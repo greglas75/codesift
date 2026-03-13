@@ -7,6 +7,8 @@ import { saveIndex, loadIndex, getIndexPath, saveIncremental } from "../storage/
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
 import { buildBM25Index, type BM25Index } from "../search/bm25.js";
+import { buildSymbolText, createEmbeddingProvider } from "../search/semantic.js";
+import { loadEmbeddings, saveEmbeddings, saveEmbeddingMeta, getEmbeddingPath, getEmbeddingMetaPath, batchEmbed } from "../storage/embedding-store.js";
 import { loadConfig } from "../config.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta } from "../types.js";
 
@@ -20,9 +22,10 @@ const IGNORE_DIRS = new Set([
 const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
 const PARSE_CONCURRENCY = 8;
 
-// Active watchers and BM25 indexes keyed by repo name
+// Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
 const bm25Indexes = new Map<string, BM25Index>();
+const embeddingCaches = new Map<string, Map<string, Float32Array>>();
 
 /**
  * Walk a directory tree, collecting files that can be parsed.
@@ -200,6 +203,31 @@ export async function indexFolder(
   // Save index to disk
   await saveIndex(indexPath, codeIndex);
 
+  // Embed symbols if an embedding provider is configured (non-fatal if it fails)
+  if (config.embeddingProvider) {
+    const embeddingPath = getEmbeddingPath(indexPath);
+    const metaPath = getEmbeddingMetaPath(indexPath);
+    try {
+      const provider = createEmbeddingProvider(config.embeddingProvider, config);
+      const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
+      const existing = await loadEmbeddings(embeddingPath);
+      const embeddings = await batchEmbed(symbolTexts, existing, provider.embed.bind(provider), config.embeddingBatchSize);
+      await saveEmbeddings(embeddingPath, embeddings);
+      await saveEmbeddingMeta(metaPath, {
+        model: provider.model,
+        provider: config.embeddingProvider,
+        dimensions: provider.dimensions,
+        symbol_count: embeddings.size,
+        updated_at: Date.now(),
+      });
+      embeddingCaches.set(repoName, embeddings);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
+      // Non-fatal — BM25 search still works
+    }
+  }
+
   // Register in the global registry
   const meta: RepoMeta = {
     name: repoName,
@@ -289,14 +317,15 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
     activeWatchers.delete(repoName);
   }
 
-  // Remove BM25 index from memory
+  // Remove in-memory caches
   bm25Indexes.delete(repoName);
+  embeddingCaches.delete(repoName);
 
-  // Delete index file
-  try {
-    await unlink(meta.index_path);
-  } catch {
-    // File may not exist
+  // Delete index file + embedding files
+  const embeddingPath = getEmbeddingPath(meta.index_path);
+  const embeddingMetaPath = getEmbeddingMetaPath(meta.index_path);
+  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath]) {
+    try { await unlink(fp); } catch { /* File may not exist */ }
   }
 
   // Remove from registry
@@ -333,4 +362,26 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
   if (!meta) return null;
 
   return loadIndex(meta.index_path);
+}
+
+/**
+ * Get the in-memory embedding cache for a repo.
+ * Loads from disk if not cached. Returns null if no embeddings file exists.
+ */
+export async function getEmbeddingCache(
+  repoName: string,
+): Promise<Map<string, Float32Array> | null> {
+  const cached = embeddingCaches.get(repoName);
+  if (cached) return cached;
+
+  const config = loadConfig();
+  const meta = await getRepo(config.registryPath, repoName);
+  if (!meta) return null;
+
+  const embeddingPath = getEmbeddingPath(meta.index_path);
+  const embeddings = await loadEmbeddings(embeddingPath);
+  if (embeddings.size === 0) return null;
+
+  embeddingCaches.set(repoName, embeddings);
+  return embeddings;
 }

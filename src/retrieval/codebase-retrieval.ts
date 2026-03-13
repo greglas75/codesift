@@ -129,6 +129,44 @@ async function executeSubQuery(
       return { type: qType, data: result, tokens: estimateTokens(text) };
     }
 
+    case "semantic": {
+      const { getCodeIndex, getEmbeddingCache } = await import("../tools/index-tools.js");
+      const { createEmbeddingProvider, searchSemantic } = await import("../search/semantic.js");
+      const { loadConfig: getConfig } = await import("../config.js");
+
+      const semanticConfig = getConfig();
+      if (!semanticConfig.embeddingProvider) {
+        throw new Error("No embedding provider configured. Set CODESIFT_VOYAGE_API_KEY, CODESIFT_OPENAI_API_KEY, or CODESIFT_OLLAMA_URL.");
+      }
+
+      const index = await getCodeIndex(repo);
+      if (!index) throw new Error(`Repository "${repo}" not found`);
+
+      const embeddings = await getEmbeddingCache(repo);
+      if (!embeddings) throw new Error(`No embeddings for "${repo}". Run index_folder with an embedding provider configured.`);
+
+      const topK = (query["top_k"] as number | undefined) ?? 10;
+      const fileFilter = query["file_filter"] as string | undefined;
+
+      // Embed the query
+      const provider = createEmbeddingProvider(semanticConfig.embeddingProvider, semanticConfig);
+      const [queryVec] = await provider.embed([query["query"] as string]);
+      if (!queryVec) throw new Error("Embedding provider returned no vector");
+
+      const queryEmbedding = new Float32Array(queryVec);
+      const symbolMap = new Map(index.symbols.map((s) => [s.id, s]));
+
+      // Optionally narrow embeddings to a file path substring
+      const filteredEmbeddings = fileFilter
+        ? new Map([...embeddings.entries()].filter(([id]) => symbolMap.get(id)?.file.includes(fileFilter) ?? false))
+        : embeddings;
+
+      const results = searchSemantic(queryEmbedding, filteredEmbeddings, symbolMap, topK);
+      const data = results.map((r) => r.symbol);
+      const text = JSON.stringify(data);
+      return { type: qType, data, tokens: estimateTokens(text) };
+    }
+
     default:
       return {
         type: qType,
