@@ -1,5 +1,6 @@
-import { readdir, readFile, stat, unlink } from "node:fs/promises";
-import { join, relative, extname, resolve } from "node:path";
+import { readdir, readFile, stat, unlink, rm } from "node:fs/promises";
+import { join, relative, extname, resolve, basename } from "node:path";
+import { execSync } from "node:child_process";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
@@ -21,6 +22,24 @@ const IGNORE_DIRS = new Set([
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
 const PARSE_CONCURRENCY = 8;
+
+// Validate git clone URL — allow HTTPS, SSH, git://, and file:// protocols
+const GIT_URL_PATTERN = /^(https?:\/\/|git@|git:\/\/|ssh:\/\/|file:\/\/)[^\s]+$/;
+
+function validateGitUrl(url: string): void {
+  if (!url || !GIT_URL_PATTERN.test(url)) {
+    throw new Error(`Invalid git URL: ${url}`);
+  }
+}
+
+// Validate branch/tag names — prevent shell injection
+const GIT_REF_PATTERN = /^[a-zA-Z0-9_./\-~^@{}]+$/;
+
+function validateGitRef(ref: string): void {
+  if (!ref || !GIT_REF_PATTERN.test(ref)) {
+    throw new Error(`Invalid git ref: ${ref}`);
+  }
+}
 
 // Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
@@ -265,6 +284,77 @@ export async function indexFolder(
     symbol_count: symbols.length,
     duration_ms: Date.now() - startTime,
   };
+}
+
+/**
+ * Clone a remote git repository and index it.
+ * Clones into ~/.codesift/repos/{name}. If already cloned, pulls latest.
+ */
+export async function indexRepo(
+  url: string,
+  options?: {
+    branch?: string | undefined;
+    include_paths?: string[] | undefined;
+  },
+): Promise<IndexFolderResult> {
+  validateGitUrl(url);
+  if (options?.branch) {
+    validateGitRef(options.branch);
+  }
+
+  const config = loadConfig();
+  const reposDir = join(config.dataDir, "repos");
+
+  // Derive repo name from URL: "https://github.com/user/repo.git" → "repo"
+  const urlBasename = basename(url).replace(/\.git$/, "");
+  const cloneTarget = join(reposDir, urlBasename);
+
+  // Check if already cloned — pull instead of clone
+  let needsClone = true;
+  try {
+    const s = await stat(join(cloneTarget, ".git"));
+    if (s.isDirectory()) {
+      needsClone = false;
+    }
+  } catch {
+    // Directory doesn't exist — will clone
+  }
+
+  if (needsClone) {
+    const branchArg = options?.branch ? `--branch ${options.branch} ` : "";
+    execSync(`git clone --depth 1 ${branchArg}-- "${url}" "${cloneTarget}"`, {
+      stdio: "pipe",
+      timeout: 120_000,
+    });
+  } else {
+    // Pull latest changes
+    try {
+      if (options?.branch) {
+        execSync(`git -C "${cloneTarget}" checkout "${options.branch}"`, {
+          stdio: "pipe",
+          timeout: 30_000,
+        });
+      }
+      execSync(`git -C "${cloneTarget}" pull --ff-only`, {
+        stdio: "pipe",
+        timeout: 60_000,
+      });
+    } catch {
+      // Pull may fail if detached HEAD — force fresh clone
+      await rm(cloneTarget, { recursive: true, force: true });
+      const branchArg = options?.branch ? `--branch ${options.branch} ` : "";
+      execSync(`git clone --depth 1 ${branchArg}-- "${url}" "${cloneTarget}"`, {
+        stdio: "pipe",
+        timeout: 120_000,
+      });
+    }
+  }
+
+  // Index the cloned repo (no watcher for remote repos)
+  return indexFolder(cloneTarget, {
+    include_paths: options?.include_paths,
+    watch: false,
+  });
 }
 
 /**

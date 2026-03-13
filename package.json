@@ -11,7 +11,9 @@
   "main": "./dist/server.js",
   "files": [
     "dist",
-    "src/parser/languages"
+    "src/parser/languages",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
@@ -22,7 +24,7 @@
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
     "download-wasm": "tsx scripts/download-wasm.ts",
-    "prepack": "npm run build"
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
-import { indexFolder, listAllRepos, invalidateCache } from "./tools/index-tools.js";
+import { indexFolder, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences } from "./tools/symbol-tools.js";
@@ -16,14 +16,6 @@ import type { SymbolKind, Direction } from "./types.js";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function notImplemented() {
-  return {
-    content: [
-      { type: "text" as const, text: JSON.stringify({ error: "not implemented" }) },
-    ],
-  };
-}
 
 function jsonResult(data: unknown) {
   return {
@@ -85,7 +77,7 @@ server.tool(
 );
 
 // ---------------------------------------------------------------------------
-// 2. index_repo (stub — Phase 4)
+// 2. index_repo
 // ---------------------------------------------------------------------------
 server.tool(
   "index_repo",
@@ -94,9 +86,13 @@ server.tool(
     url: z.string().describe("Git clone URL"),
     branch: z.string().optional().describe("Branch to checkout"),
     include_paths: z.array(z.string()).optional().describe("Glob patterns to include"),
-    use_ai_summaries: z.boolean().optional().describe("Generate AI summaries for symbols"),
   },
-  async () => notImplemented(),
+  async (args) => wrapTool(() =>
+    indexRepo(args.url, {
+      branch: args.branch,
+      include_paths: args.include_paths,
+    }),
+  )(),
 );
 
 // ---------------------------------------------------------------------------
