@@ -8,6 +8,7 @@ import { getSymbol, getSymbols, findAndShow, findReferences } from "../../src/to
 import { assembleContext } from "../../src/tools/context-tools.js";
 import { generateClaudeMd } from "../../src/tools/generate-tools.js";
 import { codebaseRetrieval } from "../../src/retrieval/codebase-retrieval.js";
+import { resetConfigCache } from "../../src/config.js";
 
 const REPO = "local/test-project";
 
@@ -20,10 +21,12 @@ beforeEach(async () => {
   await mkdir(fixtureDir, { recursive: true });
 
   process.env["CODESIFT_DATA_DIR"] = join(tmpDir, ".codesift");
+  resetConfigCache();
 });
 
 afterEach(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
+  resetConfigCache();
   await rm(tmpDir, { recursive: true, force: true });
 });
 

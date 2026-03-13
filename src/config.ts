@@ -31,7 +31,10 @@ export interface Config {
   defaultTopK: number;         // 20
 }
 
+let cachedConfig: Config | null = null;
+
 export function loadConfig(): Config {
+  if (cachedConfig) return cachedConfig;
   const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
 
   const voyageApiKey = process.env["CODESIFT_VOYAGE_API_KEY"] ?? null;
@@ -43,7 +46,7 @@ export function loadConfig(): Config {
   else if (openaiApiKey) embeddingProvider = "openai";
   else if (ollamaUrl) embeddingProvider = "ollama";
 
-  return {
+  cachedConfig = {
     dataDir,
     registryPath: join(dataDir, "registry.json"),
 
@@ -65,6 +68,12 @@ export function loadConfig(): Config {
     defaultTokenBudget: parseIntEnv("CODESIFT_DEFAULT_TOKEN_BUDGET", 8000),
     defaultTopK: parseIntEnv("CODESIFT_DEFAULT_TOP_K", 20),
   };
+  return cachedConfig;
+}
+
+/** Reset cached config — for testing only. */
+export function resetConfigCache(): void {
+  cachedConfig = null;
 }
 
 function parseIntEnv(name: string, defaultValue: number): number {

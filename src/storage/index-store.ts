@@ -1,7 +1,10 @@
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
-import type { CodeIndex, CodeSymbol } from "../types.js";
+import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
+
+/** Serialize concurrent writes to the same index path. */
+const writeLocks = new Map<string, Promise<void>>();
 
 /**
  * Save a code index atomically.
@@ -17,8 +20,13 @@ export async function saveIndex(
   const tmpPath = `${indexPath}.tmp.${Date.now()}.json`;
   const data = JSON.stringify(index);
 
-  await writeFile(tmpPath, data, "utf-8");
-  await rename(tmpPath, indexPath);
+  try {
+    await writeFile(tmpPath, data, "utf-8");
+    await rename(tmpPath, indexPath);
+  } catch (err) {
+    try { await unlink(tmpPath); } catch { /* cleanup best-effort */ }
+    throw err;
+  }
 }
 
 /**
@@ -45,27 +53,45 @@ export async function loadIndex(
 /**
  * Incrementally update an index for a single changed file.
  * Removes old symbols for the file, adds new ones, and saves atomically.
+ * Serialized per indexPath to prevent read-modify-write races.
  */
 export async function saveIncremental(
   indexPath: string,
   updatedFile: string,
   newSymbols: CodeSymbol[],
+  fileEntry?: FileEntry,
 ): Promise<void> {
-  const existing = await loadIndex(indexPath);
-  if (!existing) {
-    throw new Error(`Cannot incrementally update: index not found at ${indexPath}`);
-  }
+  const prev = writeLocks.get(indexPath) ?? Promise.resolve();
 
-  const filtered = existing.symbols.filter(
-    (symbol) => symbol.file !== updatedFile,
-  );
-  const merged = [...filtered, ...newSymbols];
+  const next = prev.then(async () => {
+    const existing = await loadIndex(indexPath);
+    if (!existing) {
+      throw new Error(`Cannot incrementally update: index not found at ${indexPath}`);
+    }
 
-  existing.symbols = merged;
-  existing.symbol_count = merged.length;
-  existing.updated_at = Date.now();
+    // Update symbols
+    const filtered = existing.symbols.filter(
+      (symbol) => symbol.file !== updatedFile,
+    );
+    const merged = [...filtered, ...newSymbols];
 
-  await saveIndex(indexPath, existing);
+    existing.symbols = merged;
+    existing.symbol_count = merged.length;
+    existing.updated_at = Date.now();
+
+    // Update files[] to keep it in sync
+    if (fileEntry) {
+      existing.files = existing.files.filter((f) => f.path !== updatedFile);
+      existing.files.push(fileEntry);
+      existing.file_count = existing.files.length;
+    }
+
+    await saveIndex(indexPath, existing);
+  });
+
+  // Store the chain (swallow errors so next caller isn't blocked)
+  writeLocks.set(indexPath, next.catch(() => {}));
+  return next;
 }
 
 /**

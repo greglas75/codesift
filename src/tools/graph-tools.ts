@@ -6,12 +6,15 @@ const DEFAULT_CALL_DEPTH = 3;
 const DEFAULT_IMPACT_DEPTH = 2;
 
 /**
- * Check if a symbol's source contains a reference to another symbol name.
- * Uses word boundary matching to avoid substring false positives.
+ * Validate a git ref to prevent command injection.
+ * Allows alphanumeric, `/`, `.`, `-`, `_`, `~`, `^`, `@`, `{`, `}`.
  */
-function sourceContainsReference(source: string, name: string): boolean {
-  const pattern = new RegExp(`\\b${escapeRegex(name)}\\b`);
-  return pattern.test(source);
+const GIT_REF_PATTERN = /^[a-zA-Z0-9_./\-~^@{}]+$/;
+
+function validateGitRef(ref: string): void {
+  if (!ref || !GIT_REF_PATTERN.test(ref)) {
+    throw new Error(`Invalid git ref: "${ref}"`);
+  }
 }
 
 function escapeRegex(str: string): string {
@@ -19,63 +22,81 @@ function escapeRegex(str: string): string {
 }
 
 /**
- * Find direct callees of a symbol by scanning its source for references
- * to other indexed symbol names.
+ * Pre-computed adjacency lists for O(n) lookup during BFS.
+ * Built once per traceCallChain / impactAnalysis call.
  */
-function findCallees(
-  target: CodeSymbol,
-  allSymbols: CodeSymbol[],
-): CodeSymbol[] {
-  if (!target.source) return [];
-
-  const callees: CodeSymbol[] = [];
-  for (const sym of allSymbols) {
-    if (sym.id === target.id) continue;
-    if (sourceContainsReference(target.source, sym.name)) {
-      callees.push(sym);
-    }
-  }
-  return callees;
+interface AdjacencyIndex {
+  /** symbol id → symbols that this symbol references (callees) */
+  callees: Map<string, CodeSymbol[]>;
+  /** symbol id → symbols that reference this symbol (callers) */
+  callers: Map<string, CodeSymbol[]>;
 }
 
 /**
- * Find direct callers of a symbol by scanning all other symbols' source
- * for references to the target name.
+ * Build caller/callee adjacency lists in a single O(n×m) pass
+ * where m = average unique symbol names per source. After this,
+ * BFS lookups are O(1) per node.
  */
-function findCallers(
-  target: CodeSymbol,
-  allSymbols: CodeSymbol[],
-): CodeSymbol[] {
-  const callers: CodeSymbol[] = [];
+function buildAdjacencyIndex(allSymbols: CodeSymbol[]): AdjacencyIndex {
+  const callees = new Map<string, CodeSymbol[]>();
+  const callers = new Map<string, CodeSymbol[]>();
+
+  // Collect unique names → symbols for regex matching targets
+  const nameToSymbols = new Map<string, CodeSymbol[]>();
   for (const sym of allSymbols) {
-    if (sym.id === target.id) continue;
-    if (sym.source && sourceContainsReference(sym.source, target.name)) {
-      callers.push(sym);
+    const existing = nameToSymbols.get(sym.name);
+    if (existing) existing.push(sym);
+    else nameToSymbols.set(sym.name, [sym]);
+  }
+
+  // For each symbol with source, find which names it references
+  for (const sym of allSymbols) {
+    if (!sym.source) continue;
+
+    const symCallees: CodeSymbol[] = [];
+
+    for (const [name, targets] of nameToSymbols) {
+      const pattern = new RegExp(`\\b${escapeRegex(name)}\\b`);
+      if (pattern.test(sym.source)) {
+        for (const target of targets) {
+          if (target.id === sym.id) continue;
+          symCallees.push(target);
+
+          // Also record the reverse edge (caller)
+          const targetCallers = callers.get(target.id);
+          if (targetCallers) targetCallers.push(sym);
+          else callers.set(target.id, [sym]);
+        }
+      }
+    }
+
+    if (symCallees.length > 0) {
+      callees.set(sym.id, symCallees);
     }
   }
-  return callers;
+
+  return { callees, callers };
 }
 
 /**
  * BFS traversal to build a call chain tree up to the given depth.
+ * Uses pre-built adjacency index for O(1) neighbor lookups.
  */
 function buildCallTree(
   root: CodeSymbol,
-  allSymbols: CodeSymbol[],
+  adjacency: AdjacencyIndex,
   direction: Direction,
   maxDepth: number,
 ): CallNode {
   const visited = new Set<string>([root.id]);
+  const adj = direction === "callees" ? adjacency.callees : adjacency.callers;
 
   function expand(symbol: CodeSymbol, depth: number): CallNode {
     if (depth >= maxDepth) {
       return { symbol, children: [] };
     }
 
-    const neighbors =
-      direction === "callees"
-        ? findCallees(symbol, allSymbols)
-        : findCallers(symbol, allSymbols);
+    const neighbors = adj.get(symbol.id) ?? [];
 
     const children: CallNode[] = [];
     for (const neighbor of neighbors) {
@@ -113,21 +134,21 @@ export async function traceCallChain(
   }
 
   const maxDepth = depth ?? DEFAULT_CALL_DEPTH;
-  return buildCallTree(target, index.symbols, direction, maxDepth);
+  const adjacency = buildAdjacencyIndex(index.symbols);
+  return buildCallTree(target, adjacency, direction, maxDepth);
 }
 
 /**
  * Find all callers of the given symbols, recursing up to depth levels.
- * Returns deduplicated affected symbols.
+ * Uses pre-built adjacency index for efficient lookups.
  */
 function findAffectedSymbols(
   changedSymbols: CodeSymbol[],
-  allSymbols: CodeSymbol[],
+  adjacency: AdjacencyIndex,
   maxDepth: number,
 ): CodeSymbol[] {
   const affected = new Map<string, CodeSymbol>();
 
-  // Seed with changed symbols
   for (const sym of changedSymbols) {
     affected.set(sym.id, sym);
   }
@@ -138,7 +159,7 @@ function findAffectedSymbols(
     const nextFrontier: CodeSymbol[] = [];
 
     for (const sym of frontier) {
-      const callers = findCallers(sym, allSymbols);
+      const callers = adjacency.callers.get(sym.id) ?? [];
       for (const caller of callers) {
         if (!affected.has(caller.id)) {
           affected.set(caller.id, caller);
@@ -155,28 +176,26 @@ function findAffectedSymbols(
 }
 
 /**
- * Build a file-level dependency graph: file -> files that reference symbols in it.
+ * Build a file-level dependency graph from pre-computed adjacency.
  */
-function buildDependencyGraph(
+function buildFileDependencyGraph(
   index: CodeIndex,
+  adjacency: AdjacencyIndex,
 ): Record<string, string[]> {
   const graph: Record<string, string[]> = {};
   const symbolsByFile = new Map<string, CodeSymbol[]>();
 
   for (const sym of index.symbols) {
     const existing = symbolsByFile.get(sym.file);
-    if (existing) {
-      existing.push(sym);
-    } else {
-      symbolsByFile.set(sym.file, [sym]);
-    }
+    if (existing) existing.push(sym);
+    else symbolsByFile.set(sym.file, [sym]);
   }
 
   for (const [file, fileSymbols] of symbolsByFile) {
     const dependentFiles = new Set<string>();
 
     for (const sym of fileSymbols) {
-      const callers = findCallers(sym, index.symbols);
+      const callers = adjacency.callers.get(sym.id) ?? [];
       for (const caller of callers) {
         if (caller.file !== file) {
           dependentFiles.add(caller.file);
@@ -196,6 +215,9 @@ function buildDependencyGraph(
  * Run git diff to find changed files between two refs.
  */
 function getChangedFiles(repoRoot: string, since: string, until: string): string[] {
+  validateGitRef(since);
+  validateGitRef(until);
+
   try {
     const output = execSync(`git diff --name-only ${since}..${until}`, {
       cwd: repoRoot,
@@ -235,16 +257,17 @@ export async function impactAnalysis(
     changedFiles.includes(s.file),
   );
 
-  // Find affected symbols (callers of changed symbols, recursively)
+  // Build adjacency index once, reuse for both affected + dependency graph
+  const adjacency = buildAdjacencyIndex(index.symbols);
+
   const maxDepth = depth ?? DEFAULT_IMPACT_DEPTH;
   const affectedSymbols = findAffectedSymbols(
     changedSymbols,
-    index.symbols,
+    adjacency,
     maxDepth,
   );
 
-  // Build file-level dependency graph
-  const dependencyGraph = buildDependencyGraph(index);
+  const dependencyGraph = buildFileDependencyGraph(index, adjacency);
 
   return {
     changed_files: changedFiles,

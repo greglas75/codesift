@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { indexFolder, listAllRepos, invalidateCache, getCodeIndex, getBM25Index } from "../../src/tools/index-tools.js";
 import { searchBM25 } from "../../src/search/bm25.js";
+import { resetConfigCache } from "../../src/config.js";
 
 const FIELD_WEIGHTS = { name: 3.0, signature: 2.0, docstring: 1.5, body: 1.0 };
 
@@ -16,10 +17,12 @@ beforeEach(async () => {
 
   // Set data dir to temp so we don't pollute real ~/.codesift
   process.env["CODESIFT_DATA_DIR"] = join(tmpDir, ".codesift");
+  resetConfigCache();
 });
 
 afterEach(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
+  resetConfigCache();
   await rm(tmpDir, { recursive: true, force: true });
 });
 

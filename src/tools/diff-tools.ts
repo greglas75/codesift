@@ -2,6 +2,18 @@ import { execSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
+/**
+ * Validate a git ref to prevent command injection.
+ * Allows alphanumeric, `/`, `.`, `-`, `_`, `~`, `^`, `@`, `{`, `}`.
+ */
+const GIT_REF_PATTERN = /^[a-zA-Z0-9_./\-~^@{}]+$/;
+
+function validateGitRef(ref: string): void {
+  if (!ref || !GIT_REF_PATTERN.test(ref)) {
+    throw new Error(`Invalid git ref: "${ref}"`);
+  }
+}
+
 export interface DiffOutlineResult {
   added: CodeSymbol[];
   modified: CodeSymbol[];
@@ -95,6 +107,9 @@ function symbolOverlapsHunks(symbol: CodeSymbol, hunks: DiffHunk[]): boolean {
  * Run git diff and return the raw output.
  */
 function runGitDiff(repoRoot: string, since: string, until: string, nameOnly: boolean): string {
+  validateGitRef(since);
+  validateGitRef(until);
+
   const flag = nameOnly ? "--name-only" : "";
   const cmd = `git diff ${flag} ${since}..${until}`.trim();
   try {
