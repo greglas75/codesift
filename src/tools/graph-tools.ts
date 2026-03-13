@@ -1,21 +1,10 @@
 import { execSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
+import { validateGitRef } from "../utils/git-validation.js";
 import type { CodeSymbol, CodeIndex, Direction, CallNode, ImpactResult } from "../types.js";
 
 const DEFAULT_CALL_DEPTH = 3;
 const DEFAULT_IMPACT_DEPTH = 2;
-
-/**
- * Validate a git ref to prevent command injection.
- * Allows alphanumeric, `/`, `.`, `-`, `_`, `~`, `^`, `@`, `{`, `}`.
- */
-const GIT_REF_PATTERN = /^[a-zA-Z0-9_./\-~^@{}]+$/;
-
-function validateGitRef(ref: string): void {
-  if (!ref || !GIT_REF_PATTERN.test(ref)) {
-    throw new Error(`Invalid git ref: "${ref}"`);
-  }
-}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

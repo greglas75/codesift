@@ -86,6 +86,20 @@ export function searchSemantic(
 }
 
 // ---------------------------------------------------------------------------
+// Response shape guard for OpenAI / Voyage embedding APIs
+// ---------------------------------------------------------------------------
+
+function isEmbeddingResponse(data: unknown): data is { data: Array<{ embedding: number[] }> } {
+  if (!data || typeof data !== "object") return false;
+  const obj = data as Record<string, unknown>;
+  if (!Array.isArray(obj["data"])) return false;
+  return obj["data"].every(
+    (item: unknown) =>
+      typeof item === "object" && item !== null && Array.isArray((item as Record<string, unknown>)["embedding"]),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Voyage AI provider
 // ---------------------------------------------------------------------------
 
@@ -118,8 +132,10 @@ export class VoyageProvider implements EmbeddingProvider {
     }
 
     const data: unknown = await response.json();
-    const result = data as { data: Array<{ embedding: number[] }> };
-    return result.data.map((d) => d.embedding);
+    if (!isEmbeddingResponse(data)) {
+      throw new Error(`Unexpected Voyage API response shape: ${JSON.stringify(data).slice(0, 200)}`);
+    }
+    return data.data.map((d) => d.embedding);
   }
 }
 
@@ -155,8 +171,10 @@ export class OpenAIProvider implements EmbeddingProvider {
     }
 
     const data: unknown = await response.json();
-    const result = data as { data: Array<{ embedding: number[] }> };
-    return result.data.map((d) => d.embedding);
+    if (!isEmbeddingResponse(data)) {
+      throw new Error(`Unexpected OpenAI API response shape: ${JSON.stringify(data).slice(0, 200)}`);
+    }
+    return data.data.map((d) => d.embedding);
   }
 }
 
@@ -193,8 +211,10 @@ export class OllamaProvider implements EmbeddingProvider {
       }
 
       const data: unknown = await response.json();
-      const result = data as { embedding: number[] };
-      results.push(result.embedding);
+      if (!data || typeof data !== "object" || !("embedding" in data) || !Array.isArray((data as Record<string, unknown>)["embedding"])) {
+        throw new Error(`Unexpected Ollama API response shape: ${JSON.stringify(data).slice(0, 200)}`);
+      }
+      results.push((data as { embedding: number[] }).embedding);
     }
 
     return results;

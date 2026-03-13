@@ -66,7 +66,6 @@ server.tool(
     path: z.string().describe("Absolute path to the folder to index"),
     incremental: z.boolean().optional().describe("Only re-index changed files"),
     include_paths: z.array(z.string()).optional().describe("Glob patterns to include"),
-    use_ai_summaries: z.boolean().optional().describe("Generate AI summaries for symbols"),
   },
   async (args) => wrapTool(() =>
     indexFolder(args.path, {

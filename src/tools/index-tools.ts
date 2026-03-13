@@ -1,6 +1,6 @@
-import { readdir, readFile, stat, unlink, rm } from "node:fs/promises";
+import { readdir, readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
 import { join, relative, extname, resolve, basename } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
@@ -11,6 +11,7 @@ import { buildBM25Index, type BM25Index } from "../search/bm25.js";
 import { buildSymbolText, createEmbeddingProvider } from "../search/semantic.js";
 import { loadEmbeddings, saveEmbeddings, saveEmbeddingMeta, getEmbeddingPath, getEmbeddingMetaPath, batchEmbed } from "../storage/embedding-store.js";
 import { loadConfig } from "../config.js";
+import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta } from "../types.js";
 
 // Ignore patterns for directory walking (same as watcher)
@@ -22,24 +23,6 @@ const IGNORE_DIRS = new Set([
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
 const PARSE_CONCURRENCY = 8;
-
-// Validate git clone URL — allow HTTPS, SSH, git://, and file:// protocols
-const GIT_URL_PATTERN = /^(https?:\/\/|git@|git:\/\/|ssh:\/\/|file:\/\/)[^\s]+$/;
-
-function validateGitUrl(url: string): void {
-  if (!url || !GIT_URL_PATTERN.test(url)) {
-    throw new Error(`Invalid git URL: ${url}`);
-  }
-}
-
-// Validate branch/tag names — prevent shell injection
-const GIT_REF_PATTERN = /^[a-zA-Z0-9_./\-~^@{}]+$/;
-
-function validateGitRef(ref: string): void {
-  if (!ref || !GIT_REF_PATTERN.test(ref)) {
-    throw new Error(`Invalid git ref: ${ref}`);
-  }
-}
 
 // Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
@@ -305,6 +288,9 @@ export async function indexRepo(
   const config = loadConfig();
   const reposDir = join(config.dataDir, "repos");
 
+  // Ensure repos directory exists (R-2: git clone requires parent to exist)
+  await mkdirAsync(reposDir, { recursive: true });
+
   // Derive repo name from URL: "https://github.com/user/repo.git" → "repo"
   const urlBasename = basename(url).replace(/\.git$/, "");
   const cloneTarget = join(reposDir, urlBasename);
@@ -320,33 +306,33 @@ export async function indexRepo(
     // Directory doesn't exist — will clone
   }
 
+  // R-1: Use execFileSync (array form) to prevent shell injection.
+  // execSync with string interpolation allows $(cmd) expansion in URLs.
   if (needsClone) {
-    const branchArg = options?.branch ? `--branch ${options.branch} ` : "";
-    execSync(`git clone --depth 1 ${branchArg}-- "${url}" "${cloneTarget}"`, {
-      stdio: "pipe",
-      timeout: 120_000,
-    });
+    const args = ["clone", "--depth", "1"];
+    if (options?.branch) args.push("--branch", options.branch);
+    args.push("--", url, cloneTarget);
+    execFileSync("git", args, { stdio: "pipe", timeout: 120_000 });
   } else {
     // Pull latest changes
     try {
       if (options?.branch) {
-        execSync(`git -C "${cloneTarget}" checkout "${options.branch}"`, {
+        execFileSync("git", ["-C", cloneTarget, "checkout", options.branch], {
           stdio: "pipe",
           timeout: 30_000,
         });
       }
-      execSync(`git -C "${cloneTarget}" pull --ff-only`, {
+      execFileSync("git", ["-C", cloneTarget, "pull", "--ff-only"], {
         stdio: "pipe",
         timeout: 60_000,
       });
     } catch {
       // Pull may fail if detached HEAD — force fresh clone
       await rm(cloneTarget, { recursive: true, force: true });
-      const branchArg = options?.branch ? `--branch ${options.branch} ` : "";
-      execSync(`git clone --depth 1 ${branchArg}-- "${url}" "${cloneTarget}"`, {
-        stdio: "pipe",
-        timeout: 120_000,
-      });
+      const args = ["clone", "--depth", "1"];
+      if (options?.branch) args.push("--branch", options.branch);
+      args.push("--", url, cloneTarget);
+      execFileSync("git", args, { stdio: "pipe", timeout: 120_000 });
     }
   }
 
@@ -378,7 +364,13 @@ async function handleFileChange(
     const language = getLanguageForExtension(ext) ?? "unknown";
     const symbols = extractSymbols(tree, relativeFile, source, repoName, language);
 
-    await saveIncremental(indexPath, relativeFile, symbols);
+    const fileEntry: FileEntry = {
+      path: relativeFile,
+      language,
+      symbol_count: symbols.length,
+      last_modified: Date.now(),
+    };
+    await saveIncremental(indexPath, relativeFile, symbols, fileEntry);
 
     // Rebuild in-memory BM25 index
     const index = await loadIndex(indexPath);
