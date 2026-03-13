@@ -1,0 +1,117 @@
+import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { dirname, basename } from "node:path";
+import type { Registry, RepoMeta } from "../types.js";
+
+/**
+ * Load the multi-repo registry from disk.
+ * Returns an empty registry if the file doesn't exist or is invalid.
+ */
+export async function loadRegistry(registryPath: string): Promise<Registry> {
+  try {
+    const raw = await readFile(registryPath, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+
+    if (isValidRegistry(parsed)) {
+      return parsed;
+    }
+
+    return emptyRegistry();
+  } catch {
+    return emptyRegistry();
+  }
+}
+
+/**
+ * Save the registry atomically.
+ * Writes to a temp file first, then renames to prevent partial reads.
+ */
+export async function saveRegistry(
+  registryPath: string,
+  registry: Registry,
+): Promise<void> {
+  const dir = dirname(registryPath);
+  await mkdir(dir, { recursive: true });
+
+  const tmpPath = `${registryPath}.tmp.${Date.now()}.json`;
+  const data = JSON.stringify(registry);
+
+  await writeFile(tmpPath, data, "utf-8");
+  await rename(tmpPath, registryPath);
+}
+
+/**
+ * Register or update a repo in the registry.
+ */
+export async function registerRepo(
+  registryPath: string,
+  meta: RepoMeta,
+): Promise<void> {
+  const registry = await loadRegistry(registryPath);
+  registry.repos[meta.name] = meta;
+  registry.updated_at = Date.now();
+  await saveRegistry(registryPath, registry);
+}
+
+/**
+ * Get a single repo's metadata by name.
+ * Returns null if the repo is not registered.
+ */
+export async function getRepo(
+  registryPath: string,
+  name: string,
+): Promise<RepoMeta | null> {
+  const registry = await loadRegistry(registryPath);
+  return registry.repos[name] ?? null;
+}
+
+/**
+ * List all registered repos.
+ */
+export async function listRepos(
+  registryPath: string,
+): Promise<RepoMeta[]> {
+  const registry = await loadRegistry(registryPath);
+  return Object.values(registry.repos);
+}
+
+/**
+ * Remove a repo from the registry.
+ * Returns true if the repo existed and was removed, false otherwise.
+ */
+export async function removeRepo(
+  registryPath: string,
+  name: string,
+): Promise<boolean> {
+  const registry = await loadRegistry(registryPath);
+
+  if (!(name in registry.repos)) {
+    return false;
+  }
+
+  delete registry.repos[name];
+  registry.updated_at = Date.now();
+  await saveRegistry(registryPath, registry);
+  return true;
+}
+
+/**
+ * Derive a repo name from its root path.
+ * Format: "local/{folder-name}"
+ */
+export function getRepoName(repoRoot: string): string {
+  return `local/${basename(repoRoot)}`;
+}
+
+function emptyRegistry(): Registry {
+  return { repos: {}, updated_at: Date.now() };
+}
+
+function isValidRegistry(value: unknown): value is Registry {
+  if (typeof value !== "object" || value === null) return false;
+
+  const obj = value as Record<string, unknown>;
+  if (typeof obj["repos"] !== "object" || obj["repos"] === null) return false;
+  if (typeof obj["updated_at"] !== "number") return false;
+
+  return true;
+}

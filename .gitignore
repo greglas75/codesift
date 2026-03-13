@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.codesift/
+*.tmp.*.json
+src/parser/languages/*.wasm
+.env
+.env.local

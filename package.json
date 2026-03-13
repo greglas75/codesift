@@ -1,0 +1,59 @@
+{
+  "name": "codesift-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for code intelligence — 21 tools for symbol search, call graph analysis, and semantic code retrieval",
+  "license": "MIT",
+  "author": "Greg Laskowski",
+  "type": "module",
+  "bin": {
+    "codesift-mcp": "./dist/server.js"
+  },
+  "main": "./dist/server.js",
+  "files": [
+    "dist",
+    "src/parser/languages"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "tsc --noEmit",
+    "download-wasm": "tsx scripts/download-wasm.ts",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "chokidar": "^4.0.0",
+    "ignore": "^6.0.0",
+    "web-tree-sitter": "^0.24.0"
+  },
+  "optionalDependencies": {
+    "openai": "^4.0.0",
+    "voyageai": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "code-search",
+    "tree-sitter",
+    "semantic-search",
+    "claude",
+    "anthropic"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/greglas/codesift-mcp"
+  }
+}
