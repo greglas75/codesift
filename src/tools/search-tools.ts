@@ -1,23 +1,47 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { join, relative, extname } from "node:path";
 import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import type { SearchResult, TextMatch, SymbolKind } from "../types.js";
 
-const MAX_TEXT_MATCHES = 100;
+const DEFAULT_MAX_TEXT_MATCHES = 500;
+const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
+
+/** Directories to skip during text search file walk */
+const IGNORE_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "coverage",
+  ".codesift", ".next", "__pycache__", ".pytest_cache",
+  ".venv", "venv", ".tox", ".mypy_cache", ".turbo",
+  "generated", "audit-results", ".backup", "jscpd-report",
+]);
+
+/** Binary/non-text extensions to skip during text search */
+const BINARY_EXTENSIONS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+  ".woff", ".woff2", ".ttf", ".eot", ".otf",
+  ".zip", ".gz", ".tar", ".bz2", ".7z", ".rar",
+  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".exe", ".dll", ".so", ".dylib", ".o", ".obj",
+  ".wasm", ".class", ".pyc", ".pyo",
+  ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac",
+  ".db", ".sqlite", ".sqlite3",
+  ".lock",
+]);
 
 export interface SearchSymbolsOptions {
   kind?: SymbolKind | undefined;
   file_pattern?: string | undefined;
   include_source?: boolean | undefined;
   top_k?: number | undefined;
+  source_chars?: number | undefined;
 }
 
 export interface SearchTextOptions {
   regex?: boolean | undefined;
   file_pattern?: string | undefined;
   context_lines?: number | undefined;
+  max_results?: number | undefined;
 }
 
 /**
@@ -43,6 +67,12 @@ function matchFilePattern(filePath: string, pattern: string): boolean {
     return filePath.endsWith(suffix);
   }
 
+  // "dir/**" — match everything under directory (e.g., "src/**")
+  if (pattern.endsWith("/**")) {
+    const prefix = pattern.slice(0, -3);
+    return filePath.startsWith(prefix + "/") || filePath === prefix;
+  }
+
   // Pattern with "**" in the middle (e.g., "src/**/*.ts")
   if (pattern.includes("/**/")) {
     const [prefix, suffix] = splitFirst(pattern, "/**/");
@@ -65,9 +95,11 @@ function matchFilePattern(filePath: string, pattern: string): boolean {
     return matchFilePattern(fileName, filePart);
   }
 
-  // Plain startsWith for directory prefixes without wildcards
+  // No wildcards: substring match on the full path
+  // "risk.service.ts" matches "src/lib/services/risk/risk.service.ts"
+  // "validators" matches "src/lib/validators/schema.ts"
   if (!pattern.includes("*")) {
-    return filePath.startsWith(pattern);
+    return filePath.includes(pattern);
   }
 
   return false;
@@ -88,8 +120,59 @@ function splitFirst(str: string, sep: string): [string, string] {
 }
 
 /**
+ * Walk a directory tree collecting all text files.
+ * Returns relative paths from rootPath.
+ * Unlike the index walk, this includes ALL text files (not just parseable ones).
+ */
+async function walkAllTextFiles(rootPath: string): Promise<string[]> {
+  const files: string[] = [];
+
+  async function walk(dirPath: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return; // permission denied, etc.
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry.name);
+
+      if (entry.isDirectory()) {
+        if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) {
+          continue;
+        }
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        const ext = extname(entry.name);
+
+        // Skip binary files
+        if (BINARY_EXTENSIONS.has(ext)) continue;
+
+        // Skip files that are too large
+        try {
+          const fileStat = await stat(fullPath);
+          if (fileStat.size > MAX_FILE_SIZE) continue;
+        } catch {
+          continue;
+        }
+
+        files.push(relative(rootPath, fullPath));
+      }
+    }
+  }
+
+  await walk(rootPath);
+  return files;
+}
+
+/**
  * Search symbols by name/signature/docstring using BM25 ranking.
  * Supports filtering by symbol kind and file pattern.
+ *
+ * When query is empty, returns all symbols matching the filters (up to top_k).
+ * When kind or file_pattern filters are active, BM25 searches a wider candidate
+ * set to avoid post-filter truncation.
  */
 export async function searchSymbols(
   repo: string,
@@ -104,19 +187,50 @@ export async function searchSymbols(
   const config = loadConfig();
   const topK = options?.top_k ?? config.defaultTopK;
   const includeSource = options?.include_source ?? true;
+  const hasKindFilter = !!options?.kind;
+  const hasFileFilter = !!options?.file_pattern;
+  const hasFilters = hasKindFilter || hasFileFilter;
 
-  let results = searchBM25(index, query, topK, config.bm25FieldWeights);
+  let results: SearchResult[];
 
-  // Filter by symbol kind
-  if (options?.kind) {
-    const kind = options.kind;
-    results = results.filter((r) => r.symbol.kind === kind);
-  }
+  if (!query.trim()) {
+    // Empty query: return all symbols matching filters (no BM25 scoring)
+    const allSymbols = [...index.symbols.values()];
+    let filtered = allSymbols;
 
-  // Filter by file pattern
-  if (options?.file_pattern) {
-    const pattern = options.file_pattern;
-    results = results.filter((r) => matchFilePattern(r.symbol.file, pattern));
+    if (hasKindFilter) {
+      const kind = options!.kind!;
+      filtered = filtered.filter((s) => s.kind === kind);
+    }
+    if (hasFileFilter) {
+      const pattern = options!.file_pattern!;
+      filtered = filtered.filter((s) => matchFilePattern(s.file, pattern));
+    }
+
+    results = filtered.slice(0, topK).map((symbol) => ({
+      symbol,
+      score: 0,
+    }));
+  } else {
+    // When filters are active, search a wider candidate set from BM25
+    // so that post-filter truncation doesn't lose relevant results.
+    const searchTopK = hasFilters ? Math.max(topK * 5, 200) : topK;
+    results = searchBM25(index, query, searchTopK, config.bm25FieldWeights);
+
+    // Filter by symbol kind
+    if (hasKindFilter) {
+      const kind = options!.kind!;
+      results = results.filter((r) => r.symbol.kind === kind);
+    }
+
+    // Filter by file pattern
+    if (hasFileFilter) {
+      const pattern = options!.file_pattern!;
+      results = results.filter((r) => matchFilePattern(r.symbol.file, pattern));
+    }
+
+    // Re-truncate to requested top_k after filtering
+    results = results.slice(0, topK);
   }
 
   // Strip source if not requested
@@ -127,12 +241,27 @@ export async function searchSymbols(
     });
   }
 
+  // Truncate source to source_chars limit (default 500 when include_source=true)
+  const sourceChars = options?.source_chars ?? (includeSource ? 500 : undefined);
+  if (includeSource && sourceChars !== undefined && sourceChars > 0) {
+    results = results.map((r) => {
+      const source = r.symbol.source;
+      if (source && source.length > sourceChars) {
+        return {
+          ...r,
+          symbol: { ...r.symbol, source: source.slice(0, sourceChars) + "..." },
+        };
+      }
+      return r;
+    });
+  }
+
   return results;
 }
 
 /**
  * Full-text search across all files in a repository.
- * Reads files from disk and searches line by line.
+ * Walks the filesystem to search ALL text files, not just indexed ones.
  */
 export async function searchText(
   repo: string,
@@ -147,6 +276,7 @@ export async function searchText(
   const contextLines = options?.context_lines ?? 2;
   const useRegex = options?.regex ?? false;
   const filePattern = options?.file_pattern;
+  const maxResults = options?.max_results ?? DEFAULT_MAX_TEXT_MATCHES;
 
   let regex: RegExp | null = null;
   if (useRegex) {
@@ -158,17 +288,20 @@ export async function searchText(
     }
   }
 
+  // Walk the filesystem to find ALL text files (not just indexed/parseable ones)
+  const allFiles = await walkAllTextFiles(index.root);
+
   const matches: TextMatch[] = [];
 
-  for (const file of index.files) {
-    if (matches.length >= MAX_TEXT_MATCHES) break;
+  for (const filePath of allFiles) {
+    if (matches.length >= maxResults) break;
 
     // Filter by file pattern
-    if (filePattern && !matchFilePattern(file.path, filePattern)) {
+    if (filePattern && !matchFilePattern(filePath, filePattern)) {
       continue;
     }
 
-    const fullPath = join(index.root, file.path);
+    const fullPath = join(index.root, filePath);
     let content: string;
     try {
       content = await readFile(fullPath, "utf-8");
@@ -179,7 +312,7 @@ export async function searchText(
     const lines = content.split("\n");
 
     for (let i = 0; i < lines.length; i++) {
-      if (matches.length >= MAX_TEXT_MATCHES) break;
+      if (matches.length >= maxResults) break;
 
       const line = lines[i];
       if (line === undefined) continue;
@@ -205,7 +338,7 @@ export async function searchText(
       }
 
       const match: TextMatch = {
-        file: file.path,
+        file: filePath,
         line: i + 1, // 1-based
         content: line,
       };

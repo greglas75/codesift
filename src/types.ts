@@ -7,6 +7,7 @@ export type SymbolKind =
   | "interface"
   | "type"
   | "variable"
+  | "constant"      // SCREAMING_CASE const
   | "field"
   | "enum"
   | "namespace"
@@ -111,4 +112,13 @@ export interface EmbeddingMeta {
   dimensions: number;
   symbol_count: number;
   updated_at: number;
+}
+
+export interface CodeChunk {
+  id: string;          // "{repo}:{file}:{startLine}"
+  file: string;        // relative path
+  startLine: number;
+  endLine: number;
+  text: string;        // the actual chunk text
+  tokenCount: number;  // estimated token count
 }

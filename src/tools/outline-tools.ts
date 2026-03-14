@@ -13,9 +13,17 @@ export interface FileTreeOptions {
   path_prefix?: string | undefined;
   name_pattern?: string | undefined;
   depth?: number | undefined;
+  compact?: boolean | undefined;
+  min_symbols?: number | undefined;
+}
+
+export interface CompactFileEntry {
+  path: string;
+  symbols: number;
 }
 
 export interface FileOutlineEntry {
+  id: string;
   name: string;
   kind: SymbolKind;
   signature?: string;
@@ -39,41 +47,66 @@ export interface RepoOutlineResult {
 }
 
 /**
- * Match a filename or path against a simple glob pattern.
- * Supports: "*.ts", "src/*.ts", "**\/*.ts"
+ * Match a filename against a glob pattern.
+ * Supports: "*.ts", "route.ts", "*risk*.test.*", "**\/*.ts"
+ *
+ * Pattern is matched against the filename portion only (not the full path),
+ * unless it contains "/" or starts with "**\/".
  */
 function matchNamePattern(filePath: string, pattern: string): boolean {
+  // Handle **/ prefix: match anywhere in path
   if (pattern.startsWith("**/")) {
     const suffix = pattern.slice(3);
     return matchNamePattern(filePath, suffix) ||
       filePath.includes("/" + suffix);
   }
 
-  if (pattern.startsWith("*") && !pattern.includes("/")) {
-    const suffix = pattern.slice(1);
-    return filePath.endsWith(suffix);
+  // If pattern contains "/" it's a path pattern — match against full path
+  if (pattern.includes("/")) {
+    return globMatch(filePath, pattern);
   }
 
-  if (!pattern.includes("*")) {
-    return filePath.includes(pattern);
-  }
-
-  // Fallback: treat * as wildcard in the filename portion
+  // Otherwise match against filename only
   const fileName = filePath.includes("/")
     ? filePath.slice(filePath.lastIndexOf("/") + 1)
     : filePath;
 
-  if (pattern.startsWith("*") && pattern.endsWith("*")) {
-    return fileName.includes(pattern.slice(1, -1));
-  }
-  if (pattern.startsWith("*")) {
-    return fileName.endsWith(pattern.slice(1));
-  }
-  if (pattern.endsWith("*")) {
-    return fileName.startsWith(pattern.slice(0, -1));
+  // No wildcard: exact filename match or substring of path
+  if (!pattern.includes("*")) {
+    return fileName === pattern || filePath.includes(pattern);
   }
 
-  return filePath.includes(pattern);
+  return globMatch(fileName, pattern);
+}
+
+/**
+ * Simple glob matching: splits pattern on "*" and checks that the segments
+ * appear in order within the text. Handles multiple wildcards correctly.
+ *
+ * Examples: "*.ts" matches "foo.ts", "*risk*.test.*" matches "risk-audit.service.test.ts"
+ */
+function globMatch(text: string, pattern: string): boolean {
+  const parts = pattern.split("*");
+  // All parts must appear in sequence within the text
+
+  // First part must be a prefix (or empty if pattern starts with *)
+  const first = parts[0];
+  if (first !== undefined && first !== "" && !text.startsWith(first)) return false;
+
+  // Last part must be a suffix (or empty if pattern ends with *)
+  const last = parts[parts.length - 1];
+  if (last !== undefined && last !== "" && !text.endsWith(last)) return false;
+
+  // All parts must appear in order
+  let pos = 0;
+  for (const part of parts) {
+    if (part === "") continue;
+    const idx = text.indexOf(part, pos);
+    if (idx < 0) return false;
+    pos = idx + part.length;
+  }
+
+  return true;
 }
 
 /**
@@ -86,6 +119,13 @@ function pathDepth(filePath: string): number {
 
 /**
  * Build a nested file tree from a flat list of file paths.
+ *
+ * Depth semantics: depth=N shows N levels below the root.
+ *   depth=1 → immediate children only (files + dirs, dirs shown without contents)
+ *   depth=2 → children + grandchildren
+ *
+ * When path_prefix is set, the tree is rooted AT the prefix (not wrapped in
+ * ancestor directories). When name_pattern is set, empty branches are pruned.
  */
 function buildTree(
   index: CodeIndex,
@@ -95,50 +135,78 @@ function buildTree(
   const pathPrefix = options?.path_prefix;
   const namePattern = options?.name_pattern;
 
+  const minSymbols = options?.min_symbols;
+
   // Build a symbol count lookup by file path
   const symbolCountByFile = new Map<string, number>();
   for (const file of index.files) {
     symbolCountByFile.set(file.path, file.symbol_count);
   }
 
-  // Filter files
+  // --- Step 1: Filter files by path_prefix, name_pattern, and min_symbols ---
   let files = index.files;
 
   if (pathPrefix) {
     const prefix = pathPrefix.endsWith("/") ? pathPrefix : pathPrefix + "/";
-    files = files.filter((f) => f.path.startsWith(prefix) || f.path === pathPrefix);
+    files = files.filter((f) => f.path.startsWith(prefix));
   }
 
   if (namePattern) {
     files = files.filter((f) => matchNamePattern(f.path, namePattern));
   }
 
-  // Compute base depth for relative depth limiting
+  if (minSymbols !== undefined && minSymbols > 0) {
+    files = files.filter((f) => f.symbol_count >= minSymbols);
+  }
+
+  // Base depth: number of path segments in the prefix (tree root level).
+  // Files/dirs are measured relative to this.
   const baseDepth = pathPrefix ? pathDepth(pathPrefix) : 0;
 
-  // Collect unique directory paths and file entries within depth limit
+  // --- Step 2: Collect visible files and their ancestor directories ---
   const dirSet = new Set<string>();
   const visibleFiles = new Set<string>();
 
   for (const file of files) {
-    const relativeDepth = pathDepth(file.path) - baseDepth;
+    const fileRelDepth = pathDepth(file.path) - baseDepth;
 
-    if (relativeDepth <= maxDepth) {
-      visibleFiles.add(file.path);
-    }
+    // depth filter: only include files within maxDepth levels of the root
+    if (fileRelDepth > maxDepth) continue;
 
-    // Add all parent directories (up to depth limit)
+    visibleFiles.add(file.path);
+
+    // Add ancestor directories between the prefix and this file (not above prefix)
     const parts = file.path.split("/");
-    for (let i = 1; i < parts.length; i++) {
+    const startIdx = baseDepth; // skip segments that are part of the prefix
+    for (let i = startIdx + 1; i < parts.length; i++) {
       const dirPath = parts.slice(0, i).join("/");
-      const dirRelDepth = pathDepth(dirPath) - baseDepth;
-      if (dirRelDepth <= maxDepth - 1) {
+      dirSet.add(dirPath);
+    }
+  }
+
+  // When depth is limited, also show directories at exactly maxDepth that
+  // WOULD have children (so the user knows there's more to explore).
+  // These appear as dirs without expanded children.
+  if (maxDepth < Infinity) {
+    for (const file of files) {
+      const fileRelDepth = pathDepth(file.path) - baseDepth;
+      if (fileRelDepth <= maxDepth) continue; // already handled above
+
+      // This file is beyond maxDepth — add its ancestor dir at maxDepth level
+      const parts = file.path.split("/");
+      const truncLen = baseDepth + maxDepth;
+      if (truncLen < parts.length) {
+        const dirPath = parts.slice(0, truncLen).join("/");
         dirSet.add(dirPath);
+        // Also add intermediate dirs between prefix and this truncated dir
+        for (let i = baseDepth + 1; i < truncLen; i++) {
+          dirSet.add(parts.slice(0, i).join("/"));
+        }
       }
     }
   }
 
-  // Build nested tree using a map
+  // --- Step 3: Build nested tree from nodeMap ---
   const nodeMap = new Map<string, FileTreeNode>();
 
   // Create directory nodes
@@ -169,20 +237,41 @@ function buildTree(
 
   // Wire up parent-child relationships
   const roots: FileTreeNode[] = [];
+  // The root path is the path_prefix itself (if set), or empty (repo root)
+  const rootPath = pathPrefix ?? "";
 
   for (const [nodePath, node] of nodeMap) {
     const lastSlash = nodePath.lastIndexOf("/");
     if (lastSlash < 0) {
+      // Top-level item (no parent directory)
       roots.push(node);
     } else {
       const parentPath = nodePath.slice(0, lastSlash);
-      const parent = nodeMap.get(parentPath);
-      if (parent?.children) {
-        parent.children.push(node);
-      } else {
+      // If parent is the root prefix (or above it), this node is a root
+      if (parentPath === rootPath || pathDepth(parentPath) < baseDepth) {
         roots.push(node);
+      } else {
+        const parent = nodeMap.get(parentPath);
+        if (parent?.children) {
+          parent.children.push(node);
+        } else {
+          roots.push(node);
+        }
       }
     }
+  }
+
+  // --- Step 4: Prune empty directories (when filtering is active) ---
+  if (namePattern || (minSymbols !== undefined && minSymbols > 0)) {
+    function hasVisibleDescendant(node: FileTreeNode): boolean {
+      if (node.type === "file") return true;
+      if (!node.children) return false;
+      node.children = node.children.filter(hasVisibleDescendant);
+      return node.children.length > 0;
+    }
+    const pruned = roots.filter(hasVisibleDescendant);
+    roots.length = 0;
+    roots.push(...pruned);
   }
 
   // Sort children: directories first, then alphabetically
@@ -204,16 +293,62 @@ function buildTree(
 }
 
 /**
+ * Build a compact flat list of file paths with symbol counts.
+ * Much cheaper than the full nested tree — similar to `find` output.
+ */
+function buildCompactList(
+  index: CodeIndex,
+  options?: FileTreeOptions,
+): CompactFileEntry[] {
+  const pathPrefix = options?.path_prefix;
+  const namePattern = options?.name_pattern;
+  const minSymbols = options?.min_symbols;
+
+  let files = index.files;
+
+  if (pathPrefix) {
+    const prefix = pathPrefix.endsWith("/") ? pathPrefix : pathPrefix + "/";
+    files = files.filter((f) => f.path.startsWith(prefix));
+  }
+
+  if (namePattern) {
+    files = files.filter((f) => matchNamePattern(f.path, namePattern));
+  }
+
+  if (minSymbols !== undefined && minSymbols > 0) {
+    files = files.filter((f) => f.symbol_count >= minSymbols);
+  }
+
+  // depth filter: count path segments relative to the prefix
+  const maxDepth = options?.depth ?? Infinity;
+  if (maxDepth < Infinity) {
+    const baseDepth = pathPrefix ? pathDepth(pathPrefix) : 0;
+    files = files.filter((f) => pathDepth(f.path) - baseDepth <= maxDepth);
+  }
+
+  return files
+    .map((f) => ({ path: f.path, symbols: f.symbol_count }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
  * Get a nested file tree for a repository.
  * Supports filtering by path prefix, name pattern, and depth.
+ *
+ * When `compact=true`, returns a flat sorted list of `{ path, symbols }`
+ * entries instead of the full nested tree — 10-50x less output.
  */
 export async function getFileTree(
   repo: string,
   options?: FileTreeOptions,
-): Promise<FileTreeNode[]> {
+): Promise<FileTreeNode[] | CompactFileEntry[]> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
+  }
+
+  if (options?.compact) {
+    return buildCompactList(index, options);
   }
 
   return buildTree(index, options);
@@ -238,6 +373,7 @@ export async function getFileOutline(
 
   return symbols.map((s) => {
     const entry: FileOutlineEntry = {
+      id: s.id,
       name: s.name,
       kind: s.kind,
       start_line: s.start_line,

@@ -6,6 +6,7 @@ import { getCodeIndex, getBM25Index } from "./index-tools.js";
 import type { CodeSymbol, Reference } from "../types.js";
 
 const MAX_REFERENCES = 200;
+const MAX_CONTEXT_LENGTH = 200; // Truncate context lines to prevent huge output from minified files
 
 /**
  * Read a source file and extract lines for a symbol (1-based, inclusive).
@@ -167,11 +168,14 @@ export async function findReferences(
       if (line === undefined) continue;
       const match = pattern.exec(line);
       if (match) {
+        const rawContext = line.trimEnd();
         refs.push({
           file: fileEntry.path,
           line: i + 1,
           col: match.index + 1,
-          context: line.trimEnd(),
+          context: rawContext.length > MAX_CONTEXT_LENGTH
+            ? rawContext.slice(0, MAX_CONTEXT_LENGTH) + "..."
+            : rawContext,
         });
       }
     }

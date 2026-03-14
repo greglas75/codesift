@@ -38,9 +38,15 @@ async function executeSubQuery(
         kind: query["kind"] as SymbolKind | undefined,
         file_pattern: query["file_pattern"] as string | undefined,
         include_source: true,
-        top_k: (query["top_k"] as number | undefined) ?? 10,
+        top_k: (query["top_k"] as number | undefined) ?? 5,
       });
-      const data = results.map((r) => r.symbol);
+      const sourceLimit = (query["source_chars"] as number | undefined) ?? 200;
+      const data = results.map((r) => {
+        const sym = r.symbol;
+        return sourceLimit > 0 && sym.source && sym.source.length > sourceLimit
+          ? { ...sym, source: sym.source.slice(0, sourceLimit) }
+          : sym;
+      });
       const text = JSON.stringify(data);
       return { type: qType, data, tokens: estimateTokens(text) };
     }
@@ -59,8 +65,11 @@ async function executeSubQuery(
     case "file_tree": {
       const { getFileTree } = await import("../tools/outline-tools.js");
       const result = await getFileTree(repo, {
-        path_prefix: query["path"] as string | undefined,
+        path_prefix: (query["path"] ?? query["path_prefix"]) as string | undefined,
+        name_pattern: query["name_pattern"] as string | undefined,
         depth: query["depth"] as number | undefined,
+        compact: query["compact"] as boolean | undefined,
+        min_symbols: query["min_symbols"] as number | undefined,
       });
       const text = JSON.stringify(result);
       return { type: qType, data: result, tokens: estimateTokens(text) };
@@ -89,7 +98,10 @@ async function executeSubQuery(
         repo,
         query["symbol_name"] as string,
         (query["direction"] as "callers" | "callees") ?? "callers",
-        query["depth"] as number | undefined,
+        {
+          depth: query["depth"] as number | undefined,
+          include_source: (query["include_source"] as boolean | undefined) ?? false,
+        },
       );
       const text = JSON.stringify(result);
       return { type: qType, data: result, tokens: estimateTokens(text) };
@@ -100,8 +112,11 @@ async function executeSubQuery(
       const result = await impactAnalysis(
         repo,
         query["since"] as string,
-        query["depth"] as number | undefined,
-        query["until"] as string | undefined,
+        {
+          depth: query["depth"] as number | undefined,
+          until: query["until"] as string | undefined,
+          include_source: (query["include_source"] as boolean | undefined) ?? false,
+        },
       );
       const text = JSON.stringify(result);
       return { type: qType, data: result, tokens: estimateTokens(text) };
@@ -131,29 +146,117 @@ async function executeSubQuery(
 
     case "semantic": {
       const { getCodeIndex, getEmbeddingCache } = await import("../tools/index-tools.js");
-      const { createEmbeddingProvider, searchSemantic } = await import("../search/semantic.js");
+      const { createEmbeddingProvider, searchSemantic, cosineSimilarity } = await import("../search/semantic.js");
       const { loadConfig: getConfig } = await import("../config.js");
+      const { getRepo } = await import("../storage/registry.js");
+      const { loadChunks, loadChunkEmbeddings, getChunkPath, getChunkEmbeddingPath } = await import("../storage/chunk-store.js");
 
       const semanticConfig = getConfig();
       if (!semanticConfig.embeddingProvider) {
         throw new Error("No embedding provider configured. Set CODESIFT_VOYAGE_API_KEY, CODESIFT_OPENAI_API_KEY, or CODESIFT_OLLAMA_URL.");
       }
 
+      const topK = (query["top_k"] as number | undefined) ?? 10;
+      const fileFilter = query["file_filter"] as string | undefined;
+
+      // Auto-decompose long queries for RRF merging (shared by both paths)
+      const provider = createEmbeddingProvider(semanticConfig.embeddingProvider, semanticConfig);
+      const subQueryTexts = decomposeQuery(query["query"] as string);
+      const vecs = await provider.embed(subQueryTexts);
+
+      // Try chunk-level semantic search first
+      const repoMeta = await getRepo(semanticConfig.registryPath, repo);
+      if (repoMeta) {
+        const chunkPath = getChunkPath(repoMeta.index_path);
+        const chunkEmbeddingPath = getChunkEmbeddingPath(repoMeta.index_path);
+        const [chunks, chunkEmbeddings] = await Promise.all([
+          loadChunks(chunkPath),
+          loadChunkEmbeddings(chunkEmbeddingPath),
+        ]);
+
+        if (chunks && chunkEmbeddings) {
+          // Optionally filter to a file path substring
+          const filteredEmbeddings = fileFilter
+            ? new Map([...chunkEmbeddings.entries()].filter(([id]) => chunks.get(id)?.file.includes(fileFilter) ?? false))
+            : chunkEmbeddings;
+
+          // RRF over sub-query rankings (k=60 per standard RRF)
+          const rrfScores = new Map<string, number>();
+          const rrfK = 60;
+          for (const vec of vecs) {
+            if (!vec) continue;
+            const qEmbed = new Float32Array(vec);
+            const subScores: Array<{ id: string; score: number }> = [];
+            for (const [id, chunkVec] of filteredEmbeddings) {
+              if (chunkVec.length === qEmbed.length) {
+                subScores.push({ id, score: cosineSimilarity(qEmbed, chunkVec) });
+              }
+            }
+            subScores.sort((a, b) => b.score - a.score);
+            subScores.forEach((s, rank) => {
+              rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (rrfK + rank + 1));
+            });
+          }
+          const topIds = [...rrfScores.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, topK)
+            .map(([id]) => id);
+
+          // Group chunks by file and sort by line number within each file
+          const byFile = new Map<string, Array<{ startLine: number; endLine: number; text: string }>>();
+          for (const id of topIds) {
+            const chunk = chunks.get(id);
+            if (!chunk) continue;
+            const existing = byFile.get(chunk.file) ?? [];
+            existing.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
+            byFile.set(chunk.file, existing);
+          }
+
+          // Format as plain text — same style as Augment's context engine
+          const sections: string[] = ["The following code sections were retrieved:"];
+          for (const [file, fileChunks] of byFile) {
+            fileChunks.sort((a, b) => a.startLine - b.startLine);
+            // Merge overlapping/adjacent chunks to avoid duplicate lines
+            const merged: Array<{ startLine: number; endLine: number; text: string }> = [];
+            for (const chunk of fileChunks) {
+              const last = merged[merged.length - 1];
+              if (last && chunk.startLine <= last.endLine + 5) {
+                if (chunk.endLine > last.endLine) {
+                  const overlapLines = last.endLine - chunk.startLine + 1;
+                  const newLines = chunk.text.split("\n").slice(overlapLines);
+                  last.text = last.text + "\n" + newLines.join("\n");
+                  last.endLine = chunk.endLine;
+                }
+              } else {
+                merged.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
+              }
+            }
+            sections.push(`Path: ${file}`);
+            for (const chunk of merged) {
+              // Add line numbers to each line (matching Auggie's format)
+              const lines = chunk.text.split("\n");
+              const numbered = lines.map((line, i) => {
+                const lineNo = String(chunk.startLine + i).padStart(6, " ");
+                return `${lineNo}\t${line}`;
+              }).join("\n");
+              sections.push(numbered);
+            }
+            sections.push("...");
+          }
+
+          const text = sections.join("\n");
+          return { type: qType, data: text, tokens: estimateTokens(text) };
+        }
+      }
+
+      // Fall back to symbol-level semantic search when no chunks are indexed
       const index = await getCodeIndex(repo);
       if (!index) throw new Error(`Repository "${repo}" not found`);
 
       const embeddings = await getEmbeddingCache(repo);
       if (!embeddings) throw new Error(`No embeddings for "${repo}". Run index_folder with an embedding provider configured.`);
 
-      const topK = (query["top_k"] as number | undefined) ?? 10;
-      const fileFilter = query["file_filter"] as string | undefined;
-
-      // Embed the query
-      const provider = createEmbeddingProvider(semanticConfig.embeddingProvider, semanticConfig);
-      const [queryVec] = await provider.embed([query["query"] as string]);
-      if (!queryVec) throw new Error("Embedding provider returned no vector");
-
-      const queryEmbedding = new Float32Array(queryVec);
+      const sourceLimit = (query["source_chars"] as number | undefined) ?? 200;
       const symbolMap = new Map(index.symbols.map((s) => [s.id, s]));
 
       // Optionally narrow embeddings to a file path substring
@@ -161,10 +264,149 @@ async function executeSubQuery(
         ? new Map([...embeddings.entries()].filter(([id]) => symbolMap.get(id)?.file.includes(fileFilter) ?? false))
         : embeddings;
 
-      const results = searchSemantic(queryEmbedding, filteredEmbeddings, symbolMap, topK);
-      const data = results.map((r) => r.symbol);
+      const primaryVec = vecs[0];
+      if (!primaryVec) throw new Error("Embedding provider returned no vector");
+      const results = searchSemantic(new Float32Array(primaryVec), filteredEmbeddings, symbolMap, topK);
+      const data = results.map((r) => {
+        const sym = r.symbol;
+        return sourceLimit > 0 && sym.source && sym.source.length > sourceLimit
+          ? { ...sym, source: sym.source.slice(0, sourceLimit) }
+          : sym;
+      });
       const text = JSON.stringify(data);
       return { type: qType, data, tokens: estimateTokens(text) };
+    }
+
+    case "hybrid": {
+      // Hybrid: semantic embedding search + text/BM25 search, RRF-merged.
+      // Benefits: no need to choose semantic vs text — gets best of both.
+      const { getRepo: getRepoH } = await import("../storage/registry.js");
+      const { loadChunks: loadChunksH, loadChunkEmbeddings: loadChunkEmbeddingsH, getChunkPath: getChunkPathH, getChunkEmbeddingPath: getChunkEmbeddingPathH } = await import("../storage/chunk-store.js");
+      const { createEmbeddingProvider: createProviderH, cosineSimilarity: cosSimH } = await import("../search/semantic.js");
+      const { loadConfig: getConfigH } = await import("../config.js");
+      const { searchText: searchTextH } = await import("../tools/search-tools.js");
+
+      const hybridConfig = getConfigH();
+      if (!hybridConfig.embeddingProvider) {
+        throw new Error("No embedding provider configured.");
+      }
+
+      const topK = (query["top_k"] as number | undefined) ?? 10;
+      const fileFilter = query["file_filter"] as string | undefined;
+      const queryText = query["query"] as string;
+
+      const repoMeta = await getRepoH(hybridConfig.registryPath, repo);
+      if (!repoMeta) throw new Error(`Repository "${repo}" not found`);
+
+      const chunkPath = getChunkPathH(repoMeta.index_path);
+      const chunkEmbeddingPath = getChunkEmbeddingPathH(repoMeta.index_path);
+
+      // Run semantic embedding + text search in parallel
+      const provider = createProviderH(hybridConfig.embeddingProvider, hybridConfig);
+      const subQueryTexts = decomposeQuery(queryText);
+      const [chunks, chunkEmbeddings, textMatches, embVecs] = await Promise.all([
+        loadChunksH(chunkPath),
+        loadChunkEmbeddingsH(chunkEmbeddingPath),
+        searchTextH(repo, queryText, { file_pattern: fileFilter }).catch(() => []),
+        provider.embed(subQueryTexts),
+      ]);
+
+      if (!chunks || !chunkEmbeddings) throw new Error(`No chunk index for "${repo}"`);
+
+      const filteredEmbeddings = fileFilter
+        ? new Map([...chunkEmbeddings.entries()].filter(([id]) => chunks.get(id)?.file.includes(fileFilter) ?? false))
+        : chunkEmbeddings;
+
+      const rrfK = 60;
+      const rrfScores = new Map<string, number>();
+
+      // 1. Semantic RRF contributions (one pass per decomposed sub-query)
+      for (const vec of embVecs) {
+        if (!vec) continue;
+        const qEmbed = new Float32Array(vec);
+        const subScores: Array<{ id: string; score: number }> = [];
+        for (const [id, chunkVec] of filteredEmbeddings) {
+          if (chunkVec.length === qEmbed.length) {
+            subScores.push({ id, score: cosSimH(qEmbed, chunkVec) });
+          }
+        }
+        subScores.sort((a, b) => b.score - a.score);
+        subScores.forEach((s, rank) => {
+          rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (rrfK + rank + 1));
+        });
+      }
+
+      // 2. Text match RRF contributions — map match line → covering chunk
+      // Build file → sorted-chunks index for efficient line lookup
+      const fileToChunks = new Map<string, Array<{ id: string; startLine: number; endLine: number }>>();
+      for (const [id, chunk] of chunks) {
+        const list = fileToChunks.get(chunk.file) ?? [];
+        list.push({ id, startLine: chunk.startLine, endLine: chunk.endLine });
+        fileToChunks.set(chunk.file, list);
+      }
+      for (const list of fileToChunks.values()) {
+        list.sort((a, b) => a.startLine - b.startLine);
+      }
+
+      for (let rank = 0; rank < textMatches.length; rank++) {
+        const match = textMatches[rank];
+        if (!match) continue;
+        const list = fileToChunks.get(match.file) ?? [];
+        for (const chunk of list) {
+          if (chunk.startLine <= match.line && match.line <= chunk.endLine) {
+            rrfScores.set(chunk.id, (rrfScores.get(chunk.id) ?? 0) + 1 / (rrfK + rank + 1));
+            break;
+          }
+        }
+      }
+
+      // Top_k by combined RRF score
+      const topIds = [...rrfScores.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, topK)
+        .map(([id]) => id);
+
+      // Format as plain text (same as semantic case)
+      const byFile = new Map<string, Array<{ startLine: number; endLine: number; text: string }>>();
+      for (const id of topIds) {
+        const chunk = chunks.get(id);
+        if (!chunk) continue;
+        const existing = byFile.get(chunk.file) ?? [];
+        existing.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
+        byFile.set(chunk.file, existing);
+      }
+
+      const sections: string[] = ["The following code sections were retrieved:"];
+      for (const [file, fileChunks] of byFile) {
+        fileChunks.sort((a, b) => a.startLine - b.startLine);
+        const merged: Array<{ startLine: number; endLine: number; text: string }> = [];
+        for (const chunk of fileChunks) {
+          const last = merged[merged.length - 1];
+          if (last && chunk.startLine <= last.endLine + 5) {
+            if (chunk.endLine > last.endLine) {
+              const overlapLines = last.endLine - chunk.startLine + 1;
+              const newLines = chunk.text.split("\n").slice(overlapLines);
+              last.text = last.text + "\n" + newLines.join("\n");
+              last.endLine = chunk.endLine;
+            }
+          } else {
+            merged.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
+          }
+        }
+        sections.push(`Path: ${file}`);
+        for (const chunk of merged) {
+          const lines = chunk.text.split("\n");
+          const numbered = lines.map((line, i) => {
+            const lineNo = String(chunk.startLine + i).padStart(6, " ");
+            return `${lineNo}\t${line}`;
+          }).join("\n");
+          sections.push(numbered);
+        }
+        sections.push("...");
+      }
+
+      const hybridText = sections.join("\n");
+      return { type: qType, data: hybridText, tokens: estimateTokens(hybridText) };
     }
 
     default:
@@ -174,6 +416,30 @@ async function executeSubQuery(
         tokens: 50,
       };
   }
+}
+
+/**
+ * Split a long query into sub-queries at natural connectors for RRF merging.
+ * Queries ≤ 8 words are returned as-is.
+ */
+function decomposeQuery(query: string): string[] {
+  const words = query.split(/\s+/).filter(Boolean);
+  if (words.length <= 8) return [query];
+
+  const splitWords = new Set(["and", "or", "from", "to", "with", "using", "for", "via", "then"]);
+  const lo = Math.floor(words.length * 0.35);
+  const hi = Math.floor(words.length * 0.65);
+
+  for (let i = lo; i <= hi; i++) {
+    if (splitWords.has((words[i] ?? "").toLowerCase())) {
+      const a = words.slice(0, i).join(" ");
+      const b = words.slice(i + 1).join(" ");
+      if (a.trim() && b.trim()) return [a, b];
+    }
+  }
+
+  const mid = Math.floor(words.length / 2);
+  return [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
 }
 
 export interface CodebaseRetrievalResult {

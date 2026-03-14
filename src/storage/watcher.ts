@@ -13,6 +13,10 @@ const IGNORE_PATTERNS = [
   "**/.next/**",
   "**/__pycache__/**",
   "**/.pytest_cache/**",
+  "**/generated/**",
+  "**/audit-results/**",
+  "**/.backup/**",
+  "**/jscpd-report/**",
 ];
 
 // WeakMap to track debounce timers per watcher for cleanup

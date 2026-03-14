@@ -9,7 +9,7 @@ const parserCache = new Map<string, Parser>();
 
 const EXTENSION_MAP: Record<string, string> = {
   ".ts": "typescript",
-  ".tsx": "typescript",
+  ".tsx": "tsx",
   ".js": "javascript",
   ".jsx": "javascript",
   ".py": "python",
@@ -22,6 +22,7 @@ const EXTENSION_MAP: Record<string, string> = {
   ".markdown": "markdown",
   ".css": "css",
   ".json": "json",
+  ".prisma": "prisma",
 };
 
 export async function initParser(): Promise<void> {

@@ -1,6 +1,13 @@
 import { tokenizeIdentifier } from "../parser/symbol-extractor.js";
 import type { CodeSymbol, SearchResult } from "../types.js";
 
+/** Test file detection — demoted in BM25 scoring */
+const TEST_FILE_PATTERNS = [".test.", ".spec.", "__tests__/", "test/mocks", "test-utils", "test-helpers"];
+
+function isTestFile(filePath: string): boolean {
+  return TEST_FILE_PATTERNS.some((pattern) => filePath.includes(pattern));
+}
+
 // BM25 parameters
 const K1 = 1.2;
 const B = 0.75;
@@ -190,6 +197,14 @@ export function searchBM25(
         }
         tokenSet.add(qToken);
       }
+    }
+  }
+
+  // Demote test file symbols so production code ranks above test helpers
+  for (const [symbolId, score] of scores) {
+    const symbol = index.symbols.get(symbolId);
+    if (symbol && isTestFile(symbol.file)) {
+      scores.set(symbolId, score * 0.3);
     }
   }
 

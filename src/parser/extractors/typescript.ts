@@ -4,6 +4,70 @@ import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
 
 const MAX_SOURCE_LENGTH = 5000;
 
+/** Matches top-level SCREAMING_CASE identifiers like MAX_RETRIES, API_URL */
+const SCREAMING_CASE_RE = /^[A-Z][A-Z0-9_]+$/;
+
+/** Test lifecycle hook names */
+const TEST_HOOK_NAMES = new Set([
+  "beforeEach", "afterEach", "beforeAll", "afterAll",
+]);
+
+/** Method suffixes on it/test that are still test_case (it.skip, it.each, etc.) */
+const TEST_CASE_METHODS = new Set([
+  "skip", "todo", "each", "only", "failing", "concurrent",
+]);
+
+/** Method suffixes on describe that are still test_suite */
+const TEST_SUITE_METHODS = new Set([
+  "skip", "only", "each",
+]);
+
+/**
+ * Parse test-call callee from a call_expression node.
+ *
+ * Handles:
+ *   describe("...", fn)        → { base: "describe", method: null }
+ *   it("...", fn)              → { base: "it",       method: null }
+ *   it.skip("...", fn)         → { base: "it",       method: "skip" }
+ *   it.each([...])("...", fn)  → { base: "it",       method: "each" }
+ *   beforeEach(fn)             → { base: "beforeEach", method: null }
+ */
+interface CalleeInfo { base: string; method: string | null }
+
+function parseTestCallee(callExpr: Parser.SyntaxNode): CalleeInfo | null {
+  const fn = callExpr.childForFieldName("function");
+  if (!fn) return null;
+
+  // Simple call: describe(...), it(...), test(...), beforeEach(...)
+  if (fn.type === "identifier") {
+    return { base: fn.text, method: null };
+  }
+
+  // Member call: it.skip(...), it.todo(...), describe.only(...)
+  if (fn.type === "member_expression") {
+    const obj = fn.childForFieldName("object");
+    const prop = fn.childForFieldName("property");
+    if (obj?.type === "identifier" && prop) {
+      return { base: obj.text, method: prop.text };
+    }
+  }
+
+  // Chained call: it.each([...])("name", fn)
+  // The outer call_expression has a call_expression child as callee
+  if (fn.type === "call_expression") {
+    const innerFn = fn.childForFieldName("function");
+    if (innerFn?.type === "member_expression") {
+      const obj = innerFn.childForFieldName("object");
+      const prop = innerFn.childForFieldName("property");
+      if (obj?.type === "identifier" && prop) {
+        return { base: obj.text, method: prop.text };
+      }
+    }
+  }
+
+  return null;
+}
+
 // --- Helpers ---
 
 function getNodeName(node: Parser.SyntaxNode): string | null {
@@ -125,6 +189,11 @@ export function extractTypeScriptSymbols(
       }
 
       case "lexical_declaration": {
+        // Determine if this is a `const` declaration (vs let/var)
+        const isConst = node.children.some(
+          (c: Parser.SyntaxNode) => c.type === "const",
+        );
+
         for (const declarator of node.namedChildren) {
           if (declarator.type !== "variable_declarator") continue;
 
@@ -140,7 +209,9 @@ export function extractTypeScriptSymbols(
             if (doc) sym.docstring = doc;
             symbols.push(sym);
           } else if (value) {
-            const sym = makeSymbol(node, name, "variable", filePath, source, repo, parentId);
+            // SCREAMING_CASE const → "constant", otherwise → "variable"
+            const kind = isConst && SCREAMING_CASE_RE.test(name) ? "constant" : "variable";
+            const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
             const doc = getDocstring(node, source);
             if (doc) sym.docstring = doc;
             symbols.push(sym);
@@ -150,7 +221,8 @@ export function extractTypeScriptSymbols(
         return;
       }
 
-      case "class_declaration": {
+      case "class_declaration":
+      case "abstract_class_declaration": {
         const name = getNodeName(node) ?? "<anonymous>";
         const sym = makeSymbol(node, name, "class", filePath, source, repo, parentId);
         symbols.push(sym);
@@ -160,6 +232,18 @@ export function extractTypeScriptSymbols(
           walk(child, sym.id);
         }
         return;
+      }
+
+      case "abstract_method_signature": {
+        // abstract doSomething(): void; inside abstract classes
+        const name = getNodeName(node);
+        if (name) {
+          const sym = makeSymbol(node, name, "method", filePath, source, repo, parentId);
+          const sig = getSignature(node, source);
+          if (sig) sym.signature = sig;
+          symbols.push(sym);
+        }
+        break;
       }
 
       case "method_definition": {
@@ -219,12 +303,15 @@ export function extractTypeScriptSymbols(
 
       case "expression_statement": {
         // Check for test calls: describe(...), it(...), test(...)
+        // Also handles member forms: it.skip(...), it.each(...)(...), describe.only(...)
         const expr = node.namedChildren[0];
         if (expr?.type === "call_expression") {
-          const fn = expr.childForFieldName("function");
-          if (fn) {
-            const fnName = fn.text;
-            if (fnName === "describe") {
+          const callee = parseTestCallee(expr);
+          if (callee) {
+            const { base, method } = callee;
+
+            // describe() or describe.skip/only/each()
+            if (base === "describe" && (method === null || TEST_SUITE_METHODS.has(method))) {
               const testName = getTestName(expr);
               const name = testName ?? "describe";
               const sym = makeSymbol(node, name, "test_suite", filePath, source, repo, parentId);
@@ -243,10 +330,22 @@ export function extractTypeScriptSymbols(
               }
               return;
             }
-            if (fnName === "it" || fnName === "test") {
+
+            // it() / test() or it.skip/each/only/todo/failing/concurrent()
+            if (
+              (base === "it" || base === "test") &&
+              (method === null || TEST_CASE_METHODS.has(method))
+            ) {
               const testName = getTestName(expr);
-              const name = testName ?? fnName;
+              const name = testName ?? base;
               const sym = makeSymbol(node, name, "test_case", filePath, source, repo, parentId);
+              symbols.push(sym);
+              return;
+            }
+
+            // Lifecycle hooks: beforeEach(), afterEach(), beforeAll(), afterAll()
+            if (TEST_HOOK_NAMES.has(base) && method === null) {
+              const sym = makeSymbol(node, base, "test_hook", filePath, source, repo, parentId);
               symbols.push(sym);
               return;
             }

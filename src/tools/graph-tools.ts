@@ -3,15 +3,38 @@ import { getCodeIndex } from "./index-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
 import type { CodeSymbol, CodeIndex, Direction, CallNode, ImpactResult } from "../types.js";
 
-const DEFAULT_CALL_DEPTH = 3;
+const DEFAULT_CALL_DEPTH = 1;
 const DEFAULT_IMPACT_DEPTH = 2;
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Maximum total nodes in a call tree to prevent runaway expansion */
+const MAX_TREE_NODES = 500;
+
+/** Maximum children per node to keep output readable */
+const MAX_CHILDREN_PER_NODE = 20;
+
+/** Minimum symbol name length to consider as a call edge (skip `id`, `e`, etc.) */
+const MIN_CALL_NAME_LENGTH = 3;
+
+/** Symbol kinds that represent callable entities */
+const CALLABLE_KINDS = new Set([
+  "function", "method", "class", "default_export", "variable",
+]);
+
+/** Test file patterns to exclude from trace by default */
+const TEST_FILE_PATTERNS = [
+  /\.test\.[jt]sx?$/,
+  /\.spec\.[jt]sx?$/,
+  /\/__tests__\//,
+  /\/test\//,
+  /\/tests\//,
+];
+
+function isTestFile(filePath: string): boolean {
+  return TEST_FILE_PATTERNS.some(p => p.test(filePath));
 }
 
 /**
- * Pre-computed adjacency lists for O(n) lookup during BFS.
+ * Pre-computed adjacency lists for O(1) lookup during BFS.
  * Built once per traceCallChain / impactAnalysis call.
  */
 interface AdjacencyIndex {
@@ -22,40 +45,101 @@ interface AdjacencyIndex {
 }
 
 /**
- * Build caller/callee adjacency lists in a single O(n×m) pass
- * where m = average unique symbol names per source. After this,
- * BFS lookups are O(1) per node.
+ * Extract identifiers that look like function/method calls from source code.
+ * Matches patterns like: `functionName(`, `obj.methodName(`, `this.method(`
+ * Returns a Set of the called identifier names.
  */
-function buildAdjacencyIndex(allSymbols: CodeSymbol[]): AdjacencyIndex {
+function extractCallSites(source: string): Set<string> {
+  const calls = new Set<string>();
+
+  // Match: word followed by ( — captures function calls and method calls
+  // Also handles: this.method(, obj.method(, await func(, new Class(
+  const callPattern = /\b([a-zA-Z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = callPattern.exec(source)) !== null) {
+    const name = match[1]!;
+    // Skip language keywords that look like calls
+    if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
+      calls.add(name);
+    }
+  }
+
+  // Also match property access patterns: .identifier (for method references passed as callbacks)
+  // This catches patterns like: items.map(processItem) where processItem is referenced
+  const propPattern = /\.([a-zA-Z_$][\w$]*)\b/g;
+  while ((match = propPattern.exec(source)) !== null) {
+    const name = match[1]!;
+    if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
+      calls.add(name);
+    }
+  }
+
+  return calls;
+}
+
+/** JS/TS keywords that appear with ( but are not function calls */
+const KEYWORD_SET = new Set([
+  "if", "for", "while", "switch", "catch", "return", "typeof", "instanceof",
+  "new", "throw", "delete", "void", "yield", "await", "import", "export",
+  "from", "const", "let", "var", "function", "class", "extends", "implements",
+  "interface", "type", "enum", "async", "static", "get", "set", "constructor",
+  "super", "this", "true", "false", "null", "undefined", "try", "finally",
+  "else", "case", "default", "break", "continue", "do", "in", "of",
+  "as", "is", "keyof", "readonly", "declare", "abstract", "override",
+  "public", "private", "protected",
+]);
+
+/**
+ * Build caller/callee adjacency lists by extracting actual call sites from source code.
+ *
+ * For each symbol with source, extracts identifiers used as function calls (pattern: `name(`)
+ * and looks them up in the symbol name index. This produces much more accurate edges than
+ * simple word-boundary matching, which matches any mention of a symbol name.
+ *
+ * @param allSymbols - All symbols in the index
+ * @param skipTests - If true, exclude symbols from test files (default: true)
+ */
+function buildAdjacencyIndex(allSymbols: CodeSymbol[], skipTests = true): AdjacencyIndex {
   const callees = new Map<string, CodeSymbol[]>();
   const callers = new Map<string, CodeSymbol[]>();
 
-  // Collect unique names → symbols for regex matching targets
+  // Filter symbols: optionally skip test files
+  const symbols = skipTests
+    ? allSymbols.filter(s => !isTestFile(s.file))
+    : allSymbols;
+
+  // Build name → symbols lookup (only callable kinds for callee targets)
   const nameToSymbols = new Map<string, CodeSymbol[]>();
-  for (const sym of allSymbols) {
+  for (const sym of symbols) {
+    if (!CALLABLE_KINDS.has(sym.kind)) continue;
+    if (sym.name.length < MIN_CALL_NAME_LENGTH) continue;
+
     const existing = nameToSymbols.get(sym.name);
     if (existing) existing.push(sym);
     else nameToSymbols.set(sym.name, [sym]);
   }
 
-  // For each symbol with source, find which names it references
-  for (const sym of allSymbols) {
+  // For each symbol with source, extract call sites and find matching targets
+  for (const sym of symbols) {
     if (!sym.source) continue;
 
+    const callSites = extractCallSites(sym.source);
     const symCallees: CodeSymbol[] = [];
 
-    for (const [name, targets] of nameToSymbols) {
-      const pattern = new RegExp(`\\b${escapeRegex(name)}\\b`);
-      if (pattern.test(sym.source)) {
-        for (const target of targets) {
-          if (target.id === sym.id) continue;
-          symCallees.push(target);
+    for (const calledName of callSites) {
+      const targets = nameToSymbols.get(calledName);
+      if (!targets) continue;
 
-          // Also record the reverse edge (caller)
-          const targetCallers = callers.get(target.id);
-          if (targetCallers) targetCallers.push(sym);
-          else callers.set(target.id, [sym]);
-        }
+      for (const target of targets) {
+        if (target.id === sym.id) continue;
+        // Skip self-file references for common patterns (e.g., method calling sibling method)
+        // Keep cross-file references always
+        symCallees.push(target);
+
+        // Record reverse edge (caller)
+        const targetCallers = callers.get(target.id);
+        if (targetCallers) targetCallers.push(sym);
+        else callers.set(target.id, [sym]);
       }
     }
 
@@ -70,6 +154,7 @@ function buildAdjacencyIndex(allSymbols: CodeSymbol[]): AdjacencyIndex {
 /**
  * BFS traversal to build a call chain tree up to the given depth.
  * Uses pre-built adjacency index for O(1) neighbor lookups.
+ * Enforces MAX_TREE_NODES and MAX_CHILDREN_PER_NODE limits.
  */
 function buildCallTree(
   root: CodeSymbol,
@@ -79,9 +164,10 @@ function buildCallTree(
 ): CallNode {
   const visited = new Set<string>([root.id]);
   const adj = direction === "callees" ? adjacency.callees : adjacency.callers;
+  let totalNodes = 1;
 
   function expand(symbol: CodeSymbol, depth: number): CallNode {
-    if (depth >= maxDepth) {
+    if (depth >= maxDepth || totalNodes >= MAX_TREE_NODES) {
       return { symbol, children: [] };
     }
 
@@ -89,8 +175,11 @@ function buildCallTree(
 
     const children: CallNode[] = [];
     for (const neighbor of neighbors) {
+      if (totalNodes >= MAX_TREE_NODES) break;
+      if (children.length >= MAX_CHILDREN_PER_NODE) break;
       if (visited.has(neighbor.id)) continue;
       visited.add(neighbor.id);
+      totalNodes++;
       children.push(expand(neighbor, depth + 1));
     }
 
@@ -101,30 +190,78 @@ function buildCallTree(
 }
 
 /**
+ * Strip the `source` field from a CodeSymbol, keeping compact metadata.
+ */
+function stripSource(sym: CodeSymbol): CodeSymbol {
+  const { source: _, ...rest } = sym;
+  return rest;
+}
+
+/**
+ * Recursively strip `source` from all symbols in a CallNode tree.
+ */
+function stripCallTreeSource(node: CallNode): CallNode {
+  return {
+    symbol: stripSource(node.symbol),
+    children: node.children.map(stripCallTreeSource),
+  };
+}
+
+export interface TraceOptions {
+  depth?: number | undefined;
+  include_source?: boolean | undefined;
+  include_tests?: boolean | undefined;
+}
+
+/**
  * Trace the call chain for a symbol in a repository.
  * Returns a tree of callers or callees up to the specified depth.
+ * By default, source code is stripped from symbols to keep output compact.
+ * Test files are excluded by default (use include_tests: true to include them).
  */
 export async function traceCallChain(
   repo: string,
   symbolName: string,
   direction: Direction,
-  depth?: number,
+  depthOrOptions?: number | TraceOptions,
 ): Promise<CallNode> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
 
-  const target = index.symbols.find((s) => s.name === symbolName);
+  // Support both legacy (depth: number) and new (options: TraceOptions) signatures
+  let maxDepth: number;
+  let includeSource: boolean;
+  let includeTests: boolean;
+  if (typeof depthOrOptions === "object" && depthOrOptions !== null) {
+    maxDepth = depthOrOptions.depth ?? DEFAULT_CALL_DEPTH;
+    includeSource = depthOrOptions.include_source ?? false;
+    includeTests = depthOrOptions.include_tests ?? false;
+  } else {
+    maxDepth = depthOrOptions ?? DEFAULT_CALL_DEPTH;
+    includeSource = false;
+    includeTests = false;
+  }
+
+  // Find the target symbol — prefer non-test files when tests are excluded
+  const candidates = index.symbols.filter((s) => s.name === symbolName);
+  let target: CodeSymbol | undefined;
+  if (!includeTests) {
+    target = candidates.find((s) => !isTestFile(s.file));
+  }
+  target ??= candidates[0];
+
   if (!target) {
     throw new Error(
       `Symbol "${symbolName}" not found in repository "${repo}"`,
     );
   }
 
-  const maxDepth = depth ?? DEFAULT_CALL_DEPTH;
-  const adjacency = buildAdjacencyIndex(index.symbols);
-  return buildCallTree(target, adjacency, direction, maxDepth);
+  const adjacency = buildAdjacencyIndex(index.symbols, !includeTests);
+  const tree = buildCallTree(target, adjacency, direction, maxDepth);
+
+  return includeSource ? tree : stripCallTreeSource(tree);
 }
 
 /**
@@ -148,8 +285,8 @@ function findAffectedSymbols(
     const nextFrontier: CodeSymbol[] = [];
 
     for (const sym of frontier) {
-      const callers = adjacency.callers.get(sym.id) ?? [];
-      for (const caller of callers) {
+      const symCallers = adjacency.callers.get(sym.id) ?? [];
+      for (const caller of symCallers) {
         if (!affected.has(caller.id)) {
           affected.set(caller.id, caller);
           nextFrontier.push(caller);
@@ -184,8 +321,8 @@ function buildFileDependencyGraph(
     const dependentFiles = new Set<string>();
 
     for (const sym of fileSymbols) {
-      const callers = adjacency.callers.get(sym.id) ?? [];
-      for (const caller of callers) {
+      const symCallers = adjacency.callers.get(sym.id) ?? [];
+      for (const caller of symCallers) {
         if (caller.file !== file) {
           dependentFiles.add(caller.file);
         }
@@ -223,14 +360,21 @@ function getChangedFiles(repoRoot: string, since: string, until: string): string
   }
 }
 
+export interface ImpactOptions {
+  depth?: number | undefined;
+  until?: string | undefined;
+  include_source?: boolean | undefined;
+}
+
 /**
  * Analyze the impact of recent git changes on a repository.
  * Finds changed files, affected symbols, and builds a dependency graph.
+ * By default, source code is stripped from symbols to keep output compact.
  */
 export async function impactAnalysis(
   repo: string,
   since: string,
-  depth?: number,
+  depthOrOptions?: number | ImpactOptions,
   until?: string,
 ): Promise<ImpactResult> {
   const index = await getCodeIndex(repo);
@@ -238,7 +382,20 @@ export async function impactAnalysis(
     throw new Error(`Repository not found: ${repo}`);
   }
 
-  const untilRef = until ?? "HEAD";
+  // Support both legacy (depth: number, until: string) and new (options: ImpactOptions) signatures
+  let maxDepth: number;
+  let untilRef: string;
+  let includeSource: boolean;
+  if (typeof depthOrOptions === "object" && depthOrOptions !== null) {
+    maxDepth = depthOrOptions.depth ?? DEFAULT_IMPACT_DEPTH;
+    untilRef = depthOrOptions.until ?? until ?? "HEAD";
+    includeSource = depthOrOptions.include_source ?? false;
+  } else {
+    maxDepth = depthOrOptions ?? DEFAULT_IMPACT_DEPTH;
+    untilRef = until ?? "HEAD";
+    includeSource = false;
+  }
+
   const changedFiles = getChangedFiles(index.root, since, untilRef);
 
   // Find all symbols in changed files
@@ -247,9 +404,9 @@ export async function impactAnalysis(
   );
 
   // Build adjacency index once, reuse for both affected + dependency graph
-  const adjacency = buildAdjacencyIndex(index.symbols);
+  // Include test files for impact analysis (want to know which tests are affected)
+  const adjacency = buildAdjacencyIndex(index.symbols, false);
 
-  const maxDepth = depth ?? DEFAULT_IMPACT_DEPTH;
   const affectedSymbols = findAffectedSymbols(
     changedSymbols,
     adjacency,
@@ -260,7 +417,12 @@ export async function impactAnalysis(
 
   return {
     changed_files: changedFiles,
-    affected_symbols: affectedSymbols,
+    affected_symbols: includeSource
+      ? affectedSymbols
+      : affectedSymbols.map(stripSource),
     dependency_graph: dependencyGraph,
   };
 }
+
+// Export for testing
+export { buildAdjacencyIndex, extractCallSites, buildCallTree, isTestFile };

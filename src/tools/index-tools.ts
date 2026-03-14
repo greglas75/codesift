@@ -2,7 +2,7 @@ import { readdir, readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:f
 import { join, relative, extname, resolve, basename } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parseFile } from "../parser/parser-manager.js";
-import { extractSymbols } from "../parser/symbol-extractor.js";
+import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental } from "../storage/index-store.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName } from "../storage/registry.js";
@@ -10,6 +10,8 @@ import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js
 import { buildBM25Index, type BM25Index } from "../search/bm25.js";
 import { buildSymbolText, createEmbeddingProvider } from "../search/semantic.js";
 import { loadEmbeddings, saveEmbeddings, saveEmbeddingMeta, getEmbeddingPath, getEmbeddingMetaPath, batchEmbed } from "../storage/embedding-store.js";
+import { saveChunks, saveChunkEmbeddings, loadChunkEmbeddings, getChunkPath, getChunkEmbeddingPath } from "../storage/chunk-store.js";
+import { chunkFile } from "../search/chunker.js";
 import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta } from "../types.js";
@@ -19,6 +21,7 @@ const IGNORE_DIRS = new Set([
   "node_modules", ".git", "dist", "build", "coverage",
   ".codesift", ".next", "__pycache__", ".pytest_cache",
   ".venv", "venv", ".tox", ".mypy_cache", ".turbo",
+  "generated", "audit-results", ".backup", "jscpd-report",
 ]);
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
@@ -103,14 +106,22 @@ async function parseFiles(
       batch.map(async (filePath) => {
         try {
           const source = await readFile(filePath, "utf-8");
-          const tree = await parseFile(filePath, source);
-          if (!tree) return null;
-
           const relPath = relative(repoRoot, filePath);
           const ext = extname(filePath);
           const language = getLanguageForExtension(ext) ?? "unknown";
 
-          const symbols = extractSymbols(tree, relPath, source, repoName, language);
+          let symbols: CodeSymbol[];
+
+          // Markdown and Prisma use custom parsers (no tree-sitter grammar)
+          if (language === "markdown") {
+            symbols = extractMarkdownSymbols(source, relPath, repoName);
+          } else if (language === "prisma") {
+            symbols = extractPrismaSymbols(source, relPath, repoName);
+          } else {
+            const tree = await parseFile(filePath, source);
+            if (!tree) return null;
+            symbols = extractSymbols(tree, relPath, source, repoName, language);
+          }
 
           const entry: FileEntry = {
             path: relPath,
@@ -227,6 +238,48 @@ export async function indexFolder(
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
       // Non-fatal — BM25 search still works
+    }
+  }
+
+  // Embed file chunks if an embedding provider is configured (non-fatal if it fails)
+  if (config.embeddingProvider) {
+    const chunkPath = getChunkPath(indexPath);
+    const chunkEmbeddingPath = getChunkEmbeddingPath(indexPath);
+    try {
+      const provider = createEmbeddingProvider(config.embeddingProvider, config);
+
+      // Build chunks for all indexed files
+      const allChunks: import("../types.js").CodeChunk[] = [];
+      for (const entry of fileEntries) {
+        const fullPath = join(rootPath, entry.path);
+        try {
+          const content = await readFile(fullPath, "utf-8");
+          const fileChunks = chunkFile(entry.path, content, repoName);
+          allChunks.push(...fileChunks);
+        } catch {
+          // Skip unreadable files
+        }
+      }
+
+      if (allChunks.length > 0) {
+        // Load existing chunk embeddings to avoid re-embedding unchanged chunks
+        const existingChunkEmbeddings = await loadChunkEmbeddings(chunkEmbeddingPath) ?? new Map<string, Float32Array>();
+        const chunkTexts = new Map(allChunks.map((c) => [c.id, c.text]));
+
+        const chunkEmbeddings = await batchEmbed(
+          chunkTexts,
+          existingChunkEmbeddings,
+          provider.embed.bind(provider),
+          96,
+        );
+
+        await saveChunks(chunkPath, allChunks);
+        await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] Chunk embedding failed for ${repoName}: ${message}`);
+      // Non-fatal — symbol-level and BM25 search still work
     }
   }
 
@@ -357,12 +410,21 @@ async function handleFileChange(
 
   try {
     const source = await readFile(fullPath, "utf-8");
-    const tree = await parseFile(fullPath, source);
-    if (!tree) return;
-
     const ext = extname(relativeFile);
     const language = getLanguageForExtension(ext) ?? "unknown";
-    const symbols = extractSymbols(tree, relativeFile, source, repoName, language);
+
+    let symbols: CodeSymbol[];
+
+    // Markdown and Prisma use custom parsers (no tree-sitter grammar)
+    if (language === "markdown") {
+      symbols = extractMarkdownSymbols(source, relativeFile, repoName);
+    } else if (language === "prisma") {
+      symbols = extractPrismaSymbols(source, relativeFile, repoName);
+    } else {
+      const tree = await parseFile(fullPath, source);
+      if (!tree) return;
+      symbols = extractSymbols(tree, relativeFile, source, repoName, language);
+    }
 
     const fileEntry: FileEntry = {
       path: relativeFile,
@@ -403,10 +465,12 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   bm25Indexes.delete(repoName);
   embeddingCaches.delete(repoName);
 
-  // Delete index file + embedding files
+  // Delete index file + embedding files + chunk files
   const embeddingPath = getEmbeddingPath(meta.index_path);
   const embeddingMetaPath = getEmbeddingMetaPath(meta.index_path);
-  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath]) {
+  const chunkPath = getChunkPath(meta.index_path);
+  const chunkEmbeddingPath = getChunkEmbeddingPath(meta.index_path);
+  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath]) {
     try { await unlink(fp); } catch { /* File may not exist */ }
   }
 

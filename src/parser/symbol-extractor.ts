@@ -8,6 +8,10 @@ import { extractJavaScriptSymbols } from "./extractors/javascript.js";
 
 // --- Public API ---
 
+/**
+ * Extract symbols from a tree-sitter parse tree.
+ * For markdown files, use `extractMarkdownSymbols` directly (no tree-sitter needed).
+ */
 export function extractSymbols(
   tree: Parser.Tree,
   filePath: string,
@@ -17,6 +21,7 @@ export function extractSymbols(
 ): CodeSymbol[] {
   switch (language) {
     case "typescript":
+    case "tsx":
       return extractTypeScriptSymbols(tree, filePath, source, repo);
     case "python":
       return extractPythonSymbols(tree, filePath, source, repo);
@@ -30,6 +35,10 @@ export function extractSymbols(
       return extractGenericSymbols(tree, filePath, source, repo);
   }
 }
+
+// Re-export custom extractors for use by the indexing pipeline (no tree-sitter grammar)
+export { extractMarkdownSymbols } from "./extractors/markdown.js";
+export { extractPrismaSymbols } from "./extractors/prisma.js";
 
 /**
  * Splits camelCase, PascalCase, UPPER_SNAKE, and snake_case identifiers

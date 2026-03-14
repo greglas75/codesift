@@ -272,6 +272,110 @@ describe("outline_tools", () => {
         expect(node.path).toMatch(/^src/);
       }
     });
+
+    it("compact mode returns flat list of paths with symbol counts", async () => {
+      const repo = await indexFixture();
+
+      const result = await getFileTree(repo, { compact: true });
+
+      // Should be an array of { path, symbols } entries
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBe(3); // 3 files in fixture
+
+      for (const entry of result) {
+        expect(entry).toHaveProperty("path");
+        expect(entry).toHaveProperty("symbols");
+        expect(typeof (entry as { path: string }).path).toBe("string");
+        expect(typeof (entry as { symbols: number }).symbols).toBe("number");
+      }
+
+      // Should NOT have nested tree properties
+      for (const entry of result) {
+        expect(entry).not.toHaveProperty("children");
+        expect(entry).not.toHaveProperty("type");
+        expect(entry).not.toHaveProperty("name");
+      }
+
+      // Should be sorted alphabetically by path
+      const paths = result.map((e) => (e as { path: string }).path);
+      const sorted = [...paths].sort();
+      expect(paths).toEqual(sorted);
+    });
+
+    it("compact mode with path_prefix filters correctly", async () => {
+      const repo = await indexFixture();
+
+      const result = await getFileTree(repo, { compact: true, path_prefix: "src" });
+
+      expect(result.length).toBe(3);
+      for (const entry of result) {
+        expect((entry as { path: string }).path).toMatch(/^src\//);
+      }
+    });
+
+    it("compact mode with name_pattern filters correctly", async () => {
+      const repo = await indexFixture();
+
+      const result = await getFileTree(repo, { compact: true, name_pattern: "*.ts" });
+
+      expect(result.length).toBe(3);
+      for (const entry of result) {
+        expect((entry as { path: string }).path).toMatch(/\.ts$/);
+      }
+    });
+
+    it("compact mode produces much less output than full mode", async () => {
+      const repo = await indexFixture();
+
+      const compact = await getFileTree(repo, { compact: true });
+      const full = await getFileTree(repo);
+
+      const compactSize = JSON.stringify(compact).length;
+      const fullSize = JSON.stringify(full).length;
+
+      // Compact should be meaningfully smaller
+      expect(compactSize).toBeLessThan(fullSize);
+    });
+
+    it("min_symbols filters files by symbol count", async () => {
+      const repo = await indexFixture();
+
+      // Get all files first to find the max symbol count
+      const allFiles = await getFileTree(repo, { compact: true });
+      expect(allFiles.length).toBe(3);
+
+      // Find a threshold that filters out at least one file
+      const symbolCounts = allFiles.map((e) => (e as { symbols: number }).symbols);
+      const maxSymbols = Math.max(...symbolCounts);
+
+      // Filter with min_symbols = maxSymbols should return only the file(s) with that count
+      const filtered = await getFileTree(repo, { compact: true, min_symbols: maxSymbols });
+      expect(filtered.length).toBeGreaterThan(0);
+      expect(filtered.length).toBeLessThanOrEqual(allFiles.length);
+
+      for (const entry of filtered) {
+        expect((entry as { symbols: number }).symbols).toBeGreaterThanOrEqual(maxSymbols);
+      }
+    });
+
+    it("min_symbols works with full (non-compact) mode", async () => {
+      const repo = await indexFixture();
+
+      // Very high threshold should return empty or very few files
+      const result = await getFileTree(repo, { min_symbols: 999 });
+
+      // Collect all file nodes from the tree
+      function collectFiles(nodes: typeof result): number {
+        let count = 0;
+        for (const node of nodes) {
+          if ("type" in node && node.type === "file") count++;
+          if ("children" in node && node.children) count += collectFiles(node.children);
+        }
+        return count;
+      }
+
+      expect(collectFiles(result)).toBe(0);
+    });
   });
 
   describe("getFileOutline", () => {
@@ -672,5 +776,105 @@ describe("codebase_retrieval", () => {
     expect(result.results[0]!.type).toBe("nonexistent_type");
     const data = result.results[0]!.data as { error: string };
     expect(data.error).toContain("Unknown sub-query type");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New symbol kinds: constant, test_hook, markdown sections
+// ---------------------------------------------------------------------------
+describe("new_symbol_kinds", () => {
+  it("indexes SCREAMING_CASE const as 'constant' kind", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+    await writeFile(
+      join(fixtureDir, "src", "constants.ts"),
+      `export const MAX_RETRIES = 3;
+export const API_BASE_URL = "https://example.com";
+export const normalVar = { key: "value" };
+`,
+    );
+    await indexFolder(fixtureDir, { watch: false });
+
+    const index = await getCodeIndex(REPO);
+    const constants = index!.symbols.filter((s) => s.kind === "constant");
+    const variables = index!.symbols.filter((s) => s.kind === "variable");
+
+    expect(constants.map((c) => c.name).sort()).toEqual(["API_BASE_URL", "MAX_RETRIES"]);
+    expect(variables.some((v) => v.name === "normalVar")).toBe(true);
+  });
+
+  it("indexes test lifecycle hooks as 'test_hook' kind", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+    await writeFile(
+      join(fixtureDir, "src", "example.test.ts"),
+      `describe("MyService", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("does something", () => {
+    expect(true).toBe(true);
+  });
+});
+`,
+    );
+    await indexFolder(fixtureDir, { watch: false });
+
+    const index = await getCodeIndex(REPO);
+    const hooks = index!.symbols.filter((s) => s.kind === "test_hook");
+
+    expect(hooks).toHaveLength(2);
+    expect(hooks.map((h) => h.name).sort()).toEqual(["afterEach", "beforeEach"]);
+  });
+
+  it("indexes markdown headings as 'section' kind", async () => {
+    await writeFile(
+      join(fixtureDir, "README.md"),
+      `# Project Title
+
+This is the project overview.
+
+## Installation
+
+Run npm install.
+
+## Usage
+
+Import and use.
+`,
+    );
+    await indexFolder(fixtureDir, { watch: false });
+
+    const index = await getCodeIndex(REPO);
+    const sections = index!.symbols.filter((s) => s.kind === "section");
+
+    expect(sections).toHaveLength(3);
+    expect(sections.map((s) => s.name)).toEqual(["Project Title", "Installation", "Usage"]);
+  });
+
+  it("indexes markdown frontmatter as 'metadata' kind", async () => {
+    await writeFile(
+      join(fixtureDir, "doc.md"),
+      `---
+title: API Guide
+version: 2.0
+---
+
+# API Guide
+
+Content here.
+`,
+    );
+    await indexFolder(fixtureDir, { watch: false });
+
+    const index = await getCodeIndex(REPO);
+    const metadata = index!.symbols.filter((s) => s.kind === "metadata");
+
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0]!.name).toBe("frontmatter");
+    expect(metadata[0]!.source).toContain("title: API Guide");
   });
 });

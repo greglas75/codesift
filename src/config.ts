@@ -28,7 +28,7 @@ export interface Config {
 
   // Retrieval
   defaultTokenBudget: number;  // 8000
-  defaultTopK: number;         // 20
+  defaultTopK: number;         // 50
 }
 
 let cachedConfig: Config | null = null;
@@ -53,10 +53,10 @@ export function loadConfig(): Config {
     watchDebounceMs: parseIntEnv("CODESIFT_WATCH_DEBOUNCE_MS", 500),
 
     bm25FieldWeights: {
-      name: 3.0,
-      signature: 2.0,
+      name: 5.0,
+      signature: 2.5,
       docstring: 1.5,
-      body: 1.0,
+      body: 0.5,
     },
 
     embeddingProvider,
@@ -66,7 +66,7 @@ export function loadConfig(): Config {
     embeddingBatchSize: parseIntEnv("CODESIFT_EMBEDDING_BATCH_SIZE", 128),
 
     defaultTokenBudget: parseIntEnv("CODESIFT_DEFAULT_TOKEN_BUDGET", 8000),
-    defaultTopK: parseIntEnv("CODESIFT_DEFAULT_TOP_K", 20),
+    defaultTopK: parseIntEnv("CODESIFT_DEFAULT_TOP_K", 50),
   };
   return cachedConfig;
 }

@@ -6,7 +6,8 @@
   "author": "Greg Laskowski",
   "type": "module",
   "bin": {
-    "codesift-mcp": "./dist/server.js"
+    "codesift-mcp": "./dist/server.js",
+    "codesift": "./dist/cli.js"
   },
   "main": "./dist/server.js",
   "files": [
@@ -16,7 +17,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/parser/languages dist/parser/",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
