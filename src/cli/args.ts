@@ -17,13 +17,19 @@ export function parseArgs(args: string[]): ParsedArgs {
     const arg = args[i]!;
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
-      const next = args[i + 1];
-      // Boolean flags: no next value, or next value is also a flag
-      if (next === undefined || next.startsWith("--")) {
-        flags[key] = true;
+      // Handle --key=value syntax
+      if (key.includes("=")) {
+        const eqIdx = key.indexOf("=");
+        flags[key.slice(0, eqIdx)] = key.slice(eqIdx + 1);
       } else {
-        flags[key] = next;
-        i++;
+        const next = args[i + 1];
+        // Boolean flags: no next value, or next value is also a flag
+        if (next === undefined || next.startsWith("--")) {
+          flags[key] = true;
+        } else {
+          flags[key] = next;
+          i++;
+        }
       }
     } else {
       positional.push(arg);
