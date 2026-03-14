@@ -30,6 +30,7 @@ export default defineConfig({
         test: {
           name: "core",
           include: [
+            "tests/cli/**/*.test.ts",
             "tests/storage/**/*.test.ts",
             "tests/search/**/*.test.ts",
             "tests/tools/**/*.test.ts",
