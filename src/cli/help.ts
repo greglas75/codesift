@@ -263,14 +263,19 @@ Arguments:
   <repo>    Repository identifier
 
 Options:
-  --queries         JSON array of sub-queries (required)
-  --token-budget    Maximum total tokens across all results
+  --queries              JSON array of sub-queries (required)
+  --token-budget         Maximum total tokens across all results
+  --exclude-tests        Exclude test files from semantic/hybrid results (default: true)
+  --exclude-tests=false  Include test files in semantic/hybrid results
 
 Sub-query types: symbols, text, file_tree, outline, references,
   call_chain, impact, context, knowledge_map, semantic, hybrid
 
+Semantic/hybrid sub-queries support an "exclude_tests" field (default: true).
+
 Example:
-  codesift retrieve local/my-project --queries '[{"type":"symbols","query":"createUser"},{"type":"text","query":"TODO"}]'`,
+  codesift retrieve local/my-project --queries '[{"type":"symbols","query":"createUser"},{"type":"text","query":"TODO"}]'
+  codesift retrieve local/my-project --queries '[{"type":"semantic","query":"caching"}]' --exclude-tests=false`,
 
   stats: `codesift stats
 

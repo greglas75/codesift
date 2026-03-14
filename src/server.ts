@@ -404,7 +404,7 @@ server.tool(
 // ---------------------------------------------------------------------------
 server.tool(
   "codebase_retrieval",
-  "Batch multiple search and retrieval queries into a single call with shared token budget",
+  "Batch multiple search and retrieval queries into a single call with shared token budget. Semantic and hybrid sub-queries exclude test files by default (set exclude_tests:false to include them).",
   {
     repo: z.string().describe("Repository identifier"),
     queries: z

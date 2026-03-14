@@ -1,5 +1,6 @@
 import { loadConfig } from "../config.js";
 import type { SymbolKind } from "../types.js";
+import { isTestFile } from "../utils/test-file.js";
 
 // Lazy imports to avoid circular dependencies at module load time.
 // Each handler imports its dependency on first call.
@@ -158,6 +159,7 @@ async function executeSubQuery(
 
       const topK = (query["top_k"] as number | undefined) ?? 10;
       const fileFilter = query["file_filter"] as string | undefined;
+      const excludeTests = (query["exclude_tests"] as boolean | undefined) ?? true;
 
       // Auto-decompose long queries for RRF merging (shared by both paths)
       const provider = createEmbeddingProvider(semanticConfig.embeddingProvider, semanticConfig);
@@ -175,10 +177,17 @@ async function executeSubQuery(
         ]);
 
         if (chunks && chunkEmbeddings) {
-          // Optionally filter to a file path substring
-          const filteredEmbeddings = fileFilter
-            ? new Map([...chunkEmbeddings.entries()].filter(([id]) => chunks.get(id)?.file.includes(fileFilter) ?? false))
-            : chunkEmbeddings;
+          // Filter embeddings by file path substring and/or test file exclusion
+          let filteredEmbeddings = chunkEmbeddings;
+          if (fileFilter || excludeTests) {
+            filteredEmbeddings = new Map([...chunkEmbeddings.entries()].filter(([id]) => {
+              const chunkFile = chunks.get(id)?.file;
+              if (!chunkFile) return false;
+              if (fileFilter && !chunkFile.includes(fileFilter)) return false;
+              if (excludeTests && isTestFile(chunkFile)) return false;
+              return true;
+            }));
+          }
 
           // RRF over sub-query rankings (k=60 per standard RRF)
           const rrfScores = new Map<string, number>();
@@ -259,10 +268,17 @@ async function executeSubQuery(
       const sourceLimit = (query["source_chars"] as number | undefined) ?? 200;
       const symbolMap = new Map(index.symbols.map((s) => [s.id, s]));
 
-      // Optionally narrow embeddings to a file path substring
-      const filteredEmbeddings = fileFilter
-        ? new Map([...embeddings.entries()].filter(([id]) => symbolMap.get(id)?.file.includes(fileFilter) ?? false))
-        : embeddings;
+      // Filter embeddings by file path substring and/or test file exclusion
+      let filteredEmbeddings = embeddings;
+      if (fileFilter || excludeTests) {
+        filteredEmbeddings = new Map([...embeddings.entries()].filter(([id]) => {
+          const symFile = symbolMap.get(id)?.file;
+          if (!symFile) return false;
+          if (fileFilter && !symFile.includes(fileFilter)) return false;
+          if (excludeTests && isTestFile(symFile)) return false;
+          return true;
+        }));
+      }
 
       const primaryVec = vecs[0];
       if (!primaryVec) throw new Error("Embedding provider returned no vector");
@@ -293,6 +309,7 @@ async function executeSubQuery(
 
       const topK = (query["top_k"] as number | undefined) ?? 10;
       const fileFilter = query["file_filter"] as string | undefined;
+      const excludeTests = (query["exclude_tests"] as boolean | undefined) ?? true;
       const queryText = query["query"] as string;
 
       const repoMeta = await getRepoH(hybridConfig.registryPath, repo);
@@ -313,9 +330,16 @@ async function executeSubQuery(
 
       if (!chunks || !chunkEmbeddings) throw new Error(`No chunk index for "${repo}"`);
 
-      const filteredEmbeddings = fileFilter
-        ? new Map([...chunkEmbeddings.entries()].filter(([id]) => chunks.get(id)?.file.includes(fileFilter) ?? false))
-        : chunkEmbeddings;
+      let filteredEmbeddings = chunkEmbeddings;
+      if (fileFilter || excludeTests) {
+        filteredEmbeddings = new Map([...chunkEmbeddings.entries()].filter(([id]) => {
+          const chunkFile = chunks.get(id)?.file;
+          if (!chunkFile) return false;
+          if (fileFilter && !chunkFile.includes(fileFilter)) return false;
+          if (excludeTests && isTestFile(chunkFile)) return false;
+          return true;
+        }));
+      }
 
       const rrfK = 60;
       const rrfScores = new Map<string, number>();
@@ -351,6 +375,8 @@ async function executeSubQuery(
       for (let rank = 0; rank < textMatches.length; rank++) {
         const match = textMatches[rank];
         if (!match) continue;
+        // Skip text matches from test files when excluding tests
+        if (excludeTests && isTestFile(match.file)) continue;
         const list = fileToChunks.get(match.file) ?? [];
         for (const chunk of list) {
           if (chunk.startLine <= match.line && match.line <= chunk.endLine) {
@@ -371,6 +397,8 @@ async function executeSubQuery(
       for (const id of topIds) {
         const chunk = chunks.get(id);
         if (!chunk) continue;
+        // Double-check test file exclusion (text matches could contribute chunk IDs)
+        if (excludeTests && isTestFile(chunk.file)) continue;
         const existing = byFile.get(chunk.file) ?? [];
         existing.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
         byFile.set(chunk.file, existing);

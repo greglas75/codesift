@@ -322,6 +322,26 @@ async function handleRetrieve(args: string[], flags: Flags): Promise<void> {
     die("Invalid JSON for --queries flag");
   }
 
+  // --exclude-tests (default: true) — pass to semantic/hybrid sub-queries
+  // Use --no-exclude-tests or --exclude-tests=false to include test files
+  const excludeTestsFlag = getBoolFlag(flags, "exclude-tests");
+  const excludeTests = excludeTestsFlag !== false; // default true
+  if (excludeTests) {
+    // Inject exclude_tests into semantic/hybrid sub-queries that don't already specify it
+    for (const q of queries) {
+      if ((q.type === "semantic" || q.type === "hybrid") && q["exclude_tests"] === undefined) {
+        q["exclude_tests"] = true;
+      }
+    }
+  } else {
+    // Explicitly set false on semantic/hybrid sub-queries
+    for (const q of queries) {
+      if ((q.type === "semantic" || q.type === "hybrid") && q["exclude_tests"] === undefined) {
+        q["exclude_tests"] = false;
+      }
+    }
+  }
+
   const { codebaseRetrieval } = await import("../retrieval/codebase-retrieval.js");
 
   const result = await codebaseRetrieval(repo, queries, getNumFlag(flags, "token-budget"));
