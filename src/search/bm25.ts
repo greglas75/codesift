@@ -1,18 +1,19 @@
 import { tokenizeIdentifier } from "../parser/symbol-extractor.js";
+import { isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, SearchResult } from "../types.js";
-
-/** Test file detection — demoted in BM25 scoring */
-const TEST_FILE_PATTERNS = [".test.", ".spec.", "__tests__/", "test/mocks", "test-utils", "test-helpers"];
-
-function isTestFile(filePath: string): boolean {
-  return TEST_FILE_PATTERNS.some((pattern) => filePath.includes(pattern));
-}
 
 // BM25 parameters
 const K1 = 1.2;
 const B = 0.75;
 
 const BODY_CHAR_LIMIT = 500;
+
+/**
+ * Score multiplier for symbols in test files.
+ * Demotes test helpers so production code ranks higher in search results.
+ * 0.3 = test symbols score 30% of equivalent production symbols.
+ */
+const TEST_FILE_SCORE_MULTIPLIER = 0.3;
 
 type FieldName = "name" | "signature" | "docstring" | "body";
 
@@ -204,7 +205,7 @@ export function searchBM25(
   for (const [symbolId, score] of scores) {
     const symbol = index.symbols.get(symbolId);
     if (symbol && isTestFile(symbol.file)) {
-      scores.set(symbolId, score * 0.3);
+      scores.set(symbolId, score * TEST_FILE_SCORE_MULTIPLIER);
     }
   }
 

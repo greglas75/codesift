@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
+import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, CodeIndex, Direction, CallNode, ImpactResult } from "../types.js";
 
 const DEFAULT_CALL_DEPTH = 1;
@@ -19,19 +20,6 @@ const MIN_CALL_NAME_LENGTH = 3;
 const CALLABLE_KINDS = new Set([
   "function", "method", "class", "default_export", "variable",
 ]);
-
-/** Test file patterns to exclude from trace by default */
-const TEST_FILE_PATTERNS = [
-  /\.test\.[jt]sx?$/,
-  /\.spec\.[jt]sx?$/,
-  /\/__tests__\//,
-  /\/test\//,
-  /\/tests\//,
-];
-
-function isTestFile(filePath: string): boolean {
-  return TEST_FILE_PATTERNS.some(p => p.test(filePath));
-}
 
 /**
  * Pre-computed adjacency lists for O(1) lookup during BFS.
@@ -59,16 +47,6 @@ function extractCallSites(source: string): Set<string> {
   while ((match = callPattern.exec(source)) !== null) {
     const name = match[1]!;
     // Skip language keywords that look like calls
-    if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
-      calls.add(name);
-    }
-  }
-
-  // Also match property access patterns: .identifier (for method references passed as callbacks)
-  // This catches patterns like: items.map(processItem) where processItem is referenced
-  const propPattern = /\.([a-zA-Z_$][\w$]*)\b/g;
-  while ((match = propPattern.exec(source)) !== null) {
-    const name = match[1]!;
     if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
       calls.add(name);
     }

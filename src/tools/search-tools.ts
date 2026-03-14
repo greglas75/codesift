@@ -7,6 +7,7 @@ import type { SearchResult, TextMatch, SymbolKind } from "../types.js";
 
 const DEFAULT_MAX_TEXT_MATCHES = 500;
 const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
+const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
 
 /** Directories to skip during text search file walk */
 const IGNORE_DIRS = new Set([
@@ -126,8 +127,11 @@ function splitFirst(str: string, sep: string): [string, string] {
  */
 async function walkAllTextFiles(rootPath: string): Promise<string[]> {
   const files: string[] = [];
+  let limitReached = false;
 
   async function walk(dirPath: string): Promise<void> {
+    if (limitReached) return;
+
     let entries;
     try {
       entries = await readdir(dirPath, { withFileTypes: true });
@@ -136,6 +140,7 @@ async function walkAllTextFiles(rootPath: string): Promise<string[]> {
     }
 
     for (const entry of entries) {
+      if (limitReached) return;
       const fullPath = join(dirPath, entry.name);
 
       if (entry.isDirectory()) {
@@ -158,6 +163,14 @@ async function walkAllTextFiles(rootPath: string): Promise<string[]> {
         }
 
         files.push(relative(rootPath, fullPath));
+
+        if (files.length >= MAX_WALK_FILES) {
+          console.warn(
+            `[codesift] walkAllTextFiles: reached ${MAX_WALK_FILES} file limit, returning partial results`,
+          );
+          limitReached = true;
+          return;
+        }
       }
     }
   }
