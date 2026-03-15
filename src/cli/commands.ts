@@ -3,9 +3,22 @@
 // ---------------------------------------------------------------------------
 
 import type { Flags } from "./args.js";
+import type { CallNode } from "../types.js";
 import { getFlag, getBoolFlag, getNumFlag, requireArg, requireFlag, parseCommaSeparated, output, die } from "./args.js";
 
 export type CommandHandler = (args: string[], flags: Flags) => Promise<void>;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const VALID_SYMBOL_KINDS: ReadonlySet<string> = new Set([
+  "function", "method", "class", "interface", "type", "variable", "constant",
+  "field", "enum", "namespace", "module", "section", "metadata",
+  "test_suite", "test_case", "test_hook", "default_export", "unknown",
+]);
+
+const EXCLUDE_TESTS_QUERY_TYPES: ReadonlySet<string> = new Set(["semantic", "hybrid"]);
 
 // ---------------------------------------------------------------------------
 // Index commands
@@ -72,6 +85,11 @@ async function handleSymbols(args: string[], flags: Flags): Promise<void> {
   const { searchSymbols } = await import("../tools/search-tools.js");
   type SymbolKind = import("../types.js").SymbolKind;
 
+  const kindRaw = getFlag(flags, "kind");
+  if (kindRaw !== undefined && !VALID_SYMBOL_KINDS.has(kindRaw)) {
+    die(`Invalid --kind: ${kindRaw}. Valid: ${Array.from(VALID_SYMBOL_KINDS).join(", ")}`);
+  }
+
   const includeSource = getBoolFlag(flags, "include-source");
   const explicitTopK = getNumFlag(flags, "top-k");
   // When --include-source is set and no explicit --top-k, default to 5
@@ -79,7 +97,7 @@ async function handleSymbols(args: string[], flags: Flags): Promise<void> {
   const topK = explicitTopK ?? (includeSource ? 5 : undefined);
 
   const result = await searchSymbols(repo, query, {
-    kind: getFlag(flags, "kind") as SymbolKind | undefined,
+    kind: kindRaw as SymbolKind | undefined,
     file_pattern: getFlag(flags, "file-pattern"),
     include_source: includeSource,
     top_k: topK,
@@ -186,47 +204,46 @@ async function handleRefs(args: string[], flags: Flags): Promise<void> {
 // Graph commands
 // ---------------------------------------------------------------------------
 
+function printTraceCompact(root: CallNode): void {
+  function printNode(node: CallNode, indent: number): void {
+    const prefix = indent === 0 ? "" : "  ".repeat(indent) + "|- ";
+    const sym = node.symbol;
+    const sig = sym.signature ? ` ${sym.signature}` : "";
+    const loc = `${sym.file}:${sym.start_line}`;
+    process.stdout.write(`${prefix}${sym.kind} | ${sym.name}${sig} | ${loc}\n`);
+    for (const child of node.children) {
+      printNode(child, indent + 1);
+    }
+  }
+  printNode(root, 0);
+
+  function countNodes(node: CallNode): number {
+    return 1 + node.children.reduce((sum, c) => sum + countNodes(c), 0);
+  }
+  process.stderr.write(`\n${countNodes(root)} symbols in trace\n`);
+}
+
 async function handleTrace(args: string[], flags: Flags): Promise<void> {
   const repo = requireArg(args, 0, "repo");
   const name = requireArg(args, 1, "name");
   const { traceCallChain } = await import("../tools/graph-tools.js");
   type Direction = import("../types.js").Direction;
-  type CallNode = import("../types.js").CallNode;
 
   const direction = (getFlag(flags, "direction") ?? "callers") as Direction;
   if (direction !== "callers" && direction !== "callees") {
     die(`Invalid --direction: ${direction}. Must be "callers" or "callees".`);
   }
 
-  const includeSource = getBoolFlag(flags, "include-source") ?? false;
-  const includeTests = getBoolFlag(flags, "include-tests") ?? false;
   const result = await traceCallChain(repo, name, direction, {
     depth: getNumFlag(flags, "depth"),
-    include_source: includeSource,
-    include_tests: includeTests,
+    include_source: getBoolFlag(flags, "include-source") ?? false,
+    include_tests: getBoolFlag(flags, "include-tests") ?? false,
   });
 
   if (getBoolFlag(flags, "json")) {
     output(result, flags);
   } else {
-    // Compact tree output
-    function printNode(node: CallNode, indent: number): void {
-      const prefix = indent === 0 ? "" : "  ".repeat(indent) + "|- ";
-      const sym = node.symbol;
-      const sig = sym.signature ? ` ${sym.signature}` : "";
-      const loc = `${sym.file}:${sym.start_line}`;
-      process.stdout.write(`${prefix}${sym.kind} | ${sym.name}${sig} | ${loc}\n`);
-      for (const child of node.children) {
-        printNode(child, indent + 1);
-      }
-    }
-    printNode(result, 0);
-
-    // Count total nodes
-    function countNodes(node: CallNode): number {
-      return 1 + node.children.reduce((sum, c) => sum + countNodes(c), 0);
-    }
-    process.stderr.write(`\n${countNodes(result)} symbols in trace\n`);
+    printTraceCompact(result);
   }
 }
 
@@ -290,44 +307,45 @@ async function handleChanged(args: string[], flags: Flags): Promise<void> {
 // Retrieval & utility commands
 // ---------------------------------------------------------------------------
 
-async function handleRetrieve(args: string[], flags: Flags): Promise<void> {
-  const repo = requireArg(args, 0, "repo");
+function parseRetrievalQueries(flags: Flags): Array<{ type: string; [key: string]: unknown }> {
   const queriesRaw = getFlag(flags, "queries");
   if (!queriesRaw) {
     die("Missing required flag: --queries <json>");
   }
 
-  let queries: Array<{ type: string; [key: string]: unknown }>;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(queriesRaw);
-    if (!Array.isArray(parsed)) {
-      die("--queries must be a JSON array");
-    }
-    queries = parsed as Array<{ type: string; [key: string]: unknown }>;
+    parsed = JSON.parse(queriesRaw);
   } catch {
     die("Invalid JSON for --queries flag");
   }
 
-  // --exclude-tests (default: true) — pass to semantic/hybrid sub-queries
-  // Use --no-exclude-tests or --exclude-tests=false to include test files
-  const excludeTestsFlag = getBoolFlag(flags, "exclude-tests");
-  const excludeTests = excludeTestsFlag !== false; // default true
-  if (excludeTests) {
-    // Inject exclude_tests into semantic/hybrid sub-queries that don't already specify it
-    for (const q of queries) {
-      if ((q.type === "semantic" || q.type === "hybrid") && q["exclude_tests"] === undefined) {
-        q["exclude_tests"] = true;
-      }
-    }
-  } else {
-    // Explicitly set false on semantic/hybrid sub-queries
-    for (const q of queries) {
-      if ((q.type === "semantic" || q.type === "hybrid") && q["exclude_tests"] === undefined) {
-        q["exclude_tests"] = false;
-      }
+  if (!Array.isArray(parsed)) {
+    die("--queries must be a JSON array");
+  }
+
+  for (const item of parsed) {
+    if (typeof item !== "object" || item === null || typeof (item as Record<string, unknown>).type !== "string") {
+      die("Each --queries entry must be an object with a \"type\" string field");
     }
   }
 
+  const queries = parsed as Array<{ type: string; [key: string]: unknown }>;
+
+  // --exclude-tests (default: true) — inject into semantic/hybrid sub-queries
+  const excludeTests = getBoolFlag(flags, "exclude-tests") !== false;
+  for (const q of queries) {
+    if (EXCLUDE_TESTS_QUERY_TYPES.has(q.type) && q["exclude_tests"] === undefined) {
+      q["exclude_tests"] = excludeTests;
+    }
+  }
+
+  return queries;
+}
+
+async function handleRetrieve(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const queries = parseRetrievalQueries(flags);
   const { codebaseRetrieval } = await import("../retrieval/codebase-retrieval.js");
 
   const result = await codebaseRetrieval(repo, queries, getNumFlag(flags, "token-budget"));

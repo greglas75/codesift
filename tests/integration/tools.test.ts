@@ -672,7 +672,7 @@ describe("generate_tools", () => {
 
     it("writes to file when outputPath is provided", async () => {
       const repo = await indexFixture();
-      const outputPath = join(tmpDir, "CLAUDE.md");
+      const outputPath = join(fixtureDir, "CLAUDE.md");
 
       const result = await generateClaudeMd(repo, outputPath);
 
@@ -775,7 +775,7 @@ describe("codebase_retrieval", () => {
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("nonexistent_type");
     const data = result.results[0]!.data as { error: string };
-    expect(data.error).toContain("Unknown sub-query type");
+    expect(data.error).toContain("Invalid sub-query");
   });
 });
 

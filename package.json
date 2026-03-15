@@ -31,7 +31,8 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chokidar": "^4.0.0",
     "ignore": "^6.0.0",
-    "web-tree-sitter": "^0.24.0"
+    "web-tree-sitter": "^0.24.0",
+    "zod": "^4.3.6"
   },
   "optionalDependencies": {
     "openai": "^4.0.0",

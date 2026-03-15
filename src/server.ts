@@ -428,7 +428,7 @@ server.tool(
   {},
   async () => wrapTool("usage_stats", {}, async () => {
     const stats = await getUsageStats();
-    return formatUsageReport(stats);
+    return { report: formatUsageReport(stats) };
   })(),
 );
 

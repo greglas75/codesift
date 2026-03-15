@@ -15,14 +15,60 @@ import { chunkFile } from "../search/chunker.js";
 import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
-import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta } from "../types.js";
+import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
 
 const PARSE_CONCURRENCY = 8;
+const CHUNK_EMBEDDING_BATCH_SIZE = 96;
+const GIT_CLONE_TIMEOUT_MS = 120_000;
+const GIT_CHECKOUT_TIMEOUT_MS = 30_000;
+const GIT_PULL_TIMEOUT_MS = 60_000;
 
 // Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
 const bm25Indexes = new Map<string, BM25Index>();
 const embeddingCaches = new Map<string, Map<string, Float32Array>>();
+
+/**
+ * Parse a single file and extract its symbols + metadata.
+ * Returns null if the file cannot be parsed.
+ */
+async function parseOneFile(
+  filePath: string,
+  repoRoot: string,
+  repoName: string,
+): Promise<{ symbols: CodeSymbol[]; entry: FileEntry } | null> {
+  try {
+    const source = await readFile(filePath, "utf-8");
+    const relPath = relative(repoRoot, filePath);
+    const ext = extname(filePath);
+    const language = getLanguageForExtension(ext) ?? "unknown";
+
+    let symbols: CodeSymbol[];
+
+    if (language === "markdown") {
+      symbols = extractMarkdownSymbols(source, relPath, repoName);
+    } else if (language === "prisma") {
+      symbols = extractPrismaSymbols(source, relPath, repoName);
+    } else {
+      const tree = await parseFile(filePath, source);
+      if (!tree) return null;
+      symbols = extractSymbols(tree, relPath, source, repoName, language);
+    }
+
+    const entry: FileEntry = {
+      path: relPath,
+      language,
+      symbol_count: symbols.length,
+      last_modified: Date.now(),
+    };
+
+    return { symbols, entry };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[codesift] Failed to parse ${relative(repoRoot, filePath)}: ${message}`);
+    return null;
+  }
+}
 
 /**
  * Parse files in parallel batches.
@@ -35,43 +81,10 @@ async function parseFiles(
   const allSymbols: CodeSymbol[] = [];
   const fileEntries: FileEntry[] = [];
 
-  // Process in batches for controlled concurrency
   for (let i = 0; i < files.length; i += PARSE_CONCURRENCY) {
     const batch = files.slice(i, i + PARSE_CONCURRENCY);
-
     const results = await Promise.all(
-      batch.map(async (filePath) => {
-        try {
-          const source = await readFile(filePath, "utf-8");
-          const relPath = relative(repoRoot, filePath);
-          const ext = extname(filePath);
-          const language = getLanguageForExtension(ext) ?? "unknown";
-
-          let symbols: CodeSymbol[];
-
-          // Markdown and Prisma use custom parsers (no tree-sitter grammar)
-          if (language === "markdown") {
-            symbols = extractMarkdownSymbols(source, relPath, repoName);
-          } else if (language === "prisma") {
-            symbols = extractPrismaSymbols(source, relPath, repoName);
-          } else {
-            const tree = await parseFile(filePath, source);
-            if (!tree) return null;
-            symbols = extractSymbols(tree, relPath, source, repoName, language);
-          }
-
-          const entry: FileEntry = {
-            path: relPath,
-            language,
-            symbol_count: symbols.length,
-            last_modified: Date.now(),
-          };
-
-          return { symbols, entry };
-        } catch {
-          return null;
-        }
-      }),
+      batch.map((filePath) => parseOneFile(filePath, repoRoot, repoName)),
     );
 
     for (const result of results) {
@@ -83,6 +96,108 @@ async function parseFiles(
   }
 
   return { symbols: allSymbols, fileEntries };
+}
+
+/**
+ * Embed symbols using the configured embedding provider.
+ * Non-fatal — BM25 search still works if embedding fails.
+ */
+async function embedSymbols(
+  symbols: CodeSymbol[],
+  indexPath: string,
+  repoName: string,
+  config: ReturnType<typeof loadConfig>,
+): Promise<void> {
+  if (!config.embeddingProvider) return;
+
+  const embeddingPath = getEmbeddingPath(indexPath);
+  const metaPath = getEmbeddingMetaPath(indexPath);
+  try {
+    const provider = createEmbeddingProvider(config.embeddingProvider, config);
+    const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
+    const existing = await loadEmbeddings(embeddingPath);
+    const embeddings = await batchEmbed(symbolTexts, existing, provider.embed.bind(provider), config.embeddingBatchSize);
+    await saveEmbeddings(embeddingPath, embeddings);
+    await saveEmbeddingMeta(metaPath, {
+      model: provider.model,
+      provider: config.embeddingProvider,
+      dimensions: provider.dimensions,
+      symbol_count: embeddings.size,
+      updated_at: Date.now(),
+    });
+    embeddingCaches.set(repoName, embeddings);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
+  }
+}
+
+/**
+ * Read files in parallel batches and split each into chunks.
+ */
+async function readAndChunkFiles(
+  fileEntries: FileEntry[],
+  rootPath: string,
+  repoName: string,
+): Promise<CodeChunk[]> {
+  const allChunks: CodeChunk[] = [];
+  for (let i = 0; i < fileEntries.length; i += PARSE_CONCURRENCY) {
+    const batch = fileEntries.slice(i, i + PARSE_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (entry) => {
+        const fullPath = join(rootPath, entry.path);
+        try {
+          const content = await readFile(fullPath, "utf-8");
+          return chunkFile(entry.path, content, repoName);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[codesift] Failed to read ${entry.path} for chunking: ${message}`);
+          return [];
+        }
+      }),
+    );
+    for (const chunks of batchResults) {
+      allChunks.push(...chunks);
+    }
+  }
+  return allChunks;
+}
+
+/**
+ * Embed file chunks using the configured embedding provider.
+ * Non-fatal — symbol-level and BM25 search still work if this fails.
+ */
+async function embedChunks(
+  fileEntries: FileEntry[],
+  rootPath: string,
+  repoName: string,
+  indexPath: string,
+  config: ReturnType<typeof loadConfig>,
+): Promise<void> {
+  if (!config.embeddingProvider) return;
+
+  const chunkPath = getChunkPath(indexPath);
+  const chunkEmbeddingPath = getChunkEmbeddingPath(indexPath);
+  try {
+    const provider = createEmbeddingProvider(config.embeddingProvider, config);
+    const existingChunkEmbeddings = await loadChunkEmbeddings(chunkEmbeddingPath) ?? new Map<string, Float32Array>();
+    const allChunks = await readAndChunkFiles(fileEntries, rootPath, repoName);
+
+    if (allChunks.length > 0) {
+      const chunkTexts = new Map(allChunks.map((c) => [c.id, c.text]));
+      const chunkEmbeddings = await batchEmbed(
+        chunkTexts,
+        existingChunkEmbeddings,
+        provider.embed.bind(provider),
+        CHUNK_EMBEDDING_BATCH_SIZE,
+      );
+      await saveChunks(chunkPath, allChunks);
+      await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[codesift] Chunk embedding failed for ${repoName}: ${message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,8 +231,6 @@ export async function indexFolder(
   if (options?.incremental) {
     const existing = await loadIndex(indexPath);
     if (existing) {
-      // For now, incremental just returns existing stats.
-      // Full incremental support comes via file watcher.
       return {
         repo: repoName,
         root: rootPath,
@@ -141,7 +254,7 @@ export async function indexFolder(
   const bm25 = buildBM25Index(symbols);
   bm25Indexes.set(repoName, bm25);
 
-  // Build code index
+  // Build and save code index
   const codeIndex: CodeIndex = {
     repo: repoName,
     root: rootPath,
@@ -152,76 +265,11 @@ export async function indexFolder(
     symbol_count: symbols.length,
     file_count: fileEntries.length,
   };
-
-  // Save index to disk
   await saveIndex(indexPath, codeIndex);
 
-  // Embed symbols if an embedding provider is configured (non-fatal if it fails)
-  if (config.embeddingProvider) {
-    const embeddingPath = getEmbeddingPath(indexPath);
-    const metaPath = getEmbeddingMetaPath(indexPath);
-    try {
-      const provider = createEmbeddingProvider(config.embeddingProvider, config);
-      const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
-      const existing = await loadEmbeddings(embeddingPath);
-      const embeddings = await batchEmbed(symbolTexts, existing, provider.embed.bind(provider), config.embeddingBatchSize);
-      await saveEmbeddings(embeddingPath, embeddings);
-      await saveEmbeddingMeta(metaPath, {
-        model: provider.model,
-        provider: config.embeddingProvider,
-        dimensions: provider.dimensions,
-        symbol_count: embeddings.size,
-        updated_at: Date.now(),
-      });
-      embeddingCaches.set(repoName, embeddings);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
-      // Non-fatal — BM25 search still works
-    }
-  }
-
-  // Embed file chunks if an embedding provider is configured (non-fatal if it fails)
-  if (config.embeddingProvider) {
-    const chunkPath = getChunkPath(indexPath);
-    const chunkEmbeddingPath = getChunkEmbeddingPath(indexPath);
-    try {
-      const provider = createEmbeddingProvider(config.embeddingProvider, config);
-
-      // Build chunks for all indexed files
-      const allChunks: import("../types.js").CodeChunk[] = [];
-      for (const entry of fileEntries) {
-        const fullPath = join(rootPath, entry.path);
-        try {
-          const content = await readFile(fullPath, "utf-8");
-          const fileChunks = chunkFile(entry.path, content, repoName);
-          allChunks.push(...fileChunks);
-        } catch {
-          // Skip unreadable files
-        }
-      }
-
-      if (allChunks.length > 0) {
-        // Load existing chunk embeddings to avoid re-embedding unchanged chunks
-        const existingChunkEmbeddings = await loadChunkEmbeddings(chunkEmbeddingPath) ?? new Map<string, Float32Array>();
-        const chunkTexts = new Map(allChunks.map((c) => [c.id, c.text]));
-
-        const chunkEmbeddings = await batchEmbed(
-          chunkTexts,
-          existingChunkEmbeddings,
-          provider.embed.bind(provider),
-          96,
-        );
-
-        await saveChunks(chunkPath, allChunks);
-        await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[codesift] Chunk embedding failed for ${repoName}: ${message}`);
-      // Non-fatal — symbol-level and BM25 search still work
-    }
-  }
+  // Embed symbols and chunks (non-fatal if either fails)
+  await embedSymbols(symbols, indexPath, repoName, config);
+  await embedChunks(fileEntries, rootPath, repoName, indexPath, config);
 
   // Register in the global registry
   const meta: RepoMeta = {
@@ -235,22 +283,8 @@ export async function indexFolder(
   await registerRepo(config.registryPath, meta);
 
   // Start file watcher for incremental updates (unless disabled)
-  const shouldWatch = options?.watch !== false;
-  if (shouldWatch) {
-    const existingWatcher = activeWatchers.get(repoName);
-    if (existingWatcher) {
-      await stopWatcher(existingWatcher);
-    }
-
-    const watcher = startWatcher(rootPath, (changedFile) => {
-      handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
-        (err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(`[codesift] Watcher error for ${changedFile}: ${message}`);
-        },
-      );
-    });
-    activeWatchers.set(repoName, watcher);
+  if (options?.watch !== false) {
+    await setupWatcher(rootPath, repoName, indexPath);
   }
 
   return {
@@ -305,27 +339,29 @@ export async function indexRepo(
     const args = ["clone", "--depth", "1"];
     if (options?.branch) args.push("--branch", options.branch);
     args.push("--", url, cloneTarget);
-    execFileSync("git", args, { stdio: "pipe", timeout: 120_000 });
+    execFileSync("git", args, { stdio: "pipe", timeout: GIT_CLONE_TIMEOUT_MS });
   } else {
     // Pull latest changes
     try {
       if (options?.branch) {
         execFileSync("git", ["-C", cloneTarget, "checkout", options.branch], {
           stdio: "pipe",
-          timeout: 30_000,
+          timeout: GIT_CHECKOUT_TIMEOUT_MS,
         });
       }
       execFileSync("git", ["-C", cloneTarget, "pull", "--ff-only"], {
         stdio: "pipe",
-        timeout: 60_000,
+        timeout: GIT_PULL_TIMEOUT_MS,
       });
-    } catch {
+    } catch (err: unknown) {
       // Pull may fail if detached HEAD — force fresh clone
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[codesift] Git pull failed for ${urlBasename}, re-cloning: ${message}`);
       await rm(cloneTarget, { recursive: true, force: true });
       const args = ["clone", "--depth", "1"];
       if (options?.branch) args.push("--branch", options.branch);
       args.push("--", url, cloneTarget);
-      execFileSync("git", args, { stdio: "pipe", timeout: 120_000 });
+      execFileSync("git", args, { stdio: "pipe", timeout: GIT_CLONE_TIMEOUT_MS });
     }
   }
 
@@ -334,6 +370,30 @@ export async function indexRepo(
     include_paths: options?.include_paths,
     watch: false,
   });
+}
+
+/**
+ * Replace or create a file watcher for incremental index updates.
+ */
+async function setupWatcher(
+  rootPath: string,
+  repoName: string,
+  indexPath: string,
+): Promise<void> {
+  const existingWatcher = activeWatchers.get(repoName);
+  if (existingWatcher) {
+    await stopWatcher(existingWatcher);
+  }
+
+  const watcher = startWatcher(rootPath, (changedFile) => {
+    handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[codesift] Watcher error for ${changedFile}: ${message}`);
+      },
+    );
+  });
+  activeWatchers.set(repoName, watcher);
 }
 
 /**
@@ -347,40 +407,15 @@ async function handleFileChange(
   relativeFile: string,
 ): Promise<void> {
   const fullPath = join(repoRoot, relativeFile);
+  const result = await parseOneFile(fullPath, repoRoot, repoName);
+  if (!result) return;
 
-  try {
-    const source = await readFile(fullPath, "utf-8");
-    const ext = extname(relativeFile);
-    const language = getLanguageForExtension(ext) ?? "unknown";
+  await saveIncremental(indexPath, relativeFile, result.symbols, result.entry);
 
-    let symbols: CodeSymbol[];
-
-    // Markdown and Prisma use custom parsers (no tree-sitter grammar)
-    if (language === "markdown") {
-      symbols = extractMarkdownSymbols(source, relativeFile, repoName);
-    } else if (language === "prisma") {
-      symbols = extractPrismaSymbols(source, relativeFile, repoName);
-    } else {
-      const tree = await parseFile(fullPath, source);
-      if (!tree) return;
-      symbols = extractSymbols(tree, relativeFile, source, repoName, language);
-    }
-
-    const fileEntry: FileEntry = {
-      path: relativeFile,
-      language,
-      symbol_count: symbols.length,
-      last_modified: Date.now(),
-    };
-    await saveIncremental(indexPath, relativeFile, symbols, fileEntry);
-
-    // Rebuild in-memory BM25 index
-    const index = await loadIndex(indexPath);
-    if (index) {
-      bm25Indexes.set(repoName, buildBM25Index(index.symbols));
-    }
-  } catch {
-    // File may have been deleted between event and read — ignore
+  // Rebuild in-memory BM25 index
+  const index = await loadIndex(indexPath);
+  if (index) {
+    bm25Indexes.set(repoName, buildBM25Index(index.symbols));
   }
 }
 

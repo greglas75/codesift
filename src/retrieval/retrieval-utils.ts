@@ -1,11 +1,20 @@
 import type { CodeChunk } from "../types.js";
 import { isTestFile } from "../utils/test-file.js";
+import {
+  CHARS_PER_TOKEN,
+  RRF_K,
+  ADJACENCY_GAP,
+  LINE_NUMBER_PAD,
+  QUERY_DECOMPOSE_THRESHOLD,
+  SPLIT_WINDOW_LO,
+  SPLIT_WINDOW_HI,
+} from "./retrieval-constants.js";
 
 /**
  * Estimate token count from a string. ~4 chars per token.
  */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
 /**
@@ -37,7 +46,6 @@ export function computeRRFScores(
   filteredEmbeddings: Map<string, Float32Array>,
   cosSim: (a: Float32Array, b: Float32Array) => number,
 ): Map<string, number> {
-  const rrfK = 60;
   const rrfScores = new Map<string, number>();
   for (const vec of vecs) {
     if (!vec) continue;
@@ -50,7 +58,7 @@ export function computeRRFScores(
     }
     subScores.sort((a, b) => b.score - a.score);
     subScores.forEach((s, rank) => {
-      rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (rrfK + rank + 1));
+      rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (RRF_K + rank + 1));
     });
   }
   return rrfScores;
@@ -83,7 +91,7 @@ export function formatChunksAsText(
     const merged: ChunkEntry[] = [];
     for (const chunk of fileChunks) {
       const last = merged[merged.length - 1];
-      if (last && chunk.startLine <= last.endLine + 5) {
+      if (last && chunk.startLine <= last.endLine + ADJACENCY_GAP) {
         if (chunk.endLine > last.endLine) {
           const overlapLines = last.endLine - chunk.startLine + 1;
           const newLines = chunk.text.split("\n").slice(overlapLines);
@@ -98,7 +106,7 @@ export function formatChunksAsText(
     for (const chunk of merged) {
       const lines = chunk.text.split("\n");
       const numbered = lines.map((line, i) => {
-        const lineNo = String(chunk.startLine + i).padStart(6, " ");
+        const lineNo = String(chunk.startLine + i).padStart(LINE_NUMBER_PAD, " ");
         return `${lineNo}\t${line}`;
       }).join("\n");
       sections.push(numbered);
@@ -111,15 +119,14 @@ export function formatChunksAsText(
 
 /**
  * Split a long query into sub-queries at natural connectors for RRF merging.
- * Queries ≤ 8 words are returned as-is.
  */
 export function decomposeQuery(query: string): string[] {
   const words = query.split(/\s+/).filter(Boolean);
-  if (words.length <= 8) return [query];
+  if (words.length <= QUERY_DECOMPOSE_THRESHOLD) return [query];
 
   const splitWords = new Set(["and", "or", "from", "to", "with", "using", "for", "via", "then"]);
-  const lo = Math.floor(words.length * 0.35);
-  const hi = Math.floor(words.length * 0.65);
+  const lo = Math.floor(words.length * SPLIT_WINDOW_LO);
+  const hi = Math.floor(words.length * SPLIT_WINDOW_HI);
 
   for (let i = lo; i <= hi; i++) {
     if (splitWords.has((words[i] ?? "").toLowerCase())) {
@@ -131,4 +138,33 @@ export function decomposeQuery(query: string): string[] {
 
   const mid = Math.floor(words.length / 2);
   return [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
+}
+
+/**
+ * Truncate symbol source to a character limit, preserving the rest of the symbol object.
+ */
+export function truncateSymbolSource<T extends { source?: string }>(
+  sym: T,
+  limit: number,
+): T {
+  if (limit > 0 && sym.source && sym.source.length > limit) {
+    return { ...sym, source: sym.source.slice(0, limit) };
+  }
+  return sym;
+}
+
+/**
+ * Race a promise against a timeout. Rejects with a descriptive error on timeout.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
 }
