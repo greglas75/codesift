@@ -9,6 +9,7 @@ import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../typ
 
 const DEFAULT_MAX_TEXT_MATCHES = 500;
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
+const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count
 
 // SEC-003: Detect common catastrophic backtracking patterns (ReDoS)
 const REDOS_PATTERNS = [
@@ -49,6 +50,7 @@ export interface SearchTextOptions {
   context_lines?: number | undefined;
   max_results?: number | undefined;
   group_by_file?: boolean | undefined;
+  auto_group?: boolean | undefined;
 }
 
 /**
@@ -258,7 +260,10 @@ export async function searchText(
     }
   }
 
-  if (options?.group_by_file) {
+  const shouldGroup = options?.group_by_file
+    || (options?.auto_group && matches.length > AUTO_GROUP_THRESHOLD);
+
+  if (shouldGroup) {
     const groups = new Map<string, TextMatchGroup>();
     for (const m of matches) {
       const existing = groups.get(m.file);

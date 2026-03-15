@@ -28,6 +28,8 @@ function errorResult(message: string) {
   };
 }
 
+const HIGH_CARDINALITY_THRESHOLD = 50;
+
 function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => Promise<T>) {
   return async () => {
     const start = performance.now();
@@ -36,6 +38,13 @@ function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => 
       const text = JSON.stringify(data, null, 2);
       const elapsed = performance.now() - start;
       trackToolCall(toolName, args, text, data, elapsed);
+
+      // Append optimization hint for high-cardinality search_text results
+      const hint = buildResponseHint(toolName, args, data);
+      if (hint) {
+        return { content: [{ type: "text" as const, text: text + "\n\n" + hint }] };
+      }
+
       return { content: [{ type: "text" as const, text }] };
     } catch (err: unknown) {
       const elapsed = performance.now() - start;
@@ -44,6 +53,19 @@ function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => 
       return errorResult(message);
     }
   };
+}
+
+/**
+ * Build an optimization hint when tool results indicate suboptimal usage.
+ * Returns null if no hint is needed.
+ */
+export function buildResponseHint(toolName: string, args: Record<string, unknown>, data: unknown): string | null {
+  if (toolName === "search_text" && Array.isArray(data) && data.length > HIGH_CARDINALITY_THRESHOLD) {
+    if (!args["group_by_file"] && !args["auto_group"]) {
+      return `⚡ Tip: This search returned ${data.length} matches. Use group_by_file=true or auto_group=true to reduce output by ~70%. For 3+ searches, batch them with codebase_retrieval.`;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +179,7 @@ server.tool(
     file_pattern: z.string().optional().describe("Glob pattern to filter files"),
     max_results: z.number().optional().describe("Maximum number of matching lines to return (default 500)"),
     group_by_file: z.boolean().optional().describe("Group results by file — returns {file, count, lines[], first_match} instead of every line. 80-90% less output for high-cardinality searches."),
+    auto_group: z.boolean().optional().describe("Automatically switch to group_by_file when result count exceeds 50 matches. Recommended for exploratory searches where match count is unknown."),
   },
   async (args) => wrapTool("search_text", args, () =>
     searchText(args.repo, args.query, {
@@ -165,6 +188,7 @@ server.tool(
       file_pattern: args.file_pattern,
       max_results: args.max_results,
       group_by_file: args.group_by_file,
+      auto_group: args.auto_group,
     }),
   )(),
 );
