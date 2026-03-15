@@ -297,11 +297,10 @@ describe("extractTypeScriptSymbols — test case extraction", () => {
 });`;
     const symbols = await extract(source, "param.test.ts");
 
-    // it.each([...])("name", fn) — the outer call_expression has the name
-    // Note: tree-sitter may parse the outer call differently; test checks extraction works
-    expect(symbols.length).toBeGreaterThanOrEqual(1);
+    expect(symbols).toHaveLength(1);
     const testCase = symbols.find((s) => s.kind === "test_case");
     expect(testCase).toBeDefined();
+    expect(testCase!.name).toBe("handles value %i");
   });
 });
 
