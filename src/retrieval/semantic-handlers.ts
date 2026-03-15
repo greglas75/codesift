@@ -139,14 +139,14 @@ export async function handleHybridQuery(
 ): Promise<SubQueryResult> {
   const { searchText } = await import("../tools/search-tools.js");
 
-  const ctx = await loadSemanticContext(repo, query);
+  // Run text search in parallel with semantic context loading (embed + chunk load)
+  const [ctx, textMatches] = await Promise.all([
+    loadSemanticContext(repo, query),
+    searchText(repo, query.query, { file_pattern: query.file_filter }).catch(() => []),
+  ]);
   if (!ctx.repoMeta) throw new Error(`Repository "${repo}" not found`);
   if (!ctx.chunks || !ctx.chunkEmbeddings) throw new Error(`No chunk index for "${repo}"`);
 
-  // Text search runs in parallel with embed (already completed via loadSemanticContext)
-  const textMatches = await searchText(repo, query.query, {
-    file_pattern: ctx.fileFilter,
-  }).catch(() => []);
 
   // 1. Semantic RRF contributions
   const rrfScores = computeRRFScores(ctx.vecs, ctx.filteredEmbeddings, ctx.cosineSimilarity);
