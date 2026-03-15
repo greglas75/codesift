@@ -1,5 +1,9 @@
 import type { CodeSymbol, SearchResult } from "../types.js";
 
+const MAX_SYMBOL_SOURCE_CHARS = 200;
+const MAX_ERROR_DETAIL_CHARS = 200;
+const EMBEDDING_TIMEOUT_MS = 30_000;
+
 // ---------------------------------------------------------------------------
 // Provider abstraction
 // ---------------------------------------------------------------------------
@@ -12,7 +16,7 @@ export interface EmbeddingProvider {
 
 /**
  * Build a searchable text string from a symbol for embedding.
- * Format: "{kind} {name}\n{signature}\n{docstring first line}\n{body first 200 chars}"
+ * Format: "{kind} {name}\n{signature}\n{docstring first line}\n{body first N chars}"
  */
 export function buildSymbolText(symbol: CodeSymbol): string {
   const parts: string[] = [`${symbol.kind} ${symbol.name}`];
@@ -27,7 +31,7 @@ export function buildSymbolText(symbol: CodeSymbol): string {
   }
 
   if (symbol.source) {
-    parts.push(symbol.source.slice(0, 200));
+    parts.push(symbol.source.slice(0, MAX_SYMBOL_SOURCE_CHARS));
   }
 
   return parts.join("\n");
@@ -38,6 +42,8 @@ export function buildSymbolText(symbol: CodeSymbol): string {
 // ---------------------------------------------------------------------------
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) return 0;
+
   let dot = 0;
   let normA = 0;
   let normB = 0;
@@ -116,6 +122,7 @@ async function fetchEmbeddings(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -127,7 +134,7 @@ async function fetchEmbeddings(
 
   const data: unknown = await response.json();
   if (!isEmbeddingResponse(data)) {
-    throw new Error(`Unexpected ${providerName} API response shape: ${JSON.stringify(data).slice(0, 200)}`);
+    throw new Error(`Unexpected ${providerName} API response shape: ${JSON.stringify(data).slice(0, MAX_ERROR_DETAIL_CHARS)}`);
   }
   return data.data.map((d) => d.embedding);
 }
@@ -203,6 +210,7 @@ export class OllamaProvider implements EmbeddingProvider {
           model: this.model,
           prompt: text,
         }),
+        signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -214,7 +222,7 @@ export class OllamaProvider implements EmbeddingProvider {
 
       const data: unknown = await response.json();
       if (!data || typeof data !== "object" || !("embedding" in data) || !Array.isArray((data as Record<string, unknown>)["embedding"])) {
-        throw new Error(`Unexpected Ollama API response shape: ${JSON.stringify(data).slice(0, 200)}`);
+        throw new Error(`Unexpected Ollama API response shape: ${JSON.stringify(data).slice(0, MAX_ERROR_DETAIL_CHARS)}`);
       }
       results.push((data as { embedding: number[] }).embedding);
     }
