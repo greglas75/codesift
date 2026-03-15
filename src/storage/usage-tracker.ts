@@ -83,6 +83,8 @@ export function buildArgsSummary(
       if (typeof args["context_lines"] === "number") summary["context_lines"] = args["context_lines"];
       if (typeof args["file_pattern"] === "string") summary["file_pattern"] = args["file_pattern"];
       if (typeof args["max_results"] === "number") summary["max_results"] = args["max_results"];
+      if (typeof args["group_by_file"] === "boolean") summary["group_by_file"] = args["group_by_file"];
+      if (typeof args["auto_group"] === "boolean") summary["auto_group"] = args["auto_group"];
       break;
     }
 
