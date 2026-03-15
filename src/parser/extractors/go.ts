@@ -1,15 +1,8 @@
 import type Parser from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
-import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
-
-const MAX_SOURCE_LENGTH = 5000;
+import { getNodeName, makeSymbol } from "./_shared.js";
 
 // --- Helpers ---
-
-function getNodeName(node: Parser.SyntaxNode): string | null {
-  const nameNode = node.childForFieldName("name");
-  return nameNode?.text ?? null;
-}
 
 /**
  * Collects contiguous // comment lines immediately preceding a declaration.
@@ -74,48 +67,6 @@ function getSignature(
   return sig;
 }
 
-function extractNodeSource(
-  node: Parser.SyntaxNode,
-  source: string,
-): string {
-  const text = source.slice(node.startIndex, node.endIndex);
-  if (text.length > MAX_SOURCE_LENGTH) {
-    return text.slice(0, MAX_SOURCE_LENGTH) + "...";
-  }
-  return text;
-}
-
-function makeSymbol(
-  node: Parser.SyntaxNode,
-  name: string,
-  kind: SymbolKind,
-  filePath: string,
-  source: string,
-  repo: string,
-  parentId?: string,
-): CodeSymbol {
-  const startLine = node.startPosition.row + 1;
-  const endLine = node.endPosition.row + 1;
-  const docstring = getDocstring(node, source);
-
-  const sym: CodeSymbol = {
-    id: makeSymbolId(repo, filePath, name, startLine),
-    repo,
-    name,
-    kind,
-    file: filePath,
-    start_line: startLine,
-    end_line: endLine,
-    source: extractNodeSource(node, source),
-    tokens: tokenizeIdentifier(name),
-  };
-
-  if (docstring) sym.docstring = docstring;
-  if (parentId) sym.parent = parentId;
-
-  return sym;
-}
-
 // --- Main extractor ---
 
 export function extractGoSymbols(
@@ -131,9 +82,11 @@ export function extractGoSymbols(
       case "function_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "function", filePath, source, repo, parentId);
-          const sig = getSignature(node, source);
-          if (sig) sym.signature = sig;
+          const sym = makeSymbol(node, name, "function", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+            signature: getSignature(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -142,9 +95,11 @@ export function extractGoSymbols(
       case "method_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "method", filePath, source, repo, parentId);
-          const sig = getSignature(node, source);
-          if (sig) sym.signature = sig;
+          const sym = makeSymbol(node, name, "method", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+            signature: getSignature(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -177,7 +132,10 @@ export function extractGoSymbols(
 
           // Use the parent type_declaration node for source/position
           // so the full `type Foo struct { ... }` is captured
-          const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
+          const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+          });
           symbols.push(sym);
 
           // For structs, walk fields as children
@@ -189,7 +147,10 @@ export function extractGoSymbols(
                     const fieldName = getNodeName(fieldDecl);
                     if (fieldName) {
                       const fieldSym = makeSymbol(
-                        fieldDecl, fieldName, "field", filePath, source, repo, sym.id,
+                        fieldDecl, fieldName, "field", filePath, source, repo, {
+                          parentId: sym.id,
+                          docstring: getDocstring(fieldDecl, source),
+                        },
                       );
                       symbols.push(fieldSym);
                     }
@@ -211,7 +172,9 @@ export function extractGoSymbols(
           if (child.type === "const_spec" || child.type === "var_spec") {
             const name = getNodeName(child);
             if (name) {
-              const sym = makeSymbol(node, name, "variable", filePath, source, repo);
+              const sym = makeSymbol(node, name, "variable", filePath, source, repo, {
+                docstring: getDocstring(node, source),
+              });
               symbols.push(sym);
             }
           }

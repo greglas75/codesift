@@ -1,6 +1,7 @@
-import { readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
-import { dirname, basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
+import { atomicWriteFile } from "./_shared.js";
 
 /**
  * Load the multi-repo registry from disk.
@@ -29,19 +30,8 @@ export async function saveRegistry(
   registryPath: string,
   registry: Registry,
 ): Promise<void> {
-  const dir = dirname(registryPath);
-  await mkdir(dir, { recursive: true });
-
-  const tmpPath = `${registryPath}.tmp.${Date.now()}.json`;
   const data = JSON.stringify(registry);
-
-  try {
-    await writeFile(tmpPath, data, "utf-8");
-    await rename(tmpPath, registryPath);
-  } catch (err) {
-    try { await unlink(tmpPath); } catch { /* cleanup best-effort */ }
-    throw err;
-  }
+  await atomicWriteFile(registryPath, data);
 }
 
 /**

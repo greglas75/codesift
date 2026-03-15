@@ -426,18 +426,10 @@ server.tool(
   "usage_stats",
   "Show usage statistics for all CodeSift tool calls (call counts, tokens, timing, repos)",
   {},
-  async () => {
-    try {
-      const stats = await getUsageStats();
-      const report = formatUsageReport(stats);
-      return {
-        content: [{ type: "text" as const, text: report }],
-      };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      return errorResult(message);
-    }
-  },
+  async () => wrapTool("usage_stats", {}, async () => {
+    const stats = await getUsageStats();
+    return formatUsageReport(stats);
+  })(),
 );
 
 // ---------------------------------------------------------------------------

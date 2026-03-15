@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Flags } from "./args.js";
-import { getFlag, getBoolFlag, getNumFlag, requireArg, output, die } from "./args.js";
+import { getFlag, getBoolFlag, getNumFlag, requireArg, requireFlag, parseCommaSeparated, output, die } from "./args.js";
 
 export type CommandHandler = (args: string[], flags: Flags) => Promise<void>;
 
@@ -15,12 +15,9 @@ async function handleIndex(args: string[], flags: Flags): Promise<void> {
   const path = requireArg(args, 0, "path");
   const { indexFolder } = await import("../tools/index-tools.js");
 
-  const includePathsRaw = getFlag(flags, "include-paths");
-  const includePaths = includePathsRaw ? includePathsRaw.split(",").map(p => p.trim()) : undefined;
-
   const result = await indexFolder(path, {
     incremental: getBoolFlag(flags, "incremental"),
-    include_paths: includePaths,
+    include_paths: parseCommaSeparated(flags, "include-paths"),
     watch: getBoolFlag(flags, "no-watch") === true ? false : undefined,
   });
   output(result, flags);
@@ -30,12 +27,9 @@ async function handleIndexRepo(args: string[], flags: Flags): Promise<void> {
   const url = requireArg(args, 0, "url");
   const { indexRepo } = await import("../tools/index-tools.js");
 
-  const includePathsRaw = getFlag(flags, "include-paths");
-  const includePaths = includePathsRaw ? includePathsRaw.split(",").map(p => p.trim()) : undefined;
-
   const result = await indexRepo(url, {
     branch: getFlag(flags, "branch"),
-    include_paths: includePaths,
+    include_paths: parseCommaSeparated(flags, "include-paths"),
   });
   output(result, flags);
 }
@@ -238,10 +232,7 @@ async function handleTrace(args: string[], flags: Flags): Promise<void> {
 
 async function handleImpact(args: string[], flags: Flags): Promise<void> {
   const repo = requireArg(args, 0, "repo");
-  const since = getFlag(flags, "since");
-  if (!since) {
-    die("Missing required flag: --since <ref>");
-  }
+  const since = requireFlag(flags, "since");
   const { impactAnalysis } = await import("../tools/graph-tools.js");
 
   const result = await impactAnalysis(repo, since, {
@@ -279,10 +270,7 @@ async function handleKnowledgeMap(args: string[], flags: Flags): Promise<void> {
 
 async function handleDiff(args: string[], flags: Flags): Promise<void> {
   const repo = requireArg(args, 0, "repo");
-  const since = getFlag(flags, "since");
-  if (!since) {
-    die("Missing required flag: --since <ref>");
-  }
+  const since = requireFlag(flags, "since");
   const { diffOutline } = await import("../tools/diff-tools.js");
 
   const result = await diffOutline(repo, since, getFlag(flags, "until"));
@@ -291,10 +279,7 @@ async function handleDiff(args: string[], flags: Flags): Promise<void> {
 
 async function handleChanged(args: string[], flags: Flags): Promise<void> {
   const repo = requireArg(args, 0, "repo");
-  const since = getFlag(flags, "since");
-  if (!since) {
-    die("Missing required flag: --since <ref>");
-  }
+  const since = requireFlag(flags, "since");
   const { changedSymbols } = await import("../tools/diff-tools.js");
 
   const result = await changedSymbols(repo, since, getFlag(flags, "until"));

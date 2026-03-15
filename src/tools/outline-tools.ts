@@ -1,4 +1,5 @@
 import { getCodeIndex } from "./index-tools.js";
+import { matchNamePattern } from "../utils/glob.js";
 import type { CodeIndex, SymbolKind } from "../types.js";
 
 export interface FileTreeNode {
@@ -44,69 +45,6 @@ export interface RepoOutlineResult {
   total_symbols: number;
   total_files: number;
   languages: Record<string, number>;
-}
-
-/**
- * Match a filename against a glob pattern.
- * Supports: "*.ts", "route.ts", "*risk*.test.*", "**\/*.ts"
- *
- * Pattern is matched against the filename portion only (not the full path),
- * unless it contains "/" or starts with "**\/".
- */
-function matchNamePattern(filePath: string, pattern: string): boolean {
-  // Handle **/ prefix: match anywhere in path
-  if (pattern.startsWith("**/")) {
-    const suffix = pattern.slice(3);
-    return matchNamePattern(filePath, suffix) ||
-      filePath.includes("/" + suffix);
-  }
-
-  // If pattern contains "/" it's a path pattern — match against full path
-  if (pattern.includes("/")) {
-    return globMatch(filePath, pattern);
-  }
-
-  // Otherwise match against filename only
-  const fileName = filePath.includes("/")
-    ? filePath.slice(filePath.lastIndexOf("/") + 1)
-    : filePath;
-
-  // No wildcard: exact filename match or substring of path
-  if (!pattern.includes("*")) {
-    return fileName === pattern || filePath.includes(pattern);
-  }
-
-  return globMatch(fileName, pattern);
-}
-
-/**
- * Simple glob matching: splits pattern on "*" and checks that the segments
- * appear in order within the text. Handles multiple wildcards correctly.
- *
- * Examples: "*.ts" matches "foo.ts", "*risk*.test.*" matches "risk-audit.service.test.ts"
- */
-function globMatch(text: string, pattern: string): boolean {
-  const parts = pattern.split("*");
-  // All parts must appear in sequence within the text
-
-  // First part must be a prefix (or empty if pattern starts with *)
-  const first = parts[0];
-  if (first !== undefined && first !== "" && !text.startsWith(first)) return false;
-
-  // Last part must be a suffix (or empty if pattern ends with *)
-  const last = parts[parts.length - 1];
-  if (last !== undefined && last !== "" && !text.endsWith(last)) return false;
-
-  // All parts must appear in order
-  let pos = 0;
-  for (const part of parts) {
-    if (part === "") continue;
-    const idx = text.indexOf(part, pos);
-    if (idx < 0) return false;
-    pos = idx + part.length;
-  }
-
-  return true;
 }
 
 /**

@@ -1,23 +1,10 @@
 import { watch, type FSWatcher } from "chokidar";
 import { relative } from "node:path";
+import { toIgnorePatterns } from "../utils/walk.js";
 
 export type { FSWatcher };
 
-const IGNORE_PATTERNS = [
-  "**/node_modules/**",
-  "**/.git/**",
-  "**/dist/**",
-  "**/build/**",
-  "**/coverage/**",
-  "**/.codesift/**",
-  "**/.next/**",
-  "**/__pycache__/**",
-  "**/.pytest_cache/**",
-  "**/generated/**",
-  "**/audit-results/**",
-  "**/.backup/**",
-  "**/jscpd-report/**",
-];
+const IGNORE_PATTERNS = toIgnorePatterns();
 
 // WeakMap to track debounce timers per watcher for cleanup
 const watcherTimers = new WeakMap<FSWatcher, Map<string, ReturnType<typeof setTimeout>>>();

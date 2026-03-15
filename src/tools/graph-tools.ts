@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
@@ -323,7 +323,8 @@ function getChangedFiles(repoRoot: string, since: string, until: string): string
   validateGitRef(until);
 
   try {
-    const output = execSync(`git diff --name-only ${since}..${until}`, {
+    // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern
+    const output = execFileSync("git", ["diff", "--name-only", `${since}..${until}`], {
       cwd: repoRoot,
       encoding: "utf-8",
       timeout: 10_000,

@@ -1,4 +1,4 @@
-import { readdir, readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
+import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
 import { join, relative, extname, resolve, basename } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parseFile } from "../parser/parser-manager.js";
@@ -14,78 +14,15 @@ import { saveChunks, saveChunkEmbeddings, loadChunkEmbeddings, getChunkPath, get
 import { chunkFile } from "../search/chunker.js";
 import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
+import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta } from "../types.js";
 
-// Ignore patterns for directory walking (same as watcher)
-const IGNORE_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", "coverage",
-  ".codesift", ".next", "__pycache__", ".pytest_cache",
-  ".venv", "venv", ".tox", ".mypy_cache", ".turbo",
-  "generated", "audit-results", ".backup", "jscpd-report",
-]);
-
-const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
 const PARSE_CONCURRENCY = 8;
 
 // Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
 const bm25Indexes = new Map<string, BM25Index>();
 const embeddingCaches = new Map<string, Map<string, Float32Array>>();
-
-/**
- * Walk a directory tree, collecting files that can be parsed.
- * Respects .gitignore patterns and skips known non-source directories.
- */
-async function walkDirectory(
-  rootPath: string,
-  includePaths?: string[],
-): Promise<string[]> {
-  const files: string[] = [];
-
-  async function walk(dirPath: string): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(dirPath, { withFileTypes: true });
-    } catch {
-      return; // permission denied, etc.
-    }
-
-    for (const entry of entries) {
-      const fullPath = join(dirPath, entry.name);
-
-      if (entry.isDirectory()) {
-        if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) {
-          continue;
-        }
-        await walk(fullPath);
-      } else if (entry.isFile()) {
-        const ext = extname(entry.name);
-        const language = getLanguageForExtension(ext);
-        if (!language) continue;
-
-        // Filter by include paths if specified
-        if (includePaths && includePaths.length > 0) {
-          const relPath = relative(rootPath, fullPath);
-          const matches = includePaths.some((p) => relPath.startsWith(p));
-          if (!matches) continue;
-        }
-
-        // Skip files that are too large
-        try {
-          const fileStat = await stat(fullPath);
-          if (fileStat.size > MAX_FILE_SIZE) continue;
-        } catch {
-          continue;
-        }
-
-        files.push(fullPath);
-      }
-    }
-  }
-
-  await walk(rootPath);
-  return files;
-}
 
 /**
  * Parse files in parallel batches.
@@ -192,7 +129,10 @@ export async function indexFolder(
   }
 
   // Walk directory and collect parseable files
-  const files = await walkDirectory(rootPath, options?.include_paths);
+  const files = await walkDirectory(rootPath, {
+    includePaths: options?.include_paths,
+    fileFilter: (ext) => !!getLanguageForExtension(ext),
+  });
 
   // Parse all files and extract symbols
   const { symbols, fileEntries } = await parseFiles(files, rootPath, repoName);

@@ -1,7 +1,8 @@
-import { readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
+import { atomicWriteFile } from "./_shared.js";
 
 /** Serialize concurrent writes to the same index path. */
 const writeLocks = new Map<string, Promise<void>>();
@@ -14,19 +15,8 @@ export async function saveIndex(
   indexPath: string,
   index: CodeIndex,
 ): Promise<void> {
-  const dir = dirname(indexPath);
-  await mkdir(dir, { recursive: true });
-
-  const tmpPath = `${indexPath}.tmp.${Date.now()}.json`;
   const data = JSON.stringify(index);
-
-  try {
-    await writeFile(tmpPath, data, "utf-8");
-    await rename(tmpPath, indexPath);
-  } catch (err) {
-    try { await unlink(tmpPath); } catch { /* cleanup best-effort */ }
-    throw err;
-  }
+  await atomicWriteFile(indexPath, data);
 }
 
 /**

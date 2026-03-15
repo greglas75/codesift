@@ -1,6 +1,6 @@
-import { readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import type { EmbeddingMeta } from "../types.js";
+import { atomicWriteFile } from "./_shared.js";
 
 /**
  * Get the embedding file path from an index path.
@@ -64,24 +64,13 @@ export async function saveEmbeddings(
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
 ): Promise<void> {
-  const dir = dirname(embeddingPath);
-  await mkdir(dir, { recursive: true });
-
   const lines: string[] = [];
   for (const [id, vec] of embeddings) {
     lines.push(JSON.stringify({ id, vec: Array.from(vec) }));
   }
 
-  const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
   const data = lines.join("\n") + "\n";
-
-  try {
-    await writeFile(tmpPath, data, "utf-8");
-    await rename(tmpPath, embeddingPath);
-  } catch (err) {
-    try { await unlink(tmpPath); } catch { /* cleanup best-effort */ }
-    throw err;
-  }
+  await atomicWriteFile(embeddingPath, data);
 }
 
 /**
@@ -91,19 +80,8 @@ export async function saveEmbeddingMeta(
   metaPath: string,
   meta: EmbeddingMeta,
 ): Promise<void> {
-  const dir = dirname(metaPath);
-  await mkdir(dir, { recursive: true });
-
-  const tmpPath = `${metaPath}.tmp.${Date.now()}`;
   const data = JSON.stringify(meta);
-
-  try {
-    await writeFile(tmpPath, data, "utf-8");
-    await rename(tmpPath, metaPath);
-  } catch (err) {
-    try { await unlink(tmpPath); } catch { /* cleanup best-effort */ }
-    throw err;
-  }
+  await atomicWriteFile(metaPath, data);
 }
 
 /**

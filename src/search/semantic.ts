@@ -99,6 +99,39 @@ function isEmbeddingResponse(data: unknown): data is { data: Array<{ embedding: 
   );
 }
 
+/**
+ * Shared fetch+validate logic for OpenAI-compatible embedding APIs.
+ * Handles: POST -> check response.ok -> parse JSON -> guard shape -> extract embeddings.
+ */
+async function fetchEmbeddings(
+  url: string,
+  apiKey: string,
+  requestBody: Record<string, unknown>,
+  providerName: string,
+): Promise<number[][]> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    // SEC-004: Log raw body to stderr only — don't forward to MCP client
+    const body = await response.text();
+    console.error(`${providerName} API error ${response.status}:`, body);
+    throw new Error(`${providerName} API error: ${response.status}`);
+  }
+
+  const data: unknown = await response.json();
+  if (!isEmbeddingResponse(data)) {
+    throw new Error(`Unexpected ${providerName} API response shape: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return data.data.map((d) => d.embedding);
+}
+
 // ---------------------------------------------------------------------------
 // Voyage AI provider
 // ---------------------------------------------------------------------------
@@ -113,29 +146,12 @@ export class VoyageProvider implements EmbeddingProvider {
   }
 
   async embed(texts: string[]): Promise<number[][]> {
-    const response = await fetch("https://api.voyageai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        input: texts,
-        model: this.model,
-        input_type: "document",
-      }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Voyage API error ${response.status}: ${body}`);
-    }
-
-    const data: unknown = await response.json();
-    if (!isEmbeddingResponse(data)) {
-      throw new Error(`Unexpected Voyage API response shape: ${JSON.stringify(data).slice(0, 200)}`);
-    }
-    return data.data.map((d) => d.embedding);
+    return fetchEmbeddings(
+      "https://api.voyageai.com/v1/embeddings",
+      this.apiKey,
+      { input: texts, model: this.model, input_type: "document" },
+      "Voyage",
+    );
   }
 }
 
@@ -153,28 +169,12 @@ export class OpenAIProvider implements EmbeddingProvider {
   }
 
   async embed(texts: string[]): Promise<number[][]> {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        input: texts,
-        model: this.model,
-      }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`OpenAI API error ${response.status}: ${body}`);
-    }
-
-    const data: unknown = await response.json();
-    if (!isEmbeddingResponse(data)) {
-      throw new Error(`Unexpected OpenAI API response shape: ${JSON.stringify(data).slice(0, 200)}`);
-    }
-    return data.data.map((d) => d.embedding);
+    return fetchEmbeddings(
+      "https://api.openai.com/v1/embeddings",
+      this.apiKey,
+      { input: texts, model: this.model },
+      "OpenAI",
+    );
   }
 }
 
@@ -206,8 +206,10 @@ export class OllamaProvider implements EmbeddingProvider {
       });
 
       if (!response.ok) {
+        // SEC-004: Log raw body to stderr only — don't forward to MCP client
         const body = await response.text();
-        throw new Error(`Ollama API error ${response.status}: ${body}`);
+        console.error(`Ollama API error ${response.status}:`, body);
+        throw new Error(`Ollama API error: ${response.status}`);
       }
 
       const data: unknown = await response.json();

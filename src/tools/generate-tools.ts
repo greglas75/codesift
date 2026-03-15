@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex, FileEntry } from "../types.js";
 
@@ -160,13 +161,19 @@ export async function generateClaudeMd(
   const content = lines.join("\n");
 
   if (outputPath) {
+    // SEC-001: Validate output_path is within the repo root to prevent arbitrary file write
+    const resolvedOutput = resolve(outputPath);
+    const resolvedRoot = resolve(index.root);
+    if (!resolvedOutput.startsWith(resolvedRoot + "/") && resolvedOutput !== resolvedRoot) {
+      throw new Error(`output_path must be within the repository root: ${resolvedRoot}`);
+    }
     try {
-      await writeFile(outputPath, content, "utf-8");
+      await writeFile(resolvedOutput, content, "utf-8");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Failed to write CLAUDE.md: ${message}`);
     }
-    return { content, path: outputPath };
+    return { content, path: resolvedOutput };
   }
 
   return { content };

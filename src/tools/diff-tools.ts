@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
 import type { CodeSymbol } from "../types.js";
@@ -99,10 +99,12 @@ function runGitDiff(repoRoot: string, since: string, until: string, nameOnly: bo
   validateGitRef(since);
   validateGitRef(until);
 
-  const flag = nameOnly ? "--name-only" : "";
-  const cmd = `git diff ${flag} ${since}..${until}`.trim();
+  // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern
+  const args = nameOnly
+    ? ["diff", "--name-only", `${since}..${until}`]
+    : ["diff", `${since}..${until}`];
   try {
-    return execSync(cmd, {
+    return execFileSync("git", args, {
       cwd: repoRoot,
       encoding: "utf-8",
       timeout: 10_000,

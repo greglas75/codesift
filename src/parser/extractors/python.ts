@@ -1,15 +1,8 @@
-import Parser from "web-tree-sitter";
+import type Parser from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
-import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
-
-const MAX_SOURCE_LENGTH = 5000;
+import { getNodeName, makeSymbol } from "./_shared.js";
 
 // --- Helpers ---
-
-function getNodeName(node: Parser.SyntaxNode): string | null {
-  const nameNode = node.childForFieldName("name");
-  return nameNode?.text ?? null;
-}
 
 /**
  * Python docstrings are the first expression_statement in the body
@@ -49,48 +42,6 @@ function getSignature(
   }
 
   return sig;
-}
-
-function extractNodeSource(
-  node: Parser.SyntaxNode,
-  source: string,
-): string {
-  const text = source.slice(node.startIndex, node.endIndex);
-  if (text.length > MAX_SOURCE_LENGTH) {
-    return text.slice(0, MAX_SOURCE_LENGTH) + "...";
-  }
-  return text;
-}
-
-function makeSymbol(
-  node: Parser.SyntaxNode,
-  name: string,
-  kind: SymbolKind,
-  filePath: string,
-  source: string,
-  repo: string,
-  parentId?: string,
-): CodeSymbol {
-  const startLine = node.startPosition.row + 1;
-  const endLine = node.endPosition.row + 1;
-  const docstring = getDocstring(node);
-
-  const sym: CodeSymbol = {
-    id: makeSymbolId(repo, filePath, name, startLine),
-    repo,
-    name,
-    kind,
-    file: filePath,
-    start_line: startLine,
-    end_line: endLine,
-    source: extractNodeSource(node, source),
-    tokens: tokenizeIdentifier(name),
-  };
-
-  if (docstring) sym.docstring = docstring;
-  if (parentId) sym.parent = parentId;
-
-  return sym;
 }
 
 /**
@@ -155,9 +106,11 @@ export function extractPythonSymbols(
         const name = getNodeName(node);
         if (name) {
           const kind = classifyFunction(name, parentId, []);
-          const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
-          const sig = getSignature(node, source);
-          if (sig) sym.signature = sig;
+          const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node),
+            signature: getSignature(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -167,7 +120,10 @@ export function extractPythonSymbols(
         const name = getNodeName(node) ?? "<anonymous>";
         const isTestClass = isTestCaseClass(node);
         const kind: SymbolKind = isTestClass ? "test_suite" : "class";
-        const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
+        const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+          parentId,
+          docstring: getDocstring(node),
+        });
         symbols.push(sym);
 
         // Walk class body with this class as parent
@@ -201,12 +157,12 @@ export function extractPythonSymbols(
           if (name) {
             const kind = classifyFunction(name, parentId, decorators);
             // Use the decorated_definition node for source span (includes decorators)
-            const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
-            const sig = getSignature(innerNode, source);
-            if (sig) sym.signature = sig;
             // Docstring comes from the inner function, not the decorated_definition
-            const docstring = getDocstring(innerNode);
-            if (docstring) sym.docstring = docstring;
+            const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+              parentId,
+              docstring: getDocstring(innerNode),
+              signature: getSignature(innerNode, source),
+            });
             symbols.push(sym);
           }
         } else if (innerNode.type === "class_definition") {
@@ -214,10 +170,11 @@ export function extractPythonSymbols(
           const isTestClass = isTestCaseClass(innerNode);
           const kind: SymbolKind = isTestClass ? "test_suite" : "class";
           // Use decorated_definition node for source span
-          const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
           // Docstring comes from the inner class
-          const docstring = getDocstring(innerNode);
-          if (docstring) sym.docstring = docstring;
+          const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(innerNode),
+          });
           symbols.push(sym);
 
           // Walk class body with this class as parent

@@ -1,13 +1,6 @@
-import Parser from "web-tree-sitter";
+import type Parser from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
-import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
-
-const MAX_SOURCE_LENGTH = 5000;
-
-function getNodeName(node: Parser.SyntaxNode): string | null {
-  const nameNode = node.childForFieldName("name");
-  return nameNode?.text ?? null;
-}
+import { getNodeName, makeSymbol } from "./_shared.js";
 
 /**
  * Extract doc comments (/// or //!) preceding a node.
@@ -30,13 +23,6 @@ function getDocstring(
   }
 
   return lines.length > 0 ? lines.join("\n") : undefined;
-}
-
-function extractSource(node: Parser.SyntaxNode, source: string): string {
-  const text = source.slice(node.startIndex, node.endIndex);
-  return text.length > MAX_SOURCE_LENGTH
-    ? text.slice(0, MAX_SOURCE_LENGTH) + "..."
-    : text;
 }
 
 function getSignature(node: Parser.SyntaxNode, source: string): string | undefined {
@@ -67,29 +53,13 @@ export function extractRustSymbols(
     parentId?: string,
     signature?: string,
   ): string {
-    const startLine = node.startPosition.row + 1;
-    const endLine = node.endPosition.row + 1;
-    const id = makeSymbolId(repo, filePath, name, startLine);
-
-    const sym: CodeSymbol = {
-      id,
-      repo,
-      name,
-      kind,
-      file: filePath,
-      start_line: startLine,
-      end_line: endLine,
-      source: extractSource(node, source),
-      tokens: tokenizeIdentifier(name),
-    };
-
-    const docstring = getDocstring(node, source);
-    if (docstring) sym.docstring = docstring;
-    if (signature) sym.signature = signature;
-    if (parentId) sym.parent = parentId;
-
+    const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+      parentId,
+      docstring: getDocstring(node, source),
+      signature,
+    });
     symbols.push(sym);
-    return id;
+    return sym.id;
   }
 
   function walk(node: Parser.SyntaxNode, parentId?: string): void {

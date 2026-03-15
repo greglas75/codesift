@@ -85,3 +85,16 @@ export function requireArg(args: string[], index: number, name: string): string 
   }
   return val;
 }
+
+export function requireFlag(flags: Flags, name: string): string {
+  const val = getFlag(flags, name);
+  if (!val) {
+    die(`Missing required flag: --${name} <ref>`);
+  }
+  return val;
+}
+
+export function parseCommaSeparated(flags: Flags, name: string): string[] | undefined {
+  const raw = getFlag(flags, name);
+  return raw ? raw.split(",").map(p => p.trim()) : undefined;
+}

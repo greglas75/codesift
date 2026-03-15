@@ -1,5 +1,5 @@
 import { loadConfig } from "../config.js";
-import type { SymbolKind } from "../types.js";
+import type { CodeChunk, SymbolKind } from "../types.js";
 import { isTestFile } from "../utils/test-file.js";
 
 // Lazy imports to avoid circular dependencies at module load time.
@@ -22,6 +22,112 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+// ---------------------------------------------------------------------------
+// Shared helpers for semantic + hybrid cases (CQ14 dedup)
+// ---------------------------------------------------------------------------
+
+/**
+ * Filter embedding entries by file path substring and/or test file exclusion.
+ * Uses a lookup map to resolve the file path for each embedding ID.
+ */
+function filterEmbeddingsByFile(
+  embeddings: Map<string, Float32Array>,
+  fileLookup: Map<string, string | undefined>,
+  fileFilter: string | undefined,
+  excludeTests: boolean,
+): Map<string, Float32Array> {
+  if (!fileFilter && !excludeTests) return embeddings;
+  return new Map([...embeddings.entries()].filter(([id]) => {
+    const file = fileLookup.get(id);
+    if (!file) return false;
+    if (fileFilter && !file.includes(fileFilter)) return false;
+    if (excludeTests && isTestFile(file)) return false;
+    return true;
+  }));
+}
+
+/**
+ * Compute RRF scores from multiple embedding query vectors against filtered embeddings.
+ * Each vector produces a ranked list; scores are accumulated via RRF formula.
+ */
+function computeRRFScores(
+  vecs: number[][],
+  filteredEmbeddings: Map<string, Float32Array>,
+  cosSim: (a: Float32Array, b: Float32Array) => number,
+): Map<string, number> {
+  const rrfK = 60;
+  const rrfScores = new Map<string, number>();
+  for (const vec of vecs) {
+    if (!vec) continue;
+    const qEmbed = new Float32Array(vec);
+    const subScores: Array<{ id: string; score: number }> = [];
+    for (const [id, chunkVec] of filteredEmbeddings) {
+      if (chunkVec.length === qEmbed.length) {
+        subScores.push({ id, score: cosSim(qEmbed, chunkVec) });
+      }
+    }
+    subScores.sort((a, b) => b.score - a.score);
+    subScores.forEach((s, rank) => {
+      rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (rrfK + rank + 1));
+    });
+  }
+  return rrfScores;
+}
+
+type ChunkEntry = { startLine: number; endLine: number; text: string };
+
+/**
+ * Group top chunk IDs by file, merge overlapping/adjacent chunks, and format
+ * as numbered plain text sections.
+ */
+function formatChunksAsText(
+  topIds: string[],
+  chunks: Map<string, CodeChunk>,
+  excludeTests: boolean,
+): string {
+  const byFile = new Map<string, ChunkEntry[]>();
+  for (const id of topIds) {
+    const chunk = chunks.get(id);
+    if (!chunk) continue;
+    if (excludeTests && isTestFile(chunk.file)) continue;
+    const existing = byFile.get(chunk.file) ?? [];
+    existing.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
+    byFile.set(chunk.file, existing);
+  }
+
+  const sections: string[] = ["The following code sections were retrieved:"];
+  for (const [file, fileChunks] of byFile) {
+    fileChunks.sort((a, b) => a.startLine - b.startLine);
+    // Merge overlapping/adjacent chunks to avoid duplicate lines
+    const merged: ChunkEntry[] = [];
+    for (const chunk of fileChunks) {
+      const last = merged[merged.length - 1];
+      if (last && chunk.startLine <= last.endLine + 5) {
+        if (chunk.endLine > last.endLine) {
+          const overlapLines = last.endLine - chunk.startLine + 1;
+          const newLines = chunk.text.split("\n").slice(overlapLines);
+          last.text = last.text + "\n" + newLines.join("\n");
+          last.endLine = chunk.endLine;
+        }
+      } else {
+        merged.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
+      }
+    }
+    sections.push(`Path: ${file}`);
+    for (const chunk of merged) {
+      // Add line numbers to each line
+      const lines = chunk.text.split("\n");
+      const numbered = lines.map((line, i) => {
+        const lineNo = String(chunk.startLine + i).padStart(6, " ");
+        return `${lineNo}\t${line}`;
+      }).join("\n");
+      sections.push(numbered);
+    }
+    sections.push("...");
+  }
+
+  return sections.join("\n");
+}
 
 /**
  * Execute a single sub-query and return the result with token estimate.
@@ -177,83 +283,16 @@ async function executeSubQuery(
         ]);
 
         if (chunks && chunkEmbeddings) {
-          // Filter embeddings by file path substring and/or test file exclusion
-          let filteredEmbeddings = chunkEmbeddings;
-          if (fileFilter || excludeTests) {
-            filteredEmbeddings = new Map([...chunkEmbeddings.entries()].filter(([id]) => {
-              const chunkFile = chunks.get(id)?.file;
-              if (!chunkFile) return false;
-              if (fileFilter && !chunkFile.includes(fileFilter)) return false;
-              if (excludeTests && isTestFile(chunkFile)) return false;
-              return true;
-            }));
-          }
+          const chunkFileLookup = new Map([...chunks.entries()].map(([id, c]) => [id, c.file]));
+          const filteredEmbeddings = filterEmbeddingsByFile(chunkEmbeddings, chunkFileLookup, fileFilter, excludeTests);
 
-          // RRF over sub-query rankings (k=60 per standard RRF)
-          const rrfScores = new Map<string, number>();
-          const rrfK = 60;
-          for (const vec of vecs) {
-            if (!vec) continue;
-            const qEmbed = new Float32Array(vec);
-            const subScores: Array<{ id: string; score: number }> = [];
-            for (const [id, chunkVec] of filteredEmbeddings) {
-              if (chunkVec.length === qEmbed.length) {
-                subScores.push({ id, score: cosineSimilarity(qEmbed, chunkVec) });
-              }
-            }
-            subScores.sort((a, b) => b.score - a.score);
-            subScores.forEach((s, rank) => {
-              rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (rrfK + rank + 1));
-            });
-          }
+          const rrfScores = computeRRFScores(vecs, filteredEmbeddings, cosineSimilarity);
           const topIds = [...rrfScores.entries()]
             .sort((a, b) => b[1] - a[1])
             .slice(0, topK)
             .map(([id]) => id);
 
-          // Group chunks by file and sort by line number within each file
-          const byFile = new Map<string, Array<{ startLine: number; endLine: number; text: string }>>();
-          for (const id of topIds) {
-            const chunk = chunks.get(id);
-            if (!chunk) continue;
-            const existing = byFile.get(chunk.file) ?? [];
-            existing.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
-            byFile.set(chunk.file, existing);
-          }
-
-          // Format as plain text — same style as Augment's context engine
-          const sections: string[] = ["The following code sections were retrieved:"];
-          for (const [file, fileChunks] of byFile) {
-            fileChunks.sort((a, b) => a.startLine - b.startLine);
-            // Merge overlapping/adjacent chunks to avoid duplicate lines
-            const merged: Array<{ startLine: number; endLine: number; text: string }> = [];
-            for (const chunk of fileChunks) {
-              const last = merged[merged.length - 1];
-              if (last && chunk.startLine <= last.endLine + 5) {
-                if (chunk.endLine > last.endLine) {
-                  const overlapLines = last.endLine - chunk.startLine + 1;
-                  const newLines = chunk.text.split("\n").slice(overlapLines);
-                  last.text = last.text + "\n" + newLines.join("\n");
-                  last.endLine = chunk.endLine;
-                }
-              } else {
-                merged.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
-              }
-            }
-            sections.push(`Path: ${file}`);
-            for (const chunk of merged) {
-              // Add line numbers to each line (matching Auggie's format)
-              const lines = chunk.text.split("\n");
-              const numbered = lines.map((line, i) => {
-                const lineNo = String(chunk.startLine + i).padStart(6, " ");
-                return `${lineNo}\t${line}`;
-              }).join("\n");
-              sections.push(numbered);
-            }
-            sections.push("...");
-          }
-
-          const text = sections.join("\n");
+          const text = formatChunksAsText(topIds, chunks, false);
           return { type: qType, data: text, tokens: estimateTokens(text) };
         }
       }
@@ -268,17 +307,8 @@ async function executeSubQuery(
       const sourceLimit = (query["source_chars"] as number | undefined) ?? 200;
       const symbolMap = new Map(index.symbols.map((s) => [s.id, s]));
 
-      // Filter embeddings by file path substring and/or test file exclusion
-      let filteredEmbeddings = embeddings;
-      if (fileFilter || excludeTests) {
-        filteredEmbeddings = new Map([...embeddings.entries()].filter(([id]) => {
-          const symFile = symbolMap.get(id)?.file;
-          if (!symFile) return false;
-          if (fileFilter && !symFile.includes(fileFilter)) return false;
-          if (excludeTests && isTestFile(symFile)) return false;
-          return true;
-        }));
-      }
+      const symFileLookup = new Map([...symbolMap.entries()].map(([id, s]) => [id, s.file]));
+      const filteredEmbeddings = filterEmbeddingsByFile(embeddings, symFileLookup, fileFilter, excludeTests);
 
       const primaryVec = vecs[0];
       if (!primaryVec) throw new Error("Embedding provider returned no vector");
@@ -330,38 +360,15 @@ async function executeSubQuery(
 
       if (!chunks || !chunkEmbeddings) throw new Error(`No chunk index for "${repo}"`);
 
-      let filteredEmbeddings = chunkEmbeddings;
-      if (fileFilter || excludeTests) {
-        filteredEmbeddings = new Map([...chunkEmbeddings.entries()].filter(([id]) => {
-          const chunkFile = chunks.get(id)?.file;
-          if (!chunkFile) return false;
-          if (fileFilter && !chunkFile.includes(fileFilter)) return false;
-          if (excludeTests && isTestFile(chunkFile)) return false;
-          return true;
-        }));
-      }
-
-      const rrfK = 60;
-      const rrfScores = new Map<string, number>();
+      const chunkFileLookup = new Map([...chunks.entries()].map(([id, c]) => [id, c.file]));
+      const filteredEmbeddings = filterEmbeddingsByFile(chunkEmbeddings, chunkFileLookup, fileFilter, excludeTests);
 
       // 1. Semantic RRF contributions (one pass per decomposed sub-query)
-      for (const vec of embVecs) {
-        if (!vec) continue;
-        const qEmbed = new Float32Array(vec);
-        const subScores: Array<{ id: string; score: number }> = [];
-        for (const [id, chunkVec] of filteredEmbeddings) {
-          if (chunkVec.length === qEmbed.length) {
-            subScores.push({ id, score: cosSimH(qEmbed, chunkVec) });
-          }
-        }
-        subScores.sort((a, b) => b.score - a.score);
-        subScores.forEach((s, rank) => {
-          rrfScores.set(s.id, (rrfScores.get(s.id) ?? 0) + 1 / (rrfK + rank + 1));
-        });
-      }
+      const rrfScores = computeRRFScores(embVecs, filteredEmbeddings, cosSimH);
 
-      // 2. Text match RRF contributions — map match line → covering chunk
-      // Build file → sorted-chunks index for efficient line lookup
+      // 2. Text match RRF contributions — map match line -> covering chunk
+      // Build file -> sorted-chunks index for efficient line lookup
+      const rrfK = 60;
       const fileToChunks = new Map<string, Array<{ id: string; startLine: number; endLine: number }>>();
       for (const [id, chunk] of chunks) {
         const list = fileToChunks.get(chunk.file) ?? [];
@@ -392,48 +399,7 @@ async function executeSubQuery(
         .slice(0, topK)
         .map(([id]) => id);
 
-      // Format as plain text (same as semantic case)
-      const byFile = new Map<string, Array<{ startLine: number; endLine: number; text: string }>>();
-      for (const id of topIds) {
-        const chunk = chunks.get(id);
-        if (!chunk) continue;
-        // Double-check test file exclusion (text matches could contribute chunk IDs)
-        if (excludeTests && isTestFile(chunk.file)) continue;
-        const existing = byFile.get(chunk.file) ?? [];
-        existing.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
-        byFile.set(chunk.file, existing);
-      }
-
-      const sections: string[] = ["The following code sections were retrieved:"];
-      for (const [file, fileChunks] of byFile) {
-        fileChunks.sort((a, b) => a.startLine - b.startLine);
-        const merged: Array<{ startLine: number; endLine: number; text: string }> = [];
-        for (const chunk of fileChunks) {
-          const last = merged[merged.length - 1];
-          if (last && chunk.startLine <= last.endLine + 5) {
-            if (chunk.endLine > last.endLine) {
-              const overlapLines = last.endLine - chunk.startLine + 1;
-              const newLines = chunk.text.split("\n").slice(overlapLines);
-              last.text = last.text + "\n" + newLines.join("\n");
-              last.endLine = chunk.endLine;
-            }
-          } else {
-            merged.push({ startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text });
-          }
-        }
-        sections.push(`Path: ${file}`);
-        for (const chunk of merged) {
-          const lines = chunk.text.split("\n");
-          const numbered = lines.map((line, i) => {
-            const lineNo = String(chunk.startLine + i).padStart(6, " ");
-            return `${lineNo}\t${line}`;
-          }).join("\n");
-          sections.push(numbered);
-        }
-        sections.push("...");
-      }
-
-      const hybridText = sections.join("\n");
+      const hybridText = formatChunksAsText(topIds, chunks, excludeTests);
       return { type: qType, data: hybridText, tokens: estimateTokens(hybridText) };
     }
 

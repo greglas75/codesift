@@ -1,21 +1,26 @@
-import { readFile, readdir, stat } from "node:fs/promises";
-import { join, relative, extname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
+import { walkDirectory } from "../utils/walk.js";
+import { matchFilePattern } from "../utils/glob.js";
 import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../types.js";
 
 const DEFAULT_MAX_TEXT_MATCHES = 500;
-const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
 
-/** Directories to skip during text search file walk */
-const IGNORE_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", "coverage",
-  ".codesift", ".next", "__pycache__", ".pytest_cache",
-  ".venv", "venv", ".tox", ".mypy_cache", ".turbo",
-  "generated", "audit-results", ".backup", "jscpd-report",
-]);
+// SEC-003: Detect common catastrophic backtracking patterns (ReDoS)
+const REDOS_PATTERNS = [
+  /\(.*[+*].*\)[+*]/,          // Nested quantifiers: (a+)+ or (a*)*
+  /\(.*\|.*\)[+*]/,            // Alternation with quantifier: (a|b)+
+  /\(.*[+*].*\)\{/,            // Nested quantifier with range: (a+){2,}
+  /\([^)]*\\[dDwWsS][+*].*\)[+*]/, // Character class with nested quantifier
+];
+
+function isSafeRegex(pattern: string): boolean {
+  return !REDOS_PATTERNS.some((p) => p.test(pattern));
+}
 
 /** Binary/non-text extensions to skip during text search */
 const BINARY_EXTENSIONS = new Set([
@@ -44,140 +49,6 @@ export interface SearchTextOptions {
   context_lines?: number | undefined;
   max_results?: number | undefined;
   group_by_file?: boolean | undefined;
-}
-
-/**
- * Match a file path against a simple glob pattern.
- * Supports: "*.ts", "src/*.ts", "src/**\/*.ts", "**\/*.test.ts"
- */
-function matchFilePattern(filePath: string, pattern: string): boolean {
-  // Exact match
-  if (filePath === pattern) return true;
-
-  // "**\/" prefix — match anywhere in path
-  if (pattern.startsWith("**/")) {
-    const suffix = pattern.slice(3);
-    // Recursively match the suffix against every segment tail
-    return matchFilePattern(filePath, suffix) ||
-      filePath.includes("/" + suffix) ||
-      matchFileSuffix(filePath, suffix);
-  }
-
-  // "*" at the start — match extension-style patterns like "*.ts"
-  if (pattern.startsWith("*") && !pattern.includes("/")) {
-    const suffix = pattern.slice(1);
-    return filePath.endsWith(suffix);
-  }
-
-  // "dir/**" — match everything under directory (e.g., "src/**")
-  if (pattern.endsWith("/**")) {
-    const prefix = pattern.slice(0, -3);
-    return filePath.startsWith(prefix + "/") || filePath === prefix;
-  }
-
-  // Pattern with "**" in the middle (e.g., "src/**/*.ts")
-  if (pattern.includes("/**/")) {
-    const [prefix, suffix] = splitFirst(pattern, "/**/");
-    if (!filePath.startsWith(prefix + "/") && filePath !== prefix) return false;
-    const rest = filePath.slice(prefix.length + 1);
-    return matchFilePattern(rest, suffix) ||
-      matchFilePattern(rest, "**/" + suffix);
-  }
-
-  // Simple directory prefix + filename pattern (e.g., "src/*.ts")
-  if (pattern.includes("/") && pattern.includes("*")) {
-    const lastSlash = pattern.lastIndexOf("/");
-    const dirPart = pattern.slice(0, lastSlash);
-    const filePart = pattern.slice(lastSlash + 1);
-    const fileLastSlash = filePath.lastIndexOf("/");
-    const fileDir = fileLastSlash >= 0 ? filePath.slice(0, fileLastSlash) : "";
-    const fileName = fileLastSlash >= 0 ? filePath.slice(fileLastSlash + 1) : filePath;
-
-    if (fileDir !== dirPart) return false;
-    return matchFilePattern(fileName, filePart);
-  }
-
-  // No wildcards: substring match on the full path
-  // "risk.service.ts" matches "src/lib/services/risk/risk.service.ts"
-  // "validators" matches "src/lib/validators/schema.ts"
-  if (!pattern.includes("*")) {
-    return filePath.includes(pattern);
-  }
-
-  return false;
-}
-
-function matchFileSuffix(filePath: string, suffix: string): boolean {
-  if (suffix.startsWith("*")) {
-    const ext = suffix.slice(1);
-    return filePath.endsWith(ext);
-  }
-  return filePath.endsWith("/" + suffix) || filePath === suffix;
-}
-
-function splitFirst(str: string, sep: string): [string, string] {
-  const idx = str.indexOf(sep);
-  if (idx < 0) return [str, ""];
-  return [str.slice(0, idx), str.slice(idx + sep.length)];
-}
-
-/**
- * Walk a directory tree collecting all text files.
- * Returns relative paths from rootPath.
- * Unlike the index walk, this includes ALL text files (not just parseable ones).
- */
-async function walkAllTextFiles(rootPath: string): Promise<string[]> {
-  const files: string[] = [];
-  let limitReached = false;
-
-  async function walk(dirPath: string): Promise<void> {
-    if (limitReached) return;
-
-    let entries;
-    try {
-      entries = await readdir(dirPath, { withFileTypes: true });
-    } catch {
-      return; // permission denied, etc.
-    }
-
-    for (const entry of entries) {
-      if (limitReached) return;
-      const fullPath = join(dirPath, entry.name);
-
-      if (entry.isDirectory()) {
-        if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) {
-          continue;
-        }
-        await walk(fullPath);
-      } else if (entry.isFile()) {
-        const ext = extname(entry.name);
-
-        // Skip binary files
-        if (BINARY_EXTENSIONS.has(ext)) continue;
-
-        // Skip files that are too large
-        try {
-          const fileStat = await stat(fullPath);
-          if (fileStat.size > MAX_FILE_SIZE) continue;
-        } catch {
-          continue;
-        }
-
-        files.push(relative(rootPath, fullPath));
-
-        if (files.length >= MAX_WALK_FILES) {
-          console.warn(
-            `[codesift] walkAllTextFiles: reached ${MAX_WALK_FILES} file limit, returning partial results`,
-          );
-          limitReached = true;
-          return;
-        }
-      }
-    }
-  }
-
-  await walk(rootPath);
-  return files;
 }
 
 /**
@@ -307,6 +178,10 @@ export async function searchText(
 
   let regex: RegExp | null = null;
   if (useRegex) {
+    // SEC-003: Check for catastrophic backtracking before compiling
+    if (!isSafeRegex(query)) {
+      throw new Error("Regex pattern rejected: potential catastrophic backtracking (ReDoS)");
+    }
     try {
       regex = new RegExp(query);
     } catch (err: unknown) {
@@ -316,7 +191,11 @@ export async function searchText(
   }
 
   // Walk the filesystem to find ALL text files (not just indexed/parseable ones)
-  const allFiles = await walkAllTextFiles(index.root);
+  const allFiles = await walkDirectory(index.root, {
+    fileFilter: (ext) => !BINARY_EXTENSIONS.has(ext),
+    maxFiles: MAX_WALK_FILES,
+    relative: true,
+  });
 
   const matches: TextMatch[] = [];
 

@@ -1,8 +1,6 @@
-import Parser from "web-tree-sitter";
-import type { CodeSymbol, SymbolKind } from "../../types.js";
-import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
-
-const MAX_SOURCE_LENGTH = 5000;
+import type Parser from "web-tree-sitter";
+import type { CodeSymbol } from "../../types.js";
+import { getNodeName, makeSymbol } from "./_shared.js";
 
 /** Matches top-level SCREAMING_CASE identifiers like MAX_RETRIES, API_URL */
 const SCREAMING_CASE_RE = /^[A-Z][A-Z0-9_]+$/;
@@ -26,11 +24,11 @@ const TEST_SUITE_METHODS = new Set([
  * Parse test-call callee from a call_expression node.
  *
  * Handles:
- *   describe("...", fn)        → { base: "describe", method: null }
- *   it("...", fn)              → { base: "it",       method: null }
- *   it.skip("...", fn)         → { base: "it",       method: "skip" }
- *   it.each([...])("...", fn)  → { base: "it",       method: "each" }
- *   beforeEach(fn)             → { base: "beforeEach", method: null }
+ *   describe("...", fn)        -> { base: "describe", method: null }
+ *   it("...", fn)              -> { base: "it",       method: null }
+ *   it.skip("...", fn)         -> { base: "it",       method: "skip" }
+ *   it.each([...])("...", fn)  -> { base: "it",       method: "each" }
+ *   beforeEach(fn)             -> { base: "beforeEach", method: null }
  */
 interface CalleeInfo { base: string; method: string | null }
 
@@ -70,11 +68,6 @@ function parseTestCallee(callExpr: Parser.SyntaxNode): CalleeInfo | null {
 
 // --- Helpers ---
 
-function getNodeName(node: Parser.SyntaxNode): string | null {
-  const nameNode = node.childForFieldName("name");
-  return nameNode?.text ?? null;
-}
-
 function getDocstring(
   node: Parser.SyntaxNode,
   source: string,
@@ -109,48 +102,6 @@ function getSignature(
   return sig;
 }
 
-function extractNodeSource(
-  node: Parser.SyntaxNode,
-  source: string,
-): string {
-  const text = source.slice(node.startIndex, node.endIndex);
-  if (text.length > MAX_SOURCE_LENGTH) {
-    return text.slice(0, MAX_SOURCE_LENGTH) + "...";
-  }
-  return text;
-}
-
-function makeSymbol(
-  node: Parser.SyntaxNode,
-  name: string,
-  kind: SymbolKind,
-  filePath: string,
-  source: string,
-  repo: string,
-  parentId?: string,
-): CodeSymbol {
-  const startLine = node.startPosition.row + 1;
-  const endLine = node.endPosition.row + 1;
-  const docstring = getDocstring(node, source);
-
-  const sym: CodeSymbol = {
-    id: makeSymbolId(repo, filePath, name, startLine),
-    repo,
-    name,
-    kind,
-    file: filePath,
-    start_line: startLine,
-    end_line: endLine,
-    source: extractNodeSource(node, source),
-    tokens: tokenizeIdentifier(name),
-  };
-
-  if (docstring) sym.docstring = docstring;
-  if (parentId) sym.parent = parentId;
-
-  return sym;
-}
-
 function getTestName(node: Parser.SyntaxNode): string | null {
   const args = node.childForFieldName("arguments");
   if (!args) return null;
@@ -180,9 +131,11 @@ export function extractTypeScriptSymbols(
       case "function_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "function", filePath, source, repo, parentId);
-          const sig = getSignature(node, source);
-          if (sig) sym.signature = sig;
+          const sym = makeSymbol(node, name, "function", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+            signature: getSignature(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -202,18 +155,19 @@ export function extractTypeScriptSymbols(
 
           const value = declarator.childForFieldName("value");
           if (value && value.type === "arrow_function") {
-            const sym = makeSymbol(node, name, "function", filePath, source, repo, parentId);
-            const sig = getSignature(value, source);
-            if (sig) sym.signature = sig;
-            const doc = getDocstring(node, source);
-            if (doc) sym.docstring = doc;
+            const sym = makeSymbol(node, name, "function", filePath, source, repo, {
+              parentId,
+              docstring: getDocstring(node, source),
+              signature: getSignature(value, source),
+            });
             symbols.push(sym);
           } else if (value) {
-            // SCREAMING_CASE const → "constant", otherwise → "variable"
+            // SCREAMING_CASE const -> "constant", otherwise -> "variable"
             const kind = isConst && SCREAMING_CASE_RE.test(name) ? "constant" : "variable";
-            const sym = makeSymbol(node, name, kind, filePath, source, repo, parentId);
-            const doc = getDocstring(node, source);
-            if (doc) sym.docstring = doc;
+            const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+              parentId,
+              docstring: getDocstring(node, source),
+            });
             symbols.push(sym);
           }
         }
@@ -224,7 +178,10 @@ export function extractTypeScriptSymbols(
       case "class_declaration":
       case "abstract_class_declaration": {
         const name = getNodeName(node) ?? "<anonymous>";
-        const sym = makeSymbol(node, name, "class", filePath, source, repo, parentId);
+        const sym = makeSymbol(node, name, "class", filePath, source, repo, {
+          parentId,
+          docstring: getDocstring(node, source),
+        });
         symbols.push(sym);
 
         // Walk class body with this class as parent
@@ -238,9 +195,11 @@ export function extractTypeScriptSymbols(
         // abstract doSomething(): void; inside abstract classes
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "method", filePath, source, repo, parentId);
-          const sig = getSignature(node, source);
-          if (sig) sym.signature = sig;
+          const sym = makeSymbol(node, name, "method", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+            signature: getSignature(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -249,9 +208,11 @@ export function extractTypeScriptSymbols(
       case "method_definition": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "method", filePath, source, repo, parentId);
-          const sig = getSignature(node, source);
-          if (sig) sym.signature = sig;
+          const sym = makeSymbol(node, name, "method", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+            signature: getSignature(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -260,7 +221,10 @@ export function extractTypeScriptSymbols(
       case "public_field_definition": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "field", filePath, source, repo, parentId);
+          const sym = makeSymbol(node, name, "field", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -269,7 +233,10 @@ export function extractTypeScriptSymbols(
       case "interface_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "interface", filePath, source, repo, parentId);
+          const sym = makeSymbol(node, name, "interface", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -278,7 +245,10 @@ export function extractTypeScriptSymbols(
       case "type_alias_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "type", filePath, source, repo, parentId);
+          const sym = makeSymbol(node, name, "type", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -287,7 +257,10 @@ export function extractTypeScriptSymbols(
       case "enum_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "enum", filePath, source, repo, parentId);
+          const sym = makeSymbol(node, name, "enum", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+          });
           symbols.push(sym);
         }
         break;
@@ -314,7 +287,10 @@ export function extractTypeScriptSymbols(
             if (base === "describe" && (method === null || TEST_SUITE_METHODS.has(method))) {
               const testName = getTestName(expr);
               const name = testName ?? "describe";
-              const sym = makeSymbol(node, name, "test_suite", filePath, source, repo, parentId);
+              const sym = makeSymbol(node, name, "test_suite", filePath, source, repo, {
+                parentId,
+                docstring: getDocstring(node, source),
+              });
               symbols.push(sym);
 
               // Walk describe body for nested tests
@@ -338,14 +314,20 @@ export function extractTypeScriptSymbols(
             ) {
               const testName = getTestName(expr);
               const name = testName ?? base;
-              const sym = makeSymbol(node, name, "test_case", filePath, source, repo, parentId);
+              const sym = makeSymbol(node, name, "test_case", filePath, source, repo, {
+                parentId,
+                docstring: getDocstring(node, source),
+              });
               symbols.push(sym);
               return;
             }
 
             // Lifecycle hooks: beforeEach(), afterEach(), beforeAll(), afterAll()
             if (TEST_HOOK_NAMES.has(base) && method === null) {
-              const sym = makeSymbol(node, base, "test_hook", filePath, source, repo, parentId);
+              const sym = makeSymbol(node, base, "test_hook", filePath, source, repo, {
+                parentId,
+                docstring: getDocstring(node, source),
+              });
               symbols.push(sym);
               return;
             }
