@@ -3,7 +3,7 @@ import { join, relative, extname } from "node:path";
 import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
-import type { SearchResult, TextMatch, SymbolKind } from "../types.js";
+import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../types.js";
 
 const DEFAULT_MAX_TEXT_MATCHES = 500;
 const MAX_FILE_SIZE = 1_000_000; // 1MB — skip giant files
@@ -43,6 +43,7 @@ export interface SearchTextOptions {
   file_pattern?: string | undefined;
   context_lines?: number | undefined;
   max_results?: number | undefined;
+  group_by_file?: boolean | undefined;
 }
 
 /**
@@ -275,12 +276,25 @@ export async function searchSymbols(
 /**
  * Full-text search across all files in a repository.
  * Walks the filesystem to search ALL text files, not just indexed ones.
+ *
+ * When group_by_file=true, returns TextMatchGroup[] instead of TextMatch[].
+ * This reduces output by 80-90% for high-cardinality searches (e.g., "throw new AppError" with 200+ hits).
  */
 export async function searchText(
   repo: string,
   query: string,
+  options?: SearchTextOptions & { group_by_file: true },
+): Promise<TextMatchGroup[]>;
+export async function searchText(
+  repo: string,
+  query: string,
   options?: SearchTextOptions,
-): Promise<TextMatch[]> {
+): Promise<TextMatch[]>;
+export async function searchText(
+  repo: string,
+  query: string,
+  options?: SearchTextOptions,
+): Promise<TextMatch[] | TextMatchGroup[]> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
@@ -363,6 +377,25 @@ export async function searchText(
       }
       matches.push(match);
     }
+  }
+
+  if (options?.group_by_file) {
+    const groups = new Map<string, TextMatchGroup>();
+    for (const m of matches) {
+      const existing = groups.get(m.file);
+      if (existing) {
+        existing.count++;
+        existing.lines.push(m.line);
+      } else {
+        groups.set(m.file, {
+          file: m.file,
+          count: 1,
+          lines: [m.line],
+          first_match: m.content,
+        });
+      }
+    }
+    return [...groups.values()];
   }
 
   return matches;

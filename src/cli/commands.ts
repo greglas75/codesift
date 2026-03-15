@@ -67,6 +67,7 @@ async function handleSearch(args: string[], flags: Flags): Promise<void> {
     regex: getBoolFlag(flags, "regex"),
     context_lines: getNumFlag(flags, "context-lines"),
     max_results: getNumFlag(flags, "max-results"),
+    group_by_file: getBoolFlag(flags, "group-by-file"),
   });
   output(result, flags);
 }

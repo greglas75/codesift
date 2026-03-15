@@ -93,6 +93,13 @@ export interface TextMatch {
   context_after?: string[];
 }
 
+export interface TextMatchGroup {
+  file: string;
+  count: number;
+  lines: number[];        // line numbers of all matches
+  first_match: string;    // content of first matching line
+}
+
 export type Direction = "callers" | "callees";
 
 export interface CallNode {

@@ -156,6 +156,7 @@ server.tool(
     context_lines: z.number().optional().describe("Number of context lines around each match"),
     file_pattern: z.string().optional().describe("Glob pattern to filter files"),
     max_results: z.number().optional().describe("Maximum number of matching lines to return (default 500)"),
+    group_by_file: z.boolean().optional().describe("Group results by file — returns {file, count, lines[], first_match} instead of every line. 80-90% less output for high-cardinality searches."),
   },
   async (args) => wrapTool("search_text", args, () =>
     searchText(args.repo, args.query, {
@@ -163,6 +164,7 @@ server.tool(
       context_lines: args.context_lines,
       file_pattern: args.file_pattern,
       max_results: args.max_results,
+      group_by_file: args.group_by_file,
     }),
   )(),
 );
