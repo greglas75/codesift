@@ -35,6 +35,7 @@ export default defineConfig({
             "tests/search/**/*.test.ts",
             "tests/tools/**/*.test.ts",
             "tests/integration/**/*.test.ts",
+            "tests/retrieval/**/*.test.ts",
           ],
           environment: "node",
           pool: "vmForks",
