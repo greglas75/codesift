@@ -419,9 +419,22 @@ async function handleFileChange(
   }
 }
 
-export async function listAllRepos(): Promise<RepoMeta[]> {
+export interface RepoSummary {
+  name: string;
+  file_count: number;
+  symbol_count: number;
+}
+
+export async function listAllRepos(options?: { compact?: boolean }): Promise<RepoMeta[] | RepoSummary[]> {
   const config = loadConfig();
-  return listRegistryRepos(config.registryPath);
+  const repos = await listRegistryRepos(config.registryPath);
+  if (options?.compact === false) return repos;
+  // Default: compact — return only what agents need (name + counts)
+  return repos.map((r) => ({
+    name: r.name,
+    file_count: r.file_count,
+    symbol_count: r.symbol_count,
+  }));
 }
 
 export async function invalidateCache(repoName: string): Promise<boolean> {

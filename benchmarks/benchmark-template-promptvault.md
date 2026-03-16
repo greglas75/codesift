@@ -31,6 +31,10 @@
 | T8 | List all risk API routes + HTTP methods | API routes | Complete route list with methods |
 | T9 | Find all `prisma.$transaction` usages | Cross-cutting | All transaction sites with context |
 | T10 | Trace document analysis pipeline architecture | Architecture trace | Full pipeline: upload → parse → AI → risks |
+| T11 | Find dead/unused exports in `src/lib/services` | Dead code | List of exported symbols with 0 external references |
+| T12 | Find top 5 most complex functions in the codebase | Complexity | Function names + file + cyclomatic complexity + nesting depth |
+| T13 | Check for circular dependencies in `src/lib/services` | Circular deps | List cycles (if any) or confirm acyclic |
+| T14 | Generate Mermaid diagram of `analyzeDocument` callees depth 2 | Visualization | Mermaid flowchart of the call tree |
 
 ---
 

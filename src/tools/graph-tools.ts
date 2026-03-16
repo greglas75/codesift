@@ -185,10 +185,13 @@ function stripCallTreeSource(node: CallNode): CallNode {
   };
 }
 
+export type OutputFormat = "json" | "mermaid";
+
 export interface TraceOptions {
   depth?: number | undefined;
   include_source?: boolean | undefined;
   include_tests?: boolean | undefined;
+  output_format?: OutputFormat | undefined;
 }
 
 /**
@@ -212,14 +215,17 @@ export async function traceCallChain(
   let maxDepth: number;
   let includeSource: boolean;
   let includeTests: boolean;
+  let outputFormat: OutputFormat;
   if (typeof depthOrOptions === "object" && depthOrOptions !== null) {
     maxDepth = depthOrOptions.depth ?? DEFAULT_CALL_DEPTH;
     includeSource = depthOrOptions.include_source ?? false;
     includeTests = depthOrOptions.include_tests ?? false;
+    outputFormat = depthOrOptions.output_format ?? "json";
   } else {
     maxDepth = depthOrOptions ?? DEFAULT_CALL_DEPTH;
     includeSource = false;
     includeTests = false;
+    outputFormat = "json";
   }
 
   // Find the target symbol — prefer non-test files when tests are excluded
@@ -239,7 +245,55 @@ export async function traceCallChain(
   const adjacency = buildAdjacencyIndex(index.symbols, !includeTests);
   const tree = buildCallTree(target, adjacency, direction, maxDepth);
 
+  if (outputFormat === "mermaid") {
+    const mermaid = callTreeToMermaid(tree, direction);
+    // Return as a special shape that serializes to the diagram string
+    return { mermaid, direction, root: symbolName, depth: maxDepth } as unknown as CallNode;
+  }
+
   return includeSource ? tree : stripCallTreeSource(tree);
+}
+
+/**
+ * Convert a CallNode tree to a Mermaid flowchart diagram.
+ */
+function callTreeToMermaid(tree: CallNode, direction: Direction): string {
+  const lines: string[] = ["graph TD"];
+  const visited = new Set<string>();
+
+  function nodeId(sym: CodeSymbol): string {
+    // Sanitize for Mermaid: replace special chars
+    return sym.id.replace(/[^a-zA-Z0-9_]/g, "_");
+  }
+
+  function nodeLabel(sym: CodeSymbol): string {
+    const shortFile = sym.file.split("/").pop() ?? sym.file;
+    return `${sym.name}<br/><small>${shortFile}:${sym.start_line}</small>`;
+  }
+
+  function walk(node: CallNode, parentId?: string): void {
+    const id = nodeId(node.symbol);
+
+    if (!visited.has(id)) {
+      visited.add(id);
+      lines.push(`  ${id}["${nodeLabel(node.symbol)}"]`);
+    }
+
+    if (parentId) {
+      if (direction === "callees") {
+        lines.push(`  ${parentId} --> ${id}`);
+      } else {
+        lines.push(`  ${id} --> ${parentId}`);
+      }
+    }
+
+    for (const child of node.children) {
+      walk(child, id);
+    }
+  }
+
+  walk(tree);
+  return lines.join("\n");
 }
 
 /**
@@ -394,13 +448,113 @@ export async function impactAnalysis(
 
   const dependencyGraph = buildFileDependencyGraph(index, adjacency);
 
+  // Find affected test files: test files that import changed symbols/files
+  const affectedTests = findAffectedTests(changedFiles, affectedSymbols, index, adjacency);
+
+  // Calculate risk scores per changed file
+  const riskScores = calculateRiskScores(changedFiles, changedSymbols, affectedTests, adjacency);
+
   return {
     changed_files: changedFiles,
     affected_symbols: includeSource
       ? affectedSymbols
       : affectedSymbols.map(stripSource),
+    affected_tests: affectedTests,
+    risk_scores: riskScores,
     dependency_graph: dependencyGraph,
   };
+}
+
+/**
+ * Calculate risk scores for changed files.
+ * Score = f(callers, test_coverage, symbols_changed).
+ */
+function calculateRiskScores(
+  changedFiles: string[],
+  changedSymbols: CodeSymbol[],
+  affectedTests: import("../types.js").AffectedTest[],
+  adjacency: AdjacencyIndex,
+): import("../types.js").RiskScore[] {
+  return changedFiles.map((file) => {
+    // Count symbols changed in this file
+    const fileSymbols = changedSymbols.filter((s) => s.file === file);
+    const symbolsChanged = fileSymbols.length;
+
+    // Count callers (other symbols that depend on symbols in this file)
+    let callers = 0;
+    for (const sym of fileSymbols) {
+      const symCallers = adjacency.callers.get(sym.id) ?? [];
+      callers += symCallers.filter((c) => c.file !== file).length;
+    }
+
+    // Count test files covering this file
+    const testCoverage = affectedTests.filter((t) =>
+      t.reason.includes(file.split("/").pop()!) || t.test_file.includes(file.replace(/\.ts$/, "")),
+    ).length;
+
+    // Score: 0-100
+    // High callers + low test coverage = high risk
+    const callerWeight = Math.min(callers * 10, 40);
+    const coverageWeight = testCoverage > 0 ? 0 : 30; // No tests = +30 risk
+    const sizeWeight = Math.min(symbolsChanged * 5, 30);
+    const score = Math.min(100, callerWeight + coverageWeight + sizeWeight);
+
+    let risk: "low" | "medium" | "high" | "critical";
+    if (score >= 70) risk = "critical";
+    else if (score >= 50) risk = "high";
+    else if (score >= 25) risk = "medium";
+    else risk = "low";
+
+    return { file, risk, score, callers, test_coverage: testCoverage, symbols_changed: symbolsChanged };
+  }).sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Find test files that would be affected by the changed symbols/files.
+ * A test is affected if it imports (directly or transitively) any changed symbol.
+ */
+function findAffectedTests(
+  changedFiles: string[],
+  affectedSymbols: CodeSymbol[],
+  index: CodeIndex,
+  adjacency: AdjacencyIndex,
+): import("../types.js").AffectedTest[] {
+  const affectedFileSet = new Set([
+    ...changedFiles,
+    ...affectedSymbols.map((s) => s.file),
+  ]);
+
+  const tests: import("../types.js").AffectedTest[] = [];
+  const seenTestFiles = new Set<string>();
+
+  // Direct: test files in changed files
+  for (const file of changedFiles) {
+    if (isTestFile(file) && !seenTestFiles.has(file)) {
+      seenTestFiles.add(file);
+      tests.push({ test_file: file, reason: "directly changed" });
+    }
+  }
+
+  // Indirect: test files that call/import symbols from affected files
+  for (const sym of index.symbols) {
+    if (!isTestFile(sym.file)) continue;
+    if (seenTestFiles.has(sym.file)) continue;
+
+    // Check if this test symbol calls anything in affected files
+    const callees = adjacency.callees.get(sym.id) ?? [];
+    for (const callee of callees) {
+      if (affectedFileSet.has(callee.file)) {
+        seenTestFiles.add(sym.file);
+        tests.push({
+          test_file: sym.file,
+          reason: `imports ${callee.name} (${callee.file.split("/").pop()})`,
+        });
+        break;
+      }
+    }
+  }
+
+  return tests;
 }
 
 // Export for testing

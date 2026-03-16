@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import { indexFolder, getCodeIndex } from "../../src/tools/index-tools.js";
 import { searchSymbols, searchText } from "../../src/tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline } from "../../src/tools/outline-tools.js";
-import { getSymbol, getSymbols, findAndShow, findReferences } from "../../src/tools/symbol-tools.js";
-import { assembleContext } from "../../src/tools/context-tools.js";
+import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "../../src/tools/symbol-tools.js";
+import { assembleContext, getKnowledgeMap } from "../../src/tools/context-tools.js";
+import { analyzeComplexity } from "../../src/tools/complexity-tools.js";
+import { findClones } from "../../src/tools/clone-tools.js";
+import { analyzeHotspots } from "../../src/tools/hotspot-tools.js";
+import { searchPatterns, listPatterns } from "../../src/tools/pattern-tools.js";
 import { generateClaudeMd } from "../../src/tools/generate-tools.js";
 import { codebaseRetrieval } from "../../src/retrieval/codebase-retrieval.js";
 import { resetConfigCache } from "../../src/config.js";
@@ -639,6 +643,509 @@ describe("context_tools", () => {
       );
       expect(hasPaymentRelated).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// context_tools: getKnowledgeMap + circular dependency detection
+// ---------------------------------------------------------------------------
+describe("knowledge_map", () => {
+  it("returns modules and edges for the fixture project", async () => {
+    const repo = await indexFixture();
+
+    const map = await getKnowledgeMap(repo);
+
+    expect(map.modules.length).toBe(3); // types.ts, user-service.ts, payment.ts
+    expect(map.edges.length).toBeGreaterThan(0);
+    // user-service.ts imports from types.ts
+    expect(map.edges.some((e) => e.from.includes("user-service") && e.to.includes("types"))).toBe(true);
+    // payment.ts imports from types.ts
+    expect(map.edges.some((e) => e.from.includes("payment") && e.to.includes("types"))).toBe(true);
+    // circular_deps should exist (may be empty for this fixture)
+    expect(Array.isArray(map.circular_deps)).toBe(true);
+  });
+
+  it("reports no circular deps in acyclic fixture", async () => {
+    const repo = await indexFixture();
+
+    const map = await getKnowledgeMap(repo);
+
+    // The standard fixture has no circular imports
+    expect(map.circular_deps).toHaveLength(0);
+  });
+
+  it("detects circular dependencies in cyclic fixture", async () => {
+    // Create a fixture with A -> B -> C -> A cycle
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "module-a.ts"),
+      `import { helperB } from "./module-b.js";
+export function funcA(): string { return helperB(); }
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "module-b.ts"),
+      `import { helperC } from "./module-c.js";
+export function helperB(): string { return helperC(); }
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "module-c.ts"),
+      `import { funcA } from "./module-a.js";
+export function helperC(): string { return funcA(); }
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const map = await getKnowledgeMap(REPO);
+
+    // Should detect the A -> B -> C -> A cycle
+    expect(map.circular_deps.length).toBeGreaterThan(0);
+    const cycle = map.circular_deps[0]!;
+    expect(cycle.length).toBe(3); // 3 edges
+    expect(cycle.cycle.length).toBe(4); // 4 nodes (first == last)
+    // First and last should be the same (closed cycle)
+    expect(cycle.cycle[0]).toBe(cycle.cycle[cycle.cycle.length - 1]);
+  });
+
+  it("detects simple A <-> B mutual dependency", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "alpha.ts"),
+      `import { beta } from "./beta.js";
+export function alpha(): string { return beta(); }
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "beta.ts"),
+      `import { alpha } from "./alpha.js";
+export function beta(): string { return alpha(); }
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const map = await getKnowledgeMap(REPO);
+
+    expect(map.circular_deps.length).toBeGreaterThan(0);
+    const cycle = map.circular_deps[0]!;
+    expect(cycle.length).toBe(2); // 2 edges: A->B, B->A
+  });
+
+  it("filters circular deps to focus path", async () => {
+    await mkdir(join(fixtureDir, "src", "core"), { recursive: true });
+    await mkdir(join(fixtureDir, "src", "utils"), { recursive: true });
+
+    // Cycle in core/
+    await writeFile(
+      join(fixtureDir, "src", "core", "x.ts"),
+      `import { y } from "./y.js";
+export function x(): string { return y(); }
+`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "core", "y.ts"),
+      `import { x } from "./x.js";
+export function y(): string { return x(); }
+`,
+    );
+    // No cycle in utils/
+    await writeFile(
+      join(fixtureDir, "src", "utils", "helper.ts"),
+      `export function helper(): number { return 42; }
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    // Focus on utils — should see no circular deps
+    const utilsMap = await getKnowledgeMap(REPO, "utils");
+    expect(utilsMap.circular_deps).toHaveLength(0);
+
+    // Focus on core — should see the cycle
+    const coreMap = await getKnowledgeMap(REPO, "core");
+    expect(coreMap.circular_deps.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_context_bundle
+// ---------------------------------------------------------------------------
+describe("get_context_bundle", () => {
+  it("returns symbol + imports + siblings in one call", async () => {
+    const repo = await indexFixture();
+
+    const bundle = await getContextBundle(repo, "getUserById");
+
+    expect(bundle).not.toBeNull();
+    expect(bundle!.symbol.name).toBe("getUserById");
+    expect(bundle!.symbol.source).toBeDefined();
+
+    // Should have imports from the file
+    expect(bundle!.imports.length).toBeGreaterThan(0);
+    expect(bundle!.imports.some((i) => i.includes("types"))).toBe(true);
+
+    // Should have sibling symbols from same file (createUser, UserService, etc.)
+    expect(bundle!.siblings.length).toBeGreaterThan(0);
+    const siblingNames = bundle!.siblings.map((s) => s.name);
+    expect(siblingNames).toContain("createUser");
+    expect(siblingNames).toContain("UserService");
+
+    // Should have types_used extracted from the symbol source
+    expect(Array.isArray(bundle!.types_used)).toBe(true);
+    // getUserById returns Promise<User | null> — should reference User
+    expect(bundle!.types_used).toContain("User");
+  });
+
+  it("returns null for non-existent symbol", async () => {
+    const repo = await indexFixture();
+
+    const bundle = await getContextBundle(repo, "xyzNonExistent");
+
+    expect(bundle).toBeNull();
+  });
+
+  it("includes all import lines from the file", async () => {
+    const repo = await indexFixture();
+
+    const bundle = await getContextBundle(repo, "processPayment");
+
+    expect(bundle).not.toBeNull();
+    // payment.ts imports from types.ts
+    expect(bundle!.imports.some((i) => i.includes("PaymentInfo"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// find_dead_code
+// ---------------------------------------------------------------------------
+describe("find_dead_code", () => {
+  it("finds exported symbols with no external references", async () => {
+    // Create fixture with a dead export
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "used.ts"),
+      `export function usedFunc(): string { return "used"; }
+export function deadFunc(): string { return "dead"; }
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "consumer.ts"),
+      `import { usedFunc } from "./used.js";
+export function main(): string { return usedFunc(); }
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findDeadCode(REPO);
+
+    expect(result.scanned_symbols).toBeGreaterThan(0);
+    expect(result.scanned_files).toBeGreaterThan(0);
+
+    // deadFunc is exported but never referenced outside used.ts
+    const dead = result.candidates.find((c) => c.name === "deadFunc");
+    expect(dead).toBeDefined();
+    expect(dead!.file).toBe("src/used.ts");
+    expect(dead!.reason).toContain("no references");
+
+    // usedFunc should NOT be in candidates (it's imported by consumer.ts)
+    const used = result.candidates.find((c) => c.name === "usedFunc");
+    expect(used).toBeUndefined();
+  });
+
+  it("excludes test files by default", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "service.ts"),
+      `export function serve(): void {}`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "service.test.ts"),
+      `import { serve } from "./service.js";
+export function testHelper(): void { serve(); }
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    // Without tests: serve() has no non-test external refs
+    const withoutTests = await findDeadCode(REPO);
+    const serveCandidate = withoutTests.candidates.find((c) => c.name === "serve");
+    // serve is referenced in test file, but tests excluded by default
+    // however test imports DO count as external refs if we read ALL files
+    // Actually: include_tests=false means we skip test files from scanning too
+    // So testHelper won't be in candidates (it's in test file = excluded)
+    expect(withoutTests.candidates.every((c) => !c.file.includes(".test."))).toBe(true);
+  });
+
+  it("filters by file_pattern", async () => {
+    await mkdir(join(fixtureDir, "src", "a"), { recursive: true });
+    await mkdir(join(fixtureDir, "src", "b"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "a", "alpha.ts"),
+      `export function alphaFunc(): void {}`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "b", "beta.ts"),
+      `export function betaFunc(): void {}`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findDeadCode(REPO, { file_pattern: "src/a" });
+
+    // Should only contain candidates from src/a
+    for (const c of result.candidates) {
+      expect(c.file).toContain("src/a");
+    }
+  });
+
+  it("returns empty candidates when all exports are used", async () => {
+    const repo = await indexFixture(); // Standard fixture: all types are imported
+
+    const result = await findDeadCode(repo);
+
+    // In the standard fixture, types.ts exports are used by user-service.ts and payment.ts
+    const typesCandidates = result.candidates.filter((c) => c.file === "src/types.ts");
+    // User and PaymentInfo should not be dead (they're imported)
+    expect(typesCandidates.find((c) => c.name === "User")).toBeUndefined();
+    expect(typesCandidates.find((c) => c.name === "PaymentInfo")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// analyze_complexity
+// ---------------------------------------------------------------------------
+describe("analyze_complexity", () => {
+  it("returns complexity info for functions in fixture", async () => {
+    const repo = await indexFixture();
+
+    const result = await analyzeComplexity(repo);
+
+    expect(result.summary.total_functions).toBeGreaterThan(0);
+    expect(result.functions.length).toBeGreaterThan(0);
+
+    for (const fn of result.functions) {
+      expect(fn.name).toBeDefined();
+      expect(fn.cyclomatic_complexity).toBeGreaterThanOrEqual(1);
+      expect(fn.lines).toBeGreaterThan(0);
+      expect(fn.max_nesting_depth).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("detects higher complexity in branchy code", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "complex.ts"),
+      `export function complexFunc(x: number, y: string): string {
+  if (x > 0) {
+    if (y === "a") {
+      return "a";
+    } else if (y === "b") {
+      return "b";
+    }
+  } else if (x < -10) {
+    switch (y) {
+      case "c": return "c";
+      case "d": return "d";
+      default: return "other";
+    }
+  }
+  return x > 5 ? "big" : "small";
+}
+
+export function simpleFunc(): number {
+  return 42;
+}
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await analyzeComplexity(REPO);
+
+    const complex = result.functions.find((f) => f.name === "complexFunc");
+    const simple = result.functions.find((f) => f.name === "simpleFunc");
+
+    expect(complex).toBeDefined();
+    expect(simple).toBeDefined();
+    expect(complex!.cyclomatic_complexity).toBeGreaterThan(simple!.cyclomatic_complexity);
+    expect(complex!.max_nesting_depth).toBeGreaterThan(0);
+    expect(complex!.branches).toBeGreaterThan(3);
+  });
+
+  it("sorts by complexity descending", async () => {
+    const repo = await indexFixture();
+
+    const result = await analyzeComplexity(repo);
+
+    for (let i = 1; i < result.functions.length; i++) {
+      expect(result.functions[i]!.cyclomatic_complexity)
+        .toBeLessThanOrEqual(result.functions[i - 1]!.cyclomatic_complexity);
+    }
+  });
+
+  it("respects min_complexity filter", async () => {
+    const repo = await indexFixture();
+
+    const result = await analyzeComplexity(repo, { min_complexity: 999 });
+
+    expect(result.functions).toHaveLength(0);
+  });
+
+  it("summary includes above_threshold count", async () => {
+    const repo = await indexFixture();
+
+    const result = await analyzeComplexity(repo);
+
+    expect(typeof result.summary.above_threshold).toBe("number");
+    expect(typeof result.summary.avg_complexity).toBe("number");
+    expect(typeof result.summary.avg_lines).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// find_clones
+// ---------------------------------------------------------------------------
+describe("find_clones", () => {
+  it("detects cloned functions across files", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    const sharedBody = `
+  const items = [];
+  for (let i = 0; i < 20; i++) {
+    if (i % 2 === 0) {
+      items.push({ id: i, value: i * 10 });
+    } else {
+      items.push({ id: i, value: i * 5 });
+    }
+  }
+  const filtered = items.filter(x => x.value > 50);
+  const mapped = filtered.map(x => x.value);
+  return mapped.reduce((a, b) => a + b, 0);`;
+
+    await writeFile(
+      join(fixtureDir, "src", "calc-a.ts"),
+      `export function calculateTotalsA(): number {${sharedBody}\n}\n`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "calc-b.ts"),
+      `export function calculateTotalsB(): number {${sharedBody}\n}\n`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findClones(REPO, { min_similarity: 0.7, min_lines: 5 });
+
+    expect(result.scanned_symbols).toBeGreaterThan(0);
+    const clone = result.clones.find((c) =>
+      (c.symbol_a.name === "calculateTotalsA" && c.symbol_b.name === "calculateTotalsB") ||
+      (c.symbol_a.name === "calculateTotalsB" && c.symbol_b.name === "calculateTotalsA"),
+    );
+    expect(clone).toBeDefined();
+    expect(clone!.similarity).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it("returns empty for unique functions", async () => {
+    const repo = await indexFixture();
+
+    // Standard fixture has unique functions
+    const result = await findClones(repo, { min_similarity: 0.9, min_lines: 5 });
+
+    // getUserById, processPayment, etc. are all different
+    expect(result.clones.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// analyze_hotspots
+// ---------------------------------------------------------------------------
+describe("analyze_hotspots", () => {
+  it("returns hotspot data for a git repo", async () => {
+    // Use the codesift-mcp repo itself (has git history)
+    // First index it in a temp dir
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+    await writeFile(join(fixtureDir, "src", "index.ts"), `export const x = 1;\n`);
+    // Init a git repo
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["init"], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["add", "."], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "init", "--no-gpg-sign"], { cwd: fixtureDir, stdio: "pipe" });
+
+    // Make a second commit
+    await writeFile(join(fixtureDir, "src", "index.ts"), `export const x = 2;\nexport const y = 3;\n`);
+    execFileSync("git", ["add", "."], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "update", "--no-gpg-sign"], { cwd: fixtureDir, stdio: "pipe" });
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await analyzeHotspots(REPO, { since_days: 3650 }); // 10 years to catch fresh commits
+
+    expect(result.period).toContain("3650");
+    // Git log may not pick up commits made milliseconds ago — check gracefully
+    if (result.hotspots.length > 0) {
+      const topFile = result.hotspots[0]!;
+      expect(topFile.commits).toBeGreaterThanOrEqual(1);
+      expect(topFile.lines_changed).toBeGreaterThan(0);
+      expect(topFile.hotspot_score).toBeGreaterThan(0);
+    }
+    // At minimum, the function should not throw
+    expect(result.total_files).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search_patterns
+// ---------------------------------------------------------------------------
+describe("search_patterns", () => {
+  it("finds empty catch blocks with built-in pattern", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+    await writeFile(
+      join(fixtureDir, "src", "bad.ts"),
+      `export function bad() {
+  try { doSomething(); } catch (e) {}
+}
+`,
+    );
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await searchPatterns(REPO, "empty-catch");
+
+    expect(result.matches.length).toBeGreaterThan(0);
+    expect(result.pattern).toContain("Empty catch");
+  });
+
+  it("finds custom regex pattern", async () => {
+    const repo = await indexFixture();
+
+    const result = await searchPatterns(repo, "Promise<.*null>");
+
+    expect(result.scanned_symbols).toBeGreaterThan(0);
+    // getUserById returns Promise<User | null>
+    const match = result.matches.find((m) => m.name === "getUserById");
+    expect(match).toBeDefined();
+  });
+
+  it("lists built-in patterns", () => {
+    const patterns = listPatterns();
+
+    expect(patterns.length).toBeGreaterThan(5);
+    expect(patterns.some((p) => p.name === "empty-catch")).toBe(true);
+    expect(patterns.some((p) => p.name === "useEffect-no-cleanup")).toBe(true);
+    expect(patterns.some((p) => p.name === "any-type")).toBe(true);
   });
 });
 

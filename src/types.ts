@@ -107,9 +107,25 @@ export interface CallNode {
   children: CallNode[];
 }
 
+export interface AffectedTest {
+  test_file: string;
+  reason: string;            // e.g. "imports OrderService (changed)"
+}
+
+export interface RiskScore {
+  file: string;
+  risk: "low" | "medium" | "high" | "critical";
+  score: number;              // 0-100
+  callers: number;            // how many symbols depend on this file
+  test_coverage: number;      // how many test files cover this file
+  symbols_changed: number;    // how many symbols were changed in this file
+}
+
 export interface ImpactResult {
   changed_files: string[];
   affected_symbols: CodeSymbol[];
+  affected_tests: AffectedTest[];
+  risk_scores: RiskScore[];
   dependency_graph: Record<string, string[]>; // file → files that import it
 }
 

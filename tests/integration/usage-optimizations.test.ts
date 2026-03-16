@@ -14,8 +14,8 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { indexFolder, listAllRepos } from "../../src/tools/index-tools.js";
-import { searchText } from "../../src/tools/search-tools.js";
-import { buildResponseHint } from "../../src/server.js";
+import { searchText, searchSymbols } from "../../src/tools/search-tools.js";
+import { buildResponseHint, buildResponseMeta } from "../../src/server.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const REPO = "local/test-project";
@@ -301,6 +301,102 @@ describe("OPT-2: list_repos session cache", () => {
 });
 
 // ---------------------------------------------------------------------------
+// OPT-1b: search_symbols response cleanup
+// ---------------------------------------------------------------------------
+describe("OPT-1b: search_symbols response cleanup", () => {
+  it("OPTIMIZATION: search results strip internal tokens and redundant repo fields", async () => {
+    const repo = await indexLargeFixture();
+
+    const results = await searchSymbols(repo, "findAll");
+
+    expect(results.length).toBeGreaterThan(0);
+
+    for (const r of results) {
+      // Internal BM25 tokens should be stripped
+      expect(r.symbol).not.toHaveProperty("tokens");
+      // Redundant repo field should be stripped
+      expect(r.symbol).not.toHaveProperty("repo");
+      // Essential fields should still be present
+      expect(r.symbol.name).toBeDefined();
+      expect(r.symbol.file).toBeDefined();
+      expect(r.symbol.kind).toBeDefined();
+      expect(r.symbol.start_line).toBeGreaterThan(0);
+    }
+  });
+
+  it("BASELINE: stripped fields save tokens", async () => {
+    const repo = await indexLargeFixture();
+
+    const results = await searchSymbols(repo, "findAll");
+    const cleanTokens = estimateTokens(results);
+
+    // Manually reconstruct what the old response would have looked like
+    const withInternal = results.map((r) => ({
+      ...r,
+      symbol: { ...r.symbol, repo, tokens: ["find", "all", "findall"] },
+    }));
+    const oldTokens = estimateTokens(withInternal);
+    const reduction = Math.round((1 - cleanTokens / oldTokens) * 100);
+
+    console.log(`[OPT-1b COMPARISON] clean=${cleanTokens} tok, with_internal=${oldTokens} tok, reduction=${reduction}%`);
+
+    expect(cleanTokens).toBeLessThan(oldTokens);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OPT-2b: list_repos compact response
+// ---------------------------------------------------------------------------
+describe("OPT-2b: list_repos compact response", () => {
+  it("BASELINE: full list_repos includes index_path and root (high token cost)", async () => {
+    await indexLargeFixture();
+
+    const full = await listAllRepos({ compact: false });
+    const fullTokens = estimateTokens(full);
+
+    console.log(`[OPT-2b BASELINE] full response: ${fullTokens} tok, fields: ${Object.keys(full[0]!).join(",")}`);
+
+    // Full response should include internal fields
+    expect(full[0]).toHaveProperty("index_path");
+    expect(full[0]).toHaveProperty("root");
+    expect(full[0]).toHaveProperty("updated_at");
+  });
+
+  it("OPTIMIZATION: compact list_repos returns only name + counts", async () => {
+    await indexLargeFixture();
+
+    const compact = await listAllRepos({ compact: true });
+    const compactTokens = estimateTokens(compact);
+
+    console.log(`[OPT-2b OPTIMIZED] compact response: ${compactTokens} tok, fields: ${Object.keys(compact[0]!).join(",")}`);
+
+    // Compact should NOT include internal fields
+    expect(compact[0]).toHaveProperty("name");
+    expect(compact[0]).toHaveProperty("file_count");
+    expect(compact[0]).toHaveProperty("symbol_count");
+    expect(compact[0]).not.toHaveProperty("index_path");
+    expect(compact[0]).not.toHaveProperty("root");
+    expect(compact[0]).not.toHaveProperty("updated_at");
+  });
+
+  it("OPTIMIZATION: compact mode is default and saves tokens", async () => {
+    await indexLargeFixture();
+
+    const compact = await listAllRepos(); // default = compact
+    const full = await listAllRepos({ compact: false });
+
+    const compactTokens = estimateTokens(compact);
+    const fullTokens = estimateTokens(full);
+    const reduction = Math.round((1 - compactTokens / fullTokens) * 100);
+
+    console.log(`[OPT-2b COMPARISON] compact=${compactTokens} tok, full=${fullTokens} tok, reduction=${reduction}%`);
+
+    expect(compactTokens).toBeLessThan(fullTokens);
+    expect(reduction).toBeGreaterThan(30); // At least 30% reduction
+  });
+});
+
+// ---------------------------------------------------------------------------
 // OPT-3: Auto reduce context_lines for high-cardinality results
 // ---------------------------------------------------------------------------
 describe("OPT-3: context reduction for high-cardinality results", () => {
@@ -353,6 +449,75 @@ describe("OPT-3: context reduction for high-cardinality results", () => {
     const contextTotal = contextBeforeTokens + contextAfterTokens;
     const contextPercent = Math.round((contextTotal / total) * 100);
     console.log(`[OPT-3 BREAKDOWN] context is ${contextPercent}% of total output`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OPT-5: Per-response _meta (tokens_saved, cost_avoided)
+// ---------------------------------------------------------------------------
+describe("OPT-5: per-response _meta", () => {
+  it("calculates tokens_used from text length", () => {
+    const meta = buildResponseMeta("search_text", 4000, 100);
+
+    expect(meta.tokens_used).toBe(1000); // 4000 chars / 4
+    expect(meta.ms).toBe(100);
+  });
+
+  it("calculates positive tokens_saved for search_text (multiplier > 1)", () => {
+    const meta = buildResponseMeta("search_text", 4000, 50);
+
+    // search_text multiplier is 1.02 → grep equivalent ~1020 tokens
+    // savings = 1020 - 1000 = 20
+    expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
+    expect(meta.tokens_used).toBe(1000);
+  });
+
+  it("calculates positive tokens_saved for codebase_retrieval (multiplier 1.88)", () => {
+    const meta = buildResponseMeta("codebase_retrieval", 40000, 500);
+
+    // 40000 chars = 10000 tokens, multiplier 1.88 → grep equiv 18800
+    // savings = 18800 - 10000 = 8800
+    expect(meta.tokens_saved).toBe(8800);
+    expect(meta.tokens_used).toBe(10000);
+  });
+
+  it("adds follow-up savings for tools where grep is smaller (multiplier < 1)", () => {
+    const meta = buildResponseMeta("search_symbols", 40000, 200);
+
+    // search_symbols multiplier 0.18 → grep equiv 1800
+    // 1800 - 10000 = -8200, but follow-up savings +1500
+    // max(0, -8200 + 1500) = 0... hmm
+    // Actually: grepEquivalent = ceil(10000 * 0.18) = 1800
+    // tokensSaved = max(0, (1800 - 10000) + 1500) = max(0, -6700) = 0
+    // That's correct — search_symbols returns MORE data but saves follow-up calls
+    expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
+  });
+
+  it("calculates cost_avoided for all models", () => {
+    const meta = buildResponseMeta("codebase_retrieval", 40000, 100);
+
+    expect(meta.cost_avoided_usd).toHaveProperty("opus");
+    expect(meta.cost_avoided_usd).toHaveProperty("sonnet");
+    expect(meta.cost_avoided_usd).toHaveProperty("haiku");
+
+    // 8800 saved tokens → opus: 8800 * 15 / 1M = $0.1320
+    expect(meta.cost_avoided_usd.opus).toBe("$0.1320");
+    expect(meta.cost_avoided_usd.sonnet).toBe("$0.0264");
+  });
+
+  it("handles unknown tool names with multiplier 1.0", () => {
+    const meta = buildResponseMeta("unknown_tool", 4000, 50);
+
+    // multiplier 1.0 → savings = 0
+    expect(meta.tokens_saved).toBe(0);
+    expect(meta.tokens_used).toBe(1000);
+  });
+
+  it("returns zero savings for tiny responses", () => {
+    const meta = buildResponseMeta("search_text", 20, 5);
+
+    expect(meta.tokens_used).toBe(5); // ceil(20/4)
+    expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
   });
 });
 

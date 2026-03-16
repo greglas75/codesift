@@ -5,12 +5,17 @@ import { loadConfig } from "./config.js";
 import { indexFolder, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline } from "./tools/outline-tools.js";
-import { getSymbol, getSymbols, findAndShow, findReferences } from "./tools/symbol-tools.js";
+import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
 import { traceCallChain, impactAnalysis } from "./tools/graph-tools.js";
 import { assembleContext, getKnowledgeMap } from "./tools/context-tools.js";
 import { diffOutline, changedSymbols } from "./tools/diff-tools.js";
 import { generateClaudeMd } from "./tools/generate-tools.js";
 import { codebaseRetrieval } from "./retrieval/codebase-retrieval.js";
+import { analyzeComplexity } from "./tools/complexity-tools.js";
+import { findClones } from "./tools/clone-tools.js";
+import { analyzeHotspots } from "./tools/hotspot-tools.js";
+import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-repo-tools.js";
+import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { trackToolCall } from "./storage/usage-tracker.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import type { SymbolKind, Direction } from "./types.js";
@@ -29,6 +34,65 @@ function errorResult(message: string) {
 }
 
 const HIGH_CARDINALITY_THRESHOLD = 50;
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Benchmark-derived multipliers: estimated grep/Read tokens for equivalent task.
+ * Source: benchmarks/tool-comparison-A through E (2026-03-14).
+ *
+ * multiplier > 1 means grep produces MORE output for the same query (CodeSift saves).
+ * multiplier < 1 means grep produces LESS (CodeSift costs more but gives richer data).
+ */
+const GREP_EQUIVALENT_MULTIPLIER: Record<string, number> = {
+  search_text: 1.02,        // A: 93K grep vs 91K CodeSift — nearly equal
+  search_symbols: 0.18,     // B: 9K grep vs 52K CodeSift — grep smaller but incomplete
+  get_file_tree: 0.63,      // C: 65K grep vs 104K CodeSift (compact mode)
+  get_file_outline: 1.5,    // Estimated: outline vs full Read
+  find_references: 1.06,    // E: 26K grep vs 24K CodeSift
+  trace_call_chain: 1.06,   // E: same category
+  get_symbol: 0.5,          // D: grep+Read wins on single retrieval
+  get_symbols: 1.2,         // D: batch wins over sequential Read
+  codebase_retrieval: 1.88, // Batch: 27K sequential vs 14K batched
+  list_repos: 0.19,         // ls is much smaller than repo metadata
+  impact_analysis: 1.5,     // Estimated: manual git diff + grep
+};
+
+// Model pricing per 1M input tokens (tool output becomes model input)
+const MODEL_PRICING_PER_M: Record<string, number> = {
+  "opus": 15.0,
+  "sonnet": 3.0,
+  "haiku": 0.80,
+};
+
+interface ResponseMeta {
+  tokens_used: number;
+  tokens_saved: number;
+  cost_avoided_usd: Record<string, string>;
+  ms: number;
+}
+
+function buildResponseMeta(toolName: string, textLength: number, elapsedMs: number): ResponseMeta {
+  const tokensUsed = Math.ceil(textLength / CHARS_PER_TOKEN);
+  const multiplier = GREP_EQUIVALENT_MULTIPLIER[toolName] ?? 1.0;
+  const grepEquivalent = Math.ceil(tokensUsed * multiplier);
+
+  // For tools where grep output is smaller (multiplier < 1), savings still exist
+  // because CodeSift eliminates follow-up Read calls (est. 2-3 calls × 500 tok each)
+  const followUpSavings = multiplier < 1 ? 1500 : 0;
+  const tokensSaved = Math.max(0, (grepEquivalent - tokensUsed) + followUpSavings);
+
+  const costAvoided: Record<string, string> = {};
+  for (const [model, pricePerM] of Object.entries(MODEL_PRICING_PER_M)) {
+    costAvoided[model] = "$" + ((tokensSaved * pricePerM) / 1_000_000).toFixed(4);
+  }
+
+  return {
+    tokens_used: tokensUsed,
+    tokens_saved: tokensSaved,
+    cost_avoided_usd: costAvoided,
+    ms: Math.round(elapsedMs),
+  };
+}
 
 function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => Promise<T>) {
   return async () => {
@@ -39,13 +103,17 @@ function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => 
       const elapsed = performance.now() - start;
       trackToolCall(toolName, args, text, data, elapsed);
 
+      // Build _meta with token savings info
+      const meta = buildResponseMeta(toolName, text.length, elapsed);
+      const metaLine = `\n\n_meta: ${JSON.stringify(meta)}`;
+
       // Append optimization hint for high-cardinality search_text results
       const hint = buildResponseHint(toolName, args, data);
       if (hint) {
-        return { content: [{ type: "text" as const, text: text + "\n\n" + hint }] };
+        return { content: [{ type: "text" as const, text: text + metaLine + "\n\n" + hint }] };
       }
 
-      return { content: [{ type: "text" as const, text }] };
+      return { content: [{ type: "text" as const, text: text + metaLine }] };
     } catch (err: unknown) {
       const elapsed = performance.now() - start;
       const message = err instanceof Error ? err.message : String(err);
@@ -54,6 +122,8 @@ function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => 
     }
   };
 }
+
+export { buildResponseMeta };
 
 /**
  * Build an optimization hint when tool results indicate suboptimal usage.
@@ -122,9 +192,11 @@ server.tool(
 // ---------------------------------------------------------------------------
 server.tool(
   "list_repos",
-  "List all indexed repositories with metadata",
-  {},
-  async () => wrapTool("list_repos", {}, () => listAllRepos())(),
+  "List all indexed repositories with metadata. Returns compact format (name + counts) by default. Set compact=false for full paths.",
+  {
+    compact: z.boolean().optional().describe("Return compact format with just name and counts (default: true). Set false to include root path and index_path."),
+  },
+  async (args) => wrapTool("list_repos", args, () => listAllRepos({ compact: args.compact ?? true }))(),
 );
 
 // ---------------------------------------------------------------------------
@@ -286,6 +358,21 @@ server.tool(
 );
 
 // ---------------------------------------------------------------------------
+// 12b. get_context_bundle
+// ---------------------------------------------------------------------------
+server.tool(
+  "get_context_bundle",
+  "Get a symbol with its file imports and sibling symbols in one call. Saves 2-3 round-trips vs separate get_symbol + search_text + get_file_outline.",
+  {
+    repo: z.string().describe("Repository identifier"),
+    symbol_name: z.string().describe("Symbol name to find"),
+  },
+  async (args) => wrapTool("get_context_bundle", args, () =>
+    getContextBundle(args.repo, args.symbol_name),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
 // 13. find_references
 // ---------------------------------------------------------------------------
 server.tool(
@@ -306,7 +393,7 @@ server.tool(
 // ---------------------------------------------------------------------------
 server.tool(
   "trace_call_chain",
-  "Trace the call chain of a symbol — who calls it (callers) or what it calls (callees). Source code is excluded by default for compact output; set include_source=true to include it.",
+  "Trace the call chain of a symbol — who calls it (callers) or what it calls (callees). Source code is excluded by default for compact output; set include_source=true to include it. Set output_format='mermaid' for a Mermaid flowchart diagram.",
   {
     repo: z.string().describe("Repository identifier"),
     symbol_name: z.string().describe("Name of the symbol to trace"),
@@ -314,12 +401,14 @@ server.tool(
     depth: z.number().optional().describe("Maximum depth to traverse the call graph (default: 1)"),
     include_source: z.boolean().optional().describe("Include full source code of each symbol (default: false)"),
     include_tests: z.boolean().optional().describe("Include test files in trace results (default: false)"),
+    output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (flowchart diagram)"),
   },
   async (args) => wrapTool("trace_call_chain", args, () =>
     traceCallChain(args.repo, args.symbol_name, args.direction as Direction, {
       depth: args.depth,
       include_source: args.include_source,
       include_tests: args.include_tests,
+      output_format: args.output_format as "json" | "mermaid" | undefined,
     }),
   )(),
 );
@@ -444,7 +533,167 @@ server.tool(
 );
 
 // ---------------------------------------------------------------------------
-// 22. usage_stats
+// 22. find_dead_code
+// ---------------------------------------------------------------------------
+server.tool(
+  "find_dead_code",
+  "Find potentially dead code: exported symbols with zero references outside their defining file. Useful for identifying unused exports to clean up.",
+  {
+    repo: z.string().describe("Repository identifier"),
+    file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+    include_tests: z.boolean().optional().describe("Include test files in scan (default: false)"),
+  },
+  async (args) => wrapTool("find_dead_code", args, () =>
+    findDeadCode(args.repo, {
+      file_pattern: args.file_pattern,
+      include_tests: args.include_tests,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 23. analyze_complexity
+// ---------------------------------------------------------------------------
+server.tool(
+  "analyze_complexity",
+  "Analyze cyclomatic complexity of functions in a repository. Returns top N most complex functions with nesting depth, branch count, and line count. Useful for prioritizing refactoring.",
+  {
+    repo: z.string().describe("Repository identifier"),
+    file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+    top_n: z.number().optional().describe("Return top N most complex functions (default: 30)"),
+    min_complexity: z.number().optional().describe("Minimum cyclomatic complexity to include (default: 1)"),
+    include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+  },
+  async (args) => wrapTool("analyze_complexity", args, () =>
+    analyzeComplexity(args.repo, {
+      file_pattern: args.file_pattern,
+      top_n: args.top_n,
+      min_complexity: args.min_complexity,
+      include_tests: args.include_tests,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 24. find_clones
+// ---------------------------------------------------------------------------
+server.tool(
+  "find_clones",
+  "Find code clones: pairs of functions with similar normalized source (copy-paste detection). Uses hash bucketing + line-similarity scoring.",
+  {
+    repo: z.string().describe("Repository identifier"),
+    file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+    min_similarity: z.number().optional().describe("Minimum similarity threshold 0-1 (default: 0.7)"),
+    min_lines: z.number().optional().describe("Minimum normalized lines to consider (default: 10)"),
+    include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+  },
+  async (args) => wrapTool("find_clones", args, () =>
+    findClones(args.repo, {
+      file_pattern: args.file_pattern,
+      min_similarity: args.min_similarity,
+      min_lines: args.min_lines,
+      include_tests: args.include_tests,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 25. analyze_hotspots
+// ---------------------------------------------------------------------------
+server.tool(
+  "analyze_hotspots",
+  "Analyze git churn hotspots: files with high change frequency × complexity. Higher hotspot_score = more likely to contain bugs. Uses git log --numstat.",
+  {
+    repo: z.string().describe("Repository identifier"),
+    since_days: z.number().optional().describe("Look back N days (default: 90)"),
+    top_n: z.number().optional().describe("Return top N hotspots (default: 30)"),
+    file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+  },
+  async (args) => wrapTool("analyze_hotspots", args, () =>
+    analyzeHotspots(args.repo, {
+      since_days: args.since_days,
+      top_n: args.top_n,
+      file_pattern: args.file_pattern,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 26. cross_repo_search
+// ---------------------------------------------------------------------------
+server.tool(
+  "cross_repo_search",
+  "Search symbols across ALL indexed repositories. Useful for monorepos and microservice architectures.",
+  {
+    query: z.string().describe("Symbol search query"),
+    repo_pattern: z.string().optional().describe("Filter repos by name pattern (e.g. 'local/tgm')"),
+    kind: z.string().optional().describe("Filter by symbol kind"),
+    top_k: z.number().optional().describe("Max results per repo (default: 10)"),
+    include_source: z.boolean().optional().describe("Include source code"),
+  },
+  async (args) => wrapTool("cross_repo_search", args, () =>
+    crossRepoSearchSymbols(args.query, {
+      repo_pattern: args.repo_pattern,
+      kind: args.kind as import("./types.js").SymbolKind | undefined,
+      top_k: args.top_k,
+      include_source: args.include_source,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 27. cross_repo_refs
+// ---------------------------------------------------------------------------
+server.tool(
+  "cross_repo_refs",
+  "Find references to a symbol across ALL indexed repositories.",
+  {
+    symbol_name: z.string().describe("Symbol name to find references for"),
+    repo_pattern: z.string().optional().describe("Filter repos by name pattern"),
+    file_pattern: z.string().optional().describe("Filter files by glob pattern"),
+  },
+  async (args) => wrapTool("cross_repo_refs", args, () =>
+    crossRepoFindReferences(args.symbol_name, {
+      repo_pattern: args.repo_pattern,
+      file_pattern: args.file_pattern,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 28. search_patterns
+// ---------------------------------------------------------------------------
+server.tool(
+  "search_patterns",
+  "Search for structural code patterns (anti-patterns, CQ violations). Built-in patterns: useEffect-no-cleanup, empty-catch, any-type, console-log, await-in-loop, no-error-type, toctou, unbounded-findmany. Or pass custom regex.",
+  {
+    repo: z.string().describe("Repository identifier"),
+    pattern: z.string().describe("Built-in pattern name or custom regex"),
+    file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+    include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+    max_results: z.number().optional().describe("Max results (default: 50)"),
+  },
+  async (args) => wrapTool("search_patterns", args, () =>
+    searchPatterns(args.repo, args.pattern, {
+      file_pattern: args.file_pattern,
+      include_tests: args.include_tests,
+      max_results: args.max_results,
+    }),
+  )(),
+);
+
+// ---------------------------------------------------------------------------
+// 29. list_patterns
+// ---------------------------------------------------------------------------
+server.tool(
+  "list_patterns",
+  "List all available built-in structural code patterns for search_patterns.",
+  {},
+  async () => wrapTool("list_patterns", {}, async () => listPatterns())(),
+);
+
+// ---------------------------------------------------------------------------
+// 30. usage_stats
 // ---------------------------------------------------------------------------
 server.tool(
   "usage_stats",

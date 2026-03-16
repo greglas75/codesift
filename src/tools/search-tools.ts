@@ -143,7 +143,13 @@ export async function searchSymbols(
     });
   }
 
-  return results;
+  // Strip internal/redundant fields from response to reduce token output:
+  // - tokens: BM25 internal pre-computed token array (not useful to agents)
+  // - repo: redundant — agent already knows which repo they searched
+  return results.map((r) => {
+    const { tokens: _tokens, repo: _repo, ...cleanSymbol } = r.symbol;
+    return { ...r, symbol: cleanSymbol as typeof r.symbol };
+  });
 }
 
 /**

@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
@@ -19,9 +21,15 @@ export interface KnowledgeMapEdge {
   to: string;
 }
 
+export interface CircularDep {
+  cycle: string[];   // file paths forming the cycle, e.g. ["a.ts", "b.ts", "a.ts"]
+  length: number;    // number of edges in the cycle
+}
+
 export interface KnowledgeMap {
   modules: KnowledgeMapModule[];
   edges: KnowledgeMapEdge[];
+  circular_deps: CircularDep[];
 }
 
 /**
@@ -159,28 +167,32 @@ export async function getKnowledgeMap(
     });
   }
 
-  // Collect all import edges by scanning symbol source
-  const edges = collectEdges(index, moduleMap);
+  // Collect all import edges by reading file source from disk
+  const edges = await collectEdges(index, moduleMap);
+
+  const circularDeps = findCircularDeps(edges);
 
   // If no focus, return the full graph (limited by depth from roots)
   if (!focus) {
     return {
       modules: [...moduleMap.values()],
       edges,
+      circular_deps: circularDeps,
     };
   }
 
   // Filter to focus path and neighbors within depth
-  return filterToFocus(moduleMap, edges, focus, maxDepth);
+  return filterToFocus(moduleMap, edges, focus, maxDepth, circularDeps);
 }
 
 /**
- * Scan all symbols to collect import edges between modules.
+ * Read files from disk and collect import edges between modules.
+ * Reads full file content (not just symbol source) to capture top-level imports.
  */
-function collectEdges(
+async function collectEdges(
   index: CodeIndex,
   moduleMap: Map<string, KnowledgeMapModule>,
-): KnowledgeMapEdge[] {
+): Promise<KnowledgeMapEdge[]> {
   const edgeSet = new Set<string>();
   const edges: KnowledgeMapEdge[] = [];
 
@@ -195,27 +207,106 @@ function collectEdges(
     }
   }
 
-  for (const sym of index.symbols) {
-    if (!sym.source) continue;
+  for (const file of index.files) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch {
+      continue; // File may have been deleted
+    }
 
-    const importPaths = extractImports(sym.source);
+    const importPaths = extractImports(source);
     for (const importPath of importPaths) {
-      const resolved = resolveImportPath(sym.file, importPath);
+      const resolved = resolveImportPath(file.path, importPath);
       const targetFile = normalizedPaths.get(resolved);
-      if (!targetFile || targetFile === sym.file) continue;
+      if (!targetFile || targetFile === file.path) continue;
 
-      const edgeKey = `${sym.file}->${targetFile}`;
+      const edgeKey = `${file.path}->${targetFile}`;
       if (edgeSet.has(edgeKey)) continue;
       edgeSet.add(edgeKey);
 
-      // Ensure both modules exist in the map
-      if (moduleMap.has(sym.file) && moduleMap.has(targetFile)) {
-        edges.push({ from: sym.file, to: targetFile });
+      if (moduleMap.has(file.path) && moduleMap.has(targetFile)) {
+        edges.push({ from: file.path, to: targetFile });
       }
     }
   }
 
   return edges;
+}
+
+/**
+ * Find circular dependencies using DFS cycle detection.
+ * Returns unique cycles (normalized so shortest path is first).
+ */
+function findCircularDeps(edges: KnowledgeMapEdge[]): CircularDep[] {
+  // Build directed adjacency list
+  const adj = new Map<string, string[]>();
+  for (const edge of edges) {
+    let list = adj.get(edge.from);
+    if (!list) {
+      list = [];
+      adj.set(edge.from, list);
+    }
+    list.push(edge.to);
+  }
+
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const color = new Map<string, number>();
+  const parent = new Map<string, string | null>();
+  const cycles: CircularDep[] = [];
+  const seenCycleKeys = new Set<string>();
+
+  const MAX_CYCLES = 50; // Cap to avoid blowup on large graphs
+
+  function dfs(node: string): void {
+    if (cycles.length >= MAX_CYCLES) return;
+    color.set(node, GRAY);
+
+    for (const neighbor of adj.get(node) ?? []) {
+      if (cycles.length >= MAX_CYCLES) return;
+      const neighborColor = color.get(neighbor) ?? WHITE;
+
+      if (neighborColor === GRAY) {
+        // Back edge found — extract cycle
+        const cycle: string[] = [neighbor];
+        let current: string | null | undefined = node;
+        while (current && current !== neighbor) {
+          cycle.push(current);
+          current = parent.get(current);
+        }
+        cycle.push(neighbor); // close the cycle
+        cycle.reverse();
+
+        // Normalize: rotate so lexicographically smallest is first
+        const minIdx = cycle.slice(0, -1).reduce(
+          (mi, _, i, arr) => (arr[i]! < arr[mi]! ? i : mi), 0,
+        );
+        const normalized = [...cycle.slice(minIdx, -1), ...cycle.slice(0, minIdx), cycle[minIdx]!];
+        const key = normalized.join(" -> ");
+
+        if (!seenCycleKeys.has(key)) {
+          seenCycleKeys.add(key);
+          cycles.push({ cycle: normalized, length: normalized.length - 1 });
+        }
+      } else if (neighborColor === WHITE) {
+        parent.set(neighbor, node);
+        dfs(neighbor);
+      }
+    }
+
+    color.set(node, BLACK);
+  }
+
+  for (const node of adj.keys()) {
+    if ((color.get(node) ?? WHITE) === WHITE) {
+      parent.set(node, null);
+      dfs(node);
+    }
+  }
+
+  // Sort by cycle length (shortest first — most actionable)
+  cycles.sort((a, b) => a.length - b.length);
+  return cycles;
 }
 
 /**
@@ -227,6 +318,7 @@ function filterToFocus(
   edges: KnowledgeMapEdge[],
   focus: string,
   maxDepth: number,
+  circularDeps: CircularDep[] = [],
 ): KnowledgeMap {
   // Build adjacency lists (bidirectional for neighbor traversal)
   const adjacency = new Map<string, Set<string>>();
@@ -287,5 +379,10 @@ function filterToFocus(
     (e) => reachable.has(e.from) && reachable.has(e.to),
   );
 
-  return { modules: filteredModules, edges: filteredEdges };
+  // Filter circular deps to only those involving reachable modules
+  const filteredCircular = circularDeps.filter(
+    (cd) => cd.cycle.some((path) => reachable.has(path)),
+  );
+
+  return { modules: filteredModules, edges: filteredEdges, circular_deps: filteredCircular };
 }
