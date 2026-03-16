@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 22 search/retrieval tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 31 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -76,10 +76,28 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 
 | Command | Description |
 |---------|-------------|
-| `codesift trace <repo> <name>` | Trace call chain (callers/callees) |
-| `codesift impact <repo> --since <ref>` | Blast radius of git changes |
+| `codesift trace <repo> <name>` | Trace call chain (callers/callees). Supports `--format mermaid` for flowchart output. |
+| `codesift impact <repo> --since <ref>` | Blast radius of git changes + affected tests + risk scores per file |
 | `codesift context <repo> <query>` | Assemble relevant code context |
-| `codesift knowledge-map <repo>` | Module dependency map |
+| `codesift knowledge-map <repo>` | Module dependency map with circular dependency detection |
+
+### Code analysis
+
+| Command | Description |
+|---------|-------------|
+| `codesift dead-code <repo>` | Find exported symbols with zero external references |
+| `codesift complexity <repo>` | Cyclomatic complexity + nesting depth per function |
+| `codesift clones <repo>` | Copy-paste detection (hash bucketing + line similarity) |
+| `codesift hotspots <repo>` | Git churn x complexity = risk-ranked file list |
+| `codesift patterns <repo> <pattern>` | Structural anti-pattern search (8 built-in + custom regex) |
+| `codesift context-bundle <repo> <name>` | Symbol + imports + siblings + types used in one call |
+
+### Cross-repo
+
+| Command | Description |
+|---------|-------------|
+| `codesift cross-search <query>` | Search symbols across ALL indexed repositories |
+| `codesift cross-refs <name>` | Find references across ALL indexed repositories |
 
 ### Diff
 
@@ -95,6 +113,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift retrieve <repo> --queries <json>` | Batch multiple queries in one call |
 | `codesift stats` | Show usage statistics |
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
+| `codesift list-patterns` | List all built-in anti-pattern names |
 
 ## When to use CodeSift vs grep
 
@@ -104,13 +123,34 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | Find function by name | `codesift symbols` | Returns signature + body in 1 call |
 | File structure | `codesift tree` | 20% fewer tokens, symbol counts |
 | "How does X work?" | `codesift retrieve` (semantic) | 20% better quality on concept queries |
+| Call chain tracing | `codesift trace` | AST-based caller/callee graph, Mermaid output |
+| Dead code / unused exports | `codesift dead-code` | Automated scan, no manual grep needed |
+| Complexity hotspots | `codesift complexity` | Cyclomatic complexity + nesting depth |
+| Copy-paste detection | `codesift clones` | Hash bucketing + line similarity scoring |
+| Anti-pattern search | `codesift patterns` | 8 built-in CQ patterns + custom regex |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
-| Call chain tracing | `grep -rn "fn("` | CodeSift trace is being rewritten |
+
+## Built-in anti-patterns
+
+The `patterns` command searches for common code quality issues across your codebase:
+
+| Pattern | What it finds |
+|---------|---------------|
+| `empty-catch` | `catch (e) {}` — swallowed errors |
+| `any-type` | `: any` or `as any` — lost type safety |
+| `console-log` | `console.log/debug/info` in production code |
+| `await-in-loop` | Sequential `await` inside `for` loops |
+| `useEffect-no-cleanup` | React useEffect without cleanup return |
+| `no-error-type` | Catch without `instanceof Error` narrowing |
+| `toctou` | Read-then-write without atomic operation |
+| `unbounded-findmany` | Prisma `findMany` without `take` limit |
+
+Custom regex is also supported: `codesift patterns local/project "Promise<.*any>"`.
 
 ## MCP server
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 22 tools to AI agents like Claude.
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 31 tools to AI agents like Claude.
 
 ### Claude Code (CLI)
 
