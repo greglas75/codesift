@@ -128,8 +128,11 @@ describe("search_tools", () => {
 
       const results = await searchSymbols(repo, "getUserById");
 
-      expect(results.length).toBeGreaterThan(0);
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      // Top result should be the exact match
       expect(results[0]!.symbol.name).toBe("getUserById");
+      expect(results[0]!.symbol.file).toBe("src/user-service.ts");
+      expect(results[0]!.symbol.kind).toBe("function");
       expect(results[0]!.score).toBeGreaterThan(0);
     });
 
@@ -138,10 +141,12 @@ describe("search_tools", () => {
 
       const results = await searchSymbols(repo, "processPayment");
 
-      expect(results.length).toBeGreaterThan(0);
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      // Top result should be the exact match with source
       const sym = results[0]!.symbol;
-      expect(sym.source).toBeDefined();
-      expect(sym.source).toContain("processPayment");
+      expect(sym.name).toBe("processPayment");
+      expect(sym.file).toBe("src/payment.ts");
+      expect(sym.source).toContain("function processPayment");
     });
 
     it("filters by kind", async () => {
@@ -175,10 +180,9 @@ describe("search_tools", () => {
         file_pattern: "src/payment.ts",
       });
 
-      expect(results.length).toBeGreaterThan(0);
-      for (const r of results) {
-        expect(r.symbol.file).toBe("src/payment.ts");
-      }
+      expect(results).toHaveLength(1);
+      expect(results[0]!.symbol.name).toBe("processPayment");
+      expect(results[0]!.symbol.file).toBe("src/payment.ts");
     });
 
     it("returns empty array when no matches", async () => {
@@ -187,6 +191,14 @@ describe("search_tools", () => {
       const results = await searchSymbols(repo, "xyzNonExistentSymbol");
 
       expect(results).toEqual([]);
+    });
+
+    it("handles empty string query gracefully", async () => {
+      const repo = await indexFixture();
+
+      const results = await searchSymbols(repo, "");
+
+      expect(Array.isArray(results)).toBe(true);
     });
   });
 
@@ -235,6 +247,14 @@ describe("search_tools", () => {
 
       expect(matches).toEqual([]);
     });
+
+    it("handles empty string query gracefully", async () => {
+      const repo = await indexFixture();
+
+      const matches = await searchText(repo, "");
+
+      expect(Array.isArray(matches)).toBe(true);
+    });
   });
 });
 
@@ -248,20 +268,21 @@ describe("outline_tools", () => {
 
       const tree = await getFileTree(repo);
 
-      expect(tree.length).toBeGreaterThan(0);
+      expect(tree).toHaveLength(1); // single root: src/
 
       // Should have a "src" directory node
-      const srcNode = tree.find((n) => n.name === "src" && n.type === "dir");
-      expect(srcNode).toBeDefined();
-      expect(srcNode!.children).toBeDefined();
-      expect(srcNode!.children!.length).toBe(3);
+      const srcNode = tree[0]!;
+      expect(srcNode.name).toBe("src");
+      expect(srcNode.type).toBe("dir");
+      expect(srcNode.children).toHaveLength(3);
 
-      // File nodes should have symbol_count
-      const fileNodes = srcNode!.children!.filter((n) => n.type === "file");
-      expect(fileNodes.length).toBe(3);
+      // File nodes should have symbol_count > 0 (all fixture files have symbols)
+      const fileNodes = srcNode.children!.filter((n) => n.type === "file");
+      expect(fileNodes).toHaveLength(3);
+      const fileNames = fileNodes.map((f) => f.name).sort();
+      expect(fileNames).toEqual(["payment.ts", "types.ts", "user-service.ts"]);
       for (const f of fileNodes) {
-        expect(f.symbol_count).toBeDefined();
-        expect(f.symbol_count).toBeGreaterThanOrEqual(0);
+        expect(f.symbol_count).toBeGreaterThan(0);
       }
     });
 
@@ -270,10 +291,9 @@ describe("outline_tools", () => {
 
       const tree = await getFileTree(repo, { path_prefix: "src" });
 
-      expect(tree.length).toBeGreaterThan(0);
-      // All nodes should be under src
+      expect(tree).toHaveLength(3); // 3 files under src/
       for (const node of tree) {
-        expect(node.path).toMatch(/^src/);
+        expect(node.path).toMatch(/^src\//);
       }
     });
 
@@ -388,7 +408,7 @@ describe("outline_tools", () => {
 
       const outline = await getFileOutline(repo, "src/user-service.ts");
 
-      expect(outline.length).toBeGreaterThan(0);
+      expect(outline.length).toBeGreaterThanOrEqual(3);
 
       const names = outline.map((e) => e.name);
       expect(names).toContain("getUserById");
@@ -400,13 +420,14 @@ describe("outline_tools", () => {
         expect(outline[i]!.start_line).toBeGreaterThanOrEqual(outline[i - 1]!.start_line);
       }
 
-      // Each entry has required fields
-      for (const entry of outline) {
-        expect(entry.name).toBeDefined();
-        expect(entry.kind).toBeDefined();
-        expect(entry.start_line).toBeGreaterThan(0);
-        expect(entry.end_line).toBeGreaterThanOrEqual(entry.start_line);
-      }
+      // Verify specific symbol metadata
+      const getUserByIdEntry = outline.find((e) => e.name === "getUserById")!;
+      expect(getUserByIdEntry.kind).toBe("function");
+      expect(getUserByIdEntry.start_line).toBeGreaterThan(0);
+      expect(getUserByIdEntry.end_line).toBeGreaterThan(getUserByIdEntry.start_line);
+
+      const userServiceEntry = outline.find((e) => e.name === "UserService")!;
+      expect(userServiceEntry.kind).toBe("class");
     });
 
     it("returns empty array for non-existent file", async () => {
@@ -425,18 +446,16 @@ describe("outline_tools", () => {
       const outline = await getRepoOutline(repo);
 
       expect(outline.total_files).toBe(3);
-      expect(outline.total_symbols).toBeGreaterThan(0);
-      expect(outline.directories.length).toBeGreaterThan(0);
-      expect(outline.languages).toBeDefined();
+      expect(outline.total_symbols).toBeGreaterThanOrEqual(9); // 3 types + 3 user-service + 3 payment minimum
+      expect(outline.directories).toHaveLength(1); // only src/
       expect(outline.languages["typescript"]).toBe(3);
 
-      // Each directory entry has the right shape
-      for (const dir of outline.directories) {
-        expect(dir.path).toBeDefined();
-        expect(dir.file_count).toBeGreaterThan(0);
-        expect(dir.symbol_count).toBeGreaterThanOrEqual(0);
-        expect(dir.languages.length).toBeGreaterThan(0);
-      }
+      // Verify the single directory entry
+      const srcDir = outline.directories[0]!;
+      expect(srcDir.path).toBe("src");
+      expect(srcDir.file_count).toBe(3);
+      expect(srcDir.symbol_count).toBeGreaterThanOrEqual(9);
+      expect(srcDir.languages).toContain("typescript");
     });
   });
 });
@@ -460,8 +479,9 @@ describe("symbol_tools", () => {
       expect(result).not.toBeNull();
       expect(result!.name).toBe("processPayment");
       expect(result!.id).toBe(targetSym!.id);
-      expect(result!.source).toBeDefined();
-      expect(result!.source).toContain("processPayment");
+      expect(result!.kind).toBe("function");
+      expect(result!.file).toBe("src/payment.ts");
+      expect(result!.source).toContain("function processPayment");
     });
 
     it("returns null for non-existent symbol ID", async () => {
@@ -484,19 +504,19 @@ describe("symbol_tools", () => {
         .filter((s) => ["processPayment", "validateCard", "getUserById"].includes(s.name))
         .map((s) => s.id);
 
-      expect(ids.length).toBeGreaterThanOrEqual(3);
+      expect(ids).toHaveLength(3);
 
       const results = await getSymbols(repo, ids);
 
-      expect(results.length).toBe(ids.length);
+      expect(results).toHaveLength(3);
       const names = results.map((s) => s.name);
       expect(names).toContain("processPayment");
       expect(names).toContain("validateCard");
       expect(names).toContain("getUserById");
 
-      // Each result has source
+      // Each result has source containing its own name
       for (const sym of results) {
-        expect(sym.source).toBeDefined();
+        expect(sym.source).toContain(sym.name);
       }
     });
 
@@ -536,8 +556,9 @@ describe("symbol_tools", () => {
 
       expect(result).not.toBeNull();
       expect(result!.symbol.name).toBe("processPayment");
-      expect(result!.symbol.source).toBeDefined();
-      expect(result!.symbol.source).toContain("processPayment");
+      expect(result!.symbol.kind).toBe("function");
+      expect(result!.symbol.file).toBe("src/payment.ts");
+      expect(result!.symbol.source).toContain("function processPayment");
     });
 
     it("includes references when requested", async () => {
@@ -547,8 +568,8 @@ describe("symbol_tools", () => {
 
       expect(result).not.toBeNull();
       expect(result!.symbol.name).toBe("getUserById");
-      expect(result!.references).toBeDefined();
-      expect(result!.references!.length).toBeGreaterThan(0);
+      expect(result!.symbol.file).toBe("src/user-service.ts");
+      expect(result!.references!.length).toBeGreaterThanOrEqual(2); // definition + call in deleteUser
     });
 
     it("returns null when no symbols match", async () => {
@@ -567,17 +588,16 @@ describe("symbol_tools", () => {
       // getUserById is defined in user-service.ts and called in the deleteUser method
       const refs = await findReferences(repo, "getUserById");
 
-      expect(refs.length).toBeGreaterThan(0);
+      expect(refs.length).toBeGreaterThanOrEqual(2); // definition + call in deleteUser
 
       // Should find it in user-service.ts (definition + usage)
       const userServiceRefs = refs.filter((r) => r.file === "src/user-service.ts");
-      expect(userServiceRefs.length).toBeGreaterThanOrEqual(2); // definition + call in deleteUser
+      expect(userServiceRefs.length).toBeGreaterThanOrEqual(2);
 
-      // Each reference has required fields
+      // Each reference has file, line, and context containing the symbol name
       for (const ref of refs) {
-        expect(ref.file).toBeDefined();
+        expect(ref.file).toBe("src/user-service.ts"); // only file with getUserById
         expect(ref.line).toBeGreaterThan(0);
-        expect(ref.context).toBeDefined();
         expect(ref.context).toContain("getUserById");
       }
     });
@@ -588,10 +608,10 @@ describe("symbol_tools", () => {
       // "User" is defined in types.ts and imported in user-service.ts
       const refs = await findReferences(repo, "User");
 
-      expect(refs.length).toBeGreaterThan(0);
+      expect(refs.length).toBeGreaterThanOrEqual(2);
 
-      const files = [...new Set(refs.map((r) => r.file))];
-      // Should appear in at least types.ts and user-service.ts
+      const files = [...new Set(refs.map((r) => r.file))].sort();
+      // Should appear in types.ts (definition) and user-service.ts (import + usage)
       expect(files).toContain("src/types.ts");
       expect(files).toContain("src/user-service.ts");
     });
@@ -611,11 +631,11 @@ describe("context_tools", () => {
       expect(result.symbols.length).toBeGreaterThan(0);
       expect(result.total_tokens).toBeGreaterThan(0);
       expect(result.total_tokens).toBeLessThanOrEqual(5000);
-      expect(typeof result.truncated).toBe("boolean");
+      expect(result.truncated).toBe(false); // 5000 budget is plenty for small fixture
 
-      // Symbols should have source
+      // Symbols should have source containing their names
       for (const sym of result.symbols) {
-        expect(sym.source).toBeDefined();
+        expect(sym.source).toContain(sym.name);
       }
     });
 
@@ -626,8 +646,16 @@ describe("context_tools", () => {
       const result = await assembleContext(repo, "function", 50);
 
       expect(result.total_tokens).toBeLessThanOrEqual(50);
-      // With a budget of 50 tokens (~200 chars), it should truncate
-      // unless only one very small symbol matches
+      expect(result.truncated).toBe(true);
+    });
+
+    it("returns empty symbols for non-matching query", async () => {
+      const repo = await indexFixture();
+
+      const result = await assembleContext(repo, "xyzCompletelyAbsentQuery", 5000);
+
+      expect(result.symbols).toHaveLength(0);
+      expect(result.total_tokens).toBe(0);
     });
 
     it("returns relevant symbols for the query", async () => {
@@ -656,10 +684,8 @@ describe("knowledge_map", () => {
     const map = await getKnowledgeMap(repo);
 
     expect(map.modules.length).toBe(3); // types.ts, user-service.ts, payment.ts
-    expect(map.edges.length).toBeGreaterThan(0);
-    // user-service.ts imports from types.ts
+    expect(map.edges).toHaveLength(2); // user-service→types, payment→types
     expect(map.edges.some((e) => e.from.includes("user-service") && e.to.includes("types"))).toBe(true);
-    // payment.ts imports from types.ts
     expect(map.edges.some((e) => e.from.includes("payment") && e.to.includes("types"))).toBe(true);
     // circular_deps should exist (may be empty for this fixture)
     expect(Array.isArray(map.circular_deps)).toBe(true);
@@ -704,7 +730,7 @@ export function helperC(): string { return funcA(); }
     const map = await getKnowledgeMap(REPO);
 
     // Should detect the A -> B -> C -> A cycle
-    expect(map.circular_deps.length).toBeGreaterThan(0);
+    expect(map.circular_deps).toHaveLength(1);
     const cycle = map.circular_deps[0]!;
     expect(cycle.length).toBe(3); // 3 edges
     expect(cycle.cycle.length).toBe(4); // 4 nodes (first == last)
@@ -733,7 +759,7 @@ export function beta(): string { return alpha(); }
 
     const map = await getKnowledgeMap(REPO);
 
-    expect(map.circular_deps.length).toBeGreaterThan(0);
+    expect(map.circular_deps).toHaveLength(1);
     const cycle = map.circular_deps[0]!;
     expect(cycle.length).toBe(2); // 2 edges: A->B, B->A
   });
@@ -770,7 +796,7 @@ export function y(): string { return x(); }
 
     // Focus on core — should see the cycle
     const coreMap = await getKnowledgeMap(REPO, "core");
-    expect(coreMap.circular_deps.length).toBeGreaterThan(0);
+    expect(coreMap.circular_deps).toHaveLength(1);
   });
 });
 
@@ -785,14 +811,14 @@ describe("get_context_bundle", () => {
 
     expect(bundle).not.toBeNull();
     expect(bundle!.symbol.name).toBe("getUserById");
-    expect(bundle!.symbol.source).toBeDefined();
+    expect(bundle!.symbol.source).toContain("getUserById");
 
-    // Should have imports from the file
-    expect(bundle!.imports.length).toBeGreaterThan(0);
+    // Should have the import line from user-service.ts
+    expect(bundle!.imports.length).toBeGreaterThanOrEqual(1);
     expect(bundle!.imports.some((i) => i.includes("types"))).toBe(true);
 
-    // Should have sibling symbols from same file (createUser, UserService, etc.)
-    expect(bundle!.siblings.length).toBeGreaterThan(0);
+    // Should have sibling symbols from same file (createUser, UserService)
+    expect(bundle!.siblings.length).toBeGreaterThanOrEqual(2);
     const siblingNames = bundle!.siblings.map((s) => s.name);
     expect(siblingNames).toContain("createUser");
     expect(siblingNames).toContain("UserService");
@@ -848,8 +874,8 @@ export function main(): string { return usedFunc(); }
 
     const result = await findDeadCode(REPO);
 
-    expect(result.scanned_symbols).toBeGreaterThan(0);
-    expect(result.scanned_files).toBeGreaterThan(0);
+    expect(result.scanned_symbols).toBeGreaterThanOrEqual(3);
+    expect(result.scanned_files).toBe(2); // used.ts and consumer.ts
 
     // deadFunc is exported but never referenced outside used.ts
     const dead = result.candidates.find((c) => c.name === "deadFunc");
@@ -934,11 +960,15 @@ describe("analyze_complexity", () => {
 
     const result = await analyzeComplexity(repo);
 
-    expect(result.summary.total_functions).toBeGreaterThan(0);
-    expect(result.functions.length).toBeGreaterThan(0);
+    expect(result.summary.total_functions).toBeGreaterThanOrEqual(5); // fixture has 5+ functions
+    expect(result.functions.length).toBeGreaterThanOrEqual(5);
+
+    // Verify known functions appear in results
+    const functionNames = result.functions.map((f) => f.name);
+    expect(functionNames).toContain("processPayment");
+    expect(functionNames).toContain("getUserById");
 
     for (const fn of result.functions) {
-      expect(fn.name).toBeDefined();
       expect(fn.cyclomatic_complexity).toBeGreaterThanOrEqual(1);
       expect(fn.lines).toBeGreaterThan(0);
       expect(fn.max_nesting_depth).toBeGreaterThanOrEqual(0);
@@ -1011,9 +1041,9 @@ export function simpleFunc(): number {
 
     const result = await analyzeComplexity(repo);
 
-    expect(typeof result.summary.above_threshold).toBe("number");
-    expect(typeof result.summary.avg_complexity).toBe("number");
-    expect(typeof result.summary.avg_lines).toBe("number");
+    expect(result.summary.above_threshold).toBeGreaterThanOrEqual(0);
+    expect(result.summary.avg_complexity).toBeGreaterThanOrEqual(1);
+    expect(result.summary.avg_lines).toBeGreaterThan(0);
   });
 });
 
@@ -1050,7 +1080,7 @@ describe("find_clones", () => {
 
     const result = await findClones(REPO, { min_similarity: 0.7, min_lines: 5 });
 
-    expect(result.scanned_symbols).toBeGreaterThan(0);
+    expect(result.scanned_symbols).toBeGreaterThanOrEqual(2); // at least the two calc functions
     const clone = result.clones.find((c) =>
       (c.symbol_a.name === "calculateTotalsA" && c.symbol_b.name === "calculateTotalsB") ||
       (c.symbol_a.name === "calculateTotalsB" && c.symbol_b.name === "calculateTotalsA"),
@@ -1124,7 +1154,8 @@ describe("search_patterns", () => {
 
     const result = await searchPatterns(REPO, "empty-catch");
 
-    expect(result.matches.length).toBeGreaterThan(0);
+    expect(result.matches).toHaveLength(1); // only one function with empty catch
+    expect(result.matches[0]!.name).toBe("bad");
     expect(result.pattern).toContain("Empty catch");
   });
 
@@ -1133,10 +1164,11 @@ describe("search_patterns", () => {
 
     const result = await searchPatterns(repo, "Promise<.*null>");
 
-    expect(result.scanned_symbols).toBeGreaterThan(0);
+    expect(result.scanned_symbols).toBeGreaterThanOrEqual(5);
     // getUserById returns Promise<User | null>
     const match = result.matches.find((m) => m.name === "getUserById");
     expect(match).toBeDefined();
+    expect(match!.file).toBe("src/user-service.ts");
   });
 
   it("lists built-in patterns", () => {
@@ -1159,9 +1191,8 @@ describe("generate_tools", () => {
 
       const result = await generateClaudeMd(repo);
 
-      expect(result.content).toBeDefined();
       expect(result.content).toContain("Architecture Overview");
-      expect(result.content).toContain("files");
+      expect(result.content).toContain("3 files");
       expect(result.content).toContain("symbols");
       expect(result.content).toContain("typescript");
       // Should not have a path when no outputPath is given
@@ -1243,7 +1274,7 @@ describe("codebase_retrieval", () => {
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("file_tree");
     const data = result.results[0]!.data as Array<{ name: string }>;
-    expect(data.length).toBeGreaterThan(0);
+    expect(data).toHaveLength(3); // 3 files in fixture src/
   });
 
   it("handles outline sub-query", async () => {
@@ -1256,7 +1287,7 @@ describe("codebase_retrieval", () => {
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("outline");
     const data = result.results[0]!.data as Array<{ name: string }>;
-    expect(data.length).toBeGreaterThan(0);
+    expect(data.length).toBeGreaterThanOrEqual(3); // types.ts has User, PaymentInfo, UserRole
   });
 
   it("handles references sub-query", async () => {
@@ -1269,7 +1300,7 @@ describe("codebase_retrieval", () => {
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("references");
     const data = result.results[0]!.data as Array<{ file: string }>;
-    expect(data.length).toBeGreaterThan(0);
+    expect(data.length).toBeGreaterThanOrEqual(2); // User referenced in types.ts + user-service.ts
   });
 
   it("returns error for unknown sub-query type", async () => {
