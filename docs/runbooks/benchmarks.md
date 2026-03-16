@@ -143,27 +143,35 @@ T10: [pipeline stages]
 
 ### Variant B: Full suite (T1-T14) — includes new analysis tools
 
-Adds Call C for T11-T14 (dead code, complexity, circular deps, mermaid).
+Adds Calls C-I for T11-T18 (all new analysis tools).
 Uses direct tool calls (not codebase_retrieval) since these are standalone tools.
 
 ```
-You are a benchmark agent. Answer T1-T14 about promptvault using ONLY mcp__codesift__ tools.
+You are a benchmark agent. Answer T1-T18 about promptvault using ONLY mcp__codesift__ tools.
 
 CRITICAL RULES:
-1. First: ToolSearch(query="codesift", max_results=20) to load ALL tool schemas
+1. First: ToolSearch(query="codesift", max_results=30) to load ALL tool schemas
 2. Call A + Call B: same as Variant A (for T1-T10)
 3. Call C: mcp__codesift__find_dead_code(repo="local/promptvault", file_pattern="src/lib/services")
 4. Call D: mcp__codesift__analyze_complexity(repo="local/promptvault", top_n=5, min_complexity=5)
 5. Call E: mcp__codesift__get_knowledge_map(repo="local/promptvault", focus="src/lib/services")
 6. Call F: mcp__codesift__trace_call_chain(repo="local/promptvault", symbol_name="analyzeDocument", direction="callees", depth=2, output_format="mermaid")
-7. NO other tool calls. Answer in form style.
+7. Call G: mcp__codesift__find_clones(repo="local/promptvault", file_pattern="src/lib/services", min_similarity=0.7)
+8. Call H: mcp__codesift__analyze_hotspots(repo="local/promptvault", since_days=90, top_n=10)
+9. Call I: mcp__codesift__search_patterns(repo="local/promptvault", pattern="empty-catch")
+10. Call J: mcp__codesift__get_context_bundle(repo="local/promptvault", symbol_name="createRisk")
+11. NO other tool calls. Answer in form style.
 
 After all calls, answer:
 T1-T10: [same as Variant A]
-T11: [list of dead exports in src/lib/services — name, file, kind]
+T11: [dead exports in src/lib/services — name, file, kind]
 T12: [top 5 most complex functions — name, file, cyclomatic_complexity, nesting]
-T13: [circular dependencies found in src/lib/services — cycle paths, or "none found"]
-T14: [paste the Mermaid diagram verbatim]
+T13: [circular deps in src/lib/services — cycle paths or "none"]
+T14: [Mermaid diagram verbatim]
+T15: [code clones found — pairs with similarity score, or "none"]
+T16: [top 10 hotspot files — file, commits, churn_score]
+T17: [empty-catch matches — name, file, line]
+T18: [createRisk context: imports, siblings, types_used]
 ```
 
 ### Which variant to use
@@ -184,7 +192,8 @@ T14: [paste the Mermaid diagram verbatim]
 | R36 | 2026-03-14 | 51,076 | 6.8/10 | 2 | Auggie comparison (for reference) |
 | R38 | 2026-03-16 | 66,184 | 8.5/10 | 4 | Post-optimization (no embeddings) |
 | R40 | 2026-03-16 | 60,801 | 9.5/10 | 13 | Post-optimization (with embeddings, T1-T10 only) |
-| R41 | 2026-03-16 | 87,465 | ~6/14 | 16 | First T1-T14 run. T11,T12=0 (tools not loaded — need MCP restart after build). T13=10, T14=3 |
+| R41 | 2026-03-16 | 87,465 | ~6/14 | 16 | First T1-T14 run. T11,T12=0 (tools not loaded). T13=10, T14=3 |
+| **R42** | **2026-03-16** | **111,865** | **~8.8/18** | **30** | **First T1-T18 run. All new tools working. T16=3 (git issue)** |
 
 ## Report Template
 

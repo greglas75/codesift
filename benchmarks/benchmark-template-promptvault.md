@@ -35,6 +35,10 @@
 | T12 | Find top 5 most complex functions in the codebase | Complexity | Function names + file + cyclomatic complexity + nesting depth |
 | T13 | Check for circular dependencies in `src/lib/services` | Circular deps | List cycles (if any) or confirm acyclic |
 | T14 | Generate Mermaid diagram of `analyzeDocument` callees depth 2 | Visualization | Mermaid flowchart of the call tree |
+| T15 | Find code clones (>70% similarity) in `src/lib/services` | Clone detection | Pairs of similar functions with similarity score |
+| T16 | Find git churn hotspots in last 90 days | Hotspot analysis | Top files by churn × complexity score |
+| T17 | Search for `empty-catch` anti-pattern across the codebase | Pattern search | Files + functions with empty catch blocks |
+| T18 | Get context bundle for `createRisk` (symbol + imports + types) | Context bundle | Symbol source + file imports + sibling symbols + types used |
 
 ---
 
