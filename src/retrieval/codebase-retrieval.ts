@@ -95,7 +95,7 @@ async function executeSubQuery(
     }
 
     case "impact": {
-      const { impactAnalysis } = await import("../tools/graph-tools.js");
+      const { impactAnalysis } = await import("../tools/impact-tools.js");
       const result = await impactAnalysis(
         repo,
         query.since,

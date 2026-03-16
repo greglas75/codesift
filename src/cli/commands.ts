@@ -250,7 +250,7 @@ async function handleTrace(args: string[], flags: Flags): Promise<void> {
 async function handleImpact(args: string[], flags: Flags): Promise<void> {
   const repo = requireArg(args, 0, "repo");
   const since = requireFlag(flags, "since");
-  const { impactAnalysis } = await import("../tools/graph-tools.js");
+  const { impactAnalysis } = await import("../tools/impact-tools.js");
 
   const result = await impactAnalysis(repo, since, {
     depth: getNumFlag(flags, "depth"),
