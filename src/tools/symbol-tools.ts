@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { searchBM25, type BM25Index } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
+import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
@@ -360,9 +361,11 @@ export async function findDeadCode(
 
   const exportedSymbols = collectExportedSymbols(index.symbols, { includeTests, filePattern });
 
-  // Read all non-test files into memory for scanning
+  // Read non-test files into memory for scanning (capped to prevent OOM on large repos)
+  const MAX_SCAN_FILES = 2000;
   const fileContents = new Map<string, string>();
   for (const file of index.files) {
+    if (fileContents.size >= MAX_SCAN_FILES) break;
     if (!includeTests && isTestFile(file.path)) continue;
     try {
       fileContents.set(file.path, await readFile(join(index.root, file.path), "utf-8"));
@@ -406,8 +409,3 @@ export async function findDeadCode(
   };
 }
 
-function isTestFile(path: string): boolean {
-  return /\.(test|spec|e2e)\.(ts|tsx|js|jsx)$/.test(path)
-    || path.includes("__tests__")
-    || path.includes("/test/");
-}

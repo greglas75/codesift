@@ -37,6 +37,26 @@ function getUsagePath(): string {
 // Args summary builders — lightweight, never includes large content
 // ---------------------------------------------------------------------------
 
+/** Per-tool field extraction schema: [key, expectedType] pairs */
+const TOOL_ARG_FIELDS: Record<string, Array<[string, "string" | "number" | "boolean"]>> = {
+  search_symbols: [["kind", "string"], ["top_k", "number"], ["file_pattern", "string"], ["include_source", "boolean"]],
+  search_text: [["regex", "boolean"], ["context_lines", "number"], ["file_pattern", "string"], ["max_results", "number"], ["group_by_file", "boolean"], ["auto_group", "boolean"]],
+  get_file_tree: [["path_prefix", "string"], ["name_pattern", "string"], ["depth", "number"]],
+  get_file_outline: [["file_path", "string"]],
+  get_symbol: [["symbol_id", "string"]],
+  find_and_show: [["include_refs", "boolean"]],
+  find_references: [["symbol_name", "string"], ["file_pattern", "string"]],
+  trace_call_chain: [["symbol_name", "string"], ["direction", "string"], ["depth", "number"]],
+  impact_analysis: [["since", "string"], ["until", "string"], ["depth", "number"]],
+  assemble_context: [["token_budget", "number"]],
+  get_knowledge_map: [["focus", "string"], ["depth", "number"]],
+  diff_outline: [["since", "string"], ["until", "string"]],
+  changed_symbols: [["since", "string"], ["until", "string"]],
+  index_folder: [["path", "string"], ["incremental", "boolean"]],
+  index_repo: [["url", "string"], ["branch", "string"]],
+  generate_claude_md: [["output_path", "string"]],
+};
+
 /**
  * Build a lightweight args summary for a given tool call.
  * Extracts only the small, useful fields — never full source or query results.
@@ -48,130 +68,30 @@ export function buildArgsSummary(
   const summary: Record<string, unknown> = {};
 
   // Common fields — always include if present
-  if (typeof args["query"] === "string") {
-    summary["query"] = args["query"].slice(0, 200);
+  if (typeof args["query"] === "string") summary["query"] = (args["query"] as string).slice(0, 200);
+  if (typeof args["repo"] === "string") summary["repo"] = args["repo"];
+
+  // Special cases with non-trivial extraction
+  if (tool === "codebase_retrieval") {
+    const queries = args["queries"];
+    if (Array.isArray(queries)) {
+      summary["query_count"] = queries.length;
+      summary["query_types"] = queries.map(
+        (q: unknown) => (typeof q === "object" && q !== null ? (q as Record<string, unknown>)["type"] : "unknown"),
+      );
+    }
+    if (typeof args["token_budget"] === "number") summary["token_budget"] = args["token_budget"];
+  } else if (tool === "get_symbols") {
+    const ids = args["symbol_ids"];
+    if (Array.isArray(ids)) summary["symbol_count"] = ids.length;
   }
-  if (typeof args["repo"] === "string") {
-    summary["repo"] = args["repo"];
-  }
 
-  switch (tool) {
-    case "codebase_retrieval": {
-      const queries = args["queries"];
-      if (Array.isArray(queries)) {
-        summary["query_count"] = queries.length;
-        summary["query_types"] = queries.map(
-          (q: unknown) => (typeof q === "object" && q !== null ? (q as Record<string, unknown>)["type"] : "unknown"),
-        );
-      }
-      if (typeof args["token_budget"] === "number") {
-        summary["token_budget"] = args["token_budget"];
-      }
-      break;
+  // Data-driven extraction for all standard tools
+  const fields = TOOL_ARG_FIELDS[tool];
+  if (fields) {
+    for (const [key, type] of fields) {
+      if (typeof args[key] === type) summary[key] = args[key];
     }
-
-    case "search_symbols": {
-      if (typeof args["kind"] === "string") summary["kind"] = args["kind"];
-      if (typeof args["top_k"] === "number") summary["top_k"] = args["top_k"];
-      if (typeof args["file_pattern"] === "string") summary["file_pattern"] = args["file_pattern"];
-      if (typeof args["include_source"] === "boolean") summary["include_source"] = args["include_source"];
-      break;
-    }
-
-    case "search_text": {
-      if (typeof args["regex"] === "boolean") summary["regex"] = args["regex"];
-      if (typeof args["context_lines"] === "number") summary["context_lines"] = args["context_lines"];
-      if (typeof args["file_pattern"] === "string") summary["file_pattern"] = args["file_pattern"];
-      if (typeof args["max_results"] === "number") summary["max_results"] = args["max_results"];
-      if (typeof args["group_by_file"] === "boolean") summary["group_by_file"] = args["group_by_file"];
-      if (typeof args["auto_group"] === "boolean") summary["auto_group"] = args["auto_group"];
-      break;
-    }
-
-    case "get_file_tree": {
-      if (typeof args["path_prefix"] === "string") summary["path_prefix"] = args["path_prefix"];
-      if (typeof args["name_pattern"] === "string") summary["name_pattern"] = args["name_pattern"];
-      if (typeof args["depth"] === "number") summary["depth"] = args["depth"];
-      break;
-    }
-
-    case "get_file_outline": {
-      if (typeof args["file_path"] === "string") summary["file_path"] = args["file_path"];
-      break;
-    }
-
-    case "get_symbol": {
-      if (typeof args["symbol_id"] === "string") summary["symbol_id"] = args["symbol_id"];
-      break;
-    }
-
-    case "get_symbols": {
-      const ids = args["symbol_ids"];
-      if (Array.isArray(ids)) summary["symbol_count"] = ids.length;
-      break;
-    }
-
-    case "find_and_show": {
-      if (typeof args["include_refs"] === "boolean") summary["include_refs"] = args["include_refs"];
-      break;
-    }
-
-    case "find_references": {
-      if (typeof args["symbol_name"] === "string") summary["symbol_name"] = args["symbol_name"];
-      if (typeof args["file_pattern"] === "string") summary["file_pattern"] = args["file_pattern"];
-      break;
-    }
-
-    case "trace_call_chain": {
-      if (typeof args["symbol_name"] === "string") summary["symbol_name"] = args["symbol_name"];
-      if (typeof args["direction"] === "string") summary["direction"] = args["direction"];
-      if (typeof args["depth"] === "number") summary["depth"] = args["depth"];
-      break;
-    }
-
-    case "impact_analysis": {
-      if (typeof args["since"] === "string") summary["since"] = args["since"];
-      if (typeof args["until"] === "string") summary["until"] = args["until"];
-      if (typeof args["depth"] === "number") summary["depth"] = args["depth"];
-      break;
-    }
-
-    case "assemble_context": {
-      if (typeof args["token_budget"] === "number") summary["token_budget"] = args["token_budget"];
-      break;
-    }
-
-    case "get_knowledge_map": {
-      if (typeof args["focus"] === "string") summary["focus"] = args["focus"];
-      if (typeof args["depth"] === "number") summary["depth"] = args["depth"];
-      break;
-    }
-
-    case "diff_outline":
-    case "changed_symbols": {
-      if (typeof args["since"] === "string") summary["since"] = args["since"];
-      if (typeof args["until"] === "string") summary["until"] = args["until"];
-      break;
-    }
-
-    case "index_folder": {
-      if (typeof args["path"] === "string") summary["path"] = args["path"];
-      if (typeof args["incremental"] === "boolean") summary["incremental"] = args["incremental"];
-      break;
-    }
-
-    case "index_repo": {
-      if (typeof args["url"] === "string") summary["url"] = args["url"];
-      if (typeof args["branch"] === "string") summary["branch"] = args["branch"];
-      break;
-    }
-
-    case "generate_claude_md": {
-      if (typeof args["output_path"] === "string") summary["output_path"] = args["output_path"];
-      break;
-    }
-
-    // list_repos, invalidate_cache, get_repo_outline, usage_stats — no extra args needed
   }
 
   return summary;

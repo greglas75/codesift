@@ -71,16 +71,15 @@ export async function saveChunks(
   await atomicWriteFile(chunkPath, data);
 }
 
-/**
- * Load all chunks from an ndjson file.
- * Returns a Map of chunkId → CodeChunk, or null if file not found.
- */
-export async function loadChunks(
-  chunkPath: string,
-): Promise<Map<string, CodeChunk> | null> {
+/** Generic NDJSON loader — reads file, parses each line, filters with a type guard, maps to value. */
+async function loadNdjsonMap<K extends string, V>(
+  filePath: string,
+  guard: (parsed: unknown) => boolean,
+  toEntry: (parsed: unknown) => [K, V],
+): Promise<Map<K, V> | null> {
   try {
-    const raw = await readFile(chunkPath, "utf-8");
-    const map = new Map<string, CodeChunk>();
+    const raw = await readFile(filePath, "utf-8");
+    const map = new Map<K, V>();
 
     for (const line of raw.split("\n")) {
       const trimmed = line.trim();
@@ -88,8 +87,9 @@ export async function loadChunks(
 
       try {
         const parsed: unknown = JSON.parse(trimmed);
-        if (isChunkLine(parsed)) {
-          map.set(parsed.id, parsed);
+        if (guard(parsed)) {
+          const [key, value] = toEntry(parsed);
+          map.set(key, value);
         }
       } catch {
         // Skip malformed lines
@@ -100,6 +100,20 @@ export async function loadChunks(
   } catch {
     return null;
   }
+}
+
+/**
+ * Load all chunks from an ndjson file.
+ * Returns a Map of chunkId → CodeChunk, or null if file not found.
+ */
+export async function loadChunks(
+  chunkPath: string,
+): Promise<Map<string, CodeChunk> | null> {
+  return loadNdjsonMap<string, CodeChunk>(
+    chunkPath,
+    isChunkLine,
+    (parsed) => [(parsed as CodeChunk).id, parsed as CodeChunk],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +142,12 @@ export async function saveChunkEmbeddings(
   await atomicWriteFile(embeddingPath, data);
 }
 
+function isChunkEmbeddingLine(parsed: unknown): boolean {
+  return typeof parsed === "object" && parsed !== null &&
+    typeof (parsed as Record<string, unknown>)["id"] === "string" &&
+    Array.isArray((parsed as Record<string, unknown>)["vec"]);
+}
+
 /**
  * Load all chunk embeddings from an ndjson file.
  * Returns a Map of chunkId → Float32Array, or null if file not found / empty.
@@ -135,31 +155,9 @@ export async function saveChunkEmbeddings(
 export async function loadChunkEmbeddings(
   embeddingPath: string,
 ): Promise<Map<string, Float32Array> | null> {
-  try {
-    const raw = await readFile(embeddingPath, "utf-8");
-    const map = new Map<string, Float32Array>();
-
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      try {
-        const parsed: unknown = JSON.parse(trimmed);
-        if (
-          typeof parsed === "object" && parsed !== null &&
-          typeof (parsed as Record<string, unknown>)["id"] === "string" &&
-          Array.isArray((parsed as Record<string, unknown>)["vec"])
-        ) {
-          const entry = parsed as ChunkEmbeddingLine;
-          map.set(entry.id, new Float32Array(entry.vec));
-        }
-      } catch {
-        // Skip malformed lines
-      }
-    }
-
-    return map.size > 0 ? map : null;
-  } catch {
-    return null;
-  }
+  return loadNdjsonMap<string, Float32Array>(
+    embeddingPath,
+    isChunkEmbeddingLine,
+    (parsed) => [(parsed as ChunkEmbeddingLine).id, new Float32Array((parsed as ChunkEmbeddingLine).vec)],
+  );
 }

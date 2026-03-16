@@ -1,4 +1,5 @@
 import { getCodeIndex } from "./index-tools.js";
+import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
 const MIN_CLONE_LINES = 10;
@@ -204,8 +205,3 @@ export async function findClones(
   };
 }
 
-function isTestFile(path: string): boolean {
-  return /\.(test|spec|e2e)\.(ts|tsx|js|jsx)$/.test(path)
-    || path.includes("__tests__")
-    || path.includes("/test/");
-}

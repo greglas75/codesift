@@ -1,4 +1,5 @@
 import { getCodeIndex } from "./index-tools.js";
+import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
 export interface PatternMatch {
@@ -139,8 +140,3 @@ export function listPatterns(): Array<{ name: string; description: string }> {
   }));
 }
 
-function isTestFile(path: string): boolean {
-  return /\.(test|spec|e2e)\.(ts|tsx|js|jsx)$/.test(path)
-    || path.includes("__tests__")
-    || path.includes("/test/");
-}

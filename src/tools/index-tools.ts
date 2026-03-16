@@ -220,6 +220,10 @@ export async function indexFolder(
     watch?: boolean | undefined;
   },
 ): Promise<IndexFolderResult> {
+  if (!folderPath || typeof folderPath !== "string") {
+    throw new Error("folderPath is required and must be a non-empty string");
+  }
+
   const config = loadConfig();
   const startTime = Date.now();
 

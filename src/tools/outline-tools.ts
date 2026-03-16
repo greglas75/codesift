@@ -55,6 +55,29 @@ function pathDepth(filePath: string): number {
   return filePath.split("/").length;
 }
 
+/** Filter index files by shared criteria (path prefix, name pattern, min symbols). */
+function filterIndexFiles(
+  index: CodeIndex,
+  options?: { path_prefix?: string | undefined; name_pattern?: string | undefined; min_symbols?: number | undefined },
+): CodeIndex["files"] {
+  let files = index.files;
+  const pathPrefix = options?.path_prefix;
+  const namePattern = options?.name_pattern;
+  const minSymbols = options?.min_symbols;
+
+  if (pathPrefix) {
+    const prefix = pathPrefix.endsWith("/") ? pathPrefix : pathPrefix + "/";
+    files = files.filter((f) => f.path.startsWith(prefix));
+  }
+  if (namePattern) {
+    files = files.filter((f) => matchNamePattern(f.path, namePattern));
+  }
+  if (minSymbols !== undefined && minSymbols > 0) {
+    files = files.filter((f) => f.symbol_count >= minSymbols);
+  }
+  return files;
+}
+
 /**
  * Build a nested file tree from a flat list of file paths.
  *
@@ -82,20 +105,7 @@ function buildTree(
   }
 
   // --- Step 1: Filter files by path_prefix, name_pattern, and min_symbols ---
-  let files = index.files;
-
-  if (pathPrefix) {
-    const prefix = pathPrefix.endsWith("/") ? pathPrefix : pathPrefix + "/";
-    files = files.filter((f) => f.path.startsWith(prefix));
-  }
-
-  if (namePattern) {
-    files = files.filter((f) => matchNamePattern(f.path, namePattern));
-  }
-
-  if (minSymbols !== undefined && minSymbols > 0) {
-    files = files.filter((f) => f.symbol_count >= minSymbols);
-  }
+  const files = filterIndexFiles(index, { path_prefix: pathPrefix, name_pattern: namePattern, min_symbols: minSymbols });
 
   // Base depth: number of path segments in the prefix (tree root level).
   // Files/dirs are measured relative to this.
@@ -239,23 +249,8 @@ function buildCompactList(
   options?: FileTreeOptions,
 ): CompactFileEntry[] {
   const pathPrefix = options?.path_prefix;
-  const namePattern = options?.name_pattern;
-  const minSymbols = options?.min_symbols;
 
-  let files = index.files;
-
-  if (pathPrefix) {
-    const prefix = pathPrefix.endsWith("/") ? pathPrefix : pathPrefix + "/";
-    files = files.filter((f) => f.path.startsWith(prefix));
-  }
-
-  if (namePattern) {
-    files = files.filter((f) => matchNamePattern(f.path, namePattern));
-  }
-
-  if (minSymbols !== undefined && minSymbols > 0) {
-    files = files.filter((f) => f.symbol_count >= minSymbols);
-  }
+  let files = filterIndexFiles(index, { path_prefix: pathPrefix, name_pattern: options?.name_pattern, min_symbols: options?.min_symbols });
 
   // depth filter: count path segments relative to the prefix
   const maxDepth = options?.depth ?? Infinity;

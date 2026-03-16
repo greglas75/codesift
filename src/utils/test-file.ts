@@ -7,6 +7,7 @@ const TEST_FILE_PATTERNS = [
 const TEST_FILE_REGEX_PATTERNS = [
   /\.test\.[jt]sx?$/,
   /\.spec\.[jt]sx?$/,
+  /\.e2e\.[jt]sx?$/,
   /\/__tests__\//,
   /\/test\//,
   /\/tests\//,

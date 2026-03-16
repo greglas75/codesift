@@ -1,4 +1,5 @@
 import { getCodeIndex } from "./index-tools.js";
+import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
 const ANALYZABLE_KINDS = new Set<SymbolKind>([
@@ -176,8 +177,3 @@ export async function analyzeComplexity(
   };
 }
 
-function isTestFile(path: string): boolean {
-  return /\.(test|spec|e2e)\.(ts|tsx|js|jsx)$/.test(path)
-    || path.includes("__tests__")
-    || path.includes("/test/");
-}
