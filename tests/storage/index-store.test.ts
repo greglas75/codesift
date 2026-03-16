@@ -2,6 +2,7 @@ import {
   saveIndex,
   loadIndex,
   saveIncremental,
+  removeFileFromIndex,
   getIndexPath,
 } from "../../src/storage/index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
@@ -122,6 +123,62 @@ describe("index-store", () => {
       await expect(
         saveIncremental(missingPath, "src/a.ts", []),
       ).rejects.toThrow("Cannot incrementally update");
+    });
+  });
+
+  describe("removeFileFromIndex", () => {
+    it("removes symbols and file entry for a deleted file", async () => {
+      const indexPath = join(tmpDir, "remove.index.json");
+
+      const symA = makeSymbol("src/a.ts", "funcA", 1);
+      const symB = makeSymbol("src/b.ts", "funcB", 1);
+
+      const initial = makeIndex({
+        symbols: [symA, symB],
+        symbol_count: 2,
+        files: [
+          { path: "src/a.ts", language: "typescript", symbol_count: 1, last_modified: Date.now() },
+          { path: "src/b.ts", language: "typescript", symbol_count: 1, last_modified: Date.now() },
+        ],
+        file_count: 2,
+      });
+      await saveIndex(indexPath, initial);
+
+      await removeFileFromIndex(indexPath, "src/a.ts");
+
+      const updated = await loadIndex(indexPath);
+      expect(updated).not.toBeNull();
+      expect(updated!.symbols).toHaveLength(1);
+      expect(updated!.symbols[0].name).toBe("funcB");
+      expect(updated!.symbol_count).toBe(1);
+      expect(updated!.files).toHaveLength(1);
+      expect(updated!.files[0].path).toBe("src/b.ts");
+      expect(updated!.file_count).toBe(1);
+    });
+
+    it("is a no-op when file is not in the index", async () => {
+      const indexPath = join(tmpDir, "remove-noop.index.json");
+
+      const sym = makeSymbol("src/a.ts", "funcA", 1);
+      const initial = makeIndex({
+        symbols: [sym],
+        symbol_count: 1,
+        files: [{ path: "src/a.ts", language: "typescript", symbol_count: 1, last_modified: Date.now() }],
+        file_count: 1,
+      });
+      await saveIndex(indexPath, initial);
+
+      await removeFileFromIndex(indexPath, "src/nonexistent.ts");
+
+      const updated = await loadIndex(indexPath);
+      expect(updated!.symbols).toHaveLength(1);
+      expect(updated!.files).toHaveLength(1);
+    });
+
+    it("silently handles missing index file", async () => {
+      const missingPath = join(tmpDir, "missing-remove.index.json");
+      // Should not throw
+      await removeFileFromIndex(missingPath, "src/a.ts");
     });
   });
 

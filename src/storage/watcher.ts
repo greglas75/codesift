@@ -12,10 +12,12 @@ const watcherTimers = new WeakMap<FSWatcher, Map<string, ReturnType<typeof setTi
 /**
  * Start watching a repo root for file changes.
  * Calls onChange with the relative file path, debounced per file at 500ms.
+ * Calls onDelete immediately when a file is removed (no debounce needed).
  */
 export function startWatcher(
   repoRoot: string,
   onChange: (filePath: string) => void,
+  onDelete?: (filePath: string) => void,
 ): FSWatcher {
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -47,6 +49,19 @@ export function startWatcher(
 
   watcher.on("add", debouncedOnChange);
   watcher.on("change", debouncedOnChange);
+
+  if (onDelete) {
+    watcher.on("unlink", (absolutePath: string) => {
+      const relativePath = relative(repoRoot, absolutePath);
+      // Cancel any pending debounce for this file
+      const pendingTimer = debounceTimers.get(relativePath);
+      if (pendingTimer !== undefined) {
+        clearTimeout(pendingTimer);
+        debounceTimers.delete(relativePath);
+      }
+      onDelete(relativePath);
+    });
+  }
 
   watcherTimers.set(watcher, debounceTimers);
 

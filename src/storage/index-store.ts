@@ -85,6 +85,37 @@ export async function saveIncremental(
 }
 
 /**
+ * Remove all symbols and the file entry for a deleted file.
+ * Serialized per indexPath to prevent read-modify-write races.
+ */
+export async function removeFileFromIndex(
+  indexPath: string,
+  deletedFile: string,
+): Promise<void> {
+  const prev = writeLocks.get(indexPath) ?? Promise.resolve();
+
+  const next = prev.then(async () => {
+    const existing = await loadIndex(indexPath);
+    if (!existing) return;
+
+    const hadSymbols = existing.symbols.some((s) => s.file === deletedFile);
+    const hadFile = existing.files.some((f) => f.path === deletedFile);
+    if (!hadSymbols && !hadFile) return;
+
+    existing.symbols = existing.symbols.filter((s) => s.file !== deletedFile);
+    existing.symbol_count = existing.symbols.length;
+    existing.files = existing.files.filter((f) => f.path !== deletedFile);
+    existing.file_count = existing.files.length;
+    existing.updated_at = Date.now();
+
+    await saveIndex(indexPath, existing);
+  });
+
+  writeLocks.set(indexPath, next.catch(() => {}));
+  return next;
+}
+
+/**
  * Derive a deterministic index file path from a repo root.
  * Uses a truncated SHA-256 hash of the root path.
  */

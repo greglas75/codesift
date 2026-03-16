@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
-import { saveIndex, loadIndex, getIndexPath, saveIncremental } from "../storage/index-store.js";
+import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
 import { buildBM25Index, type BM25Index } from "../search/bm25.js";
@@ -385,14 +385,25 @@ async function setupWatcher(
     await stopWatcher(existingWatcher);
   }
 
-  const watcher = startWatcher(rootPath, (changedFile) => {
-    handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
-      (err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[codesift] Watcher error for ${changedFile}: ${message}`);
-      },
-    );
-  });
+  const watcher = startWatcher(
+    rootPath,
+    (changedFile) => {
+      handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[codesift] Watcher error for ${changedFile}: ${message}`);
+        },
+      );
+    },
+    (deletedFile) => {
+      handleFileDelete(repoName, indexPath, deletedFile).catch(
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[codesift] Watcher delete error for ${deletedFile}: ${message}`);
+        },
+      );
+    },
+  );
   activeWatchers.set(repoName, watcher);
 }
 
@@ -417,6 +428,30 @@ async function handleFileChange(
   if (index) {
     bm25Indexes.set(repoName, buildBM25Index(index.symbols));
   }
+
+  // Invalidate embedding cache so semantic search picks up changes on next query
+  embeddingCaches.delete(repoName);
+}
+
+/**
+ * Handle a file deletion event from the watcher.
+ * Removes all symbols for the deleted file from the index.
+ */
+async function handleFileDelete(
+  repoName: string,
+  indexPath: string,
+  relativeFile: string,
+): Promise<void> {
+  await removeFileFromIndex(indexPath, relativeFile);
+
+  // Rebuild in-memory BM25 index
+  const index = await loadIndex(indexPath);
+  if (index) {
+    bm25Indexes.set(repoName, buildBM25Index(index.symbols));
+  }
+
+  // Invalidate embedding cache
+  embeddingCaches.delete(repoName);
 }
 
 export interface RepoSummary {
