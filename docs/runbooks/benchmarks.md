@@ -193,7 +193,8 @@ T18: [createRisk context: imports, siblings, types_used]
 | R38 | 2026-03-16 | 66,184 | 8.5/10 | 4 | Post-optimization (no embeddings) |
 | R40 | 2026-03-16 | 60,801 | 9.5/10 | 13 | Post-optimization (with embeddings, T1-T10 only) |
 | R41 | 2026-03-16 | 87,465 | ~6/14 | 16 | First T1-T14 run. T11,T12=0 (tools not loaded). T13=10, T14=3 |
-| **R42** | **2026-03-16** | **111,865** | **~8.8/18** | **30** | **First T1-T18 run. All new tools working. T16=3 (git issue)** |
+| **R42** | **2026-03-16** | **111,865** | **~8.8/18** | **30** | **First T1-T18 promptvault. All new tools working. T16=3 (git issue)** |
+| **R43** | **2026-03-16** | **108,485** | **~9.0/18** | **25** | **First T1-T18 tgm-survey-platform. T12: complexity=92! T15: 11 clones. T16=0 (shallow clone)** |
 
 ## Report Template
 
