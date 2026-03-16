@@ -172,12 +172,27 @@ export async function getKnowledgeMap(
 
   const circularDeps = findCircularDeps(edges);
 
-  // If no focus, return the full graph (limited by depth from roots)
+  // If no focus, cap output to prevent 129K+ token responses on large repos
+  const MAX_UNFOCUSED_MODULES = 200;
+  const MAX_UNFOCUSED_EDGES = 500;
+
   if (!focus) {
+    const allModules = [...moduleMap.values()];
+    const cappedModules = allModules.length > MAX_UNFOCUSED_MODULES
+      ? allModules.sort((a, b) => b.symbol_count - a.symbol_count).slice(0, MAX_UNFOCUSED_MODULES)
+      : allModules;
+    const cappedModuleSet = new Set(cappedModules.map((m) => m.path));
+    const cappedEdges = edges
+      .filter((e) => cappedModuleSet.has(e.from) && cappedModuleSet.has(e.to))
+      .slice(0, MAX_UNFOCUSED_EDGES);
+
     return {
-      modules: [...moduleMap.values()],
-      edges,
+      modules: cappedModules,
+      edges: cappedEdges,
       circular_deps: circularDeps,
+      ...(allModules.length > MAX_UNFOCUSED_MODULES
+        ? { truncated: true, total_modules: allModules.length, hint: `Showing top ${MAX_UNFOCUSED_MODULES} by symbol count. Use focus param to narrow.` }
+        : {}),
     };
   }
 

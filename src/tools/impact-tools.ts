@@ -7,6 +7,8 @@ import type { CodeSymbol, CodeIndex, AffectedTest, RiskScore, ImpactResult } fro
 import type { AdjacencyIndex } from "./graph-tools.js";
 
 const DEFAULT_IMPACT_DEPTH = 2;
+const MAX_AFFECTED_SYMBOLS = 200;
+const MAX_DEPENDENCY_GRAPH_FILES = 100;
 
 /**
  * Find all callers of the given symbols, recursing up to depth levels.
@@ -46,22 +48,30 @@ function findAffectedSymbols(
 }
 
 /**
- * Build a file-level dependency graph from pre-computed adjacency.
+ * Build a file-level dependency graph scoped to relevant files only.
+ * Only includes changed files + their direct dependents (not the entire repo graph).
+ * Capped at MAX_DEPENDENCY_GRAPH_FILES to prevent 2.6M token responses.
  */
 function buildFileDependencyGraph(
   index: CodeIndex,
   adjacency: AdjacencyIndex,
+  relevantFiles: Set<string>,
 ): Record<string, string[]> {
   const graph: Record<string, string[]> = {};
   const symbolsByFile = new Map<string, CodeSymbol[]>();
 
+  // Only index symbols from relevant files
   for (const sym of index.symbols) {
+    if (!relevantFiles.has(sym.file)) continue;
     const existing = symbolsByFile.get(sym.file);
     if (existing) existing.push(sym);
     else symbolsByFile.set(sym.file, [sym]);
   }
 
+  let fileCount = 0;
   for (const [file, fileSymbols] of symbolsByFile) {
+    if (fileCount >= MAX_DEPENDENCY_GRAPH_FILES) break;
+
     const dependentFiles = new Set<string>();
 
     for (const sym of fileSymbols) {
@@ -75,6 +85,7 @@ function buildFileDependencyGraph(
 
     if (dependentFiles.size > 0) {
       graph[file] = [...dependentFiles];
+      fileCount++;
     }
   }
 
@@ -153,13 +164,21 @@ export async function impactAnalysis(
   // Include test files for impact analysis (want to know which tests are affected)
   const adjacency = buildAdjacencyIndex(index.symbols, false);
 
-  const affectedSymbols = findAffectedSymbols(
+  const allAffected = findAffectedSymbols(
     changedSymbols,
     adjacency,
     maxDepth,
   );
 
-  const dependencyGraph = buildFileDependencyGraph(index, adjacency);
+  // Cap affected symbols to prevent massive responses
+  const affectedSymbols = allAffected.slice(0, MAX_AFFECTED_SYMBOLS);
+
+  // Build dependency graph scoped to changed + affected files only (not entire repo)
+  const relevantFiles = new Set([
+    ...changedFiles,
+    ...affectedSymbols.map((s) => s.file),
+  ]);
+  const dependencyGraph = buildFileDependencyGraph(index, adjacency, relevantFiles);
 
   // Find affected test files: test files that import changed symbols/files
   const affectedTests = findAffectedTests(changedFiles, affectedSymbols, index, adjacency);
