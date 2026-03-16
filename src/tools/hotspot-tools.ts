@@ -38,7 +38,9 @@ function getGitChurn(
       encoding: "utf-8",
       timeout: 30_000,
     });
-  } catch {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[hotspot] git log failed for ${repoRoot}: ${message}`);
     return new Map();
   }
 

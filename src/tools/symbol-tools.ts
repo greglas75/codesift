@@ -1,13 +1,34 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { searchBM25 } from "../search/bm25.js";
+import { searchBM25, type BM25Index } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
-import type { CodeSymbol, Reference, SymbolKind } from "../types.js";
+import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
 const MAX_REFERENCES = 200;
 const MAX_DEAD_CODE_RESULTS = 100;
 const MAX_CONTEXT_LENGTH = 200; // Truncate context lines to prevent huge output from minified files
+
+async function requireCodeIndex(repo: string): Promise<CodeIndex> {
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+  }
+  return index;
+}
+
+async function requireBM25Index(repo: string): Promise<BM25Index> {
+  const index = await getBM25Index(repo);
+  if (!index) {
+    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+  }
+  return index;
+}
+
+function wordBoundaryPattern(name: string): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`);
+}
 
 /**
  * Read a source file and extract lines for a symbol (1-based, inclusive).
@@ -35,10 +56,7 @@ export async function getSymbol(
   repo: string,
   symbolId: string,
 ): Promise<CodeSymbol | null> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
+  const index = await requireCodeIndex(repo);
 
   const symbol = index.symbols.find((s) => s.id === symbolId);
   if (!symbol) return null;
@@ -65,15 +83,13 @@ export async function getSymbols(
   repo: string,
   symbolIds: string[],
 ): Promise<CodeSymbol[]> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
+  const index = await requireCodeIndex(repo);
 
   // Build lookup map for requested symbols
+  const requestedIds = new Set(symbolIds);
   const symbolMap = new Map<string, CodeSymbol>();
   for (const sym of index.symbols) {
-    if (symbolIds.includes(sym.id)) {
+    if (requestedIds.has(sym.id)) {
       symbolMap.set(sym.id, sym);
     }
   }
@@ -133,14 +149,8 @@ export async function findReferences(
   symbolName: string,
   filePattern?: string,
 ): Promise<Reference[]> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
-
-  // Escape special regex characters in symbol name
-  const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`\\b${escaped}\\b`);
+  const index = await requireCodeIndex(repo);
+  const pattern = wordBoundaryPattern(symbolName);
 
   // Optional file pattern filter
   const fileFilter = filePattern
@@ -194,11 +204,7 @@ export async function findAndShow(
   query: string,
   includeRefs?: boolean,
 ): Promise<{ symbol: CodeSymbol; references?: Reference[] } | null> {
-  const bm25Index = await getBM25Index(repo);
-  if (!bm25Index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
-
+  const bm25Index = await requireBM25Index(repo);
   const config = loadConfig();
   const results = searchBM25(bm25Index, query, 1, config.bm25FieldWeights);
 
@@ -242,18 +248,13 @@ export async function getContextBundle(
   repo: string,
   symbolName: string,
 ): Promise<ContextBundle | null> {
-  const bm25Index = await getBM25Index(repo);
-  if (!bm25Index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
-
+  const bm25Index = await requireBM25Index(repo);
   const config = loadConfig();
   const results = searchBM25(bm25Index, symbolName, 1, config.bm25FieldWeights);
   const topResult = results[0];
   if (!topResult) return null;
 
-  const index = await getCodeIndex(repo);
-  if (!index) return null;
+  const index = await requireCodeIndex(repo);
 
   // Get full symbol with source
   const fullSymbol = await getSymbol(repo, topResult.symbol.id);
@@ -296,9 +297,7 @@ function extractTypesUsed(source: string, allSymbols: CodeSymbol[]): string[] {
   const used = new Set<string>();
   for (const sym of typeSymbols) {
     if (sym.name.length < 3) continue;
-    // Check if the type name appears in the source (word boundary)
-    const pattern = new RegExp(`\\b${sym.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
-    if (pattern.test(source)) {
+    if (wordBoundaryPattern(sym.name).test(source)) {
       used.add(sym.name);
     }
   }
@@ -327,6 +326,24 @@ const EXPORTABLE_KINDS = new Set<SymbolKind>([
 ]);
 
 /**
+ * Collect top-level symbols of exportable kinds, filtered by test/pattern options.
+ */
+function collectExportedSymbols(
+  symbols: CodeSymbol[],
+  options: { includeTests: boolean; filePattern?: string | undefined },
+): CodeSymbol[] {
+  return symbols.filter((s) => {
+    if (!EXPORTABLE_KINDS.has(s.kind)) return false;
+    if (s.parent) return false;
+    if (!options.includeTests && isTestFile(s.file)) return false;
+    if (options.filePattern && !s.file.includes(options.filePattern)) return false;
+    if (s.name.length < 3) return false;
+    if (s.kind === "variable" && s.name === "default") return false;
+    return true;
+  });
+}
+
+/**
  * Find potentially dead code: exported symbols with 0 references outside their own file.
  * Scans all indexed files for word-boundary matches of each exported symbol name.
  */
@@ -337,26 +354,11 @@ export async function findDeadCode(
     include_tests?: boolean | undefined;
   },
 ): Promise<DeadCodeResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
-
+  const index = await requireCodeIndex(repo);
   const includeTests = options?.include_tests ?? false;
   const filePattern = options?.file_pattern;
 
-  // Filter to top-level symbols of relevant kinds
-  // Note: tree-sitter source may not include 'export' keyword, so we check
-  // kind + top-level position (no parent = not nested in a class/namespace)
-  const exportedSymbols = index.symbols.filter((s) => {
-    if (!EXPORTABLE_KINDS.has(s.kind)) return false;
-    if (s.parent) return false; // Skip nested symbols (class methods, etc.)
-    if (!includeTests && isTestFile(s.file)) return false;
-    if (filePattern && !s.file.includes(filePattern)) return false;
-    if (s.name.length < 3) return false;
-    if (s.kind === "variable" && s.name === "default") return false;
-    return true;
-  });
+  const exportedSymbols = collectExportedSymbols(index.symbols, { includeTests, filePattern });
 
   // Read all non-test files into memory for scanning
   const fileContents = new Map<string, string>();
@@ -374,8 +376,7 @@ export async function findDeadCode(
   for (const sym of exportedSymbols) {
     if (candidates.length >= MAX_DEAD_CODE_RESULTS) break;
 
-    const escaped = sym.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`\\b${escaped}\\b`);
+    const pattern = wordBoundaryPattern(sym.name);
 
     let externalRefs = 0;
     for (const [filePath, content] of fileContents) {

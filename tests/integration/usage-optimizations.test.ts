@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { indexFolder, listAllRepos } from "../../src/tools/index-tools.js";
 import { searchText, searchSymbols } from "../../src/tools/search-tools.js";
-import { buildResponseHint, buildResponseMeta } from "../../src/server.js";
+import { buildResponseHint } from "../../src/server.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const REPO = "local/test-project";
@@ -449,75 +449,6 @@ describe("OPT-3: context reduction for high-cardinality results", () => {
     const contextTotal = contextBeforeTokens + contextAfterTokens;
     const contextPercent = Math.round((contextTotal / total) * 100);
     console.log(`[OPT-3 BREAKDOWN] context is ${contextPercent}% of total output`);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// OPT-5: Per-response _meta (tokens_saved, cost_avoided)
-// ---------------------------------------------------------------------------
-describe("OPT-5: per-response _meta", () => {
-  it("calculates tokens_used from text length", () => {
-    const meta = buildResponseMeta("search_text", 4000, 100);
-
-    expect(meta.tokens_used).toBe(1000); // 4000 chars / 4
-    expect(meta.ms).toBe(100);
-  });
-
-  it("calculates positive tokens_saved for search_text (multiplier > 1)", () => {
-    const meta = buildResponseMeta("search_text", 4000, 50);
-
-    // search_text multiplier is 1.02 → grep equivalent ~1020 tokens
-    // savings = 1020 - 1000 = 20
-    expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
-    expect(meta.tokens_used).toBe(1000);
-  });
-
-  it("calculates positive tokens_saved for codebase_retrieval (multiplier 1.88)", () => {
-    const meta = buildResponseMeta("codebase_retrieval", 40000, 500);
-
-    // 40000 chars = 10000 tokens, multiplier 1.88 → grep equiv 18800
-    // savings = 18800 - 10000 = 8800
-    expect(meta.tokens_saved).toBe(8800);
-    expect(meta.tokens_used).toBe(10000);
-  });
-
-  it("adds follow-up savings for tools where grep is smaller (multiplier < 1)", () => {
-    const meta = buildResponseMeta("search_symbols", 40000, 200);
-
-    // search_symbols multiplier 0.18 → grep equiv 1800
-    // 1800 - 10000 = -8200, but follow-up savings +1500
-    // max(0, -8200 + 1500) = 0... hmm
-    // Actually: grepEquivalent = ceil(10000 * 0.18) = 1800
-    // tokensSaved = max(0, (1800 - 10000) + 1500) = max(0, -6700) = 0
-    // That's correct — search_symbols returns MORE data but saves follow-up calls
-    expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
-  });
-
-  it("calculates cost_avoided for all models", () => {
-    const meta = buildResponseMeta("codebase_retrieval", 40000, 100);
-
-    expect(meta.cost_avoided_usd).toHaveProperty("opus");
-    expect(meta.cost_avoided_usd).toHaveProperty("sonnet");
-    expect(meta.cost_avoided_usd).toHaveProperty("haiku");
-
-    // 8800 saved tokens → opus: 8800 * 15 / 1M = $0.1320
-    expect(meta.cost_avoided_usd.opus).toBe("$0.1320");
-    expect(meta.cost_avoided_usd.sonnet).toBe("$0.0264");
-  });
-
-  it("handles unknown tool names with multiplier 1.0", () => {
-    const meta = buildResponseMeta("unknown_tool", 4000, 50);
-
-    // multiplier 1.0 → savings = 0
-    expect(meta.tokens_saved).toBe(0);
-    expect(meta.tokens_used).toBe(1000);
-  });
-
-  it("returns zero savings for tiny responses", () => {
-    const meta = buildResponseMeta("search_text", 20, 5);
-
-    expect(meta.tokens_used).toBe(5); // ceil(20/4)
-    expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
   });
 });
 

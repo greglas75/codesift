@@ -110,17 +110,13 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
       const elapsed = performance.now() - start;
       trackToolCall(toolName, args, text, data, elapsed);
 
-      // Build _meta with token savings info
-      const meta = buildResponseMeta(toolName, text.length, elapsed);
-      const metaLine = `\n\n_meta: ${JSON.stringify(meta)}`;
-
       // Append optimization hint for high-cardinality search_text results
       const hint = buildResponseHint(toolName, args, data);
       if (hint) {
-        return { content: [{ type: "text" as const, text: text + metaLine + "\n\n" + hint }] };
+        return { content: [{ type: "text" as const, text: text + "\n\n" + hint }] };
       }
 
-      return { content: [{ type: "text" as const, text: text + metaLine }] };
+      return { content: [{ type: "text" as const, text }] };
     } catch (err: unknown) {
       const elapsed = performance.now() - start;
       const message = err instanceof Error ? err.message : String(err);

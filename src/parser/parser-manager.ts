@@ -49,7 +49,9 @@ export async function getParser(language: string): Promise<Parser | null> {
     parser.setLanguage(lang);
     parserCache.set(language, parser);
     return parser;
-  } catch {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[parser] WASM grammar not available for ${language}: ${message}`);
     return null;
   }
 }

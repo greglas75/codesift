@@ -17,12 +17,47 @@ export interface CrossRepoSearchResult {
   symbol_results: CrossRepoSymbolResult[];
   total_matches: number;
   repos_searched: number;
+  errors: Array<{ repo: string; error: string }>;
 }
 
 export interface CrossRepoRefSearchResult {
   ref_results: CrossRepoRefResult[];
   total_references: number;
   repos_searched: number;
+  errors: Array<{ repo: string; error: string }>;
+}
+
+/**
+ * Run a search function across all indexed repos (or a filtered subset).
+ * Collects results and errors separately — never silently swallows failures.
+ */
+async function searchAcrossRepos<T>(
+  repoPattern: string | undefined,
+  searchFn: (repoName: string) => Promise<T[]>,
+): Promise<{ results: Array<{ repo: string; items: T[] }>; errors: Array<{ repo: string; error: string }>; reposSearched: number }> {
+  const repos = await listAllRepos({ compact: false });
+  const repoList = Array.isArray(repos) ? repos : [];
+
+  const filtered = repoPattern
+    ? repoList.filter((r) => r.name.includes(repoPattern))
+    : repoList;
+
+  const results: Array<{ repo: string; items: T[] }> = [];
+  const errors: Array<{ repo: string; error: string }> = [];
+
+  for (const repo of filtered) {
+    try {
+      const items = await searchFn(repo.name);
+      if (items.length > 0) {
+        results.push({ repo: repo.name, items });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push({ repo: repo.name, error: message });
+    }
+  }
+
+  return { results, errors, reposSearched: filtered.length };
 }
 
 /**
@@ -35,32 +70,16 @@ export async function crossRepoSearchSymbols(
     repo_pattern?: string | undefined;
   },
 ): Promise<CrossRepoSearchResult> {
-  const repos = await listAllRepos({ compact: false }) as Array<{ name: string }>;
-
-  const repoPattern = options?.repo_pattern;
-  const filtered = repoPattern
-    ? repos.filter((r) => r.name.includes(repoPattern))
-    : repos;
-
-  const symbolResults: CrossRepoSymbolResult[] = [];
-  let totalMatches = 0;
-
-  for (const repo of filtered) {
-    try {
-      const results = await searchSymbols(repo.name, query, options);
-      if (results.length > 0) {
-        symbolResults.push({ repo: repo.name, results });
-        totalMatches += results.length;
-      }
-    } catch {
-      // Repo may have stale index — skip
-    }
-  }
+  const { results, errors, reposSearched } = await searchAcrossRepos<SearchResult>(
+    options?.repo_pattern,
+    (repoName) => searchSymbols(repoName, query, options),
+  );
 
   return {
-    symbol_results: symbolResults,
-    total_matches: totalMatches,
-    repos_searched: filtered.length,
+    symbol_results: results.map(({ repo, items }) => ({ repo, results: items })),
+    total_matches: results.reduce((sum, r) => sum + r.items.length, 0),
+    repos_searched: reposSearched,
+    errors,
   };
 }
 
@@ -74,31 +93,15 @@ export async function crossRepoFindReferences(
     file_pattern?: string | undefined;
   },
 ): Promise<CrossRepoRefSearchResult> {
-  const repos = await listAllRepos({ compact: false }) as Array<{ name: string }>;
-
-  const repoPattern = options?.repo_pattern;
-  const filtered = repoPattern
-    ? repos.filter((r) => r.name.includes(repoPattern))
-    : repos;
-
-  const refResults: CrossRepoRefResult[] = [];
-  let totalRefs = 0;
-
-  for (const repo of filtered) {
-    try {
-      const refs = await findReferences(repo.name, symbolName, options?.file_pattern);
-      if (refs.length > 0) {
-        refResults.push({ repo: repo.name, references: refs });
-        totalRefs += refs.length;
-      }
-    } catch {
-      // Skip stale repos
-    }
-  }
+  const { results, errors, reposSearched } = await searchAcrossRepos<Reference>(
+    options?.repo_pattern,
+    (repoName) => findReferences(repoName, symbolName, options?.file_pattern),
+  );
 
   return {
-    ref_results: refResults,
-    total_references: totalRefs,
-    repos_searched: filtered.length,
+    ref_results: results.map(({ repo, items }) => ({ repo, references: items })),
+    total_references: results.reduce((sum, r) => sum + r.items.length, 0),
+    repos_searched: reposSearched,
+    errors,
   };
 }

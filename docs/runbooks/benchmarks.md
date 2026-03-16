@@ -128,7 +128,13 @@ mcp__codesift__codebase_retrieval(
   token_budget=20000
 )
 
-After both calls, answer ALL tasks:
+After both calls, report per-call token cost (estimate: response JSON length / 4), then answer:
+
+TOKENS PER CALL:
+Call A: [N] tok
+Call B: [N] tok
+
+ANSWERS:
 T1: [params + return type]
 T2: [file list]
 T3: [fields]
@@ -162,16 +168,30 @@ CRITICAL RULES:
 10. Call J: mcp__codesift__get_context_bundle(repo="local/promptvault", symbol_name="createRisk")
 11. NO other tool calls. Answer in form style.
 
-After all calls, answer:
+After all calls, report per-call token cost (estimate: response JSON length / 4), then answer:
+
+TOKENS PER CALL:
+Call A: [N] tok
+Call B: [N] tok
+Call C (find_dead_code): [N] tok
+Call D (analyze_complexity): [N] tok
+Call E (get_knowledge_map): [N] tok
+Call F (trace_call_chain): [N] tok
+Call G (find_clones): [N] tok
+Call H (analyze_hotspots): [N] tok
+Call I (search_patterns): [N] tok
+Call J (get_context_bundle): [N] tok
+
+ANSWERS:
 T1-T10: [same as Variant A]
-T11: [dead exports in src/lib/services — name, file, kind]
-T12: [top 5 most complex functions — name, file, cyclomatic_complexity, nesting]
-T13: [circular deps in src/lib/services — cycle paths or "none"]
+T11: [dead exports — name, file, kind]
+T12: [top 5 complex functions — name, file, cyclomatic_complexity, nesting]
+T13: [circular deps — cycle paths or "none"]
 T14: [Mermaid diagram verbatim]
-T15: [code clones found — pairs with similarity score, or "none"]
+T15: [code clones — pairs + similarity, or "none"]
 T16: [top 10 hotspot files — file, commits, churn_score]
 T17: [empty-catch matches — name, file, line]
-T18: [createRisk context: imports, siblings, types_used]
+T18: [context: imports, siblings, types_used]
 ```
 
 ### Which variant to use
@@ -218,17 +238,17 @@ T18: [createRisk context: imports, siblings, types_used]
 | **Quality** | /10 | 8.5/10 |
 | **Tool calls** | | ~4 |
 
-### Per-task quality
+### Per-task quality + tokens
 
-| Task | R[N] | R27 | Notes |
-|------|------|-----|-------|
-| T1 createRisk | /10 | 9/10 | |
-| T2 importers | /10 | 8/10 | |
-| T3 DocumentDetail | /10 | 8/10 | |
-| T4 withAuth | /10 | 10/10 | |
-| T5 Zod schemas | /10 | 8/10 | |
-| T6 RiskPanel | /10 | 10/10 | |
-| T7 ENTITY_NOT_FOUND | /10 | 8/10 | |
+| Task | Score | Tokens | Notes |
+|------|-------|--------|-------|
+| T1 | /10 | | |
+| T2 | /10 | | |
+| T3 | /10 | | |
+| T4 | /10 | | |
+| T5 | /10 | | |
+| T6 | /10 | | |
+| T7 | /10 | | |
 | T8 risk routes | /10 | 8/10 | |
 | T9 $transaction | /10 | 5/10 | |
 | T10 pipeline | /10 | 9/10 | |
