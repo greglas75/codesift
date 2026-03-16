@@ -215,6 +215,7 @@ T18: [context: imports, siblings, types_used]
 | R41 | 2026-03-16 | 87,465 | ~6/14 | 16 | First T1-T14 run. T11,T12=0 (tools not loaded). T13=10, T14=3 |
 | **R42** | **2026-03-16** | **111,865** | **~8.8/18** | **30** | **First T1-T18 promptvault. All new tools working. T16=3 (git issue)** |
 | **R43** | **2026-03-16** | **108,485** | **~9.0/18** | **25** | **First T1-T18 tgm-survey-platform. T12: complexity=92! T15: 11 clones. T16=0 (shallow clone)** |
+| **R44** | **2026-03-16** | **112,728** | **9.3/18** | **22** | **tgm-survey with per-call tokens. T13=129K tok (knowledge_map without limit!). T16=0** |
 
 ## Report Template
 
