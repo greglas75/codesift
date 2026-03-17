@@ -109,7 +109,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       regex: z.boolean().optional().describe("Treat query as a regex pattern"),
       context_lines: z.number().optional().describe("Number of context lines around each match"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
-      max_results: z.number().optional().describe("Maximum number of matching lines to return (default 500)"),
+      max_results: z.number().optional().describe("Maximum number of matching lines to return (default 200)"),
       group_by_file: z.boolean().optional().describe("Group results by file — returns {file, count, lines[], first_match} instead of every line. 80-90% less output for high-cardinality searches."),
       auto_group: z.boolean().optional().describe("Automatically switch to group_by_file when result count exceeds 50 matches. Recommended for exploratory searches where match count is unknown."),
     },

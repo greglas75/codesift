@@ -6,6 +6,7 @@ import { trackToolCall } from "./storage/usage-tracker.js";
 
 export const HIGH_CARDINALITY_THRESHOLD = 50;
 export const CHARS_PER_TOKEN = 4;
+export const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,9 +49,17 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
     const start = performance.now();
     try {
       const data = await fn();
-      const text = JSON.stringify(data, null, 2);
+      let text = JSON.stringify(data, null, 2);
       const elapsed = performance.now() - start;
       trackToolCall(toolName, args, text, data, elapsed);
+
+      // Hard cap: truncate oversized responses to prevent 100K+ token blowouts
+      const maxChars = MAX_RESPONSE_TOKENS * CHARS_PER_TOKEN;
+      if (text.length > maxChars) {
+        const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
+        text = text.slice(0, maxChars) +
+          `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.`;
+      }
 
       // Append optimization hint for high-cardinality search_text results
       const hint = buildResponseHint(toolName, args, data);

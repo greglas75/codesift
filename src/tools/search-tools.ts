@@ -7,9 +7,10 @@ import { walkDirectory } from "../utils/walk.js";
 import { matchFilePattern } from "../utils/glob.js";
 import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../types.js";
 
-const DEFAULT_MAX_TEXT_MATCHES = 500;
+const DEFAULT_MAX_TEXT_MATCHES = 200;
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
 const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count
+const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
 
 // SEC-003: Detect common catastrophic backtracking patterns (ReDoS)
 const REDOS_PATTERNS = [
@@ -266,8 +267,17 @@ export async function searchText(
     }
   }
 
+  // Estimate response size; force grouping when output would be enormous
+  const estimatedChars = matches.reduce((sum, m) => {
+    let chars = m.file.length + m.content.length + 40; // JSON overhead
+    if (m.context_before) chars += m.context_before.reduce((s, l) => s + l.length, 0);
+    if (m.context_after) chars += m.context_after.reduce((s, l) => s + l.length, 0);
+    return sum + chars;
+  }, 0);
+
   const shouldGroup = options?.group_by_file
-    || (options?.auto_group && matches.length > AUTO_GROUP_THRESHOLD);
+    || (options?.auto_group && matches.length > AUTO_GROUP_THRESHOLD)
+    || estimatedChars > MAX_RESPONSE_CHARS;
 
   if (shouldGroup) {
     const groups = new Map<string, TextMatchGroup>();
