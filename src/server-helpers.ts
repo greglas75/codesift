@@ -124,7 +124,8 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
 
   const hint = buildResponseHint(toolName, args, data);
   if (hint) {
-    return { content: [{ type: "text" as const, text: text + "\n\n" + hint }] };
+    // Prepend hint so agent sees it first (appended hints get ignored after long output)
+    return { content: [{ type: "text" as const, text: hint + "\n\n" + text }] };
   }
   return { content: [{ type: "text" as const, text }] };
 }

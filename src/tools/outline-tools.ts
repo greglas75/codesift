@@ -271,17 +271,45 @@ function buildCompactList(
  * When `compact=true`, returns a flat sorted list of `{ path, symbols }`
  * entries instead of the full nested tree — 10-50x less output.
  */
+const MAX_TREE_FILES = 500; // Cap file count in tree output to prevent 30K+ tok responses
+
 export async function getFileTree(
   repo: string,
   options?: FileTreeOptions,
-): Promise<FileTreeNode[] | CompactFileEntry[]> {
+): Promise<FileTreeNode[] | CompactFileEntry[] | { entries: CompactFileEntry[]; truncated: boolean; total: number; hint: string }> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
   if (options?.compact) {
-    return buildCompactList(index, options);
+    const list = buildCompactList(index, options);
+    if (list.length > MAX_TREE_FILES) {
+      return {
+        entries: list.slice(0, MAX_TREE_FILES),
+        truncated: true,
+        total: list.length,
+        hint: `Showing ${MAX_TREE_FILES}/${list.length} files. Use path_prefix or name_pattern to narrow scope.`,
+      };
+    }
+    return list;
+  }
+
+  // For non-compact (nested tree), force compact when result would be huge
+  const filteredFiles = filterIndexFiles(index, {
+    path_prefix: options?.path_prefix,
+    name_pattern: options?.name_pattern,
+    min_symbols: options?.min_symbols,
+  });
+
+  if (filteredFiles.length > MAX_TREE_FILES) {
+    const list = buildCompactList(index, options).slice(0, MAX_TREE_FILES);
+    return {
+      entries: list,
+      truncated: true,
+      total: filteredFiles.length,
+      hint: `Auto-compacted: ${filteredFiles.length} files exceeds ${MAX_TREE_FILES} limit. Use path_prefix, name_pattern, or compact=true.`,
+    };
   }
 
   return buildTree(index, options);
