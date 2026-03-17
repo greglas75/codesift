@@ -11,6 +11,7 @@ const DEFAULT_MAX_TEXT_MATCHES = 200;
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
 const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count
 const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
+const MAX_FIRST_MATCH_CHARS = 300; // Cap first_match preview in grouped output
 
 // SEC-003: Detect common catastrophic backtracking patterns (ReDoS)
 const REDOS_PATTERNS = [
@@ -291,7 +292,9 @@ export async function searchText(
           file: m.file,
           count: 1,
           lines: [m.line],
-          first_match: m.content,
+          first_match: m.content.length > MAX_FIRST_MATCH_CHARS
+            ? m.content.slice(0, MAX_FIRST_MATCH_CHARS) + "..."
+            : m.content,
         });
       }
     }

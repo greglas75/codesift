@@ -81,27 +81,3 @@ export function matchNamePattern(filePath: string, pattern: string): boolean {
   // Glob against filename only
   return getMatcher(pattern)(fileName);
 }
-
-/**
- * Simple glob matching (kept for backward-compat — callers outside this module).
- * Splits pattern on "*" and checks segments appear in order.
- */
-export function globMatch(text: string, pattern: string): boolean {
-  const parts = pattern.split("*");
-
-  const first = parts[0];
-  if (first !== undefined && first !== "" && !text.startsWith(first)) return false;
-
-  const last = parts[parts.length - 1];
-  if (last !== undefined && last !== "" && !text.endsWith(last)) return false;
-
-  let pos = 0;
-  for (const part of parts) {
-    if (part === "") continue;
-    const idx = text.indexOf(part, pos);
-    if (idx < 0) return false;
-    pos = idx + part.length;
-  }
-
-  return true;
-}
