@@ -24,15 +24,18 @@ export interface ToolResponse {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory call tracking + response cache
+// In-memory call tracking + response cache + in-flight dedup
 // ---------------------------------------------------------------------------
 
 let lastToolName = "";
 let consecutiveCount = 0;
 let listReposCallCount = 0;
 
-/** Cache recent responses to deduplicate identical calls */
+/** Cache completed responses */
 const responseCache = new Map<string, { text: string; ts: number }>();
+
+/** In-flight requests — coalesce parallel identical calls */
+const inflight = new Map<string, Promise<ToolResponse>>();
 
 function getCacheKey(toolName: string, args: Record<string, unknown>): string {
   return `${toolName}\0${JSON.stringify(args, Object.keys(args).sort())}`;
@@ -49,7 +52,6 @@ function getCached(key: string): string | null {
 }
 
 function setCache(key: string, text: string): void {
-  // Evict oldest entries if cache is full
   if (responseCache.size >= CACHE_MAX_SIZE) {
     const oldest = responseCache.keys().next().value;
     if (oldest !== undefined) responseCache.delete(oldest);
@@ -89,25 +91,21 @@ export function errorResult(message: string): ToolResponse {
 export function buildResponseHint(toolName: string, args: Record<string, unknown>, data: unknown): string | null {
   const hints: string[] = [];
 
-  // High-cardinality ungrouped results
   if (toolName === "search_text" && Array.isArray(data) && data.length > HIGH_CARDINALITY_THRESHOLD) {
     if (!args["group_by_file"] && !args["auto_group"]) {
       hints.push(`⚡ ${data.length} matches — use group_by_file=true or auto_group=true to reduce output by ~70%.`);
     }
   }
 
-  // Sequential same-tool calls → suggest batching
   if (consecutiveCount >= SEQUENTIAL_HINT_THRESHOLD && BATCHABLE_TOOLS.has(toolName)) {
     const batchTool = toolName === "get_symbol" ? "get_symbols" : "codebase_retrieval";
     hints.push(`⚡ ${consecutiveCount} consecutive ${toolName} calls. Batch into one ${batchTool} call.`);
   }
 
-  // Repeated list_repos
   if (toolName === "list_repos" && listReposCallCount > 1) {
     hints.push(`⚡ list_repos called ${listReposCallCount}x. Result is static — cache from first call.`);
   }
 
-  // search_symbols without file_pattern + include_source → expensive
   if (toolName === "search_symbols" && args["include_source"] && !args["file_pattern"]) {
     hints.push(`⚡ search_symbols with include_source=true but no file_pattern scans entire repo. Add file_pattern to reduce tokens.`);
   }
@@ -115,54 +113,73 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
   return hints.length > 0 ? hints.join("\n") : null;
 }
 
+function formatResponse(text: string, toolName: string, args: Record<string, unknown>, data: unknown): ToolResponse {
+  // Hard cap: truncate oversized responses
+  const maxChars = MAX_RESPONSE_TOKENS * CHARS_PER_TOKEN;
+  if (text.length > maxChars) {
+    const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
+    text = text.slice(0, maxChars) +
+      `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.`;
+  }
+
+  const hint = buildResponseHint(toolName, args, data);
+  if (hint) {
+    return { content: [{ type: "text" as const, text: text + "\n\n" + hint }] };
+  }
+  return { content: [{ type: "text" as const, text }] };
+}
+
 export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => Promise<T>): () => Promise<ToolResponse> {
-  return async () => {
+  return () => {
     const cacheKey = getCacheKey(toolName, args);
 
-    // Deduplicate: return cached response for identical call within TTL
+    // 1. Return completed cache hit
     const cached = getCached(cacheKey);
     if (cached) {
       trackSequentialCalls(toolName);
-      return {
+      return Promise.resolve({
         content: [{
           type: "text" as const,
-          text: cached + "\n\n⚡ Deduplicated: identical call returned cached result (30s TTL). Avoid repeating the same call.",
+          text: cached + "\n\n⚡ Deduplicated: identical call returned cached result (30s TTL).",
         }],
-      };
+      });
     }
 
-    const start = performance.now();
-    try {
-      const data = await fn();
-      let text = JSON.stringify(data, null, 2);
-      const elapsed = performance.now() - start;
-      trackToolCall(toolName, args, text, data, elapsed);
-      trackSequentialCalls(toolName);
-
-      // Hard cap: truncate oversized responses
-      const maxChars = MAX_RESPONSE_TOKENS * CHARS_PER_TOKEN;
-      if (text.length > maxChars) {
-        const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
-        text = text.slice(0, maxChars) +
-          `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.`;
-      }
-
-      // Cache the response
-      setCache(cacheKey, text);
-
-      // Append optimization hints
-      const hint = buildResponseHint(toolName, args, data);
-      if (hint) {
-        return { content: [{ type: "text" as const, text: text + "\n\n" + hint }] };
-      }
-
-      return { content: [{ type: "text" as const, text }] };
-    } catch (err: unknown) {
-      const elapsed = performance.now() - start;
-      const message = err instanceof Error ? err.message : String(err);
-      trackToolCall(toolName, args, message, { error: message }, elapsed);
-      trackSequentialCalls(toolName);
-      return errorResult(message);
+    // 2. Coalesce with in-flight request (parallel dedup)
+    const pending = inflight.get(cacheKey);
+    if (pending) {
+      return pending.then((response) => ({
+        content: [{
+          type: "text" as const,
+          text: (response.content[0]?.text ?? "") + "\n\n⚡ Deduplicated: coalesced with in-flight identical request.",
+        }],
+      }));
     }
+
+    // 3. Execute and cache
+    const promise = (async (): Promise<ToolResponse> => {
+      const start = performance.now();
+      try {
+        const data = await fn();
+        const text = JSON.stringify(data, null, 2);
+        const elapsed = performance.now() - start;
+        trackToolCall(toolName, args, text, data, elapsed);
+        trackSequentialCalls(toolName);
+
+        setCache(cacheKey, text);
+        return formatResponse(text, toolName, args, data);
+      } catch (err: unknown) {
+        const elapsed = performance.now() - start;
+        const message = err instanceof Error ? err.message : String(err);
+        trackToolCall(toolName, args, message, { error: message }, elapsed);
+        trackSequentialCalls(toolName);
+        return errorResult(message);
+      } finally {
+        inflight.delete(cacheKey);
+      }
+    })();
+
+    inflight.set(cacheKey, promise);
+    return promise;
   };
 }
