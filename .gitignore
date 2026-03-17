@@ -6,3 +6,8 @@ coverage/
 src/parser/languages/*.wasm
 .env
 .env.local
+
+# Audit artifacts — may contain secrets found by scanners
+audits/
+audit/
+audit-results/
