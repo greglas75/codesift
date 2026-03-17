@@ -74,8 +74,10 @@ export async function searchSymbols(
   }
 
   const config = loadConfig();
-  const topK = options?.top_k ?? config.defaultTopK;
   const includeSource = options?.include_source ?? true;
+  // When include_source=true without file_pattern, cap results to avoid 10K+ token responses
+  const defaultK = (includeSource && !options?.file_pattern) ? 10 : config.defaultTopK;
+  const topK = options?.top_k ?? defaultK;
   const hasKindFilter = !!options?.kind;
   const hasFileFilter = !!options?.file_pattern;
   const hasFilters = hasKindFilter || hasFileFilter;
