@@ -10,6 +10,17 @@ const MAX_REFERENCES = 200;
 const MAX_DEAD_CODE_RESULTS = 100;
 const MAX_CONTEXT_LENGTH = 200; // Truncate context lines to prevent huge output from minified files
 
+/** Skip non-code files in find_references to reduce noise (audits, docs, snapshots) */
+const NOISE_PATH_PREFIXES = ["audits/", "docs/", ".next/", "dist/", "build/", "coverage/", "node_modules/"];
+const NOISE_EXTENSIONS = new Set([".md", ".json", ".snap", ".lock", ".svg", ".png", ".jpg", ".map"]);
+
+function isNoisePath(filePath: string): boolean {
+  if (NOISE_PATH_PREFIXES.some((p) => filePath.startsWith(p))) return true;
+  const dot = filePath.lastIndexOf(".");
+  if (dot >= 0 && NOISE_EXTENSIONS.has(filePath.slice(dot))) return true;
+  return false;
+}
+
 async function requireCodeIndex(repo: string): Promise<CodeIndex> {
   const index = await getCodeIndex(repo);
   if (!index) {
@@ -164,6 +175,8 @@ export async function findReferences(
     if (refs.length >= MAX_REFERENCES) break;
 
     if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
+    // Skip non-code files (audits, docs, snapshots) unless user explicitly filtered
+    if (!filePattern && isNoisePath(fileEntry.path)) continue;
 
     let content: string;
     try {
