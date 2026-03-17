@@ -132,8 +132,9 @@ export async function searchSymbols(
     });
   }
 
-  // Truncate source to source_chars limit (default 500 when include_source=true)
-  const sourceChars = options?.source_chars ?? (includeSource ? 500 : undefined);
+  // Truncate source: 200 chars without file_pattern (reduce waste), 500 with
+  const defaultSourceChars = (includeSource && !options?.file_pattern) ? 200 : 500;
+  const sourceChars = options?.source_chars ?? (includeSource ? defaultSourceChars : undefined);
   if (includeSource && sourceChars !== undefined && sourceChars > 0) {
     results = results.map((r) => {
       const source = r.symbol.source;
@@ -183,10 +184,12 @@ export async function searchText(
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
-  const contextLines = options?.context_lines ?? 2;
   const useRegex = options?.regex ?? false;
   const filePattern = options?.file_pattern;
-  const maxResults = options?.max_results ?? DEFAULT_MAX_TEXT_MATCHES;
+  // Regex without file_pattern scans entire repo — cap results to limit timeout
+  const maxResults = options?.max_results
+    ?? (useRegex && !filePattern ? 50 : DEFAULT_MAX_TEXT_MATCHES);
+  const contextLines = options?.context_lines ?? 2;
 
   let regex: RegExp | null = null;
   if (useRegex) {
