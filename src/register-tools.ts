@@ -309,9 +309,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       queries: z
-        .array(z.object({ type: z.string() }).passthrough())
-        .describe("Array of sub-queries (symbols, text, file_tree, outline, references, call_chain, impact, context, knowledge_map)"),
-      token_budget: z.number().optional().describe("Maximum total tokens across all sub-query results"),
+        .union([
+          z.array(z.object({ type: z.string() }).passthrough()),
+          z.string().transform((s) => JSON.parse(s) as Array<{ type: string } & Record<string, unknown>>),
+        ])
+        .describe("Array of sub-queries (symbols, text, file_tree, outline, references, call_chain, impact, context, knowledge_map). Can be passed as JSON string."),
+      token_budget: z.union([z.number(), z.string().transform(Number)]).optional().describe("Maximum total tokens across all sub-query results"),
     },
     handler: (args) => codebaseRetrieval(
       args.repo as string,
