@@ -507,8 +507,20 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
 }
 
 /**
+ * Ensure watcher is running for a repo (lazy start on first access after restart).
+ */
+async function ensureWatcher(repoName: string, meta: { root: string; index_path: string }): Promise<void> {
+  if (activeWatchers.has(repoName)) return;
+  try {
+    await setupWatcher(meta.root, repoName, meta.index_path);
+  } catch {
+    // Watcher failure is non-fatal — index still works, just won't auto-update
+  }
+}
+
+/**
  * Get the in-memory BM25 index for a repo.
- * Loads from disk if not cached.
+ * Loads from disk if not cached. Starts watcher if not running.
  */
 export async function getBM25Index(repoName: string): Promise<BM25Index | null> {
   const cached = bm25Indexes.get(repoName);
@@ -523,16 +535,24 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
 
   const bm25 = buildBM25Index(index.symbols);
   bm25Indexes.set(repoName, bm25);
+
+  // Lazy-start watcher after restart so file changes are picked up
+  await ensureWatcher(repoName, meta);
+
   return bm25;
 }
 
 /**
  * Get the code index for a repo from disk.
+ * Starts watcher if not running (lazy start after server restart).
  */
 export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> {
   const config = loadConfig();
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return null;
+
+  // Lazy-start watcher so file changes are picked up
+  await ensureWatcher(repoName, meta);
 
   return loadIndex(meta.index_path);
 }
