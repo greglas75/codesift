@@ -58,19 +58,37 @@ export async function loadEmbeddings(
 }
 
 /**
- * Save all embeddings atomically to an ndjson file.
+ * Save all embeddings to an ndjson file using streaming writes.
+ * Avoids building a single huge string (30K+ symbols × 1536 floats = >300MB).
  */
 export async function saveEmbeddings(
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
 ): Promise<void> {
-  const lines: string[] = [];
-  for (const [id, vec] of embeddings) {
-    lines.push(JSON.stringify({ id, vec: Array.from(vec) }));
-  }
+  const tmpPath = embeddingPath + ".tmp";
+  const { createWriteStream } = await import("node:fs");
+  const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
 
-  const data = lines.join("\n") + "\n";
-  await atomicWriteFile(embeddingPath, data);
+  try {
+    for (const [id, vec] of embeddings) {
+      const line = JSON.stringify({ id, vec: Array.from(vec) }) + "\n";
+      const canContinue = stream.write(line);
+      if (!canContinue) {
+        await new Promise<void>((resolve) => stream.once("drain", resolve));
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      stream.end(() => resolve());
+      stream.on("error", reject);
+    });
+    // Atomic rename
+    const { rename } = await import("node:fs/promises");
+    await rename(tmpPath, embeddingPath);
+  } catch (err) {
+    // Clean up temp file on error
+    try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 /**
