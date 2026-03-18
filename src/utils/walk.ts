@@ -10,6 +10,7 @@ export const IGNORE_DIRS = new Set([
   ".codesift", ".next", "__pycache__", ".pytest_cache",
   ".venv", "venv", ".tox", ".mypy_cache", ".turbo",
   "generated", "audit-results", ".backup", "jscpd-report",
+  "helpscout_export", ".output",
 ]);
 
 /**
