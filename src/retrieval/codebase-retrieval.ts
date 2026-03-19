@@ -145,28 +145,31 @@ export async function codebaseRetrieval(
 
   const limited = queries.slice(0, MAX_QUERIES);
 
-  // Validate and execute all sub-queries in parallel
-  const subResults = await Promise.all(
-    limited.map((raw) => {
-      const parsed = SubQuerySchema.safeParse(raw);
-      if (!parsed.success) {
-        const message = `Invalid sub-query: ${parsed.error.issues.map((i) => i.message).join(", ")}`;
-        return Promise.resolve({
-          type: (raw as { type?: string })?.type ?? "unknown",
-          data: { error: message },
-          tokens: estimateTokens(message),
-        } satisfies SubQueryResult);
-      }
-      return executeSubQuery(repo, parsed.data).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          type: parsed.data.type,
-          data: { error: message },
-          tokens: estimateTokens(message),
-        } satisfies SubQueryResult;
+  // Execute sub-queries sequentially to avoid parallel filesystem walks
+  // (6 concurrent searchText walks on 600+ files = OOM / connection closed)
+  const subResults: SubQueryResult[] = [];
+  for (const raw of limited) {
+    const parsed = SubQuerySchema.safeParse(raw);
+    if (!parsed.success) {
+      const message = `Invalid sub-query: ${parsed.error.issues.map((i) => i.message).join(", ")}`;
+      subResults.push({
+        type: (raw as { type?: string })?.type ?? "unknown",
+        data: { error: message },
+        tokens: estimateTokens(message),
       });
-    }),
-  );
+      continue;
+    }
+    try {
+      subResults.push(await executeSubQuery(repo, parsed.data));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      subResults.push({
+        type: parsed.data.type,
+        data: { error: message },
+        tokens: estimateTokens(message),
+      });
+    }
+  }
 
   // Enforce token budget — include results until budget is exceeded
   const results: SubQueryResult[] = [];
