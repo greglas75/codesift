@@ -91,7 +91,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   // --- Search ---
   {
     name: "search_symbols",
-    description: "Search for code symbols (functions, classes, types) by name or signature",
+    description: "Search for code symbols (functions, classes, types) by name or signature. Use detail_level='compact' for discovery (~15 tok/result), 'standard' for signatures+source (default), 'full' for complete source.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query string"),
@@ -100,6 +100,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_source: z.boolean().optional().describe("Include full source code of each symbol"),
       top_k: z.number().optional().describe("Maximum number of results to return (default 50)"),
       source_chars: z.number().optional().describe("Truncate each symbol's source to N characters (reduces output size)"),
+      detail_level: z.enum(["compact", "standard", "full"]).optional().describe("Output detail: compact (~15 tok/result, id+name+kind+file+line), standard (default, +signature+source), full (unlimited source)"),
     },
     handler: (args) => searchSymbols(args.repo as string, args.query as string, {
       kind: args.kind as SymbolKind | undefined,
@@ -107,6 +108,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_source: args.include_source as boolean | undefined,
       top_k: args.top_k as number | undefined,
       source_chars: args.source_chars as number | undefined,
+      detail_level: args.detail_level as "compact" | "standard" | "full" | undefined,
     }),
   },
   {

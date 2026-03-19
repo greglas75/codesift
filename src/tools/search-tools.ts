@@ -38,12 +38,15 @@ const BINARY_EXTENSIONS = new Set([
   ".lock",
 ]);
 
+export type DetailLevel = "compact" | "standard" | "full";
+
 export interface SearchSymbolsOptions {
   kind?: SymbolKind | undefined;
   file_pattern?: string | undefined;
   include_source?: boolean | undefined;
   top_k?: number | undefined;
   source_chars?: number | undefined;
+  detail_level?: DetailLevel | undefined;
 }
 
 export interface SearchTextOptions {
@@ -124,6 +127,23 @@ export async function searchSymbols(
     results = results.slice(0, topK);
   }
 
+  const detail = options?.detail_level ?? (includeSource ? "standard" : "standard");
+
+  // Apply detail level shaping
+  if (detail === "compact") {
+    // ~15 tokens per result: id, name, kind, file, start_line only
+    return results.map((r) => ({
+      symbol: {
+        id: r.symbol.id,
+        name: r.symbol.name,
+        kind: r.symbol.kind,
+        file: r.symbol.file,
+        start_line: r.symbol.start_line,
+      },
+      score: r.score,
+    })) as SearchResult[];
+  }
+
   // Strip source if not requested
   if (!includeSource) {
     results = results.map((r) => {
@@ -132,8 +152,9 @@ export async function searchSymbols(
     });
   }
 
-  // Truncate source: 200 chars without file_pattern (reduce waste), 500 with
-  const defaultSourceChars = (includeSource && !options?.file_pattern) ? 200 : 500;
+  // Truncate source: 200 chars without file_pattern (reduce waste), 500 with, unlimited for "full"
+  const defaultSourceChars = detail === "full" ? undefined
+    : (includeSource && !options?.file_pattern) ? 200 : 500;
   const sourceChars = options?.source_chars ?? (includeSource ? defaultSourceChars : undefined);
   if (includeSource && sourceChars !== undefined && sourceChars > 0) {
     results = results.map((r) => {
@@ -148,9 +169,7 @@ export async function searchSymbols(
     });
   }
 
-  // Strip internal/redundant fields from response to reduce token output:
-  // - tokens: BM25 internal pre-computed token array (not useful to agents)
-  // - repo: redundant — agent already knows which repo they searched
+  // Strip internal/redundant fields
   return results.map((r) => {
     const { tokens: _tokens, repo: _repo, ...cleanSymbol } = r.symbol;
     return { ...r, symbol: cleanSymbol as typeof r.symbol };
