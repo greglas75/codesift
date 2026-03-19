@@ -39,6 +39,7 @@ export function extractSymbols(
 // Re-export custom extractors for use by the indexing pipeline (no tree-sitter grammar)
 export { extractMarkdownSymbols } from "./extractors/markdown.js";
 export { extractPrismaSymbols } from "./extractors/prisma.js";
+export { extractAstroSymbols } from "./extractors/astro.js";
 
 /**
  * Splits camelCase, PascalCase, UPPER_SNAKE, and snake_case identifiers

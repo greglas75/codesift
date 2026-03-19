@@ -23,6 +23,7 @@ const EXTENSION_MAP: Record<string, string> = {
   ".css": "css",
   ".json": "json",
   ".prisma": "prisma",
+  ".astro": "astro",
 };
 
 export async function initParser(): Promise<void> {

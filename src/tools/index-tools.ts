@@ -2,7 +2,7 @@ import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promise
 import { join, relative, extname, resolve, basename } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parseFile } from "../parser/parser-manager.js";
-import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols } from "../parser/symbol-extractor.js";
+import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName } from "../storage/registry.js";
@@ -50,6 +50,8 @@ async function parseOneFile(
       symbols = extractMarkdownSymbols(source, relPath, repoName);
     } else if (language === "prisma") {
       symbols = extractPrismaSymbols(source, relPath, repoName);
+    } else if (language === "astro") {
+      symbols = extractAstroSymbols(source, relPath, repoName);
     } else {
       const tree = await parseFile(filePath, source);
       if (!tree) return null;
