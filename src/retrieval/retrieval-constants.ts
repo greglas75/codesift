@@ -1,5 +1,7 @@
-/** Approximate characters per token for budget estimation. */
-export const CHARS_PER_TOKEN = 4;
+/** Approximate characters per token for budget estimation.
+ * 3 is conservative (accounts for JSON overhead: keys, quotes, indentation).
+ * Real ratio is ~3.5 for JSON-serialized code, but 3 prevents budget overruns. */
+export const CHARS_PER_TOKEN = 3;
 
 /** Reciprocal Rank Fusion smoothing constant. */
 export const RRF_K = 60;

@@ -12,22 +12,22 @@ describe("estimateTokens", () => {
     expect(estimateTokens("")).toBe(0);
   });
 
-  it("returns ceil(length / 4) for short strings", () => {
-    expect(estimateTokens("a")).toBe(1); // 1/4 → ceil = 1
-    expect(estimateTokens("ab")).toBe(1); // 2/4 → ceil = 1
-    expect(estimateTokens("abc")).toBe(1); // 3/4 → ceil = 1
-    expect(estimateTokens("abcd")).toBe(1); // 4/4 → ceil = 1
-    expect(estimateTokens("abcde")).toBe(2); // 5/4 → ceil = 2
+  it("returns ceil(length / 3) for short strings", () => {
+    expect(estimateTokens("a")).toBe(1); // 1/3 → ceil = 1
+    expect(estimateTokens("ab")).toBe(1); // 2/3 → ceil = 1
+    expect(estimateTokens("abc")).toBe(1); // 3/3 → ceil = 1
+    expect(estimateTokens("abcd")).toBe(2); // 4/3 → ceil = 2
+    expect(estimateTokens("abcde")).toBe(2); // 5/3 → ceil = 2
   });
 
   it("scales linearly for longer text", () => {
     const text = "x".repeat(100);
-    expect(estimateTokens(text)).toBe(25); // 100/4 = 25
+    expect(estimateTokens(text)).toBe(34); // ceil(100/3) = 34
   });
 
   it("rounds up for non-divisible lengths", () => {
     const text = "x".repeat(101);
-    expect(estimateTokens(text)).toBe(26); // ceil(101/4) = 26
+    expect(estimateTokens(text)).toBe(34); // ceil(101/3) = 34
   });
 });
 

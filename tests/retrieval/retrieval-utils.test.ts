@@ -179,10 +179,10 @@ describe("formatChunksAsText", () => {
 // estimateTokens (also tested in codebase-retrieval.test.ts — basic coverage here)
 // ---------------------------------------------------------------------------
 describe("estimateTokens", () => {
-  it("computes ceil(length/4)", () => {
+  it("computes ceil(length/3)", () => {
     expect(estimateTokens("")).toBe(0);
-    expect(estimateTokens("abcd")).toBe(1);
-    expect(estimateTokens("abcde")).toBe(2);
+    expect(estimateTokens("abc")).toBe(1);
+    expect(estimateTokens("abcd")).toBe(2);
   });
 });
 

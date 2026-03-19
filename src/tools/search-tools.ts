@@ -12,6 +12,7 @@ const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many 
 const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count
 const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
 const MAX_FIRST_MATCH_CHARS = 300; // Cap first_match preview in grouped output
+const MAX_LINE_CHARS = 500; // Truncate individual match lines (minified JS/JSON can be 100K+)
 
 // SEC-003: Detect common catastrophic backtracking patterns (ReDoS)
 const REDOS_PATTERNS = [
@@ -294,10 +295,13 @@ export async function searchText(
         }
       }
 
+      const truncLine = line.length > MAX_LINE_CHARS
+        ? line.slice(0, MAX_LINE_CHARS) + "..."
+        : line;
       const match: TextMatch = {
         file: filePath,
         line: i + 1, // 1-based
-        content: line,
+        content: truncLine,
       };
       if (contextBefore.length > 0) {
         match.context_before = contextBefore;
