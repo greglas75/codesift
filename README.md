@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 31 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 33 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -37,13 +37,28 @@ Measured on a real 4,127-file TypeScript codebase (70 tasks, CodeSift CLI vs Bas
 
 CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, being optimized). Relationship tracing is being rewritten for AST-level accuracy.
 
+## Performance features
+
+| Feature | Description | Impact |
+|---------|-------------|--------|
+| **mtime-based incremental indexing** | Skip files with unchanged mtime on reindex | 5.6x faster reindex (57s → 10s on 778-file repo) |
+| **index_file** | Re-index a single file without full repo walk | 9ms (unchanged) / 153ms (changed) vs 3-8s full folder |
+| **detail_level** on search_symbols | `compact` (~15 tok/result), `standard`, `full` | compact is 63% fewer tokens than standard |
+| **token_budget** on search_symbols | Pack results to token limit instead of guessing top_k | Precise budget control |
+| **Centrality bonus** in BM25 | Symbols in frequently-imported files rank higher | Core utilities surface first in search |
+| **Response dedup cache** | Identical calls within 30s return cached result | Eliminates duplicate API calls |
+| **In-flight dedup** | Parallel identical requests coalesce into one | Prevents race condition duplicates |
+| **Auto-grouping** | Force group_by_file when output exceeds 80K chars | Prevents 100K+ token responses |
+| **30K token hard cap** | Truncate any response exceeding 30K tokens | Last-resort safety net |
+| **Sequential hints** | Prepended hints suggest batching after 3+ consecutive calls | Guides agents toward codebase_retrieval |
+
 ## CLI commands
 
 ### Indexing
 
 | Command | Description |
 |---------|-------------|
-| `codesift index <path>` | Index a local folder |
+| `codesift index <path>` | Index a local folder (mtime-based incremental — skips unchanged files) |
 | `codesift index-repo <url>` | Clone and index a remote git repository |
 | `codesift repos` | List all indexed repositories |
 | `codesift invalidate <repo>` | Clear index cache for a repository |
@@ -53,7 +68,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | Command | Description |
 |---------|-------------|
 | `codesift search <repo> <query>` | Full-text search across all files |
-| `codesift symbols <repo> <query>` | Search symbols by name/signature |
+| `codesift symbols <repo> <query>` | Search symbols by name/signature (supports `--detail compact\|standard\|full` and `--token-budget N`) |
 
 ### Outline
 
@@ -71,6 +86,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift symbols-batch <repo> <ids...>` | Get multiple symbols by ID |
 | `codesift find <repo> <query>` | Find symbol and show source |
 | `codesift refs <repo> <name>` | Find all references to a symbol |
+| `codesift context-bundle <repo> <name>` | Symbol + imports + siblings + types used in one call |
 
 ### Graph & analysis
 
@@ -90,7 +106,6 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift clones <repo>` | Copy-paste detection (hash bucketing + line similarity) |
 | `codesift hotspots <repo>` | Git churn x complexity = risk-ranked file list |
 | `codesift patterns <repo> <pattern>` | Structural anti-pattern search (8 built-in + custom regex) |
-| `codesift context-bundle <repo> <name>` | Symbol + imports + siblings + types used in one call |
 
 ### Cross-repo
 
@@ -115,6 +130,24 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
+## MCP tools (33 total)
+
+When running as an MCP server, CodeSift exposes these tools:
+
+| Category | Tools |
+|----------|-------|
+| **Indexing** | `index_folder`, `index_repo`, `index_file`, `list_repos`, `invalidate_cache` |
+| **Search** | `search_symbols` (detail_level, token_budget), `search_text` (auto_group, group_by_file) |
+| **Outline** | `get_file_tree`, `get_file_outline`, `get_repo_outline`, `suggest_queries` |
+| **Symbol retrieval** | `get_symbol`, `get_symbols`, `find_and_show`, `get_context_bundle` |
+| **References & graph** | `find_references`, `trace_call_chain`, `impact_analysis` |
+| **Context & knowledge** | `assemble_context`, `get_knowledge_map` |
+| **Diff** | `diff_outline`, `changed_symbols` |
+| **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget) |
+| **Analysis** | `find_dead_code`, `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns`, `list_patterns` |
+| **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
+| **Utility** | `generate_claude_md`, `usage_stats` |
+
 ## When to use CodeSift vs grep
 
 | Task | Best tool | Why |
@@ -128,6 +161,8 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | Complexity hotspots | `codesift complexity` | Cyclomatic complexity + nesting depth |
 | Copy-paste detection | `codesift clones` | Hash bucketing + line similarity scoring |
 | Anti-pattern search | `codesift patterns` | 8 built-in CQ patterns + custom regex |
+| Explore new codebase | `codesift suggest-queries` | Instant overview: top files, kind distribution, example queries |
+| Re-index after edit | `index_file` | 9ms skip / 153ms reparse vs 3-8s full folder |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -148,13 +183,13 @@ The `patterns` command searches for common code quality issues across your codeb
 
 Custom regex is also supported: `codesift patterns local/project "Promise<.*any>"`.
 
-## MCP server
+## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 31 tools to AI agents like Claude.
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 33 tools to AI agents like Claude.
 
 ### Claude Code (CLI)
 
-Add to `~/.claude.json`:
+Add to `~/.claude/.mcp.json`:
 
 ```json
 {
@@ -166,14 +201,14 @@ Add to `~/.claude.json`:
 }
 ```
 
-Or from source:
+With semantic search (OpenAI embeddings):
 
 ```json
 {
   "mcpServers": {
     "codesift": {
-      "command": "node",
-      "args": ["/path/to/codesift-mcp/dist/server.js"]
+      "command": "/bin/sh",
+      "args": ["-c", "CODESIFT_OPENAI_API_KEY='sk-...' exec codesift-mcp"]
     }
   }
 }
@@ -194,6 +229,20 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
+### Cursor
+
+Add to `.cursor/mcp.json` in your project or global config:
+
+```json
+{
+  "mcpServers": {
+    "codesift": {
+      "command": "codesift-mcp"
+    }
+  }
+}
+```
+
 ## Semantic search
 
 Semantic search uses embeddings to answer concept queries like "how does authentication work?" that keyword search misses.
@@ -202,11 +251,11 @@ Semantic search uses embeddings to answer concept queries like "how does authent
 
 Set **one** of these environment variables:
 
-| Variable | Provider | Model |
-|----------|----------|-------|
-| `CODESIFT_VOYAGE_API_KEY` | [Voyage AI](https://voyageai.com/) | `voyage-code-3` |
-| `CODESIFT_OPENAI_API_KEY` | [OpenAI](https://openai.com/) | `text-embedding-3-small` |
-| `CODESIFT_OLLAMA_URL` | [Ollama](https://ollama.com/) (local) | `nomic-embed-text` |
+| Variable | Provider | Model | Cost |
+|----------|----------|-------|------|
+| `CODESIFT_VOYAGE_API_KEY` | [Voyage AI](https://voyageai.com/) | `voyage-code-3` | Best for code |
+| `CODESIFT_OPENAI_API_KEY` | [OpenAI](https://openai.com/) | `text-embedding-3-small` | ~$0.02/1M tok (~$0.21 for 44 repos) |
+| `CODESIFT_OLLAMA_URL` | [Ollama](https://ollama.com/) (local) | `nomic-embed-text` | Free (local) |
 
 ### Usage
 
@@ -222,21 +271,6 @@ codesift retrieve local/my-project \
 
 Semantic and hybrid queries exclude test files by default to maximize token efficiency. To include test files, set `"exclude_tests": false` in the sub-query or pass `--exclude-tests=false` on the CLI.
 
-### MCP example
-
-```json
-{
-  "mcpServers": {
-    "codesift": {
-      "command": "codesift-mcp",
-      "env": {
-        "CODESIFT_OPENAI_API_KEY": "sk-..."
-      }
-    }
-  }
-}
-```
-
 ## Configuration
 
 All configuration is via environment variables.
@@ -246,19 +280,32 @@ All configuration is via environment variables.
 | `CODESIFT_DATA_DIR` | Storage directory for indexes | `~/.codesift` |
 | `CODESIFT_WATCH_DEBOUNCE_MS` | File watcher debounce interval | `500` |
 | `CODESIFT_DEFAULT_TOKEN_BUDGET` | Default token budget for retrieval | `8000` |
-| `CODESIFT_DEFAULT_TOP_K` | Default max results for search | `20` |
+| `CODESIFT_DEFAULT_TOP_K` | Default max results for search | `50` |
+| `CODESIFT_EMBEDDING_BATCH_SIZE` | Symbols per embedding API call | `128` |
 
 ## How it works
 
-1. **Indexing** -- Tree-sitter WASM grammars parse source files into ASTs. Symbol extraction produces functions, classes, methods, types, constants, etc. with signatures, docstrings, and source code.
+1. **Indexing** -- Tree-sitter WASM grammars parse source files into ASTs. Symbol extraction produces functions, classes, methods, types, constants, etc. with signatures, docstrings, and source code. Filesystem mtime is stored per file for incremental skip on reindex.
 
-2. **BM25F search** -- Symbols are tokenized (camelCase/snake_case splitting) and indexed with field-weighted BM25 scoring. Name matches rank 3x higher than body matches.
+2. **BM25F search** -- Symbols are tokenized (camelCase/snake_case splitting) and indexed with field-weighted BM25 scoring. Name matches rank 5x higher than body matches. Symbols in frequently-imported files get a log-scaled centrality bonus as tiebreaker.
 
 3. **Semantic search** (optional) -- Source code is chunked and embedded via the configured provider. Queries are embedded at search time and ranked by cosine similarity. Multi-sub-query decomposition with Reciprocal Rank Fusion (RRF, k=60).
 
 4. **Hybrid search** -- Combines semantic embedding similarity with BM25 text matches via RRF, getting the best of both keyword and concept search.
 
 5. **File watcher** -- chokidar watches indexed folders for changes. Modified files are re-parsed and the index is updated incrementally.
+
+6. **Response guards** -- Multiple layers prevent token waste: auto-grouping at 80K chars, 30K token hard cap, response dedup cache (30s), in-flight request coalescing, sequential call hints, and source truncation.
+
+## Glob pattern support
+
+File pattern parameters (`file_pattern`) support full glob syntax via [picomatch](https://github.com/micromatch/picomatch):
+
+- `*.ts` — match by extension at any depth
+- `*.{ts,tsx}` — brace expansion
+- `src/**/*.service.ts` — directory globbing
+- `[!.]*.ts` — character classes
+- `service` — plain substring match (no glob chars)
 
 ## Supported languages
 
@@ -267,15 +314,37 @@ TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, Java, Ruby, PHP, Markdown, C
 ## Development
 
 ```bash
-git clone https://github.com/greglas/codesift-mcp.git
+git clone https://github.com/greglas75/codesift.git
 cd codesift-mcp
 npm install
 npm run download-wasm   # Download tree-sitter WASM grammars
 npm run build           # TypeScript compilation
-npm test                # Run tests (Vitest)
+npm test                # Run tests (Vitest, 350 tests)
 npm run test:coverage   # Coverage report
+npm run lint            # Type check (tsc --noEmit)
 ```
 
 ## License
 
 MIT
+
+<!-- Evidence Map
+| Section | Source file(s) |
+|---------|---------------|
+| Tool count (33) | src/register-tools.ts (grep 'name: "' count) |
+| Quick install | package.json:bin (line 8-11) |
+| Quick start | src/cli/commands.ts |
+| Benchmark | benchmarks/ directory, previously measured |
+| Performance features | src/tools/index-tools.ts (mtime), src/tools/search-tools.ts (detail_level, token_budget), src/search/bm25.ts (centrality), src/server-helpers.ts (cache, dedup, guards) |
+| CLI commands | src/cli/commands.ts:1-403 |
+| MCP tools | src/register-tools.ts (all tool definitions) |
+| Anti-patterns | src/tools/pattern-tools.ts |
+| MCP setup | ~/.claude/.mcp.json (verified working config) |
+| Semantic search | src/search/semantic.ts, src/config.ts:40-47 |
+| Configuration | src/config.ts:36-72 |
+| How it works | src/search/bm25.ts, src/parser/, src/storage/watcher.ts, src/server-helpers.ts |
+| Glob support | src/utils/glob.ts (picomatch) |
+| Languages | src/parser/parser-manager.ts, src/parser/extractors/ |
+| Development | package.json:scripts (line 19-28) |
+| Git URL | package.json:repository (line 62-64) |
+-->
