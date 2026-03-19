@@ -532,10 +532,72 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
 }
 
 /**
- * Lazy-start watcher only for repos the agent actively indexes.
- * DO NOT auto-start watchers on read — 44 watchers × 1000s of files = EMFILE crash.
- * Watchers start only via indexFolder (explicit user action).
+ * Re-index a single file instantly. Finds the repo by matching the file
+ * path against indexed repo roots. Updates symbols, BM25 index, and
+ * invalidates embedding cache — no full repo walk needed.
  */
+export async function indexFile(filePath: string): Promise<{
+  repo: string;
+  file: string;
+  symbol_count: number;
+  duration_ms: number;
+  skipped?: boolean;
+}> {
+  const absPath = resolve(filePath);
+  const config = loadConfig();
+  const repos = await listRegistryRepos(config.registryPath);
+
+  // Find the most specific repo root that contains this file
+  const matchingRepo = repos
+    .filter((r) => absPath.startsWith(r.root + "/") || absPath === r.root)
+    .sort((a, b) => b.root.length - a.root.length)[0];
+
+  if (!matchingRepo) {
+    throw new Error(`No indexed repo contains "${absPath}". Run index_folder first.`);
+  }
+
+  const startTime = Date.now();
+  const relPath = relative(matchingRepo.root, absPath);
+
+  // mtime check — skip if unchanged
+  const existing = await loadIndex(matchingRepo.index_path);
+  if (existing) {
+    const prevEntry = existing.files.find((f) => f.path === relPath);
+    if (prevEntry?.mtime_ms) {
+      const st = await stat(absPath);
+      if (Math.round(st.mtimeMs) === prevEntry.mtime_ms) {
+        return {
+          repo: matchingRepo.name,
+          file: relPath,
+          symbol_count: prevEntry.symbol_count,
+          duration_ms: Date.now() - startTime,
+          skipped: true,
+        };
+      }
+    }
+  }
+
+  const result = await parseOneFile(absPath, matchingRepo.root, matchingRepo.name);
+  if (!result) {
+    throw new Error(`Failed to parse "${relPath}"`);
+  }
+
+  await saveIncremental(matchingRepo.index_path, relPath, result.symbols, result.entry);
+
+  // Rebuild in-memory BM25 index
+  const index = await loadIndex(matchingRepo.index_path);
+  if (index) {
+    bm25Indexes.set(matchingRepo.name, buildBM25Index(index.symbols));
+  }
+  embeddingCaches.delete(matchingRepo.name);
+
+  return {
+    repo: matchingRepo.name,
+    file: relPath,
+    symbol_count: result.symbols.length,
+    duration_ms: Date.now() - startTime,
+  };
+}
 
 /**
  * Get the in-memory BM25 index for a repo.

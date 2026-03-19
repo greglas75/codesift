@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { wrapTool } from "./server-helpers.js";
-import { indexFolder, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
+import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
@@ -77,6 +77,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier (e.g. local/my-project)"),
     },
     handler: (args) => invalidateCache(args.repo as string),
+  },
+
+  {
+    name: "index_file",
+    description: "Re-index a single file instantly after editing. Finds the repo automatically, updates symbols and BM25 index. Skips if file mtime unchanged. Much faster than index_folder for single-file updates.",
+    schema: {
+      path: z.string().describe("Absolute path to the file to re-index"),
+    },
+    handler: (args) => indexFile(args.path as string),
   },
 
   // --- Search ---
