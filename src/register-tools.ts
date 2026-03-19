@@ -3,7 +3,7 @@ import { z } from "zod";
 import { wrapTool } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
-import { getFileTree, getFileOutline, getRepoOutline } from "./tools/outline-tools.js";
+import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
@@ -172,6 +172,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
     },
     handler: (args) => getRepoOutline(args.repo as string),
+  },
+
+  {
+    name: "suggest_queries",
+    description: "Suggest useful queries for exploring an unfamiliar repo. Returns top files by symbol density, kind distribution, and ready-to-use example queries. Ideal first call when starting work on a new codebase.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+    },
+    handler: (args) => suggestQueries(args.repo as string),
   },
 
   // --- Symbol retrieval ---

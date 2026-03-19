@@ -403,3 +403,62 @@ export async function getRepoOutline(
     languages: languageCounts,
   };
 }
+
+/**
+ * Suggest useful queries for exploring an unfamiliar repo.
+ * Returns top symbol names, most-symbol-dense files, kind distribution,
+ * and example queries ready to paste.
+ */
+export async function suggestQueries(repo: string): Promise<{
+  top_files: Array<{ path: string; symbols: number }>;
+  kind_distribution: Record<string, number>;
+  example_queries: string[];
+}> {
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
+  }
+
+  // Top files by symbol count
+  const topFiles = [...index.files]
+    .sort((a, b) => b.symbol_count - a.symbol_count)
+    .slice(0, 10)
+    .map((f) => ({ path: f.path, symbols: f.symbol_count }));
+
+  // Kind distribution
+  const kinds: Record<string, number> = {};
+  for (const sym of index.symbols) {
+    kinds[sym.kind] = (kinds[sym.kind] ?? 0) + 1;
+  }
+
+  // Extract top symbol names by frequency (most common names = core concepts)
+  const nameCounts = new Map<string, number>();
+  for (const sym of index.symbols) {
+    // Skip internal/anonymous
+    if (sym.name.startsWith("<") || sym.name.length < 3) continue;
+    nameCounts.set(sym.name, (nameCounts.get(sym.name) ?? 0) + 1);
+  }
+  const topNames = [...nameCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name]) => name);
+
+  // Build example queries
+  const examples: string[] = [];
+  if (topFiles[0]) {
+    examples.push(`get_file_outline(repo, "${topFiles[0].path}")`);
+  }
+  for (const name of topNames.slice(0, 3)) {
+    examples.push(`search_symbols(repo, "${name}")`);
+  }
+  if (topFiles[0]) {
+    const dir = topFiles[0].path.split("/").slice(0, -1).join("/");
+    if (dir) examples.push(`get_file_tree(repo, path_prefix="${dir}")`);
+  }
+
+  return {
+    top_files: topFiles,
+    kind_distribution: kinds,
+    example_queries: examples,
+  };
+}
