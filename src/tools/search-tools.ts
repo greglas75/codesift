@@ -47,6 +47,7 @@ export interface SearchSymbolsOptions {
   top_k?: number | undefined;
   source_chars?: number | undefined;
   detail_level?: DetailLevel | undefined;
+  token_budget?: number | undefined;
 }
 
 export interface SearchTextOptions {
@@ -170,10 +171,26 @@ export async function searchSymbols(
   }
 
   // Strip internal/redundant fields
-  return results.map((r) => {
+  let cleaned = results.map((r) => {
     const { tokens: _tokens, repo: _repo, ...cleanSymbol } = r.symbol;
     return { ...r, symbol: cleanSymbol as typeof r.symbol };
   });
+
+  // Token budget: greedily pack results until budget exhausted
+  const budget = options?.token_budget;
+  if (budget && budget > 0) {
+    const packed: typeof cleaned = [];
+    let used = 0;
+    for (const r of cleaned) {
+      const tok = Math.ceil(JSON.stringify(r).length / 4);
+      if (used + tok > budget) break;
+      packed.push(r);
+      used += tok;
+    }
+    return packed;
+  }
+
+  return cleaned;
 }
 
 /**

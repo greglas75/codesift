@@ -101,6 +101,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       top_k: z.number().optional().describe("Maximum number of results to return (default 50)"),
       source_chars: z.number().optional().describe("Truncate each symbol's source to N characters (reduces output size)"),
       detail_level: z.enum(["compact", "standard", "full"]).optional().describe("Output detail: compact (~15 tok/result, id+name+kind+file+line), standard (default, +signature+source), full (unlimited source)"),
+      token_budget: z.number().optional().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
     },
     handler: (args) => searchSymbols(args.repo as string, args.query as string, {
       kind: args.kind as SymbolKind | undefined,
@@ -109,6 +110,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       top_k: args.top_k as number | undefined,
       source_chars: args.source_chars as number | undefined,
       detail_level: args.detail_level as "compact" | "standard" | "full" | undefined,
+      token_budget: args.token_budget as number | undefined,
     }),
   },
   {
