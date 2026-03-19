@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { wrapTool } from "./server-helpers.js";
+
+/** Coerce string→number for numeric params (LLMs sometimes send "2" instead of 2) */
+const zNum = () => z.union([z.number(), z.string().transform(Number)]).optional();
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
@@ -98,10 +101,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       kind: z.string().optional().describe("Filter by symbol kind (function, class, etc.)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
       include_source: z.boolean().optional().describe("Include full source code of each symbol"),
-      top_k: z.number().optional().describe("Maximum number of results to return (default 50)"),
-      source_chars: z.number().optional().describe("Truncate each symbol's source to N characters (reduces output size)"),
+      top_k: zNum().describe("Maximum number of results to return (default 50)"),
+      source_chars: zNum().describe("Truncate each symbol's source to N characters (reduces output size)"),
       detail_level: z.enum(["compact", "standard", "full"]).optional().describe("Output detail: compact (~15 tok/result, id+name+kind+file+line), standard (default, +signature+source), full (unlimited source)"),
-      token_budget: z.number().optional().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
+      token_budget: zNum().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
     },
     handler: (args) => searchSymbols(args.repo as string, args.query as string, {
       kind: args.kind as SymbolKind | undefined,
@@ -120,9 +123,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query or regex pattern"),
       regex: z.boolean().optional().describe("Treat query as a regex pattern"),
-      context_lines: z.number().optional().describe("Number of context lines around each match"),
+      context_lines: zNum().describe("Number of context lines around each match"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
-      max_results: z.number().optional().describe("Maximum number of matching lines to return (default 200)"),
+      max_results: zNum().describe("Maximum number of matching lines to return (default 200)"),
       group_by_file: z.boolean().optional().describe("Group results by file — returns {file, count, lines[], first_match} instead of every line. 80-90% less output for high-cardinality searches."),
       auto_group: z.boolean().optional().describe("Automatically switch to group_by_file when result count exceeds 50 matches. Recommended for exploratory searches where match count is unknown."),
     },
@@ -144,9 +147,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
       name_pattern: z.string().optional().describe("Glob pattern to filter file names"),
-      depth: z.number().optional().describe("Maximum directory depth to traverse"),
+      depth: zNum().describe("Maximum directory depth to traverse"),
       compact: z.boolean().optional().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
-      min_symbols: z.number().optional().describe("Only include files with at least this many symbols"),
+      min_symbols: zNum().describe("Only include files with at least this many symbols"),
     },
     handler: (args) => getFileTree(args.repo as string, {
       path_prefix: args.path_prefix as string | undefined,
@@ -240,7 +243,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Name of the symbol to trace"),
       direction: z.enum(["callers", "callees"]).describe("Trace direction"),
-      depth: z.number().optional().describe("Maximum depth to traverse the call graph (default: 1)"),
+      depth: zNum().describe("Maximum depth to traverse the call graph (default: 1)"),
       include_source: z.boolean().optional().describe("Include full source code of each symbol (default: false)"),
       include_tests: z.boolean().optional().describe("Include test files in trace results (default: false)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (flowchart diagram)"),
@@ -258,7 +261,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       since: z.string().describe("Git ref to compare from (e.g. HEAD~3, commit SHA, branch)"),
-      depth: z.number().optional().describe("Depth of dependency traversal"),
+      depth: zNum().describe("Depth of dependency traversal"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_source: z.boolean().optional().describe("Include full source code of affected symbols (default: false)"),
     },
@@ -276,7 +279,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Natural language query describing what context is needed"),
-      token_budget: z.number().optional().describe("Maximum tokens for the assembled context"),
+      token_budget: zNum().describe("Maximum tokens for the assembled context"),
     },
     handler: (args) => assembleContext(args.repo as string, args.query as string, args.token_budget as number | undefined),
   },
@@ -286,7 +289,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       focus: z.string().optional().describe("Focus on a specific module or directory"),
-      depth: z.number().optional().describe("Maximum depth of the dependency graph"),
+      depth: zNum().describe("Maximum depth of the dependency graph"),
     },
     handler: (args) => getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined),
   },
@@ -365,8 +368,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      top_n: z.number().optional().describe("Return top N most complex functions (default: 30)"),
-      min_complexity: z.number().optional().describe("Minimum cyclomatic complexity to include (default: 1)"),
+      top_n: zNum().describe("Return top N most complex functions (default: 30)"),
+      min_complexity: zNum().describe("Minimum cyclomatic complexity to include (default: 1)"),
       include_tests: z.boolean().optional().describe("Include test files (default: false)"),
     },
     handler: (args) => analyzeComplexity(args.repo as string, {
@@ -382,8 +385,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      min_similarity: z.number().optional().describe("Minimum similarity threshold 0-1 (default: 0.7)"),
-      min_lines: z.number().optional().describe("Minimum normalized lines to consider (default: 10)"),
+      min_similarity: zNum().describe("Minimum similarity threshold 0-1 (default: 0.7)"),
+      min_lines: zNum().describe("Minimum normalized lines to consider (default: 10)"),
       include_tests: z.boolean().optional().describe("Include test files (default: false)"),
     },
     handler: (args) => findClones(args.repo as string, {
@@ -398,8 +401,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Analyze git churn hotspots: files with high change frequency × complexity. Higher hotspot_score = more likely to contain bugs. Uses git log --numstat.",
     schema: {
       repo: z.string().describe("Repository identifier"),
-      since_days: z.number().optional().describe("Look back N days (default: 90)"),
-      top_n: z.number().optional().describe("Return top N hotspots (default: 30)"),
+      since_days: zNum().describe("Look back N days (default: 90)"),
+      top_n: zNum().describe("Return top N hotspots (default: 30)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
     },
     handler: (args) => analyzeHotspots(args.repo as string, {
@@ -417,7 +420,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Symbol search query"),
       repo_pattern: z.string().optional().describe("Filter repos by name pattern (e.g. 'local/tgm')"),
       kind: z.string().optional().describe("Filter by symbol kind"),
-      top_k: z.number().optional().describe("Max results per repo (default: 10)"),
+      top_k: zNum().describe("Max results per repo (default: 10)"),
       include_source: z.boolean().optional().describe("Include source code"),
     },
     handler: (args) => crossRepoSearchSymbols(args.query as string, {
@@ -450,7 +453,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       pattern: z.string().describe("Built-in pattern name or custom regex"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: z.boolean().optional().describe("Include test files (default: false)"),
-      max_results: z.number().optional().describe("Max results (default: 50)"),
+      max_results: zNum().describe("Max results (default: 50)"),
     },
     handler: (args) => searchPatterns(args.repo as string, args.pattern as string, {
       file_pattern: args.file_pattern as string | undefined,
