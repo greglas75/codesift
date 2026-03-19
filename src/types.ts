@@ -45,6 +45,7 @@ export interface FileEntry {
   language: string;
   symbol_count: number;
   last_modified: number; // unix ms
+  mtime_ms?: number;    // filesystem mtime (ms) — for incremental skip
 }
 
 export interface CodeIndex {

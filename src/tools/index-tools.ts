@@ -38,6 +38,7 @@ async function parseOneFile(
   repoName: string,
 ): Promise<{ symbols: CodeSymbol[]; entry: FileEntry } | null> {
   try {
+    const stat = await import("node:fs/promises").then((fs) => fs.stat(filePath));
     const source = await readFile(filePath, "utf-8");
     const relPath = relative(repoRoot, filePath);
     const ext = extname(filePath);
@@ -60,6 +61,7 @@ async function parseOneFile(
       language,
       symbol_count: symbols.length,
       last_modified: Date.now(),
+      mtime_ms: Math.round(stat.mtimeMs),
     };
 
     return { symbols, entry };
@@ -231,28 +233,55 @@ export async function indexFolder(
   const repoName = getRepoName(rootPath);
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
-  // Check for incremental update
-  if (options?.incremental) {
-    const existing = await loadIndex(indexPath);
-    if (existing) {
-      return {
-        repo: repoName,
-        root: rootPath,
-        file_count: existing.file_count,
-        symbol_count: existing.symbol_count,
-        duration_ms: Date.now() - startTime,
-      };
-    }
-  }
-
   // Walk directory and collect parseable files
   const files = await walkDirectory(rootPath, {
     includePaths: options?.include_paths,
     fileFilter: (ext) => !!getLanguageForExtension(ext),
   });
 
-  // Parse all files and extract symbols
-  const { symbols, fileEntries } = await parseFiles(files, rootPath, repoName);
+  // mtime-based incremental: skip files unchanged since last index
+  const existing = await loadIndex(indexPath);
+  const mtimeMap = new Map<string, number>();
+  if (existing) {
+    for (const f of existing.files) {
+      if (f.mtime_ms) mtimeMap.set(f.path, f.mtime_ms);
+    }
+  }
+
+  const filesToParse: string[] = [];
+  const keptSymbols: CodeSymbol[] = [];
+  const keptEntries: FileEntry[] = [];
+
+  if (mtimeMap.size > 0) {
+    const { stat } = await import("node:fs/promises");
+    for (const filePath of files) {
+      const relPath = relative(rootPath, filePath);
+      const prevMtime = mtimeMap.get(relPath);
+      if (prevMtime !== undefined) {
+        try {
+          const st = await stat(filePath);
+          if (Math.round(st.mtimeMs) === prevMtime) {
+            // File unchanged — keep existing symbols
+            const fileSymbols = existing!.symbols.filter((s) => s.file === relPath);
+            const fileEntry = existing!.files.find((f) => f.path === relPath);
+            if (fileEntry) {
+              keptSymbols.push(...fileSymbols);
+              keptEntries.push(fileEntry);
+              continue;
+            }
+          }
+        } catch { /* file may have been deleted — reparse */ }
+      }
+      filesToParse.push(filePath);
+    }
+  } else {
+    filesToParse.push(...files);
+  }
+
+  // Parse only changed/new files
+  const { symbols: parsedSymbols, fileEntries: parsedEntries } = await parseFiles(filesToParse, rootPath, repoName);
+  const symbols = [...keptSymbols, ...parsedSymbols];
+  const fileEntries = [...keptEntries, ...parsedEntries];
 
   // Build and cache BM25 index
   const bm25 = buildBM25Index(symbols);
