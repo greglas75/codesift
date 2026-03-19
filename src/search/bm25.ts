@@ -26,6 +26,8 @@ export interface BM25Index {
   docCount: number;
   /** Symbol lookup by ID */
   symbols: Map<string, CodeSymbol>;
+  /** Import centrality: file -> log-scaled importer count (for search ranking bonus) */
+  centrality: Map<string, number>;
 }
 
 /**
@@ -122,7 +124,36 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
     body: docCount > 0 ? totalFieldLengths.body / docCount : 0,
   };
 
-  return { fields, avgFieldLengths, docCount, symbols: symbolMap };
+  // Compute import centrality: count how many files import each file
+  // Heuristic: scan symbol source for import/require patterns pointing to files in the index
+  const importCount = new Map<string, number>();
+  const allFiles = new Set<string>();
+  for (const sym of symbols) allFiles.add(sym.file);
+
+  for (const sym of symbols) {
+    if (!sym.source) continue;
+    // Quick regex for import paths (captures relative paths)
+    const importRe = /from\s+['"]\.?\.\/([\w/.-]+)['"]/g;
+    let match: RegExpExecArray | null;
+    while ((match = importRe.exec(sym.source)) !== null) {
+      const imported = match[1]!;
+      // Try to match against known files
+      for (const file of allFiles) {
+        if (file.includes(imported)) {
+          importCount.set(file, (importCount.get(file) ?? 0) + 1);
+          break;
+        }
+      }
+    }
+  }
+
+  // Log-scale centrality: avoids a single highly-imported utility from dominating
+  const centrality = new Map<string, number>();
+  for (const [file, count] of importCount) {
+    centrality.set(file, Math.log2(1 + count));
+  }
+
+  return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality };
 }
 
 export function searchBM25(
@@ -201,12 +232,26 @@ export function searchBM25(
     }
   }
 
-  // Demote test file symbols so production code ranks above test helpers
+  // Centrality bonus: symbols in frequently-imported files get a tiebreaker
+  const maxCentrality = Math.max(1, ...index.centrality.values());
   for (const [symbolId, score] of scores) {
     const symbol = index.symbols.get(symbolId);
-    if (symbol && isTestFile(symbol.file)) {
-      scores.set(symbolId, score * TEST_FILE_SCORE_MULTIPLIER);
+    if (!symbol) continue;
+
+    let adjusted = score;
+
+    // Centrality: 0-10% bonus scaled by file import popularity
+    const fileCentrality = index.centrality.get(symbol.file) ?? 0;
+    if (fileCentrality > 0) {
+      adjusted += score * 0.1 * (fileCentrality / maxCentrality);
     }
+
+    // Demote test file symbols so production code ranks above test helpers
+    if (isTestFile(symbol.file)) {
+      adjusted *= TEST_FILE_SCORE_MULTIPLIER;
+    }
+
+    scores.set(symbolId, adjusted);
   }
 
   // Sort by score descending, take top-K
