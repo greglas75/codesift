@@ -88,7 +88,7 @@ describe("index_repo integration", () => {
     await indexRepo(url);
 
     const repos = await listAllRepos();
-    expect(repos.some((r) => r.name === "local/bare-repo")).toBe(true);
+    expect(repos.some((r) => (typeof r === "string" ? r : r.name) === "local/bare-repo")).toBe(true);
   });
 
   it("re-indexes an already-cloned repo without error", async () => {

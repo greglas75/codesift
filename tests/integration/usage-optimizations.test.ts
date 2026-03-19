@@ -362,21 +362,17 @@ describe("OPT-2b: list_repos compact response", () => {
     expect(full[0]).toHaveProperty("updated_at");
   });
 
-  it("OPTIMIZATION: compact list_repos returns only name + counts", async () => {
+  it("OPTIMIZATION: compact list_repos returns only repo names", async () => {
     await indexLargeFixture();
 
     const compact = await listAllRepos({ compact: true });
     const compactTokens = estimateTokens(compact);
 
-    console.log(`[OPT-2b OPTIMIZED] compact response: ${compactTokens} tok, fields: ${Object.keys(compact[0]!).join(",")}`);
+    console.log(`[OPT-2b OPTIMIZED] compact response: ${compactTokens} tok`);
 
-    // Compact should NOT include internal fields
-    expect(compact[0]).toHaveProperty("name");
-    expect(compact[0]).toHaveProperty("file_count");
-    expect(compact[0]).toHaveProperty("symbol_count");
-    expect(compact[0]).not.toHaveProperty("index_path");
-    expect(compact[0]).not.toHaveProperty("root");
-    expect(compact[0]).not.toHaveProperty("updated_at");
+    // Compact returns string[] — just repo names
+    expect(typeof compact[0]).toBe("string");
+    expect(compact[0]).toContain("local/");
   });
 
   it("OPTIMIZATION: compact mode is default and saves tokens", async () => {

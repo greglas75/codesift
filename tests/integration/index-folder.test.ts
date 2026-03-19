@@ -144,7 +144,7 @@ describe("index_folder integration", () => {
 
     const repos = await listAllRepos();
     expect(repos.length).toBeGreaterThan(0);
-    expect(repos.some((r) => r.name === "local/test-project")).toBe(true);
+    expect(repos.some((r) => (typeof r === "string" ? r : r.name) === "local/test-project")).toBe(true);
   });
 
   it("invalidateCache removes the index", async () => {

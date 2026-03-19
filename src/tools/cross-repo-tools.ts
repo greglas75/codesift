@@ -36,7 +36,7 @@ async function searchAcrossRepos<T>(
   searchFn: (repoName: string) => Promise<T[]>,
 ): Promise<{ results: Array<{ repo: string; items: T[] }>; errors: Array<{ repo: string; error: string }>; reposSearched: number }> {
   const repos = await listAllRepos({ compact: false });
-  const repoList = Array.isArray(repos) ? repos : [];
+  const repoList = (Array.isArray(repos) ? repos : []) as Array<{ name: string }>;
 
   const filtered = repoPattern
     ? repoList.filter((r) => r.name.includes(repoPattern))

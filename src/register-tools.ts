@@ -64,9 +64,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "list_repos",
-    description: "List all indexed repositories with metadata. Returns compact format (name + counts) by default. Set compact=false for full paths.",
+    description: "List all indexed repository names. Returns just names by default. Set compact=false for full metadata (paths, counts).",
     schema: {
-      compact: z.boolean().optional().describe("Return compact format with just name and counts (default: true). Set false to include root path and index_path."),
+      compact: z.boolean().optional().describe("Return just repo names (default: true). Set false for full metadata including root path, index_path, file/symbol counts."),
     },
     handler: (args) => listAllRepos({ compact: (args.compact as boolean | undefined) ?? true }),
   },

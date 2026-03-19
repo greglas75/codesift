@@ -7,8 +7,9 @@ import type { CodeSymbol, CodeIndex, AffectedTest, RiskScore, ImpactResult } fro
 import type { AdjacencyIndex } from "./graph-tools.js";
 
 const DEFAULT_IMPACT_DEPTH = 2;
-const MAX_AFFECTED_SYMBOLS = 200;
+const MAX_AFFECTED_SYMBOLS = 100;
 const MAX_DEPENDENCY_GRAPH_FILES = 100;
+const MAX_SOURCE_CHARS = 300; // Truncate source in impact results
 
 /**
  * Find all callers of the given symbols, recursing up to depth levels.
@@ -189,7 +190,9 @@ export async function impactAnalysis(
   return {
     changed_files: changedFiles,
     affected_symbols: includeSource
-      ? affectedSymbols
+      ? affectedSymbols.map((s) => s.source && s.source.length > MAX_SOURCE_CHARS
+          ? { ...s, source: s.source.slice(0, MAX_SOURCE_CHARS) + "..." }
+          : s)
       : affectedSymbols.map(stripSource),
     affected_tests: affectedTests,
     risk_scores: riskScores,

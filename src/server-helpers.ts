@@ -10,7 +10,8 @@ export const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response
 
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
 const SEQUENTIAL_HINT_THRESHOLD = 3;
-const CACHE_TTL_MS = 30_000; // 30s — cache identical calls within this window
+const CACHE_TTL_MS = 30_000; // 30s default for search results
+const CACHE_TTL_STATIC_MS = 300_000; // 5min for static data (list_repos)
 const CACHE_MAX_SIZE = 50;
 
 // ---------------------------------------------------------------------------
@@ -41,10 +42,14 @@ function getCacheKey(toolName: string, args: Record<string, unknown>): string {
   return `${toolName}\0${JSON.stringify(args, Object.keys(args).sort())}`;
 }
 
+const STATIC_TOOLS = new Set(["list_repos", "get_repo_outline"]);
+
 function getCached(key: string): string | null {
   const entry = responseCache.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+  const toolName = key.split("\0")[0] ?? "";
+  const ttl = STATIC_TOOLS.has(toolName) ? CACHE_TTL_STATIC_MS : CACHE_TTL_MS;
+  if (Date.now() - entry.ts > ttl) {
     responseCache.delete(key);
     return null;
   }

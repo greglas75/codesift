@@ -464,16 +464,12 @@ export interface RepoSummary {
   symbol_count: number;
 }
 
-export async function listAllRepos(options?: { compact?: boolean }): Promise<RepoMeta[] | RepoSummary[]> {
+export async function listAllRepos(options?: { compact?: boolean }): Promise<RepoMeta[] | RepoSummary[] | string[]> {
   const config = loadConfig();
   const repos = await listRegistryRepos(config.registryPath);
   if (options?.compact === false) return repos;
-  // Default: compact — return only what agents need (name + counts)
-  return repos.map((r) => ({
-    name: r.name,
-    file_count: r.file_count,
-    symbol_count: r.symbol_count,
-  }));
+  // Default: ultra-compact — just repo names (agents only need the identifier)
+  return repos.map((r) => r.name);
 }
 
 export async function invalidateCache(repoName: string): Promise<boolean> {
