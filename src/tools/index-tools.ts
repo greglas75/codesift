@@ -503,16 +503,10 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
 }
 
 /**
- * Ensure watcher is running for a repo (lazy start on first access after restart).
+ * Lazy-start watcher only for repos the agent actively indexes.
+ * DO NOT auto-start watchers on read — 44 watchers × 1000s of files = EMFILE crash.
+ * Watchers start only via indexFolder (explicit user action).
  */
-async function ensureWatcher(repoName: string, meta: { root: string; index_path: string }): Promise<void> {
-  if (activeWatchers.has(repoName)) return;
-  try {
-    await setupWatcher(meta.root, repoName, meta.index_path);
-  } catch {
-    // Watcher failure is non-fatal — index still works, just won't auto-update
-  }
-}
 
 /**
  * Get the in-memory BM25 index for a repo.
@@ -531,10 +525,6 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
 
   const bm25 = buildBM25Index(index.symbols);
   bm25Indexes.set(repoName, bm25);
-
-  // Lazy-start watcher after restart so file changes are picked up
-  await ensureWatcher(repoName, meta);
-
   return bm25;
 }
 
@@ -546,9 +536,6 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
   const config = loadConfig();
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return null;
-
-  // Lazy-start watcher so file changes are picked up
-  await ensureWatcher(repoName, meta);
 
   return loadIndex(meta.index_path);
 }
