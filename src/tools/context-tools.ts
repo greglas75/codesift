@@ -4,10 +4,41 @@ import { loadConfig } from "../config.js";
 import { collectImportEdges } from "../utils/import-graph.js";
 import type { CodeSymbol, CodeIndex } from "../types.js";
 
+export type ContextLevel = "L0" | "L1" | "L2" | "L3";
+
+interface SymbolCompact {
+  id: string;
+  name: string;
+  kind: string;
+  file: string;
+  start_line: number;
+  signature?: string;
+  docstring?: string;
+}
+
+interface FileSummary {
+  path: string;
+  language: string;
+  exports: string[];
+  symbol_count: number;
+}
+
+interface DirectoryOverview {
+  path: string;
+  file_count: number;
+  symbol_count: number;
+  top_files: string[];
+}
+
 export interface AssembleContextResult {
-  symbols: CodeSymbol[];
+  symbols?: CodeSymbol[];
+  compact_symbols?: SymbolCompact[];
+  file_summaries?: FileSummary[];
+  directory_overview?: DirectoryOverview[];
+  level: ContextLevel;
   total_tokens: number;
   truncated: boolean;
+  result_count: number;
 }
 
 export interface KnowledgeMapModule {
@@ -40,14 +71,37 @@ function estimateTokens(source: string): number {
 }
 
 /**
+ * Compress a symbol to L1 format (signatures only, no source).
+ */
+function toCompact(sym: CodeSymbol): SymbolCompact {
+  const c: SymbolCompact = {
+    id: sym.id,
+    name: sym.name,
+    kind: sym.kind,
+    file: sym.file,
+    start_line: sym.start_line,
+  };
+  if (sym.signature) c.signature = sym.signature;
+  if (sym.docstring) c.docstring = sym.docstring;
+  return c;
+}
+
+/**
  * Assemble a context window of relevant code for a query.
  * Uses BM25 search to find the most relevant symbols and accumulates
  * them until the token budget is reached.
+ *
+ * Levels:
+ *   L0 = full source (default)
+ *   L1 = signatures + docstrings only (~5-10x more symbols per budget)
+ *   L2 = file-level summaries (export lists)
+ *   L3 = directory overview (file counts + top files)
  */
 export async function assembleContext(
   repo: string,
   query: string,
   tokenBudget?: number,
+  level?: ContextLevel,
 ): Promise<AssembleContextResult> {
   const bm25Index = await getBM25Index(repo);
   if (!bm25Index) {
@@ -56,28 +110,113 @@ export async function assembleContext(
 
   const config = loadConfig();
   const budget = tokenBudget ?? config.defaultTokenBudget;
-  const topK = 20;
+  const lvl = level ?? "L0";
 
+  // Search wider for compressed levels (more results fit in budget)
+  const topK = lvl === "L0" ? 20 : lvl === "L1" ? 100 : 200;
   const results = searchBM25(bm25Index, query, topK, config.bm25FieldWeights);
 
-  const symbols: CodeSymbol[] = [];
+  if (lvl === "L0") {
+    // Full source — current behavior
+    const symbols: CodeSymbol[] = [];
+    let totalTokens = 0;
+    let truncated = false;
+
+    for (const result of results) {
+      const source = result.symbol.source ?? "";
+      const tokens = estimateTokens(source);
+      if (totalTokens + tokens > budget) { truncated = true; break; }
+      symbols.push(result.symbol);
+      totalTokens += tokens;
+    }
+
+    return { symbols, level: lvl, total_tokens: totalTokens, truncated, result_count: symbols.length };
+  }
+
+  if (lvl === "L1") {
+    // Signatures only — 5-10x denser
+    const compact: SymbolCompact[] = [];
+    let totalTokens = 0;
+    let truncated = false;
+
+    for (const result of results) {
+      const c = toCompact(result.symbol);
+      const tokens = estimateTokens(JSON.stringify(c));
+      if (totalTokens + tokens > budget) { truncated = true; break; }
+      compact.push(c);
+      totalTokens += tokens;
+    }
+
+    return { compact_symbols: compact, level: lvl, total_tokens: totalTokens, truncated, result_count: compact.length };
+  }
+
+  if (lvl === "L2") {
+    // File-level summaries
+    const fileMap = new Map<string, { lang: string; exports: string[]; count: number }>();
+    for (const result of results) {
+      const sym = result.symbol;
+      let entry = fileMap.get(sym.file);
+      if (!entry) {
+        entry = { lang: "unknown", exports: [], count: 0 };
+        fileMap.set(sym.file, entry);
+      }
+      entry.exports.push(`${sym.name}(${sym.kind})`);
+      entry.count++;
+    }
+
+    // Enrich with language from index
+    const codeIndex = await getCodeIndex(repo);
+    if (codeIndex) {
+      for (const f of codeIndex.files) {
+        const entry = fileMap.get(f.path);
+        if (entry) entry.lang = f.language;
+      }
+    }
+
+    const summaries: FileSummary[] = [];
+    let totalTokens = 0;
+    let truncated = false;
+
+    for (const [path, entry] of fileMap) {
+      const summary: FileSummary = { path, language: entry.lang, exports: entry.exports, symbol_count: entry.count };
+      const tokens = estimateTokens(JSON.stringify(summary));
+      if (totalTokens + tokens > budget) { truncated = true; break; }
+      summaries.push(summary);
+      totalTokens += tokens;
+    }
+
+    return { file_summaries: summaries, level: lvl, total_tokens: totalTokens, truncated, result_count: summaries.length };
+  }
+
+  // L3 — Directory overview
+  const dirMap = new Map<string, { files: Set<string>; symbols: number }>();
+  for (const result of results) {
+    const file = result.symbol.file;
+    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : ".";
+    let entry = dirMap.get(dir);
+    if (!entry) { entry = { files: new Set(), symbols: 0 }; dirMap.set(dir, entry); }
+    entry.files.add(file);
+    entry.symbols++;
+  }
+
+  const overviews: DirectoryOverview[] = [];
   let totalTokens = 0;
   let truncated = false;
 
-  for (const result of results) {
-    const source = result.symbol.source ?? "";
-    const tokens = estimateTokens(source);
-
-    if (totalTokens + tokens > budget) {
-      truncated = true;
-      break;
-    }
-
-    symbols.push(result.symbol);
+  for (const [path, entry] of [...dirMap.entries()].sort((a, b) => b[1].symbols - a[1].symbols)) {
+    const overview: DirectoryOverview = {
+      path,
+      file_count: entry.files.size,
+      symbol_count: entry.symbols,
+      top_files: [...entry.files].slice(0, 3),
+    };
+    const tokens = estimateTokens(JSON.stringify(overview));
+    if (totalTokens + tokens > budget) { truncated = true; break; }
+    overviews.push(overview);
     totalTokens += tokens;
   }
 
-  return { symbols, total_tokens: totalTokens, truncated };
+  return { directory_overview: overviews, level: "L3", total_tokens: totalTokens, truncated, result_count: overviews.length };
 }
 
 // Import graph utilities moved to src/utils/import-graph.ts

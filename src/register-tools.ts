@@ -1,9 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { wrapTool } from "./server-helpers.js";
-
-/** Coerce string→number for numeric params (LLMs sometimes send "2" instead of 2) */
-const zNum = () => z.union([z.number(), z.string().transform(Number)]).optional();
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
@@ -21,6 +18,19 @@ import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-r
 import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import type { SymbolKind, Direction } from "./types.js";
+
+const zFiniteNumber = z.number().finite();
+
+/** Coerce string→number for numeric params while rejecting NaN/empty strings. */
+export const zNum = () =>
+  z.union([
+    zFiniteNumber,
+    z.string()
+      .trim()
+      .min(1, "Expected a number")
+      .transform((value) => Number(value))
+      .pipe(zFiniteNumber),
+  ]).optional();
 
 // ---------------------------------------------------------------------------
 // Tool definition type
@@ -275,13 +285,19 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   // --- Context & knowledge ---
   {
     name: "assemble_context",
-    description: "Assemble a focused code context for a query within a token budget",
+    description: "Assemble a focused code context for a query within a token budget. Use level to control density: L0=full source, L1=signatures only (5-10x denser), L2=file summaries, L3=directory overview.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Natural language query describing what context is needed"),
       token_budget: zNum().describe("Maximum tokens for the assembled context"),
+      level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("Context compression level: L0=full source (default), L1=signatures only, L2=file summaries, L3=directory overview"),
     },
-    handler: (args) => assembleContext(args.repo as string, args.query as string, args.token_budget as number | undefined),
+    handler: (args) => assembleContext(
+      args.repo as string,
+      args.query as string,
+      args.token_budget as number | undefined,
+      args.level as "L0" | "L1" | "L2" | "L3" | undefined,
+    ),
   },
   {
     name: "get_knowledge_map",
@@ -339,7 +355,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           z.string().transform((s) => JSON.parse(s) as Array<{ type: string } & Record<string, unknown>>),
         ])
         .describe("Array of sub-queries (symbols, text, file_tree, outline, references, call_chain, impact, context, knowledge_map). Can be passed as JSON string."),
-      token_budget: z.union([z.number(), z.string().transform(Number)]).optional().describe("Maximum total tokens across all sub-query results"),
+      token_budget: zNum().describe("Maximum total tokens across all sub-query results"),
     },
     handler: (args) => codebaseRetrieval(
       args.repo as string,
