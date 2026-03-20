@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 33 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 35 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -94,8 +94,10 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 |---------|-------------|
 | `codesift trace <repo> <name>` | Trace call chain (callers/callees). Supports `--format mermaid` for flowchart output. |
 | `codesift impact <repo> --since <ref>` | Blast radius of git changes + affected tests + risk scores per file |
-| `codesift context <repo> <query>` | Assemble relevant code context |
+| `codesift context <repo> <query>` | Assemble relevant code context. Supports `--level L0\|L1\|L2\|L3` for compression. |
 | `codesift knowledge-map <repo>` | Module dependency map with circular dependency detection |
+| `codesift trace-route <repo> <path>` | Trace HTTP route → handler → service → DB calls (NestJS/Next.js/Express) |
+| `codesift communities <repo>` | Louvain community detection — discover code clusters from import graph |
 
 ### Code analysis
 
@@ -130,18 +132,18 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (33 total)
+## MCP tools (35 total)
 
 When running as an MCP server, CodeSift exposes these tools:
 
 | Category | Tools |
 |----------|-------|
-| **Indexing** | `index_folder`, `index_repo`, `index_file`, `list_repos`, `invalidate_cache` |
-| **Search** | `search_symbols` (detail_level, token_budget), `search_text` (auto_group, group_by_file) |
+| **Indexing** | `index_folder` (mtime skip, dirty propagation), `index_repo`, `index_file` (single-file reindex, 9ms), `list_repos`, `invalidate_cache` |
+| **Search** | `search_symbols` (detail_level: compact/standard/full, token_budget), `search_text` (auto_group, group_by_file) |
 | **Outline** | `get_file_tree`, `get_file_outline`, `get_repo_outline`, `suggest_queries` |
 | **Symbol retrieval** | `get_symbol`, `get_symbols`, `find_and_show`, `get_context_bundle` |
-| **References & graph** | `find_references`, `trace_call_chain`, `impact_analysis` |
-| **Context & knowledge** | `assemble_context`, `get_knowledge_map` |
+| **References & graph** | `find_references`, `trace_call_chain`, `impact_analysis`, `trace_route` (HTTP route → handler → DB) |
+| **Context & knowledge** | `assemble_context` (level: L0/L1/L2/L3), `get_knowledge_map`, `detect_communities` (Louvain) |
 | **Diff** | `diff_outline`, `changed_symbols` |
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget) |
 | **Analysis** | `find_dead_code`, `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns`, `list_patterns` |
@@ -163,6 +165,9 @@ When running as an MCP server, CodeSift exposes these tools:
 | Anti-pattern search | `codesift patterns` | 8 built-in CQ patterns + custom regex |
 | Explore new codebase | `codesift suggest-queries` | Instant overview: top files, kind distribution, example queries |
 | Re-index after edit | `index_file` | 9ms skip / 153ms reparse vs 3-8s full folder |
+| Trace HTTP route | `trace_route` | URL → handler → service → DB calls in one call |
+| Discover code modules | `detect_communities` | Louvain clustering finds architectural boundaries |
+| Dense context (5-10x) | `assemble_context --level L1` | Signatures only — fits 56 symbols where L0 fits 19 |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 

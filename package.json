@@ -1,7 +1,7 @@
 {
   "name": "codesift-mcp",
   "version": "0.1.0",
-  "description": "MCP server for code intelligence — 33 tools for symbol search, call graph analysis, and semantic code retrieval",
+  "description": "MCP server for code intelligence — 35 tools for symbol search, call graph analysis, semantic code retrieval, route tracing, and community detection",
   "license": "MIT",
   "author": "Greg Laskowski",
   "type": "module",
