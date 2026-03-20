@@ -8,6 +8,7 @@ import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getCo
 import { traceCallChain } from "./tools/graph-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
+import { detectCommunities } from "./tools/community-tools.js";
 import { assembleContext, getKnowledgeMap } from "./tools/context-tools.js";
 import { diffOutline, changedSymbols } from "./tools/diff-tools.js";
 import { generateClaudeMd } from "./tools/generate-tools.js";
@@ -291,6 +292,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
     },
     handler: (args) => traceRoute(args.repo as string, args.path as string),
+  },
+
+  {
+    name: "detect_communities",
+    description: "Detect code clusters/modules using Louvain community detection on the import graph. Discovers hidden architectural boundaries. Use focus to narrow scope.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      focus: z.string().optional().describe("Path substring to filter files (e.g. 'src/lib')"),
+      resolution: zNum().describe("Louvain resolution: higher = more smaller communities, lower = fewer larger (default: 1.0)"),
+    },
+    handler: (args) => detectCommunities(
+      args.repo as string,
+      args.focus as string | undefined,
+      args.resolution as number | undefined,
+    ),
   },
 
   // --- Context & knowledge ---
