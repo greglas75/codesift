@@ -1,6 +1,7 @@
 import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
 import { join, relative, extname, resolve, basename } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
@@ -100,6 +101,76 @@ async function parseFiles(
   }
 
   return { symbols: allSymbols, fileEntries };
+}
+
+// ---------------------------------------------------------------------------
+// Dirty propagation — mark caller files stale when a callee signature changes
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute a hash of a symbol's public interface (name + kind + signature).
+ * Body changes don't trigger propagation — only signature changes.
+ */
+function computeSignatureHash(sym: CodeSymbol): string {
+  const key = `${sym.name}|${sym.kind}|${sym.signature ?? ""}`;
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
+/**
+ * Detect signature changes and mark caller files as stale.
+ * Returns the set of files marked stale.
+ */
+function propagateDirtySignatures(
+  oldSymbols: CodeSymbol[],
+  newSymbols: CodeSymbol[],
+  fileEntries: FileEntry[],
+): Set<string> {
+  // Build old signature hashes
+  const oldHashes = new Map<string, string>();
+  for (const sym of oldSymbols) {
+    oldHashes.set(sym.id, computeSignatureHash(sym));
+  }
+
+  // Find symbols with changed signatures
+  const changedSymbolFiles = new Set<string>();
+  for (const sym of newSymbols) {
+    const oldHash = oldHashes.get(sym.id);
+    if (oldHash && oldHash !== computeSignatureHash(sym)) {
+      changedSymbolFiles.add(sym.file);
+    }
+  }
+
+  if (changedSymbolFiles.size === 0) return new Set();
+
+  // Find files that import from changed files (1 level of callers)
+  // Use a simple heuristic: check if any symbol source mentions a changed file's name
+  const changedBasenames = new Set<string>();
+  for (const f of changedSymbolFiles) {
+    const base = f.split("/").pop()?.replace(/\.\w+$/, "");
+    if (base) changedBasenames.add(base);
+  }
+
+  const staleFiles = new Set<string>();
+  for (const sym of newSymbols) {
+    if (changedSymbolFiles.has(sym.file)) continue; // Don't mark the changed file itself
+    if (!sym.source) continue;
+    for (const base of changedBasenames) {
+      if (sym.source.includes(base)) {
+        staleFiles.add(sym.file);
+        break;
+      }
+    }
+  }
+
+  // Mark stale in file entries (clear mtime so next index re-parses them)
+  for (const entry of fileEntries) {
+    if (staleFiles.has(entry.path)) {
+      entry.stale = true;
+      delete entry.mtime_ms; // Force re-parse on next indexFolder
+    }
+  }
+
+  return staleFiles;
 }
 
 /**
@@ -260,12 +331,17 @@ export async function indexFolder(
       const relPath = relative(rootPath, filePath);
       const prevMtime = mtimeMap.get(relPath);
       if (prevMtime !== undefined) {
+        const fileEntry = existing!.files.find((f) => f.path === relPath);
+        // Force re-parse if file is marked stale (callee signature changed)
+        if (fileEntry?.stale) {
+          filesToParse.push(filePath);
+          continue;
+        }
         try {
           const st = await stat(filePath);
           if (Math.round(st.mtimeMs) === prevMtime) {
             // File unchanged — keep existing symbols
             const fileSymbols = existing!.symbols.filter((s) => s.file === relPath);
-            const fileEntry = existing!.files.find((f) => f.path === relPath);
             if (fileEntry) {
               keptSymbols.push(...fileSymbols);
               keptEntries.push(fileEntry);
@@ -284,6 +360,14 @@ export async function indexFolder(
   const { symbols: parsedSymbols, fileEntries: parsedEntries } = await parseFiles(filesToParse, rootPath, repoName);
   const symbols = [...keptSymbols, ...parsedSymbols];
   const fileEntries = [...keptEntries, ...parsedEntries];
+
+  // Dirty propagation: detect signature changes and mark caller files stale
+  if (existing && filesToParse.length > 0 && filesToParse.length < files.length) {
+    const staleFiles = propagateDirtySignatures(existing.symbols, symbols, fileEntries);
+    if (staleFiles.size > 0) {
+      console.error(`[codesift] Dirty propagation: ${staleFiles.size} caller files marked stale`);
+    }
+  }
 
   // Build and cache BM25 index
   const bm25 = buildBM25Index(symbols);

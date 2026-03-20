@@ -46,6 +46,7 @@ export interface FileEntry {
   symbol_count: number;
   last_modified: number; // unix ms
   mtime_ms?: number;    // filesystem mtime (ms) — for incremental skip
+  stale?: boolean;      // dirty propagation: callee signature changed, re-parse needed
 }
 
 export interface CodeIndex {
