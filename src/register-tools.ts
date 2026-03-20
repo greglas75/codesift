@@ -7,6 +7,7 @@ import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./t
 import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
+import { traceRoute } from "./tools/route-tools.js";
 import { assembleContext, getKnowledgeMap } from "./tools/context-tools.js";
 import { diffOutline, changedSymbols } from "./tools/diff-tools.js";
 import { generateClaudeMd } from "./tools/generate-tools.js";
@@ -280,6 +281,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       until: args.until as string | undefined,
       include_source: args.include_source as boolean | undefined,
     }),
+  },
+
+  {
+    name: "trace_route",
+    description: "Trace an HTTP route: find handler function, trace to service calls, identify DB operations. Supports NestJS decorators, Next.js App Router, and Express patterns.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
+    },
+    handler: (args) => traceRoute(args.repo as string, args.path as string),
   },
 
   // --- Context & knowledge ---

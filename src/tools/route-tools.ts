@@ -1,0 +1,252 @@
+/**
+ * HTTP route tracing — given a URL path, find handler → service → DB calls.
+ * Supports NestJS decorators, Next.js App Router, and Express patterns.
+ */
+import { getCodeIndex } from "./index-tools.js";
+import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
+import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
+
+const DB_PATTERNS = [
+  /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
+  /\.\$(transaction|queryRaw|executeRaw)/,
+  /getRepository|\.query\(|\.execute\(/,
+  /knex\.|\.raw\(/,
+];
+
+interface RouteHandler {
+  symbol: ReturnType<typeof stripSource>;
+  file: string;
+  method?: string;
+  framework: "nestjs" | "nextjs" | "express" | "unknown";
+}
+
+interface DbCall {
+  symbol_name: string;
+  file: string;
+  line: number;
+  operation: string;
+}
+
+export interface RouteTraceResult {
+  path: string;
+  handlers: RouteHandler[];
+  call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
+  db_calls: DbCall[];
+}
+
+/**
+ * Match a URL path pattern against a route definition.
+ * Handles :param, [param], [...param], [[...param]] as wildcards.
+ */
+function matchPath(routePath: string, searchPath: string): boolean {
+  const normalize = (p: string) => p.replace(/^\/|\/$/g, "").toLowerCase();
+  const routeParts = normalize(routePath).split("/");
+  const searchParts = normalize(searchPath).split("/");
+
+  if (routeParts.length !== searchParts.length) return false;
+
+  for (let i = 0; i < routeParts.length; i++) {
+    const rp = routeParts[i]!;
+    const sp = searchParts[i]!;
+    // Dynamic segments: :id, [id], [...slug], [[...slug]]
+    if (rp.startsWith(":") || rp.startsWith("[")) continue;
+    if (rp !== sp) return false;
+  }
+  return true;
+}
+
+/**
+ * Find NestJS route handlers via @Controller + @Get/@Post/etc. decorators.
+ * Reads raw file content because tree-sitter symbol source may not include decorators.
+ */
+async function findNestJSHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const methods = ["Get", "Post", "Put", "Delete", "Patch"];
+
+  // Find controller files
+  const controllerFiles = index.files.filter((f) =>
+    f.path.endsWith(".controller.ts") || f.path.endsWith(".controller.js"),
+  );
+
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  for (const file of controllerFiles) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch { continue; }
+
+    // Extract controller prefix
+    const ctrlMatch = /@Controller\s*\(\s*['"`]([^'"`]*)['"`]/.exec(source);
+    const controllerPrefix = ctrlMatch?.[1] ?? "";
+
+    for (const method of methods) {
+      const re = new RegExp(`@${method}\\s*\\(\\s*['"\`]([^'"\`]*)['"\`]\\s*\\)\\s*\\n\\s*(?:async\\s+)?(\\w+)`, "g");
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(source)) !== null) {
+        const routePath = match[1] ?? "";
+        const funcName = match[2] ?? "";
+
+        const fullPath = `/${controllerPrefix}/${routePath}`.replace(/\/+/g, "/");
+        if (matchPath(fullPath, searchPath)) {
+          const sym = index.symbols.find((s) => s.file === file.path && s.name === funcName);
+          handlers.push({
+            symbol: sym ? stripSource(sym) : { id: `${file.path}:${funcName}`, name: funcName, kind: "method", file: file.path, start_line: 1, end_line: 1 } as ReturnType<typeof stripSource>,
+            file: file.path,
+            method: method.toUpperCase(),
+            framework: "nestjs",
+          });
+        }
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Next.js App Router handlers — file path IS the route.
+ */
+function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  const normalized = searchPath.replace(/^\/|\/$/g, "");
+
+  for (const file of index.files) {
+    // Match app/api/...route.ts or app/...route.ts
+    if (!file.path.endsWith("/route.ts") && !file.path.endsWith("/route.js")) continue;
+
+    // Extract route path from file path: app/api/users/[id]/route.ts → /api/users/[id]
+    const routeMatch = file.path.match(/app\/(.*?)\/route\.\w+$/);
+    if (!routeMatch) continue;
+
+    const filePath = routeMatch[1]!;
+    if (matchPath(filePath, normalized)) {
+      // Find exported handler functions (GET, POST, etc.)
+      const fileSymbols = index.symbols.filter((s) =>
+        s.file === file.path && /^(GET|POST|PUT|DELETE|PATCH)$/.test(s.name),
+      );
+
+      for (const sym of fileSymbols) {
+        handlers.push({
+          symbol: stripSource(sym),
+          file: sym.file,
+          method: sym.name,
+          framework: "nextjs",
+        });
+      }
+
+      // If no named exports found, add the file itself
+      if (fileSymbols.length === 0) {
+        handlers.push({
+          symbol: { id: file.path, name: "route", kind: "function", file: file.path, start_line: 1, end_line: 1 } as ReturnType<typeof stripSource>,
+          file: file.path,
+          framework: "nextjs",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Express-style route handlers via router.get/app.post patterns.
+ */
+function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  const methods = ["get", "post", "put", "delete", "patch"];
+
+  for (const sym of index.symbols) {
+    if (!sym.source) continue;
+
+    for (const method of methods) {
+      const re = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`);
+      const match = re.exec(sym.source);
+      if (!match) continue;
+
+      const routePath = match[2] ?? "";
+      if (matchPath(routePath, searchPath)) {
+        handlers.push({
+          symbol: stripSource(sym),
+          file: sym.file,
+          method: method.toUpperCase(),
+          framework: "express",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Detect DB operations in a symbol's call chain.
+ */
+function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
+  const calls: DbCall[] = [];
+  for (const sym of symbols) {
+    if (!sym.source) continue;
+    for (const pattern of DB_PATTERNS) {
+      const match = pattern.exec(sym.source);
+      if (match) {
+        calls.push({
+          symbol_name: sym.name,
+          file: sym.file,
+          line: sym.start_line,
+          operation: match[0],
+        });
+        break; // One match per symbol
+      }
+    }
+  }
+  return calls;
+}
+
+/**
+ * Trace an HTTP route: find handler, trace callees, identify DB calls.
+ */
+export async function traceRoute(
+  repo: string,
+  path: string,
+): Promise<RouteTraceResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  // Try all frameworks
+  const handlers = [
+    ...(await findNestJSHandlers(index, path)),
+    ...findNextJSHandlers(index, path),
+    ...findExpressHandlers(index, path),
+  ];
+
+  if (handlers.length === 0) {
+    return { path, handlers: [], call_chain: [], db_calls: [] };
+  }
+
+  // Trace callees from handler symbols
+  const adjacency = buildAdjacencyIndex(index.symbols, false);
+  const callChain: Array<{ name: string; file: string; kind: string; depth: number }> = [];
+  const allCalleeSymbols: CodeSymbol[] = [];
+
+  for (const handler of handlers) {
+    // Find the full symbol in index
+    const fullSym = index.symbols.find((s) => s.id === handler.symbol.id);
+    if (!fullSym) continue;
+
+    const tree = buildCallTree(fullSym, adjacency, "callees", 3);
+    // Flatten tree
+    function flatten(node: CallNode, depth: number): void {
+      callChain.push({ name: node.symbol.name, file: node.symbol.file, kind: node.symbol.kind, depth });
+      allCalleeSymbols.push(node.symbol);
+      for (const child of node.children) {
+        flatten(child, depth + 1);
+      }
+    }
+    flatten(tree, 0);
+  }
+
+  const dbCalls = findDbCalls(allCalleeSymbols);
+
+  return { path, handlers, call_chain: callChain, db_calls: dbCalls };
+}
