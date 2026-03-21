@@ -373,6 +373,24 @@ export async function indexFolder(
   const bm25 = buildBM25Index(symbols);
   bm25Indexes.set(repoName, bm25);
 
+  // Sanity check: don't overwrite a complete index with a partial one
+  // (WASM crash or walk failure can produce truncated results)
+  const DROP_THRESHOLD = 0.5; // Reject if new index has <50% of old file count
+  if (existing && fileEntries.length < existing.file_count * DROP_THRESHOLD && existing.file_count > 50) {
+    console.error(
+      `[codesift] SANITY CHECK FAILED for ${repoName}: ` +
+      `new index has ${fileEntries.length} files vs ${existing.file_count} previously. ` +
+      `Keeping old index. Use invalidate_cache + index_folder to force reindex.`,
+    );
+    return {
+      repo: repoName,
+      root: rootPath,
+      file_count: existing.file_count,
+      symbol_count: existing.symbol_count,
+      duration_ms: Date.now() - startTime,
+    };
+  }
+
   // Build and save code index
   const codeIndex: CodeIndex = {
     repo: repoName,
