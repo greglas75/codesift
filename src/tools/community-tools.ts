@@ -255,10 +255,14 @@ export async function detectCommunities(
       else if (fromIn || toIn) external++;
     }
 
+    const MAX_FILES_PER_COMMUNITY = 20;
+    const sortedFiles = communityFiles.sort();
     communities.push({
       id,
       name: nameCommunity(communityFiles, id),
-      files: communityFiles.sort(),
+      files: sortedFiles.length > MAX_FILES_PER_COMMUNITY
+        ? [...sortedFiles.slice(0, MAX_FILES_PER_COMMUNITY), `... +${sortedFiles.length - MAX_FILES_PER_COMMUNITY} more`]
+        : sortedFiles,
       symbol_count: communityFiles.reduce((sum, f) => sum + (symCountByFile.get(f) ?? 0), 0),
       internal_edges: internal,
       external_edges: external,

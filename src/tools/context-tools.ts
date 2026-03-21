@@ -425,18 +425,29 @@ function filterToFocus(
     frontier = nextFrontier;
   }
 
-  // Filter modules and edges to reachable set
-  const filteredModules: KnowledgeMapModule[] = [];
+  // Filter modules and edges to reachable set, with caps
+  const MAX_FOCUSED_MODULES = 200;
+  const MAX_FOCUSED_EDGES = 500;
+
+  let filteredModules: KnowledgeMapModule[] = [];
   for (const path of reachable) {
     const mod = moduleMap.get(path);
-    if (mod) {
-      filteredModules.push(mod);
-    }
+    if (mod) filteredModules.push(mod);
   }
 
-  const filteredEdges = edges.filter(
-    (e) => reachable.has(e.from) && reachable.has(e.to),
+  if (filteredModules.length > MAX_FOCUSED_MODULES) {
+    filteredModules = filteredModules
+      .sort((a, b) => b.symbol_count - a.symbol_count)
+      .slice(0, MAX_FOCUSED_MODULES);
+  }
+
+  const filteredModuleSet = new Set(filteredModules.map((m) => m.path));
+  let filteredEdges = edges.filter(
+    (e) => filteredModuleSet.has(e.from) && filteredModuleSet.has(e.to),
   );
+  if (filteredEdges.length > MAX_FOCUSED_EDGES) {
+    filteredEdges = filteredEdges.slice(0, MAX_FOCUSED_EDGES);
+  }
 
   // Filter circular deps to only those involving reachable modules
   const filteredCircular = circularDeps.filter(
