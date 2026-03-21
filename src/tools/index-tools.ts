@@ -386,9 +386,14 @@ export async function indexFolder(
   };
   await saveIndex(indexPath, codeIndex);
 
-  // Embed symbols and chunks (non-fatal if either fails)
-  await embedSymbols(symbols, indexPath, repoName, config);
-  await embedChunks(fileEntries, rootPath, repoName, indexPath, config);
+  // Embed symbols and chunks in background (non-fatal, don't block MCP response)
+  // Large repos (71K symbols) can take minutes — fire-and-forget to prevent timeout
+  embedSymbols(symbols, indexPath, repoName, config)
+    .then(() => embedChunks(fileEntries, rootPath, repoName, indexPath, config))
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] Background embedding failed for ${repoName}: ${msg}`);
+    });
 
   // Register in the global registry
   const meta: RepoMeta = {
