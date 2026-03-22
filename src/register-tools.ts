@@ -57,7 +57,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       path: z.string().describe("Absolute path to the folder to index"),
       incremental: z.boolean().optional().describe("Only re-index changed files"),
-      include_paths: z.array(z.string()).optional().describe("Glob patterns to include"),
+      include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
     },
     handler: (args) => indexFolder(args.path as string, {
       incremental: args.incremental as boolean | undefined,
@@ -70,7 +70,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       url: z.string().describe("Git clone URL"),
       branch: z.string().optional().describe("Branch to checkout"),
-      include_paths: z.array(z.string()).optional().describe("Glob patterns to include"),
+      include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
     },
     handler: (args) => indexRepo(args.url as string, {
       branch: args.branch as string | undefined,
@@ -213,7 +213,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Retrieve multiple symbols by ID in a single batch call",
     schema: {
       repo: z.string().describe("Repository identifier"),
-      symbol_ids: z.array(z.string()).describe("Array of symbol identifiers"),
+      symbol_ids: z.union([
+        z.array(z.string()),
+        z.string().transform((s) => JSON.parse(s) as string[]),
+      ]).describe("Array of symbol identifiers. Can be passed as JSON string."),
     },
     handler: (args) => getSymbols(args.repo as string, args.symbol_ids as string[]),
   },
