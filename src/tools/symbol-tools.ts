@@ -214,6 +214,8 @@ export async function findReferencesBatch(
   return result;
 }
 
+const SEARCH_TIMEOUT_MS = 30_000; // 30s timeout for file scanning
+
 export async function findReferences(
   repo: string,
   symbolName: string,
@@ -221,6 +223,7 @@ export async function findReferences(
 ): Promise<Reference[]> {
   const index = await requireCodeIndex(repo);
   const pattern = wordBoundaryPattern(symbolName);
+  const searchStart = Date.now();
 
   // Optional file pattern filter
   const fileFilter = filePattern
@@ -231,6 +234,7 @@ export async function findReferences(
 
   for (const fileEntry of index.files) {
     if (refs.length >= MAX_REFERENCES) break;
+    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break; // Prevent 285s+ hangs
 
     if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
     // Skip non-code files (audits, docs, snapshots) unless user explicitly filtered

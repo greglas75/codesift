@@ -9,6 +9,7 @@ import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../typ
 
 const DEFAULT_MAX_TEXT_MATCHES = 200;
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
+const SEARCH_TIMEOUT_MS = 30_000; // Abort search after 30s to prevent 100s+ hangs
 const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count
 const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
 const MAX_FIRST_MATCH_CHARS = 300; // Cap first_match preview in grouped output
@@ -242,17 +243,27 @@ export async function searchText(
     }
   }
 
-  // Walk the filesystem to find ALL text files (not just indexed/parseable ones)
-  const allFiles = await walkDirectory(index.root, {
-    fileFilter: (ext) => !BINARY_EXTENSIONS.has(ext),
-    maxFiles: MAX_WALK_FILES,
-    relative: true,
-  });
+  // Use indexed file list when file_pattern is specified (skip expensive filesystem walk)
+  // Fall back to full walk only when no pattern (need to search non-parseable files too)
+  let allFiles: string[];
+  if (filePattern) {
+    // Fast path: filter indexed files instead of walking filesystem
+    allFiles = index.files.map((f) => f.path);
+  } else {
+    // Slow path: walk filesystem for ALL text files (not just indexed/parseable ones)
+    allFiles = await walkDirectory(index.root, {
+      fileFilter: (ext) => !BINARY_EXTENSIONS.has(ext),
+      maxFiles: MAX_WALK_FILES,
+      relative: true,
+    });
+  }
 
   const matches: TextMatch[] = [];
+  const searchStart = Date.now();
 
   for (const filePath of allFiles) {
     if (matches.length >= maxResults) break;
+    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break; // Prevent 100s+ hangs
 
     // Filter by file pattern
     if (filePattern && !matchFilePattern(filePath, filePattern)) {
