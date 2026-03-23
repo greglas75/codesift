@@ -4,7 +4,7 @@ import { wrapTool } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
-import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
+import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
@@ -243,13 +243,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   // --- References & call graph ---
   {
     name: "find_references",
-    description: "Find all references to a symbol across the codebase",
+    description: "Find all references to a symbol across the codebase. Pass symbol_names (array) to batch-search multiple symbols in one file pass — much faster than sequential calls on large repos.",
     schema: {
       repo: z.string().describe("Repository identifier"),
-      symbol_name: z.string().describe("Name of the symbol to find references for"),
+      symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
+      symbol_names: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional()
+        .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
     },
-    handler: (args) => findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined),
+    handler: (args) => {
+      const names = args.symbol_names as string[] | undefined;
+      if (names && names.length > 0) {
+        return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
+      }
+      return findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
+    },
   },
   {
     name: "trace_call_chain",

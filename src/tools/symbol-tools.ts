@@ -156,6 +156,64 @@ export async function getSymbols(
  * Find references to a symbol name across indexed files.
  * Matches whole words only using word-boundary regex.
  */
+/**
+ * Batch find references for multiple symbols in one pass.
+ * Reads each file once instead of N times — critical for large repos.
+ */
+export async function findReferencesBatch(
+  repo: string,
+  symbolNames: string[],
+  filePattern?: string,
+): Promise<Record<string, Reference[]>> {
+  const index = await requireCodeIndex(repo);
+  const patterns = symbolNames.map((name) => ({
+    name,
+    regex: wordBoundaryPattern(name),
+  }));
+
+  const fileFilter = filePattern
+    ? new RegExp(filePattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*"))
+    : null;
+
+  const result: Record<string, Reference[]> = {};
+  for (const name of symbolNames) result[name] = [];
+
+  for (const fileEntry of index.files) {
+    if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
+    if (!filePattern && isNoisePath(fileEntry.path)) continue;
+
+    let content: string;
+    try {
+      content = await readFile(join(index.root, fileEntry.path), "utf-8");
+    } catch { continue; }
+
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line === undefined) continue;
+
+      for (const { name, regex } of patterns) {
+        const refs = result[name]!;
+        if (refs.length >= MAX_REFERENCES) continue;
+        const match = regex.exec(line);
+        if (match) {
+          const rawContext = line.trimEnd();
+          refs.push({
+            file: fileEntry.path,
+            line: i + 1,
+            col: match.index + 1,
+            context: rawContext.length > MAX_CONTEXT_LENGTH
+              ? rawContext.slice(0, MAX_CONTEXT_LENGTH) + "..."
+              : rawContext,
+          });
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export async function findReferences(
   repo: string,
   symbolName: string,
