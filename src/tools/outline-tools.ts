@@ -380,15 +380,18 @@ export async function getRepoOutline(
     entry.languages.add(file.language);
   }
 
-  // Build directory outlines sorted by path
-  const directories: DirectoryOutline[] = [...dirMap.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+  // Build directory outlines, cap to top 100 by symbol count to prevent 50K+ responses
+  const MAX_OUTLINE_DIRS = 100;
+  const allDirs = [...dirMap.entries()]
     .map(([path, data]) => ({
       path,
       file_count: data.files,
       symbol_count: data.symbols,
       languages: [...data.languages].sort(),
     }));
+  const directories: DirectoryOutline[] = allDirs.length > MAX_OUTLINE_DIRS
+    ? allDirs.sort((a, b) => b.symbol_count - a.symbol_count).slice(0, MAX_OUTLINE_DIRS)
+    : allDirs.sort((a, b) => a.path.localeCompare(b.path));
 
   // Compute global language counts
   const languageCounts: Record<string, number> = {};

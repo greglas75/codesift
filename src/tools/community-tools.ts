@@ -207,10 +207,17 @@ export async function detectCommunities(
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
-  // Filter files by focus
-  const files = focus
+  // Filter files by focus; cap without focus to prevent 66K tok responses
+  const MAX_UNFOCUSED_FILES = 500;
+  const MAX_COMMUNITIES = 20;
+  let files = focus
     ? index.files.filter((f) => f.path.includes(focus))
     : index.files;
+
+  if (!focus && files.length > MAX_UNFOCUSED_FILES) {
+    // Keep files with most symbols (most architecturally relevant)
+    files = [...files].sort((a, b) => b.symbol_count - a.symbol_count).slice(0, MAX_UNFOCUSED_FILES);
+  }
 
   const fileSet = new Set(files.map((f) => f.path));
   const edges = await collectImportEdges(index, fileSet);
@@ -270,10 +277,16 @@ export async function detectCommunities(
     });
   }
 
+  // Cap communities output
+  const cappedCommunities = communities.slice(0, MAX_COMMUNITIES);
+
   return {
-    communities,
+    communities: cappedCommunities,
     modularity: Math.round(modularity * 1000) / 1000,
     total_files: files.length,
+    ...(communities.length > MAX_COMMUNITIES
+      ? { truncated: true, total_communities: communities.length }
+      : {}),
     algorithm: "louvain",
     resolution: res,
   };
