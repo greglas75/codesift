@@ -18,6 +18,7 @@ import { findClones } from "./tools/clone-tools.js";
 import { analyzeHotspots } from "./tools/hotspot-tools.js";
 import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-repo-tools.js";
 import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
+import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import type { SymbolKind, Direction } from "./types.js";
 
@@ -529,6 +530,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "List all available built-in structural code patterns for search_patterns.",
     schema: {},
     handler: async () => listPatterns(),
+  },
+
+  // --- Report ---
+  {
+    name: "generate_report",
+    description: "Generate a standalone HTML report with complexity, dead code, hotspots, and architecture. Opens in any browser.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+    },
+    handler: (args) => generateReport(args.repo as string),
   },
 
   // --- Stats ---
