@@ -312,11 +312,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       focus: z.string().optional().describe("Path substring to filter files (e.g. 'src/lib')"),
       resolution: zNum().describe("Louvain resolution: higher = more smaller communities, lower = fewer larger (default: 1.0)"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (graph diagram)"),
     },
     handler: (args) => detectCommunities(
       args.repo as string,
       args.focus as string | undefined,
       args.resolution as number | undefined,
+      args.output_format as "json" | "mermaid" | undefined,
     ),
   },
 

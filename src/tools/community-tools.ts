@@ -3,6 +3,7 @@
  */
 import { getCodeIndex } from "./index-tools.js";
 import { collectImportEdges } from "../utils/import-graph.js";
+import type { ImportEdge } from "../utils/import-graph.js";
 
 export interface Community {
   id: number;
@@ -196,6 +197,49 @@ function nameCommunity(files: string[], id: number): string {
     : `community-${id}`;
 }
 
+const MAX_MERMAID_COMMUNITIES = 15;
+const MAX_MERMAID_FILES_PER = 5;
+
+function communityToMermaid(result: CommunityResult, edges: ImportEdge[]): string {
+  const lines: string[] = ["graph LR"];
+  const comms = result.communities.slice(0, MAX_MERMAID_COMMUNITIES);
+
+  const fileToCommunity = new Map<string, number>();
+  for (const c of comms) {
+    for (const f of c.files) {
+      if (!f.startsWith("...")) fileToCommunity.set(f, c.id);
+    }
+  }
+
+  for (const c of comms) {
+    const safeId = `c${c.id}`;
+    const label = `${c.name} (${c.files.length} files)`;
+    lines.push(`    subgraph ${safeId}["${label}"]`);
+    const showFiles = c.files.filter((f) => !f.startsWith("...")).slice(0, MAX_MERMAID_FILES_PER);
+    for (const f of showFiles) {
+      const short = f.split("/").pop()?.replace(/\.\w+$/, "") ?? f;
+      const nodeId = (safeId + "_" + short).replace(/[^a-zA-Z0-9_]/g, "_");
+      lines.push(`        ${nodeId}["${short}"]`);
+    }
+    lines.push("    end");
+  }
+
+  const crossEdges = new Set<string>();
+  for (const edge of edges) {
+    const fromC = fileToCommunity.get(edge.from);
+    const toC = fileToCommunity.get(edge.to);
+    if (fromC !== undefined && toC !== undefined && fromC !== toC) {
+      const key = fromC < toC ? `c${fromC}-->c${toC}` : `c${toC}-->c${fromC}`;
+      if (!crossEdges.has(key)) {
+        crossEdges.add(key);
+        lines.push(`    c${Math.min(fromC, toC)} --> c${Math.max(fromC, toC)}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
 /**
  * Detect code communities using Louvain algorithm on the import graph.
  */
@@ -203,7 +247,8 @@ export async function detectCommunities(
   repo: string,
   focus?: string,
   resolution?: number,
-): Promise<CommunityResult> {
+  outputFormat?: "json" | "mermaid",
+): Promise<CommunityResult | { mermaid: string }> {
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
@@ -280,7 +325,7 @@ export async function detectCommunities(
   // Cap communities output
   const cappedCommunities = communities.slice(0, MAX_COMMUNITIES);
 
-  return {
+  const result: CommunityResult = {
     communities: cappedCommunities,
     modularity: Math.round(modularity * 1000) / 1000,
     total_files: files.length,
@@ -290,4 +335,10 @@ export async function detectCommunities(
     algorithm: "louvain",
     resolution: res,
   };
+
+  if (outputFormat === "mermaid") {
+    return { mermaid: communityToMermaid(result, edges) };
+  }
+
+  return result;
 }
