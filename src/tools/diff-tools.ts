@@ -12,6 +12,7 @@ export interface DiffOutlineResult {
 export interface ChangedFileSymbols {
   file: string;
   symbols: string[];
+  diff?: string | null; // unified diff for this file (truncated to MAX_DIFF_CHARS)
 }
 
 interface DiffHunk {
@@ -165,6 +166,8 @@ export async function diffOutline(
   };
 }
 
+const MAX_DIFF_CHARS = 500;
+
 /**
  * List all symbol names in each changed file.
  * Simplified version of diffOutline that only reports symbol names per file.
@@ -173,6 +176,7 @@ export async function changedSymbols(
   repo: string,
   since: string,
   until?: string,
+  options?: { include_diff?: boolean },
 ): Promise<ChangedFileSymbols[]> {
   const index = await getCodeIndex(repo);
   if (!index) {
@@ -207,6 +211,21 @@ export async function changedSymbols(
     const symbols = symbolsByFile.get(file);
     if (symbols && symbols.length > 0) {
       result.push({ file, symbols });
+    }
+  }
+
+  if (options?.include_diff) {
+    for (const entry of result) {
+      try {
+        const raw = execFileSync("git", [
+          "diff", `${since}..${untilRef}`, "--", entry.file,
+        ], { cwd: index.root, maxBuffer: 50_000 }).toString("utf-8");
+        entry.diff = raw.length > MAX_DIFF_CHARS
+          ? raw.slice(0, MAX_DIFF_CHARS) + "\n... (truncated)"
+          : raw;
+      } catch {
+        entry.diff = null;
+      }
     }
   }
 

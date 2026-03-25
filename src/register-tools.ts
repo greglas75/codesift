@@ -366,8 +366,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
+      include_diff: z.boolean().optional().describe("Include unified diff per changed file (truncated to 500 chars)"),
     },
-    handler: (args) => changedSymbols(args.repo as string, args.since as string, args.until as string | undefined),
+    handler: (args) => {
+      const opts: { include_diff?: boolean } = {};
+      if (args.include_diff === true) opts.include_diff = true;
+      return changedSymbols(args.repo as string, args.since as string, args.until as string | undefined, opts);
+    },
   },
 
   // --- Generation ---
