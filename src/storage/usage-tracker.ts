@@ -132,6 +132,16 @@ export function extractResultChunks(data: unknown): number {
 // Core tracking function
 // ---------------------------------------------------------------------------
 
+let cumulativeTokensSaved = 0;
+
+export function getCumulativeSavings(): number {
+  return cumulativeTokensSaved;
+}
+
+export function addSavings(tokens: number): void {
+  cumulativeTokensSaved += tokens;
+}
+
 let dirEnsured = false;
 
 /**

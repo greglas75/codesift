@@ -319,20 +319,25 @@ export async function getFileTree(
  * Get an outline of symbols in a specific file.
  * Returns symbols sorted by start line, with source stripped for brevity.
  */
+const MAX_OUTLINE_SYMBOLS = 200;
+
 export async function getFileOutline(
   repo: string,
   filePath: string,
-): Promise<FileOutlineEntry[]> {
+): Promise<{ symbols: FileOutlineEntry[]; truncated?: boolean; total_symbols?: number }> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
-  const symbols = index.symbols
+  const allSymbols = index.symbols
     .filter((s) => s.file === filePath)
     .sort((a, b) => a.start_line - b.start_line);
 
-  return symbols.map((s) => {
+  const truncated = allSymbols.length > MAX_OUTLINE_SYMBOLS;
+  const symbols = truncated ? allSymbols.slice(0, MAX_OUTLINE_SYMBOLS) : allSymbols;
+
+  const entries = symbols.map((s) => {
     const entry: FileOutlineEntry = {
       id: s.id,
       name: s.name,
@@ -348,6 +353,11 @@ export async function getFileOutline(
     }
     return entry;
   });
+
+  if (truncated) {
+    return { symbols: entries, truncated: true, total_symbols: allSymbols.length };
+  }
+  return { symbols: entries };
 }
 
 /**

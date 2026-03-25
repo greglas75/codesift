@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 35 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 36 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -49,6 +49,12 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | **Response dedup cache** | Identical calls within 30s return cached result | Eliminates duplicate API calls |
 | **In-flight dedup** | Parallel identical requests coalesce into one | Prevents race condition duplicates |
 | **Auto-grouping** | Force group_by_file when output exceeds 80K chars | Prevents 100K+ token responses |
+| **Relevance-gap filtering** | Cut search results below 15% of top score | 50→21 results (cleaner output) |
+| **Semantic chunking** | Chunk by symbol boundaries, not fixed lines | Functions stay intact for semantic search |
+| **Token savings display** | "Saved ~X tokens ($Y)" on every response | Visible ROI per call |
+| **Framework-aware dead code** | Whitelist React hooks, NestJS lifecycle, Next.js handlers | <10% false positives (was ~40%) |
+| **Mermaid diagrams** | `detect_communities`, `get_knowledge_map`, `trace_route` output Mermaid | Paste-ready architecture diagrams |
+| **HTML report** | `generate_report` → standalone browser report | Complexity, dead code, hotspots, communities |
 | **30K token hard cap** | Truncate any response exceeding 30K tokens | Last-resort safety net |
 | **Sequential hints** | Prepended hints suggest batching after 3+ consecutive calls | Guides agents toward codebase_retrieval |
 
@@ -132,7 +138,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (35 total)
+## MCP tools (36 total)
 
 When running as an MCP server, CodeSift exposes these tools:
 
@@ -146,9 +152,10 @@ When running as an MCP server, CodeSift exposes these tools:
 | **Context & knowledge** | `assemble_context` (level: L0/L1/L2/L3), `get_knowledge_map`, `detect_communities` (Louvain) |
 | **Diff** | `diff_outline`, `changed_symbols` |
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget) |
-| **Analysis** | `find_dead_code`, `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns`, `list_patterns` |
+| **Analysis** | `find_dead_code` (framework-aware), `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns` (9 built-in incl. scaffolding), `list_patterns` |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
-| **Utility** | `generate_claude_md`, `usage_stats` |
+| **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
+| **Utility** | `generate_claude_md`, `usage_stats` (with token savings tracking) |
 
 ## When to use CodeSift vs grep
 
@@ -162,7 +169,7 @@ When running as an MCP server, CodeSift exposes these tools:
 | Dead code / unused exports | `codesift dead-code` | Automated scan, no manual grep needed |
 | Complexity hotspots | `codesift complexity` | Cyclomatic complexity + nesting depth |
 | Copy-paste detection | `codesift clones` | Hash bucketing + line similarity scoring |
-| Anti-pattern search | `codesift patterns` | 8 built-in CQ patterns + custom regex |
+| Anti-pattern search | `codesift patterns` | 9 built-in CQ patterns + custom regex |
 | Explore new codebase | `codesift suggest-queries` | Instant overview: top files, kind distribution, example queries |
 | Re-index after edit | `index_file` | 9ms skip / 153ms reparse vs 3-8s full folder |
 | Trace HTTP route | `trace_route` | URL → handler → service → DB calls in one call |
@@ -185,6 +192,7 @@ The `patterns` command searches for common code quality issues across your codeb
 | `no-error-type` | Catch without `instanceof Error` narrowing |
 | `toctou` | Read-then-write without atomic operation |
 | `unbounded-findmany` | Prisma `findMany` without `take` limit |
+| `scaffolding` | TODO/FIXME/HACK markers, Phase/Step stubs, "not implemented" throws |
 
 Custom regex is also supported: `codesift patterns local/project "Promise<.*any>"`.
 

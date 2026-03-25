@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { UsageEntry } from "./usage-tracker.js";
+import { getCumulativeSavings } from "./usage-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +27,12 @@ export interface DailyStats {
   total_tokens: number;
 }
 
+export interface QueryTypeStats {
+  type: string;
+  query_count: number;
+  call_count: number;   // how many codebase_retrieval calls included this type
+}
+
 export interface UsageStats {
   total_calls: number;
   total_sessions: number;
@@ -33,6 +40,7 @@ export interface UsageStats {
   tools: ToolStats[];
   top_repos: RepoStats[];
   daily: DailyStats[];
+  query_types: QueryTypeStats[];
   earliest_ts: number;
   latest_ts: number;
 }
@@ -110,6 +118,7 @@ export async function getUsageStats(options?: {
       tools: [],
       top_repos: [],
       daily: [],
+      query_types: [],
       earliest_ts: 0,
       latest_ts: 0,
     };
@@ -120,6 +129,9 @@ export async function getUsageStats(options?: {
   const repoMap = new Map<string, number>();
   const sessionSet = new Set<string>();
   const dailyMap = new Map<string, { calls: number; tokens: number }>();
+  // codebase_retrieval query type breakdown
+  const queryTypeQueries = new Map<string, number>();  // type → total query count
+  const queryTypeCalls = new Map<string, number>();     // type → calls containing this type
 
   let earliest = Infinity;
   let latest = 0;
@@ -146,6 +158,23 @@ export async function getUsageStats(options?: {
     dayStats.calls += 1;
     dayStats.tokens += entry.result_tokens;
     dailyMap.set(date, dayStats);
+
+    // codebase_retrieval query type breakdown
+    if (entry.tool === "codebase_retrieval") {
+      const types = (entry.args_summary as Record<string, unknown>)?.["query_types"];
+      if (Array.isArray(types)) {
+        const seenInCall = new Set<string>();
+        for (const t of types) {
+          if (typeof t === "string") {
+            queryTypeQueries.set(t, (queryTypeQueries.get(t) ?? 0) + 1);
+            seenInCall.add(t);
+          }
+        }
+        for (const t of seenInCall) {
+          queryTypeCalls.set(t, (queryTypeCalls.get(t) ?? 0) + 1);
+        }
+      }
+    }
 
     // Time range
     if (entry.ts < earliest) earliest = entry.ts;
@@ -178,6 +207,14 @@ export async function getUsageStats(options?: {
 
   const totalSessions = sessionSet.size;
 
+  const query_types: QueryTypeStats[] = [...queryTypeQueries.entries()]
+    .map(([type, query_count]) => ({
+      type,
+      query_count,
+      call_count: queryTypeCalls.get(type) ?? 0,
+    }))
+    .sort((a, b) => b.query_count - a.query_count);
+
   return {
     total_calls: entries.length,
     total_sessions: totalSessions,
@@ -185,6 +222,7 @@ export async function getUsageStats(options?: {
     tools,
     top_repos,
     daily,
+    query_types,
     earliest_ts: earliest,
     latest_ts: latest,
   };
@@ -224,6 +262,23 @@ export function formatUsageReport(stats: UsageStats): string {
   }
   lines.push("");
 
+  // codebase_retrieval query type breakdown
+  if (stats.query_types.length > 0) {
+    const crTool = stats.tools.find((t) => t.tool === "codebase_retrieval");
+    const totalQueries = stats.query_types.reduce((sum, qt) => sum + qt.query_count, 0);
+    lines.push("--- codebase_retrieval Query Types ---");
+    lines.push(
+      `${"Type".padEnd(14)}  ${"Queries".padStart(8)}  ${"%".padStart(5)}  ${"In calls".padStart(9)}`,
+    );
+    for (const qt of stats.query_types) {
+      const pct = totalQueries > 0 ? Math.round((qt.query_count / totalQueries) * 100) : 0;
+      lines.push(
+        `${qt.type.padEnd(14)}  ${String(qt.query_count).padStart(8)}  ${(pct + "%").padStart(5)}  ${(qt.call_count + "/" + (crTool?.total_calls ?? "?")).padStart(9)}`,
+      );
+    }
+    lines.push("");
+  }
+
   // Top repos
   if (stats.top_repos.length > 0) {
     lines.push("--- Top Repos ---");
@@ -243,6 +298,11 @@ export function formatUsageReport(stats: UsageStats): string {
     if (stats.daily.length > 14) {
       lines.push(`  ... and ${stats.daily.length - 14} earlier days`);
     }
+  }
+
+  const saved = getCumulativeSavings();
+  if (saved > 0) {
+    lines.push(`\nEstimated tokens saved this session: ${saved.toLocaleString()} (~$${(saved * 30 / 1_000_000).toFixed(2)} at Opus rates)`);
   }
 
   return lines.join("\n");

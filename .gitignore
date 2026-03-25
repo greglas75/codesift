@@ -11,3 +11,4 @@ src/parser/languages/*.wasm
 audits/
 audit/
 audit-results/
+codesift-report.html

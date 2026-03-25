@@ -406,7 +406,8 @@ describe("outline_tools", () => {
     it("returns symbols for a file sorted by start_line", async () => {
       const repo = await indexFixture();
 
-      const outline = await getFileOutline(repo, "src/user-service.ts");
+      const result = await getFileOutline(repo, "src/user-service.ts");
+      const outline = result.symbols;
 
       expect(outline.length).toBeGreaterThanOrEqual(3);
 
@@ -433,9 +434,9 @@ describe("outline_tools", () => {
     it("returns empty array for non-existent file", async () => {
       const repo = await indexFixture();
 
-      const outline = await getFileOutline(repo, "src/nonexistent.ts");
+      const result = await getFileOutline(repo, "src/nonexistent.ts");
 
-      expect(outline).toEqual([]);
+      expect(result.symbols).toEqual([]);
     });
   });
 
@@ -1286,8 +1287,8 @@ describe("codebase_retrieval", () => {
 
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("outline");
-    const data = result.results[0]!.data as Array<{ name: string }>;
-    expect(data.length).toBeGreaterThanOrEqual(3); // types.ts has User, PaymentInfo, UserRole
+    const data = result.results[0]!.data as { symbols: Array<{ name: string }> };
+    expect(data.symbols.length).toBeGreaterThanOrEqual(3); // types.ts has User, PaymentInfo, UserRole
   });
 
   it("handles references sub-query", async () => {

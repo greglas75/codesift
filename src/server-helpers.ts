@@ -1,4 +1,4 @@
-import { trackToolCall } from "./storage/usage-tracker.js";
+import { trackToolCall, addSavings } from "./storage/usage-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -7,6 +7,24 @@ import { trackToolCall } from "./storage/usage-tracker.js";
 export const HIGH_CARDINALITY_THRESHOLD = 50;
 export const CHARS_PER_TOKEN = 4;
 export const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
+
+/** Estimated token multiplier vs manual grep/Read approach (from benchmark data) */
+const SAVINGS_MULTIPLIER: Record<string, number> = {
+  search_text: 1.5,
+  search_symbols: 1.0,
+  get_file_outline: 3.0,
+  get_file_tree: 1.25,
+  find_references: 1.5,
+  codebase_retrieval: 3.0,
+  assemble_context: 5.0,
+  trace_call_chain: 4.0,
+  impact_analysis: 3.0,
+  detect_communities: 2.0,
+  trace_route: 4.0,
+  get_context_bundle: 3.0,
+};
+
+const OPUS_COST_PER_TOKEN = 30 / 1_000_000; // $30/1M input tokens
 
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
 const SEQUENTIAL_HINT_THRESHOLD = 3;
@@ -118,6 +136,14 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
   return hints.length > 0 ? hints.join("\n") : null;
 }
 
+function estimateSavings(toolName: string, resultTokens: number): { tokens: number; cost: number } | null {
+  const mult = SAVINGS_MULTIPLIER[toolName];
+  if (!mult || mult <= 1.0) return null;
+  const saved = Math.round(resultTokens * (mult - 1));
+  if (saved < 50) return null; // Don't show trivial savings
+  return { tokens: saved, cost: saved * OPUS_COST_PER_TOKEN };
+}
+
 function formatResponse(text: string, toolName: string, args: Record<string, unknown>, data: unknown): ToolResponse {
   // Hard cap: truncate oversized responses
   const maxChars = MAX_RESPONSE_TOKENS * CHARS_PER_TOKEN;
@@ -125,6 +151,14 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
     const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
     text = text.slice(0, maxChars) +
       `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.`;
+  }
+
+  // Token savings estimate
+  const savings = estimateSavings(toolName, Math.round(text.length / CHARS_PER_TOKEN));
+  if (savings) {
+    const costStr = savings.cost >= 0.01 ? `$${savings.cost.toFixed(2)}` : `$${savings.cost.toFixed(4)}`;
+    text = `⚡ Saved ~${savings.tokens.toLocaleString()} tokens vs manual approach (${costStr} at Opus rates)\n\n` + text;
+    addSavings(savings.tokens);
   }
 
   const hint = buildResponseHint(toolName, args, data);
