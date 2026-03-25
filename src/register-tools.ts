@@ -346,8 +346,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       focus: z.string().optional().describe("Focus on a specific module or directory"),
       depth: zNum().describe("Maximum depth of the dependency graph"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (dependency diagram)"),
     },
-    handler: (args) => getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined),
+    handler: (args) => getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined, args.output_format as "json" | "mermaid" | undefined),
   },
 
   // --- Diff ---

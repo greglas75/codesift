@@ -222,6 +222,53 @@ export async function assembleContext(
 // Import graph utilities moved to src/utils/import-graph.ts
 
 /**
+ * Convert a KnowledgeMap into a Mermaid graph TD diagram.
+ * Aggregates at directory level for readability.
+ * Capped at 30 nodes and 50 edges.
+ */
+function knowledgeMapToMermaid(result: KnowledgeMap): string {
+  const lines: string[] = ["graph TD"];
+  const MAX_NODES = 30;
+  const MAX_EDGES = 50;
+
+  // Aggregate to directory level for readability
+  const dirSymbols = new Map<string, number>();
+  for (const mod of result.modules) {
+    const dir = mod.path.includes("/") ? mod.path.slice(0, mod.path.lastIndexOf("/")) : mod.path;
+    dirSymbols.set(dir, (dirSymbols.get(dir) ?? 0) + mod.symbol_count);
+  }
+
+  const topDirs = [...dirSymbols.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_NODES);
+  const dirSet = new Set(topDirs.map(([d]) => d));
+
+  for (const [dir, syms] of topDirs) {
+    const id = dir.replace(/[^a-zA-Z0-9]/g, "_");
+    const short = dir.split("/").slice(-2).join("/");
+    lines.push(`    ${id}["${short} (${syms} sym)"]`);
+  }
+
+  const dirEdges = new Set<string>();
+  let edgeCount = 0;
+  for (const edge of result.edges) {
+    if (edgeCount >= MAX_EDGES) break;
+    const fromDir = edge.from.includes("/") ? edge.from.slice(0, edge.from.lastIndexOf("/")) : edge.from;
+    const toDir = edge.to.includes("/") ? edge.to.slice(0, edge.to.lastIndexOf("/")) : edge.to;
+    if (fromDir === toDir || !dirSet.has(fromDir) || !dirSet.has(toDir)) continue;
+    const key = `${fromDir}|${toDir}`;
+    if (dirEdges.has(key)) continue;
+    dirEdges.add(key);
+    const fromId = fromDir.replace(/[^a-zA-Z0-9]/g, "_");
+    const toId = toDir.replace(/[^a-zA-Z0-9]/g, "_");
+    lines.push(`    ${fromId} --> ${toId}`);
+    edgeCount++;
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Build a module dependency map for a repository.
  * Parses import statements from each file's symbols to discover edges.
  * Optionally filters to modules matching a focus path.
@@ -230,7 +277,8 @@ export async function getKnowledgeMap(
   repo: string,
   focus?: string,
   depth?: number,
-): Promise<KnowledgeMap> {
+  outputFormat?: "json" | "mermaid",
+): Promise<KnowledgeMap | { mermaid: string }> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
@@ -266,7 +314,7 @@ export async function getKnowledgeMap(
       .filter((e) => cappedModuleSet.has(e.from) && cappedModuleSet.has(e.to))
       .slice(0, MAX_UNFOCUSED_EDGES);
 
-    return {
+    const result: KnowledgeMap = {
       modules: cappedModules,
       edges: cappedEdges,
       circular_deps: circularDeps,
@@ -274,10 +322,15 @@ export async function getKnowledgeMap(
         ? { truncated: true, total_modules: allModules.length, hint: `Showing top ${MAX_UNFOCUSED_MODULES} by symbol count. Use focus param to narrow.` }
         : {}),
     };
+
+    if (outputFormat === "mermaid") return { mermaid: knowledgeMapToMermaid(result) };
+    return result;
   }
 
   // Filter to focus path and neighbors within depth
-  return filterToFocus(moduleMap, edges, focus, maxDepth, circularDeps);
+  const result = filterToFocus(moduleMap, edges, focus, maxDepth, circularDeps);
+  if (outputFormat === "mermaid") return { mermaid: knowledgeMapToMermaid(result) };
+  return result;
 }
 
 /**
