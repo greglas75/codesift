@@ -204,12 +204,48 @@ function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
 }
 
 /**
+ * Render a RouteTraceResult as a Mermaid sequence diagram.
+ */
+function routeToMermaid(result: RouteTraceResult): string {
+  if (result.handlers.length === 0) {
+    return "sequenceDiagram\n    Note over Client: No handler found for " + result.path;
+  }
+
+  const lines: string[] = ["sequenceDiagram"];
+  const handler = result.handlers[0]!;
+  const method = handler.method ?? "REQUEST";
+
+  lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+
+  const depth1 = result.call_chain.filter((n) => n.depth === 1);
+
+  for (const node of depth1.slice(0, 5)) {
+    const participant = node.file.split("/").pop()?.replace(/\.\w+$/, "") ?? node.name;
+    // Sanitize participant name for Mermaid (no dots, spaces)
+    const safeParticipant = participant.replace(/[^a-zA-Z0-9_-]/g, "_");
+    lines.push(`    Controller->>+${safeParticipant}: ${node.name}()`);
+
+    const dbFromNode = result.db_calls.filter((d) => d.symbol_name === node.name);
+    for (const db of dbFromNode.slice(0, 3)) {
+      lines.push(`    ${safeParticipant}->>+DB: ${db.operation}`);
+      lines.push(`    DB-->>-${safeParticipant}: result`);
+    }
+
+    lines.push(`    ${safeParticipant}-->>-Controller: result`);
+  }
+
+  lines.push(`    Controller-->>-Client: response`);
+  return lines.join("\n");
+}
+
+/**
  * Trace an HTTP route: find handler, trace callees, identify DB calls.
  */
 export async function traceRoute(
   repo: string,
   path: string,
-): Promise<RouteTraceResult> {
+  outputFormat?: "json" | "mermaid",
+): Promise<RouteTraceResult | { mermaid: string }> {
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
@@ -248,5 +284,11 @@ export async function traceRoute(
 
   const dbCalls = findDbCalls(allCalleeSymbols);
 
-  return { path, handlers, call_chain: callChain, db_calls: dbCalls };
+  const result: RouteTraceResult = { path, handlers, call_chain: callChain, db_calls: dbCalls };
+
+  if (outputFormat === "mermaid") {
+    return { mermaid: routeToMermaid(result) };
+  }
+
+  return result;
 }

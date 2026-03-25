@@ -301,8 +301,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (sequence diagram)"),
     },
-    handler: (args) => traceRoute(args.repo as string, args.path as string),
+    handler: (args) => traceRoute(args.repo as string, args.path as string, args.output_format as "json" | "mermaid" | undefined),
   },
 
   {
