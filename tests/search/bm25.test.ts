@@ -1,4 +1,4 @@
-import { buildBM25Index, searchBM25, tokenizeText } from "../../src/search/bm25.js";
+import { buildBM25Index, searchBM25, tokenizeText, applyCutoff } from "../../src/search/bm25.js";
 import type { CodeSymbol } from "../../src/types.js";
 
 function makeSymbol(overrides: Partial<CodeSymbol> & { id: string; name: string }): CodeSymbol {
@@ -127,5 +127,42 @@ describe("searchBM25", () => {
     expect(topResult.matches!.length).toBeGreaterThan(0);
     expect(topResult.matches).toContain("get");
     expect(topResult.matches).toContain("user");
+  });
+});
+
+describe("applyCutoff", () => {
+  it("cuts results below 15% of top score", () => {
+    const results = [
+      { score: 10.0, symbol: { id: "a" } },
+      { score: 8.0, symbol: { id: "b" } },
+      { score: 7.0, symbol: { id: "c" } },
+      { score: 1.2, symbol: { id: "d" } },
+      { score: 0.5, symbol: { id: "e" } },
+    ] as any;
+    const cut = applyCutoff(results);
+    expect(cut.length).toBe(3);
+  });
+
+  it("always returns minimum 3 results", () => {
+    const results = [
+      { score: 10.0, symbol: { id: "a" } },
+      { score: 0.1, symbol: { id: "b" } },
+      { score: 0.05, symbol: { id: "c" } },
+    ] as any;
+    const cut = applyCutoff(results);
+    expect(cut.length).toBe(3);
+  });
+
+  it("returns all if no gap", () => {
+    const results = [
+      { score: 10.0, symbol: { id: "a" } },
+      { score: 9.5, symbol: { id: "b" } },
+      { score: 8.0, symbol: { id: "c" } },
+    ] as any;
+    expect(applyCutoff(results).length).toBe(3);
+  });
+
+  it("handles empty array", () => {
+    expect(applyCutoff([])).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getBM25Index, getCodeIndex } from "./index-tools.js";
-import { searchBM25 } from "../search/bm25.js";
+import { searchBM25, applyCutoff } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { walkDirectory } from "../utils/walk.js";
 import { matchFilePattern } from "../utils/glob.js";
@@ -254,6 +254,7 @@ export async function searchSymbols(
     results = searchBM25(index, query, searchTopK, config.bm25FieldWeights);
     results = results.filter((r) => matchesSymbolFilters(r.symbol, options));
     results = results.slice(0, topK);
+    results = applyCutoff(results);
   }
 
   const detail = options?.detail_level ?? "standard";

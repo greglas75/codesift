@@ -273,3 +273,19 @@ export function searchBM25(
 
   return results;
 }
+
+const CUTOFF_THRESHOLD = 0.15;
+const CUTOFF_MIN_RESULTS = 3;
+
+export function applyCutoff(results: SearchResult[]): SearchResult[] {
+  if (results.length <= CUTOFF_MIN_RESULTS) return results;
+  const topScore = results[0]?.score ?? 0;
+  if (topScore <= 0) return results;
+  const threshold = topScore * CUTOFF_THRESHOLD;
+  for (let i = CUTOFF_MIN_RESULTS; i < results.length; i++) {
+    if ((results[i]?.score ?? 0) < threshold) {
+      return results.slice(0, i);
+    }
+  }
+  return results;
+}
