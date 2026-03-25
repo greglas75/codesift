@@ -87,6 +87,66 @@ export function chunkFile(
   return chunks;
 }
 
+/**
+ * Chunk a file at symbol boundaries instead of fixed character count.
+ * Each symbol = one chunk. Preamble (imports) = separate chunk.
+ * Falls back to chunkFile when no symbols provided.
+ */
+export function chunkBySymbols(
+  file: string,
+  content: string,
+  repo: string,
+  symbols: Array<{ name: string; start_line: number; end_line: number }>,
+): CodeChunk[] {
+  if (symbols.length === 0) return chunkFile(file, content, repo);
+
+  const lines = content.split("\n");
+  const chunks: CodeChunk[] = [];
+
+  // Sort symbols by start_line
+  const sorted = [...symbols].sort((a, b) => a.start_line - b.start_line);
+
+  // Preamble: lines before first symbol (imports, comments)
+  const firstStart = sorted[0]?.start_line ?? 1;
+  if (firstStart > 1) {
+    const text = lines.slice(0, firstStart - 1).join("\n");
+    if (text.trim().length > 0) {
+      chunks.push({
+        id: `${repo}:${file}:1`,
+        file,
+        startLine: 1,
+        endLine: firstStart - 1,
+        text,
+        tokenCount: Math.ceil(text.length / CHARS_PER_TOKEN),
+      });
+    }
+  }
+
+  // One chunk per symbol
+  for (const sym of sorted) {
+    const start = sym.start_line - 1; // 0-based
+    const end = Math.min(sym.end_line, lines.length); // 1-based inclusive
+    const symLines = lines.slice(start, end);
+    const text = symLines.join("\n");
+
+    if (text.trim().length === 0) continue;
+
+    // Cap very large symbols
+    const cappedText = text.length > MAX_FILE_BYTES ? text.slice(0, MAX_FILE_BYTES) : text;
+
+    chunks.push({
+      id: `${repo}:${file}:${sym.start_line}`,
+      file,
+      startLine: sym.start_line,
+      endLine: end,
+      text: cappedText,
+      tokenCount: Math.ceil(cappedText.length / CHARS_PER_TOKEN),
+    });
+  }
+
+  return chunks;
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

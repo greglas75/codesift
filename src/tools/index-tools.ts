@@ -12,7 +12,7 @@ import { buildBM25Index, type BM25Index } from "../search/bm25.js";
 import { buildSymbolText, createEmbeddingProvider } from "../search/semantic.js";
 import { loadEmbeddings, saveEmbeddings, saveEmbeddingMeta, getEmbeddingPath, getEmbeddingMetaPath, batchEmbed } from "../storage/embedding-store.js";
 import { saveChunks, saveChunkEmbeddings, loadChunkEmbeddings, getChunkPath, getChunkEmbeddingPath } from "../storage/chunk-store.js";
-import { chunkFile } from "../search/chunker.js";
+import { chunkFile, chunkBySymbols } from "../search/chunker.js";
 import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
@@ -214,6 +214,7 @@ async function readAndChunkFiles(
   fileEntries: FileEntry[],
   rootPath: string,
   repoName: string,
+  symbols?: CodeSymbol[],
 ): Promise<CodeChunk[]> {
   const allChunks: CodeChunk[] = [];
   for (let i = 0; i < fileEntries.length; i += PARSE_CONCURRENCY) {
@@ -223,6 +224,12 @@ async function readAndChunkFiles(
         const fullPath = join(rootPath, entry.path);
         try {
           const content = await readFile(fullPath, "utf-8");
+          if (symbols) {
+            const fileSymbols = symbols
+              .filter((s) => s.file === entry.path)
+              .map((s) => ({ name: s.name, start_line: s.start_line, end_line: s.end_line }));
+            return chunkBySymbols(entry.path, content, repoName, fileSymbols);
+          }
           return chunkFile(entry.path, content, repoName);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
@@ -248,6 +255,7 @@ async function embedChunks(
   repoName: string,
   indexPath: string,
   config: ReturnType<typeof loadConfig>,
+  symbols?: CodeSymbol[],
 ): Promise<void> {
   if (!config.embeddingProvider) return;
 
@@ -256,7 +264,7 @@ async function embedChunks(
   try {
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const existingChunkEmbeddings = await loadChunkEmbeddings(chunkEmbeddingPath) ?? new Map<string, Float32Array>();
-    const allChunks = await readAndChunkFiles(fileEntries, rootPath, repoName);
+    const allChunks = await readAndChunkFiles(fileEntries, rootPath, repoName, symbols);
 
     if (allChunks.length > 0) {
       const chunkTexts = new Map(allChunks.map((c) => [c.id, c.text]));
@@ -407,7 +415,7 @@ export async function indexFolder(
   // Embed symbols and chunks in background (non-fatal, don't block MCP response)
   // Large repos (71K symbols) can take minutes — fire-and-forget to prevent timeout
   embedSymbols(symbols, indexPath, repoName, config)
-    .then(() => embedChunks(fileEntries, rootPath, repoName, indexPath, config))
+    .then(() => embedChunks(fileEntries, rootPath, repoName, indexPath, config, symbols))
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[codesift] Background embedding failed for ${repoName}: ${msg}`);
@@ -565,13 +573,8 @@ async function handleFileChange(
 
   await saveIncremental(indexPath, relativeFile, result.symbols, result.entry);
 
-  // Rebuild in-memory BM25 index
-  const index = await loadIndex(indexPath);
-  if (index) {
-    bm25Indexes.set(repoName, buildBM25Index(index.symbols));
-  }
-
-  // Invalidate embedding cache so semantic search picks up changes on next query
+  // Invalidate caches — lazy rebuild on next query via getBM25Index()
+  bm25Indexes.delete(repoName);
   embeddingCaches.delete(repoName);
 }
 
@@ -586,13 +589,8 @@ async function handleFileDelete(
 ): Promise<void> {
   await removeFileFromIndex(indexPath, relativeFile);
 
-  // Rebuild in-memory BM25 index
-  const index = await loadIndex(indexPath);
-  if (index) {
-    bm25Indexes.set(repoName, buildBM25Index(index.symbols));
-  }
-
-  // Invalidate embedding cache
+  // Invalidate caches — lazy rebuild on next query via getBM25Index()
+  bm25Indexes.delete(repoName);
   embeddingCaches.delete(repoName);
 }
 
@@ -693,11 +691,8 @@ export async function indexFile(filePath: string): Promise<{
 
   await saveIncremental(matchingRepo.index_path, relPath, result.symbols, result.entry);
 
-  // Rebuild in-memory BM25 index
-  const index = await loadIndex(matchingRepo.index_path);
-  if (index) {
-    bm25Indexes.set(matchingRepo.name, buildBM25Index(index.symbols));
-  }
+  // Invalidate caches — lazy rebuild on next query via getBM25Index()
+  bm25Indexes.delete(matchingRepo.name);
   embeddingCaches.delete(matchingRepo.name);
 
   return {
