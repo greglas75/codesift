@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { searchBM25, type BM25Index } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
+import { detectFrameworks, isFrameworkEntryPoint } from "../utils/framework-detect.js";
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
@@ -435,6 +436,7 @@ export async function findDeadCode(
   const filePattern = options?.file_pattern;
 
   const exportedSymbols = collectExportedSymbols(index.symbols, { includeTests, filePattern });
+  const frameworks = detectFrameworks(index);
 
   // Read non-test files into memory for scanning (capped to prevent OOM on large repos)
   const MAX_SCAN_FILES = 2000;
@@ -453,6 +455,7 @@ export async function findDeadCode(
 
   for (const sym of exportedSymbols) {
     if (candidates.length >= MAX_DEAD_CODE_RESULTS) break;
+    if (isFrameworkEntryPoint(sym.name, frameworks)) continue;
 
     const pattern = wordBoundaryPattern(sym.name);
 
