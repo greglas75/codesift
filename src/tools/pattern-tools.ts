@@ -52,6 +52,10 @@ const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> =
     regex: /findMany\s*\(\s*\{(?:(?!take\b|limit\b)[\s\S])*\}\s*\)/,
     description: "findMany without take/limit — unbounded query (CQ7)",
   },
+  "scaffolding": {
+    regex: /\/\/\s*(TODO|FIXME|HACK|XXX|TEMP|TEMPORARY)\b|\/\/\s*(Phase|Step|Stage)\s*\d|\/\/\s*(placeholder|stub|dummy)\b|throw new Error\(['"]not implemented['"]\)|console\.(log|warn)\(['"]TODO\b/i,
+    description: "Scaffolding markers: TODO/FIXME/HACK, Phase/Step markers, placeholder stubs, not-implemented throws (tech debt)",
+  },
 };
 
 /**
