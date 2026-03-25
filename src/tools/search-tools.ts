@@ -14,6 +14,14 @@ const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this matc
 const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
 const MAX_FIRST_MATCH_CHARS = 300; // Cap first_match preview in grouped output
 const MAX_LINE_CHARS = 500; // Truncate individual match lines (minified JS/JSON can be 100K+)
+const DEFAULT_TOP_K_WITH_SOURCE = 10; // Cap results when include_source=true without file_pattern
+const BM25_FILTER_MULTIPLIER = 5; // Widen BM25 candidate set when filters active
+const BM25_FILTER_MIN_K = 200; // Minimum candidate set size when filters active
+const DEFAULT_SOURCE_CHARS_NARROW = 200; // Source truncation without file_pattern (reduce waste)
+const DEFAULT_SOURCE_CHARS_WIDE = 500; // Source truncation with file_pattern
+const CHARS_PER_TOKEN = 4; // Approximate chars-per-token for budget calculation
+const DEFAULT_MAX_REGEX_RESULTS = 50; // Regex without file_pattern — tighter cap to limit timeout
+const JSON_OVERHEAD_PER_MATCH = 40; // Estimated JSON serialization overhead per TextMatch
 
 // SEC-003: Detect common catastrophic backtracking patterns (ReDoS)
 const REDOS_PATTERNS = [
@@ -61,6 +69,156 @@ export interface SearchTextOptions {
   auto_group?: boolean | undefined;
 }
 
+// ── Private helpers ─────────────────────────────────────
+
+/** Check if a symbol matches the active kind and file_pattern filters. */
+function matchesSymbolFilters(
+  symbol: { kind: string; file: string },
+  options?: Pick<SearchSymbolsOptions, "kind" | "file_pattern">,
+): boolean {
+  if (options?.kind && symbol.kind !== options.kind) return false;
+  if (options?.file_pattern && !matchFilePattern(symbol.file, options.file_pattern)) return false;
+  return true;
+}
+
+/**
+ * Apply detail-level shaping, source truncation, and field cleanup.
+ * Compact: ~15 tok/result. Standard: signature + truncated source. Full: unlimited.
+ */
+function shapeSearchResults(
+  results: SearchResult[],
+  detail: DetailLevel,
+  includeSource: boolean,
+  options?: Pick<SearchSymbolsOptions, "source_chars" | "file_pattern">,
+): SearchResult[] {
+  if (detail === "compact") {
+    return results.map((r) => ({
+      symbol: {
+        id: r.symbol.id,
+        name: r.symbol.name,
+        kind: r.symbol.kind,
+        file: r.symbol.file,
+        start_line: r.symbol.start_line,
+      },
+      score: r.score,
+    })) as SearchResult[];
+  }
+
+  let shaped = results;
+
+  if (!includeSource) {
+    shaped = shaped.map((r) => {
+      const { source: _source, ...symbolWithoutSource } = r.symbol;
+      return { ...r, symbol: symbolWithoutSource as typeof r.symbol };
+    });
+  }
+
+  const defaultSourceChars = detail === "full" ? undefined
+    : (includeSource && !options?.file_pattern) ? DEFAULT_SOURCE_CHARS_NARROW : DEFAULT_SOURCE_CHARS_WIDE;
+  const sourceChars = options?.source_chars ?? (includeSource ? defaultSourceChars : undefined);
+  if (includeSource && sourceChars !== undefined && sourceChars > 0) {
+    shaped = shaped.map((r) => {
+      const source = r.symbol.source;
+      if (source && source.length > sourceChars) {
+        return { ...r, symbol: { ...r.symbol, source: source.slice(0, sourceChars) + "..." } };
+      }
+      return r;
+    });
+  }
+
+  return shaped.map((r) => {
+    const { tokens: _tokens, repo: _repo, ...cleanSymbol } = r.symbol;
+    return { ...r, symbol: cleanSymbol as typeof r.symbol };
+  });
+}
+
+/** Validate regex for ReDoS safety and compile without g/y flags, or throw descriptive error. */
+function compileSearchRegex(query: string): RegExp {
+  if (!isSafeRegex(query)) {
+    throw new Error("Regex pattern rejected: potential catastrophic backtracking (ReDoS)");
+  }
+  try {
+    // No g/y flags — regex is reused across files; stateful flags cause alternating matches
+    return new RegExp(query);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid regex pattern: ${message}`);
+  }
+}
+
+/** Search file content for line matches, collecting context lines around each hit. */
+function searchFileForMatches(
+  content: string,
+  filePath: string,
+  query: string,
+  regex: RegExp | null,
+  contextLines: number,
+  maxMatches: number,
+): TextMatch[] {
+  const lines = content.split("\n");
+  const matches: TextMatch[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (matches.length >= maxMatches) break;
+
+    const line = lines[i];
+    if (line === undefined) continue;
+
+    const isMatch = regex ? regex.test(line) : line.includes(query);
+    if (!isMatch) continue;
+
+    const contextBefore: string[] = [];
+    for (let j = Math.max(0, i - contextLines); j < i; j++) {
+      const ctxLine = lines[j];
+      if (ctxLine !== undefined) contextBefore.push(ctxLine);
+    }
+
+    const contextAfter: string[] = [];
+    for (let j = i + 1; j <= Math.min(lines.length - 1, i + contextLines); j++) {
+      const ctxLine = lines[j];
+      if (ctxLine !== undefined) contextAfter.push(ctxLine);
+    }
+
+    const truncLine = line.length > MAX_LINE_CHARS
+      ? line.slice(0, MAX_LINE_CHARS) + "..."
+      : line;
+    const match: TextMatch = {
+      file: filePath,
+      line: i + 1,
+      content: truncLine,
+    };
+    if (contextBefore.length > 0) match.context_before = contextBefore;
+    if (contextAfter.length > 0) match.context_after = contextAfter;
+    matches.push(match);
+  }
+
+  return matches;
+}
+
+/** Aggregate flat TextMatch[] into per-file groups with counts and first_match preview. */
+function groupMatchesByFile(matches: TextMatch[]): TextMatchGroup[] {
+  const groups = new Map<string, TextMatchGroup>();
+  for (const m of matches) {
+    const existing = groups.get(m.file);
+    if (existing) {
+      existing.count++;
+      existing.lines.push(m.line);
+    } else {
+      groups.set(m.file, {
+        file: m.file,
+        count: 1,
+        lines: [m.line],
+        first_match: m.content.length > MAX_FIRST_MATCH_CHARS
+          ? m.content.slice(0, MAX_FIRST_MATCH_CHARS) + "..."
+          : m.content,
+      });
+    }
+  }
+  return [...groups.values()];
+}
+
+// ── Public API ──────────────────────────────────────────
+
 /**
  * Search symbols by name/signature/docstring using BM25 ranking.
  * Supports filtering by symbol kind and file pattern.
@@ -81,110 +239,33 @@ export async function searchSymbols(
 
   const config = loadConfig();
   const includeSource = options?.include_source ?? true;
-  // When include_source=true without file_pattern, cap results to avoid 10K+ token responses
-  const defaultK = (includeSource && !options?.file_pattern) ? 10 : config.defaultTopK;
+  const defaultK = (includeSource && !options?.file_pattern) ? DEFAULT_TOP_K_WITH_SOURCE : config.defaultTopK;
   const topK = options?.top_k ?? defaultK;
-  const hasKindFilter = !!options?.kind;
-  const hasFileFilter = !!options?.file_pattern;
-  const hasFilters = hasKindFilter || hasFileFilter;
+  const hasFilters = !!options?.kind || !!options?.file_pattern;
 
   let results: SearchResult[];
 
   if (!query.trim()) {
-    // Empty query: return all symbols matching filters (no BM25 scoring)
     const allSymbols = [...index.symbols.values()];
-    let filtered = allSymbols;
-
-    if (hasKindFilter) {
-      const kind = options!.kind!;
-      filtered = filtered.filter((s) => s.kind === kind);
-    }
-    if (hasFileFilter) {
-      const pattern = options!.file_pattern!;
-      filtered = filtered.filter((s) => matchFilePattern(s.file, pattern));
-    }
-
-    results = filtered.slice(0, topK).map((symbol) => ({
-      symbol,
-      score: 0,
-    }));
+    const filtered = allSymbols.filter((s) => matchesSymbolFilters(s, options));
+    results = filtered.slice(0, topK).map((symbol) => ({ symbol, score: 0 }));
   } else {
-    // When filters are active, search a wider candidate set from BM25
-    // so that post-filter truncation doesn't lose relevant results.
-    const searchTopK = hasFilters ? Math.max(topK * 5, 200) : topK;
+    const searchTopK = hasFilters ? Math.max(topK * BM25_FILTER_MULTIPLIER, BM25_FILTER_MIN_K) : topK;
     results = searchBM25(index, query, searchTopK, config.bm25FieldWeights);
-
-    // Filter by symbol kind
-    if (hasKindFilter) {
-      const kind = options!.kind!;
-      results = results.filter((r) => r.symbol.kind === kind);
-    }
-
-    // Filter by file pattern
-    if (hasFileFilter) {
-      const pattern = options!.file_pattern!;
-      results = results.filter((r) => matchFilePattern(r.symbol.file, pattern));
-    }
-
-    // Re-truncate to requested top_k after filtering
+    results = results.filter((r) => matchesSymbolFilters(r.symbol, options));
     results = results.slice(0, topK);
   }
 
-  const detail = options?.detail_level ?? (includeSource ? "standard" : "standard");
-
-  // Apply detail level shaping
-  if (detail === "compact") {
-    // ~15 tokens per result: id, name, kind, file, start_line only
-    return results.map((r) => ({
-      symbol: {
-        id: r.symbol.id,
-        name: r.symbol.name,
-        kind: r.symbol.kind,
-        file: r.symbol.file,
-        start_line: r.symbol.start_line,
-      },
-      score: r.score,
-    })) as SearchResult[];
-  }
-
-  // Strip source if not requested
-  if (!includeSource) {
-    results = results.map((r) => {
-      const { source: _source, ...symbolWithoutSource } = r.symbol;
-      return { ...r, symbol: symbolWithoutSource as typeof r.symbol };
-    });
-  }
-
-  // Truncate source: 200 chars without file_pattern (reduce waste), 500 with, unlimited for "full"
-  const defaultSourceChars = detail === "full" ? undefined
-    : (includeSource && !options?.file_pattern) ? 200 : 500;
-  const sourceChars = options?.source_chars ?? (includeSource ? defaultSourceChars : undefined);
-  if (includeSource && sourceChars !== undefined && sourceChars > 0) {
-    results = results.map((r) => {
-      const source = r.symbol.source;
-      if (source && source.length > sourceChars) {
-        return {
-          ...r,
-          symbol: { ...r.symbol, source: source.slice(0, sourceChars) + "..." },
-        };
-      }
-      return r;
-    });
-  }
-
-  // Strip internal/redundant fields
-  let cleaned = results.map((r) => {
-    const { tokens: _tokens, repo: _repo, ...cleanSymbol } = r.symbol;
-    return { ...r, symbol: cleanSymbol as typeof r.symbol };
-  });
+  const detail = options?.detail_level ?? "standard";
+  const shaped = shapeSearchResults(results, detail, includeSource, options);
 
   // Token budget: greedily pack results until budget exhausted
   const budget = options?.token_budget;
   if (budget && budget > 0) {
-    const packed: typeof cleaned = [];
+    const packed: typeof shaped = [];
     let used = 0;
-    for (const r of cleaned) {
-      const tok = Math.ceil(JSON.stringify(r).length / 4);
+    for (const r of shaped) {
+      const tok = Math.ceil(JSON.stringify(r).length / CHARS_PER_TOKEN);
       if (used + tok > budget) break;
       packed.push(r);
       used += tok;
@@ -192,7 +273,7 @@ export async function searchSymbols(
     return packed;
   }
 
-  return cleaned;
+  return shaped;
 }
 
 /**
@@ -200,7 +281,7 @@ export async function searchSymbols(
  * Walks the filesystem to search ALL text files, not just indexed ones.
  *
  * When group_by_file=true, returns TextMatchGroup[] instead of TextMatch[].
- * This reduces output by 80-90% for high-cardinality searches (e.g., "throw new AppError" with 200+ hits).
+ * This reduces output by 80-90% for high-cardinality searches.
  */
 export async function searchText(
   repo: string,
@@ -224,33 +305,17 @@ export async function searchText(
 
   const useRegex = options?.regex ?? false;
   const filePattern = options?.file_pattern;
-  // Regex without file_pattern scans entire repo — cap results to limit timeout
   const maxResults = options?.max_results
-    ?? (useRegex && !filePattern ? 50 : DEFAULT_MAX_TEXT_MATCHES);
+    ?? (useRegex && !filePattern ? DEFAULT_MAX_REGEX_RESULTS : DEFAULT_MAX_TEXT_MATCHES);
   const contextLines = options?.context_lines ?? 2;
 
-  let regex: RegExp | null = null;
-  if (useRegex) {
-    // SEC-003: Check for catastrophic backtracking before compiling
-    if (!isSafeRegex(query)) {
-      throw new Error("Regex pattern rejected: potential catastrophic backtracking (ReDoS)");
-    }
-    try {
-      regex = new RegExp(query);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Invalid regex pattern: ${message}`);
-    }
-  }
+  const regex = useRegex ? compileSearchRegex(query) : null;
 
   // Use indexed file list when file_pattern is specified (skip expensive filesystem walk)
-  // Fall back to full walk only when no pattern (need to search non-parseable files too)
   let allFiles: string[];
   if (filePattern) {
-    // Fast path: filter indexed files instead of walking filesystem
     allFiles = index.files.map((f) => f.path);
   } else {
-    // Slow path: walk filesystem for ALL text files (not just indexed/parseable ones)
     allFiles = await walkDirectory(index.root, {
       fileFilter: (ext) => !BINARY_EXTENSIONS.has(ext),
       maxFiles: MAX_WALK_FILES,
@@ -263,70 +328,27 @@ export async function searchText(
 
   for (const filePath of allFiles) {
     if (matches.length >= maxResults) break;
-    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break; // Prevent 100s+ hangs
+    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break;
 
-    // Filter by file pattern
-    if (filePattern && !matchFilePattern(filePath, filePattern)) {
-      continue;
-    }
+    if (filePattern && !matchFilePattern(filePath, filePattern)) continue;
 
     const fullPath = join(index.root, filePath);
     let content: string;
     try {
       content = await readFile(fullPath, "utf-8");
     } catch {
-      continue; // File may have been deleted or moved
+      continue;
     }
 
-    const lines = content.split("\n");
-
-    for (let i = 0; i < lines.length; i++) {
-      if (matches.length >= maxResults) break;
-
-      const line = lines[i];
-      if (line === undefined) continue;
-
-      const isMatch = regex ? regex.test(line) : line.includes(query);
-      if (!isMatch) continue;
-
-      const contextBefore: string[] = [];
-      const contextAfter: string[] = [];
-
-      for (let j = Math.max(0, i - contextLines); j < i; j++) {
-        const ctxLine = lines[j];
-        if (ctxLine !== undefined) {
-          contextBefore.push(ctxLine);
-        }
-      }
-
-      for (let j = i + 1; j <= Math.min(lines.length - 1, i + contextLines); j++) {
-        const ctxLine = lines[j];
-        if (ctxLine !== undefined) {
-          contextAfter.push(ctxLine);
-        }
-      }
-
-      const truncLine = line.length > MAX_LINE_CHARS
-        ? line.slice(0, MAX_LINE_CHARS) + "..."
-        : line;
-      const match: TextMatch = {
-        file: filePath,
-        line: i + 1, // 1-based
-        content: truncLine,
-      };
-      if (contextBefore.length > 0) {
-        match.context_before = contextBefore;
-      }
-      if (contextAfter.length > 0) {
-        match.context_after = contextAfter;
-      }
-      matches.push(match);
-    }
+    const fileMatches = searchFileForMatches(
+      content, filePath, query, regex, contextLines, maxResults - matches.length,
+    );
+    matches.push(...fileMatches);
   }
 
   // Estimate response size; force grouping when output would be enormous
   const estimatedChars = matches.reduce((sum, m) => {
-    let chars = m.file.length + m.content.length + 40; // JSON overhead
+    let chars = m.file.length + m.content.length + JSON_OVERHEAD_PER_MATCH;
     if (m.context_before) chars += m.context_before.reduce((s, l) => s + l.length, 0);
     if (m.context_after) chars += m.context_after.reduce((s, l) => s + l.length, 0);
     return sum + chars;
@@ -337,24 +359,7 @@ export async function searchText(
     || estimatedChars > MAX_RESPONSE_CHARS;
 
   if (shouldGroup) {
-    const groups = new Map<string, TextMatchGroup>();
-    for (const m of matches) {
-      const existing = groups.get(m.file);
-      if (existing) {
-        existing.count++;
-        existing.lines.push(m.line);
-      } else {
-        groups.set(m.file, {
-          file: m.file,
-          count: 1,
-          lines: [m.line],
-          first_match: m.content.length > MAX_FIRST_MATCH_CHARS
-            ? m.content.slice(0, MAX_FIRST_MATCH_CHARS) + "..."
-            : m.content,
-        });
-      }
-    }
-    return [...groups.values()];
+    return groupMatchesByFile(matches);
   }
 
   return matches;
