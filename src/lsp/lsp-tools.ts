@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getLspManager } from "./lsp-manager.js";
-import { getCodeIndex } from "../tools/index-tools.js";
+import { getCodeIndex, indexFile } from "../tools/index-tools.js";
 import type { CodeIndex, Reference } from "../types.js";
 
 /** Map file extension to LSP language ID. */
@@ -216,4 +216,119 @@ export async function findReferencesLsp(
   } catch {
     return null;
   }
+}
+
+interface RenameEdit {
+  file: string;
+  changes: number;
+}
+
+export async function renameSymbol(
+  repo: string,
+  symbolName: string,
+  newName: string,
+  filePath?: string,
+  line?: number,
+  character?: number,
+): Promise<{ files_changed: number; edits: RenameEdit[] }> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  if (!pos) throw new Error(`Symbol "${symbolName}" not found in index.`);
+
+  const language = detectLanguage(pos.filePath);
+  if (!language) throw new Error("Unsupported language for LSP rename.");
+
+  const manager = getLspManager();
+  const client = await manager.getClient(index.root, language);
+  if (!client) {
+    const serverName = manager.getServerName(language);
+    throw new Error(`rename_symbol requires a language server. Install ${serverName ?? "a language server"}.`);
+  }
+
+  const fileUri = pathToFileURL(join(index.root, pos.filePath)).href;
+  const content = await readFile(join(index.root, pos.filePath), "utf-8");
+  await client.openFile(fileUri, content, language);
+
+  // Validate rename is possible
+  try {
+    await client.request("textDocument/prepareRename", {
+      textDocument: { uri: fileUri },
+      position: { line: pos.line, character: pos.character },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Cannot rename at this position: ${msg}`);
+  }
+
+  // Execute rename
+  const workspaceEdit = await client.request<{
+    changes?: Record<string, Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }>>;
+    documentChanges?: Array<{ textDocument: { uri: string }; edits: Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }> }>;
+  }>("textDocument/rename", {
+    textDocument: { uri: fileUri },
+    position: { line: pos.line, character: pos.character },
+    newName,
+  });
+
+  // Normalize workspace edits
+  const fileEdits = new Map<string, Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }>>();
+  const rootUri = pathToFileURL(index.root).href + "/";
+
+  if (workspaceEdit.changes) {
+    for (const [uri, edits] of Object.entries(workspaceEdit.changes)) {
+      fileEdits.set(uri.replace(rootUri, ""), edits);
+    }
+  } else if (workspaceEdit.documentChanges) {
+    for (const docChange of workspaceEdit.documentChanges) {
+      if ("edits" in docChange) {
+        fileEdits.set(docChange.textDocument.uri.replace(rootUri, ""), docChange.edits);
+      }
+    }
+  }
+
+  // Apply edits to disk
+  const results: RenameEdit[] = [];
+
+  for (const [relPath, edits] of fileEdits) {
+    const absPath = join(index.root, relPath);
+    let fileContent: string;
+    try {
+      fileContent = await readFile(absPath, "utf-8");
+    } catch { continue; }
+
+    const lines = fileContent.split("\n");
+
+    // Apply in reverse order to preserve line numbers
+    const sortedEdits = [...edits].sort((a, b) => {
+      const lineDiff = b.range.start.line - a.range.start.line;
+      return lineDiff !== 0 ? lineDiff : b.range.start.character - a.range.start.character;
+    });
+
+    for (const edit of sortedEdits) {
+      const startLine = edit.range.start.line;
+      const startChar = edit.range.start.character;
+      const endLine = edit.range.end.line;
+      const endChar = edit.range.end.character;
+
+      if (startLine === endLine) {
+        const l = lines[startLine] ?? "";
+        lines[startLine] = l.slice(0, startChar) + edit.newText + l.slice(endChar);
+      } else {
+        const firstLine = (lines[startLine] ?? "").slice(0, startChar);
+        const lastLine = (lines[endLine] ?? "").slice(endChar);
+        const newLines = (firstLine + edit.newText + lastLine).split("\n");
+        lines.splice(startLine, endLine - startLine + 1, ...newLines);
+      }
+    }
+
+    await writeFile(absPath, lines.join("\n"), "utf-8");
+    results.push({ file: relPath, changes: edits.length });
+
+    // Reindex changed file
+    try { await indexFile(absPath); } catch { /* non-fatal */ }
+  }
+
+  return { files_changed: results.length, edits: results };
 }

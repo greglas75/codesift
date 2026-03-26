@@ -20,7 +20,7 @@ import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-r
 import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
-import { goToDefinition, getTypeInfo } from "./lsp/lsp-tools.js";
+import { goToDefinition, getTypeInfo, renameSymbol } from "./lsp/lsp-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
 const zFiniteNumber = z.number().finite();
@@ -340,6 +340,27 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: (args) => getTypeInfo(
       args.repo as string,
       args.symbol_name as string,
+      args.file_path as string | undefined,
+      args.line as number | undefined,
+      args.character as number | undefined,
+    ),
+  },
+
+  {
+    name: "rename_symbol",
+    description: "Rename a symbol across all files using LSP refactoring. Type-safe, handles imports and references. Requires a language server — no fallback.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      symbol_name: z.string().describe("Current name of the symbol to rename"),
+      new_name: z.string().describe("New name for the symbol"),
+      file_path: z.string().optional().describe("File containing the symbol"),
+      line: zNum().describe("0-based line number"),
+      character: zNum().describe("0-based column"),
+    },
+    handler: (args) => renameSymbol(
+      args.repo as string,
+      args.symbol_name as string,
+      args.new_name as string,
       args.file_path as string | undefined,
       args.line as number | undefined,
       args.character as number | undefined,
