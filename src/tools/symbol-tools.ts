@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { searchBM25, type BM25Index } from "../search/bm25.js";
+import { findReferencesLsp } from "../lsp/lsp-tools.js";
 import { loadConfig } from "../config.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { detectFrameworks, isFrameworkEntryPoint } from "../utils/framework-detect.js";
@@ -222,6 +223,11 @@ export async function findReferences(
   symbolName: string,
   filePattern?: string,
 ): Promise<Reference[]> {
+  // Try LSP first (type-safe, no false positives)
+  const lspRefs = await findReferencesLsp(repo, symbolName);
+  if (lspRefs !== null) return lspRefs;
+
+  // Fallback: grep-based search
   const index = await requireCodeIndex(repo);
   const pattern = wordBoundaryPattern(symbolName);
   const searchStart = Date.now();
@@ -455,7 +461,7 @@ export async function findDeadCode(
 
   for (const sym of exportedSymbols) {
     if (candidates.length >= MAX_DEAD_CODE_RESULTS) break;
-    if (isFrameworkEntryPoint(sym.name, frameworks)) continue;
+    if (isFrameworkEntryPoint(sym, frameworks)) continue;
 
     const pattern = wordBoundaryPattern(sym.name);
 
@@ -486,4 +492,3 @@ export async function findDeadCode(
     scanned_files: fileContents.size,
   };
 }
-

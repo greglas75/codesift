@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getLspManager } from "./lsp-manager.js";
 import { getCodeIndex } from "../tools/index-tools.js";
-import type { CodeIndex } from "../types.js";
+import type { CodeIndex, Reference } from "../types.js";
 
 /** Map file extension to LSP language ID. */
-function detectLanguage(filePath: string): string | null {
+export function detectLanguage(filePath: string): string | null {
   const ext = filePath.slice(filePath.lastIndexOf("."));
   const map: Record<string, string> = {
     ".ts": "typescript", ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript",
@@ -16,7 +16,7 @@ function detectLanguage(filePath: string): string | null {
 }
 
 /** Resolve symbol name to file position. Uses provided params or searches index. */
-async function resolveSymbolPosition(
+export async function resolveSymbolPosition(
   index: CodeIndex,
   symbolName: string,
   filePath?: string,
@@ -103,4 +103,53 @@ export async function goToDefinition(
     ...(sym.source ? { preview: sym.source.slice(0, 300) } : {}),
     ...(hint ? { hint: `Install ${hint} for precise go-to-definition` } : {}),
   };
+}
+
+/**
+ * Find references to a symbol using LSP textDocument/references.
+ * Returns null if LSP is unavailable (caller should fall back to grep).
+ */
+export async function findReferencesLsp(
+  repo: string,
+  symbolName: string,
+  filePath?: string,
+  line?: number,
+  character?: number,
+): Promise<Reference[] | null> {
+  const index = await getCodeIndex(repo);
+  if (!index) return null;
+
+  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  if (!pos) return null;
+
+  const language = detectLanguage(pos.filePath);
+  if (!language) return null;
+
+  const manager = getLspManager();
+  const client = await manager.getClient(index.root, language);
+  if (!client) return null;
+
+  try {
+    const fileUri = pathToFileURL(join(index.root, pos.filePath)).href;
+    const content = await readFile(join(index.root, pos.filePath), "utf-8");
+    await client.openFile(fileUri, content, language);
+
+    const result = await client.request<unknown[]>("textDocument/references", {
+      textDocument: { uri: fileUri },
+      position: { line: pos.line, character: pos.character },
+      context: { includeDeclaration: false },
+    });
+
+    if (!Array.isArray(result)) return null;
+
+    const rootUri = pathToFileURL(index.root).href + "/";
+    return result.map((loc: any) => ({
+      file: (loc.uri ?? "").replace(rootUri, ""),
+      line: (loc.range?.start?.line ?? 0) + 1,
+      col: (loc.range?.start?.character ?? 0) + 1,
+      context: "",
+    }));
+  } catch {
+    return null;
+  }
 }
