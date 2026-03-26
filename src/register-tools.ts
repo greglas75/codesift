@@ -20,7 +20,7 @@ import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-r
 import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
-import { goToDefinition } from "./lsp/lsp-tools.js";
+import { goToDefinition, getTypeInfo } from "./lsp/lsp-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
 const zFiniteNumber = z.number().finite();
@@ -319,6 +319,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       character: zNum().describe("0-based column of the reference"),
     },
     handler: (args) => goToDefinition(
+      args.repo as string,
+      args.symbol_name as string,
+      args.file_path as string | undefined,
+      args.line as number | undefined,
+      args.character as number | undefined,
+    ),
+  },
+
+  {
+    name: "get_type_info",
+    description: "Get type information for a symbol (return type, parameter types, documentation). Requires a language server — returns hint if not available.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      symbol_name: z.string().describe("Symbol name to get type info for"),
+      file_path: z.string().optional().describe("File containing the symbol"),
+      line: zNum().describe("0-based line number"),
+      character: zNum().describe("0-based column"),
+    },
+    handler: (args) => getTypeInfo(
       args.repo as string,
       args.symbol_name as string,
       args.file_path as string | undefined,
