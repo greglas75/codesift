@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 36 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 39 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -113,7 +113,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift complexity <repo>` | Cyclomatic complexity + nesting depth per function |
 | `codesift clones <repo>` | Copy-paste detection (hash bucketing + line similarity) |
 | `codesift hotspots <repo>` | Git churn x complexity = risk-ranked file list |
-| `codesift patterns <repo> <pattern>` | Structural anti-pattern search (8 built-in + custom regex) |
+| `codesift patterns <repo> <pattern>` | Structural anti-pattern search (9 built-in + custom regex) |
 
 ### Cross-repo
 
@@ -138,7 +138,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (36 total)
+## MCP tools (39 total)
 
 When running as an MCP server, CodeSift exposes these tools:
 
@@ -148,7 +148,8 @@ When running as an MCP server, CodeSift exposes these tools:
 | **Search** | `search_symbols` (detail_level: compact/standard/full, token_budget), `search_text` (auto_group, group_by_file) |
 | **Outline** | `get_file_tree`, `get_file_outline`, `get_repo_outline`, `suggest_queries` |
 | **Symbol retrieval** | `get_symbol`, `get_symbols`, `find_and_show`, `get_context_bundle` |
-| **References & graph** | `find_references`, `trace_call_chain`, `impact_analysis`, `trace_route` (HTTP route → handler → DB) |
+| **References & graph** | `find_references` (LSP-enhanced), `trace_call_chain`, `impact_analysis`, `trace_route` (HTTP route → handler → DB) |
+| **LSP bridge** | `go_to_definition` (LSP + index fallback), `get_type_info` (hover), `rename_symbol` (cross-file type-safe rename) |
 | **Context & knowledge** | `assemble_context` (level: L0/L1/L2/L3), `get_knowledge_map`, `detect_communities` (Louvain) |
 | **Diff** | `diff_outline`, `changed_symbols` |
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget) |
@@ -175,6 +176,9 @@ When running as an MCP server, CodeSift exposes these tools:
 | Trace HTTP route | `trace_route` | URL → handler → service → DB calls in one call |
 | Discover code modules | `detect_communities` | Louvain clustering finds architectural boundaries |
 | Dense context (5-10x) | `assemble_context --level L1` | Signatures only — fits 56 symbols where L0 fits 19 |
+| Go to definition | `go_to_definition` | LSP-precise when available, index fallback |
+| Get type info | `get_type_info` | Return types + docs via LSP hover — no file reading |
+| Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -198,7 +202,7 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 33 tools to AI agents like Claude.
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 39 tools to AI agents like Claude.
 
 ### Claude Code (CLI)
 
@@ -310,6 +314,8 @@ All configuration is via environment variables.
 
 6. **Response guards** -- Multiple layers prevent token waste: auto-grouping at 80K chars, 30K token hard cap, response dedup cache (30s), in-flight request coalescing, sequential call hints, and source truncation.
 
+7. **LSP bridge** (optional) -- When a language server is installed (typescript-language-server, pylsp, gopls, rust-analyzer, solargraph, intelephense), CodeSift uses it for type-safe `find_references`, precise `go_to_definition`, `get_type_info` via hover, and cross-file `rename_symbol`. Falls back to tree-sitter/grep when LSP is unavailable. Lazy start + 5 min idle kill — zero overhead when not used.
+
 ## Glob pattern support
 
 File pattern parameters (`file_pattern`) support full glob syntax via [picomatch](https://github.com/micromatch/picomatch):
@@ -322,7 +328,7 @@ File pattern parameters (`file_pattern`) support full glob syntax via [picomatch
 
 ## Supported languages
 
-TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, Java, Ruby, PHP, Markdown, CSS, Prisma.
+TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, Java, Ruby, PHP, Markdown, CSS, Prisma, Astro.
 
 ## Development
 
@@ -332,7 +338,7 @@ cd codesift-mcp
 npm install
 npm run download-wasm   # Download tree-sitter WASM grammars
 npm run build           # TypeScript compilation
-npm test                # Run tests (Vitest, 350 tests)
+npm test                # Run tests (Vitest, 392+ tests)
 npm run test:coverage   # Coverage report
 npm run lint            # Type check (tsc --noEmit)
 ```
@@ -344,7 +350,7 @@ MIT
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (33) | src/register-tools.ts (grep 'name: "' count) |
+| Tool count (39) | src/register-tools.ts (grep 'name: "' count) |
 | Quick install | package.json:bin (line 8-11) |
 | Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |
@@ -357,6 +363,7 @@ MIT
 | Configuration | src/config.ts:36-72 |
 | How it works | src/search/bm25.ts, src/parser/, src/storage/watcher.ts, src/server-helpers.ts |
 | Glob support | src/utils/glob.ts (picomatch) |
+| LSP bridge | src/lsp/lsp-client.ts, src/lsp/lsp-manager.ts, src/lsp/lsp-servers.ts, src/lsp/lsp-tools.ts |
 | Languages | src/parser/parser-manager.ts, src/parser/extractors/ |
 | Development | package.json:scripts (line 19-28) |
 | Git URL | package.json:repository (line 62-64) |
