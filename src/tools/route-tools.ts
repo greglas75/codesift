@@ -34,6 +34,8 @@ export interface RouteTraceResult {
   db_calls: DbCall[];
 }
 
+type RouteCallNode = RouteTraceResult["call_chain"][number];
+
 /**
  * Match a URL path pattern against a route definition.
  * Handles :param, [param], [...param], [[...param]] as wildcards.
@@ -203,6 +205,40 @@ function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
   return calls;
 }
 
+function nodeKey(node: Pick<RouteCallNode, "name" | "file">): string {
+  return `${node.file}:${node.name}`;
+}
+
+function nodeAlias(
+  node: Pick<RouteCallNode, "name" | "file">,
+  aliases: Map<string, string>,
+): string {
+  const key = nodeKey(node);
+  const existing = aliases.get(key);
+  if (existing) return existing;
+
+  const baseName = node.file.split("/").pop()?.replace(/\.\w+$/, "") ?? node.name;
+  const alias = `${baseName}_${node.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+  aliases.set(key, alias);
+  return alias;
+}
+
+function appendDbCalls(
+  lines: string[],
+  dbCalls: DbCall[],
+  node: Pick<RouteCallNode, "name" | "file">,
+  actor: string,
+): void {
+  const callsForNode = dbCalls.filter((db) =>
+    db.file === node.file && db.symbol_name === node.name,
+  );
+
+  for (const db of callsForNode.slice(0, 3)) {
+    lines.push(`    ${actor}->>+DB: ${db.operation}`);
+    lines.push(`    DB-->>-${actor}: result`);
+  }
+}
+
 /**
  * Render a RouteTraceResult as a Mermaid sequence diagram.
  */
@@ -214,26 +250,44 @@ function routeToMermaid(result: RouteTraceResult): string {
   const lines: string[] = ["sequenceDiagram"];
   const handler = result.handlers[0]!;
   const method = handler.method ?? "REQUEST";
+  const aliases = new Map<string, string>();
 
   lines.push(`    Client->>+Controller: ${method} ${result.path}`);
 
-  const depth1 = result.call_chain.filter((n) => n.depth === 1);
-
-  for (const node of depth1.slice(0, 5)) {
-    const participant = node.file.split("/").pop()?.replace(/\.\w+$/, "") ?? node.name;
-    // Sanitize participant name for Mermaid (no dots, spaces)
-    const safeParticipant = participant.replace(/[^a-zA-Z0-9_-]/g, "_");
-    lines.push(`    Controller->>+${safeParticipant}: ${node.name}()`);
-
-    const dbFromNode = result.db_calls.filter((d) => d.symbol_name === node.name);
-    for (const db of dbFromNode.slice(0, 3)) {
-      lines.push(`    ${safeParticipant}->>+DB: ${db.operation}`);
-      lines.push(`    DB-->>-${safeParticipant}: result`);
-    }
-
-    lines.push(`    ${safeParticipant}-->>-Controller: result`);
+  const root = result.call_chain[0];
+  if (root) {
+    appendDbCalls(lines, result.db_calls, root, "Controller");
   }
 
+  const descendants = result.call_chain
+    .filter((node, idx) => idx > 0 && node.depth > 0)
+    .slice(0, 12);
+  const stack: Array<{ node: RouteCallNode; alias: string }> = [];
+
+  const closeUntilDepth = (nextDepth: number): void => {
+    while (stack.length > 0 && (stack[stack.length - 1]?.node.depth ?? -1) >= nextDepth) {
+      const finished = stack.pop();
+      if (!finished) break;
+      const returnTo = stack.length > 0 ? stack[stack.length - 1]!.alias : "Controller";
+      lines.push(`    ${finished.alias}-->>-${returnTo}: result`);
+    }
+  };
+
+  for (let i = 0; i < descendants.length; i++) {
+    const node = descendants[i]!;
+    closeUntilDepth(node.depth);
+
+    const parentActor = stack.length > 0 ? stack[stack.length - 1]!.alias : "Controller";
+    const alias = nodeAlias(node, aliases);
+    lines.push(`    ${parentActor}->>+${alias}: ${node.name}()`);
+    appendDbCalls(lines, result.db_calls, node, alias);
+    stack.push({ node, alias });
+
+    const nextDepth = descendants[i + 1]?.depth ?? 0;
+    closeUntilDepth(nextDepth);
+  }
+
+  closeUntilDepth(0);
   lines.push(`    Controller-->>-Client: response`);
   return lines.join("\n");
 }

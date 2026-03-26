@@ -1,21 +1,15 @@
-import type { CodeIndex } from "../types.js";
+import type { CodeIndex, CodeSymbol } from "../types.js";
 
 export type Framework = "react" | "nestjs" | "nextjs" | "express" | "test";
 
-const FRAMEWORK_ENTRY_POINTS: Record<Framework, RegExp[]> = {
-  react: [/^use[A-Z]/],
-  nestjs: [
-    /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown)$/,
-    /^(canActivate|intercept|transform|catch|use)$/,
-  ],
-  nextjs: [
-    /^(getServerSideProps|getStaticProps|getStaticPaths|generateMetadata|generateStaticParams)$/,
-    /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/,
-    /^(middleware|default)$/,
-  ],
-  express: [/^(get|post|put|delete|patch|use|all|param)$/],
-  test: [/^(describe|it|test|beforeEach|afterEach|beforeAll|afterAll)$/],
-};
+const NEXT_ROUTE_FILE = /(^|\/)app\/.*\/route\.[jt]sx?$/;
+const NEXT_APP_FILE = /(^|\/)app\/.+\.[jt]sx?$/;
+const NEXT_PAGES_FILE = /(^|\/)pages\/.+\.[jt]sx?$/;
+const NEXT_MIDDLEWARE_FILE = /(^|\/)middleware\.[jt]sx?$/;
+
+const NEXT_ROUTE_METHODS = /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/;
+const NEXT_PAGES_DATA_FUNCTIONS = /^(getServerSideProps|getStaticProps|getStaticPaths)$/;
+const NEXT_APP_METADATA_FUNCTIONS = /^(generateMetadata|generateStaticParams)$/;
 
 export function detectFrameworks(index: CodeIndex): Set<Framework> {
   const frameworks = new Set<Framework>();
@@ -31,10 +25,16 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
   return frameworks;
 }
 
-export function isFrameworkEntryPoint(symbolName: string, frameworks: Set<Framework>): boolean {
-  for (const fw of frameworks) {
-    const patterns = FRAMEWORK_ENTRY_POINTS[fw];
-    if (patterns?.some((p) => p.test(symbolName))) return true;
+export function isFrameworkEntryPoint(
+  symbol: Pick<CodeSymbol, "name" | "file">,
+  frameworks: Set<Framework>,
+): boolean {
+  if (frameworks.has("nextjs")) {
+    if (NEXT_ROUTE_FILE.test(symbol.file) && NEXT_ROUTE_METHODS.test(symbol.name)) return true;
+    if (NEXT_MIDDLEWARE_FILE.test(symbol.file) && symbol.name === "middleware") return true;
+    if (NEXT_PAGES_FILE.test(symbol.file) && NEXT_PAGES_DATA_FUNCTIONS.test(symbol.name)) return true;
+    if (NEXT_APP_FILE.test(symbol.file) && NEXT_APP_METADATA_FUNCTIONS.test(symbol.name)) return true;
   }
+
   return false;
 }

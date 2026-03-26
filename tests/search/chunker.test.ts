@@ -58,4 +58,25 @@ describe("chunkBySymbols", () => {
       expect(chunk.tokenCount).toBe(Math.ceil(chunk.text.length / 4));
     }
   });
+
+  it("preserves skip rules for markdown files even when symbols exist", () => {
+    const source = "# Title\n\n## Section\nHello\n";
+    const symbols = [
+      { name: "Title", start_line: 1, end_line: 1 },
+      { name: "Section", start_line: 3, end_line: 3 },
+    ];
+    expect(chunkBySymbols("README.md", source, "repo", symbols)).toEqual([]);
+  });
+
+  it("skips binary files even when symbols exist", () => {
+    const source = "function a() {\0 return 1; }";
+    const symbols = [{ name: "a", start_line: 1, end_line: 1 }];
+    expect(chunkBySymbols("test.ts", source, "repo", symbols)).toEqual([]);
+  });
+
+  it("skips oversized files even when symbols exist", () => {
+    const source = "x".repeat(50_001);
+    const symbols = [{ name: "huge", start_line: 1, end_line: 1 }];
+    expect(chunkBySymbols("test.ts", source, "repo", symbols)).toEqual([]);
+  });
 });

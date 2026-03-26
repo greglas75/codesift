@@ -19,6 +19,17 @@ const SKIP_EXTENSIONS = new Set([
   ".env", ".txt", ".svg", ".png", ".wasm",
 ]);
 
+function shouldSkipChunking(file: string, content: string): boolean {
+  const dotIdx = file.lastIndexOf(".");
+  const ext = dotIdx !== -1 ? file.slice(dotIdx) : "";
+
+  if (SKIP_EXTENSIONS.has(ext)) return true;
+  if (content.length > MAX_FILE_BYTES) return true;
+  if (content.includes("\0")) return true;
+
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -34,16 +45,7 @@ export function chunkFile(
   content: string,
   repo: string,
 ): CodeChunk[] {
-  // Skip non-code file types
-  const dotIdx = file.lastIndexOf(".");
-  const ext = dotIdx !== -1 ? file.slice(dotIdx) : "";
-  if (SKIP_EXTENSIONS.has(ext)) return [];
-
-  // Skip files that are too large
-  if (content.length > MAX_FILE_BYTES) return [];
-
-  // Skip binary files (presence of null bytes is a reliable signal)
-  if (content.includes("\0")) return [];
+  if (shouldSkipChunking(file, content)) return [];
 
   const lines = content.split("\n");
   const totalLines = lines.length;
@@ -98,6 +100,7 @@ export function chunkBySymbols(
   repo: string,
   symbols: Array<{ name: string; start_line: number; end_line: number }>,
 ): CodeChunk[] {
+  if (shouldSkipChunking(file, content)) return [];
   if (symbols.length === 0) return chunkFile(file, content, repo);
 
   const lines = content.split("\n");

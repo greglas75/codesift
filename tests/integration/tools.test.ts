@@ -12,6 +12,7 @@ import { analyzeHotspots } from "../../src/tools/hotspot-tools.js";
 import { searchPatterns, listPatterns } from "../../src/tools/pattern-tools.js";
 import { generateClaudeMd } from "../../src/tools/generate-tools.js";
 import { codebaseRetrieval } from "../../src/retrieval/codebase-retrieval.js";
+import { traceRoute } from "../../src/tools/route-tools.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const REPO = "local/test-project";
@@ -949,6 +950,122 @@ export function testHelper(): void { serve(); }
     // User and PaymentInfo should not be dead (they're imported)
     expect(typesCandidates.find((c) => c.name === "User")).toBeUndefined();
     expect(typesCandidates.find((c) => c.name === "PaymentInfo")).toBeUndefined();
+  });
+
+  it("still reports unused useX exports in repos that happen to use React", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "widget.tsx"),
+      `import { useState } from "react";
+export function Widget(): number {
+  const [count] = useState(0);
+  return count;
+}
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "parser.ts"),
+      `export function useLegacyParser(): number {
+  return 42;
+}
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findDeadCode(REPO);
+
+    expect(result.candidates.find((c) => c.name === "useLegacyParser")).toBeDefined();
+  });
+
+  it("keeps Next.js route handlers off the dead-code list", async () => {
+    await mkdir(join(fixtureDir, "app", "api", "users"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "app", "api", "users", "route.ts"),
+      `export async function GET(): Promise<Response> {
+  return new Response("ok");
+}
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const index = await getCodeIndex(REPO);
+    expect(index?.symbols.some((s) => s.name === "GET" && s.file === "app/api/users/route.ts")).toBe(true);
+
+    const result = await findDeadCode(REPO);
+    expect(result.candidates.find((c) => c.name === "GET")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// traceRoute
+// ---------------------------------------------------------------------------
+describe("traceRoute", () => {
+  it("includes DB calls nested below depth 1 in Mermaid output", async () => {
+    await mkdir(join(fixtureDir, "app", "api", "users"), { recursive: true });
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "app", "api", "users", "route.ts"),
+      `import { loadUsers } from "../../../src/user-service.js";
+
+export async function GET() {
+  return loadUsers();
+}
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "user-service.ts"),
+      `import { findUsers } from "./user-repo.js";
+
+export async function loadUsers() {
+  return findUsers();
+}
+`,
+    );
+
+    await writeFile(
+      join(fixtureDir, "src", "user-repo.ts"),
+      `export async function findUsers() {
+  return prisma.user.findMany();
+}
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await traceRoute(REPO, "/api/users", "mermaid");
+    expect("mermaid" in result).toBe(true);
+    if (!("mermaid" in result)) throw new Error("Expected Mermaid route output");
+
+    expect(result.mermaid).toContain("loadUsers()");
+    expect(result.mermaid).toContain("findUsers()");
+    expect(result.mermaid).toContain("prisma.user.findMany");
+  });
+
+  it("includes direct handler DB calls in Mermaid output", async () => {
+    await mkdir(join(fixtureDir, "app", "api", "users"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "app", "api", "users", "route.ts"),
+      `export async function GET() {
+  return prisma.user.findMany();
+}
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await traceRoute(REPO, "/api/users", "mermaid");
+    expect("mermaid" in result).toBe(true);
+    if (!("mermaid" in result)) throw new Error("Expected Mermaid route output");
+
+    expect(result.mermaid).toContain("Controller->>+DB: prisma.user.findMany");
   });
 });
 
