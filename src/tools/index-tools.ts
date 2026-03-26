@@ -713,11 +713,104 @@ export async function indexFile(filePath: string): Promise<{
   };
 }
 
+// ---------------------------------------------------------------------------
+// Git-based auto-refresh — transparent freshness check before index access
+// ---------------------------------------------------------------------------
+
+const freshnessChecked = new Map<string, number>();
+const FRESHNESS_INTERVAL_MS = 60_000;
+const MAX_DIFF_FILES = 50;
+
+/**
+ * Ensure the index for a repo is fresh relative to git HEAD.
+ * Throttled to once per minute per repo. Reindexes changed files if HEAD moved.
+ * No-op for non-git repos.
+ */
+export async function ensureIndexFresh(repoName: string): Promise<{
+  status: "fresh" | "refreshed" | "skipped";
+  files_updated?: number;
+}> {
+  const lastCheck = freshnessChecked.get(repoName);
+  if (lastCheck && Date.now() - lastCheck < FRESHNESS_INTERVAL_MS) {
+    return { status: "fresh" };
+  }
+
+  const config = loadConfig();
+  const meta = await getRepo(config.registryPath, repoName);
+  if (!meta) return { status: "skipped" };
+
+  let currentCommit: string;
+  try {
+    currentCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: meta.root, encoding: "utf-8", timeout: 5000,
+    }).trim();
+  } catch {
+    freshnessChecked.set(repoName, Date.now());
+    return { status: "skipped" };
+  }
+
+  if (meta.last_git_commit === currentCommit) {
+    freshnessChecked.set(repoName, Date.now());
+    return { status: "fresh" };
+  }
+
+  // HEAD moved — find changed files
+  let changedFiles: string[] = [];
+  if (meta.last_git_commit) {
+    try {
+      const diff = execFileSync("git", [
+        "diff", "--name-only", "--diff-filter=ACMR",
+        `${meta.last_git_commit}..${currentCommit}`,
+      ], {
+        cwd: meta.root, encoding: "utf-8", timeout: 10_000,
+      });
+      changedFiles = diff.trim().split("\n").filter(Boolean);
+    } catch {
+      // Stored commit gone (rebase/squash) — will do full incremental
+      changedFiles = [];
+    }
+  }
+
+  if (changedFiles.length > 0 && changedFiles.length <= MAX_DIFF_FILES) {
+    for (const file of changedFiles) {
+      try {
+        await indexFile(join(meta.root, file));
+      } catch {
+        // File deleted or unparseable — skip
+      }
+    }
+  } else if (changedFiles.length > MAX_DIFF_FILES || !meta.last_git_commit) {
+    await indexFolder(meta.root, { incremental: true, watch: false });
+  }
+
+  await updateRepoMeta(config.registryPath, repoName, {
+    last_git_commit: currentCommit,
+    updated_at: Date.now(),
+  });
+
+  bm25Indexes.delete(repoName);
+  embeddingCaches.delete(repoName);
+
+  freshnessChecked.set(repoName, Date.now());
+  return { status: "refreshed", files_updated: changedFiles.length };
+}
+
+/** Reset freshness throttle cache. Exported for testing. */
+export function resetFreshnessCache(): void {
+  freshnessChecked.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Index access — with auto-refresh
+// ---------------------------------------------------------------------------
+
 /**
  * Get the in-memory BM25 index for a repo.
- * Loads from disk if not cached. Starts watcher if not running.
+ * Loads from disk if not cached. Auto-refreshes if git HEAD moved.
  */
 export async function getBM25Index(repoName: string): Promise<BM25Index | null> {
+  await ensureIndexFresh(repoName);
+
   const cached = bm25Indexes.get(repoName);
   if (cached) return cached;
 
@@ -737,7 +830,12 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
  * Get the code index for a repo from disk.
  * Starts watcher if not running (lazy start after server restart).
  */
+/**
+ * Get the code index for a repo from disk. Auto-refreshes if git HEAD moved.
+ */
 export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> {
+  await ensureIndexFresh(repoName);
+
   const config = loadConfig();
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return null;
