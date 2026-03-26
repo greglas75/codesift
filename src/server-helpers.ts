@@ -50,6 +50,11 @@ let lastToolName = "";
 let consecutiveCount = 0;
 let listReposCallCount = 0;
 
+/** Session-level tracking for cross-tool hints */
+const fileTreePaths = new Set<string>();
+let sessionSearchSymbolsCalled = false;
+let sessionGetSymbolCount = 0;
+
 /** Cache completed responses */
 const responseCache = new Map<string, { text: string; ts: number }>();
 
@@ -60,12 +65,19 @@ function getCacheKey(toolName: string, args: Record<string, unknown>): string {
   return `${toolName}\0${JSON.stringify(args, Object.keys(args).sort())}`;
 }
 
-const STATIC_TOOLS = new Set(["list_repos", "get_repo_outline"]);
+const STATIC_TOOLS = new Set(["list_repos", "get_repo_outline", "get_file_tree"]);
+
+/** Tools whose cache NEVER expires within a session (repo list doesn't change mid-session) */
+const SESSION_PERMANENT_TOOLS = new Set(["list_repos"]);
 
 function getCached(key: string): string | null {
   const entry = responseCache.get(key);
   if (!entry) return null;
   const toolName = key.split("\0")[0] ?? "";
+
+  // Session-permanent tools never expire (repo list doesn't change mid-session)
+  if (SESSION_PERMANENT_TOOLS.has(toolName)) return entry.text;
+
   const ttl = STATIC_TOOLS.has(toolName) ? CACHE_TTL_STATIC_MS : CACHE_TTL_MS;
   if (Date.now() - entry.ts > ttl) {
     responseCache.delete(key);
@@ -82,7 +94,8 @@ function setCache(key: string, text: string): void {
   responseCache.set(key, { text, ts: Date.now() });
 }
 
-function trackSequentialCalls(toolName: string): void {
+/** Track sequential calls + session-level state. Exported for testing. */
+export function trackSequentialCalls(toolName: string): void {
   if (toolName === lastToolName && BATCHABLE_TOOLS.has(toolName)) {
     consecutiveCount++;
   } else {
@@ -92,6 +105,12 @@ function trackSequentialCalls(toolName: string): void {
 
   if (toolName === "list_repos") {
     listReposCallCount++;
+  }
+  if (toolName === "search_symbols") {
+    sessionSearchSymbolsCalled = true;
+  }
+  if (toolName === "get_symbol") {
+    sessionGetSymbolCount++;
   }
 }
 
@@ -108,11 +127,15 @@ export function errorResult(message: string): ToolResponse {
   };
 }
 
+const QUESTION_PATTERN = /^(how|where|why|what|when|which)\b/i;
+
 /**
  * Build optimization hints based on response data + call patterns.
  */
 export function buildResponseHint(toolName: string, args: Record<string, unknown>, data: unknown): string | null {
   const hints: string[] = [];
+
+  // --- Existing hints ---
 
   if (toolName === "search_text" && Array.isArray(data) && data.length > HIGH_CARDINALITY_THRESHOLD) {
     if (!args["group_by_file"] && !args["auto_group"]) {
@@ -131,6 +154,40 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
 
   if (toolName === "search_symbols" && args["include_source"] && !args["file_pattern"]) {
     hints.push(`⚡ search_symbols with include_source=true but no file_pattern scans entire repo. Add file_pattern to reduce tokens.`);
+  }
+
+  // --- Fix 1: get_file_tree duplicate path detection ---
+  if (toolName === "get_file_tree") {
+    const repo = typeof args["repo"] === "string" ? args["repo"] : "";
+    const pathPrefix = typeof args["path_prefix"] === "string" ? args["path_prefix"] : "";
+    const pathKey = `${repo}\0${pathPrefix}`;
+    if (fileTreePaths.has(pathKey)) {
+      hints.push(`⚡ get_file_tree("${pathPrefix || "(root)"}") was already fetched this session. Cache the result to avoid repeated calls.`);
+    }
+    fileTreePaths.add(pathKey);
+  }
+
+  // --- Fix 3: search_symbols detail_level hint ---
+  if (toolName === "search_symbols" && !args["detail_level"]) {
+    const resultCount = Array.isArray(data) ? data.length : 0;
+    if (resultCount > 5) {
+      hints.push(`⚡ ${resultCount} symbols returned. Use detail_level='compact' (~15 tok/result) for discovery, or 'full' for complete source.`);
+    }
+  }
+
+  // --- Fix 5: search_symbols + get_symbol → suggest get_context_bundle ---
+  if (toolName === "get_symbol" && sessionSearchSymbolsCalled) {
+    hints.push(`⚡ Consider get_context_bundle(repo, symbol_name) — returns symbol + imports + siblings + callers in 1 call.`);
+  }
+
+  // --- Fix 6: 3+ get_symbol → suggest assemble_context ---
+  if (toolName === "get_symbol" && sessionGetSymbolCount >= 3) {
+    hints.push(`⚡ ${sessionGetSymbolCount}x get_symbol this session — try assemble_context(repo, query, level='L1') for batch retrieval (3x more symbols per budget).`);
+  }
+
+  // --- Fix 7: question-word text queries → suggest semantic search ---
+  if (toolName === "search_text" && typeof args["query"] === "string" && QUESTION_PATTERN.test(args["query"])) {
+    hints.push(`⚡ Text search with question words — consider codebase_retrieval with type:'semantic' for meaning-based search.`);
   }
 
   return hints.length > 0 ? hints.join("\n") : null;
@@ -222,4 +279,17 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
     inflight.set(cacheKey, promise);
     return promise;
   };
+}
+
+/**
+ * Reset all session-level tracking state. Exported for testing only.
+ */
+export function resetSessionState(): void {
+  lastToolName = "";
+  consecutiveCount = 0;
+  listReposCallCount = 0;
+  fileTreePaths.clear();
+  sessionSearchSymbolsCalled = false;
+  sessionGetSymbolCount = 0;
+  responseCache.clear();
 }

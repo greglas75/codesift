@@ -6,7 +6,7 @@ import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
-import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName } from "../storage/registry.js";
+import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
 import { buildBM25Index, type BM25Index } from "../search/bm25.js";
 import { buildSymbolText, createEmbeddingProvider } from "../search/semantic.js";
@@ -431,6 +431,16 @@ export async function indexFolder(
     updated_at: Date.now(),
   };
   await registerRepo(config.registryPath, meta);
+
+  // Capture git HEAD for auto-refresh tracking
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: rootPath, encoding: "utf-8", timeout: 5000,
+    }).trim();
+    await updateRepoMeta(config.registryPath, repoName, { last_git_commit: head });
+  } catch {
+    // Not a git repo — skip
+  }
 
   // Start file watcher for incremental updates (unless disabled)
   if (options?.watch !== false) {

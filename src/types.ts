@@ -67,6 +67,7 @@ export interface RepoMeta {
   symbol_count: number;
   file_count: number;
   updated_at: number;
+  last_git_commit?: string; // HEAD SHA at last index time — for auto-refresh
 }
 
 export interface Registry {

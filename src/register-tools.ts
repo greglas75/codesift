@@ -81,7 +81,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "list_repos",
-    description: "List all indexed repository names. Returns just names by default. Set compact=false for full metadata (paths, counts).",
+    description: "List all indexed repository names. Returns just names by default. Set compact=false for full metadata (paths, counts). Call ONCE per session — result is permanently cached (repo list doesn't change).",
     schema: {
       compact: z.boolean().optional().describe("Return just repo names (default: true). Set false for full metadata including root path, index_path, file/symbol counts."),
     },
@@ -132,7 +132,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "search_text",
-    description: "Full-text search across all files in a repository",
+    description: "Full-text search across all files in a repository. For conceptual questions (how/where/why), use codebase_retrieval with type:'semantic' instead — it finds code by meaning, not keywords.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query or regex pattern"),
@@ -156,7 +156,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   // --- Outline ---
   {
     name: "get_file_tree",
-    description: "Get the file tree of a repository with symbol counts per file. Use compact=true for a flat list of paths (10-50x less output).",
+    description: "Get the file tree of a repository with symbol counts per file. Use compact=true for a flat list of paths (10-50x less output). Result is cached for 5 minutes — avoid calling the same path_prefix twice.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
@@ -203,7 +203,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   // --- Symbol retrieval ---
   {
     name: "get_symbol",
-    description: "Retrieve a single symbol by its unique ID with full source code",
+    description: "Retrieve a single symbol by its unique ID with full source code. For 2+ symbols use get_symbols (batch). After search_symbols, prefer get_context_bundle for symbol + imports + siblings in 1 call. For 3+ reads, use assemble_context(level='L1').",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_id: z.string().describe("Unique symbol identifier"),

@@ -70,6 +70,22 @@ export async function listRepos(
 }
 
 /**
+ * Partially update a repo's metadata (e.g., last_git_commit after freshness check).
+ */
+export async function updateRepoMeta(
+  registryPath: string,
+  repoName: string,
+  updates: Partial<Pick<RepoMeta, "last_git_commit" | "symbol_count" | "file_count" | "updated_at">>,
+): Promise<void> {
+  const registry = await loadRegistry(registryPath);
+  const existing = registry.repos[repoName];
+  if (!existing) return;
+  Object.assign(existing, updates);
+  registry.updated_at = Date.now();
+  await saveRegistry(registryPath, registry);
+}
+
+/**
  * Remove a repo from the registry.
  * Returns true if the repo existed and was removed, false otherwise.
  */

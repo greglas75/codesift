@@ -513,12 +513,13 @@ describe("OPT-4: response hints", () => {
     expect(hint).toBeNull();
   });
 
-  it("returns no hint for non-search_text tools", () => {
+  it("returns detail_level hint for search_symbols with many results", () => {
     const fakeData = Array.from({ length: 100 }, () => ({ name: "sym" }));
 
     const hint = buildResponseHint("search_symbols", { repo: "local/test" }, fakeData);
 
-    expect(hint).toBeNull();
+    expect(hint).not.toBeNull();
+    expect(hint).toContain("detail_level='compact'");
   });
 
   it("INTEGRATION: hint appears in real search with many results", async () => {

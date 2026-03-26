@@ -4,7 +4,7 @@ import { loadConfig } from "./config.js";
 import { registerTools } from "./register-tools.js";
 
 // Re-export for test compatibility
-export { buildResponseHint } from "./server-helpers.js";
+export { buildResponseHint, resetSessionState } from "./server-helpers.js";
 
 loadConfig();
 

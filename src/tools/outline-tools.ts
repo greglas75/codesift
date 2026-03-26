@@ -319,7 +319,7 @@ export async function getFileTree(
  * Get an outline of symbols in a specific file.
  * Returns symbols sorted by start line, with source stripped for brevity.
  */
-const MAX_OUTLINE_SYMBOLS = 200;
+const MAX_OUTLINE_SYMBOLS = 100;
 
 export async function getFileOutline(
   repo: string,
