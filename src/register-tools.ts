@@ -20,6 +20,7 @@ import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-r
 import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
+import { goToDefinition } from "./lsp/lsp-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
 const zFiniteNumber = z.number().finite();
@@ -305,6 +306,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (sequence diagram)"),
     },
     handler: (args) => traceRoute(args.repo as string, args.path as string, args.output_format as "json" | "mermaid" | undefined),
+  },
+
+  {
+    name: "go_to_definition",
+    description: "Go to the definition of a symbol. Uses LSP when available for type-safe precision, falls back to index search.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      symbol_name: z.string().describe("Symbol name to find definition of"),
+      file_path: z.string().optional().describe("File containing the symbol reference (for LSP precision)"),
+      line: zNum().describe("0-based line number of the reference"),
+      character: zNum().describe("0-based column of the reference"),
+    },
+    handler: (args) => goToDefinition(
+      args.repo as string,
+      args.symbol_name as string,
+      args.file_path as string | undefined,
+      args.line as number | undefined,
+      args.character as number | undefined,
+    ),
   },
 
   {
