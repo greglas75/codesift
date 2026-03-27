@@ -374,6 +374,85 @@ async function handleGenerateClaudeMd(args: string[], flags: Flags): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
+// Analysis commands
+// ---------------------------------------------------------------------------
+
+async function handleComplexity(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const { analyzeComplexity } = await import("../tools/complexity-tools.js");
+
+  const result = await analyzeComplexity(repo, {
+    file_pattern: getFlag(flags, "file-pattern"),
+    top_n: getNumFlag(flags, "top-n"),
+    min_complexity: getNumFlag(flags, "min-complexity"),
+    include_tests: getBoolFlag(flags, "include-tests"),
+  });
+  output(result, flags);
+}
+
+async function handleDeadCode(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const { findDeadCode } = await import("../tools/symbol-tools.js");
+
+  const result = await findDeadCode(repo, {
+    file_pattern: getFlag(flags, "file-pattern"),
+    include_tests: getBoolFlag(flags, "include-tests"),
+  });
+  output(result, flags);
+}
+
+async function handleHotspots(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const { analyzeHotspots } = await import("../tools/hotspot-tools.js");
+
+  const result = await analyzeHotspots(repo, {
+    since_days: getNumFlag(flags, "since-days"),
+    top_n: getNumFlag(flags, "top-n"),
+    file_pattern: getFlag(flags, "file-pattern"),
+  });
+  output(result, flags);
+}
+
+async function handleCommunities(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const { detectCommunities } = await import("../tools/community-tools.js");
+
+  const result = await detectCommunities(
+    repo,
+    getFlag(flags, "focus"),
+    getNumFlag(flags, "resolution"),
+    getFlag(flags, "output-format") as "json" | "mermaid" | undefined,
+  );
+  output(result, flags);
+}
+
+async function handlePatterns(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const pattern = requireFlag(flags, "pattern");
+  const { searchPatterns } = await import("../tools/pattern-tools.js");
+
+  const result = await searchPatterns(repo, pattern, {
+    file_pattern: getFlag(flags, "file-pattern"),
+    include_tests: getBoolFlag(flags, "include-tests"),
+    max_results: getNumFlag(flags, "max-results"),
+  });
+  output(result, flags);
+}
+
+async function handleFindClones(args: string[], flags: Flags): Promise<void> {
+  const repo = requireArg(args, 0, "repo");
+  const { findClones } = await import("../tools/clone-tools.js");
+
+  const result = await findClones(repo, {
+    file_pattern: getFlag(flags, "file-pattern"),
+    min_similarity: getNumFlag(flags, "threshold"),
+    min_lines: getNumFlag(flags, "min-lines"),
+    include_tests: getBoolFlag(flags, "include-tests"),
+  });
+  output(result, flags);
+}
+
+// ---------------------------------------------------------------------------
 // Command dispatch map
 // ---------------------------------------------------------------------------
 
@@ -400,4 +479,10 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "retrieve": handleRetrieve,
   "stats": handleStats,
   "generate-claude-md": handleGenerateClaudeMd,
+  "complexity": handleComplexity,
+  "dead-code": handleDeadCode,
+  "hotspots": handleHotspots,
+  "communities": handleCommunities,
+  "patterns": handlePatterns,
+  "find-clones": handleFindClones,
 };

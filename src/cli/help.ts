@@ -36,6 +36,13 @@ Commands:
   stats                           Show usage statistics
   generate-claude-md <repo>       Generate CLAUDE.md project summary
 
+  complexity <repo>               Analyze cyclomatic complexity of functions
+  dead-code <repo>                Find potentially dead (unreferenced) exports
+  hotspots <repo>                 Analyze git churn hotspots
+  communities <repo>              Detect code clusters via community detection
+  patterns <repo> --pattern <name>  Search for structural code patterns
+  find-clones <repo>              Find copy-paste code clones
+
 Flags:
   --help            Show help for a command
   --version         Show version
@@ -290,4 +297,81 @@ Arguments:
 
 Options:
   --output    Custom output file path`,
+
+  complexity: `codesift complexity <repo> [options]
+
+Analyze cyclomatic complexity of functions in a repository.
+
+Arguments:
+  <repo>    Repository identifier
+
+Options:
+  --file-pattern      Filter to files matching this path substring
+  --top-n             Return top N most complex functions (default: 30)
+  --min-complexity    Minimum cyclomatic complexity to include (default: 1)
+  --include-tests     Include test files (default: false)`,
+
+  "dead-code": `codesift dead-code <repo> [options]
+
+Find potentially dead code: exported symbols with zero references outside their defining file.
+
+Arguments:
+  <repo>    Repository identifier
+
+Options:
+  --file-pattern     Filter to files matching this path substring
+  --include-tests    Include test files in scan (default: false)`,
+
+  hotspots: `codesift hotspots <repo> [options]
+
+Analyze git churn hotspots: files with high change frequency x complexity.
+
+Arguments:
+  <repo>    Repository identifier
+
+Options:
+  --since-days       Look back N days (default: 90)
+  --top-n            Return top N hotspots (default: 30)
+  --file-pattern     Filter to files matching this path substring`,
+
+  communities: `codesift communities <repo> [options]
+
+Detect code clusters/modules using Louvain community detection on the import graph.
+
+Arguments:
+  <repo>    Repository identifier
+
+Options:
+  --focus            Path substring to filter files (e.g. 'src/lib')
+  --resolution       Louvain resolution: higher = more smaller communities (default: 1.0)
+  --output-format    Output format: 'json' (default) or 'mermaid'`,
+
+  patterns: `codesift patterns <repo> --pattern <name> [options]
+
+Search for structural code patterns (anti-patterns, CQ violations).
+
+Arguments:
+  <repo>    Repository identifier
+
+Options:
+  --pattern          Pattern name or custom regex (required)
+  --file-pattern     Filter to files matching this path substring
+  --include-tests    Include test files (default: false)
+  --max-results      Max results (default: 50)
+
+Built-in patterns: useEffect-no-cleanup, empty-catch, any-type, console-log,
+  await-in-loop, no-error-type, toctou, unbounded-findmany`,
+
+  "find-clones": `codesift find-clones <repo> [options]
+
+Find code clones: pairs of functions with similar normalized source (copy-paste detection).
+
+Arguments:
+  <repo>    Repository identifier
+
+Options:
+  --file-pattern     Filter to files matching this path substring
+  --threshold        Minimum similarity threshold 0-1 (default: 0.7)
+  --min-lines        Minimum normalized lines to consider (default: 10)
+  --include-tests    Include test files (default: false)`,
 };
