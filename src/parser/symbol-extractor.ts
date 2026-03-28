@@ -40,6 +40,7 @@ export function extractSymbols(
 export { extractMarkdownSymbols } from "./extractors/markdown.js";
 export { extractPrismaSymbols } from "./extractors/prisma.js";
 export { extractAstroSymbols } from "./extractors/astro.js";
+export { extractConversationSymbols } from "./extractors/conversation.js";
 
 /**
  * Splits camelCase, PascalCase, UPPER_SNAKE, and snake_case identifiers

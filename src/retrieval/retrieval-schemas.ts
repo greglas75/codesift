@@ -3,7 +3,8 @@ import { z } from "zod";
 const SymbolKindSchema = z.enum([
   "function", "method", "class", "interface", "type", "variable",
   "constant", "field", "enum", "namespace", "module", "section",
-  "metadata", "test_suite", "test_case", "test_hook", "default_export", "unknown",
+  "metadata", "test_suite", "test_case", "test_hook", "default_export",
+  "conversation_turn", "conversation_summary", "unknown",
 ]);
 
 const SymbolsQuerySchema = z.object({
@@ -88,6 +89,13 @@ const HybridQuerySchema = z.object({
   exclude_tests: z.boolean().optional(),
 });
 
+const ConversationQuerySchema = z.object({
+  type: z.literal("conversation"),
+  query: z.string(),
+  project: z.string().optional(),
+  limit: z.number().int().positive().optional().default(5),
+});
+
 export const SubQuerySchema = z.discriminatedUnion("type", [
   SymbolsQuerySchema,
   TextQuerySchema,
@@ -100,6 +108,7 @@ export const SubQuerySchema = z.discriminatedUnion("type", [
   KnowledgeMapQuerySchema,
   SemanticQuerySchema,
   HybridQuerySchema,
+  ConversationQuerySchema,
 ]);
 
 export type SubQuery = z.infer<typeof SubQuerySchema>;

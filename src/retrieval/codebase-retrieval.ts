@@ -128,6 +128,13 @@ async function executeSubQuery(
 
     case "hybrid":
       return handleHybridQuery(repo, query);
+
+    case "conversation": {
+      const { searchConversations } = await import("../tools/conversation-tools.js");
+      const result = await searchConversations(query.query, query.project, query.limit);
+      const text = JSON.stringify(result);
+      return { type: query.type, data: result, tokens: estimateTokens(text) };
+    }
   }
 }
 

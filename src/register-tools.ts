@@ -21,6 +21,7 @@ import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import { goToDefinition, getTypeInfo, renameSymbol } from "./lsp/lsp-tools.js";
+import { indexConversations, searchConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
 const zFiniteNumber = z.number().finite();
@@ -600,6 +601,45 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
     },
     handler: (args) => generateReport(args.repo as string),
+  },
+
+  // --- Conversations ---
+  {
+    name: "index_conversations",
+    description: "Index Claude Code conversation history for search. Scans JSONL files in ~/.claude/projects/ for the given project path.",
+    schema: {
+      project_path: z.string().optional().describe("Path to the Claude project conversations directory. Auto-detects from cwd if omitted."),
+      quiet: z.boolean().optional().describe("Suppress output (used by session-end hook)"),
+    },
+    handler: async (args) => indexConversations(args.project_path as string | undefined),
+  },
+  {
+    name: "search_conversations",
+    description: "Search past Claude Code conversations using hybrid BM25 search. Returns conversation turns ranked by relevance.",
+    schema: {
+      query: z.string().describe("Search query — keywords or natural language"),
+      project: z.string().optional().describe("Project path to search (default: current project)"),
+      limit: zNum().optional().describe("Maximum results to return (default: 10, max: 50)"),
+    },
+    handler: async (args) => searchConversations(
+      args.query as string,
+      args.project as string | undefined,
+      args.limit as number | undefined,
+    ),
+  },
+  {
+    name: "find_conversations_for_symbol",
+    description: "Find past conversations that discussed a specific code symbol. Cross-references code intelligence with conversation history.",
+    schema: {
+      symbol_name: z.string().describe("Name of the code symbol to search for in conversations"),
+      repo: z.string().describe("Code repository to resolve the symbol from (e.g., 'local/my-project')"),
+      limit: zNum().optional().describe("Maximum conversation results (default: 5)"),
+    },
+    handler: async (args) => findConversationsForSymbol(
+      args.symbol_name as string,
+      args.repo as string,
+      args.limit as number | undefined,
+    ),
   },
 
   // --- Stats ---

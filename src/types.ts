@@ -18,6 +18,8 @@ export type SymbolKind =
   | "test_case"     // it() / test()
   | "test_hook"     // beforeEach() etc.
   | "default_export"
+  | "conversation_turn"   // user+assistant exchange pair
+  | "conversation_summary" // compaction summary
   | "unknown";
 
 export interface FileLocation {

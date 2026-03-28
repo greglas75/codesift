@@ -24,6 +24,7 @@ const EXTENSION_MAP: Record<string, string> = {
   ".json": "json",
   ".prisma": "prisma",
   ".astro": "astro",
+  ".jsonl": "conversation",
 };
 
 export async function initParser(): Promise<void> {
