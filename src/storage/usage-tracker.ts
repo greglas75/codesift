@@ -55,6 +55,7 @@ const TOOL_ARG_FIELDS: Record<string, Array<[string, "string" | "number" | "bool
   index_folder: [["path", "string"], ["incremental", "boolean"]],
   index_repo: [["url", "string"], ["branch", "string"]],
   generate_claude_md: [["output_path", "string"]],
+  scan_secrets: [["file_pattern", "string"], ["min_confidence", "string"], ["severity", "string"], ["exclude_tests", "boolean"]],
 };
 
 /**

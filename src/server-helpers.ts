@@ -22,6 +22,7 @@ const SAVINGS_MULTIPLIER: Record<string, number> = {
   detect_communities: 2.0,
   trace_route: 4.0,
   get_context_bundle: 3.0,
+  scan_secrets: 1.2,
 };
 
 const OPUS_COST_PER_TOKEN = 30 / 1_000_000; // $30/1M input tokens

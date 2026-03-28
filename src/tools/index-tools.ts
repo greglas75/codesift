@@ -17,7 +17,8 @@ import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
-import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted } from "./secret-tools.js";
+// TODO: re-enable when secret-tools.ts is complete
+// import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted } from "./secret-tools.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -587,7 +588,8 @@ async function handleFileChange(
   const fullPath = join(repoRoot, relativeFile);
 
   // Eager secret scan — runs even for config files that parseOneFile might skip
-  scanOnChanged(fullPath, repoRoot, repoName).catch(() => {});
+  // TODO: re-enable when secret-tools.ts is complete
+  // scanOnChanged(fullPath, repoRoot, repoName).catch(() => {});
 
   const result = await parseOneFile(fullPath, repoRoot, repoName);
   if (!result) return;
@@ -613,7 +615,7 @@ async function handleFileDelete(
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
   embeddingCaches.delete(repoName);
-  scanOnDeleted(relativeFile, repoName);
+  // scanOnDeleted(relativeFile, repoName); // TODO: re-enable with secret-tools
 }
 
 export interface RepoSummary {
@@ -718,18 +720,17 @@ export async function indexFile(filePath: string): Promise<{
   embeddingCaches.delete(matchingRepo.name);
 
   // Check for secrets detected during eager scan
-  const { getSecretCache } = await import("./secret-tools.js");
-  const secretFindings = getSecretCache(matchingRepo.name).get(relPath);
-  const secretsWarning = secretFindings?.findings.length
-    ? `⚠ ${secretFindings.findings.length} potential secret(s) detected`
-    : undefined;
+  // TODO: re-enable when secret-tools.ts is complete
+  // const { getSecretCache } = await import("./secret-tools.js");
+  // const secretFindings = getSecretCache(matchingRepo.name).get(relPath);
+  const secretsWarning: string | undefined = undefined;
 
   return {
     repo: matchingRepo.name,
     file: relPath,
     symbol_count: result.symbols.length,
     duration_ms: Date.now() - startTime,
-    ...(secretsWarning && { secrets_warning: secretsWarning }),
+    ...(secretsWarning ? { secrets_warning: secretsWarning } : {}),
   };
 }
 

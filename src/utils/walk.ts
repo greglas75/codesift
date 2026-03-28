@@ -48,7 +48,7 @@ export interface WalkOptions {
    *
    * When omitted every file (within size limits) is included.
    */
-  fileFilter?: ((ext: string) => boolean) | undefined;
+  fileFilter?: ((ext: string, name?: string) => boolean) | undefined;
 
   /**
    * When `true` the returned paths are relative to `rootPath`.
@@ -96,7 +96,7 @@ export async function walkDirectory(
         const ext = extname(entry.name);
 
         // Apply caller's file filter (e.g. language check, binary exclusion)
-        if (fileFilter && !fileFilter(ext)) continue;
+        if (fileFilter && !fileFilter(ext, entry.name)) continue;
 
         // Filter by include paths if specified
         if (includePaths && includePaths.length > 0) {

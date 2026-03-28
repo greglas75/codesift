@@ -21,10 +21,16 @@ const EXTENSION_MAP: Record<string, string> = {
   ".md": "markdown",
   ".markdown": "markdown",
   ".css": "css",
-  ".json": "json",
+  ".json": "config",
   ".prisma": "prisma",
   ".astro": "astro",
   ".jsonl": "conversation",
+  ".env": "config",
+  ".yaml": "config",
+  ".yml": "config",
+  ".toml": "config",
+  ".ini": "config",
+  ".properties": "config",
 };
 
 export async function initParser(): Promise<void> {

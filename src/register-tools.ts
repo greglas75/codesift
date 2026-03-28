@@ -22,9 +22,8 @@ import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import { goToDefinition, getTypeInfo, renameSymbol } from "./lsp/lsp-tools.js";
 import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
-// TODO: re-enable when secret-tools.ts is complete
-// import { scanSecrets } from "./tools/secret-tools.js";
-// import type { SecretSeverity } from "./tools/secret-tools.js";
+import { scanSecrets } from "./tools/secret-tools.js";
+import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
 const zFiniteNumber = z.number().finite();
@@ -658,11 +657,27 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     ),
   },
 
-  // --- Security --- (TODO: re-enable when secret-tools.ts is complete)
-  // {
-  //   name: "scan_secrets",
-  //   ...
-  // },
+  // --- Security ---
+  {
+    name: "scan_secrets",
+    description: "Scan repository for hardcoded secrets (API keys, tokens, passwords, connection strings). Returns masked findings with severity, confidence, and AST context. Uses ~1,100 detection rules.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      file_pattern: z.string().optional().describe("Glob pattern to filter scanned files"),
+      min_confidence: z.enum(["high", "medium", "low"]).optional().describe("Minimum confidence level (default: medium)"),
+      exclude_tests: z.boolean().optional().describe("Exclude test file findings (default: true)"),
+      severity: z.enum(["critical", "high", "medium", "low"]).optional().describe("Minimum severity level"),
+    },
+    handler: async (args) => scanSecrets(
+      args.repo as string,
+      {
+        file_pattern: args.file_pattern as string | undefined,
+        min_confidence: args.min_confidence as "high" | "medium" | "low" | undefined,
+        exclude_tests: args.exclude_tests as boolean | undefined,
+        severity: args.severity as SecretSeverity | undefined,
+      },
+    ),
+  },
 
   // --- Stats ---
   {

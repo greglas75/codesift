@@ -29,6 +29,9 @@ export interface Config {
   // Retrieval
   defaultTokenBudget: number;  // 8000
   defaultTopK: number;         // 50
+
+  // Secret scanning
+  secretScanEnabled: boolean;  // true by default
 }
 
 let cachedConfig: Config | null = null;
@@ -67,6 +70,8 @@ export function loadConfig(): Config {
 
     defaultTokenBudget: parseIntEnv("CODESIFT_DEFAULT_TOKEN_BUDGET", 8000),
     defaultTopK: parseIntEnv("CODESIFT_DEFAULT_TOP_K", 50),
+
+    secretScanEnabled: process.env["CODESIFT_SECRET_SCAN"] !== "false",
   };
   return cachedConfig;
 }
