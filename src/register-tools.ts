@@ -21,7 +21,10 @@ import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
 import { generateReport } from "./tools/report-tools.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import { goToDefinition, getTypeInfo, renameSymbol } from "./lsp/lsp-tools.js";
-import { indexConversations, searchConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
+import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
+// TODO: re-enable when secret-tools.ts is complete
+// import { scanSecrets } from "./tools/secret-tools.js";
+// import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
 const zFiniteNumber = z.number().finite();
@@ -611,11 +614,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       project_path: z.string().optional().describe("Path to the Claude project conversations directory. Auto-detects from cwd if omitted."),
       quiet: z.boolean().optional().describe("Suppress output (used by session-end hook)"),
     },
-    handler: async (args) => indexConversations(args.project_path as string ?? process.cwd()),
+    handler: async (args) => indexConversations(args.project_path as string | undefined),
   },
   {
     name: "search_conversations",
-    description: "Search past Claude Code conversations using hybrid BM25 search. Returns conversation turns ranked by relevance.",
+    description: "Search past Claude Code conversations in a SINGLE project using hybrid BM25+semantic search. Use search_all_conversations to search across ALL projects.",
     schema: {
       query: z.string().describe("Search query — keywords or natural language"),
       project: z.string().optional().describe("Project path to search (default: current project)"),
@@ -641,6 +644,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       args.limit as number | undefined,
     ),
   },
+
+  {
+    name: "search_all_conversations",
+    description: "Search ALL indexed Claude Code conversation projects at once. Use this when you don't know which project a conversation was in. Returns results from all projects ranked by relevance.",
+    schema: {
+      query: z.string().describe("Search query — keywords, natural language, or concept"),
+      limit: zNum().optional().describe("Maximum results across all projects (default: 10)"),
+    },
+    handler: async (args) => searchAllConversations(
+      args.query as string,
+      args.limit as number | undefined,
+    ),
+  },
+
+  // --- Security --- (TODO: re-enable when secret-tools.ts is complete)
+  // {
+  //   name: "scan_secrets",
+  //   ...
+  // },
 
   // --- Stats ---
   {

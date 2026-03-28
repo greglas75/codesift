@@ -195,6 +195,7 @@ export interface ConversationSearchResult {
   score: number;
   file: string;
   turn_index: number;
+  project?: string;
 }
 
 export interface SearchConversationsResult {
@@ -203,9 +204,80 @@ export interface SearchConversationsResult {
 }
 
 /**
- * Search indexed conversation turns using BM25 full-text search.
+ * Map a SearchResult to a ConversationSearchResult with metadata extraction.
+ */
+function toConversationResult(r: { symbol: CodeSymbol; score: number }, repoName?: string): ConversationSearchResult {
+  const sym = r.symbol;
+  const source = sym.source ?? "";
+  const sepIdx = source.indexOf("\n---\n");
+  const assistantAnswer = sepIdx >= 0 ? source.slice(sepIdx + 5, sepIdx + 505) : "";
+  const turnMatch = sym.id.match(/:turn_(\d+):/);
+  const turnIndex = turnMatch ? parseInt(turnMatch[1]!, 10) : 0;
+
+  // Parse signature for metadata: "timestamp\nuser_text" or "timestamp | branch\nuser_text"
+  const sig = sym.signature ?? "";
+  const firstNewline = sig.indexOf("\n");
+  const metaLine = firstNewline >= 0 ? sig.slice(0, firstNewline) : "";
+  const metaParts = metaLine.split(" | ");
+  // Check if first part looks like a timestamp (starts with 20)
+  const timestamp = metaParts[0]?.startsWith("20") ? metaParts[0] : "";
+  const gitBranch = timestamp ? (metaParts[1] ?? "") : "";
+
+  return {
+    session_id: sym.parent ?? "",
+    timestamp,
+    git_branch: gitBranch,
+    user_question: sym.name,
+    assistant_answer: assistantAnswer,
+    score: r.score,
+    file: sym.file,
+    turn_index: turnIndex,
+    ...(repoName ? { project: repoName } : {}),
+  };
+}
+
+/**
+ * Load BM25 index + symbol map for a conversation repo (from cache or disk).
+ */
+async function loadConversationIndex(rootPath: string): Promise<{
+  bm25: BM25Index;
+  repoName: string;
+  indexPath: string;
+  symbols: Map<string, CodeSymbol>;
+} | null> {
+  const repoName = `conversations/${basename(rootPath)}`;
+  const config = loadConfig();
+  const indexPath = getIndexPath(config.dataDir, rootPath);
+
+  let bm25 = bm25Indexes.get(repoName) ?? null;
+  let codeIndex: CodeIndex | null = null;
+
+  if (!bm25) {
+    try {
+      codeIndex = await loadIndex(indexPath);
+      if (codeIndex && codeIndex.symbols.length > 0) {
+        bm25 = buildBM25Index(codeIndex.symbols);
+        bm25Indexes.set(repoName, bm25);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (!bm25) return null;
+
+  // Build symbol map from BM25 index or loaded index
+  const symbols = bm25.symbols;
+
+  return { bm25, repoName, indexPath, symbols };
+}
+
+/**
+ * Search indexed conversation turns using hybrid BM25 + semantic search.
  *
- * Requires `indexConversations` to have been called first (populates the BM25 cache).
+ * When embeddings are available, fuses BM25 keyword results with semantic
+ * similarity via RRF (Reciprocal Rank Fusion). Falls back to BM25-only
+ * when no embedding provider is configured.
  */
 export async function searchConversations(
   query: string,
@@ -213,62 +285,110 @@ export async function searchConversations(
   limit?: number,
 ): Promise<SearchConversationsResult> {
   const rootPath = resolveConversationProjectPath(projectPath);
-  const repoName = `conversations/${basename(rootPath)}`;
+  const loaded = await loadConversationIndex(rootPath);
+  if (!loaded) return { results: [], total_matches: 0 };
 
-  let bm25 = bm25Indexes.get(repoName) ?? null;
-  if (!bm25) {
-    // Try loading from disk if not in cache
-    try {
-      const config = loadConfig();
-      const indexPath = getIndexPath(config.dataDir, rootPath);
-      const codeIndex = await loadIndex(indexPath);
-      if (codeIndex && codeIndex.symbols.length > 0) {
-        bm25 = buildBM25Index(codeIndex.symbols);
-        bm25Indexes.set(repoName, bm25);
-      }
-    } catch {
-      // Index doesn't exist yet
-    }
-  }
-  if (!bm25) {
-    return { results: [], total_matches: 0 };
-  }
-
+  const { bm25, repoName, indexPath, symbols } = loaded;
   const config = loadConfig();
   const topK = limit ?? 10;
-  const raw = searchBM25(bm25, query, topK, config.bm25FieldWeights);
-  const filtered = applyCutoff(raw).slice(0, topK);
 
-  const results: ConversationSearchResult[] = filtered.map((r) => {
-    const sym = r.symbol;
+  // BM25 results
+  const bm25Results = searchBM25(bm25, query, topK * 2, config.bm25FieldWeights);
+  const bm25Filtered = applyCutoff(bm25Results);
 
-    // Extract assistant answer — text after "---" separator in source
-    const source = sym.source ?? "";
-    const sepIdx = source.indexOf("\n---\n");
-    const assistantAnswer = sepIdx >= 0 ? source.slice(sepIdx + 5) : "";
+  // Try semantic search if embeddings available
+  let semanticResults: Array<{ symbol: CodeSymbol; score: number }> = [];
+  if (config.embeddingProvider) {
+    try {
+      const { createEmbeddingProvider, searchSemantic, cosineSimilarity: _cos } = await import("../search/semantic.js");
+      const { loadEmbeddings, getEmbeddingPath } = await import("../storage/embedding-store.js");
 
-    // Parse docstring: "timestamp | gitBranch" (both optional)
-    const docParts = sym.docstring ? sym.docstring.split(" | ") : [];
-    const timestamp = docParts[0] ?? "";
-    const gitBranch = docParts[1] ?? "";
+      const provider = createEmbeddingProvider(config.embeddingProvider, config);
+      const embeddingPath = getEmbeddingPath(indexPath);
+      const embeddings = await loadEmbeddings(embeddingPath);
 
-    // Extract turn_index from symbol id: "...turn_N:line"
-    const turnMatch = sym.id.match(/:turn_(\d+):/);
-    const turnIndex = turnMatch ? parseInt(turnMatch[1]!, 10) : 0;
+      if (embeddings.size > 0) {
+        const [queryVec] = await provider.embed([query]);
+        if (queryVec) {
+          const qEmb = new Float32Array(queryVec);
+          semanticResults = searchSemantic(qEmb, embeddings, symbols, topK * 2);
+        }
+      }
+    } catch {
+      // Semantic search failed — fall back to BM25 only
+    }
+  }
 
-    return {
-      session_id: sym.parent ?? "",
-      timestamp,
-      git_branch: gitBranch,
-      user_question: sym.name,
-      assistant_answer: assistantAnswer,
-      score: r.score,
-      file: sym.file,
-      turn_index: turnIndex,
-    };
-  });
+  // Fuse results with RRF if we have both
+  let finalResults: Array<{ symbol: CodeSymbol; score: number }>;
+  if (semanticResults.length > 0) {
+    const RRF_K = 60;
+    const scores = new Map<string, { symbol: CodeSymbol; score: number }>();
 
+    bm25Filtered.forEach((r, rank) => {
+      const rrf = 1 / (RRF_K + rank + 1);
+      scores.set(r.symbol.id, { symbol: r.symbol, score: rrf });
+    });
+
+    semanticResults.forEach((r, rank) => {
+      const rrf = 1 / (RRF_K + rank + 1);
+      const existing = scores.get(r.symbol.id);
+      if (existing) {
+        existing.score += rrf;
+      } else {
+        scores.set(r.symbol.id, { symbol: r.symbol, score: rrf });
+      }
+    });
+
+    finalResults = [...scores.values()].sort((a, b) => b.score - a.score).slice(0, topK);
+  } else {
+    finalResults = bm25Filtered.slice(0, topK);
+  }
+
+  const results = finalResults.map((r) => toConversationResult(r, repoName));
   return { results, total_matches: results.length };
+}
+
+/**
+ * Search ALL indexed conversation projects at once.
+ * Iterates over all `conversations/*` repos in the registry,
+ * searches each, merges and re-ranks results.
+ */
+export async function searchAllConversations(
+  query: string,
+  limit?: number,
+): Promise<SearchConversationsResult & { projects_searched: number }> {
+  const { listRepos } = await import("../storage/registry.js");
+  const config = loadConfig();
+  const repos = await listRepos(config.registryPath);
+
+  const conversationRepos = repos.filter(
+    (r) => r.name.startsWith("conversations/") && !r.name.includes("conv-test") && !r.name.includes("conv-ret"),
+  );
+
+  const allResults: ConversationSearchResult[] = [];
+
+  for (const repo of conversationRepos) {
+    try {
+      const { results } = await searchConversations(query, repo.root, limit ?? 10);
+      for (const r of results) {
+        allResults.push({ ...r, project: repo.name } as ConversationSearchResult);
+      }
+    } catch {
+      // Skip repos that fail to load
+    }
+  }
+
+  // Sort by score descending, take top limit
+  allResults.sort((a, b) => b.score - a.score);
+  const topK = limit ?? 10;
+  const trimmed = allResults.slice(0, topK);
+
+  return {
+    results: trimmed,
+    total_matches: trimmed.length,
+    projects_searched: conversationRepos.length,
+  };
 }
 
 export interface FindConversationsForSymbolResult {
