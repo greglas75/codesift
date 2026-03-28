@@ -3,13 +3,28 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 let tmpDir: string;
+let dataDir: string;
+let originalDataDir: string | undefined;
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), "conv-test-"));
+  dataDir = await mkdtemp(join(tmpdir(), "codesift-data-"));
+  originalDataDir = process.env.CODESIFT_DATA_DIR;
+  process.env.CODESIFT_DATA_DIR = dataDir;
+  const { resetConfigCache } = await import("../../src/config.js");
+  resetConfigCache();
 });
 
 afterEach(async () => {
+  if (originalDataDir === undefined) {
+    delete process.env.CODESIFT_DATA_DIR;
+  } else {
+    process.env.CODESIFT_DATA_DIR = originalDataDir;
+  }
+  const { resetConfigCache } = await import("../../src/config.js");
+  resetConfigCache();
   await rm(tmpDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 describe("indexConversations", () => {
@@ -106,32 +121,4 @@ describe("searchConversations", () => {
   });
 });
 
-describe("findConversationsForSymbol", () => {
-  it("finds conversations mentioning a symbol name", async () => {
-    const { indexConversations, findConversationsForSymbol } = await import("../../src/tools/conversation-tools.js");
-    const jsonl = [
-      JSON.stringify({ type: "user", message: { content: "Can you refactor processPayment?" }, uuid: "u1", sessionId: "s1" }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Sure, processPayment needs error handling." }] }, uuid: "a1", sessionId: "s1" }),
-    ].join("\n");
-    await writeFile(join(tmpDir, "s1.jsonl"), jsonl);
-    await indexConversations(tmpDir);
-
-    const result = await findConversationsForSymbol("processPayment", tmpDir);
-    expect(result.conversations.length).toBeGreaterThanOrEqual(1);
-    expect(result.session_count).toBeGreaterThanOrEqual(1);
-  });
-
-  it("returns empty when symbol is not mentioned", async () => {
-    const { indexConversations, findConversationsForSymbol } = await import("../../src/tools/conversation-tools.js");
-    const jsonl = [
-      JSON.stringify({ type: "user", message: { content: "some question" }, uuid: "u1", sessionId: "s1" }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "some answer" }] }, uuid: "a1", sessionId: "s1" }),
-    ].join("\n");
-    await writeFile(join(tmpDir, "s1.jsonl"), jsonl);
-    await indexConversations(tmpDir);
-
-    const result = await findConversationsForSymbol("nonExistentSymbol", tmpDir);
-    expect(result.conversations).toHaveLength(0);
-    expect(result.session_count).toBe(0);
-  });
-});
+// Cross-repo symbol resolution behavior is covered in conversation-resolution.test.ts.

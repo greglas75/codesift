@@ -11,6 +11,7 @@ Commands:
   index-repo <url>                Clone and index a remote git repository
   repos                           List all indexed repositories
   invalidate <repo>               Clear index cache for a repository
+  index-conversations [path]      Index Claude Code conversations for the current project
 
   search <repo> <query>           Full-text search across all files
   symbols <repo> <query>          Search symbols by name/signature
@@ -43,6 +44,9 @@ Commands:
   patterns <repo> --pattern <name>  Search for structural code patterns
   find-clones <repo>              Find copy-paste code clones
 
+  setup <platform>                Configure codesift-mcp in an AI coding tool
+                                  Platforms: codex, claude, cursor
+
 Flags:
   --help            Show help for a command
   --version         Show version
@@ -51,6 +55,8 @@ Flags:
   --include-source  Include source code in output (trace, impact)
 
 Examples:
+  codesift setup codex                          Set up MCP in OpenAI Codex
+  codesift setup claude                         Set up MCP in Claude Code
   codesift index /path/to/project
   codesift repos
   codesift search local/my-project "createUser"
@@ -82,6 +88,17 @@ Arguments:
 Options:
   --branch          Branch to checkout
   --include-paths   Comma-separated path prefixes to include`,
+
+  "index-conversations": `codesift index-conversations [project-path] [options]
+
+Index Claude Code conversation JSONL files for the current project.
+
+Arguments:
+  [project-path]    Optional path to a Claude conversation directory. If omitted,
+                    derives ~/.claude/projects/<encoded-cwd> from the current cwd.
+
+Options:
+  --quiet           Suppress JSON output (used by the Claude Stop hook)`,
 
   repos: `codesift repos
 
@@ -374,4 +391,26 @@ Options:
   --threshold        Minimum similarity threshold 0-1 (default: 0.7)
   --min-lines        Minimum normalized lines to consider (default: 10)
   --include-tests    Include test files (default: false)`,
+
+  setup: `codesift setup <platform>
+
+Configure codesift-mcp as an MCP server in an AI coding tool.
+
+Platforms:
+  codex     Add to ~/.codex/config.toml (OpenAI Codex CLI & IDE)
+  claude    Add to ~/.claude/settings.json (Claude Code)
+  cursor    Add to ~/.cursor/mcp.json (Cursor IDE)
+
+Options:
+  --json    Output result as JSON instead of human-readable text
+
+What it does:
+  - Creates the config file if it doesn't exist
+  - Adds the codesift MCP server entry if not already present
+  - Skips if already configured (safe to run multiple times)
+
+Examples:
+  codesift setup codex
+  codesift setup claude
+  codesift setup cursor`,
 };

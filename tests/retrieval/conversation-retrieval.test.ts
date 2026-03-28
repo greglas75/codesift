@@ -4,13 +4,28 @@ import { tmpdir } from "node:os";
 
 describe("codebase_retrieval — conversation query type", () => {
   let tmpDir: string;
+  let dataDir: string;
+  let originalDataDir: string | undefined;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "conv-ret-"));
+    dataDir = await mkdtemp(join(tmpdir(), "codesift-data-"));
+    originalDataDir = process.env.CODESIFT_DATA_DIR;
+    process.env.CODESIFT_DATA_DIR = dataDir;
+    const { resetConfigCache } = await import("../../src/config.js");
+    resetConfigCache();
   });
 
   afterEach(async () => {
+    if (originalDataDir === undefined) {
+      delete process.env.CODESIFT_DATA_DIR;
+    } else {
+      process.env.CODESIFT_DATA_DIR = originalDataDir;
+    }
+    const { resetConfigCache } = await import("../../src/config.js");
+    resetConfigCache();
     await rm(tmpDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true });
   });
 
   it("SubQuerySchema parses conversation type correctly", async () => {

@@ -60,6 +60,16 @@ async function handleInvalidate(args: string[], flags: Flags): Promise<void> {
   output({ invalidated: result, repo }, flags);
 }
 
+async function handleIndexConversations(args: string[], flags: Flags): Promise<void> {
+  const projectPath = args[0];
+  const { indexConversations } = await import("../tools/conversation-tools.js");
+
+  const result = await indexConversations(projectPath);
+  if (!getBoolFlag(flags, "quiet")) {
+    output(result, flags);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Search commands
 // ---------------------------------------------------------------------------
@@ -439,6 +449,23 @@ async function handlePatterns(args: string[], flags: Flags): Promise<void> {
   output(result, flags);
 }
 
+async function handleSetup(args: string[], flags: Flags): Promise<void> {
+  const platform = args[0];
+  const { setup, formatSetupResult, SUPPORTED_PLATFORMS } = await import("./setup.js");
+
+  if (!platform) {
+    die(`Missing platform. Usage: codesift setup <${SUPPORTED_PLATFORMS.join("|")}>`);
+  }
+
+  const result = await setup(platform);
+
+  if (getBoolFlag(flags, "json")) {
+    output(result, flags);
+  } else {
+    process.stdout.write(formatSetupResult(result) + "\n");
+  }
+}
+
 async function handleFindClones(args: string[], flags: Flags): Promise<void> {
   const repo = requireArg(args, 0, "repo");
   const { findClones } = await import("../tools/clone-tools.js");
@@ -461,6 +488,7 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "index-repo": handleIndexRepo,
   "repos": handleRepos,
   "invalidate": handleInvalidate,
+  "index-conversations": handleIndexConversations,
   "search": handleSearch,
   "symbols": handleSymbols,
   "tree": handleTree,
@@ -485,4 +513,5 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "communities": handleCommunities,
   "patterns": handlePatterns,
   "find-clones": handleFindClones,
+  "setup": handleSetup,
 };
