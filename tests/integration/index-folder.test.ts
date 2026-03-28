@@ -1,9 +1,10 @@
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { indexFolder, listAllRepos, invalidateCache, getCodeIndex, getBM25Index } from "../../src/tools/index-tools.js";
+import { indexFolder, indexFile, listAllRepos, invalidateCache, getCodeIndex, getBM25Index } from "../../src/tools/index-tools.js";
 import { searchBM25 } from "../../src/search/bm25.js";
 import { resetConfigCache } from "../../src/config.js";
+import { resetSecretCache } from "../../src/tools/secret-tools.js";
 
 const FIELD_WEIGHTS = { name: 3.0, signature: 2.0, docstring: 1.5, body: 1.0 };
 
@@ -18,11 +19,13 @@ beforeEach(async () => {
   // Set data dir to temp so we don't pollute real ~/.codesift
   process.env["CODESIFT_DATA_DIR"] = join(tmpDir, ".codesift");
   resetConfigCache();
+  resetSecretCache();
 });
 
 afterEach(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
   resetConfigCache();
+  resetSecretCache();
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -184,5 +187,20 @@ describe("index_folder integration", () => {
     const index = await getCodeIndex("local/test-project");
     const files = index!.files.map((f) => f.path);
     expect(files.every((f) => f.startsWith("src/"))).toBe(true);
+  });
+
+  it("returns a secret warning when indexFile detects a hardcoded secret", async () => {
+    await createFixtureProject();
+    await indexFolder(fixtureDir, { watch: false });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const secretFile = join(fixtureDir, "src", "payment.ts");
+    await writeFile(
+      secretFile,
+      'export const awsKey = "AKIAIOSFODNN7EXAMPLE";\n',
+    );
+
+    const result = await indexFile(secretFile);
+    expect(result.secrets_warning).toContain("potential secret");
   });
 });

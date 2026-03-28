@@ -49,6 +49,8 @@ export interface ScanSecretsResult {
   files_scanned: number;
   files_with_secrets: number;
   scan_coverage: "none" | "partial" | "full";
+  files_failed?: number;
+  partial_failure?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ const PLACEHOLDER_NAMES = new Set([
 export const SEVERITY_MAP: Record<string, SecretSeverity> = {
   // Critical — cloud provider keys
   aws: "critical",
+  "aws-access_keys": "critical",
   "aws-secret": "critical",
   gcp: "critical",
   "gcp-api-key": "critical",
@@ -102,6 +105,7 @@ export const SEVERITY_MAP: Record<string, SecretSeverity> = {
   twilio: "high",
   sendgrid: "high",
   github: "high",
+  "github-v2": "high",
   "github-pat": "high",
   gitlab: "high",
   slack: "high",
@@ -182,6 +186,28 @@ export function classifyContext(filePath: string): SecretContext["type"] {
  */
 export function getSeverity(rule: string): SecretSeverity {
   return SEVERITY_MAP[rule] ?? "medium";
+}
+
+function severityAtLeast(
+  severity: SecretSeverity,
+  minimum: SecretSeverity,
+): boolean {
+  const severityOrder: Record<SecretSeverity, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+  return severityOrder[severity] >= severityOrder[minimum];
+}
+
+function isMissingFileError(err: unknown): boolean {
+  return (
+    typeof err === "object"
+    && err !== null
+    && "code" in err
+    && (err as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 /**
@@ -394,6 +420,7 @@ export async function scanSecrets(
     file_pattern?: string | undefined;
     min_confidence?: "high" | "medium" | "low" | undefined;
     exclude_tests?: boolean | undefined;
+    severity?: SecretSeverity | undefined;
     max_results?: number | undefined;
   },
 ): Promise<ScanSecretsResult> {
@@ -402,9 +429,10 @@ export async function scanSecrets(
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
-  const excludeTests = options?.exclude_tests ?? false;
+  const excludeTests = options?.exclude_tests ?? true;
   const filePattern = options?.file_pattern;
-  const minConfidence = options?.min_confidence ?? "low";
+  const minConfidence = options?.min_confidence ?? "medium";
+  const minSeverity = options?.severity ?? "low";
   const maxResults = options?.max_results ?? 200;
 
   const confidenceOrder: Record<string, number> = {
@@ -416,6 +444,7 @@ export async function scanSecrets(
 
   let allFindings: SecretFinding[] = [];
   let filesScanned = 0;
+  let filesFailed = 0;
   const filesWithSecrets = new Set<string>();
 
   const fileMatcher = filePattern ? picomatch(filePattern) : null;
@@ -430,8 +459,6 @@ export async function scanSecrets(
     // Skip files we know to skip
     if (shouldSkipFile(file.path)) continue;
 
-    filesScanned++;
-
     const absPath = join(index.root, file.path);
     try {
       const findings = await scanFileForSecrets(
@@ -440,19 +467,26 @@ export async function scanSecrets(
         repo,
         index.symbols,
       );
+      filesScanned++;
 
-      // Filter by confidence
+      // Filter by confidence and severity
       const filtered = findings.filter(
-        (f) => (confidenceOrder[f.confidence] ?? 1) >= minConfidenceLevel,
+        (f) =>
+          (confidenceOrder[f.confidence] ?? 1) >= minConfidenceLevel
+          && severityAtLeast(f.severity, minSeverity),
       );
 
       if (filtered.length > 0) {
         filesWithSecrets.add(file.path);
         allFindings.push(...filtered);
       }
-    } catch {
-      // File may have been deleted since indexing — skip
-      continue;
+    } catch (err: unknown) {
+      if (isMissingFileError(err)) {
+        continue;
+      }
+      filesFailed++;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[codesift] Secret scan failed for ${file.path}: ${message}`);
     }
   }
 
@@ -473,6 +507,12 @@ export async function scanSecrets(
     files_scanned: filesScanned,
     files_with_secrets: filesWithSecrets.size,
     scan_coverage: scanCoverage,
+    ...(filesFailed > 0
+      ? {
+          files_failed: filesFailed,
+          partial_failure: true,
+        }
+      : {}),
   };
 }
 

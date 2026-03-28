@@ -17,8 +17,7 @@ import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
-// TODO: re-enable when secret-tools.ts is complete
-// import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted } from "./secret-tools.js";
+import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "./secret-tools.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -587,14 +586,22 @@ async function handleFileChange(
 ): Promise<void> {
   const fullPath = join(repoRoot, relativeFile);
 
-  // Eager secret scan — runs even for config files that parseOneFile might skip
-  // TODO: re-enable when secret-tools.ts is complete
-  // scanOnChanged(fullPath, repoRoot, repoName).catch(() => {});
+  // Invalidate cached findings so the next scan sees the updated file contents.
+  scanOnChanged(repoName, relativeFile);
 
   const result = await parseOneFile(fullPath, repoRoot, repoName);
   if (!result) return;
 
   await saveIncremental(indexPath, relativeFile, result.symbols, result.entry);
+
+  if (loadConfig().secretScanEnabled) {
+    try {
+      await scanFileForSecrets(fullPath, relativeFile, repoName, result.symbols);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[codesift] Secret scan failed for ${relativeFile}: ${message}`);
+    }
+  }
 
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
@@ -615,7 +622,7 @@ async function handleFileDelete(
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
   embeddingCaches.delete(repoName);
-  // scanOnDeleted(relativeFile, repoName); // TODO: re-enable with secret-tools
+  scanOnDeleted(repoName, relativeFile);
 }
 
 export interface RepoSummary {
@@ -673,6 +680,7 @@ export async function indexFile(filePath: string): Promise<{
   symbol_count: number;
   duration_ms: number;
   skipped?: boolean;
+  secrets_warning?: string;
 }> {
   const absPath = resolve(filePath);
   const config = loadConfig();
@@ -715,15 +723,26 @@ export async function indexFile(filePath: string): Promise<{
 
   await saveIncremental(matchingRepo.index_path, relPath, result.symbols, result.entry);
 
+  let secretFindingsCount = 0;
+  if (config.secretScanEnabled) {
+    try {
+      secretFindingsCount = (
+        await scanFileForSecrets(absPath, relPath, matchingRepo.name, result.symbols)
+      ).length;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[codesift] Secret scan failed for ${relPath}: ${message}`);
+    }
+  }
+
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(matchingRepo.name);
   embeddingCaches.delete(matchingRepo.name);
 
-  // Check for secrets detected during eager scan
-  // TODO: re-enable when secret-tools.ts is complete
-  // const { getSecretCache } = await import("./secret-tools.js");
-  // const secretFindings = getSecretCache(matchingRepo.name).get(relPath);
-  const secretsWarning: string | undefined = undefined;
+  let secretsWarning: string | undefined;
+  if (secretFindingsCount > 0) {
+    secretsWarning = `\u26A0 ${secretFindingsCount} potential secret(s) detected`;
+  }
 
   return {
     repo: matchingRepo.name,

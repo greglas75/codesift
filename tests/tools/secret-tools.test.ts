@@ -222,10 +222,12 @@ describe("getSeverity", () => {
   it("returns critical for AWS rules", () => {
     expect(getSeverity("aws")).toBe("critical");
     expect(getSeverity("aws-secret")).toBe("critical");
+    expect(getSeverity("aws-access_keys")).toBe("critical");
   });
 
   it("returns high for openai", () => {
     expect(getSeverity("openai")).toBe("high");
+    expect(getSeverity("github-v2")).toBe("high");
   });
 
   it("returns medium for generic-api-key", () => {
@@ -686,6 +688,45 @@ describe("scanSecrets", () => {
     expect(result.findings).toHaveLength(0);
   });
 
+  it("filters by severity", async () => {
+    const index = makeIndex([makeFileEntry("src/config.ts")]);
+    mockGetCodeIndex.mockResolvedValue(index);
+
+    mockScan.mockReturnValue([
+      {
+        rule: "generic-api-key",
+        label: "Generic API Key",
+        text: "key-abcdef1234567890",
+        confidence: "high" as const,
+        start: 0,
+        end: 20,
+      },
+      {
+        rule: "aws",
+        label: "AWS",
+        text: "AKIAIOSFODNN7EXAMPLE",
+        confidence: "high" as const,
+        start: 30,
+        end: 50,
+      },
+    ]);
+
+    const result = await scanSecrets("test", { severity: "high" });
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.rule).toBe("aws");
+  });
+
+  it("excludes test files by default", async () => {
+    const index = makeIndex([
+      makeFileEntry("src/config.ts"),
+      makeFileEntry("src/config.test.ts"),
+    ]);
+    mockGetCodeIndex.mockResolvedValue(index);
+
+    const result = await scanSecrets("test");
+    expect(result.files_scanned).toBe(1);
+  });
+
   it("excludes test files when exclude_tests=true", async () => {
     const index = makeIndex([
       makeFileEntry("src/config.ts"),
@@ -749,6 +790,53 @@ describe("scanSecrets", () => {
 
     const result = await scanSecrets("test", { max_results: 3 });
     expect(result.findings.length).toBeLessThanOrEqual(3);
+  });
+
+  it("reports partial failures for non-missing file errors", async () => {
+    const index = makeIndex([
+      makeFileEntry("src/good.ts"),
+      makeFileEntry("src/bad.ts"),
+    ]);
+    mockGetCodeIndex.mockResolvedValue(index);
+
+    mockReadFile.mockImplementation(async (path: string) => {
+      if (path.endsWith("bad.ts")) {
+        const err = new Error("permission denied");
+        (err as Error & { code?: string }).code = "EACCES";
+        throw err;
+      }
+      return Buffer.from('const key = "AKIAIOSFODNN7EXAMPLE";');
+    });
+    mockScan.mockReturnValue([
+      {
+        rule: "aws",
+        label: "AWS",
+        text: "AKIAIOSFODNN7EXAMPLE",
+        confidence: "high" as const,
+        start: 13,
+        end: 33,
+      },
+    ]);
+
+    const result = await scanSecrets("test", { exclude_tests: false, min_confidence: "low" });
+    expect(result.files_scanned).toBe(1);
+    expect(result.files_failed).toBe(1);
+    expect(result.partial_failure).toBe(true);
+    expect(result.findings).toHaveLength(1);
+  });
+
+  it("silently skips files deleted after indexing", async () => {
+    const index = makeIndex([makeFileEntry("src/missing.ts")]);
+    mockGetCodeIndex.mockResolvedValue(index);
+
+    const err = new Error("missing");
+    (err as Error & { code?: string }).code = "ENOENT";
+    mockStat.mockRejectedValue(err);
+
+    const result = await scanSecrets("test", { exclude_tests: false, min_confidence: "low" });
+    expect(result.files_scanned).toBe(0);
+    expect(result.partial_failure).toBeUndefined();
+    expect(result.files_failed).toBeUndefined();
   });
 });
 

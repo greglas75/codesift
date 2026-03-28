@@ -11,11 +11,6 @@ npm install -g codesift-mcp
 ## Quick start
 
 ```bash
-# Set up in your AI coding tool (one-time)
-codesift setup codex    # OpenAI Codex
-codesift setup claude   # Claude Code
-codesift setup cursor   # Cursor IDE
-
 # Index a project
 codesift index /path/to/project
 
@@ -133,16 +128,6 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 |---------|-------------|
 | `codesift diff <repo> --since <ref>` | Structural diff between git refs |
 | `codesift changed <repo> --since <ref>` | List changed symbols between refs |
-
-### Setup
-
-| Command | Description |
-|---------|-------------|
-| `codesift setup codex` | Configure MCP server in OpenAI Codex (`~/.codex/config.toml`) |
-| `codesift setup claude` | Configure MCP server in Claude Code (`~/.claude/settings.json`) |
-| `codesift setup cursor` | Configure MCP server in Cursor IDE (`~/.cursor/mcp.json`) |
-
-Safe to run multiple times — skips if already configured.
 
 ### Batch & utility
 
@@ -281,19 +266,9 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 44 tools to AI agents.
 
-### Automatic setup (recommended)
-
-```bash
-codesift setup codex    # OpenAI Codex CLI & IDE
-codesift setup claude   # Claude Code
-codesift setup cursor   # Cursor IDE
-```
-
-Each command creates or updates the platform's config file, adding the CodeSift MCP server entry. Safe to run multiple times — skips if already configured.
-
 ### OpenAI Codex
 
-The `setup codex` command adds this to `~/.codex/config.toml`:
+Add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.codesift]
@@ -310,7 +285,7 @@ codex mcp add codesift -- npx -y codesift-mcp
 
 ### Claude Code
 
-The `setup claude` command adds this to `~/.claude/settings.json`:
+Add this to `~/.claude/settings.json`:
 
 ```json
 {
@@ -353,7 +328,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ### Cursor
 
-The `setup cursor` command adds to `~/.cursor/mcp.json`. You can also add it manually to `.cursor/mcp.json` in your project:
+Add this to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in your project:
 
 ```json
 {
@@ -459,14 +434,13 @@ BSL-1.1
 |---------|---------------|
 | Tool count (44) | src/register-tools.ts (grep 'name: "' count: 44) |
 | Quick install | package.json:bin (line 8-11) |
-| Quick start | src/cli/commands.ts, src/cli/setup.ts |
-| Setup command | src/cli/setup.ts (codex/claude/cursor), tests/cli/setup.test.ts |
+| Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |
 | Performance features | src/tools/index-tools.ts (mtime), src/tools/search-tools.ts (detail_level, token_budget), src/search/bm25.ts (centrality), src/server-helpers.ts (cache, dedup, guards) |
 | CLI commands | src/cli/commands.ts:1-515 |
 | MCP tools | src/register-tools.ts (all tool definitions) |
 | Anti-patterns | src/tools/pattern-tools.ts |
-| MCP setup | src/cli/setup.ts (automated), manual configs verified |
+| MCP setup | manual configs verified |
 | Semantic search | src/search/semantic.ts, src/config.ts:40-47 |
 | Configuration | src/config.ts:36-72 |
 | How it works | src/search/bm25.ts, src/parser/, src/storage/watcher.ts, src/server-helpers.ts |
