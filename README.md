@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 39 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 44 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -11,6 +11,11 @@ npm install -g codesift-mcp
 ## Quick start
 
 ```bash
+# Set up in your AI coding tool (one-time)
+codesift setup codex    # OpenAI Codex
+codesift setup claude   # Claude Code
+codesift setup cursor   # Cursor IDE
+
 # Index a project
 codesift index /path/to/project
 
@@ -129,6 +134,16 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift diff <repo> --since <ref>` | Structural diff between git refs |
 | `codesift changed <repo> --since <ref>` | List changed symbols between refs |
 
+### Setup
+
+| Command | Description |
+|---------|-------------|
+| `codesift setup codex` | Configure MCP server in OpenAI Codex (`~/.codex/config.toml`) |
+| `codesift setup claude` | Configure MCP server in Claude Code (`~/.claude/settings.json`) |
+| `codesift setup cursor` | Configure MCP server in Cursor IDE (`~/.cursor/mcp.json`) |
+
+Safe to run multiple times — skips if already configured.
+
 ### Batch & utility
 
 | Command | Description |
@@ -138,7 +153,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (42 total)
+## MCP tools (44 total)
 
 When running as an MCP server, CodeSift exposes these tools:
 
@@ -154,6 +169,7 @@ When running as an MCP server, CodeSift exposes these tools:
 | **Conversation search** | `index_conversations`, `search_conversations`, `find_conversations_for_symbol` |
 | **Diff** | `diff_outline`, `changed_symbols` |
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget, incl. `type: "conversation"`) |
+| **Security** | `scan_secrets` (AST-aware secret detection, ~1,100 rules, masked output) |
 | **Analysis** | `find_dead_code` (framework-aware), `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns` (9 built-in incl. scaffolding), `list_patterns` |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
 | **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
@@ -191,6 +207,33 @@ codebase_retrieval(repo, queries=[
 - Compaction-aware: skips summary injections, indexes last summary as meta-doc
 - Cross-reference: link code symbols to the conversations that discussed them
 
+### Secret scanning
+
+Detect hardcoded secrets (API keys, JWT tokens, passwords, connection strings) in your indexed codebase. Uses ~1,100 detection rules from TruffleHog via `@sanity-labs/secret-scan`, with CodeSift's tree-sitter AST for false-positive reduction.
+
+```bash
+# Scan entire repo for secrets
+scan_secrets(repo="local/my-project")
+
+# Filter by severity
+scan_secrets(repo="local/my-project", severity="critical")
+
+# Only high-confidence findings, including test files
+scan_secrets(repo="local/my-project", min_confidence="high", exclude_tests=false)
+
+# Scope to specific directory
+scan_secrets(repo="local/my-project", file_pattern="src/config/**")
+```
+
+**Features:**
+- Eager scanning on file change — results are cached and instant on query
+- AST-aware confidence: test files, docs, placeholder variables auto-demoted to `low`
+- Masked output — secrets shown as `sk-p***hijk`, raw values never in cache or logs
+- Inline allowlist — add `// codesift:allow-secret` to suppress a finding
+- Config files indexed — `.env`, `.yaml`, `.toml`, `.json`, `.ini`, `.properties` scanned
+- Severity mapping: cloud keys (AWS, GCP) = critical, API keys (OpenAI, GitHub) = high
+- Inline warnings in `index_file` responses when secrets detected
+
 ## When to use CodeSift vs grep
 
 | Task | Best tool | Why |
@@ -212,6 +255,7 @@ codebase_retrieval(repo, queries=[
 | Go to definition | `go_to_definition` | LSP-precise when available, index fallback |
 | Get type info | `get_type_info` | Return types + docs via LSP hover — no file reading |
 | Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
+| Detect hardcoded secrets | `scan_secrets` | ~1,100 rules, AST-aware, masked output, auto-cached |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -235,23 +279,51 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 39 tools to AI agents like Claude.
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 44 tools to AI agents.
 
-### Claude Code (CLI)
+### Automatic setup (recommended)
 
-Add to `~/.claude/.mcp.json`:
+```bash
+codesift setup codex    # OpenAI Codex CLI & IDE
+codesift setup claude   # Claude Code
+codesift setup cursor   # Cursor IDE
+```
+
+Each command creates or updates the platform's config file, adding the CodeSift MCP server entry. Safe to run multiple times — skips if already configured.
+
+### OpenAI Codex
+
+The `setup codex` command adds this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.codesift]
+command = "npx"
+args = ["-y", "codesift-mcp"]
+tool_timeout_sec = 120
+```
+
+You can also add it manually or via the Codex CLI:
+
+```bash
+codex mcp add codesift -- npx -y codesift-mcp
+```
+
+### Claude Code
+
+The `setup claude` command adds this to `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "codesift": {
-      "command": "codesift-mcp"
+      "command": "npx",
+      "args": ["-y", "codesift-mcp"]
     }
   }
 }
 ```
 
-With semantic search (OpenAI embeddings):
+With semantic search (OpenAI embeddings), add the env var manually:
 
 ```json
 {
@@ -281,13 +353,14 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ### Cursor
 
-Add to `.cursor/mcp.json` in your project or global config:
+The `setup cursor` command adds to `~/.cursor/mcp.json`. You can also add it manually to `.cursor/mcp.json` in your project:
 
 ```json
 {
   "mcpServers": {
     "codesift": {
-      "command": "codesift-mcp"
+      "command": "npx",
+      "args": ["-y", "codesift-mcp"]
     }
   }
 }
@@ -332,6 +405,7 @@ All configuration is via environment variables.
 | `CODESIFT_DEFAULT_TOKEN_BUDGET` | Default token budget for retrieval | `8000` |
 | `CODESIFT_DEFAULT_TOP_K` | Default max results for search | `50` |
 | `CODESIFT_EMBEDDING_BATCH_SIZE` | Symbols per embedding API call | `128` |
+| `CODESIFT_SECRET_SCAN` | Enable/disable secret scanning | `true` (set `false` to disable) |
 
 ## How it works
 
@@ -371,32 +445,34 @@ cd codesift-mcp
 npm install
 npm run download-wasm   # Download tree-sitter WASM grammars
 npm run build           # TypeScript compilation
-npm test                # Run tests (Vitest, 392+ tests)
+npm test                # Run tests (Vitest, 570+ tests)
 npm run test:coverage   # Coverage report
 npm run lint            # Type check (tsc --noEmit)
 ```
 
 ## License
 
-MIT
+BSL-1.1
 
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (39) | src/register-tools.ts (grep 'name: "' count) |
+| Tool count (44) | src/register-tools.ts (grep 'name: "' count: 44) |
 | Quick install | package.json:bin (line 8-11) |
-| Quick start | src/cli/commands.ts |
+| Quick start | src/cli/commands.ts, src/cli/setup.ts |
+| Setup command | src/cli/setup.ts (codex/claude/cursor), tests/cli/setup.test.ts |
 | Benchmark | benchmarks/ directory, previously measured |
 | Performance features | src/tools/index-tools.ts (mtime), src/tools/search-tools.ts (detail_level, token_budget), src/search/bm25.ts (centrality), src/server-helpers.ts (cache, dedup, guards) |
-| CLI commands | src/cli/commands.ts:1-403 |
+| CLI commands | src/cli/commands.ts:1-515 |
 | MCP tools | src/register-tools.ts (all tool definitions) |
 | Anti-patterns | src/tools/pattern-tools.ts |
-| MCP setup | ~/.claude/.mcp.json (verified working config) |
+| MCP setup | src/cli/setup.ts (automated), manual configs verified |
 | Semantic search | src/search/semantic.ts, src/config.ts:40-47 |
 | Configuration | src/config.ts:36-72 |
 | How it works | src/search/bm25.ts, src/parser/, src/storage/watcher.ts, src/server-helpers.ts |
 | Glob support | src/utils/glob.ts (picomatch) |
 | LSP bridge | src/lsp/lsp-client.ts, src/lsp/lsp-manager.ts, src/lsp/lsp-servers.ts, src/lsp/lsp-tools.ts |
+| Secret scanning | src/tools/secret-tools.ts, @sanity-labs/secret-scan (package.json) |
 | Languages | src/parser/parser-manager.ts, src/parser/extractors/ |
 | Development | package.json:scripts (line 19-28) |
 | Git URL | package.json:repository (line 62-64) |
