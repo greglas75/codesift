@@ -8,7 +8,7 @@
 import { readdir, stat, readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { join, relative, basename, resolve } from "node:path";
 import { extractConversationSymbols } from "../parser/symbol-extractor.js";
-import { saveIndex, getIndexPath } from "../storage/index-store.js";
+import { saveIndex, loadIndex, getIndexPath } from "../storage/index-store.js";
 import { registerRepo } from "../storage/registry.js";
 import { buildBM25Index, searchBM25, applyCutoff, type BM25Index } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
@@ -185,10 +185,33 @@ export async function searchConversations(
   projectPath?: string,
   limit?: number,
 ): Promise<SearchConversationsResult> {
-  const rootPath = resolve(projectPath ?? process.cwd());
+  let rootPath: string;
+  if (projectPath) {
+    rootPath = resolve(projectPath);
+  } else {
+    // Auto-detect: convert cwd to Claude conversation path
+    const { homedir } = await import("node:os");
+    const cwd = process.cwd();
+    const encoded = encodeCwdToClaudePath(cwd);
+    rootPath = join(homedir(), ".claude", "projects", encoded);
+  }
   const repoName = `conversations/${basename(rootPath)}`;
 
-  const bm25 = bm25Indexes.get(repoName) ?? null;
+  let bm25 = bm25Indexes.get(repoName) ?? null;
+  if (!bm25) {
+    // Try loading from disk if not in cache
+    try {
+      const config = loadConfig();
+      const indexPath = getIndexPath(config.dataDir, rootPath);
+      const codeIndex = await loadIndex(indexPath);
+      if (codeIndex && codeIndex.symbols.length > 0) {
+        bm25 = buildBM25Index(codeIndex.symbols);
+        bm25Indexes.set(repoName, bm25);
+      }
+    } catch {
+      // Index doesn't exist yet
+    }
+  }
   if (!bm25) {
     return { results: [], total_matches: 0 };
   }
