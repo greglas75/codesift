@@ -611,7 +611,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       project_path: z.string().optional().describe("Path to the Claude project conversations directory. Auto-detects from cwd if omitted."),
       quiet: z.boolean().optional().describe("Suppress output (used by session-end hook)"),
     },
-    handler: async (args) => indexConversations(args.project_path as string | undefined),
+    handler: async (args) => indexConversations(args.project_path as string ?? process.cwd()),
   },
   {
     name: "search_conversations",
