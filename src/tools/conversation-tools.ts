@@ -307,28 +307,31 @@ export async function searchConversations(
     }
   }
 
-  // Fuse results with RRF if we have both
+  // Fuse results: boost BM25 scores with semantic signal (additive, not RRF)
+  // This preserves BM25 magnitude for cross-project ranking
   let finalResults: Array<{ symbol: CodeSymbol; score: number }>;
   if (semanticResults.length > 0) {
-    const RRF_K = 60;
-    const scores = new Map<string, { symbol: CodeSymbol; score: number }>();
+    const semanticMap = new Map<string, number>();
+    for (const r of semanticResults) {
+      semanticMap.set(r.symbol.id, r.score);
+    }
 
-    bm25Filtered.forEach((r, rank) => {
-      const rrf = 1 / (RRF_K + rank + 1);
-      scores.set(r.symbol.id, { symbol: r.symbol, score: rrf });
+    // Add semantic similarity as a bonus to BM25 score (scaled to ~20% of BM25 range)
+    const maxBm25 = bm25Filtered.length > 0 ? bm25Filtered[0]!.score : 1;
+    const boosted = bm25Filtered.map((r) => {
+      const semScore = semanticMap.get(r.symbol.id) ?? 0;
+      return { symbol: r.symbol, score: r.score + semScore * maxBm25 * 0.2 };
     });
 
-    semanticResults.forEach((r, rank) => {
-      const rrf = 1 / (RRF_K + rank + 1);
-      const existing = scores.get(r.symbol.id);
-      if (existing) {
-        existing.score += rrf;
-      } else {
-        scores.set(r.symbol.id, { symbol: r.symbol, score: rrf });
+    // Also add semantic-only results not in BM25 (with lower base score)
+    for (const r of semanticResults) {
+      if (!bm25Filtered.some((b) => b.symbol.id === r.symbol.id)) {
+        boosted.push({ symbol: r.symbol, score: r.score * maxBm25 * 0.15 });
       }
-    });
+    }
 
-    finalResults = [...scores.values()].sort((a, b) => b.score - a.score).slice(0, topK);
+    boosted.sort((a, b) => b.score - a.score);
+    finalResults = boosted.slice(0, topK);
   } else {
     finalResults = bm25Filtered.slice(0, topK);
   }

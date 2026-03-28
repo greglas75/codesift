@@ -43,13 +43,17 @@ describe("indexConversations", () => {
     expect(result.elapsed_ms).toBeGreaterThan(0);
   });
 
-  it("skips files larger than 10MB", async () => {
+  it("indexes files regardless of size (no limit)", async () => {
     const { indexConversations } = await import("../../src/tools/conversation-tools.js");
-    const bigContent = "x".repeat(11 * 1024 * 1024);
-    await writeFile(join(tmpDir, "big.jsonl"), bigContent);
+    // File with valid JSONL — no size limit
+    const jsonl = [
+      JSON.stringify({ type: "user", message: { content: "big question" }, uuid: "u1", sessionId: "s1" }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "big answer" }] }, uuid: "a1", sessionId: "s1" }),
+    ].join("\n");
+    await writeFile(join(tmpDir, "big.jsonl"), jsonl);
 
     const result = await indexConversations(tmpDir);
-    expect(result.sessions_found).toBe(0);
+    expect(result.sessions_found).toBe(1);
   });
 
   it("handles empty directory", async () => {
