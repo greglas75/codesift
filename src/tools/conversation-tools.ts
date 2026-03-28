@@ -16,7 +16,8 @@ import { loadConfig } from "../config.js";
 import { embedSymbols } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../types.js";
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+// No file size limit — large sessions (40-66MB) often contain the most
+// valuable decisions. readFile + line-by-line JSON.parse handles them fine.
 
 function getCurrentHomeDir(): string {
   return process.env.HOME ?? process.env.USERPROFILE ?? homedir();
@@ -98,19 +99,6 @@ export async function indexConversations(
 
   for (const fileName of jsonlFiles) {
     const filePath = join(rootPath, fileName);
-
-    // Size guard
-    let fileSize: number;
-    try {
-      const fileStat = await stat(filePath);
-      fileSize = fileStat.size;
-    } catch {
-      continue;
-    }
-
-    if (fileSize > MAX_FILE_SIZE) {
-      continue;
-    }
 
     // Read and extract
     let source: string;
