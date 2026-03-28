@@ -23,8 +23,8 @@ afterEach(async () => {
   }
   const { resetConfigCache } = await import("../../src/config.js");
   resetConfigCache();
-  await rm(tmpDir, { recursive: true, force: true });
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 });
 
 describe("indexConversations", () => {
