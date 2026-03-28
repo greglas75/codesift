@@ -138,7 +138,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (39 total)
+## MCP tools (42 total)
 
 When running as an MCP server, CodeSift exposes these tools:
 
@@ -151,12 +151,45 @@ When running as an MCP server, CodeSift exposes these tools:
 | **References & graph** | `find_references` (LSP-enhanced), `trace_call_chain`, `impact_analysis`, `trace_route` (HTTP route → handler → DB) |
 | **LSP bridge** | `go_to_definition` (LSP + index fallback), `get_type_info` (hover), `rename_symbol` (cross-file type-safe rename) |
 | **Context & knowledge** | `assemble_context` (level: L0/L1/L2/L3), `get_knowledge_map`, `detect_communities` (Louvain) |
+| **Conversation search** | `index_conversations`, `search_conversations`, `find_conversations_for_symbol` |
 | **Diff** | `diff_outline`, `changed_symbols` |
-| **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget) |
+| **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget, incl. `type: "conversation"`) |
 | **Analysis** | `find_dead_code` (framework-aware), `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns` (9 built-in incl. scaffolding), `list_patterns` |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
 | **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
 | **Utility** | `generate_claude_md`, `usage_stats` (with token savings tracking) |
+
+### Conversation search
+
+Search past Claude Code conversation history — the decisions, rationale, and debugging sessions that shaped your code.
+
+```bash
+# Index conversations for current project (auto-detected from cwd)
+# Also runs automatically at startup via auto-discovery
+index_conversations()
+
+# Index a specific project's conversations
+index_conversations(project_path="/Users/me/.claude/projects/-Users-me-DEV-my-project")
+
+# Search past conversations
+search_conversations(query="auth middleware bug", limit=5)
+
+# Find conversations that discussed a specific code symbol
+find_conversations_for_symbol(symbol_name="processPayment", repo="local/my-project")
+
+# In codebase_retrieval batch queries
+codebase_retrieval(repo, queries=[
+  {"type": "semantic", "query": "how does auth work"},
+  {"type": "conversation", "query": "why we chose Redis over Postgres cache"}
+])
+```
+
+**Features:**
+- Auto-discovery at startup (zero config)
+- Session-end hook for immediate re-indexing
+- Noise filtering: tool_result dumps stripped, tool_use truncated, images → `[image]`
+- Compaction-aware: skips summary injections, indexes last summary as meta-doc
+- Cross-reference: link code symbols to the conversations that discussed them
 
 ## When to use CodeSift vs grep
 
