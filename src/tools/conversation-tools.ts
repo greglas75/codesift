@@ -6,15 +6,21 @@
  */
 
 import { readdir, stat, readFile, writeFile, mkdir, rename } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, relative, basename, resolve } from "node:path";
 import { extractConversationSymbols } from "../parser/symbol-extractor.js";
 import { saveIndex, loadIndex, getIndexPath } from "../storage/index-store.js";
 import { registerRepo } from "../storage/registry.js";
 import { buildBM25Index, searchBM25, applyCutoff, type BM25Index } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
+import { embedSymbols } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../types.js";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+function getCurrentHomeDir(): string {
+  return process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+}
 
 /** Module-level BM25 cache keyed by conversation repo name. */
 const bm25Indexes = new Map<string, BM25Index>();
@@ -38,6 +44,21 @@ export interface IndexConversationsResult {
 }
 
 /**
+ * Convert a project root path into Claude Code's per-project conversation path.
+ * Claude stores conversation JSONL files under `~/.claude/projects/<encoded-cwd>`.
+ */
+export function getClaudeConversationProjectPath(
+  cwd: string,
+  homeDir = getCurrentHomeDir(),
+): string {
+  return join(homeDir, ".claude", "projects", encodeCwdToClaudePath(resolve(cwd)));
+}
+
+function resolveConversationProjectPath(projectPath?: string): string {
+  return projectPath ? resolve(projectPath) : getClaudeConversationProjectPath(process.cwd());
+}
+
+/**
  * Index all JSONL conversation session files found in `projectPath`.
  *
  * - Filters to `.jsonl` files only
@@ -47,10 +68,10 @@ export interface IndexConversationsResult {
  * - Caches the BM25 index in module memory for search use
  */
 export async function indexConversations(
-  projectPath: string,
+  projectPath?: string,
 ): Promise<IndexConversationsResult> {
   const startTime = Date.now();
-  const rootPath = resolve(projectPath);
+  const rootPath = resolveConversationProjectPath(projectPath);
   const config = loadConfig();
 
   // Derive repo name: "conversations/<folder>"
@@ -139,6 +160,12 @@ export async function indexConversations(
   };
   await saveIndex(indexPath, codeIndex);
 
+  // Embed conversation symbols in background (non-fatal, fire-and-forget)
+  embedSymbols(allSymbols, indexPath, repoName, config).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[codesift] Conversation embedding failed for ${repoName}: ${msg}`);
+  });
+
   // Register in the global registry
   const meta: RepoMeta = {
     name: repoName,
@@ -185,16 +212,7 @@ export async function searchConversations(
   projectPath?: string,
   limit?: number,
 ): Promise<SearchConversationsResult> {
-  let rootPath: string;
-  if (projectPath) {
-    rootPath = resolve(projectPath);
-  } else {
-    // Auto-detect: convert cwd to Claude conversation path
-    const { homedir } = await import("node:os");
-    const cwd = process.cwd();
-    const encoded = encodeCwdToClaudePath(cwd);
-    rootPath = join(homedir(), ".claude", "projects", encoded);
-  }
+  const rootPath = resolveConversationProjectPath(projectPath);
   const repoName = `conversations/${basename(rootPath)}`;
 
   let bm25 = bm25Indexes.get(repoName) ?? null;
@@ -262,20 +280,57 @@ export interface FindConversationsForSymbolResult {
 /**
  * Find conversation turns that mention a given symbol name.
  *
- * Delegates to `searchConversations` using the symbol name as the query,
- * then counts unique sessions that matched.
+ * Resolves the symbol in the code repo first, then searches the matching
+ * Claude Code conversation directory for discussions of that symbol.
  */
 export async function findConversationsForSymbol(
   symbolName: string,
-  projectPath?: string,
+  repo: string,
   limit?: number,
 ): Promise<FindConversationsForSymbolResult> {
-  const { results } = await searchConversations(symbolName, projectPath, limit ?? 5);
+  let resolvedSymbol = { name: symbolName, file: "", kind: "" };
+  let projectPath: string | undefined;
+
+  try {
+    const { searchSymbols } = await import("./search-tools.js");
+    const symbolResults = await searchSymbols(repo, symbolName, {
+      include_source: false,
+      detail_level: "compact",
+      top_k: 10,
+    });
+    const bestMatch =
+      symbolResults.find((r) => r.symbol.name === symbolName) ??
+      symbolResults.find((r) => r.symbol.name.toLowerCase() === symbolName.toLowerCase()) ??
+      symbolResults[0];
+
+    if (bestMatch) {
+      resolvedSymbol = {
+        name: bestMatch.symbol.name,
+        file: bestMatch.symbol.file,
+        kind: bestMatch.symbol.kind,
+      };
+    }
+  } catch {
+    // Fall back to plain-text search using the provided symbol name.
+  }
+
+  try {
+    const { getRepo } = await import("../storage/registry.js");
+    const config = loadConfig();
+    const repoMeta = await getRepo(config.registryPath, repo);
+    if (repoMeta) {
+      projectPath = getClaudeConversationProjectPath(repoMeta.root);
+    }
+  } catch {
+    // Fall back to the current project's conversations if repo lookup fails.
+  }
+
+  const { results } = await searchConversations(resolvedSymbol.name, projectPath, limit ?? 5);
 
   const uniqueSessions = new Set(results.map((r) => r.session_id));
 
   return {
-    symbol: { name: symbolName, file: "", kind: "" },
+    symbol: resolvedSymbol,
     conversations: results,
     session_count: uniqueSessions.size,
   };
@@ -354,9 +409,7 @@ export async function installSessionEndHook(projectRoot: string): Promise<void> 
  * directory exists for the project.
  */
 export async function autoDiscoverConversations(cwd: string): Promise<void> {
-  const homedir = (await import("node:os")).homedir();
-  const encoded = encodeCwdToClaudePath(cwd);
-  const conversationsDir = join(homedir, ".claude", "projects", encoded);
+  const conversationsDir = getClaudeConversationProjectPath(cwd);
 
   try {
     const dirStat = await stat(conversationsDir);

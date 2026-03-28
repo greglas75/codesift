@@ -17,6 +17,7 @@ import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
+import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted } from "./secret-tools.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -43,7 +44,9 @@ async function parseOneFile(
     const source = await readFile(filePath, "utf-8");
     const relPath = relative(repoRoot, filePath);
     const ext = extname(filePath);
-    const language = getLanguageForExtension(ext) ?? "unknown";
+    const baseName = filePath.split("/").pop() ?? "";
+    const language = getLanguageForExtension(ext)
+      ?? (baseName.startsWith(".env") ? "config" : "unknown");
 
     let symbols: CodeSymbol[];
 
@@ -55,6 +58,8 @@ async function parseOneFile(
       symbols = extractAstroSymbols(source, relPath, repoName);
     } else if (language === "conversation") {
       symbols = extractConversationSymbols(source, relPath, repoName);
+    } else if (language === "config") {
+      symbols = [];
     } else {
       const tree = await parseFile(filePath, source);
       if (!tree) return null;
@@ -179,7 +184,7 @@ function propagateDirtySignatures(
  * Embed symbols using the configured embedding provider.
  * Non-fatal — BM25 search still works if embedding fails.
  */
-async function embedSymbols(
+export async function embedSymbols(
   symbols: CodeSymbol[],
   indexPath: string,
   repoName: string,
@@ -319,7 +324,7 @@ export async function indexFolder(
   // Walk directory and collect parseable files
   const files = await walkDirectory(rootPath, {
     includePaths: options?.include_paths,
-    fileFilter: (ext) => !!getLanguageForExtension(ext),
+    fileFilter: (ext, name) => !!getLanguageForExtension(ext) || (name?.startsWith(".env") ?? false),
   });
 
   // mtime-based incremental: skip files unchanged since last index
@@ -580,6 +585,10 @@ async function handleFileChange(
   relativeFile: string,
 ): Promise<void> {
   const fullPath = join(repoRoot, relativeFile);
+
+  // Eager secret scan — runs even for config files that parseOneFile might skip
+  scanOnChanged(fullPath, repoRoot, repoName).catch(() => {});
+
   const result = await parseOneFile(fullPath, repoRoot, repoName);
   if (!result) return;
 
@@ -604,6 +613,7 @@ async function handleFileDelete(
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
   embeddingCaches.delete(repoName);
+  scanOnDeleted(relativeFile, repoName);
 }
 
 export interface RepoSummary {
@@ -707,11 +717,19 @@ export async function indexFile(filePath: string): Promise<{
   bm25Indexes.delete(matchingRepo.name);
   embeddingCaches.delete(matchingRepo.name);
 
+  // Check for secrets detected during eager scan
+  const { getSecretCache } = await import("./secret-tools.js");
+  const secretFindings = getSecretCache(matchingRepo.name).get(relPath);
+  const secretsWarning = secretFindings?.findings.length
+    ? `⚠ ${secretFindings.findings.length} potential secret(s) detected`
+    : undefined;
+
   return {
     repo: matchingRepo.name,
     file: relPath,
     symbol_count: result.symbols.length,
     duration_ms: Date.now() - startTime,
+    ...(secretsWarning && { secrets_warning: secretsWarning }),
   };
 }
 
