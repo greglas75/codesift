@@ -179,10 +179,15 @@ export function extractConversationSymbols(
         userLineNumber,
       );
 
-      const docParts: string[] = [];
-      if (userRecord.timestamp) docParts.push(userRecord.timestamp);
-      if (userRecord.gitBranch) docParts.push(userRecord.gitBranch);
-      const docstring = docParts.length > 0 ? docParts.join(" | ") : undefined;
+      // BM25 field mapping — signature and docstring hold searchable text
+      // (body field is limited to 500 chars, too short for conversations)
+      const signature = userText.slice(0, 2000);
+      const docstring = assistantText.slice(0, 3000);
+
+      const metaParts: string[] = [];
+      if (userRecord.timestamp) metaParts.push(userRecord.timestamp);
+      if (userRecord.gitBranch) metaParts.push(userRecord.gitBranch);
+      const metaTag = metaParts.length > 0 ? metaParts.join(" | ") : "";
 
       const sym: CodeSymbol = {
         id,
@@ -193,8 +198,9 @@ export function extractConversationSymbols(
         start_line: userLineNumber,
         end_line: assistantLineNumber,
         source: truncatedSource,
+        signature: metaTag ? `${metaTag}\n${signature}` : signature,
+        docstring,
         tokens: tokenizeText(`${userText} ${assistantText}`),
-        ...(docstring !== undefined && { docstring }),
         ...(userRecord.sessionId !== undefined && { parent: userRecord.sessionId }),
       };
 
