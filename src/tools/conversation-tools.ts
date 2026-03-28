@@ -280,7 +280,12 @@ export async function installSessionEndHook(projectRoot: string): Promise<void> 
 
   const hookEntry = {
     matcher: "",
-    command: "codesift index-conversations --quiet",
+    hooks: [
+      {
+        type: "command",
+        command: "codesift index-conversations --quiet",
+      },
+    ],
   };
 
   let settings: Record<string, unknown> = {};
@@ -295,14 +300,14 @@ export async function installSessionEndHook(projectRoot: string): Promise<void> 
   if (!settings.hooks || typeof settings.hooks !== "object") {
     settings.hooks = {};
   }
-  const hooks = settings.hooks as Record<string, unknown[]>;
-  if (!Array.isArray(hooks.Stop)) {
-    hooks.Stop = [];
+  const hooksObj = settings.hooks as Record<string, unknown[]>;
+  if (!Array.isArray(hooksObj.Stop)) {
+    hooksObj.Stop = [];
   }
 
   // Check if codesift hook already exists (idempotent)
-  const existing = hooks.Stop as Array<{ command?: string }>;
-  if (existing.some((h) => h.command?.includes("codesift"))) {
+  const existing = hooksObj.Stop as Array<{ hooks?: Array<{ command?: string }> }>;
+  if (existing.some((h) => h.hooks?.some((hk) => hk.command?.includes("codesift")))) {
     return; // Already installed
   }
 

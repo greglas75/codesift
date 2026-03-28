@@ -27,14 +27,15 @@ describe("hook installation", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("creates .claude/settings.local.json with Stop hook", async () => {
+  it("creates .claude/settings.local.json with correct hook format", async () => {
     const { installSessionEndHook } = await import("../../src/tools/conversation-tools.js");
     await installSessionEndHook(tmpDir);
 
     const settingsPath = join(tmpDir, ".claude", "settings.local.json");
     const content = JSON.parse(await readFile(settingsPath, "utf-8"));
     expect(content.hooks.Stop).toBeDefined();
-    expect(content.hooks.Stop[0].command).toContain("codesift");
+    expect(content.hooks.Stop[0].hooks[0].type).toBe("command");
+    expect(content.hooks.Stop[0].hooks[0].command).toContain("codesift");
   });
 
   it("does not duplicate hook on second call (idempotent)", async () => {
@@ -44,8 +45,7 @@ describe("hook installation", () => {
 
     const settingsPath = join(tmpDir, ".claude", "settings.local.json");
     const content = JSON.parse(await readFile(settingsPath, "utf-8"));
-    const codesiftHooks = content.hooks.Stop.filter((h: { command: string }) => h.command.includes("codesift"));
-    expect(codesiftHooks).toHaveLength(1);
+    expect(content.hooks.Stop).toHaveLength(1);
   });
 
   it("preserves existing hooks when adding", async () => {
@@ -53,13 +53,13 @@ describe("hook installation", () => {
     const settingsDir = join(tmpDir, ".claude");
     await mkdir(settingsDir, { recursive: true });
     await writeFile(join(settingsDir, "settings.local.json"), JSON.stringify({
-      hooks: { Stop: [{ matcher: "", command: "echo done" }] }
+      hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: "echo done" }] }] }
     }));
 
     await installSessionEndHook(tmpDir);
 
     const content = JSON.parse(await readFile(join(settingsDir, "settings.local.json"), "utf-8"));
     expect(content.hooks.Stop).toHaveLength(2);
-    expect(content.hooks.Stop[0].command).toBe("echo done");
+    expect(content.hooks.Stop[0].hooks[0].command).toBe("echo done");
   });
 });
