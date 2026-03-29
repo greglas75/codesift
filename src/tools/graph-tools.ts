@@ -293,5 +293,90 @@ function callTreeToMermaid(tree: CallNode, direction: Direction): string {
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Symbol role classification
+// ---------------------------------------------------------------------------
+
+export type SymbolRole = "entry" | "core" | "utility" | "adapter" | "dead" | "leaf";
+
+export interface SymbolRoleInfo {
+  id: string;
+  name: string;
+  kind: string;
+  file: string;
+  role: SymbolRole;
+  callers: number;
+  callees: number;
+}
+
+/**
+ * Classify every symbol's architectural role based on call graph connectivity.
+ *
+ * - entry: many callees, few callers (handlers, main, CLI commands)
+ * - core: high connectivity both ways (key business logic)
+ * - utility: many callers, few callees (helpers, formatters, validators)
+ * - adapter: callers from one cluster, callees in another (bridge code)
+ * - dead: zero callers (potentially unused)
+ * - leaf: zero callees (terminal functions)
+ */
+export async function classifySymbolRoles(
+  repo: string,
+  options?: { file_pattern?: string; include_tests?: boolean; top_n?: number },
+): Promise<SymbolRoleInfo[]> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository not found: ${repo}`);
+
+  const skipTests = !(options?.include_tests ?? false);
+  const adjacency = buildAdjacencyIndex(index.symbols, skipTests);
+
+  const results: SymbolRoleInfo[] = [];
+
+  for (const sym of index.symbols) {
+    if (skipTests && isTestFile(sym.file)) continue;
+    if (options?.file_pattern && !sym.file.includes(options.file_pattern)) continue;
+    if (!CALLABLE_KINDS.has(sym.kind)) continue;
+
+    const callerCount = (adjacency.callers.get(sym.id) ?? []).length;
+    const calleeCount = (adjacency.callees.get(sym.id) ?? []).length;
+
+    const role = classifyRole(callerCount, calleeCount);
+
+    results.push({
+      id: sym.id,
+      name: sym.name,
+      kind: sym.kind,
+      file: sym.file,
+      role,
+      callers: callerCount,
+      callees: calleeCount,
+    });
+  }
+
+  results.sort((a, b) => (b.callers + b.callees) - (a.callers + a.callees));
+
+  const limit = options?.top_n ?? 100;
+  return results.slice(0, limit);
+}
+
+function classifyRole(callers: number, callees: number): SymbolRole {
+  if (callers === 0 && callees === 0) return "dead";
+  if (callers === 0) return "dead";
+  if (callees === 0) return "leaf";
+
+  const ratio = callers / (callees || 1);
+
+  // High callers, few callees → utility (helpers called by many)
+  if (ratio >= 3 && callers >= 3) return "utility";
+
+  // Few callers, many callees → entry point (orchestrator)
+  if (ratio <= 0.33 && callees >= 3) return "entry";
+
+  // Both high → core business logic
+  if (callers >= 2 && callees >= 2) return "core";
+
+  // Default: leaf-like
+  return "leaf";
+}
+
 // Export shared utilities for impact-tools and testing
-export { buildAdjacencyIndex, extractCallSites, buildCallTree, stripSource, isTestFile };
+export { buildAdjacencyIndex, extractCallSites, buildCallTree, stripSource, isTestFile, classifyRole };

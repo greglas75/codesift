@@ -390,6 +390,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     ),
   },
 
+  {
+    name: "classify_roles",
+    description: "Classify each symbol's architectural role (entry/core/utility/adapter/dead/leaf) based on call graph connectivity. Entry points have many callees, few callers. Utilities have many callers, few callees. Core has both. Dead has no callers.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      top_n: zNum().describe("Maximum number of symbols to return (default: 100)"),
+    },
+    handler: async (args) => {
+      const { classifySymbolRoles } = await import("./tools/graph-tools.js");
+      return classifySymbolRoles(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        top_n: args.top_n as number | undefined,
+      });
+    },
+  },
+
   // --- Context & knowledge ---
   {
     name: "assemble_context",
