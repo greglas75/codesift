@@ -1,16 +1,22 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { astQuery } from "../../src/tools/ast-query-tools.js";
-import { indexFolder } from "../../src/tools/index-tools.js";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { indexFolder, invalidateCache } from "../../src/tools/index-tools.js";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { afterAll } from "vitest";
 
 let repo: string;
 let testDir: string;
 
+afterAll(async () => {
+  if (repo) await invalidateCache(repo).catch(() => {});
+  if (testDir) rmSync(testDir, { recursive: true, force: true, maxRetries: 3 });
+});
+
 beforeAll(async () => {
-  testDir = mkdtempSync(path.join(tmpdir(), "ast-query-test-"));
+  testDir = mkdtempSync(path.join(tmpdir(), "codesift-ast-q-"));
   execSync("git init", { cwd: testDir, stdio: "ignore" });
   execSync("git config user.email test@test.com && git config user.name Test", { cwd: testDir, stdio: "ignore" });
 

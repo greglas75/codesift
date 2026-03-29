@@ -34,7 +34,7 @@ export interface CheckBoundariesResult {
 export async function checkBoundaries(
   repo: string,
   rules: BoundaryRule[],
-  options?: { file_pattern?: string },
+  options?: { file_pattern?: string | undefined },
 ): Promise<CheckBoundariesResult> {
   if (!rules.length) {
     return { violations: [], edges_checked: 0, rules_applied: 0, passed: true };

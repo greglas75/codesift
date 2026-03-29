@@ -321,7 +321,7 @@ export interface SymbolRoleInfo {
  */
 export async function classifySymbolRoles(
   repo: string,
-  options?: { file_pattern?: string; include_tests?: boolean; top_n?: number },
+  options?: { file_pattern?: string | undefined; include_tests?: boolean | undefined; top_n?: number | undefined },
 ): Promise<SymbolRoleInfo[]> {
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);

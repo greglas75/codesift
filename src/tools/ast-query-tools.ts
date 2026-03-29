@@ -1,4 +1,4 @@
-import { getParser, getLanguageForExtension, initParser } from "../parser/parser-manager.js";
+import { getParser, initParser } from "../parser/parser-manager.js";
 import { getCodeIndex } from "./index-tools.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -36,9 +36,9 @@ export async function astQuery(
   repo: string,
   queryString: string,
   options?: {
-    language?: string;
-    file_pattern?: string;
-    max_matches?: number;
+    language?: string | undefined;
+    file_pattern?: string | undefined;
+    max_matches?: number | undefined;
   },
 ): Promise<AstQueryResult> {
   const index = await getCodeIndex(repo);

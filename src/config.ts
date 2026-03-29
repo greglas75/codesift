@@ -17,6 +17,7 @@ export interface Config {
     signature: number;
     docstring: number;
     body: number;
+    comments: number;
   };
 
   // Semantic search (optional)
@@ -60,6 +61,7 @@ export function loadConfig(): Config {
       signature: 2.5,
       docstring: 1.5,
       body: 0.5,
+      comments: 0.2,
     },
 
     embeddingProvider,

@@ -15,7 +15,7 @@ const BODY_CHAR_LIMIT = 500;
  */
 const TEST_FILE_SCORE_MULTIPLIER = 0.3;
 
-type FieldName = "name" | "signature" | "docstring" | "body";
+type FieldName = "name" | "signature" | "docstring" | "body" | "comments";
 
 export interface BM25Index {
   /** Per-field inverted index: token -> Map<symbolId, termFrequency> */
@@ -59,14 +59,35 @@ export function tokenizeText(text: string): string[] {
 }
 
 function getFieldTokens(symbol: CodeSymbol): Record<FieldName, string[]> {
+  const source = symbol.source?.slice(0, BODY_CHAR_LIMIT) ?? "";
+  const { code, comments } = splitCodeAndComments(source);
+
   return {
     name: tokenizeIdentifier(symbol.name),
     signature: symbol.signature ? tokenizeText(symbol.signature) : [],
     docstring: symbol.docstring ? tokenizeText(symbol.docstring) : [],
-    body: symbol.source
-      ? tokenizeText(symbol.source.slice(0, BODY_CHAR_LIMIT))
-      : [],
+    body: source ? tokenizeText(code) : [],
+    comments: comments ? tokenizeText(comments) : [],
   };
+}
+
+/**
+ * Split source into code (logic) vs inline comments.
+ * Strips single-line (//) and multi-line comments from code,
+ * collects them into a separate string.
+ */
+function splitCodeAndComments(source: string): { code: string; comments: string } {
+  const commentParts: string[] = [];
+  // Match // comments and /* ... */ blocks
+  const stripped = source.replace(/\/\/[^\n]*/g, (m) => {
+    commentParts.push(m);
+    return "";
+  }).replace(/\/\*[\s\S]*?\*\//g, (m) => {
+    commentParts.push(m);
+    return "";
+  });
+
+  return { code: stripped, comments: commentParts.join(" ") };
 }
 
 function countTermFrequencies(tokens: string[]): Map<string, number> {
@@ -78,13 +99,14 @@ function countTermFrequencies(tokens: string[]): Map<string, number> {
 }
 
 export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
-  const fieldNames: FieldName[] = ["name", "signature", "docstring", "body"];
+  const fieldNames: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
 
   const fields: Record<FieldName, Map<string, Map<string, number>>> = {
     name: new Map(),
     signature: new Map(),
     docstring: new Map(),
     body: new Map(),
+    comments: new Map(),
   };
 
   const totalFieldLengths: Record<FieldName, number> = {
@@ -92,6 +114,7 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
     signature: 0,
     docstring: 0,
     body: 0,
+    comments: 0,
   };
 
   const symbolMap = new Map<string, CodeSymbol>();
@@ -122,6 +145,7 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
     signature: docCount > 0 ? totalFieldLengths.signature / docCount : 0,
     docstring: docCount > 0 ? totalFieldLengths.docstring / docCount : 0,
     body: docCount > 0 ? totalFieldLengths.body / docCount : 0,
+    comments: docCount > 0 ? totalFieldLengths.comments / docCount : 0,
   };
 
   // Compute import centrality: count how many files import each file
@@ -171,7 +195,7 @@ export function searchBM25(
     return [];
   }
 
-  const fieldNames: FieldName[] = ["name", "signature", "docstring", "body"];
+  const fieldNames: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
 
   // Accumulate scores per document
   const scores = new Map<string, number>();
@@ -188,6 +212,7 @@ export function searchBM25(
       signature: 0,
       docstring: 0,
       body: 0,
+      comments: 0,
     };
     fieldLengths.set(symbolId, lengths);
   }
