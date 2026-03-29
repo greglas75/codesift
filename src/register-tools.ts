@@ -137,6 +137,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     }),
   },
   {
+    name: "ast_query",
+    description: "Search for AST patterns using tree-sitter query language. Finds code by structural shape, not text. Example: '(function_declaration name: (identifier) @name)' finds all functions. Use for anti-pattern detection, structural grep, and code shape matching.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      query: z.string().describe("Tree-sitter query in S-expression syntax"),
+      language: z.string().optional().describe("Tree-sitter grammar to use (default: typescript). Options: typescript, javascript, python, go, rust, java, ruby, php"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      max_matches: zNum().describe("Maximum matches to return (default: 50)"),
+    },
+    handler: async (args) => {
+      const { astQuery } = await import("./tools/ast-query-tools.js");
+      return astQuery(args.repo as string, args.query as string, {
+        language: args.language as string | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        max_matches: args.max_matches as number | undefined,
+      });
+    },
+  },
+  {
     name: "search_text",
     description: "Full-text search across all files in a repository. For conceptual questions (how/where/why), use codebase_retrieval with type:'semantic' instead — it finds code by meaning, not keywords.",
     schema: {
