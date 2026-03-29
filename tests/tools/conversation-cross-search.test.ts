@@ -45,6 +45,7 @@ let dataDir: string;
 let originalDataDir: string | undefined;
 
 beforeEach(async () => {
+  turnCounter = 0;
   tmpDir = await mkdtemp(join(tmpdir(), "conv-cross-"));
   dataDir = await mkdtemp(join(tmpdir(), "codesift-data-"));
   originalDataDir = process.env.CODESIFT_DATA_DIR;
