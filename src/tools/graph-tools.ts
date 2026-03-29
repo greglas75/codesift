@@ -297,7 +297,7 @@ function callTreeToMermaid(tree: CallNode, direction: Direction): string {
 // Symbol role classification
 // ---------------------------------------------------------------------------
 
-export type SymbolRole = "entry" | "core" | "utility" | "adapter" | "dead" | "leaf";
+export type SymbolRole = "entry" | "core" | "utility" | "dead" | "leaf";
 
 export interface SymbolRoleInfo {
   id: string;
@@ -315,7 +315,6 @@ export interface SymbolRoleInfo {
  * - entry: many callees, few callers (handlers, main, CLI commands)
  * - core: high connectivity both ways (key business logic)
  * - utility: many callers, few callees (helpers, formatters, validators)
- * - adapter: callers from one cluster, callees in another (bridge code)
  * - dead: zero callers (potentially unused)
  * - leaf: zero callees (terminal functions)
  */

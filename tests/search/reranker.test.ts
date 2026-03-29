@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { rerankResults, rerankChunkIds, _resetReranker } from "../../src/search/reranker.js";
 import type { SearchResult, CodeChunk } from "../../src/types.js";
 
-// Mock @huggingface/transformers
-const mockReranker = vi.fn(async (input: string) => {
-  // Score based on the document part (after [SEP])
-  const docPart = input.split("[SEP]")[1] ?? "";
-  const score = docPart.includes("matchMe") ? 0.95 : 0.1;
-  return [{ label: "LABEL_0", score }];
+// Mock @huggingface/transformers — batch-aware
+const mockClassifier = vi.fn(async (inputs: string | string[]) => {
+  const arr = Array.isArray(inputs) ? inputs : [inputs];
+  return arr.map((input) => {
+    const docPart = input.split("[SEP]")[1] ?? "";
+    const score = docPart.includes("matchMe") ? 0.95 : 0.1;
+    return [{ label: "LABEL_0", score }];
+  });
 });
 
-const mockPipeline = vi.fn(async () => mockReranker);
+const mockPipeline = vi.fn(async () => mockClassifier);
 
 vi.mock("@huggingface/transformers", () => ({
   pipeline: mockPipeline,

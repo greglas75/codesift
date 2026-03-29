@@ -142,7 +142,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Tree-sitter query in S-expression syntax"),
-      language: z.string().optional().describe("Tree-sitter grammar to use (default: typescript). Options: typescript, javascript, python, go, rust, java, ruby, php"),
+      language: z.string().describe("Tree-sitter grammar: typescript, javascript, python, go, rust, java, ruby, php"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       max_matches: zNum().describe("Maximum matches to return (default: 50)"),
     },
@@ -411,7 +411,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   {
     name: "check_boundaries",
-    description: "Check architecture boundary rules against the import graph. Define which modules can/cannot import from other modules. Use for CI gates, architectural drift prevention, and onion/hexagonal architecture enforcement.",
+    description: "Check architecture boundary rules against the import graph. Define which modules can/cannot import from other modules. Rules use path substring matching (e.g. 'src/domain' matches 'src/domain/user.ts'). Use for CI gates, architectural drift prevention, and onion/hexagonal architecture enforcement.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       rules: z.array(z.object({
@@ -432,7 +432,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: "classify_roles",
-    description: "Classify each symbol's architectural role (entry/core/utility/adapter/dead/leaf) based on call graph connectivity. Entry points have many callees, few callers. Utilities have many callers, few callees. Core has both. Dead has no callers.",
+    description: "Classify each symbol's architectural role (entry/core/utility/dead/leaf) based on call graph connectivity. Entry points have many callees, few callers. Utilities have many callers, few callees. Core has both. Dead has no callers.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),

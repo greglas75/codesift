@@ -3,37 +3,48 @@ import type { SearchResult, CodeChunk } from "../types.js";
 const DEFAULT_RERANK_TOP_N = 50;
 const DEFAULT_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2";
 
-let pipeline: ((pairs: string[][], options?: Record<string, unknown>) => Promise<Array<{ score: number }>>) | null = null;
-let loadAttempted = false;
+type RerankerFn = (pairs: string[][]) => Promise<Array<{ score: number }>>;
+
+const pipelineCache = new Map<string, RerankerFn>();
+const failedModels = new Set<string>();
 let loadWarned = false;
 
-async function loadPipeline(model?: string): Promise<typeof pipeline> {
-  if (pipeline) return pipeline;
-  if (loadAttempted) return null;
-  loadAttempted = true;
+async function loadPipeline(model?: string): Promise<RerankerFn | null> {
+  const modelName = model ?? DEFAULT_MODEL;
+
+  const cached = pipelineCache.get(modelName);
+  if (cached) return cached;
+  if (failedModels.has(modelName)) return null;
 
   try {
     // @ts-expect-error — optional dependency, may not be installed
     const transformers = await import("@huggingface/transformers");
     const pipelineFn = transformers.pipeline ?? transformers.default?.pipeline;
-    if (!pipelineFn) return null;
+    if (!pipelineFn) { failedModels.add(modelName); return null; }
 
-    const reranker = await pipelineFn("text-classification", model ?? DEFAULT_MODEL, {
+    const classifier = await pipelineFn("text-classification", modelName, {
       quantized: true,
     });
 
-    pipeline = async (pairs: string[][]) => {
+    const rerankerFn: RerankerFn = async (pairs: string[][]) => {
+      // Batch: send all inputs at once for better throughput
+      const inputs = pairs.map(([q, t]) => `${q} [SEP] ${t}`);
+      const outputs = await classifier(inputs, { topk: 1 });
+
+      // Normalize: pipeline returns single object for 1 input, array for N
       const results: Array<{ score: number }> = [];
-      for (const [query, text] of pairs) {
-        const out = await reranker(`${query} [SEP] ${text}`, { topk: 1 });
-        const score = Array.isArray(out) ? (out[0]?.score ?? 0) : (out?.score ?? 0);
+      for (let i = 0; i < pairs.length; i++) {
+        const out = Array.isArray(outputs[i]) ? outputs[i][0] : outputs[i] ?? outputs;
+        const score = out?.score ?? 0;
         results.push({ score: typeof score === "number" ? score : 0 });
       }
       return results;
     };
 
-    return pipeline;
+    pipelineCache.set(modelName, rerankerFn);
+    return rerankerFn;
   } catch {
+    failedModels.add(modelName);
     return null;
   }
 }
@@ -139,9 +150,9 @@ function buildCandidateText(r: SearchResult): string {
   return parts.join(" ");
 }
 
-/** Reset singleton for testing. */
+/** Reset caches for testing. */
 export function _resetReranker(): void {
-  pipeline = null;
-  loadAttempted = false;
+  pipelineCache.clear();
+  failedModels.clear();
   loadWarned = false;
 }

@@ -75,6 +75,10 @@ function getFieldTokens(symbol: CodeSymbol): Record<FieldName, string[]> {
  * Split source into code (logic) vs inline comments.
  * Strips single-line (//) and multi-line comments from code,
  * collects them into a separate string.
+ *
+ * Limitation: regex-based, so `//` inside string literals (e.g. URLs)
+ * may be misclassified as comments. Acceptable for BM25 scoring where
+ * a few misclassified tokens have negligible impact on ranking.
  */
 function splitCodeAndComments(source: string): { code: string; comments: string } {
   const commentParts: string[] = [];
