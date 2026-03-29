@@ -58,6 +58,7 @@ export interface SearchSymbolsOptions {
   source_chars?: number | undefined;
   detail_level?: DetailLevel | undefined;
   token_budget?: number | undefined;
+  rerank?: boolean | undefined;
 }
 
 export interface SearchTextOptions {
@@ -255,6 +256,11 @@ export async function searchSymbols(
     results = results.filter((r) => matchesSymbolFilters(r.symbol, options));
     results = results.slice(0, topK);
     results = applyCutoff(results);
+  }
+
+  if (options?.rerank && results.length > 1) {
+    const { rerankResults } = await import("../search/reranker.js");
+    results = await rerankResults(query, results);
   }
 
   const detail = options?.detail_level ?? "standard";

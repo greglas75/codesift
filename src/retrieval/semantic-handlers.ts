@@ -99,7 +99,13 @@ export async function handleSemanticQuery(
       .slice(0, ctx.topK)
       .map(([id]) => id);
 
-    const text = formatChunksAsText(topIds, ctx.chunks, false);
+    let finalIds = topIds;
+    if (query.rerank) {
+      const { rerankChunkIds } = await import("../search/reranker.js");
+      finalIds = await rerankChunkIds(query.query, topIds, ctx.chunks);
+    }
+
+    const text = formatChunksAsText(finalIds, ctx.chunks, false);
     return { type: "semantic", data: text, tokens: estimateTokens(text) };
   }
 
@@ -175,10 +181,15 @@ export async function handleHybridQuery(
     }
   }
 
-  const topIds = [...rrfScores.entries()]
+  let topIds = [...rrfScores.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, ctx.topK)
     .map(([id]) => id);
+
+  if (query.rerank) {
+    const { rerankChunkIds } = await import("../search/reranker.js");
+    topIds = await rerankChunkIds(query.query, topIds, ctx.chunks);
+  }
 
   const hybridText = formatChunksAsText(topIds, ctx.chunks, ctx.excludeTests);
   return { type: "hybrid", data: hybridText, tokens: estimateTokens(hybridText) };

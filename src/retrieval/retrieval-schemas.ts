@@ -14,6 +14,7 @@ const SymbolsQuerySchema = z.object({
   file_pattern: z.string().optional(),
   top_k: z.number().int().positive().optional(),
   source_chars: z.number().int().nonnegative().optional(),
+  rerank: z.boolean().optional(),
 });
 
 const TextQuerySchema = z.object({
@@ -79,6 +80,7 @@ const SemanticQuerySchema = z.object({
   file_filter: z.string().optional(),
   exclude_tests: z.boolean().optional(),
   source_chars: z.number().int().nonnegative().optional(),
+  rerank: z.boolean().optional(),
 });
 
 const HybridQuerySchema = z.object({
@@ -87,6 +89,7 @@ const HybridQuerySchema = z.object({
   top_k: z.number().int().positive().optional(),
   file_filter: z.string().optional(),
   exclude_tests: z.boolean().optional(),
+  rerank: z.boolean().optional(),
 });
 
 const ConversationQuerySchema = z.object({

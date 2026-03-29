@@ -23,6 +23,7 @@ import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import { goToDefinition, getTypeInfo, renameSymbol } from "./lsp/lsp-tools.js";
 import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
 import { scanSecrets } from "./tools/secret-tools.js";
+import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 
@@ -122,6 +123,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       source_chars: zNum().describe("Truncate each symbol's source to N characters (reduces output size)"),
       detail_level: z.enum(["compact", "standard", "full"]).optional().describe("Output detail: compact (~15 tok/result, id+name+kind+file+line), standard (default, +signature+source), full (unlimited source)"),
       token_budget: zNum().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
+      rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
     handler: (args) => searchSymbols(args.repo as string, args.query as string, {
       kind: args.kind as SymbolKind | undefined,
@@ -131,6 +133,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       source_chars: args.source_chars as number | undefined,
       detail_level: args.detail_level as "compact" | "standard" | "full" | undefined,
       token_budget: args.token_budget as number | undefined,
+      rerank: args.rerank as boolean | undefined,
     }),
   },
   {
@@ -396,12 +399,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Natural language query describing what context is needed"),
       token_budget: zNum().describe("Maximum tokens for the assembled context"),
       level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("Context compression level: L0=full source (default), L1=signatures only, L2=file summaries, L3=directory overview"),
+      rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
     handler: (args) => assembleContext(
       args.repo as string,
       args.query as string,
       args.token_budget as number | undefined,
       args.level as "L0" | "L1" | "L2" | "L3" | undefined,
+      args.rerank as boolean | undefined,
     ),
   },
   {
@@ -522,6 +527,30 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       min_lines: args.min_lines as number | undefined,
       include_tests: args.include_tests as boolean | undefined,
     }),
+  },
+  {
+    name: "frequency_analysis",
+    description: "Find the most common code structures by normalizing AST and grouping by shape. Discovers emergent patterns invisible to regex: functions with the same control flow but different variable names are grouped together. Returns TOP N clusters with examples. For similar-but-not-identical pairs, use find_clones instead.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      top_n: zNum().optional().describe("Number of clusters to return (default: 30)"),
+      min_nodes: zNum().optional().describe("Minimum AST nodes in a subtree to include (default: 5)"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      kind: z.string().optional().describe("Filter by symbol kind, comma-separated (default: function,method)"),
+      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      token_budget: zNum().optional().describe("Max tokens for response"),
+    },
+    handler: async (args) => frequencyAnalysis(
+      args.repo as string,
+      {
+        top_n: args.top_n as number | undefined,
+        min_nodes: args.min_nodes as number | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        kind: args.kind as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        token_budget: args.token_budget as number | undefined,
+      },
+    ),
   },
   {
     name: "analyze_hotspots",

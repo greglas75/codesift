@@ -102,6 +102,7 @@ export async function assembleContext(
   query: string,
   tokenBudget?: number,
   level?: ContextLevel,
+  rerank?: boolean,
 ): Promise<AssembleContextResult> {
   const bm25Index = await getBM25Index(repo);
   if (!bm25Index) {
@@ -114,7 +115,12 @@ export async function assembleContext(
 
   // Search wider for compressed levels (more results fit in budget)
   const topK = lvl === "L0" ? 20 : lvl === "L1" ? 100 : 200;
-  const results = searchBM25(bm25Index, query, topK, config.bm25FieldWeights);
+  let results = searchBM25(bm25Index, query, topK, config.bm25FieldWeights);
+
+  if (rerank && results.length > 1) {
+    const { rerankResults } = await import("../search/reranker.js");
+    results = await rerankResults(query, results);
+  }
 
   if (lvl === "L0") {
     // Full source — current behavior
