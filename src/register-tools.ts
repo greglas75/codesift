@@ -410,6 +410,27 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 
   {
+    name: "check_boundaries",
+    description: "Check architecture boundary rules against the import graph. Define which modules can/cannot import from other modules. Use for CI gates, architectural drift prevention, and onion/hexagonal architecture enforcement.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      rules: z.array(z.object({
+        from: z.string().describe("Path substring matching source files (e.g. 'src/domain')"),
+        cannot_import: z.array(z.string()).optional().describe("Path patterns that matched files must NOT import"),
+        can_only_import: z.array(z.string()).optional().describe("Path patterns that matched files may ONLY import (allowlist)"),
+      })).describe("Array of boundary rules to check"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+    },
+    handler: async (args) => {
+      const { checkBoundaries } = await import("./tools/boundary-tools.js");
+      return checkBoundaries(
+        args.repo as string,
+        args.rules as Array<{ from: string; cannot_import?: string[]; can_only_import?: string[] }>,
+        { file_pattern: args.file_pattern as string | undefined },
+      );
+    },
+  },
+  {
     name: "classify_roles",
     description: "Classify each symbol's architectural role (entry/core/utility/adapter/dead/leaf) based on call graph connectivity. Entry points have many callees, few callers. Utilities have many callers, few callees. Core has both. Dead has no callers.",
     schema: {
