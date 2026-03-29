@@ -195,20 +195,17 @@ describe("OPT-1: auto group_by_file", () => {
     // Use auto_group option — should auto-detect high cardinality
     const result = await searchText(repo, "export", { auto_group: true });
 
-    // When auto_group is active and many matches, should return grouped format
-    // Grouped format has .count and .lines properties
-    if (Array.isArray(result) && result.length > 0 && "count" in result[0]!) {
-      // Grouped
-      const tokens = estimateTokens(result);
-      const ungrouped = await searchText(repo, "export");
-      const ungroupedTokens = estimateTokens(ungrouped);
+    // "export" yields >50 matches (verified by OPT-1 BASELINE), so auto_group must trigger
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0]).toHaveProperty("count");
 
-      console.log(`[OPT-1 OPTIMIZED] grouped_tokens=${tokens}, vs ungrouped=${ungroupedTokens}`);
-      expect(tokens).toBeLessThan(ungroupedTokens);
-    } else {
-      // Below threshold — stays ungrouped, that's OK
-      expect(result.length).toBeLessThanOrEqual(50);
-    }
+    const tokens = estimateTokens(result);
+    const ungrouped = await searchText(repo, "export");
+    const ungroupedTokens = estimateTokens(ungrouped);
+
+    console.log(`[OPT-1 OPTIMIZED] grouped_tokens=${tokens}, vs ungrouped=${ungroupedTokens}`);
+    expect(tokens).toBeLessThan(ungroupedTokens);
   });
 
   it("OPTIMIZATION: auto_group preserves ungrouped format for low match counts", async () => {

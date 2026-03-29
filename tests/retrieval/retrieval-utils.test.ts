@@ -115,8 +115,7 @@ describe("computeRRFScores", () => {
     const embeddings = new Map<string, Float32Array>([
       ["a", new Float32Array([1])],
     ]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vecs = [null as any, [1]];
+    const vecs: (number[] | null)[] = [null, [1]];
     const result = computeRRFScores(vecs, embeddings, mockCosSim);
     expect(result.size).toBe(1);
   });

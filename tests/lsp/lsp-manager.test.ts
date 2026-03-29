@@ -16,10 +16,9 @@ describe("LspManager", () => {
 
   it("returns null when LSP binary not installed", async () => {
     manager = new LspManager();
-    // Use a language with a server that's very unlikely to be installed
+    // Ruby LSP binary typically not installed in dev/CI environments
     const client = await manager.getClient("/tmp/test", "ruby");
-    // Don't assert null — it depends on env. Just verify no crash.
-    expect(client === null || client !== null).toBe(true);
+    expect(client).toBeNull();
   });
 
   it("shutdown completes without error when no sessions", async () => {

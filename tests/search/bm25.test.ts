@@ -1,5 +1,5 @@
 import { buildBM25Index, searchBM25, tokenizeText, applyCutoff } from "../../src/search/bm25.js";
-import type { CodeSymbol } from "../../src/types.js";
+import type { CodeSymbol, SearchResult } from "../../src/types.js";
 
 function makeSymbol(overrides: Partial<CodeSymbol> & { id: string; name: string }): CodeSymbol {
   return {
@@ -10,6 +10,10 @@ function makeSymbol(overrides: Partial<CodeSymbol> & { id: string; name: string 
     end_line: 10,
     ...overrides,
   };
+}
+
+function makeResult(id: string, score: number): SearchResult {
+  return { score, symbol: makeSymbol({ id, name: id }) };
 }
 
 const DEFAULT_WEIGHTS = { name: 3.0, signature: 2.0, docstring: 1.5, body: 1.0 };
@@ -132,33 +136,33 @@ describe("searchBM25", () => {
 
 describe("applyCutoff", () => {
   it("cuts results below 15% of top score", () => {
-    const results = [
-      { score: 10.0, symbol: { id: "a" } },
-      { score: 8.0, symbol: { id: "b" } },
-      { score: 7.0, symbol: { id: "c" } },
-      { score: 1.2, symbol: { id: "d" } },
-      { score: 0.5, symbol: { id: "e" } },
-    ] as any;
+    const results: SearchResult[] = [
+      makeResult("a", 10.0),
+      makeResult("b", 8.0),
+      makeResult("c", 7.0),
+      makeResult("d", 1.2),
+      makeResult("e", 0.5),
+    ];
     const cut = applyCutoff(results);
     expect(cut.length).toBe(3);
   });
 
   it("always returns minimum 3 results", () => {
-    const results = [
-      { score: 10.0, symbol: { id: "a" } },
-      { score: 0.1, symbol: { id: "b" } },
-      { score: 0.05, symbol: { id: "c" } },
-    ] as any;
+    const results: SearchResult[] = [
+      makeResult("a", 10.0),
+      makeResult("b", 0.1),
+      makeResult("c", 0.05),
+    ];
     const cut = applyCutoff(results);
     expect(cut.length).toBe(3);
   });
 
   it("returns all if no gap", () => {
-    const results = [
-      { score: 10.0, symbol: { id: "a" } },
-      { score: 9.5, symbol: { id: "b" } },
-      { score: 8.0, symbol: { id: "c" } },
-    ] as any;
+    const results: SearchResult[] = [
+      makeResult("a", 10.0),
+      makeResult("b", 9.5),
+      makeResult("c", 8.0),
+    ];
     expect(applyCutoff(results).length).toBe(3);
   });
 

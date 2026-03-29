@@ -105,8 +105,8 @@ describe("Fix 3: search_symbols detail_level hint", () => {
       { repo: "local/proj", query: "auth", detail_level: "compact" },
       makeSymbols(10),
     );
-    // Should not contain detail_level hint (may contain other hints)
-    expect(hint === null || !hint.includes("detail_level='compact'")).toBe(true);
+    // detail_level is set, no other hint applicable → null
+    expect(hint).toBeNull();
   });
 
   it("should not hint when <=5 results", () => {
@@ -115,7 +115,7 @@ describe("Fix 3: search_symbols detail_level hint", () => {
       { repo: "local/proj", query: "auth" },
       makeSymbols(3),
     );
-    expect(hint === null || !hint.includes("detail_level")).toBe(true);
+    expect(hint).toBeNull();
   });
 
   it("should not hint for non-array results", () => {
@@ -124,7 +124,7 @@ describe("Fix 3: search_symbols detail_level hint", () => {
       { repo: "local/proj", query: "auth" },
       { symbols: [] },
     );
-    expect(hint === null || !hint.includes("detail_level")).toBe(true);
+    expect(hint).toBeNull();
   });
 });
 
@@ -182,7 +182,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       { repo: "local/proj", query: "validateUser" },
       [],
     );
-    expect(hint === null || !hint.includes("semantic")).toBe(true);
+    expect(hint).toBeNull();
   });
 
   it("should not hint when query is not a string", () => {
@@ -191,7 +191,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       { repo: "local/proj" },
       [],
     );
-    expect(hint === null || !hint.includes("semantic")).toBe(true);
+    expect(hint).toBeNull();
   });
 
   it("should be case-insensitive", () => {
@@ -210,7 +210,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       { repo: "local/proj", query: "find how" },
       [],
     );
-    expect(hint === null || !hint.includes("semantic")).toBe(true);
+    expect(hint).toBeNull();
   });
 });
 
@@ -255,11 +255,11 @@ describe("Fix 6: 3+ get_symbol → assemble_context hint", () => {
   it("should not hint on 1st or 2nd get_symbol", () => {
     trackSequentialCalls("get_symbol");
     const hint1 = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-1" }, {});
-    expect(hint1 === null || !hint1.includes("assemble_context")).toBe(true);
+    expect(hint1).toBeNull();
 
     trackSequentialCalls("get_symbol");
     const hint2 = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-2" }, {});
-    expect(hint2 === null || !hint2.includes("assemble_context")).toBe(true);
+    expect(hint2).toBeNull();
   });
 
   it("should hint on 3rd get_symbol call", () => {
@@ -290,7 +290,7 @@ describe("Fix 6: 3+ get_symbol → assemble_context hint", () => {
 
     trackSequentialCalls("get_symbol");
     const hint = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-1" }, {});
-    expect(hint === null || !hint.includes("assemble_context")).toBe(true);
+    expect(hint).toBeNull();
   });
 });
 
@@ -313,7 +313,7 @@ describe("Existing hints: search_text high cardinality", () => {
       { repo: "local/proj", query: "import", group_by_file: true },
       data,
     );
-    expect(hint === null || !hint.includes("group_by_file")).toBe(true);
+    expect(hint).toBeNull();
   });
 });
 
