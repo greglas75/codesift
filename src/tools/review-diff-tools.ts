@@ -6,6 +6,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { changedSymbols } from "./diff-tools.js";
 import { getCodeIndex } from "./index-tools.js";
 import { impactAnalysis } from "./impact-tools.js";
@@ -15,6 +16,7 @@ import { searchPatterns, listPatterns } from "./pattern-tools.js";
 import { analyzeHotspots } from "./hotspot-tools.js";
 import { analyzeComplexity } from "./complexity-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
+import { isTestFile } from "../utils/test-file.js";
 import picomatch from "picomatch";
 import type { CodeIndex } from "../types.js";
 
@@ -744,6 +746,87 @@ export async function checkBreakingChanges(
   }
 }
 
+/**
+ * Test-gaps check: for each changed non-test source file, verify that at least
+ * one test file covers it — either by naming convention or by import reference.
+ *
+ * Naming convention candidates:
+ *   foo.ts → foo.test.ts, foo.spec.ts, __tests__/foo.ts, __tests__/foo.test.ts
+ *
+ * Import graph: search index symbols from test files whose source imports the
+ * source file's base name (without extension).
+ *
+ * If BOTH pathways find 0 tests → T3 advisory finding.
+ */
+export async function checkTestGaps(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+
+  const SOURCE_EXTENSIONS = /\.(tsx?|jsx?)$/;
+
+  // Only process non-test source files
+  const sourceFiles = changedFiles.filter(
+    (f) => SOURCE_EXTENSIONS.test(f) && !isTestFile(f),
+  );
+
+  const indexFilePaths = new Set(index.files.map((f) => f.path));
+  const findings: ReviewFinding[] = [];
+
+  for (const sourceFile of sourceFiles) {
+    // -----------------------------------------------------------------------
+    // 1. Naming check
+    // -----------------------------------------------------------------------
+    const dir = path.dirname(sourceFile);
+    const base = path.basename(sourceFile).replace(SOURCE_EXTENSIONS, "");
+    const candidates = [
+      path.join(dir, `${base}.test.ts`),
+      path.join(dir, `${base}.spec.ts`),
+      path.join(dir, `${base}.test.tsx`),
+      path.join(dir, `${base}.spec.tsx`),
+      path.join(dir, `${base}.test.js`),
+      path.join(dir, `${base}.spec.js`),
+      path.join(dir, "__tests__", `${base}.ts`),
+      path.join(dir, "__tests__", `${base}.test.ts`),
+    ];
+
+    const foundByNaming = candidates.some((c) => indexFilePaths.has(c));
+    if (foundByNaming) continue;
+
+    // -----------------------------------------------------------------------
+    // 2. Import graph check: look for test file symbols that import sourceFile
+    // -----------------------------------------------------------------------
+    const foundByImport = index.symbols.some((sym) => {
+      if (!isTestFile(sym.file)) return false;
+      if (!sym.source) return false;
+      // Check if source mentions the file base name in an import
+      return sym.source.includes(base);
+    });
+    if (foundByImport) continue;
+
+    // -----------------------------------------------------------------------
+    // 3. Neither pathway found a test → T3 finding
+    // -----------------------------------------------------------------------
+    findings.push({
+      check: "test-gaps",
+      severity: "warn",
+      message: `No test found for "${sourceFile}" — add a test file matching naming convention or import it from a test`,
+      file: sourceFile,
+    });
+  }
+
+  return {
+    check: "test-gaps",
+    status: findings.length > 0 ? "warn" : "pass",
+    findings,
+    duration_ms: Date.now() - start,
+    summary: findings.length > 0
+      ? `${findings.length} source file(s) with no test coverage found`
+      : "All changed source files have test coverage",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Check runner — dispatches to real adapters or stubs for unimplemented checks
 // ---------------------------------------------------------------------------
@@ -773,6 +856,8 @@ async function runCheck(
       return checkCouplingGaps(index.root, changedFiles);
     case "breaking":
       return checkBreakingChanges(index, index.root, changedFiles, since, until);
+    case "test-gaps":
+      return checkTestGaps(index, changedFiles);
     default: {
       const tier = findingTier(checkName);
       return {
