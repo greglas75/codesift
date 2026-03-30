@@ -312,6 +312,53 @@ export function formatTraceRoute(data: RouteResult | string): string {
   return parts.join("\n");
 }
 
+// ── Impact analysis ───────────────────────────────
+
+interface ImpactResult {
+  changed_files: string[];
+  affected_symbols: Array<{ name: string; kind: string; file: string; start_line: number }>;
+  affected_tests: Array<{ test_file: string; reason: string }>;
+  risk_scores: Array<{ file: string; risk: string; score: number }>;
+  dependency_graph: Record<string, string[]>;
+}
+
+export function formatImpactAnalysis(data: ImpactResult): string {
+  const parts: string[] = [];
+  parts.push(`changed files: ${data.changed_files.join(", ")}`);
+
+  if (data.risk_scores.length > 0) {
+    parts.push("\nrisk scores:");
+    for (const r of data.risk_scores) {
+      parts.push(`  [${r.risk}] ${r.file} (score=${r.score})`);
+    }
+  }
+
+  if (data.affected_symbols.length > 0) {
+    parts.push(`\naffected symbols (${data.affected_symbols.length}):`);
+    for (const s of data.affected_symbols.slice(0, 30)) {
+      parts.push(`  ${s.file}:${s.start_line} ${s.kind} ${s.name}`);
+    }
+    if (data.affected_symbols.length > 30) parts.push(`  ... +${data.affected_symbols.length - 30} more`);
+  }
+
+  if (data.affected_tests.length > 0) {
+    parts.push("\naffected tests:");
+    for (const t of data.affected_tests) {
+      parts.push(`  ${t.test_file}: ${t.reason}`);
+    }
+  }
+
+  const depEntries = Object.entries(data.dependency_graph);
+  if (depEntries.length > 0) {
+    parts.push(`\ndependency graph (${depEntries.length} files):`);
+    for (const [file, deps] of depEntries.slice(0, 20)) {
+      parts.push(`  ${file} → ${deps.join(", ")}`);
+    }
+  }
+
+  return parts.join("\n");
+}
+
 // ── Knowledge map ─────────────────────────────────
 
 interface KnowledgeMapResult {

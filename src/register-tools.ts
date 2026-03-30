@@ -26,7 +26,7 @@ import { scanSecrets } from "./tools/secret-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -354,11 +354,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_source: z.boolean().optional().describe("Include full source code of affected symbols (default: false)"),
     },
-    handler: (args) => impactAnalysis(args.repo as string, args.since as string, {
-      depth: args.depth as number | undefined,
-      until: args.until as string | undefined,
-      include_source: args.include_source as boolean | undefined,
-    }),
+    handler: async (args) => {
+      const result = await impactAnalysis(args.repo as string, args.since as string, {
+        depth: args.depth as number | undefined,
+        until: args.until as string | undefined,
+        include_source: args.include_source as boolean | undefined,
+      });
+      return formatImpactAnalysis(result as never);
+    },
   },
 
   {

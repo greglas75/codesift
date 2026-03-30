@@ -330,6 +330,14 @@ async function main(): Promise<void> {
     for (const [primary, drill1, drill2] of FLOW3_TRIPLES) {
       const label = `${primary}→${drill1},${drill2}`;
 
+      // Native: 3× rg (initial + 2 drill-downs with context)
+      const natStart = performance.now();
+      const gPrimary = runRg(repo.root, primary, "--glob=*.ts");
+      const gDrill1 = runRg(repo.root, drill1, "--glob=*.ts -C 2");
+      const gDrill2 = runRg(repo.root, drill2, "--glob=*.ts -C 2");
+      const natMs = Math.round(performance.now() - natStart);
+      const nativeTok = tokStr(gPrimary.output) + tokStr(gDrill1.output) + tokStr(gDrill2.output);
+
       // Current: CR(5K) + 2× searchText drill-down
       const curStart = performance.now();
       const crResult = await codebaseRetrieval(repo.id, [
@@ -350,7 +358,7 @@ async function main(): Promise<void> {
       const optMs = Math.round(performance.now() - optStart);
       const optTok = tokJson(batchResult);
 
-      const row: ComboRow = { flow: "cr_drilldown", query: label, repo: repo.label, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
+      const row: ComboRow = { flow: "cr_drilldown", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
       allRows.push(row);
       printRow(label.slice(0, 28), row);
     }
@@ -369,6 +377,13 @@ async function main(): Promise<void> {
     printTableHeader();
 
     for (const q of FLOW4_QUERIES) {
+      // Native: find (file tree) + rg (text search)
+      const natStart = performance.now();
+      const findResult = runFind(repo.root, "-name '*.ts' -o -name '*.tsx'");
+      const grepResult = runRg(repo.root, q, "--glob=*.ts");
+      const natMs = Math.round(performance.now() - natStart);
+      const nativeTok = tokStr(findResult.output) + tokStr(grepResult.output);
+
       // Current: getFileTree + searchText
       const curStart = performance.now();
       const tree = await getFileTree(repo.id, { compact: true });
@@ -385,7 +400,7 @@ async function main(): Promise<void> {
       const optMs = Math.round(performance.now() - optStart);
       const optTok = tokJson(batch);
 
-      const row: ComboRow = { flow: "tree_then_st", query: q, repo: repo.label, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
+      const row: ComboRow = { flow: "tree_then_st", query: q, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
       allRows.push(row);
       printRow(q, row);
     }
@@ -406,6 +421,18 @@ async function main(): Promise<void> {
     for (const { pattern, followUp } of FLOW5_PAIRS) {
       const label = `${pattern}+${followUp}`;
 
+      // Native: rg for pattern + rg for follow-up with context
+      const PATTERN_REGEX: Record<string, string> = {
+        "empty-catch": "catch\\s*\\{\\s*\\}",
+        "console-log": "console\\.log\\(",
+        "any-type": ": any[^A-Za-z]",
+      };
+      const natStart = performance.now();
+      const gPat = runRg(repo.root, PATTERN_REGEX[pattern] ?? pattern, "--glob=*.ts");
+      const gFollow = runRg(repo.root, followUp, "--glob=*.ts -C 3");
+      const natMs = Math.round(performance.now() - natStart);
+      const nativeTok = tokStr(gPat.output) + tokStr(gFollow.output);
+
       // Current: searchPatterns + redundant searchText
       const curStart = performance.now();
       const patResult = await searchPatterns(repo.id, pattern);
@@ -419,7 +446,7 @@ async function main(): Promise<void> {
       const optMs = Math.round(performance.now() - optStart);
       const optTok = tokStr(formatSearchPatterns(optResult));
 
-      const row: ComboRow = { flow: "patterns_then_st", query: label, repo: repo.label, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
+      const row: ComboRow = { flow: "patterns_then_st", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
       allRows.push(row);
       printRow(label, row);
     }
@@ -440,6 +467,14 @@ async function main(): Promise<void> {
     for (const [q1, q2, q3] of FLOW6_TRIPLES) {
       const label = `${q1}+${q2}+${q3}`;
 
+      // Native: 3× rg for function definitions with context
+      const natStart = performance.now();
+      const g1 = runRg(repo.root, `(export )?(async )?function ${q1}[A-Z]`, "--glob=*.ts -A 20");
+      const g2 = runRg(repo.root, `(export )?(async )?function ${q2}[A-Z]`, "--glob=*.ts -A 20");
+      const g3 = runRg(repo.root, `(export )?(async )?function ${q3}[A-Z]`, "--glob=*.ts -A 20");
+      const natMs = Math.round(performance.now() - natStart);
+      const nativeTok = tokStr(g1.output) + tokStr(g2.output) + tokStr(g3.output);
+
       // Current: 3× sequential searchSymbols
       const curStart = performance.now();
       const s1 = await searchSymbols(repo.id, q1, { top_k: 3, include_source: true });
@@ -458,7 +493,7 @@ async function main(): Promise<void> {
       const optMs = Math.round(performance.now() - optStart);
       const optTok = tokJson(batch);
 
-      const row: ComboRow = { flow: "ss_x3_batch", query: label, repo: repo.label, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
+      const row: ComboRow = { flow: "ss_x3_batch", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
       allRows.push(row);
       printRow(label, row);
     }
@@ -479,6 +514,14 @@ async function main(): Promise<void> {
     for (const [symbolQuery, relatedQuery] of FLOW7_PAIRS) {
       const label = `${symbolQuery}→${relatedQuery}`;
 
+      // Native: rg(text) + rg(function def) + rg(related with context)
+      const natStart = performance.now();
+      const gText = runRg(repo.root, symbolQuery, "--glob=*.ts");
+      const gDef = runRg(repo.root, `(export )?(async )?function ${symbolQuery}`, "--glob=*.ts -A 20");
+      const gRelated = runRg(repo.root, relatedQuery, "--glob=*.ts -C 2");
+      const natMs = Math.round(performance.now() - natStart);
+      const nativeTok = tokStr(gText.output) + tokStr(gDef.output) + tokStr(gRelated.output);
+
       // Current: searchText → searchSymbols → searchText
       const curStart = performance.now();
       const textR1 = await searchText(repo.id, symbolQuery, { compact: true });
@@ -494,7 +537,7 @@ async function main(): Promise<void> {
       if (!found) continue;
       const optTok = tokStr(formatSymbolCompact(found.symbol)) + (found.references ? tokStr(JSON.stringify(found.references.length)) : 0);
 
-      const row: ComboRow = { flow: "st_ss_st_pingpong", query: label, repo: repo.label, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
+      const row: ComboRow = { flow: "st_ss_st_pingpong", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
       allRows.push(row);
       printRow(label, row);
     }
@@ -506,23 +549,25 @@ async function main(): Promise<void> {
   // ═══════════════════════════════════════════════════════
 
   const flowIds = Object.keys(FLOW_META);
-  const byFlow: Record<string, { curTok: number; optTok: number; curMs: number; optMs: number; optWins: number; curWins: number; ties: number; count: number; curCalls: number; optCalls: number }> = {};
+  const byFlow: Record<string, { natTok: number; curTok: number; optTok: number; natMs: number; curMs: number; optMs: number; optWins: number; curWins: number; ties: number; count: number; curCalls: number; optCalls: number }> = {};
 
   for (const fid of flowIds) {
     const rows = allRows.filter(r => r.flow === fid);
     if (rows.length === 0) continue;
 
+    const natTok = rows.reduce((s, r) => s + r.nativeTok, 0);
     const curTok = rows.reduce((s, r) => s + r.currentTok, 0);
     const optTok = rows.reduce((s, r) => s + r.optimalTok, 0);
+    const natMs = rows.reduce((s, r) => s + r.nativeMs, 0);
     const curMs = rows.reduce((s, r) => s + r.currentMs, 0);
     const optMs = rows.reduce((s, r) => s + r.optimalMs, 0);
     const curCalls = rows.reduce((s, r) => s + r.currentCalls, 0);
     const optCalls = rows.reduce((s, r) => s + r.optimalCalls, 0);
-    const optWins = rows.filter(r => r.optimalTok < r.currentTok).length;
-    const curWins = rows.filter(r => r.currentTok < r.optimalTok).length;
-    const ties = rows.filter(r => r.currentTok === r.optimalTok).length;
+    const optWins = rows.filter(r => r.optimalTok < r.nativeTok).length;
+    const curWins = rows.filter(r => r.nativeTok <= r.optimalTok).length;
+    const ties = rows.filter(r => r.nativeTok === r.optimalTok).length;
 
-    byFlow[fid] = { curTok, optTok, curMs, optMs, optWins, curWins, ties, count: rows.length, curCalls, optCalls };
+    byFlow[fid] = { natTok, curTok, optTok, natMs, curMs, optMs, optWins, curWins, ties, count: rows.length, curCalls, optCalls };
   }
 
   // Format time as seconds string
@@ -536,43 +581,49 @@ async function main(): Promise<void> {
   }
 
   // Column widths
-  const C = { combo: 42, runs: 6, curTok: 10, optTok: 10, diff: 10, curTime: 10, optTime: 10, wins: 7 };
+  const C = { combo: 38, runs: 4, natTok: 10, curTok: 10, optTok: 10, diff: 14, natTime: 8, curTime: 8, optTime: 8, wins: 5 };
 
   function hLine(left: string, mid: string, right: string): string {
-    return `${left}${"─".repeat(C.combo + 2)}${mid}${"─".repeat(C.runs + 2)}${mid}${"─".repeat(C.curTok + 2)}${mid}${"─".repeat(C.optTok + 2)}${mid}${"─".repeat(C.diff + 2)}${mid}${"─".repeat(C.curTime + 2)}${mid}${"─".repeat(C.optTime + 2)}${mid}${"─".repeat(C.wins + 2)}${right}`;
+    return `${left}${"─".repeat(C.combo + 2)}${mid}${"─".repeat(C.runs + 2)}${mid}${"─".repeat(C.natTok + 2)}${mid}${"─".repeat(C.curTok + 2)}${mid}${"─".repeat(C.optTok + 2)}${mid}${"─".repeat(C.diff + 2)}${mid}${"─".repeat(C.natTime + 2)}${mid}${"─".repeat(C.curTime + 2)}${mid}${"─".repeat(C.optTime + 2)}${mid}${"─".repeat(C.wins + 2)}${right}`;
   }
 
-  function dataRow(combo: string, runs: string, curTok: string, optTok: string, diff: string, curTime: string, optTime: string, wins: string): string {
-    return `│ ${combo.padEnd(C.combo)} │ ${runs.padStart(C.runs)} │ ${curTok.padStart(C.curTok)} │ ${optTok.padStart(C.optTok)} │ ${diff.padStart(C.diff)} │ ${curTime.padStart(C.curTime)} │ ${optTime.padStart(C.optTime)} │ ${wins.padStart(C.wins)} │`;
+  function dataRow(combo: string, runs: string, natTok: string, curTok: string, optTok: string, diff: string, natTime: string, curTime: string, optTime: string, wins: string): string {
+    return `│ ${combo.padEnd(C.combo)} │ ${runs.padStart(C.runs)} │ ${natTok.padStart(C.natTok)} │ ${curTok.padStart(C.curTok)} │ ${optTok.padStart(C.optTok)} │ ${diff.padStart(C.diff)} │ ${natTime.padStart(C.natTime)} │ ${curTime.padStart(C.curTime)} │ ${optTime.padStart(C.optTime)} │ ${wins.padStart(C.wins)} │`;
   }
 
   console.log("\n═══ SUMMARY ═══\n");
   console.log(hLine("┌", "┬", "┐"));
-  console.log(dataRow("Kombinacja", "Runs", "Tok", "Tok", "Token", "Czas", "Czas", "Wins"));
-  console.log(dataRow("", "", "Current", "Optimal", "diff", "Current", "Optimal", ""));
+  console.log(dataRow("Kombinacja", "Runs", "Tok", "Tok Sift", "Tok Sift", "Token diff", "Czas", "Czas", "Czas", "Wins"));
+  console.log(dataRow("", "", "natywne", "CURRENT", "OPTIMAL", "nat→cur→opt", "natywny", "Current", "Optimal", ""));
   console.log(hLine("├", "┼", "┤"));
+
+  const shortNames: Record<string, string> = {
+    ss_then_st: "search_symbols+search_text→bundle",
+    st_x3_batch: "search_text×3→CR_batch",
+    cr_drilldown: "CR+search_text×2→CR_high_bud",
+    tree_then_st: "get_file_tree+search_text→CR",
+    patterns_then_st: "search_patterns+search_text→pat",
+    ss_x3_batch: "search_symbols×3→CR_sym_batch",
+    st_ss_st_pingpong: "ST→SS→ST→findAndShow",
+  };
 
   for (const fid of flowIds) {
     const f = byFlow[fid];
     if (!f) continue;
-    const meta = FLOW_META[fid]!;
-    // Short name for the combo
-    const shortNames: Record<string, string> = {
-      ss_then_st: "search_symbols+search_text→bundle",
-      st_x3_batch: "search_text×3→CR_batch",
-      cr_drilldown: "CR+search_text×2→CR_high_budget",
-      tree_then_st: "get_file_tree+search_text→CR",
-      patterns_then_st: "search_patterns+search_text→pat",
-      ss_x3_batch: "search_symbols×3→CR_sym_batch",
-      st_ss_st_pingpong: "ST→SS→ST→findAndShow",
-    };
+
+    // Token diff chain: native→current→optimal
+    const natCurDiff = pct(f.curTok, f.natTok);
+    const natOptDiff = pct(f.optTok, f.natTok);
+    const diffStr = `${natCurDiff}→${natOptDiff}`;
 
     console.log(dataRow(
       shortNames[fid] ?? fid,
       String(f.count),
+      fmtNum(f.natTok),
       fmtNum(f.curTok),
       fmtNum(f.optTok),
-      pct(f.optTok, f.curTok),
+      diffStr,
+      fmtTime(f.natMs),
       fmtTime(f.curMs),
       fmtTime(f.optMs),
       `${f.optWins}/${f.count}`,
@@ -582,21 +633,24 @@ async function main(): Promise<void> {
   console.log(hLine("├", "┼", "┤"));
 
   // Aggregate row
+  const totNatTok = Object.values(byFlow).reduce((s, f) => s + f.natTok, 0);
   const totCurTok = Object.values(byFlow).reduce((s, f) => s + f.curTok, 0);
   const totOptTok = Object.values(byFlow).reduce((s, f) => s + f.optTok, 0);
+  const totNatMs = Object.values(byFlow).reduce((s, f) => s + f.natMs, 0);
   const totCurMs = Object.values(byFlow).reduce((s, f) => s + f.curMs, 0);
   const totOptMs = Object.values(byFlow).reduce((s, f) => s + f.optMs, 0);
   const totCurCalls = Object.values(byFlow).reduce((s, f) => s + f.curCalls, 0);
   const totOptCalls = Object.values(byFlow).reduce((s, f) => s + f.optCalls, 0);
   const totOptWins = Object.values(byFlow).reduce((s, f) => s + f.optWins, 0);
-  const totCurWins = Object.values(byFlow).reduce((s, f) => s + f.curWins, 0);
 
   console.log(dataRow(
     `AGGREGATE (${totCurCalls}→${totOptCalls} calls)`,
     String(allRows.length),
+    fmtNum(totNatTok),
     fmtNum(totCurTok),
     fmtNum(totOptTok),
-    pct(totOptTok, totCurTok),
+    `${pct(totCurTok, totNatTok)}→${pct(totOptTok, totNatTok)}`,
+    fmtTime(totNatMs),
     fmtTime(totCurMs),
     fmtTime(totOptMs),
     `${totOptWins}/${allRows.length}`,
@@ -615,32 +669,29 @@ async function main(): Promise<void> {
     byFlow: Object.fromEntries(Object.entries(byFlow).map(([fid, f]) => [fid, {
       description: FLOW_META[fid]!.description,
       usageCount: FLOW_META[fid]!.usageCount,
+      nativeTokTotal: f.natTok,
       currentTokTotal: f.curTok,
       optimalTokTotal: f.optTok,
-      tokenDiff: pct(f.optTok, f.curTok),
+      natToOptDiff: pct(f.optTok, f.natTok),
+      nativeMsTotal: f.natMs,
       currentMsTotal: f.curMs,
       optimalMsTotal: f.optMs,
-      speedDiff: pct(f.optMs, f.curMs),
       currentCallsTotal: f.curCalls,
       optimalCallsTotal: f.optCalls,
-      callReduction: pct(f.optCalls, f.curCalls),
       optimalWins: f.optWins,
-      currentWins: f.curWins,
-      ties: f.ties,
       totalRuns: f.count,
     }])),
     aggregate: {
+      totalNativeTok: totNatTok,
       totalCurrentTok: totCurTok,
       totalOptimalTok: totOptTok,
-      tokenSavings: pct(totOptTok, totCurTok),
+      natToOptSavings: pct(totOptTok, totNatTok),
+      totalNativeMs: totNatMs,
       totalCurrentMs: totCurMs,
       totalOptimalMs: totOptMs,
-      speedSavings: pct(totOptMs, totCurMs),
       totalCurrentCalls: totCurCalls,
       totalOptimalCalls: totOptCalls,
-      callReduction: pct(totOptCalls, totCurCalls),
       optimalWins: totOptWins,
-      currentWins: totCurWins,
       totalRuns: allRows.length,
     },
   };

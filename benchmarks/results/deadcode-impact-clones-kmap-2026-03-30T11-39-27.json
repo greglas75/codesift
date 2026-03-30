@@ -1,0 +1,125 @@
+{
+  "startedAt": "2026-03-30T11:39:27.306Z",
+  "rows": [
+    {
+      "flow": "find_dead_code",
+      "query": "all",
+      "repo": "codesift-mcp",
+      "nativeTok": 8222,
+      "siftTok": 1635,
+      "nativeMs": 322,
+      "siftMs": 212,
+      "nativeCalls": 21
+    },
+    {
+      "flow": "find_dead_code",
+      "query": "all",
+      "repo": "translation-qa",
+      "nativeTok": 17187,
+      "siftTok": 1758,
+      "nativeMs": 1841,
+      "siftMs": 580,
+      "nativeCalls": 21
+    },
+    {
+      "flow": "find_dead_code",
+      "query": "all",
+      "repo": "promptvault",
+      "nativeTok": 15044,
+      "siftTok": 1956,
+      "nativeMs": 657,
+      "siftMs": 619,
+      "nativeCalls": 21
+    },
+    {
+      "flow": "impact_analysis",
+      "query": "HEAD~3",
+      "repo": "codesift-mcp",
+      "nativeTok": 897,
+      "siftTok": 13917,
+      "nativeMs": 49,
+      "siftMs": 68,
+      "nativeCalls": 2
+    },
+    {
+      "flow": "impact_analysis",
+      "query": "HEAD~3",
+      "repo": "translation-qa",
+      "nativeTok": 6162,
+      "siftTok": 27964,
+      "nativeMs": 557,
+      "siftMs": 608,
+      "nativeCalls": 10
+    },
+    {
+      "flow": "impact_analysis",
+      "query": "HEAD~3",
+      "repo": "promptvault",
+      "nativeTok": 7174,
+      "siftTok": 7693,
+      "nativeMs": 248,
+      "siftMs": 129,
+      "nativeCalls": 10
+    },
+    {
+      "flow": "find_clones",
+      "query": "all",
+      "repo": "codesift-mcp",
+      "nativeTok": 12220,
+      "siftTok": 193,
+      "nativeMs": 19,
+      "siftMs": 26,
+      "nativeCalls": 11
+    },
+    {
+      "flow": "find_clones",
+      "query": "all",
+      "repo": "translation-qa",
+      "nativeTok": 12790,
+      "siftTok": 1703,
+      "nativeMs": 22,
+      "siftMs": 273,
+      "nativeCalls": 11
+    },
+    {
+      "flow": "find_clones",
+      "query": "all",
+      "repo": "promptvault",
+      "nativeTok": 13737,
+      "siftTok": 1717,
+      "nativeMs": 18,
+      "siftMs": 118,
+      "nativeCalls": 11
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src",
+      "repo": "codesift-mcp",
+      "nativeTok": 17331,
+      "siftTok": 1244,
+      "nativeMs": 169,
+      "siftMs": 45,
+      "nativeCalls": 12
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src",
+      "repo": "translation-qa",
+      "nativeTok": 8771,
+      "siftTok": 1492,
+      "nativeMs": 529,
+      "siftMs": 757,
+      "nativeCalls": 7
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src",
+      "repo": "promptvault",
+      "nativeTok": 26481,
+      "siftTok": 1659,
+      "nativeMs": 280,
+      "siftMs": 204,
+      "nativeCalls": 12
+    }
+  ]
+}
