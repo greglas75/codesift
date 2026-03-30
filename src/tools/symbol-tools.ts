@@ -401,9 +401,25 @@ export async function findReferences(
   return refs;
 }
 
-/** Format references as compact string for MCP output (drops col, no JSON overhead). */
+/** Format references as compact string for MCP output. Groups by file to avoid repeating paths. */
 export function formatRefsCompact(refs: Reference[]): string {
-  return refs.map((r) => `${r.file}:${r.line}: ${r.context}`).join("\n");
+  if (refs.length === 0) return "";
+  // Group by file
+  const groups = new Map<string, string[]>();
+  for (const r of refs) {
+    let g = groups.get(r.file);
+    if (!g) { g = []; groups.set(r.file, g); }
+    g.push(`  ${r.line}: ${r.context}`);
+  }
+  if (groups.size === refs.length) {
+    // Each file has 1 ref — flat is fine
+    return refs.map((r) => `${r.file}:${r.line}: ${r.context}`).join("\n");
+  }
+  const parts: string[] = [];
+  for (const [file, lines] of groups) {
+    parts.push(`${file}\n${lines.join("\n")}`);
+  }
+  return parts.join("\n");
 }
 
 /** Format a CodeSymbol as compact text: header line + source. ~70% less tokens than JSON. */

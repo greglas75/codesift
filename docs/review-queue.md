@@ -82,3 +82,4 @@ Commits pending review. Auto-managed:
 - b5ab2e4 (2026-03-30) feat: unified combo benchmark — 13 real tool sequences from usage data
 - e89f365 (2026-03-30) perf: final optimizations — file_tree cap 250, changed_symbols cap 5/file
 - 1514323 (2026-03-30) docs: update README + CLAUDE.md for 48 tools + combo benchmark results
+- 1e88023 (2026-03-30) benchmark: add CodeSift vs jCodeMunch head-to-head comparison

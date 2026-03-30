@@ -588,7 +588,23 @@ export async function searchText(
     ?? (options?.auto_group && contextLines === 0 && matches.length > 0 && matches.length <= AUTO_GROUP_THRESHOLD);
 
   if (useCompact && !options?.group_by_file) {
-    return matches.map((m) => `${m.file}:${m.line}: ${m.content}`).join("\n");
+    // Group by file to avoid repeating long paths (saves ~30% on multi-match files)
+    const groups = new Map<string, string[]>();
+    for (const m of matches) {
+      let g = groups.get(m.file);
+      if (!g) { g = []; groups.set(m.file, g); }
+      g.push(`  ${m.line}: ${m.content}`);
+    }
+    if (groups.size === matches.length) {
+      // Each file has 1 match — flat format is fine
+      return matches.map((m) => `${m.file}:${m.line}: ${m.content}`).join("\n");
+    }
+    // Grouped: file header + indented matches
+    const parts: string[] = [];
+    for (const [file, lines] of groups) {
+      parts.push(`${file}\n${lines.join("\n")}`);
+    }
+    return parts.join("\n");
   }
 
   // Estimate response size; force grouping when output would be enormous
