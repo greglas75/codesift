@@ -39,11 +39,14 @@ export function formatFileTree(data: CompactFileEntry[] | FileTreeNode[] | { ent
   const arr = data as Array<CompactFileEntry | FileTreeNode>;
   if (arr.length === 0) return "(empty)";
 
-  // Compact list — only show files WITH symbols (skip config/json/etc noise)
+  // Compact list — only files with symbols, capped at 250
   if ("symbols" in arr[0]!) {
+    const MAX_FILES = 250;
     const withSymbols = (arr as CompactFileEntry[]).filter((e) => e.symbols > 0);
+    const shown = withSymbols.slice(0, MAX_FILES);
     const without = arr.length - withSymbols.length;
-    let result = withSymbols.map((e) => `${e.path} (${e.symbols})`).join("\n");
+    let result = shown.map((e) => `${e.path} (${e.symbols})`).join("\n");
+    if (withSymbols.length > MAX_FILES) result += `\n(+${withSymbols.length - MAX_FILES} more files)`;
     if (without > 0) result += `\n(${without} files without symbols omitted)`;
     return result;
   }
@@ -351,10 +354,9 @@ interface ChangedFileSymbols { file: string; symbols: string[]; diff?: string }
 export function formatChangedSymbols(data: ChangedFileSymbols[]): string {
   if (data.length === 0) return "(no changed symbols)";
   return data.map((f) => {
-    const MAX_PER_FILE = 10;
-    const shown = f.symbols.slice(0, MAX_PER_FILE).join(", ");
-    const more = f.symbols.length > MAX_PER_FILE ? ` +${f.symbols.length - MAX_PER_FILE} more` : "";
-    return `${f.file} (${f.symbols.length}): ${shown}${more}`;
+    if (f.symbols.length <= 5) return `${f.file}: ${f.symbols.join(", ")}`;
+    const shown = f.symbols.slice(0, 5).join(", ");
+    return `${f.file} (${f.symbols.length}): ${shown} +${f.symbols.length - 5}`;
   }).join("\n");
 }
 
