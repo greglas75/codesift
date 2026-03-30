@@ -78,3 +78,5 @@ Commits pending review. Auto-managed:
 - c71914f (2026-03-30) perf: optimize all MCP tools — ripgrep backend, compact text output, index caching
 - e1d6ee8 (2026-03-30) perf: optimize get_knowledge_map, go_to_definition, formatters
 - 1c25521 (2026-03-30) perf: optimize impact_analysis, add text formatters, reduce caps
+- fd0d153 (2026-03-30) perf: fix 4 remaining losers — diff_outline, changed_symbols, impact_analysis, get_repo_outline
+- b5ab2e4 (2026-03-30) feat: unified combo benchmark — 13 real tool sequences from usage data
