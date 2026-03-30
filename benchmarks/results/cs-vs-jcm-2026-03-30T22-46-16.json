@@ -1,0 +1,220 @@
+{
+  "rows": [
+    {
+      "tool": "search_text",
+      "query": "search_text_TODO",
+      "repo": "codesift-mcp",
+      "jcm_tok": 726,
+      "cs_tok": 2146,
+      "jcm_ms": 26,
+      "cs_ms": 30
+    },
+    {
+      "tool": "search_text",
+      "query": "search_text_async function",
+      "repo": "codesift-mcp",
+      "jcm_tok": 651,
+      "cs_tok": 2359,
+      "jcm_ms": 5,
+      "cs_ms": 25
+    },
+    {
+      "tool": "search_symbols",
+      "query": "search_symbols_create",
+      "repo": "codesift-mcp",
+      "jcm_tok": 924,
+      "cs_tok": 525,
+      "jcm_ms": 26,
+      "cs_ms": 136
+    },
+    {
+      "tool": "search_symbols",
+      "query": "search_symbols_handle",
+      "repo": "codesift-mcp",
+      "jcm_tok": 937,
+      "cs_tok": 750,
+      "jcm_ms": 0,
+      "cs_ms": 0
+    },
+    {
+      "tool": "get_file_outline",
+      "query": "get_file_outline_src/types.ts",
+      "repo": "codesift-mcp",
+      "jcm_tok": 1007,
+      "cs_tok": 138,
+      "jcm_ms": 0,
+      "cs_ms": 1
+    },
+    {
+      "tool": "get_file_tree",
+      "query": "get_file_tree",
+      "repo": "codesift-mcp",
+      "jcm_tok": 4259,
+      "cs_tok": 2229,
+      "jcm_ms": 2,
+      "cs_ms": 6
+    },
+    {
+      "tool": "find_references",
+      "query": "find_references_searchText",
+      "repo": "codesift-mcp",
+      "jcm_tok": 461,
+      "cs_tok": 2265,
+      "jcm_ms": 0,
+      "cs_ms": 31
+    },
+    {
+      "tool": "find_references",
+      "query": "find_references_loadConfig",
+      "repo": "codesift-mcp",
+      "jcm_tok": 337,
+      "cs_tok": 1419,
+      "jcm_ms": 0,
+      "cs_ms": 18
+    },
+    {
+      "tool": "find_dead_code",
+      "query": "find_dead_code",
+      "repo": "codesift-mcp",
+      "jcm_tok": 91791,
+      "cs_tok": 1693,
+      "jcm_ms": 11,
+      "cs_ms": 211
+    },
+    {
+      "tool": "get_context_bundle",
+      "query": "get_context_bundle_searchText",
+      "repo": "codesift-mcp",
+      "jcm_tok": 11,
+      "cs_tok": 1854,
+      "jcm_ms": 0,
+      "cs_ms": 6
+    },
+    {
+      "tool": "get_repo_outline",
+      "query": "get_repo_outline",
+      "repo": "codesift-mcp",
+      "jcm_tok": 535,
+      "cs_tok": 274,
+      "jcm_ms": 31,
+      "cs_ms": 0
+    },
+    {
+      "tool": "suggest_queries",
+      "query": "suggest_queries",
+      "repo": "codesift-mcp",
+      "jcm_tok": 357,
+      "cs_tok": 196,
+      "jcm_ms": 4,
+      "cs_ms": 2
+    },
+    {
+      "tool": "search_text",
+      "query": "search_text_TODO",
+      "repo": "promptvault",
+      "jcm_tok": 604,
+      "cs_tok": 463,
+      "jcm_ms": 326,
+      "cs_ms": 61
+    },
+    {
+      "tool": "search_text",
+      "query": "search_text_async function",
+      "repo": "promptvault",
+      "jcm_tok": 609,
+      "cs_tok": 2103,
+      "jcm_ms": 9,
+      "cs_ms": 42
+    },
+    {
+      "tool": "search_symbols",
+      "query": "search_symbols_create",
+      "repo": "promptvault",
+      "jcm_tok": 960,
+      "cs_tok": 894,
+      "jcm_ms": 175,
+      "cs_ms": 474
+    },
+    {
+      "tool": "search_symbols",
+      "query": "search_symbols_handle",
+      "repo": "promptvault",
+      "jcm_tok": 1022,
+      "cs_tok": 511,
+      "jcm_ms": 0,
+      "cs_ms": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "query": "get_file_outline_src/types.ts",
+      "repo": "promptvault",
+      "jcm_tok": 28,
+      "cs_tok": 3,
+      "jcm_ms": 0,
+      "cs_ms": 1
+    },
+    {
+      "tool": "get_file_tree",
+      "query": "get_file_tree",
+      "repo": "promptvault",
+      "jcm_tok": 18710,
+      "cs_tok": 10021,
+      "jcm_ms": 6,
+      "cs_ms": 0
+    },
+    {
+      "tool": "find_references",
+      "query": "find_references_searchText",
+      "repo": "promptvault",
+      "jcm_tok": 79,
+      "cs_tok": 173,
+      "jcm_ms": 5,
+      "cs_ms": 27
+    },
+    {
+      "tool": "find_references",
+      "query": "find_references_loadConfig",
+      "repo": "promptvault",
+      "jcm_tok": 79,
+      "cs_tok": 0,
+      "jcm_ms": 0,
+      "cs_ms": 34
+    },
+    {
+      "tool": "find_dead_code",
+      "query": "find_dead_code",
+      "repo": "promptvault",
+      "jcm_tok": 545392,
+      "cs_tok": 1956,
+      "jcm_ms": 43,
+      "cs_ms": 636
+    },
+    {
+      "tool": "get_context_bundle",
+      "query": "get_context_bundle_searchText",
+      "repo": "promptvault",
+      "jcm_tok": 11,
+      "cs_tok": 1363,
+      "jcm_ms": 0,
+      "cs_ms": 16
+    },
+    {
+      "tool": "get_repo_outline",
+      "query": "get_repo_outline",
+      "repo": "promptvault",
+      "jcm_tok": 463,
+      "cs_tok": 1035,
+      "jcm_ms": 114,
+      "cs_ms": 1
+    },
+    {
+      "tool": "suggest_queries",
+      "query": "suggest_queries",
+      "repo": "promptvault",
+      "jcm_tok": 363,
+      "cs_tok": 256,
+      "jcm_ms": 39,
+      "cs_ms": 8
+    }
+  ]
+}
