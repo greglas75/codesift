@@ -26,7 +26,7 @@ import { scanSecrets } from "./tools/secret-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -385,13 +385,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       line: zNum().describe("0-based line number of the reference"),
       character: zNum().describe("0-based column of the reference"),
     },
-    handler: (args) => goToDefinition(
-      args.repo as string,
-      args.symbol_name as string,
-      args.file_path as string | undefined,
-      args.line as number | undefined,
-      args.character as number | undefined,
-    ),
+    handler: async (args) => {
+      const result = await goToDefinition(
+        args.repo as string,
+        args.symbol_name as string,
+        args.file_path as string | undefined,
+        args.line as number | undefined,
+        args.character as number | undefined,
+      );
+      if (!result) return null;
+      const preview = result.preview ? `\n${result.preview}` : "";
+      return `${result.file}:${result.line + 1} (via ${result.via})${preview}`;
+    },
   },
 
   {
@@ -526,7 +531,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       depth: zNum().describe("Maximum depth of the dependency graph"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (dependency diagram)"),
     },
-    handler: (args) => getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined, args.output_format as "json" | "mermaid" | undefined),
+    handler: async (args) => {
+      const result = await getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined, args.output_format as "json" | "mermaid" | undefined);
+      return formatKnowledgeMap(result as never);
+    },
   },
 
   // --- Diff ---

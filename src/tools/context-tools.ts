@@ -306,9 +306,9 @@ export async function getKnowledgeMap(
 
   const circularDeps = findCircularDeps(edges);
 
-  // If no focus, cap output to prevent 25K+ token responses on large repos
-  const MAX_UNFOCUSED_MODULES = 100;
-  const MAX_UNFOCUSED_EDGES = 300;
+  // Cap output to prevent huge responses on large repos
+  const MAX_UNFOCUSED_MODULES = 30;
+  const MAX_UNFOCUSED_EDGES = 80;
 
   if (!focus) {
     const allModules = [...moduleMap.values()];

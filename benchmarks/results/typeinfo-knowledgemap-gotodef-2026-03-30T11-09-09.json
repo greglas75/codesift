@@ -1,0 +1,329 @@
+{
+  "startedAt": "2026-03-30T11:09:09.277Z",
+  "rows": [
+    {
+      "flow": "go_to_definition",
+      "query": "searchText",
+      "repo": "codesift-mcp",
+      "nativeTok": 133,
+      "siftTok": 125,
+      "nativeMs": 19,
+      "siftMs": 9
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "CodeSymbol",
+      "repo": "codesift-mcp",
+      "nativeTok": 25,
+      "siftTok": 121,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "BM25Index",
+      "repo": "codesift-mcp",
+      "nativeTok": 124,
+      "siftTok": 121,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "TextMatch",
+      "repo": "codesift-mcp",
+      "nativeTok": 40,
+      "siftTok": 78,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "loadConfig",
+      "repo": "codesift-mcp",
+      "nativeTok": 53,
+      "siftTok": 122,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "searchText",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 67,
+      "nativeMs": 169,
+      "siftMs": 8
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "CodeSymbol",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 87,
+      "siftMs": 5
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "BM25Index",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 85,
+      "siftMs": 5
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "TextMatch",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 84,
+      "siftMs": 4
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "loadConfig",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 83,
+      "siftMs": 5
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "searchText",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 53,
+      "siftMs": 2
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "CodeSymbol",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 32,
+      "siftMs": 1
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "BM25Index",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 43,
+      "siftMs": 1
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "TextMatch",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 33,
+      "siftMs": 1
+    },
+    {
+      "flow": "go_to_definition",
+      "query": "loadConfig",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 1,
+      "nativeMs": 33,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_type_info",
+      "query": "searchText",
+      "repo": "codesift-mcp",
+      "nativeTok": 133,
+      "siftTok": 22,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "get_type_info",
+      "query": "loadConfig",
+      "repo": "codesift-mcp",
+      "nativeTok": 53,
+      "siftTok": 22,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "get_type_info",
+      "query": "getCodeIndex",
+      "repo": "codesift-mcp",
+      "nativeTok": 36,
+      "siftTok": 22,
+      "nativeMs": 16,
+      "siftMs": 0
+    },
+    {
+      "flow": "get_type_info",
+      "query": "buildBM25Index",
+      "repo": "codesift-mcp",
+      "nativeTok": 31,
+      "siftTok": 22,
+      "nativeMs": 17,
+      "siftMs": 0
+    },
+    {
+      "flow": "get_type_info",
+      "query": "searchText",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 22,
+      "nativeMs": 73,
+      "siftMs": 4
+    },
+    {
+      "flow": "get_type_info",
+      "query": "loadConfig",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 82,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_type_info",
+      "query": "getCodeIndex",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 85,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_type_info",
+      "query": "buildBM25Index",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 79,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_type_info",
+      "query": "searchText",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 29,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_type_info",
+      "query": "loadConfig",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 28,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_type_info",
+      "query": "getCodeIndex",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 28,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_type_info",
+      "query": "buildBM25Index",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 17,
+      "nativeMs": 27,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src",
+      "repo": "codesift-mcp",
+      "nativeTok": 3251,
+      "siftTok": 12349,
+      "nativeMs": 13,
+      "siftMs": 41
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src/tools",
+      "repo": "codesift-mcp",
+      "nativeTok": 912,
+      "siftTok": 12305,
+      "nativeMs": 15,
+      "siftMs": 33
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "lib",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 15,
+      "nativeMs": 13,
+      "siftMs": 35
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 3212,
+      "nativeMs": 34,
+      "siftMs": 718
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src/tools",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 15,
+      "nativeMs": 33,
+      "siftMs": 699
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "lib",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 6053,
+      "nativeMs": 34,
+      "siftMs": 685
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 7669,
+      "nativeMs": 18,
+      "siftMs": 199
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "src/tools",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 15,
+      "nativeMs": 18,
+      "siftMs": 200
+    },
+    {
+      "flow": "get_knowledge_map",
+      "query": "lib",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 7909,
+      "nativeMs": 17,
+      "siftMs": 187
+    }
+  ]
+}

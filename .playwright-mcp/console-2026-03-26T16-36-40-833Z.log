@@ -1,0 +1,25 @@
+[    1740ms] [WARNING] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width. @ http://localhost:4322/node_modules/.vite/deps/recharts.js?v=b0fe0045:9095
+[    1743ms] [WARNING] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width. @ http://localhost:4322/node_modules/.vite/deps/recharts.js?v=b0fe0045:9095
+[  145589ms] [WARNING] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width. @ http://localhost:4322/node_modules/.vite/deps/recharts.js?v=b0fe0045:9095
+[  145589ms] [WARNING] The width(-1) and height(-1) of chart should be greater than 0,
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width. @ http://localhost:4322/node_modules/.vite/deps/recharts.js?v=b0fe0045:9095
+[  277081ms] [ERROR] WebSocket connection to 'ws://localhost:4322/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:4322/@vite/client:1766
+[  278585ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4322/node_modules/astro/dist/runtime/client/dev-toolbar/helpers.js?v=0b0aeed1:0
+[  278585ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4322/node_modules/astro/dist/runtime/client/dev-toolbar/settings.js?v=0b0aeed1:0
+[  278585ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4322/node_modules/astro/node_modules/vite/dist/client/env.mjs:0
+[  278588ms] Failed to fetch dynamically imported module: http://localhost:4322/@id/astro:scripts/before-hydration.js
+[  278588ms] Failed to fetch dynamically imported module: http://localhost:4322/@id/astro:scripts/before-hydration.js
+[  278588ms] Failed to fetch dynamically imported module: http://localhost:4322/@id/astro:scripts/before-hydration.js
+[  278586ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4322/@id/__x00__astro:toolbar:internal:0
+[  278587ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4322/favicon.svg:0

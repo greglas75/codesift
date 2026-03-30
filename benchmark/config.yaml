@@ -1,0 +1,156 @@
+# =============================================================================
+# CodeSift Benchmark Framework — config.yaml
+# =============================================================================
+# One config to rule them all. Repos, adapters, metrics, limits.
+#
+# Usage:
+#   python scripts/run_benchmark.py --config config.yaml
+#   python scripts/run_benchmark.py --repo codesift-mcp --adapter codesift
+#   python scripts/run_benchmark.py --adapter codesift,ripgrep --task-filter category=text
+# =============================================================================
+
+version: "1.1"
+
+# ---------------------------------------------------------------------------
+# Repositories to benchmark against
+# ---------------------------------------------------------------------------
+repos:
+  - id: codesift-mcp
+    path: /Users/greglas/DEV/codesift-mcp
+    language: typescript
+    framework: node
+    tags: [typescript, mcp, ast, search]
+    size: medium
+    notes: "CodeSift itself — 44 MCP tools, tree-sitter, BM25F"
+
+  - id: shield
+    path: /Users/greglas/DEV/Shield
+    language: typescript
+    framework: cloudflare-workers
+    tags: [http, db, auth, workers, fraud-detection]
+    size: large
+    notes: "Cloudflare Workers, MongoDB, fraud detection"
+
+  - id: offer-module
+    path: /Users/greglas/DEV/Rewards-API
+    language: typescript
+    framework: nestjs
+    tags: [http, db, auth, nestjs, prisma, react]
+    size: large
+    notes: "NestJS backend + React frontend, Prisma/Supabase"
+
+  - id: mobi
+    path: /Users/greglas/DEV/Mobi
+    language: php
+    framework: yii2
+    tags: [http, db, auth, php, yii]
+    size: large
+    notes: "PHP/Yii2 legacy platform"
+
+  - id: data-lab
+    path: /Users/greglas/DEV/DataLab
+    language: python
+    framework: flask
+    tags: [http, db, python, flask, polars]
+    size: medium
+    notes: "Python/Flask data validation platform"
+
+  - id: tgm-platform
+    path: /Users/greglas/DEV/tgm-survey-platform
+    language: typescript
+    framework: nestjs
+    tags: [http, db, auth, nestjs, prisma, monorepo]
+    size: large
+    notes: "NestJS monorepo, Prisma, Turborepo"
+
+  - id: translation-qa
+    path: /Users/greglas/DEV/translation-qa
+    language: typescript
+    framework: vite
+    tags: [ai, embeddings, qdrant, vitest]
+    size: medium
+    notes: "AI translation pipeline, Qdrant, heavy service layer"
+
+# ---------------------------------------------------------------------------
+# Tool adapters — pluggable measurement targets
+# ---------------------------------------------------------------------------
+# Each adapter is a Python file in adapters/ that implements ToolAdapter.
+# To add a new tool: create adapters/my_tool.py, register here.
+adapters:
+  - id: codesift
+    module: adapters.codesift
+    class: CodeSiftAdapter
+    description: "CodeSift CLI — AST-indexed search"
+    requires_index: true
+
+  - id: ripgrep
+    module: adapters.ripgrep
+    class: RipgrepAdapter
+    description: "ripgrep (rg) — fast text search"
+    requires_index: false
+
+  # --- Planned (not yet implemented) ---
+  # - id: ast_grep
+  #   module: adapters.ast_grep
+  #   class: AstGrepAdapter
+  #   description: "ast-grep — structural pattern matching"
+  #   requires_index: false
+
+  # - id: ctags
+  #   module: adapters.ctags
+  #   class: CtagsAdapter
+  #   description: "Universal Ctags — symbol indexing"
+  #   requires_index: true
+
+# ---------------------------------------------------------------------------
+# Metrics collected per task execution
+# ---------------------------------------------------------------------------
+metrics:
+  # Token estimation: ~3.7 chars per token (tiktoken cl100k_base average for code)
+  chars_per_token: 3.7
+
+  per_task:
+    - wall_clock_ms          # TRUE wall clock (includes inter-call overhead)
+    - sum_call_ms            # Sum of individual call durations
+    - tool_calls             # Number of tool/command invocations
+    - total_output_chars     # Characters in all tool outputs combined
+    - total_output_tokens    # Estimated tokens (chars / 3.7)
+    - result_count           # Number of items in result (files, symbols, edges)
+    - success                # Did it produce output?
+    - precision              # For set tasks: correct / total returned
+    - recall                 # For set tasks: correct / total expected
+
+  per_call:
+    - call_wall_clock_ms
+    - call_output_chars
+    - call_output_tokens
+    - call_command
+    - call_returncode
+
+# ---------------------------------------------------------------------------
+# Execution limits
+# ---------------------------------------------------------------------------
+limits:
+  max_wall_clock_seconds: 120
+  max_tool_calls: 50
+  max_output_chars: 500000
+  retries_on_error: 1
+
+# ---------------------------------------------------------------------------
+# Gold answer generation
+# ---------------------------------------------------------------------------
+gold:
+  generation_adapter: codesift
+  output_dir: gold/
+  require_verification: true
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+reporting:
+  output_dir: reports/
+  formats: [json, markdown]
+  include_per_call_details: true
+  include_failure_analysis: true
+  # Show delta columns (vs baseline adapter)
+  baseline_adapter: ripgrep

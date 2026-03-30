@@ -1,0 +1,354 @@
+# =============================================================================
+# Universal Task Set — works on any repo without modification
+# =============================================================================
+# Each task is a question/goal, NOT a hardcoded file lookup.
+# The agent/tool must FIND the answer in whatever repo it's pointed at.
+#
+# Gold answers are generated per-repo at prep time (gold_mode: auto)
+# or provided manually (gold_mode: fixed) for verification tasks.
+#
+# Categories:
+#   text       — find text patterns across files
+#   symbol     — find function/class/type definitions
+#   structure  — understand file/module organization
+#   retrieval  — read specific code blocks
+#   relationship — trace call chains, references, dependencies
+#   semantic   — answer conceptual questions about architecture
+#   analysis   — dead code, complexity, clones, anti-patterns
+# =============================================================================
+
+tasks:
+
+  # =========================================================================
+  # TEXT SEARCH (5 tasks)
+  # =========================================================================
+
+  - id: text-001
+    category: text
+    difficulty: easy
+    question: "Find all TODO and FIXME comments in production (non-test) code."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Baseline text search. Every repo has TODOs."
+
+  - id: text-002
+    category: text
+    difficulty: easy
+    question: "Find all files that use environment variables (process.env, os.environ, os.Getenv, env::var, $_ENV, getenv)."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Cross-language env usage. Adapter for language detected from repo config."
+
+  - id: text-003
+    category: text
+    difficulty: medium
+    question: "Find all empty catch blocks — catch that swallows errors without logging or rethrowing."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Structural pattern. AST tools should excel here."
+
+  - id: text-004
+    category: text
+    difficulty: medium
+    question: "Find all console.log / print / fmt.Println statements in production (non-test) code."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Requires excluding test files. Tests tool's filter capability."
+
+  - id: text-005
+    category: text
+    difficulty: hard
+    question: "Find all type safety bypasses: 'as any', 'as never', '# type: ignore', 'noinspection', '@SuppressWarnings' in production code."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Cross-language type bypass. High-value for code quality."
+
+  # =========================================================================
+  # SYMBOL SEARCH (5 tasks)
+  # =========================================================================
+
+  - id: symbol-001
+    category: symbol
+    difficulty: easy
+    question: "Find the main authentication/login function or method in this codebase."
+    evaluation_type: exact_location
+    gold_mode: auto
+    tags_required: [auth]
+    notes: "Semantic symbol search. Tool must understand 'auth' concept."
+
+  - id: symbol-002
+    category: symbol
+    difficulty: easy
+    question: "List all exported functions/methods in the main service layer (the directory with business logic services)."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Tests service layer discovery + symbol listing."
+
+  - id: symbol-003
+    category: symbol
+    difficulty: medium
+    question: "Find all validation schemas or validators (Zod schemas, Joi schemas, class-validator decorators, Pydantic models, form validation)."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Cross-framework validator discovery."
+
+  - id: symbol-004
+    category: symbol
+    difficulty: medium
+    question: "Find the function/method responsible for creating or registering a new user."
+    evaluation_type: exact_location
+    gold_mode: auto
+    tags_required: [auth]
+    notes: "Semantic lookup — 'create user' not always named createUser."
+
+  - id: symbol-005
+    category: symbol
+    difficulty: hard
+    question: "Find all factory functions or builder patterns used in test files (functions named make*, create*, build*, fake*, mock*)."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Test infrastructure discovery."
+
+  # =========================================================================
+  # STRUCTURE (4 tasks)
+  # =========================================================================
+
+  - id: structure-001
+    category: structure
+    difficulty: easy
+    question: "Show the top-level directory structure and identify the main source code directory vs config/build/test directories."
+    evaluation_type: rubric
+    gold_mode: auto
+    tags_required: []
+    rubric:
+      required_points:
+        - "Identifies main source directory (src/, app/, lib/, internal/)"
+        - "Identifies test directory"
+        - "Identifies config files (tsconfig, package.json, pyproject, go.mod, etc.)"
+      optional_points:
+        - "Identifies CI/CD config"
+        - "Notes monorepo structure if present"
+
+  - id: structure-002
+    category: structure
+    difficulty: medium
+    question: "Identify the 10 most complex files in the codebase (by number of functions/methods or lines of code)."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Tests complexity analysis capability."
+
+  - id: structure-003
+    category: structure
+    difficulty: medium
+    question: "List all HTTP route/endpoint definitions in this codebase with their HTTP methods and paths."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: [http]
+    notes: "Route discovery across frameworks."
+
+  - id: structure-004
+    category: structure
+    difficulty: hard
+    question: "Find all barrel files (index.ts, __init__.py, mod.rs) that re-export from other modules. List what each re-exports."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Module system understanding."
+
+  # =========================================================================
+  # RETRIEVAL (4 tasks)
+  # =========================================================================
+
+  - id: retrieval-001
+    category: retrieval
+    difficulty: easy
+    question: "Read the main database connection/configuration setup code. Show the full function/class."
+    evaluation_type: exact_location
+    gold_mode: auto
+    tags_required: [db]
+    notes: "Single symbol retrieval with context."
+
+  - id: retrieval-002
+    category: retrieval
+    difficulty: medium
+    question: "Read the error handling middleware or global error handler. Show all related functions."
+    evaluation_type: exact_location
+    gold_mode: auto
+    tags_required: [http]
+    notes: "Multi-part retrieval — error handler may span multiple functions."
+
+  - id: retrieval-003
+    category: retrieval
+    difficulty: medium
+    question: "Read the main configuration/settings module. Show all config values and their defaults."
+    evaluation_type: exact_location
+    gold_mode: auto
+    tags_required: []
+    notes: "Config retrieval — often a single file but may reference .env."
+
+  - id: retrieval-004
+    category: retrieval
+    difficulty: hard
+    question: "Read the 3 most important functions in the main business logic service (by call frequency or centrality). Show their full source."
+    evaluation_type: rubric
+    gold_mode: auto
+    tags_required: []
+    rubric:
+      required_points:
+        - "Identifies 3 functions from the core service layer"
+        - "Shows full source for each"
+        - "Functions are genuinely central (not utility/helper)"
+
+  # =========================================================================
+  # RELATIONSHIP (5 tasks)
+  # =========================================================================
+
+  - id: relationship-001
+    category: relationship
+    difficulty: easy
+    question: "Find all callers of the main authentication/login function. List each call site with file and line."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: [auth]
+    notes: "Basic reference finding."
+
+  - id: relationship-002
+    category: relationship
+    difficulty: medium
+    question: "Trace the main POST/create endpoint from HTTP handler through service layer to database write. Show the full call chain."
+    evaluation_type: graph
+    gold_mode: auto
+    tags_required: [http, db]
+    notes: "Core differentiator — route → service → DB trace."
+
+  - id: relationship-003
+    category: relationship
+    difficulty: medium
+    question: "Find all modules/files that would be affected if the main User/Account model/entity changes. Show the dependency chain."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: [db]
+    notes: "Impact analysis — blast radius of a model change."
+
+  - id: relationship-004
+    category: relationship
+    difficulty: hard
+    question: "Trace the deepest call chain in the codebase (the longest path from entry point to leaf function). Show each step."
+    evaluation_type: graph
+    gold_mode: auto
+    tags_required: []
+    notes: "Max-depth trace. Tests tool's ability to follow deep chains."
+
+  - id: relationship-005
+    category: relationship
+    difficulty: hard
+    question: "Find all circular dependencies between modules/files. Show each cycle."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Graph analysis — cycle detection in import graph."
+
+  # =========================================================================
+  # SEMANTIC (4 tasks)
+  # =========================================================================
+
+  - id: semantic-001
+    category: semantic
+    difficulty: medium
+    question: "Explain how authentication works in this codebase. Cover: entry points, validation, session/token management, and storage."
+    evaluation_type: rubric
+    gold_mode: auto
+    tags_required: [auth]
+    rubric:
+      required_points:
+        - "Identifies auth entry point (route/controller)"
+        - "Describes credential validation mechanism"
+        - "Describes session or token creation"
+        - "Identifies where auth state is persisted"
+      optional_points:
+        - "Mentions middleware/guards"
+        - "Mentions role-based access control"
+      penalties:
+        - "Describes test mocks as production implementation"
+        - "Invents auth mechanisms not present in code"
+
+  - id: semantic-002
+    category: semantic
+    difficulty: medium
+    question: "Explain how errors are handled across this application. Cover: error types, propagation, user-facing responses, and logging."
+    evaluation_type: rubric
+    gold_mode: auto
+    tags_required: []
+    rubric:
+      required_points:
+        - "Identifies error class hierarchy or error types"
+        - "Describes how errors propagate (throw/catch chain)"
+        - "Describes user-facing error response format"
+        - "Mentions logging or monitoring integration"
+
+  - id: semantic-003
+    category: semantic
+    difficulty: hard
+    question: "Explain the main data processing pipeline in this codebase. What is the input, what transformations happen, what is the output?"
+    evaluation_type: rubric
+    gold_mode: auto
+    tags_required: []
+    rubric:
+      required_points:
+        - "Identifies pipeline entry point"
+        - "Describes at least 2 transformation steps"
+        - "Identifies output format or destination"
+        - "Cites specific functions or modules"
+
+  - id: semantic-004
+    category: semantic
+    difficulty: hard
+    question: "What are the main architectural modules in this codebase? How do they communicate? Draw the dependency map."
+    evaluation_type: rubric
+    gold_mode: auto
+    tags_required: []
+    rubric:
+      required_points:
+        - "Identifies 3+ distinct modules/layers"
+        - "Describes communication pattern between them"
+        - "Cites specific directories or key files"
+
+  # =========================================================================
+  # ANALYSIS (3 tasks) — CodeSift differentiators
+  # =========================================================================
+
+  - id: analysis-001
+    category: analysis
+    difficulty: medium
+    question: "Find exported functions/classes/types that appear to be unused (dead code) — exported but never imported by any other file."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Dead code detection. grep can approximate, CodeSift has dedicated tool."
+
+  - id: analysis-002
+    category: analysis
+    difficulty: hard
+    question: "Find copy-pasted or near-duplicate code blocks (functions/methods with similar structure but different variable names)."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Clone detection. Only AST-aware tools can do this well."
+
+  - id: analysis-003
+    category: analysis
+    difficulty: hard
+    question: "Rank files by risk: combine code complexity (cyclomatic complexity, nesting depth) with git churn (how often the file changes). Show top 10 riskiest files."
+    evaluation_type: set
+    gold_mode: auto
+    tags_required: []
+    notes: "Hotspot analysis. Requires both AST analysis and git history."

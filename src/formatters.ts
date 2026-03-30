@@ -312,6 +312,43 @@ export function formatTraceRoute(data: RouteResult | string): string {
   return parts.join("\n");
 }
 
+// ── Knowledge map ─────────────────────────────────
+
+interface KnowledgeMapResult {
+  modules: Array<{ path: string; symbol_count: number }>;
+  edges: Array<{ from: string; to: string }>;
+  circular_deps: Array<{ cycle: string[] }>;
+  truncated?: boolean;
+  total_modules?: number;
+}
+
+export function formatKnowledgeMap(data: KnowledgeMapResult | { mermaid: string }): string {
+  if ("mermaid" in data) return (data as { mermaid: string }).mermaid;
+  const parts: string[] = [];
+  parts.push(`${data.modules.length} modules, ${data.edges.length} edges`);
+  if (data.truncated) parts[0] += ` (truncated from ${data.total_modules})`;
+
+  if (data.modules.length > 0) {
+    parts.push("\nmodules:");
+    for (const m of data.modules.slice(0, 30)) {
+      parts.push(`  ${m.path} (${m.symbol_count})`);
+    }
+  }
+  if (data.edges.length > 0) {
+    parts.push("\nedges:");
+    for (const e of data.edges.slice(0, 50)) {
+      parts.push(`  ${e.from} → ${e.to}`);
+    }
+  }
+  if (data.circular_deps.length > 0) {
+    parts.push("\ncircular:");
+    for (const c of data.circular_deps) {
+      parts.push(`  ${c.cycle.join(" → ")}`);
+    }
+  }
+  return parts.join("\n");
+}
+
 export function formatCommunities(data: CommunitiesResult | string): string {
   if (typeof data === "string") return data; // mermaid format
   const header = `${data.communities.length} communities, ${data.total_files} files, modularity=${data.modularity.toFixed(2)}`;

@@ -1,0 +1,590 @@
+[
+  {
+    "task_id": "text-001",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 40,
+    "sum_call_ms": 39,
+    "tool_calls": 1,
+    "total_output_chars": 2915,
+    "total_output_tokens": 787,
+    "result_count": 20,
+    "parsed_items_count": 20,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'TODO|FIXME|HACK' --glob=!*.test.* --glob=!*.spec.* --glob=!*__tests__* --glob=!node_modules --glob=!vendor --glob=!dist .",
+        "wall_clock_ms": 39,
+        "output_chars": 2915,
+        "output_tokens": 787,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./README.md:261:| `scaffolding` | TODO/FIXME/HACK markers, Phase/Step stubs, \"not implemented\" throws |\n./src/cli/help.ts:301:  codesift retrieve local/my-project --queries '[{\"type\":\"symbols\",\"query\":\"createUser\"},{\"type\":\"text\",\"query\":\"TODO\"}]'\n./benchmarks/benchmark-R11-2026-03-13.md:43:- No verbosity tuning yet for hybrid mode (BM25 already had `trim source to 200 chars` TODO)\n./benchmarks/benchmark-R11-2026-03-13.md:70:| **CRITICAL** | Truncate semantic result source to 200 chars (same as BM25 TODO) | -5K tokens |\n./docs/superpowers/specs/2026-03-25-quality-and-visual-features-design.md:101:**Problem:** Kod ma zapomniane TODO markers, placeholder komentarze, Phase/Step markers kt\u00f3re mia\u0142y by\u0107 tymczasowe. To realny tech debt kt\u00f3rego nikt nie szuka.\n./docs/superpowers/specs/2026-03-25-quality-and-visual-features-design.md:108:  /\\/\\/\\s*(TODO|FIXME|HACK|XXX|TEMP|TEMPORARY)\\b/i,\n./docs/superpowers/specs/2026-03-25-quality-and-visual-features-design.md:111:  /\\/\\*\\*?\\s*(TODO|FIXME|HACK)\\b/i,\n./docs/superpowers/specs/2026-03-25-quality-and-visual-features-design.md:113:  /console\\.(log|warn)\\(['\"]TODO\\b/i,\n./docs/superpowers/specs/2026-03-25-quality-and-visual-features-design.md:330:| Scaffolding | TODO/FIXME markers found per repo | >0 on most repos |\n./benchmarks/run-bash-baseline.sh:45:run_task \"A3: TODO|FIXME in src/\" \\\n./benchmarks/run-bash-baseline.sh:46:  \"grep -rnE $GREP_EXCLUDE 'TODO|FIXME' '$REPO_ROOT/src'\"\n./benchmarks/run-benchmark.ts:47:    { id: \"A3\", q: \"TODO|FIXME\", opts: { regex: true, file_pattern: \"src/**\" } },\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:182:    regex: /\\/\\/\\s*(TODO|FIXME|HACK|XXX|TEMP|TEMPORARY)\\b|\\/\\/\\s*(Phase|Step|Stage)\\s*\\d|\\/\\/\\s*(placeholder|stub|dummy)\\b|throw new Error\\(['\"]not implemented['\"]\\)|console\\.(log|warn)\\(['\"]TODO\\b/i,\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:183:    description: \"Scaffolding markers: TODO/FIXME/HACK, Phase/Step markers, placeholder stubs, not-implemented throws (tech debt)\",\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:211:New built-in pattern 'scaffolding' finds TODO/FIXME/HACK markers,\n./docs/specs/2026-03-27-dashboard-v1.1-spec.md:234:8. `scaffolding` \u2014 TODO/FIXME/HACK comments\n./src/tools/pattern-tools.ts:56:    regex: /\\/\\/\\s*(TODO|FIXME|HACK|XXX|TEMP|TEMPORARY)\\b|\\/\\/\\s*(Phase|Step|Stage)\\s*\\d|\\/\\/\\s*(placeholder|stub|dummy)\\b|throw new Error\\(['\"]not implemented['\"]\\)|console\\.(log|warn)\\(['\"]TODO\\b/i,\n./src/tools/pattern-tools.ts:57:    description: \"Scaffolding markers: TODO/FIXME/HACK, Phase/Step markers, placeholder stubs, not-implemented throws (tech debt)\",\n./benchmarks/tool-comparison-A-search-text.md:35:- **Symptom:** A3 (TODO/FIXME) returned 0 instead of 8; A5 (process.env) found 26 vars instead of 38\n./benchmarks/tool-comparison-A-search-text.md:54:| A3 | TODO + FIXME in src/ | 8 | 8 | 2 | 2 | \u2713 Match |\n"
+  },
+  {
+    "task_id": "text-002",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 11,
+    "sum_call_ms": 11,
+    "tool_calls": 1,
+    "total_output_chars": 4047,
+    "total_output_tokens": 1093,
+    "result_count": 31,
+    "parsed_items_count": 31,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'process\\.env|os\\.environ|os\\.Getenv|\\$_ENV|getenv' --glob=!*.test.* --glob=!*.spec.* --glob=!*__tests__* --glob=!node_modules --glob=!vendor --glob=!dist .",
+        "wall_clock_ms": 11,
+        "output_chars": 4047,
+        "output_tokens": 1093,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./src/config.ts:41:  const dataDir = process.env[\"CODESIFT_DATA_DIR\"] ?? join(homedir(), \".codesift\");\n./src/config.ts:43:  const voyageApiKey = process.env[\"CODESIFT_VOYAGE_API_KEY\"] ?? null;\n./src/config.ts:44:  const openaiApiKey = process.env[\"CODESIFT_OPENAI_API_KEY\"] ?? null;\n./src/config.ts:45:  const ollamaUrl = process.env[\"CODESIFT_OLLAMA_URL\"] ?? null;\n./src/config.ts:74:    secretScanEnabled: process.env[\"CODESIFT_SECRET_SCAN\"] !== \"false\",\n./src/config.ts:85:  const raw = process.env[name];\n./src/storage/usage-tracker.ts:32:  const dataDir = process.env[\"CODESIFT_DATA_DIR\"] ?? join(homedir(), \".codesift\");\n./src/storage/usage-tracker.ts:157:      const dataDir = process.env[\"CODESIFT_DATA_DIR\"] ?? join(homedir(), \".codesift\");\n./src/storage/usage-stats.ts:53:  const dataDir = process.env[\"CODESIFT_DATA_DIR\"] ?? join(homedir(), \".codesift\");\n./docs/use-cases/bottom-up-frequency-analysis.md:57:    if (/process\\.env\\./) { print \"process.env.X\" }\n./docs/use-cases/bottom-up-frequency-analysis.md:156: 244  process.env.X          \u2190 #1 non-obvious: env vars EVERYWHERE\n./docs/use-cases/bottom-up-frequency-analysis.md:186:- Shield's **top non-collection pattern is `process.env.X` (244\u00d7)** \u2014 not `as any`, not catch. This is invisible in a top-down scan that doesn't check env scattering.\n./docs/use-cases/bottom-up-frequency-analysis.md:208:| `process.env` is Shield's #1 pattern (not `as any`) | Partially \u2014 we scanned for it, but didn't know the RANK | Frequency ranking put it above as any |\n./src/tools/conversation-tools.ts:23:  return process.env.HOME ?? process.env.USERPROFILE ?? homedir();\n./benchmarks/tool-comparison-A-search-text.md:35:- **Symptom:** A3 (TODO/FIXME) returned 0 instead of 8; A5 (process.env) found 26 vars instead of 38\n./benchmarks/tool-comparison-A-search-text.md:56:| A5 | process.env usage | 40 vars | 38 vars | 1 | 1 | Sift finds more (.env, .prisma) |\n./benchmarks/run-bash-baseline.sh:51:run_task \"A5: process.env\" \\\n./docs/specs/2026-03-28-scan-secrets-plan.md:134:      process.env.CODESIFT_DATA_DIR = join(tempDir, \".codesift\");\n./docs/specs/2026-03-28-scan-secrets-plan.md:139:      delete process.env.CODESIFT_DATA_DIR;\n./docs/specs/2026-03-28-scan-secrets-plan.md:988:      delete process.env.CODESIFT_SECRET_SCAN;\n./docs/specs/2026-03-28-scan-secrets-plan.md:998:      process.env.CODESIFT_SECRET_SCAN = \"false\";\n./docs/specs/2026-03-28-scan-secrets-plan.md:1010:  secretScanEnabled: process.env.CODESIFT_SECRET_SCAN !== \"false\",\n./docs/specs/2026-03-27-dashboard-v1.1-plan.md:19:- **Anonymization**: `process.env.CODESIFT_ANONYMIZE` + `node:crypto` sha256 for deterministic codenames\n./docs/specs/2026-03-27-dashboard-v1.1-plan.md:20:- **Adapters**: Conditional `process.env.VERCEL ? vercel() : node()` in astro.config.mjs\n./docs/specs/2026-03-27-dashboard-v1.1-plan.md:76:- [ ] GREEN: Change `output: 'static'` \u2192 `output: 'server'`. Add conditional adapter: `process.env.VERCEL ? vercel() : node()`. Add `@astrojs/vercel` to devDependencies. Remove ALL `export const prerender = true` from all pages.\n./docs/specs/2026-03-27-dashboard-v1.1-plan.md:90:- [ ] GREEN: Implement `anonRepo()` and `anonPath()` using sha256 hash mod codename list via `process.env.CODESIFT_ANONYMIZE`\n./docs/specs/2026-03-27-dashboard-v1.1-spec.md:26:7. **`process.env` for server-side, `import.meta.env` for client-side** \u2014 anonymize.ts uses `process.env.CODESIFT_ANONYMIZE` since it runs in Node.js context (Astro SSR + prerender).\n./docs/specs/2026-03-27-dashboard-v1.1-spec.md:71:**Trigger:** `CODESIFT_ANONYMIZE=true` environment variable (read via `process.env`).\n./docs/specs/2026-03-27-dashboard-v1.1-spec.md:94:const ANONYMIZE = process.env.CODESIFT_ANONYMIZE === 'true';\n./docs/specs/2026-03-27-dashboard-v1.1-spec.md:134:  adapter: process.env.VERCEL ? vercel() : node({ mode: 'standalone' }),\n./docs/specs/2026-03-27-dashboard-v1.1-spec.md:391:3. **Both adapters** \u2014 detect environment at config time: `process.env.VERCEL ? vercelAdapter() : nodeAdapter()`. One astro.config.mjs serves both.\n"
+  },
+  {
+    "task_id": "text-003",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 12,
+    "sum_call_ms": 12,
+    "tool_calls": 1,
+    "total_output_chars": 1342,
+    "total_output_tokens": 362,
+    "result_count": 13,
+    "parsed_items_count": 13,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n -U 'catch.*\\{\\s*\\}' --glob=!*.test.* --glob=!*.spec.* --glob=!*__tests__* --glob=!node_modules --glob=!vendor --glob=!dist .",
+        "wall_clock_ms": 12,
+        "output_chars": 1342,
+        "output_tokens": 362,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./README.md:253:| `empty-catch` | `catch (e) {}` \u2014 swallowed errors |\n./src/storage/usage-tracker.ts:194:  trackUsage(entry).catch(() => {});\n./docs/superpowers/plans/2026-03-26-lsp-bridge.md:480:        session.client.shutdown().catch(() => {});\n./docs/superpowers/plans/2026-03-26-lsp-bridge.md:492:      s.client.shutdown().catch(() => {}),\n./src/storage/index-store.ts:83:  writeLocks.set(indexPath, next.catch(() => {}));\n./src/storage/index-store.ts:114:  writeLocks.set(indexPath, next.catch(() => {}));\n./docs/use-cases/test-quality-mining.md:9:Code quality degrades silently. A `catch (error) {}` here, an `as any` there, an `expect(x).toBeDefined()` that proves nothing. Multiply by dozens of repositories and years of organic growth \u2014 you have thousands of hidden issues that no code review will ever catch retroactively.\n./docs/use-cases/test-quality-mining.md:175:} catch (error: any) {}\n./docs/use-cases/test-quality-mining.md:181:catch (error) {}\n./docs/use-cases/test-quality-mining.md:196:| P5 | Empty catch `{}` | **7** | 3 | **Critical** |\n./src/lsp/lsp-manager.ts:77:        session.client.shutdown().catch(() => {});\n./src/lsp/lsp-manager.ts:89:      s.client.shutdown().catch(() => {}),\n./docs/specs/2026-03-28-scan-secrets-plan.md:916:    scanOnChanged(fullPath, repoRoot, repoName).catch(() => {}); // fire-and-forget\n"
+  },
+  {
+    "task_id": "text-004",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 11,
+    "sum_call_ms": 11,
+    "tool_calls": 1,
+    "total_output_chars": 8066,
+    "total_output_tokens": 2180,
+    "result_count": 64,
+    "parsed_items_count": 64,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'console\\.(log|debug|info)' --glob=!*.test.* --glob=!*.spec.* --glob=!*__tests__* --glob=!node_modules --glob=!vendor --glob=!dist .",
+        "wall_clock_ms": 11,
+        "output_chars": 8066,
+        "output_tokens": 2180,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./scripts/download-wasm.ts:109:  console.log(msg);\n./README.md:255:| `console-log` | `console.log/debug/info` in production code |\n./benchmarks/run-bash-baseline.sh:66:run_task \"A10: console.log in src/\" \\\n./benchmarks/run-benchmark.ts:54:    { id: \"A10\", q: \"console.log\", opts: { file_pattern: \"src/**\" } },\n./benchmarks/run-benchmark.ts:192:  console.log(\"\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\");\n./benchmarks/run-benchmark.ts:193:  console.log(\"\u2551           CodeSift Benchmark Suite (Tool Output)             \u2551\");\n./benchmarks/run-benchmark.ts:194:  console.log(\"\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563\");\n./benchmarks/run-benchmark.ts:195:  console.log(`\u2551  Repo: ${REPO.padEnd(54)}\u2551`);\n./benchmarks/run-benchmark.ts:196:  console.log(`\u2551  Date: ${new Date().toISOString().slice(0, 10).padEnd(54)}\u2551`);\n./benchmarks/run-benchmark.ts:197:  console.log(`\u2551  Metric: JSON output tokens (chars/4, indent=2)${\" \".repeat(14)}\u2551`);\n./benchmarks/run-benchmark.ts:198:  console.log(\"\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\");\n./benchmarks/run-benchmark.ts:199:  console.log();\n./benchmarks/run-benchmark.ts:202:  console.log(\"\u2501\u2501\u2501 Category B: Symbol Search (search_symbols) \u2501\u2501\u2501\");\n./benchmarks/run-benchmark.ts:206:    console.log(`  ${r.task.padEnd(45)} ${String(r.tokens).padStart(7)} tok  ${String(r.ms).padStart(5)}ms`);\n./benchmarks/run-benchmark.ts:209:  console.log(`  ${\"SUBTOTAL\".padEnd(45)} ${String(bTotal).padStart(7)} tok`);\n./benchmarks/run-benchmark.ts:215:      console.log(`  Fix 2 check: B1 with source=${bWithSourceB1.tokens} tok, no source=${bNoSource.tokens} tok (${Math.round((1 - bNoSource.tokens / bWithSourceB1.tokens) * 100)}% saved)`);\n./benchmarks/run-benchmark.ts:218:  console.log();\n./benchmarks/run-benchmark.ts:221:  console.log(\"\u2501\u2501\u2501 Category C: File Structure (get_file_tree) \u2501\u2501\u2501\");\n./benchmarks/run-benchmark.ts:227:    console.log(`  ${r.task.padEnd(45)} ${String(r.tokens).padStart(7)} tok  ${String(r.ms).padStart(5)}ms`);\n./benchmarks/run-benchmark.ts:229:  console.log(`  ${\"SUBTOTAL (compact only)\".padEnd(45)} ${String(cCompactTotal).padStart(7)} tok`);\n./benchmarks/run-benchmark.ts:233:      console.log(`  Compact vs Full: ${c1Compact.tokens} vs ${cFull.tokens} (${Math.round((1 - c1Compact.tokens / cFull.tokens) * 100)}% saved)`);\n./benchmarks/run-benchmark.ts:236:  console.log();\n./benchmarks/run-benchmark.ts:239:  console.log(\"\u2501\u2501\u2501 Category E: Relationships (refs + trace) \u2501\u2501\u2501\");\n./benchmarks/run-benchmark.ts:243:    console.log(`  ${r.task.padEnd(45)} ${String(r.tokens).padStart(7)} tok  ${String(r.ms).padStart(5)}ms`);\n./benchmarks/run-benchmark.ts:246:  console.log(`  ${\"SUBTOTAL\".padEnd(45)} ${String(eTotal).padStart(7)} tok`);\n./benchmarks/run-benchmark.ts:247:  console.log();\n./benchmarks/run-benchmark.ts:250:  console.log(\"\u2501\u2501\u2501 Fix 1: list_repos (compact optimization) \u2501\u2501\u2501\");\n./benchmarks/run-benchmark.ts:253:    console.log(`  ${r.task.padEnd(45)} ${String(r.tokens).padStart(7)} tok  ${String(r.ms).padStart(5)}ms`);\n./benchmarks/run-benchmark.ts:258:    console.log(`  Savings: ${Math.round((1 - compact.tokens / full.tokens) * 100)}% reduction (${full.tokens - compact.tokens} tok saved per call)`);\n./benchmarks/run-benchmark.ts:259:    console.log(`  At 186 calls/day: ~${Math.round((full.tokens - compact.tokens) * 186 / 1000)}K tokens saved`);\n./benchmarks/run-benchmark.ts:261:  console.log();\n./benchmarks/run-benchmark.ts:264:  console.log(\"\u2501\u2501\u2501 Batch vs Sequential (codebase_retrieval) \u2501\u2501\u2501\");\n./benchmarks/run-benchmark.ts:267:    console.log(`  ${r.task.padEnd(45)} ${String(r.tokens).padStart(7)} tok  ${String(r.ms).padStart(5)}ms`);\n./benchmarks/run-benchmark.ts:272:    console.log(`  Batch saves: ${Math.round((1 - batch.tokens / seq.tokens) * 100)}% tokens, ${Math.round((1 - batch.ms / seq.ms) * 100)}% time`);\n./benchmarks/run-benchmark.ts:274:  console.log();\n./benchmarks/run-benchmark.ts:277:  console.log(\"\u2501\u2501\u2501 Category A: Text Search \u2014 default vs auto_group \u2501\u2501\u2501\");\n./benchmarks/run-benchmark.ts:286:    console.log(`  ${def.task.replace(\" (default)\", \"\").padEnd(40)} default=${String(def.tokens).padStart(6)} tok  auto_group=${String(opt.tokens).padStart(6)} tok${savedStr}`);\n./benchmarks/run-benchmark.ts:291:  console.log(`  ${\"TOTAL\".padEnd(40)} default=${String(aDefaultTotal).padStart(6)} tok  auto_group=${String(aOptTotal).padStart(6)} tok  \u2193${aSaved}%`);\n./benchmarks/run-benchmark.ts:292:  console.log();\n./benchmarks/run-benchmark.ts:295:  console.log(\"\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\");\n./benchmarks/run-benchmark.ts:296:  console.log(\"\u2551                     OPTIMIZATION SUMMARY                     \u2551\");\n./benchmarks/run-benchmark.ts:297:  console.log(\"\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563\");\n./benchmarks/run-benchmark.ts:299:    console.log(`\u2551  Fix 1: list_repos compact     ${String(compact.tokens).padStart(6)} vs ${String(full.tokens).padStart(6)} tok  \u2193${Math.round((1 - compact.tokens / full.tokens) * 100)}%`.padEnd(64) + \"\u2551\");\n./benchmarks/run-benchmark.ts:303:    console.log(`\u2551  Fix 2: search_symbols cleanup  ${String(bNoSource.tokens).padStart(6)} vs ${String(b1With.tokens).padStart(6)} tok  \u2193${Math.round((1 - bNoSource.tokens / b1With.tokens) * 100)}% (no-source)`.padEnd(64) + \"\u2551\");\n./benchmarks/run-benchmark.ts:305:  console.log(`\u2551  Fix 3: auto_group search_text ${String(aOptTotal).padStart(6)} vs ${String(aDefaultTotal).padStart(6)} tok  \u2193${aSaved}%`.padEnd(64) + \"\u2551\");\n./benchmarks/run-benchmark.ts:307:    console.log(`\u2551  Batch vs sequential           ${String(batch.tokens).padStart(6)} vs ${String(seq.tokens).padStart(6)} tok  \u2193${Math.round((1 - batch.tokens / seq.tokens) * 100)}%`.padEnd(64) + \"\u2551\");\n./benchmarks/run-benchmark.ts:309:  console.log(\"\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\");\n./benchmarks/tool-comparison-A-search-text.md:61:| A10 | console.log in src/ non-test | 5 | 1 | 1 | 2 | Sift finds more (includes non-logger) |\n./docs/use-cases/bottom-up-frequency-analysis.md:160: 184  console.log()          \u2190 production logging\n./docs/use-cases/test-quality-mining.md:112:### P3: `console.log` in production code\n./docs/use-cases/test-quality-mining.md:124:console.log('Creating postal code prompt...')\n./docs/use-cases/test-quality-mining.md:129:console.log('RS Result API Call:', { ... })\n./docs/use-cases/test-quality-mining.md:194:| P3 | `console.log` in prod | **260** | 28 | **Medium** |\n./docs/use-cases/test-quality-mining.md:642:| **rs-admin** | 56 | minimal | 29 console.log + 22 `as any` | Prod |\n./src/tools/pattern-tools.ts:37:    description: \"console.log in production code \u2014 use structured logger (CQ13)\",\n./docs/specs/2026-03-28-scan-secrets-plan.md:48:  node -e \"import('@sanity-labs/secret-scan').then(m => console.log(Object.keys(m))).catch(() => console.log('NOT_INSTALLED'))\"\n./docs/specs/2026-03-28-scan-secrets-plan.md:55:- [ ] Verify: `node -e \"import('@sanity-labs/secret-scan').then(m => console.log('OK:', typeof m.scan === 'function'))\"`\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:152:    console.log('Results:', r.length);\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:153:    r.forEach(s => console.log('  ' + s.score.toFixed(2) + ' ' + s.symbol.name));\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:195:  console.log('Found:', r.matches.length, 'scaffolding markers')\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:371:  .then(r => console.log(JSON.stringify(r, null, 2).slice(0, 2000)));\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:460:  console.log('Dead code candidates:', r.length, r.slice(0, 5).map(s => s.name))\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:556:  .then(r => console.log(typeof r === 'string' ? r : r.mermaid || JSON.stringify(r)));\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:978:generateReport('local/codesift-mcp').then(r => console.log('Report:', r.path));\n"
+  },
+  {
+    "task_id": "text-005",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 11,
+    "sum_call_ms": 11,
+    "tool_calls": 1,
+    "total_output_chars": 4386,
+    "total_output_tokens": 1185,
+    "result_count": 36,
+    "parsed_items_count": 36,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'as any|as never|# type: ignore|@SuppressWarnings|noinspection' --glob=!*.test.* --glob=!*.spec.* --glob=!*__tests__* --glob=!node_modules --glob=!vendor --glob=!dist .",
+        "wall_clock_ms": 11,
+        "output_chars": 4386,
+        "output_tokens": 1185,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./README.md:254:| `any-type` | `: any` or `as any` \u2014 lost type safety |\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:61:    ] as any;\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:72:    ] as any;\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:82:    ] as any;\n./docs/superpowers/plans/2026-03-25-quality-and-visual-features.md:733:    ] as any;\n./docs/specs/2026-03-28-dashboard-v2-overview-plan.md:325:      const result = computePortfolioSummary(repos as any, testDir);\n./docs/specs/2026-03-28-dashboard-v2-overview-plan.md:335:      const result = computePortfolioSummary(repos as any, testDir);\n./docs/specs/2026-03-28-dashboard-v2-overview-plan.md:677:      expect(shouldRefreshRepo(cached as any, registry as any)).toBe(false);\n./docs/specs/2026-03-28-dashboard-v2-overview-plan.md:684:      expect(shouldRefreshRepo(cached as any, registry as any)).toBe(true);\n./docs/specs/2026-03-28-dashboard-v2-overview-plan.md:689:      expect(shouldRefreshRepo(null, { last_git_commit: 'abc123' } as any)).toBe(true);\n./docs/specs/2026-03-28-dashboard-v2-overview-plan.md:695:      expect(shouldRefreshRepo(cached as any, { last_git_commit: 'abc123' } as any)).toBe(true);\n./docs/use-cases/test-quality-mining.md:9:Code quality degrades silently. A `catch (error) {}` here, an `as any` there, an `expect(x).toBeDefined()` that proves nothing. Multiply by dozens of repositories and years of organic growth \u2014 you have thousands of hidden issues that no code review will ever catch retroactively.\n./docs/use-cases/test-quality-mining.md:79:### P2: `as any` type bypass in production\n./docs/use-cases/test-quality-mining.md:91:const streamAny = stream as any;\n./docs/use-cases/test-quality-mining.md:96:// Deleting fields via as any cast instead of proper typing\n./docs/use-cases/test-quality-mining.md:97:delete (postData as any).translatedLanguage;\n./docs/use-cases/test-quality-mining.md:98:delete (postData as any).translatedCustom;\n./docs/use-cases/test-quality-mining.md:99:delete (postData as any).translatedToTranslate;\n./docs/use-cases/test-quality-mining.md:105:const oldValue = (updatedPricing as any)[validatedData.field] as number | null\n./docs/use-cases/test-quality-mining.md:193:| P2 | `as any` bypass | **249** | 15 | **High** |\n./docs/use-cases/test-quality-mining.md:202:### T1: `as any` in tests \u2014 type safety bypass\n./docs/use-cases/test-quality-mining.md:216:const result = ctx.services.reward.calculateReward({} as any, {} as any);\n./docs/use-cases/test-quality-mining.md:222:const request = new Request(url, options) as any\n./docs/use-cases/test-quality-mining.md:424:| T1 | `as any` in tests | ~1,500 | ~320 | 14 | **High** |\n./docs/use-cases/test-quality-mining.md:636:| **Offer Module** | 148 | 80+ `as any`, 56 >0 | 3 empty catches + 52 `as any` | Both layers |\n./docs/use-cases/test-quality-mining.md:637:| **Rewards-API** | 153 | 122 `as any`, tautological | untyped catch (80 files) | Both layers |\n./docs/use-cases/test-quality-mining.md:640:| **MYA** | 18 | 200+ `as any`, 40+ skip | `as any` in pricing routes | Both layers |\n./docs/use-cases/test-quality-mining.md:642:| **rs-admin** | 56 | minimal | 29 console.log + 22 `as any` | Prod |\n./docs/use-cases/test-quality-mining.md:644:| **coding-ui** | 19 | 49 toBeDefined, 37 `as any` | test layer | Test layer |\n./docs/use-cases/test-quality-mining.md:645:| **Inovoicer** | 21 | 36 `as any`, 100+ mocks | 10 untyped catch in auth | Prod |\n./docs/use-cases/test-quality-mining.md:646:| **AI Content Studio** | low | 181 `as any`, 117 `.length` | test layer | Test layer |\n./docs/use-cases/test-quality-mining.md:706:- **Production risk visibility** \u2014 319 files with untyped catch, 7 with swallowed errors, 249 with `as any`\n./docs/use-cases/bottom-up-frequency-analysis.md:59:    if (/as any/) { print \"as any\" }\n./docs/use-cases/bottom-up-frequency-analysis.md:159: 185  as any                 \u2190 type safety defeated\n./docs/use-cases/bottom-up-frequency-analysis.md:186:- Shield's **top non-collection pattern is `process.env.X` (244\u00d7)** \u2014 not `as any`, not catch. This is invisible in a top-down scan that doesn't check env scattering.\n./docs/use-cases/bottom-up-frequency-analysis.md:208:| `process.env` is Shield's #1 pattern (not `as any`) | Partially \u2014 we scanned for it, but didn't know the RANK | Frequency ranking put it above as any |\n"
+  },
+  {
+    "task_id": "symbol-002",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 10,
+    "sum_call_ms": 10,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n '^export (function|class|const|type|interface)' --glob='*service*' --glob='*Service*' .",
+        "wall_clock_ms": 10,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 1
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "symbol-003",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 11,
+    "sum_call_ms": 11,
+    "tool_calls": 1,
+    "total_output_chars": 1368,
+    "total_output_tokens": 369,
+    "result_count": 16,
+    "parsed_items_count": 16,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n '(z\\.object|Joi\\.|@IsString|class.*Dto|BaseModel)' .",
+        "wall_clock_ms": 11,
+        "output_chars": 1368,
+        "output_tokens": 369,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./src/retrieval/retrieval-schemas.ts:10:const SymbolsQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:19:const TextQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:27:const FileTreeQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:37:const OutlineQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:42:const ReferencesQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:47:const CallChainQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:55:const ImpactQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:63:const ContextQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:69:const KnowledgeMapQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:75:const SemanticQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:84:const HybridQuerySchema = z.object({\n./src/retrieval/retrieval-schemas.ts:92:const ConversationQuerySchema = z.object({\n./docs/runbooks/benchmarks.md:112:    {\"type\": \"text\", \"query\": \"z.object\", \"file_pattern\": \"**/route.ts\", \"max_results\": 7}\n./docs/specs/2026-03-28-conversation-search-plan.md:96:  const ConversationQuerySchema = z.object({\n./src/register-tools.ts:465:          z.array(z.object({ type: z.string() }).passthrough()),\n./docs/specs/2026-03-28-conversation-search-spec.md:194:const ConversationSubQuerySchema = z.object({\n"
+  },
+  {
+    "task_id": "symbol-005",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 11,
+    "sum_call_ms": 11,
+    "tool_calls": 1,
+    "total_output_chars": 5034,
+    "total_output_tokens": 1360,
+    "result_count": 48,
+    "parsed_items_count": 48,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n '(function|const|def)\\s+(make|create|build|fake|mock)[A-Z]' --glob='*.test.*' --glob='*.spec.*' .",
+        "wall_clock_ms": 11,
+        "output_chars": 5034,
+        "output_tokens": 1360,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "./tests/integration/index-folder.test.ts:32:async function createFixtureProject(): Promise<void> {\n./tests/integration/index-folder.test.ts:44:export const createUser = async (data: CreateUserInput): Promise<User> => {\n./tests/integration/index-folder.test.ts:180:      `export function buildStuff(): void {}`,\n./tests/search/semantic.test.ts:5:function makeSymbol(overrides: Partial<CodeSymbol> = {}): CodeSymbol {\n./tests/search/semantic.test.ts:62:function makeEmbedding(dims: number, values: number[]): Float32Array {\n./tests/retrieval/retrieval-utils.test.ts:15:  const makeEmbeddings = () =>\n./tests/retrieval/retrieval-utils.test.ts:75:  const mockCosSim = (a: Float32Array, b: Float32Array): number => {\n./tests/retrieval/retrieval-utils.test.ts:129:  const makeChunks = (): Map<string, CodeChunk> =>\n./tests/storage/index-store.test.ts:13:function makeIndex(overrides?: Partial<CodeIndex>): CodeIndex {\n./tests/storage/index-store.test.ts:27:function makeSymbol(file: string, name: string, line: number): CodeSymbol {\n./tests/integration/tools.test.ts:42:async function createFixtureProject(): Promise<void> {\n./tests/integration/tools.test.ts:76:export async function createUser(name: string, email: string, role: UserRole): Promise<User> {\n./tests/integration/usage-optimizations.test.ts:46:async function createLargeFixture(): Promise<void> {\n./tests/integration/usage-optimizations.test.ts:457:    const fakeData = Array.from({ length: 100 }, (_, i) => ({\n./tests/integration/usage-optimizations.test.ts:472:    const fakeData = Array.from({ length: 100 }, (_, i) => ({\n./tests/integration/usage-optimizations.test.ts:489:    const fakeData = Array.from({ length: 100 }, (_, i) => ({\n./tests/integration/usage-optimizations.test.ts:505:    const fakeData = Array.from({ length: 10 }, (_, i) => ({\n./tests/integration/usage-optimizations.test.ts:517:    const fakeData = Array.from({ length: 100 }, () => ({ name: \"sym\" }));\n./tests/search/bm25.test.ts:4:function makeSymbol(overrides: Partial<CodeSymbol> & { id: string; name: string }): CodeSymbol {\n./tests/tools/conversation-resolution.test.ts:6:const mockSearchSymbols = vi.hoisted(() => vi.fn());\n./tests/tools/conversation-resolution.test.ts:7:const mockGetRepo = vi.hoisted(() => vi.fn());\n./tests/integration/index-repo.test.ts:26:async function createLocalBareRepo(): Promise<string> {\n./tests/cli/commands.test.ts:7:const mockAnalyzeComplexity = vi.fn().mockResolvedValue({ functions: [], summary: {} });\n./tests/cli/commands.test.ts:8:const mockFindDeadCode = vi.fn().mockResolvedValue({ candidates: [], scanned_symbols: 0, scanned_files: 0 });\n./tests/cli/commands.test.ts:9:const mockAnalyzeHotspots = vi.fn().mockResolvedValue({ hotspots: [], summary: {} });\n./tests/cli/commands.test.ts:10:const mockDetectCommunities = vi.fn().mockResolvedValue({ communities: [], modularity: 0 });\n./tests/cli/commands.test.ts:11:const mockSearchPatterns = vi.fn().mockResolvedValue({ matches: [], pattern: \"empty-catch\" });\n./tests/cli/commands.test.ts:12:const mockFindClones = vi.fn().mockResolvedValue({ clones: [], summary: {} });\n./tests/parser/conversation-extractor.test.ts:3:const makeJsonl = (records: object[]): string =>\n./tests/storage/registry.test.ts:15:function makeMeta(name: string): RepoMeta {\n./tests/search/hybrid.test.ts:5:function makeSymbol(id: string, name: string): CodeSymbol {\n./tests/search/hybrid.test.ts:17:function makeResult(id: string, name: string, score: number, matches?: string[]): SearchResult {\n./tests/tools/clone-tools.test.ts:9:const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();\n./tests/tools/clone-tools.test.ts:19:function makeSymbol(\n./tests/tools/clone-tools.test.ts:32:function makeIndex(symbols: CodeSymbol[]): CodeIndex {\n./tests/tools/response-hints.test.ts:88:  const makeSymbols = (n: number): unknown[] =>\n./tests/storage/embedding-store.test.ts:138:  function fakeEmbedFn(texts: string[]): Promise<number[][]> {\n./tests/tools/auto-refresh.test.ts:19:async function createGitRepo(): Promise<void> {\n./tests/tools/auto-refresh.test.ts:32:function makeCommit(filename: string, content: string, message: string): void {\n./tests/cli/conversation-commands.test.ts:3:const mockIndexConversations = vi.fn().mockResolvedValue({\n./tests/tools/secret-tools.test.ts:8:const mockScan = vi.fn<(input: string) => Array<{\n./tests/tools/secret-tools.test.ts:21:const mockReadFile = vi.fn<(path: string) => Promise<Buffer>>();\n./tests/tools/secret-tools.test.ts:22:const mockStat = vi.fn<(path: string) => Promise<{ mtimeMs: number }>>();\n./tests/tools/secret-tools.test.ts:29:const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();\n./tests/tools/secret-tools.test.ts:61:function makeSymbol(\n./tests/tools/secret-tools.test.ts:74:function makeFileEntry(path: string, overrides?: Partial<FileEntry>): FileEntry {\n./tests/tools/secret-tools.test.ts:85:function makeIndex(\n./tests/tools/secret-tools.test.ts:101:function makeFinding(overrides?: Partial<SecretFinding>): SecretFinding {\n"
+  },
+  {
+    "task_id": "structure-001",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 5,
+    "sum_call_ms": 5,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "find . -maxdepth 2 -type d | sort | head -50",
+        "wall_clock_ms": 5,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 1
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "structure-002",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 3,
+    "sum_call_ms": 3,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "find . -name '*.ts' -o -name '*.py' -o -name '*.go' -o -name '*.php' | xargs wc -l 2>/dev/null | sort -rn | head -12",
+        "wall_clock_ms": 3,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 1
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "structure-004",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 3,
+    "sum_call_ms": 3,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "find . -name 'index.ts' -o -name '__init__.py' | head -20",
+        "wall_clock_ms": 3,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 1
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "retrieval-003",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 4,
+    "sum_call_ms": 4,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -l 'read|configuration/settings|module|config|values' . | head -5",
+        "wall_clock_ms": 4,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "retrieval-004",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 5,
+    "sum_call_ms": 5,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -l 'read|most|important|functions|business' . | head -5",
+        "wall_clock_ms": 5,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "relationship-004",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 6,
+    "sum_call_ms": 6,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n '(function|def|func|class).*([Ll]ogin|[Aa]uth|[Cc]reate)' . | head -20",
+        "wall_clock_ms": 6,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "relationship-005",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 4,
+    "sum_call_ms": 4,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n '(function|def|func|class).*([Ll]ogin|[Aa]uth|[Cc]reate)' . | head -20",
+        "wall_clock_ms": 4,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "semantic-002",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 4,
+    "sum_call_ms": 4,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'errors|handled|application|cover:|error' . | head -30",
+        "wall_clock_ms": 4,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "semantic-003",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 5,
+    "sum_call_ms": 5,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'data|processing|pipeline|codebase|input,' . | head -30",
+        "wall_clock_ms": 5,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "semantic-004",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 5,
+    "sum_call_ms": 5,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n 'architectural|modules|codebase|they|communicate' . | head -30",
+        "wall_clock_ms": 5,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "analysis-001",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 5,
+    "sum_call_ms": 5,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "rg -n '^export (function|class|const|type)' . --glob='!*.test.*' | head -30",
+        "wall_clock_ms": 5,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 2
+      }
+    ],
+    "raw_output": ""
+  },
+  {
+    "task_id": "analysis-002",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": true,
+    "wall_clock_ms": 7,
+    "sum_call_ms": 7,
+    "tool_calls": 1,
+    "total_output_chars": 41,
+    "total_output_tokens": 11,
+    "result_count": 1,
+    "parsed_items_count": 1,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "Clone detection not supported",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "echo 'Clone detection not supported by ripgrep'",
+        "wall_clock_ms": 7,
+        "output_chars": 41,
+        "output_tokens": 11,
+        "returncode": 0
+      }
+    ],
+    "raw_output": "Clone detection not supported by ripgrep\n"
+  },
+  {
+    "task_id": "analysis-003",
+    "adapter_id": "ripgrep",
+    "repo_id": "codesift-mcp",
+    "success": false,
+    "wall_clock_ms": 4,
+    "sum_call_ms": 4,
+    "tool_calls": 1,
+    "total_output_chars": 0,
+    "total_output_tokens": 1,
+    "result_count": 0,
+    "parsed_items_count": 0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "error": "",
+    "timed_out": false,
+    "calls": [
+      {
+        "command": "find . -name '*.ts' -o -name '*.py' | xargs wc -l 2>/dev/null | sort -rn | head -10",
+        "wall_clock_ms": 4,
+        "output_chars": 0,
+        "output_tokens": 1,
+        "returncode": 1
+      }
+    ],
+    "raw_output": ""
+  }
+]

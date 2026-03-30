@@ -1,0 +1,78 @@
+# Review Queue
+
+Commits pending review. Auto-managed:
+- post-commit hook → adds new commits
+- `/review` after audit → removes reviewed commits
+- `/review mark-reviewed` → removes in bulk
+
+- c1b8b77 (2026-03-21) fix: fire-and-forget embeddings in index_folder — prevent MCP timeout
+- 0a77e01 (2026-03-21) fix: sanity check prevents overwriting complete index with partial one
+- aa32aab (2026-03-21) fix: cap detect_communities (20 files/community) + knowledge_map focused output
+- 41a4255 (2026-03-22) fix: coerce string→array for symbol_ids and include_paths params
+- fc83d19 (2026-03-23) fix: cap detect_communities (500 files/20 communities) + get_repo_outline (100 dirs)
+- 6a544e5 (2026-03-23) feat: batch find_references — search multiple symbols in one file pass
+- 765a94d (2026-03-23) fix: search_text uses indexed file list + 30s timeout on all file scans
+- ff5a5e2 (2026-03-25) test(clone-tools): pre-extraction behavioral tests for findClones
+- 1d6833c (2026-03-25) docs: spec for 10 quality + visual features
+- 804f49b (2026-03-25) docs: implementation plan for 10 quality + visual features
+- 2e767bd (2026-03-25) feat: relevance-gap filtering — cut low-score search results
+- 3d1c388 (2026-03-25) feat: add scaffolding detection pattern
+- 122f6a7 (2026-03-25) feat: include_diff on changed_symbols — show what changed per file
+- 848a017 (2026-03-25) feat: framework-aware dead code — whitelist React/NestJS/Next.js entry points
+- f7994c0 (2026-03-25) feat: Mermaid output for detect_communities — visual architecture map
+- 46cc110 (2026-03-25) feat: Mermaid output for get_knowledge_map — dependency diagram
+- 153d5c4 (2026-03-25) feat: Mermaid sequence diagram for trace_route — visual endpoint flow
+- 333b0aa (2026-03-25) feat: semantic chunking — chunk by symbol boundaries
+- 3110e25 (2026-03-25) feat: HTML report export — standalone browser report
+- 799cf1d (2026-03-25) docs: update README + CLAUDE.md for 36 tools + 10 new features
+- 0e0f470 (2026-03-26) docs: benchmark results for 10 quality + visual features
+- 54df5c3 (2026-03-26) docs: generated visual outputs — Mermaid diagrams + HTML report
+- 0cfcf54 (2026-03-26) docs: LSP bridge design spec — 4 tools, lazy lifecycle, fallback
+- 0ad3ce8 (2026-03-26) docs: LSP bridge implementation plan — 7 tasks
+- 068fd01 (2026-03-26) feat(lsp): JSON-RPC client over stdio
+- a836f7a (2026-03-26) feat(lsp): server config registry — 6 language servers
+- da969ac (2026-03-26) feat(lsp): session manager — lazy start + 5min idle kill
+- 1883da0 (2026-03-26) feat(lsp): go_to_definition — LSP precision + index fallback
+- 05c4a4c (2026-03-26) feat(lsp): upgrade find_references — LSP when available, grep fallback
+- 9594b19 (2026-03-26) feat(lsp): get_type_info — hover-based type inspection
+- e603160 (2026-03-26) feat(lsp): rename_symbol — cross-file type-safe rename
+- cbc7a4b (2026-03-26) fix: linter fixes — chunker, route-tools, framework-detect, tests
+- 7aa91b6 (2026-03-26) docs: update README + CLAUDE.md for 39 tools — LSP bridge, Astro, tests
+- 03c535f (2026-03-26) docs: dashboard design spec — 4 tabs + badge API + landing page integration
+- 7d0f544 (2026-03-26) docs: dashboard implementation plan — 10 tasks, reality-checked
+- a2bcc6a (2026-03-27) fix: server-helpers improvements + registry exports + test updates
+- 9e0cf04 (2026-03-27) feat: git-based auto-refresh — transparent index freshness check
+- 6a33490 (2026-03-27) feat(cli): add 6 analysis commands + dashboard v1.1 spec/plan
+- 1c322bf (2026-03-27) docs: dashboard v2 design brief — user feedback + competitor research
+- c4ce84a (2026-03-28) docs: dashboard v2 overview spec — approved
+- a267726 (2026-03-28) feat: conversation search — index Claude Code chat histories for semantic search
+- 49e2fe9 (2026-03-28) docs: dashboard v2 overview implementation plan — 13 TDD tasks
+- 2e663e0 (2026-03-28) fix: indexConversations handler — default to cwd when project_path omitted
+- f93c7ea (2026-03-28) fix: hook format — use Claude Code's matcher+hooks array structure
+- 3d21837 (2026-03-28) fix: search_conversations auto-detects Claude conversation path from cwd
+- d02b98b (2026-03-28) fix: search_conversations auto-detects Claude conversation path from cwd
+- 07d54db (2026-03-28) chore: change license from MIT to BSL-1.1
+- 1d40cef (2026-03-28) fix: BM25 field mapping for conversations — use signature/docstring for full text
+- 7fd8959 (2026-03-28) docs: update CLAUDE.md — 42 tools, conversation search documentation
+- a4d901f (2026-03-28) docs: README — 42 tools, conversation search section with usage examples
+- 84f7d3c (2026-03-28) feat: embed conversation symbols — fire-and-forget after indexing
+- 57de2a4 (2026-03-28) feat: hybrid search + cross-project search for conversations
+- 975fc34 (2026-03-28) fix: remove 10MB file size limit — index ALL conversation sessions
+- 765fdb1 (2026-03-28) fix: remove 10MB file size limit — index ALL conversation sessions
+- 8d0cb72 (2026-03-28) feat: add scan_secrets tool — AST-aware secret detection with ~1,100 rules
+- 2b865d7 (2026-03-28) docs: update README and CLAUDE.md for scan_secrets + 44 tools
+- 06dadf6 (2026-03-28) fix: wire conversation indexing through CLI
+- b480303 (2026-03-28) fix: cross-project scoring — preserve BM25 magnitudes instead of RRF normalization
+- 7c1dc4b (2026-03-28) review-fix: harden scan_secrets behavior
+- 75ee35c (2026-03-28) feat: add `codesift setup` command for automated MCP configuration
+- 7cc757e (2026-03-28) fix: flaky test cleanup — add maxRetries to rm for background embed race
+- d28dea5 (2026-03-29) fix(tests): repair AP9/AP2/AP5 anti-patterns found by test-audit
+- e5dfffd (2026-03-29) feat: add cross-encoder reranking as optional 3rd search pipeline stage
+- f011971 (2026-03-29) feat: add classify_roles tool — symbol role classification via call graph
+- 5a15c7f (2026-03-29) feat: add ast_query tool — structural grep via tree-sitter query language
+- 5fddef5 (2026-03-29) fix(tests): replace Tier-D conversation-registration with behavioral tests
+- 2a7ca8d (2026-03-29) feat: add check_boundaries tool — architecture boundary enforcement
+- 16cfe55 (2026-03-29) feat: add structural BM25 field weighting — separate code vs comments scoring
+- 9c12148 (2026-03-29) fix: address review findings — batch reranking, model cache, adapter removal
+- df63251 (2026-03-29) review-fix: reset turnCounter in beforeEach to prevent test ordering flakiness
+- c71914f (2026-03-30) perf: optimize all MCP tools — ripgrep backend, compact text output, index caching
