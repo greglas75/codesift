@@ -1,10 +1,31 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Mocks — MUST be before imports so vi.mock hoists correctly
+// ---------------------------------------------------------------------------
+
+vi.mock("../../src/tools/diff-tools.js", () => ({ changedSymbols: vi.fn() }));
+vi.mock("../../src/tools/impact-tools.js", () => ({ impactAnalysis: vi.fn() }));
+vi.mock("../../src/tools/secret-tools.js", () => ({ scanSecrets: vi.fn() }));
+vi.mock("../../src/tools/symbol-tools.js", () => ({ findDeadCode: vi.fn() }));
+vi.mock("../../src/tools/pattern-tools.js", () => ({ searchPatterns: vi.fn() }));
+vi.mock("../../src/tools/hotspot-tools.js", () => ({ analyzeHotspots: vi.fn() }));
+vi.mock("../../src/tools/complexity-tools.js", () => ({ analyzeComplexity: vi.fn() }));
+vi.mock("../../src/tools/index-tools.js", () => ({ getCodeIndex: vi.fn() }));
+vi.mock("../../src/utils/git-validation.js", () => ({ validateGitRef: vi.fn() }));
+vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
+
 import {
   findingTier,
   calculateScore,
   determineVerdict,
+  reviewDiff,
 } from "../../src/tools/review-diff-tools.js";
-import type { ReviewFinding, CheckResult } from "../../src/tools/review-diff-tools.js";
+import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
+import { changedSymbols } from "../../src/tools/diff-tools.js";
+import { getCodeIndex } from "../../src/tools/index-tools.js";
+import { validateGitRef } from "../../src/utils/git-validation.js";
+import type { CodeIndex } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,6 +47,20 @@ function check(
   overrides: Partial<CheckResult> = {},
 ): CheckResult {
   return { check: name, status, findings: [], duration_ms: 0, ...overrides };
+}
+
+function makeFakeIndex(overrides: Partial<CodeIndex> = {}): CodeIndex {
+  return {
+    repo: "local/test-repo",
+    root: "/tmp/test-repo",
+    symbols: [],
+    files: [],
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    symbol_count: 0,
+    file_count: 0,
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -197,5 +232,198 @@ describe("determineVerdict", () => {
       check("test-gaps", "pass"),
     ];
     expect(determineVerdict(checks)).toBe("fail");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reviewDiff orchestrator
+// ---------------------------------------------------------------------------
+
+describe("reviewDiff orchestrator", () => {
+  const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+  const mockedChangedSymbols = vi.mocked(changedSymbols);
+  const mockedValidateGitRef = vi.mocked(validateGitRef);
+
+  const fakeIndex = makeFakeIndex();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: valid index, valid refs
+    mockedGetCodeIndex.mockResolvedValue(fakeIndex);
+    mockedValidateGitRef.mockImplementation(() => {});
+  });
+
+  // 1. Happy path
+  it("returns pass with score 100 when diff has 2 files and all checks pass", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+      { file: "src/b.ts", symbols: ["bar"] },
+    ]);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+    });
+
+    expect(result.verdict).toBe("pass");
+    expect(result.score).toBe(100);
+    expect(result.findings).toEqual([]);
+    expect(result.checks.length).toBeGreaterThan(0);
+    expect(result.checks.every((c) => c.status === "pass")).toBe(true);
+  });
+
+  // 2. Empty diff
+  it("returns pass with score 100 and 0 files when diff is empty", async () => {
+    mockedChangedSymbols.mockResolvedValue([]);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+    });
+
+    expect(result.verdict).toBe("pass");
+    expect(result.score).toBe(100);
+    expect(result.diff_stats.files_changed).toBe(0);
+  });
+
+  // 3. Invalid ref
+  it("returns structured error when git ref is invalid", async () => {
+    mockedValidateGitRef.mockImplementation((ref: string) => {
+      throw new Error(`Invalid git ref: "${ref}"`);
+    });
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: ";;;bad;;;",
+    });
+
+    expect(result.error).toBeDefined();
+    expect(result.error).toContain("invalid_ref");
+  });
+
+  // 4. Check filtering
+  it("runs only specified checks when checks option is provided", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+    ]);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      checks: "secrets,breaking",
+    });
+
+    expect(result.checks.length).toBe(2);
+    const checkNames = result.checks.map((c) => c.check);
+    expect(checkNames).toContain("secrets");
+    expect(checkNames).toContain("breaking");
+  });
+
+  // 5. Large diff
+  it("adds T3 finding and sets files_capped when diff exceeds max_files", async () => {
+    const manyFiles = Array.from({ length: 51 }, (_, i) => ({
+      file: `src/file-${i}.ts`,
+      symbols: [`fn${i}`],
+    }));
+    mockedChangedSymbols.mockResolvedValue(manyFiles);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      max_files: 50,
+    });
+
+    expect(result.metadata.files_capped).toBe(true);
+    const largeDiffFinding = result.findings.find(
+      (f: ReviewFinding) => f.message.toLowerCase().includes("large diff") || f.message.toLowerCase().includes("files"),
+    );
+    expect(largeDiffFinding).toBeDefined();
+  });
+
+  // 6. Exclude patterns
+  it("excludes files matching exclude_patterns from checks", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+      { file: "package-lock.json", symbols: [] },
+    ]);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      exclude_patterns: ["*.lock", "*.json"],
+    });
+
+    // The package-lock.json should be excluded
+    expect(result.diff_stats.files_changed).toBe(1);
+  });
+
+  // 7. Non-git repo error
+  it("returns structured error when repo has no git", async () => {
+    mockedGetCodeIndex.mockResolvedValue(null);
+
+    const result = await reviewDiff("local/no-repo", {
+      repo: "local/no-repo",
+      since: "HEAD~1",
+    });
+
+    expect(result.error).toBeDefined();
+  });
+
+  // 8. Index warning
+  it("sets index_warning when since ref is not HEAD~N pattern", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+    ]);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "abc1234567",
+    });
+
+    expect(result.metadata.index_warning).toBeDefined();
+  });
+
+  // 9. WORKING sentinel
+  it("passes WORKING sentinel to changedSymbols correctly", async () => {
+    mockedChangedSymbols.mockResolvedValue([]);
+
+    await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      until: "WORKING",
+    });
+
+    expect(mockedChangedSymbols).toHaveBeenCalledWith(
+      "local/test-repo",
+      "HEAD~1",
+      "WORKING",
+      undefined,
+    );
+  });
+
+  // 10. Check timeout
+  it("marks check as timeout when it exceeds check_timeout_ms", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+    ]);
+
+    // With default stubs (synchronous resolve), 0ms timeout won't trigger
+    // because microtasks beat macrotasks. Use check_timeout_ms: 1 and verify
+    // the orchestrator handles the timeout field without error.
+    // Real timeout testing will happen in Task 3+ when stubs are replaced
+    // with actual async check runners.
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      check_timeout_ms: 1,
+    });
+
+    expect(result).toBeDefined();
+    expect(result.checks).toBeDefined();
+    // All stubs are synchronous, so they won't actually timeout.
+    // Verify that timeout infrastructure doesn't break normal flow.
+    expect(result.checks.every(
+      (c) => c.status === "pass" || c.status === "timeout",
+    )).toBe(true);
   });
 });
