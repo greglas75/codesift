@@ -1,9 +1,14 @@
 /**
  * review-diff-tools.ts
  *
- * Types, tier assignment, scoring, and verdict functions for the review_diff MCP tool.
- * All exports are pure functions — no side effects.
+ * Types, tier assignment, scoring, verdict, and orchestrator for the review_diff MCP tool.
+ * Pure functions + one async orchestrator that fans out sub-checks.
  */
+
+import { changedSymbols } from "./diff-tools.js";
+import { getCodeIndex } from "./index-tools.js";
+import { validateGitRef } from "../utils/git-validation.js";
+import picomatch from "picomatch";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -12,10 +17,18 @@
 export interface ReviewDiffOptions {
   repo: string;
   since?: string;
+  /** End ref — defaults to "HEAD". Use "WORKING" for uncommitted changes. */
+  until?: string;
   /** Comma-separated check names to run (defaults to all) */
   checks?: string;
   /** Token budget for responses (default 8000) */
   token_budget?: number;
+  /** Glob patterns of files to exclude from review */
+  exclude_patterns?: string[];
+  /** Maximum files to review before capping (default 50) */
+  max_files?: number;
+  /** Per-check timeout in milliseconds (default 30000) */
+  check_timeout_ms?: number;
 }
 
 export interface ReviewFinding {
@@ -37,6 +50,16 @@ export interface CheckResult {
   summary?: string;
 }
 
+export interface DiffStats {
+  files_changed: number;
+  files_reviewed: number;
+}
+
+export interface ReviewMetadata {
+  files_capped?: boolean;
+  index_warning?: string;
+}
+
 export interface ReviewDiffResult {
   repo: string;
   since: string;
@@ -46,6 +69,10 @@ export interface ReviewDiffResult {
   score: number;
   verdict: "pass" | "warn" | "fail";
   duration_ms: number;
+  diff_stats: DiffStats;
+  metadata: ReviewMetadata;
+  /** Structured error (present instead of throwing) */
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,4 +177,264 @@ export function determineVerdict(checks: CheckResult[]): "pass" | "warn" | "fail
   if (hasWarn) return "warn";
 
   return "pass";
+}
+
+// ---------------------------------------------------------------------------
+// All known check names
+// ---------------------------------------------------------------------------
+
+const ALL_CHECKS = [
+  "secrets",
+  "breaking",
+  "coupling",
+  "complexity",
+  "dead-code",
+  "blast-radius",
+  "bug-patterns",
+  "test-gaps",
+  "hotspots",
+] as const;
+
+type CheckName = (typeof ALL_CHECKS)[number];
+
+const DEFAULT_MAX_FILES = 50;
+const DEFAULT_CHECK_TIMEOUT_MS = 30_000;
+const HEAD_TILDE_PATTERN = /^HEAD~\d+$/;
+
+// ---------------------------------------------------------------------------
+// Timeout wrapper
+// ---------------------------------------------------------------------------
+
+interface TimeoutSentinel {
+  status: "timeout";
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<T | TimeoutSentinel> {
+  return Promise.race([
+    promise,
+    new Promise<TimeoutSentinel>((resolve) =>
+      setTimeout(() => resolve({ status: "timeout" }), ms),
+    ),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Stub check runner (Task 2: stubs only — real checks come in later tasks)
+// ---------------------------------------------------------------------------
+
+async function runCheck(
+  checkName: string,
+  _repo: string,
+  _changedFiles: string[],
+): Promise<CheckResult> {
+  const tier = findingTier(checkName);
+  return {
+    check: checkName,
+    status: "pass",
+    tier,
+    findings: [],
+    duration_ms: 0,
+    summary: "No findings",
+  } as CheckResult & { tier: number };
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator
+// ---------------------------------------------------------------------------
+
+export async function reviewDiff(
+  repo: string,
+  opts: ReviewDiffOptions,
+): Promise<ReviewDiffResult> {
+  const startTime = Date.now();
+  const since = opts.since ?? "HEAD~1";
+  const until = opts.until;
+  const maxFiles = opts.max_files ?? DEFAULT_MAX_FILES;
+  const checkTimeoutMs = opts.check_timeout_ms ?? DEFAULT_CHECK_TIMEOUT_MS;
+
+  // -----------------------------------------------------------------------
+  // Pre-flight: validate refs
+  // -----------------------------------------------------------------------
+  try {
+    validateGitRef(since);
+    if (until && until !== "WORKING" && until !== "STAGED") {
+      validateGitRef(until);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      repo,
+      since,
+      checks: [],
+      findings: [],
+      score: 0,
+      verdict: "fail",
+      duration_ms: Date.now() - startTime,
+      diff_stats: { files_changed: 0, files_reviewed: 0 },
+      metadata: {},
+      error: `invalid_ref: ${msg}`,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Pre-flight: validate repo exists
+  // -----------------------------------------------------------------------
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    return {
+      repo,
+      since,
+      checks: [],
+      findings: [],
+      score: 0,
+      verdict: "fail",
+      duration_ms: Date.now() - startTime,
+      diff_stats: { files_changed: 0, files_reviewed: 0 },
+      metadata: {},
+      error: `Repository not found: ${repo}`,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Parse diff
+  // -----------------------------------------------------------------------
+  const diffResult = await changedSymbols(
+    repo,
+    since,
+    until ?? "HEAD",
+    undefined,
+  );
+
+  let changedFiles = diffResult.map((f) => f.file);
+
+  // -----------------------------------------------------------------------
+  // Exclude patterns
+  // -----------------------------------------------------------------------
+  if (opts.exclude_patterns && opts.exclude_patterns.length > 0) {
+    const isExcluded = picomatch(opts.exclude_patterns);
+    changedFiles = changedFiles.filter((f) => !isExcluded(f));
+  }
+
+  const totalFilesChanged = changedFiles.length;
+
+  // -----------------------------------------------------------------------
+  // Early return: empty diff
+  // -----------------------------------------------------------------------
+  if (changedFiles.length === 0) {
+    return {
+      repo,
+      since,
+      checks: [],
+      findings: [],
+      score: 100,
+      verdict: "pass",
+      duration_ms: Date.now() - startTime,
+      diff_stats: { files_changed: 0, files_reviewed: 0 },
+      metadata: {},
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Large diff: cap files and add advisory finding
+  // -----------------------------------------------------------------------
+  const allFindings: ReviewFinding[] = [];
+  const metadata: ReviewMetadata = {};
+
+  if (changedFiles.length > maxFiles) {
+    metadata.files_capped = true;
+    allFindings.push({
+      check: "large-diff",
+      severity: "info",
+      message: `Large diff: ${changedFiles.length} files changed, reviewing first ${maxFiles}. Consider smaller commits.`,
+    });
+    changedFiles = changedFiles.slice(0, maxFiles);
+  }
+
+  // -----------------------------------------------------------------------
+  // Index warning: non-HEAD~N ref may mean stale index
+  // -----------------------------------------------------------------------
+  if (!HEAD_TILDE_PATTERN.test(since)) {
+    metadata.index_warning =
+      `Ref "${since}" is not a HEAD~N pattern. Index may not reflect this commit range.`;
+  }
+
+  // -----------------------------------------------------------------------
+  // Check enablement
+  // -----------------------------------------------------------------------
+  const requestedChecks = opts.checks
+    ? opts.checks.split(",").map((c) => c.trim())
+    : [...ALL_CHECKS];
+
+  const enabledChecks = requestedChecks.filter((c) =>
+    ALL_CHECKS.includes(c as CheckName),
+  );
+
+  // -----------------------------------------------------------------------
+  // Fan-out: run checks with timeout
+  // -----------------------------------------------------------------------
+  const checkPromises = enabledChecks.map((checkName) =>
+    withTimeout(runCheck(checkName, repo, changedFiles), checkTimeoutMs),
+  );
+
+  const settled = await Promise.allSettled(checkPromises);
+
+  const checkResults: CheckResult[] = [];
+
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    const checkName = enabledChecks[i];
+
+    if (outcome.status === "rejected") {
+      checkResults.push({
+        check: checkName,
+        status: "error",
+        findings: [],
+        duration_ms: 0,
+        summary: `Error: ${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)}`,
+      });
+    } else if (
+      outcome.value &&
+      typeof outcome.value === "object" &&
+      "status" in outcome.value &&
+      outcome.value.status === "timeout"
+    ) {
+      checkResults.push({
+        check: checkName,
+        status: "timeout",
+        findings: [],
+        duration_ms: checkTimeoutMs,
+        summary: `Timed out after ${checkTimeoutMs}ms`,
+      });
+    } else {
+      checkResults.push(outcome.value as CheckResult);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Assembly: collect findings, score, verdict
+  // -----------------------------------------------------------------------
+  for (const cr of checkResults) {
+    allFindings.push(...cr.findings);
+  }
+
+  const score = calculateScore(allFindings, checkResults);
+  const verdict = determineVerdict(checkResults);
+
+  return {
+    repo,
+    since,
+    checks: checkResults,
+    findings: allFindings,
+    score,
+    verdict,
+    duration_ms: Date.now() - startTime,
+    diff_stats: {
+      files_changed: totalFilesChanged,
+      files_reviewed: changedFiles.length,
+    },
+    metadata,
+  };
 }
