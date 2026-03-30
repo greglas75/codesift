@@ -8,7 +8,7 @@ vi.mock("../../src/tools/diff-tools.js", () => ({ changedSymbols: vi.fn() }));
 vi.mock("../../src/tools/impact-tools.js", () => ({ impactAnalysis: vi.fn() }));
 vi.mock("../../src/tools/secret-tools.js", () => ({ scanSecrets: vi.fn() }));
 vi.mock("../../src/tools/symbol-tools.js", () => ({ findDeadCode: vi.fn() }));
-vi.mock("../../src/tools/pattern-tools.js", () => ({ searchPatterns: vi.fn() }));
+vi.mock("../../src/tools/pattern-tools.js", () => ({ searchPatterns: vi.fn(), listPatterns: vi.fn() }));
 vi.mock("../../src/tools/hotspot-tools.js", () => ({ analyzeHotspots: vi.fn() }));
 vi.mock("../../src/tools/complexity-tools.js", () => ({ analyzeComplexity: vi.fn() }));
 vi.mock("../../src/tools/index-tools.js", () => ({ getCodeIndex: vi.fn() }));
@@ -23,6 +23,9 @@ import {
   checkBlastRadius,
   checkSecrets,
   checkDeadCode,
+  checkBugPatterns,
+  checkHotspots,
+  checkComplexityDelta,
 } from "../../src/tools/review-diff-tools.js";
 import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
@@ -31,6 +34,9 @@ import { validateGitRef } from "../../src/utils/git-validation.js";
 import { impactAnalysis } from "../../src/tools/impact-tools.js";
 import { scanSecrets } from "../../src/tools/secret-tools.js";
 import { findDeadCode } from "../../src/tools/symbol-tools.js";
+import { searchPatterns, listPatterns } from "../../src/tools/pattern-tools.js";
+import { analyzeHotspots } from "../../src/tools/hotspot-tools.js";
+import { analyzeComplexity } from "../../src/tools/complexity-tools.js";
 import type { CodeIndex } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -252,6 +258,10 @@ describe("reviewDiff orchestrator", () => {
   const mockedImpactAnalysisOrch = vi.mocked(impactAnalysis);
   const mockedScanSecretsOrch = vi.mocked(scanSecrets);
   const mockedFindDeadCodeOrch = vi.mocked(findDeadCode);
+  const mockedSearchPatternsOrch = vi.mocked(searchPatterns);
+  const mockedListPatternsOrch = vi.mocked(listPatterns);
+  const mockedAnalyzeHotspotsOrch = vi.mocked(analyzeHotspots);
+  const mockedAnalyzeComplexityOrch = vi.mocked(analyzeComplexity);
 
   const fakeIndex = makeFakeIndex();
 
@@ -279,6 +289,39 @@ describe("reviewDiff orchestrator", () => {
       candidates: [],
       scanned_symbols: 0,
       scanned_files: 0,
+    });
+    mockedListPatternsOrch.mockReturnValue([
+      { name: "useEffect-no-cleanup", description: "d1" },
+      { name: "empty-catch", description: "d2" },
+      { name: "any-type", description: "d3" },
+      { name: "console-log", description: "d4" },
+      { name: "await-in-loop", description: "d5" },
+      { name: "no-error-type", description: "d6" },
+      { name: "toctou", description: "d7" },
+      { name: "unbounded-findmany", description: "d8" },
+      { name: "scaffolding", description: "d9" },
+    ]);
+    mockedSearchPatternsOrch.mockResolvedValue({
+      matches: [],
+      pattern: "x",
+      scanned_symbols: 0,
+    });
+    mockedAnalyzeHotspotsOrch.mockResolvedValue({
+      hotspots: [],
+      period: "last 90 days",
+      total_files: 0,
+      total_commits: 0,
+    });
+    mockedAnalyzeComplexityOrch.mockResolvedValue({
+      functions: [],
+      summary: {
+        total_functions: 0,
+        avg_complexity: 0,
+        avg_lines: 0,
+        max_complexity: 0,
+        max_nesting: 0,
+        above_threshold: 0,
+      },
     });
   });
 
@@ -637,6 +680,293 @@ describe("check adapters — blast-radius, secrets, dead-code", () => {
     const result = await checkDeadCode(makeFakeIndex(), ["src/a.ts"]);
 
     expect(result.check).toBe("dead-code");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check adapters — bug-patterns, hotspots, complexity
+// ---------------------------------------------------------------------------
+
+// The 9 built-in pattern names from pattern-tools.ts
+const BUILTIN_PATTERN_NAMES = [
+  "useEffect-no-cleanup",
+  "empty-catch",
+  "any-type",
+  "console-log",
+  "await-in-loop",
+  "no-error-type",
+  "toctou",
+  "unbounded-findmany",
+  "scaffolding",
+];
+
+describe("check adapters — bug-patterns, hotspots, complexity", () => {
+  const mockedSearchPatterns = vi.mocked(searchPatterns);
+  const mockedListPatternsLocal = vi.mocked(listPatterns);
+  const mockedAnalyzeHotspots = vi.mocked(analyzeHotspots);
+  const mockedAnalyzeComplexity = vi.mocked(analyzeComplexity);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: listPatterns returns all 9 built-in pattern names
+    mockedListPatternsLocal.mockReturnValue(
+      BUILTIN_PATTERN_NAMES.map((name) => ({ name, description: `desc-${name}` })),
+    );
+  });
+
+  // --- checkBugPatterns ---
+
+  it("checkBugPatterns: matches from 2 patterns → merged findings, no duplicates", async () => {
+    // Simulate searchPatterns returning different matches for different patterns
+    mockedSearchPatterns.mockImplementation(async (_repo, pattern) => {
+      if (pattern === "empty-catch") {
+        return {
+          matches: [
+            {
+              name: "fetchData",
+              kind: "function",
+              file: "src/a.ts",
+              start_line: 5,
+              end_line: 20,
+              matched_pattern: "empty-catch: Empty catch block",
+              context: "catch (e) {}",
+            },
+          ],
+          pattern: "empty-catch: Empty catch block",
+          scanned_symbols: 10,
+        };
+      }
+      if (pattern === "any-type") {
+        return {
+          matches: [
+            {
+              name: "parseData",
+              kind: "function",
+              file: "src/b.ts",
+              start_line: 10,
+              end_line: 30,
+              matched_pattern: "any-type: Usage of 'any' type",
+              context: "const x: any = data",
+            },
+          ],
+          pattern: "any-type: Usage of 'any' type",
+          scanned_symbols: 10,
+        };
+      }
+      return { matches: [], pattern, scanned_symbols: 10 };
+    });
+
+    const changedFiles = ["src/a.ts", "src/b.ts"];
+    const result = await checkBugPatterns(makeFakeIndex(), changedFiles);
+
+    expect(result.check).toBe("bug-patterns");
+    // Should have findings from both patterns
+    expect(result.findings.length).toBeGreaterThanOrEqual(2);
+    // All findings belong to bug-patterns check
+    expect(result.findings.every((f) => f.check === "bug-patterns")).toBe(true);
+    // Status should be warn when findings exist
+    expect(result.status).toBe("warn");
+  });
+
+  it("checkBugPatterns: calls searchPatterns once per BUILTIN_PATTERN", async () => {
+    mockedSearchPatterns.mockResolvedValue({ matches: [], pattern: "x", scanned_symbols: 0 });
+
+    const changedFiles = ["src/a.ts"];
+    await checkBugPatterns(makeFakeIndex(), changedFiles);
+
+    // There are 9 built-in patterns in pattern-tools.ts
+    expect(mockedSearchPatterns).toHaveBeenCalledTimes(9);
+  });
+
+  it("checkBugPatterns: deduplicates findings by file+line+matched_pattern", async () => {
+    // Two patterns return the same match (same file, same line)
+    const duplicateMatch = {
+      name: "foo",
+      kind: "function" as const,
+      file: "src/a.ts",
+      start_line: 5,
+      end_line: 20,
+      matched_pattern: "empty-catch: Empty catch block",
+      context: "catch (e) {}",
+    };
+    mockedSearchPatterns.mockResolvedValue({
+      matches: [duplicateMatch],
+      pattern: "empty-catch",
+      scanned_symbols: 10,
+    });
+
+    const result = await checkBugPatterns(makeFakeIndex(), ["src/a.ts"]);
+
+    // Even though all 9 pattern calls return the same match,
+    // deduplication should collapse them (same file+line+matched_pattern)
+    expect(result.findings.length).toBe(1);
+  });
+
+  it("checkBugPatterns: searchPatterns throws → status error, findings empty", async () => {
+    mockedSearchPatterns.mockRejectedValue(new Error("pattern scan failed"));
+
+    const result = await checkBugPatterns(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.check).toBe("bug-patterns");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
+  });
+
+  it("checkBugPatterns: 0 matches → status pass", async () => {
+    mockedSearchPatterns.mockResolvedValue({ matches: [], pattern: "x", scanned_symbols: 0 });
+
+    const result = await checkBugPatterns(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  // --- checkHotspots ---
+
+  it("checkHotspots: 3 hotspots, 2 in changedFiles → 2 T3 findings, status warn", async () => {
+    mockedAnalyzeHotspots.mockResolvedValue({
+      hotspots: [
+        { file: "src/a.ts", commits: 10, lines_changed: 500, symbol_count: 5, churn_score: 5000, hotspot_score: 25000 },
+        { file: "src/b.ts", commits: 8, lines_changed: 300, symbol_count: 4, churn_score: 2400, hotspot_score: 9600 },
+        { file: "src/c.ts", commits: 3, lines_changed: 100, symbol_count: 2, churn_score: 300, hotspot_score: 600 },
+      ],
+      period: "last 90 days",
+      total_files: 3,
+      total_commits: 7,
+    });
+
+    // Only src/a.ts and src/b.ts are in changedFiles
+    const changedFiles = ["src/a.ts", "src/b.ts"];
+    const result = await checkHotspots(makeFakeIndex(), changedFiles);
+
+    expect(result.check).toBe("hotspots");
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings.every((f) => f.check === "hotspots")).toBe(true);
+    expect(result.status).toBe("warn");
+    // Verify the right files are included
+    const files = result.findings.map((f) => f.file);
+    expect(files).toContain("src/a.ts");
+    expect(files).toContain("src/b.ts");
+    expect(files).not.toContain("src/c.ts");
+  });
+
+  it("checkHotspots: no hotspots in changedFiles → status pass", async () => {
+    mockedAnalyzeHotspots.mockResolvedValue({
+      hotspots: [
+        { file: "src/other.ts", commits: 10, lines_changed: 500, symbol_count: 5, churn_score: 5000, hotspot_score: 25000 },
+      ],
+      period: "last 90 days",
+      total_files: 1,
+      total_commits: 10,
+    });
+
+    const changedFiles = ["src/a.ts"];
+    const result = await checkHotspots(makeFakeIndex(), changedFiles);
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("checkHotspots: analyzeHotspots throws → status error, findings empty", async () => {
+    mockedAnalyzeHotspots.mockRejectedValue(new Error("git log failed"));
+
+    const result = await checkHotspots(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.check).toBe("hotspots");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
+  });
+
+  // --- checkComplexityDelta ---
+
+  it("checkComplexityDelta: 2 functions in changedFiles with cyclomatic > 10 → 2 T2 findings", async () => {
+    mockedAnalyzeComplexity.mockResolvedValue({
+      functions: [
+        { name: "complexFn", kind: "function", file: "src/a.ts", start_line: 1, end_line: 50, lines: 50, cyclomatic_complexity: 15, max_nesting_depth: 5, branches: 14 },
+        { name: "alsoComplex", kind: "method", file: "src/b.ts", start_line: 10, end_line: 60, lines: 50, cyclomatic_complexity: 12, max_nesting_depth: 4, branches: 11 },
+        { name: "notChanged", kind: "function", file: "src/other.ts", start_line: 1, end_line: 30, lines: 30, cyclomatic_complexity: 20, max_nesting_depth: 6, branches: 19 },
+        { name: "simple", kind: "function", file: "src/a.ts", start_line: 55, end_line: 60, lines: 6, cyclomatic_complexity: 3, max_nesting_depth: 1, branches: 2 },
+      ],
+      summary: {
+        total_functions: 4,
+        avg_complexity: 12.5,
+        avg_lines: 34,
+        max_complexity: 20,
+        max_nesting: 6,
+        above_threshold: 3,
+      },
+    });
+
+    // Only src/a.ts and src/b.ts are in changedFiles
+    const changedFiles = ["src/a.ts", "src/b.ts"];
+    const result = await checkComplexityDelta(makeFakeIndex(), changedFiles);
+
+    expect(result.check).toBe("complexity");
+    // complexFn (15 > 10, in changedFiles) + alsoComplex (12 > 10, in changedFiles)
+    // notChanged (20 > 10, NOT in changedFiles) → excluded
+    // simple (3 <= 10) → excluded
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings.every((f) => f.check === "complexity")).toBe(true);
+    expect(result.status).toBe("warn");
+    const symbols = result.findings.map((f) => f.symbol);
+    expect(symbols).toContain("complexFn");
+    expect(symbols).toContain("alsoComplex");
+  });
+
+  it("checkComplexityDelta: functions not in changedFiles are excluded", async () => {
+    mockedAnalyzeComplexity.mockResolvedValue({
+      functions: [
+        { name: "highComplexity", kind: "function", file: "src/other.ts", start_line: 1, end_line: 50, lines: 50, cyclomatic_complexity: 25, max_nesting_depth: 8, branches: 24 },
+      ],
+      summary: {
+        total_functions: 1,
+        avg_complexity: 25,
+        avg_lines: 50,
+        max_complexity: 25,
+        max_nesting: 8,
+        above_threshold: 1,
+      },
+    });
+
+    const changedFiles = ["src/a.ts"]; // "src/other.ts" is NOT in changedFiles
+    const result = await checkComplexityDelta(makeFakeIndex(), changedFiles);
+
+    expect(result.findings).toHaveLength(0);
+    expect(result.status).toBe("pass");
+  });
+
+  it("checkComplexityDelta: functions with cyclomatic <= 10 are excluded", async () => {
+    mockedAnalyzeComplexity.mockResolvedValue({
+      functions: [
+        { name: "okFn", kind: "function", file: "src/a.ts", start_line: 1, end_line: 20, lines: 20, cyclomatic_complexity: 10, max_nesting_depth: 2, branches: 9 },
+        { name: "simpleFn", kind: "function", file: "src/a.ts", start_line: 25, end_line: 35, lines: 10, cyclomatic_complexity: 5, max_nesting_depth: 1, branches: 4 },
+      ],
+      summary: {
+        total_functions: 2,
+        avg_complexity: 7.5,
+        avg_lines: 15,
+        max_complexity: 10,
+        max_nesting: 2,
+        above_threshold: 0,
+      },
+    });
+
+    const changedFiles = ["src/a.ts"];
+    const result = await checkComplexityDelta(makeFakeIndex(), changedFiles);
+
+    // cyclomatic_complexity must be > 10, not >= 10
+    expect(result.findings).toHaveLength(0);
+    expect(result.status).toBe("pass");
+  });
+
+  it("checkComplexityDelta: analyzeComplexity throws → status error, findings empty", async () => {
+    mockedAnalyzeComplexity.mockRejectedValue(new Error("complexity scan failed"));
+
+    const result = await checkComplexityDelta(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.check).toBe("complexity");
     expect(result.status).toBe("error");
     expect(result.findings).toEqual([]);
   });

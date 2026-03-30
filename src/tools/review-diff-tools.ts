@@ -10,6 +10,9 @@ import { getCodeIndex } from "./index-tools.js";
 import { impactAnalysis } from "./impact-tools.js";
 import { scanSecrets } from "./secret-tools.js";
 import { findDeadCode } from "./symbol-tools.js";
+import { searchPatterns, listPatterns } from "./pattern-tools.js";
+import { analyzeHotspots } from "./hotspot-tools.js";
+import { analyzeComplexity } from "./complexity-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
 import picomatch from "picomatch";
 import type { CodeIndex } from "../types.js";
@@ -358,6 +361,158 @@ export async function checkDeadCode(
   }
 }
 
+/**
+ * Bug-patterns check: run all BUILTIN_PATTERNS via searchPatterns, merge and
+ * deduplicate findings across patterns.
+ */
+export async function checkBugPatterns(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+  try {
+    // Build a file_pattern covering all changed files
+    const filePattern =
+      changedFiles.length === 1
+        ? changedFiles[0]!
+        : `{${changedFiles.join(",")}}`;
+
+    // Get all built-in pattern names
+    const patterns = listPatterns().map((p) => p.name);
+
+    // Run all patterns in parallel
+    const results = await Promise.all(
+      patterns.map((p) =>
+        searchPatterns(index.repo, p, { file_pattern: filePattern }),
+      ),
+    );
+
+    // Merge matches, dedup by (file, start_line, matched_pattern)
+    const seen = new Set<string>();
+    const findings: ReviewFinding[] = [];
+
+    for (const result of results) {
+      for (const match of result.matches) {
+        const key = `${match.file}:${match.start_line}:${match.matched_pattern}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        findings.push({
+          check: "bug-patterns",
+          severity: "warn",
+          message: `Pattern match: ${match.matched_pattern} — "${match.context}"`,
+          file: match.file,
+          line: match.start_line,
+          symbol: match.name,
+        });
+      }
+    }
+
+    return {
+      check: "bug-patterns",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} bug pattern(s) found`
+        : "No bug patterns detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "bug-patterns",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Hotspots check: run analyzeHotspots and filter to files in changedFiles.
+ * Maps high-churn files to T3 advisory findings.
+ */
+export async function checkHotspots(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+  try {
+    const changedSet = new Set(changedFiles);
+    const result = await analyzeHotspots(index.repo);
+
+    const findings: ReviewFinding[] = result.hotspots
+      .filter((h) => changedSet.has(h.file))
+      .map((h) => ({
+        check: "hotspots",
+        severity: "warn" as const,
+        message: `High churn file: ${h.file} — hotspot_score ${h.hotspot_score} (${h.commits} commits, ${h.lines_changed} lines changed)`,
+        file: h.file,
+      }));
+
+    return {
+      check: "hotspots",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} hotspot file(s) in diff`
+        : "No hotspot files in diff",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "hotspots",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Complexity delta check: run analyzeComplexity and filter to functions in
+ * changedFiles with cyclomatic complexity > 10. Maps to T2 findings.
+ */
+export async function checkComplexityDelta(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+  try {
+    const changedSet = new Set(changedFiles);
+    const result = await analyzeComplexity(index.repo, { top_n: 50 });
+
+    const findings: ReviewFinding[] = result.functions
+      .filter((fn) => changedSet.has(fn.file) && fn.cyclomatic_complexity > 10)
+      .map((fn) => ({
+        check: "complexity",
+        severity: "warn" as const,
+        message: `High complexity: "${fn.name}" in ${fn.file} — cyclomatic complexity ${fn.cyclomatic_complexity} (>${10})`,
+        file: fn.file,
+        line: fn.start_line,
+        symbol: fn.name,
+      }));
+
+    return {
+      check: "complexity",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} high-complexity function(s) in diff`
+        : "No high-complexity functions in diff",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "complexity",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Check runner — dispatches to real adapters or stubs for unimplemented checks
 // ---------------------------------------------------------------------------
@@ -377,6 +532,12 @@ async function runCheck(
       return checkSecrets(index, changedFiles);
     case "dead-code":
       return checkDeadCode(index, changedFiles);
+    case "bug-patterns":
+      return checkBugPatterns(index, changedFiles);
+    case "hotspots":
+      return checkHotspots(index, changedFiles);
+    case "complexity":
+      return checkComplexityDelta(index, changedFiles);
     default: {
       const tier = findingTier(checkName);
       return {
