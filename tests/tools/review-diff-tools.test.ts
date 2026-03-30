@@ -30,7 +30,8 @@ import {
   checkBreakingChanges,
   checkTestGaps,
 } from "../../src/tools/review-diff-tools.js";
-import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
+import type { ReviewFinding, CheckResult, ReviewDiffOptions, ReviewDiffResult } from "../../src/tools/review-diff-tools.js";
+import { formatReviewDiff } from "../../src/formatters.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { validateGitRef } from "../../src/utils/git-validation.js";
@@ -1388,5 +1389,153 @@ describe("checkTestGaps", () => {
     expect(result.check).toBe("test-gaps");
     expect(result.status).toBe("pass");
     expect(result.findings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatReviewDiff
+// ---------------------------------------------------------------------------
+
+function makeReviewDiffResult(overrides: Partial<ReviewDiffResult> = {}): ReviewDiffResult {
+  return {
+    repo: "local/test",
+    since: "HEAD~1",
+    checks: [],
+    findings: [],
+    score: 100,
+    verdict: "pass",
+    duration_ms: 42,
+    diff_stats: { files_changed: 3, files_reviewed: 3 },
+    metadata: {},
+    ...overrides,
+  };
+}
+
+function makeCheckResult(name: string, status: CheckResult["status"], summary?: string): CheckResult {
+  return { check: name, status, findings: [], duration_ms: 10, summary };
+}
+
+function makeT1Finding(check: "secrets" | "breaking" = "secrets"): ReviewFinding {
+  return { check, severity: "error", message: "T1 finding message", file: "src/secret.ts", line: 5 };
+}
+
+function makeT2Finding(check = "complexity"): ReviewFinding {
+  return { check, severity: "warn", message: "T2 finding message", file: "src/complex.ts", line: 10 };
+}
+
+function makeT3Finding(check = "test-gaps"): ReviewFinding {
+  return { check, severity: "warn", message: "T3 finding message", file: "src/notest.ts" };
+}
+
+describe("formatReviewDiff", () => {
+  // 1. Full result with verdict "warn", score 75, 2 T1, 3 T2, 5 T3
+  it("formats full result with verdict, score, check summaries, and findings grouped by tier", () => {
+    const t1Findings = [makeT1Finding("secrets"), makeT1Finding("breaking")];
+    const t2Findings = [makeT2Finding("complexity"), makeT2Finding("dead-code"), makeT2Finding("coupling")];
+    const t3Findings = Array.from({ length: 5 }, () => makeT3Finding("test-gaps"));
+
+    const result = makeReviewDiffResult({
+      verdict: "warn",
+      score: 75,
+      checks: [
+        makeCheckResult("secrets", "fail", "1 secret found"),
+        makeCheckResult("breaking", "fail", "1 breaking change"),
+        makeCheckResult("complexity", "warn", "3 high-complexity functions"),
+        makeCheckResult("dead-code", "warn"),
+        makeCheckResult("coupling", "pass"),
+      ],
+      findings: [...t1Findings, ...t2Findings, ...t3Findings],
+    });
+
+    const output = formatReviewDiff(result);
+
+    expect(output).toContain("warn");
+    expect(output).toContain("75");
+    expect(output).toContain("secrets");
+    expect(output).toContain("breaking");
+    expect(output).toContain("T1 findings");
+    expect(output).toContain("T2 findings");
+    expect(output).toContain("T3 findings");
+    expect(output).toContain("T1 finding message");
+    expect(output).toContain("T2 finding message");
+    expect(output).toContain("T3 finding message");
+  });
+
+  // 2. Empty findings: verdict "pass", score 100, no findings
+  it("formats empty findings as short compact output", () => {
+    const result = makeReviewDiffResult({
+      verdict: "pass",
+      score: 100,
+      checks: [makeCheckResult("secrets", "pass", "No secrets"), makeCheckResult("complexity", "pass")],
+      findings: [],
+    });
+
+    const output = formatReviewDiff(result);
+
+    expect(output).toContain("pass");
+    expect(output).toContain("100");
+    expect(output).not.toContain("T1 findings");
+    expect(output).not.toContain("T2 findings");
+    expect(output).not.toContain("T3 findings");
+  });
+
+  // 3. JSON round-trip: result serializes and deserializes without loss
+  it("JSON round-trip succeeds for all test cases (AC#9)", () => {
+    const results: ReviewDiffResult[] = [
+      makeReviewDiffResult({ verdict: "pass", score: 100, findings: [] }),
+      makeReviewDiffResult({
+        verdict: "warn",
+        score: 75,
+        findings: [makeT1Finding(), makeT2Finding(), makeT3Finding()],
+      }),
+      makeReviewDiffResult({ verdict: "fail", score: 0, findings: [makeT1Finding("breaking")] }),
+    ];
+
+    for (const result of results) {
+      const serialized = JSON.stringify(result);
+      const deserialized = JSON.parse(serialized) as ReviewDiffResult;
+      expect(deserialized.verdict).toBe(result.verdict);
+      expect(deserialized.score).toBe(result.score);
+      expect(deserialized.findings).toHaveLength(result.findings.length);
+    }
+  });
+
+  // 4. Token budget truncation: 50 T3 findings are truncated, T1 findings intact
+  it("truncates T3 findings but keeps all T1 findings intact", () => {
+    const t1Findings = [makeT1Finding("secrets")];
+    const t3Findings = Array.from({ length: 50 }, (_, i) =>
+      ({ check: "test-gaps", severity: "warn" as const, message: `T3 finding ${i}`, file: `src/file-${i}.ts` }),
+    );
+
+    const result = makeReviewDiffResult({
+      verdict: "fail",
+      score: 20,
+      findings: [...t1Findings, ...t3Findings],
+    });
+
+    const output = formatReviewDiff(result);
+
+    // T1 findings must all be present
+    expect(output).toContain("T1 finding message");
+    // T3 section must be present
+    expect(output).toContain("T3 findings");
+    // T3 truncation notice must appear
+    expect(output).toMatch(/showing \d+ of 50/);
+    // All 50 T3 messages should NOT all be present (truncation applied)
+    const t3MessageCount = (output.match(/T3 finding \d+/g) ?? []).length;
+    expect(t3MessageCount).toBeLessThan(50);
+  });
+
+  // 5. Handler param parsing: comma-separated checks and exclude_patterns
+  it("parses comma-separated checks string to array correctly", () => {
+    const checksStr = "secrets,breaking";
+    const parsed = checksStr.split(",").map((c) => c.trim()).filter(Boolean);
+    expect(parsed).toEqual(["secrets", "breaking"]);
+  });
+
+  it("parses and trims comma-separated exclude_patterns string to array", () => {
+    const excludeStr = "*.lock, dist/**";
+    const parsed = excludeStr.split(",").map((p) => p.trim()).filter(Boolean);
+    expect(parsed).toEqual(["*.lock", "dist/**"]);
   });
 });

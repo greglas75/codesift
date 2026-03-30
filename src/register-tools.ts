@@ -24,9 +24,10 @@ import { goToDefinition, getTypeInfo, renameSymbol } from "./lsp/lsp-tools.js";
 import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
 import { scanSecrets } from "./tools/secret-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
+import { reviewDiff } from "./tools/review-diff-tools.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -851,6 +852,42 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         severity: args.severity as SecretSeverity | undefined,
       });
       return formatSecrets(result as never);
+    },
+  },
+
+  // --- Review diff ---
+  {
+    name: "review_diff",
+    description: "Run 9 parallel static analysis checks on a git diff: secrets, breaking changes, coupling gaps, complexity, dead-code, blast-radius, bug-patterns, test-gaps, hotspots. Returns a scored verdict (pass/warn/fail) with tiered findings.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      since: z.string().optional().describe("Base git ref (default: HEAD~1)"),
+      until: z.string().optional().describe("Target ref. Default: HEAD. Special: WORKING, STAGED"),
+      checks: z.string().optional().describe("Comma-separated check names (default: all)"),
+      exclude_patterns: z.string().optional().describe("Comma-separated globs to exclude"),
+      token_budget: zNum().describe("Max tokens (default: 15000)"),
+      max_files: zNum().describe("Warn above N files (default: 50)"),
+      check_timeout_ms: zNum().describe("Per-check timeout ms (default: 8000)"),
+    },
+    handler: async (args) => {
+      const checksArr = args.checks
+        ? (args.checks as string).split(",").map((c) => c.trim()).filter(Boolean)
+        : undefined;
+      const excludeArr = args.exclude_patterns
+        ? (args.exclude_patterns as string).split(",").map((p) => p.trim()).filter(Boolean)
+        : undefined;
+      const opts: import("./tools/review-diff-tools.js").ReviewDiffOptions = {
+        repo: args.repo as string,
+      };
+      if (args.since != null) opts.since = args.since as string;
+      if (args.until != null) opts.until = args.until as string;
+      if (checksArr != null) opts.checks = checksArr.join(",");
+      if (excludeArr != null) opts.exclude_patterns = excludeArr;
+      if (args.token_budget != null) opts.token_budget = args.token_budget as number;
+      if (args.max_files != null) opts.max_files = args.max_files as number;
+      if (args.check_timeout_ms != null) opts.check_timeout_ms = args.check_timeout_ms as number;
+      const result = await reviewDiff(args.repo as string, opts);
+      return formatReviewDiff(result);
     },
   },
 
