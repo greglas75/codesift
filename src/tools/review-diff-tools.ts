@@ -5,6 +5,7 @@
  * Pure functions + one async orchestrator that fans out sub-checks.
  */
 
+import { execFileSync } from "node:child_process";
 import { changedSymbols } from "./diff-tools.js";
 import { getCodeIndex } from "./index-tools.js";
 import { impactAnalysis } from "./impact-tools.js";
@@ -513,6 +514,114 @@ export async function checkComplexityDelta(
   }
 }
 
+/**
+ * Coupling gaps check: parse git log for co-change pairs, compute Jaccard
+ * similarity, and flag coupled files that are missing from the diff.
+ */
+export async function checkCouplingGaps(
+  repoRoot: string,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+  const MIN_SUPPORT = 3;
+  const MIN_JACCARD = 0.5;
+  const MAX_FILES_PER_COMMIT = 50;
+
+  try {
+    const raw = execFileSync(
+      "git",
+      [
+        "log",
+        "--name-only",
+        "--no-merges",
+        "--diff-filter=AMRC",
+        "--since=180 days ago",
+        "--pretty=format:%H",
+      ],
+      { cwd: repoRoot, encoding: "utf-8", timeout: 15000 },
+    );
+
+    // Parse commits: git log --pretty=format:%H --name-only outputs:
+    //   SHA\n\nfile1\nfile2\n\nSHA\n\nfile1\nfile2
+    // Split by \n\n yields alternating blocks: [SHA, files, SHA, files, ...]
+    const blocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
+    const fileCommitCounts = new Map<string, number>();
+    const pairCounts = new Map<string, number>();
+
+    // Process pairs: blocks[i] = SHA, blocks[i+1] = file list
+    for (let i = 0; i < blocks.length - 1; i += 2) {
+      const fileBlock = blocks[i + 1]!;
+      const files = fileBlock.split("\n").filter((l) => l.trim().length > 0);
+
+      // Skip bulk commits
+      if (files.length > MAX_FILES_PER_COMMIT) continue;
+
+      // Count file appearances
+      for (const file of files) {
+        fileCommitCounts.set(file, (fileCommitCounts.get(file) ?? 0) + 1);
+      }
+
+      // Count pairs (canonical: sorted alphabetically)
+      for (let i = 0; i < files.length; i++) {
+        for (let j = i + 1; j < files.length; j++) {
+          const pair = [files[i]!, files[j]!].sort().join("\0");
+          pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + 1);
+        }
+      }
+    }
+
+    // For each changed file, find partners with high Jaccard that are NOT in the diff
+    const changedSet = new Set(changedFiles);
+    const findings: ReviewFinding[] = [];
+
+    for (const changedFile of changedFiles) {
+      for (const [pair, coCount] of pairCounts) {
+        if (coCount < MIN_SUPPORT) continue;
+
+        const [fileA, fileB] = pair.split("\0") as [string, string];
+        let partner: string | undefined;
+        if (fileA === changedFile) partner = fileB;
+        else if (fileB === changedFile) partner = fileA;
+        else continue;
+
+        // Skip if partner is already in the diff
+        if (changedSet.has(partner)) continue;
+
+        const countA = fileCommitCounts.get(fileA) ?? 0;
+        const countB = fileCommitCounts.get(fileB) ?? 0;
+        const jaccard = coCount / (countA + countB - coCount);
+
+        if (jaccard >= MIN_JACCARD) {
+          findings.push({
+            check: "coupling",
+            severity: "warn",
+            message: `"${changedFile}" is frequently co-changed with "${partner}" (Jaccard ${jaccard.toFixed(2)}, ${coCount} co-commits) but "${partner}" is not in this diff`,
+            file: changedFile,
+          });
+        }
+      }
+    }
+
+    return {
+      check: "coupling",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} coupling gap(s) detected`
+        : "No coupling gaps detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "coupling",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Check runner — dispatches to real adapters or stubs for unimplemented checks
 // ---------------------------------------------------------------------------
@@ -538,6 +647,8 @@ async function runCheck(
       return checkHotspots(index, changedFiles);
     case "complexity":
       return checkComplexityDelta(index, changedFiles);
+    case "coupling":
+      return checkCouplingGaps(index.root, changedFiles);
     default: {
       const tier = findingTier(checkName);
       return {

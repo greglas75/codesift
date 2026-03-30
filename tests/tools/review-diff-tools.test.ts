@@ -26,6 +26,7 @@ import {
   checkBugPatterns,
   checkHotspots,
   checkComplexityDelta,
+  checkCouplingGaps,
 } from "../../src/tools/review-diff-tools.js";
 import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
@@ -37,6 +38,7 @@ import { findDeadCode } from "../../src/tools/symbol-tools.js";
 import { searchPatterns, listPatterns } from "../../src/tools/pattern-tools.js";
 import { analyzeHotspots } from "../../src/tools/hotspot-tools.js";
 import { analyzeComplexity } from "../../src/tools/complexity-tools.js";
+import { execFileSync } from "node:child_process";
 import type { CodeIndex } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -262,6 +264,7 @@ describe("reviewDiff orchestrator", () => {
   const mockedListPatternsOrch = vi.mocked(listPatterns);
   const mockedAnalyzeHotspotsOrch = vi.mocked(analyzeHotspots);
   const mockedAnalyzeComplexityOrch = vi.mocked(analyzeComplexity);
+  const mockedExecFileSyncOrch = vi.mocked(execFileSync);
 
   const fakeIndex = makeFakeIndex();
 
@@ -323,6 +326,8 @@ describe("reviewDiff orchestrator", () => {
         above_threshold: 0,
       },
     });
+    // Coupling check uses execFileSync for git log — return empty log (no coupling findings)
+    mockedExecFileSyncOrch.mockReturnValue("");
   });
 
   // 1. Happy path
@@ -969,5 +974,136 @@ describe("check adapters — bug-patterns, hotspots, complexity", () => {
     expect(result.check).toBe("complexity");
     expect(result.status).toBe("error");
     expect(result.findings).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check adapter — coupling gaps (Jaccard from git log)
+// ---------------------------------------------------------------------------
+
+describe("checkCouplingGaps", () => {
+  const mockedExecFileSync = vi.mocked(execFileSync);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("detects high Jaccard coupling: A in diff, B not → T2 finding", async () => {
+    // A and B co-commit 5 times, A alone 1 more. Jaccard = 5/(6+5-5) = 0.833
+    // Actual git log format: SHA\n\nfile1\nfile2\n\nSHA\n\nfile1\nfile2
+    const gitLog =
+      "sha1\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha2\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha3\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha4\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha5\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha6\n\nsrc/a.ts";
+
+    mockedExecFileSync.mockReturnValue(gitLog);
+
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.status).toBe("warn");
+    expect(result.findings.length).toBeGreaterThanOrEqual(1);
+    // Finding should mention src/b.ts as a coupled partner
+    expect(result.findings.some((f) => f.message.includes("src/b.ts"))).toBe(true);
+    expect(result.findings.every((f) => f.check === "coupling")).toBe(true);
+  });
+
+  it("no finding when Jaccard is below threshold (0.5)", async () => {
+    // A appears in 10 commits, B in 10 commits, co-commit only 3 times
+    // Jaccard = 3/(10+10-3) = 3/17 ≈ 0.176 (below 0.5)
+    // Format: SHA\n\nfiles for each commit
+    const commits: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      commits.push(`sha${i}\n\nsrc/a.ts\nsrc/b.ts`);
+    }
+    for (let i = 3; i < 10; i++) {
+      commits.push(`sha${i}\n\nsrc/a.ts`);
+    }
+    for (let i = 10; i < 17; i++) {
+      commits.push(`sha${i}\n\nsrc/b.ts`);
+    }
+
+    mockedExecFileSync.mockReturnValue(commits.join("\n\n"));
+
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.findings).toHaveLength(0);
+    expect(result.status).toBe("pass");
+  });
+
+  it("no finding when co-commits below minSupport (3)", async () => {
+    // A and B co-commit only 2 times, Jaccard = 2/(2+2-2) = 1.0 but support < 3
+    const gitLog =
+      "sha1\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha2\n\nsrc/a.ts\nsrc/b.ts";
+
+    mockedExecFileSync.mockReturnValue(gitLog);
+
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.findings).toHaveLength(0);
+    expect(result.status).toBe("pass");
+  });
+
+  it("skips bulk commits with >50 files", async () => {
+    // One commit with 51 files → skipped. No other commits → no pairs → no findings.
+    // Format: SHA\n\nfile1\nfile2\n...
+    const bulkFiles = Array.from({ length: 51 }, (_, i) => `src/file${i}.ts`).join("\n");
+    const gitLog = `bulksha\n\n${bulkFiles}`;
+
+    mockedExecFileSync.mockReturnValue(gitLog);
+
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/file0.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.findings).toHaveLength(0);
+    expect(result.status).toBe("pass");
+  });
+
+  it("returns pass with 0 findings on empty git log", async () => {
+    mockedExecFileSync.mockReturnValue("");
+
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("no finding when both coupled files are in the diff", async () => {
+    // A and B co-commit 5 times with high Jaccard, but BOTH are in changedFiles
+    const gitLog =
+      "sha1\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha2\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha3\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha4\n\nsrc/a.ts\nsrc/b.ts\n\n" +
+      "sha5\n\nsrc/a.ts\nsrc/b.ts";
+
+    mockedExecFileSync.mockReturnValue(gitLog);
+
+    // Both files in diff → no "missing partner" finding
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts", "src/b.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.findings).toHaveLength(0);
+    expect(result.status).toBe("pass");
+  });
+
+  it("returns error status when execFileSync throws", async () => {
+    mockedExecFileSync.mockImplementation(() => {
+      throw new Error("git log failed");
+    });
+
+    const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
+
+    expect(result.check).toBe("coupling");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
+    expect(result.summary).toContain("git log failed");
   });
 });
