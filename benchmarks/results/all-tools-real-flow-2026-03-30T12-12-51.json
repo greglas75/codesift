@@ -1,0 +1,995 @@
+{
+  "startedAt": "2026-03-30T12:12:51.968Z",
+  "rows": [
+    {
+      "tool": "search_text",
+      "repo": "codesift-mcp",
+      "nTok": 556,
+      "sTok": 1684,
+      "nMs": 231,
+      "sMs": 467,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_text",
+      "repo": "codesift-mcp",
+      "nTok": 9662,
+      "sTok": 1082,
+      "nMs": 103,
+      "sMs": 245,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_text",
+      "repo": "codesift-mcp",
+      "nTok": 5994,
+      "sTok": 2458,
+      "nMs": 194,
+      "sMs": 133,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "codesift-mcp",
+      "nTok": 5068,
+      "sTok": 525,
+      "nMs": 151,
+      "sMs": 1759,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "codesift-mcp",
+      "nTok": 5983,
+      "sTok": 750,
+      "nMs": 293,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "codesift-mcp",
+      "nTok": 1368,
+      "sTok": 183,
+      "nMs": 325,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "codesift-mcp",
+      "nTok": 5293,
+      "sTok": 1058,
+      "nMs": 1,
+      "sMs": 3,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "codesift-mcp",
+      "nTok": 1033,
+      "sTok": 138,
+      "nMs": 1,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "codesift-mcp",
+      "nTok": 622,
+      "sTok": 117,
+      "nMs": 0,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_tree",
+      "repo": "codesift-mcp",
+      "nTok": 4735,
+      "sTok": 3213,
+      "nMs": 2923,
+      "sMs": 20,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_patterns",
+      "repo": "codesift-mcp",
+      "nTok": 27,
+      "sTok": 138,
+      "nMs": 167,
+      "sMs": 25,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_patterns",
+      "repo": "codesift-mcp",
+      "nTok": 9740,
+      "sTok": 804,
+      "nMs": 355,
+      "sMs": 9,
+      "nCalls": 1
+    },
+    {
+      "tool": "codebase_retrieval",
+      "repo": "codesift-mcp",
+      "nTok": 12328,
+      "sTok": 2519,
+      "nMs": 526,
+      "sMs": 332,
+      "nCalls": 3
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "codesift-mcp",
+      "nTok": 1497,
+      "sTok": 849,
+      "nMs": 382,
+      "sMs": 72,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "codesift-mcp",
+      "nTok": 6752,
+      "sTok": 51,
+      "nMs": 544,
+      "sMs": 4,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "codesift-mcp",
+      "nTok": 1985,
+      "sTok": 58,
+      "nMs": 108,
+      "sMs": 13,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbols",
+      "repo": "codesift-mcp",
+      "nTok": 5068,
+      "sTok": 1498,
+      "nMs": 172,
+      "sMs": 20,
+      "nCalls": 1
+    },
+    {
+      "tool": "find_references",
+      "repo": "codesift-mcp",
+      "nTok": 2838,
+      "sTok": 2240,
+      "nMs": 98,
+      "sMs": 458,
+      "nCalls": 1
+    },
+    {
+      "tool": "find_references",
+      "repo": "codesift-mcp",
+      "nTok": 1824,
+      "sTok": 1335,
+      "nMs": 176,
+      "sMs": 136,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_context_bundle",
+      "repo": "codesift-mcp",
+      "nTok": 11477,
+      "sTok": 1854,
+      "nMs": 184,
+      "sMs": 19,
+      "nCalls": 2
+    },
+    {
+      "tool": "get_context_bundle",
+      "repo": "codesift-mcp",
+      "nTok": 2091,
+      "sTok": 1071,
+      "nMs": 99,
+      "sMs": 100,
+      "nCalls": 2
+    },
+    {
+      "tool": "assemble_context",
+      "repo": "codesift-mcp",
+      "nTok": 17695,
+      "sTok": 2305,
+      "nMs": 107,
+      "sMs": 5,
+      "nCalls": 6
+    },
+    {
+      "tool": "assemble_context",
+      "repo": "codesift-mcp",
+      "nTok": 8429,
+      "sTok": 1977,
+      "nMs": 155,
+      "sMs": 2,
+      "nCalls": 6
+    },
+    {
+      "tool": "find_and_show",
+      "repo": "codesift-mcp",
+      "nTok": 4335,
+      "sTok": 3094,
+      "nMs": 250,
+      "sMs": 86,
+      "nCalls": 2
+    },
+    {
+      "tool": "find_and_show",
+      "repo": "codesift-mcp",
+      "nTok": 5369,
+      "sTok": 251,
+      "nMs": 269,
+      "sMs": 139,
+      "nCalls": 2
+    },
+    {
+      "tool": "detect_communities",
+      "repo": "codesift-mcp",
+      "nTok": 0,
+      "sTok": 645,
+      "nMs": 0,
+      "sMs": 179,
+      "nCalls": 0
+    },
+    {
+      "tool": "analyze_complexity",
+      "repo": "codesift-mcp",
+      "nTok": 7472,
+      "sTok": 178,
+      "nMs": 1193,
+      "sMs": 18,
+      "nCalls": 2
+    },
+    {
+      "tool": "search_conversations",
+      "repo": "codesift-mcp",
+      "nTok": 0,
+      "sTok": 203,
+      "nMs": 0,
+      "sMs": 8502,
+      "nCalls": 0
+    },
+    {
+      "tool": "analyze_hotspots",
+      "repo": "codesift-mcp",
+      "nTok": 216,
+      "sTok": 11,
+      "nMs": 3128,
+      "sMs": 168,
+      "nCalls": 1
+    },
+    {
+      "tool": "trace_call_chain",
+      "repo": "codesift-mcp",
+      "nTok": 3919,
+      "sTok": 789,
+      "nMs": 114,
+      "sMs": 28,
+      "nCalls": 7
+    },
+    {
+      "tool": "trace_call_chain",
+      "repo": "codesift-mcp",
+      "nTok": 2277,
+      "sTok": 1484,
+      "nMs": 126,
+      "sMs": 22,
+      "nCalls": 7
+    },
+    {
+      "tool": "get_repo_outline",
+      "repo": "codesift-mcp",
+      "nTok": 389,
+      "sTok": 470,
+      "nMs": 162,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_knowledge_map",
+      "repo": "codesift-mcp",
+      "nTok": 15932,
+      "sTok": 1244,
+      "nMs": 136,
+      "sMs": 684,
+      "nCalls": 7
+    },
+    {
+      "tool": "find_dead_code",
+      "repo": "codesift-mcp",
+      "nTok": 8037,
+      "sTok": 1635,
+      "nMs": 415,
+      "sMs": 222,
+      "nCalls": 20
+    },
+    {
+      "tool": "impact_analysis",
+      "repo": "codesift-mcp",
+      "nTok": 897,
+      "sTok": 14326,
+      "nMs": 44,
+      "sMs": 56,
+      "nCalls": 2
+    },
+    {
+      "tool": "find_clones",
+      "repo": "codesift-mcp",
+      "nTok": 12399,
+      "sTok": 193,
+      "nMs": 18,
+      "sMs": 27,
+      "nCalls": 11
+    },
+    {
+      "tool": "search_text",
+      "repo": "translation-qa",
+      "nTok": 1625,
+      "sTok": 3137,
+      "nMs": 161,
+      "sMs": 156,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_text",
+      "repo": "translation-qa",
+      "nTok": 7883,
+      "sTok": 901,
+      "nMs": 15,
+      "sMs": 108,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_text",
+      "repo": "translation-qa",
+      "nTok": 8159,
+      "sTok": 3761,
+      "nMs": 31,
+      "sMs": 174,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "translation-qa",
+      "nTok": 5914,
+      "sTok": 790,
+      "nMs": 19,
+      "sMs": 3146,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "translation-qa",
+      "nTok": 6895,
+      "sTok": 710,
+      "nMs": 41,
+      "sMs": 3,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "translation-qa",
+      "nTok": 6589,
+      "sTok": 761,
+      "nMs": 211,
+      "sMs": 2,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 3,
+      "nMs": 0,
+      "sMs": 5,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 3,
+      "nMs": 0,
+      "sMs": 5,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 3,
+      "nMs": 0,
+      "sMs": 5,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_tree",
+      "repo": "translation-qa",
+      "nTok": 6685,
+      "sTok": 8737,
+      "nMs": 9999,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_patterns",
+      "repo": "translation-qa",
+      "nTok": 88,
+      "sTok": 35,
+      "nMs": 156,
+      "sMs": 32,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_patterns",
+      "repo": "translation-qa",
+      "nTok": 8029,
+      "sTok": 1001,
+      "nMs": 39,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "codebase_retrieval",
+      "repo": "translation-qa",
+      "nTok": 16382,
+      "sTok": 3185,
+      "nMs": 181,
+      "sMs": 313,
+      "nCalls": 3
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 1245,
+      "nMs": 157,
+      "sMs": 27,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "translation-qa",
+      "nTok": 5932,
+      "sTok": 116,
+      "nMs": 19,
+      "sMs": 13,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "translation-qa",
+      "nTok": 6972,
+      "sTok": 125,
+      "nMs": 38,
+      "sMs": 7,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbols",
+      "repo": "translation-qa",
+      "nTok": 7052,
+      "sTok": 956,
+      "nMs": 28,
+      "sMs": 40,
+      "nCalls": 1
+    },
+    {
+      "tool": "find_references",
+      "repo": "translation-qa",
+      "nTok": 929,
+      "sTok": 723,
+      "nMs": 114,
+      "sMs": 159,
+      "nCalls": 1
+    },
+    {
+      "tool": "find_references",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 0,
+      "nMs": 132,
+      "sMs": 157,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_context_bundle",
+      "repo": "translation-qa",
+      "nTok": 894,
+      "sTok": 1199,
+      "nMs": 152,
+      "sMs": 65,
+      "nCalls": 2
+    },
+    {
+      "tool": "get_context_bundle",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 445,
+      "nMs": 147,
+      "sMs": 40,
+      "nCalls": 2
+    },
+    {
+      "tool": "assemble_context",
+      "repo": "translation-qa",
+      "nTok": 20192,
+      "sTok": 1958,
+      "nMs": 121,
+      "sMs": 3,
+      "nCalls": 6
+    },
+    {
+      "tool": "assemble_context",
+      "repo": "translation-qa",
+      "nTok": 9754,
+      "sTok": 2057,
+      "nMs": 29,
+      "sMs": 14,
+      "nCalls": 6
+    },
+    {
+      "tool": "find_and_show",
+      "repo": "translation-qa",
+      "nTok": 929,
+      "sTok": 1136,
+      "nMs": 264,
+      "sMs": 157,
+      "nCalls": 2
+    },
+    {
+      "tool": "find_and_show",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 368,
+      "nMs": 267,
+      "sMs": 135,
+      "nCalls": 2
+    },
+    {
+      "tool": "detect_communities",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 844,
+      "nMs": 0,
+      "sMs": 12,
+      "nCalls": 0
+    },
+    {
+      "tool": "analyze_complexity",
+      "repo": "translation-qa",
+      "nTok": 8493,
+      "sTok": 226,
+      "nMs": 38165,
+      "sMs": 153,
+      "nCalls": 2
+    },
+    {
+      "tool": "search_conversations",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 203,
+      "nMs": 0,
+      "sMs": 981,
+      "nCalls": 0
+    },
+    {
+      "tool": "analyze_hotspots",
+      "repo": "translation-qa",
+      "nTok": 351,
+      "sTok": 11,
+      "nMs": 2109,
+      "sMs": 1392,
+      "nCalls": 1
+    },
+    {
+      "tool": "trace_call_chain",
+      "repo": "translation-qa",
+      "nTok": 1316,
+      "sTok": 18,
+      "nMs": 210,
+      "sMs": 339,
+      "nCalls": 7
+    },
+    {
+      "tool": "trace_call_chain",
+      "repo": "translation-qa",
+      "nTok": 0,
+      "sTok": 0,
+      "nMs": 180,
+      "sMs": 5,
+      "nCalls": 2
+    },
+    {
+      "tool": "get_repo_outline",
+      "repo": "translation-qa",
+      "nTok": 1089,
+      "sTok": 1600,
+      "nMs": 10963,
+      "sMs": 3,
+      "nCalls": 1
+    },
+    {
+      "tool": "trace_route",
+      "repo": "translation-qa",
+      "nTok": 32767,
+      "sTok": 100,
+      "nMs": 144,
+      "sMs": 1006,
+      "nCalls": 4
+    },
+    {
+      "tool": "get_knowledge_map",
+      "repo": "translation-qa",
+      "nTok": 8594,
+      "sTok": 1492,
+      "nMs": 47,
+      "sMs": 2096,
+      "nCalls": 2
+    },
+    {
+      "tool": "find_dead_code",
+      "repo": "translation-qa",
+      "nTok": 18515,
+      "sTok": 1758,
+      "nMs": 3458,
+      "sMs": 1169,
+      "nCalls": 20
+    },
+    {
+      "tool": "impact_analysis",
+      "repo": "translation-qa",
+      "nTok": 6113,
+      "sTok": 27964,
+      "nMs": 1152,
+      "sMs": 662,
+      "nCalls": 10
+    },
+    {
+      "tool": "find_clones",
+      "repo": "translation-qa",
+      "nTok": 12937,
+      "sTok": 1703,
+      "nMs": 59,
+      "sMs": 322,
+      "nCalls": 11
+    },
+    {
+      "tool": "search_text",
+      "repo": "promptvault",
+      "nTok": 211,
+      "sTok": 463,
+      "nMs": 98,
+      "sMs": 232,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_text",
+      "repo": "promptvault",
+      "nTok": 4937,
+      "sTok": 1023,
+      "nMs": 100,
+      "sMs": 85,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_text",
+      "repo": "promptvault",
+      "nTok": 9424,
+      "sTok": 3616,
+      "nMs": 48,
+      "sMs": 114,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "promptvault",
+      "nTok": 6898,
+      "sTok": 894,
+      "nMs": 27,
+      "sMs": 738,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "promptvault",
+      "nTok": 7256,
+      "sTok": 412,
+      "nMs": 116,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_symbols",
+      "repo": "promptvault",
+      "nTok": 8110,
+      "sTok": 827,
+      "nMs": 113,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 3,
+      "nMs": 0,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 3,
+      "nMs": 0,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_outline",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 3,
+      "nMs": 0,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_file_tree",
+      "repo": "promptvault",
+      "nTok": 5764,
+      "sTok": 10021,
+      "nMs": 4266,
+      "sMs": 0,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_patterns",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 25,
+      "nMs": 34,
+      "sMs": 5,
+      "nCalls": 1
+    },
+    {
+      "tool": "search_patterns",
+      "repo": "promptvault",
+      "nTok": 3313,
+      "sTok": 500,
+      "nMs": 34,
+      "sMs": 5,
+      "nCalls": 1
+    },
+    {
+      "tool": "codebase_retrieval",
+      "repo": "promptvault",
+      "nTok": 12042,
+      "sTok": 2483,
+      "nMs": 69,
+      "sMs": 70,
+      "nCalls": 3
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 1096,
+      "nMs": 32,
+      "sMs": 4,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "promptvault",
+      "nTok": 7959,
+      "sTok": 267,
+      "nMs": 12,
+      "sMs": 3,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbol",
+      "repo": "promptvault",
+      "nTok": 8108,
+      "sTok": 151,
+      "nMs": 31,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_symbols",
+      "repo": "promptvault",
+      "nTok": 8065,
+      "sTok": 2508,
+      "nMs": 12,
+      "sMs": 9,
+      "nCalls": 1
+    },
+    {
+      "tool": "find_references",
+      "repo": "promptvault",
+      "nTok": 250,
+      "sTok": 173,
+      "nMs": 31,
+      "sMs": 28,
+      "nCalls": 1
+    },
+    {
+      "tool": "find_references",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 0,
+      "nMs": 30,
+      "sMs": 28,
+      "nCalls": 1
+    },
+    {
+      "tool": "get_context_bundle",
+      "repo": "promptvault",
+      "nTok": 1234,
+      "sTok": 1363,
+      "nMs": 31,
+      "sMs": 14,
+      "nCalls": 2
+    },
+    {
+      "tool": "get_context_bundle",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 328,
+      "nMs": 30,
+      "sMs": 13,
+      "nCalls": 2
+    },
+    {
+      "tool": "assemble_context",
+      "repo": "promptvault",
+      "nTok": 9732,
+      "sTok": 2263,
+      "nMs": 30,
+      "sMs": 1,
+      "nCalls": 6
+    },
+    {
+      "tool": "assemble_context",
+      "repo": "promptvault",
+      "nTok": 11006,
+      "sTok": 2000,
+      "nMs": 21,
+      "sMs": 2,
+      "nCalls": 6
+    },
+    {
+      "tool": "find_and_show",
+      "repo": "promptvault",
+      "nTok": 250,
+      "sTok": 1961,
+      "nMs": 63,
+      "sMs": 38,
+      "nCalls": 2
+    },
+    {
+      "tool": "find_and_show",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 1320,
+      "nMs": 63,
+      "sMs": 29,
+      "nCalls": 2
+    },
+    {
+      "tool": "detect_communities",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 2089,
+      "nMs": 0,
+      "sMs": 380,
+      "nCalls": 0
+    },
+    {
+      "tool": "analyze_complexity",
+      "repo": "promptvault",
+      "nTok": 9148,
+      "sTok": 260,
+      "nMs": 1258,
+      "sMs": 14,
+      "nCalls": 2
+    },
+    {
+      "tool": "search_conversations",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 203,
+      "nMs": 0,
+      "sMs": 857,
+      "nCalls": 0
+    },
+    {
+      "tool": "analyze_hotspots",
+      "repo": "promptvault",
+      "nTok": 305,
+      "sTok": 11,
+      "nMs": 939,
+      "sMs": 2913,
+      "nCalls": 1
+    },
+    {
+      "tool": "trace_call_chain",
+      "repo": "promptvault",
+      "nTok": 290,
+      "sTok": 0,
+      "nMs": 78,
+      "sMs": 1,
+      "nCalls": 3
+    },
+    {
+      "tool": "trace_call_chain",
+      "repo": "promptvault",
+      "nTok": 0,
+      "sTok": 0,
+      "nMs": 65,
+      "sMs": 1,
+      "nCalls": 2
+    },
+    {
+      "tool": "get_repo_outline",
+      "repo": "promptvault",
+      "nTok": 1045,
+      "sTok": 1537,
+      "nMs": 1238,
+      "sMs": 1,
+      "nCalls": 1
+    },
+    {
+      "tool": "trace_route",
+      "repo": "promptvault",
+      "nTok": 37489,
+      "sTok": 23,
+      "nMs": 78,
+      "sMs": 123,
+      "nCalls": 4
+    },
+    {
+      "tool": "get_knowledge_map",
+      "repo": "promptvault",
+      "nTok": 19422,
+      "sTok": 1659,
+      "nMs": 107,
+      "sMs": 227,
+      "nCalls": 7
+    },
+    {
+      "tool": "find_dead_code",
+      "repo": "promptvault",
+      "nTok": 12029,
+      "sTok": 1956,
+      "nMs": 632,
+      "sMs": 617,
+      "nCalls": 21
+    },
+    {
+      "tool": "impact_analysis",
+      "repo": "promptvault",
+      "nTok": 6625,
+      "sTok": 7693,
+      "nMs": 215,
+      "sMs": 122,
+      "nCalls": 10
+    },
+    {
+      "tool": "find_clones",
+      "repo": "promptvault",
+      "nTok": 14022,
+      "sTok": 1717,
+      "nMs": 28,
+      "sMs": 125,
+      "nCalls": 11
+    }
+  ]
+}

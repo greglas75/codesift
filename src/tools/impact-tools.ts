@@ -7,8 +7,8 @@ import type { CodeSymbol, CodeIndex, AffectedTest, RiskScore, ImpactResult } fro
 import type { AdjacencyIndex } from "./graph-tools.js";
 
 const DEFAULT_IMPACT_DEPTH = 2;
-const MAX_AFFECTED_SYMBOLS = 50;
-const MAX_DEPENDENCY_GRAPH_FILES = 30;
+const MAX_AFFECTED_SYMBOLS = 20;
+const MAX_DEPENDENCY_GRAPH_FILES = 15;
 const MAX_SOURCE_CHARS = 300; // Truncate source in impact results
 
 /**

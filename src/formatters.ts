@@ -31,17 +31,21 @@ interface FileTreeNode { name: string; path: string; type: "dir" | "file"; symbo
 export function formatFileTree(data: CompactFileEntry[] | FileTreeNode[] | { entries: CompactFileEntry[]; truncated: boolean; total: number; hint: string }): string {
   // Truncated compact
   if ("entries" in data && "truncated" in data) {
-    const lines = (data as { entries: CompactFileEntry[]; total: number; hint: string }).entries
-      .map((e) => e.symbols > 0 ? `${e.path} (${e.symbols})` : e.path);
-    return `${lines.join("\n")}\n\n(${data.hint})`;
+    const entries = (data as { entries: CompactFileEntry[]; total: number; hint: string }).entries;
+    const lines = entries.map((e) => e.symbols > 0 ? `${e.path} (${e.symbols})` : e.path);
+    return `${lines.join("\n")}\n\n(${(data as { hint: string }).hint})`;
   }
 
   const arr = data as Array<CompactFileEntry | FileTreeNode>;
   if (arr.length === 0) return "(empty)";
 
-  // Compact list
+  // Compact list — only show files WITH symbols (skip config/json/etc noise)
   if ("symbols" in arr[0]!) {
-    return (arr as CompactFileEntry[]).map((e) => e.symbols > 0 ? `${e.path} (${e.symbols})` : e.path).join("\n");
+    const withSymbols = (arr as CompactFileEntry[]).filter((e) => e.symbols > 0);
+    const without = arr.length - withSymbols.length;
+    let result = withSymbols.map((e) => `${e.path} (${e.symbols})`).join("\n");
+    if (without > 0) result += `\n(${without} files without symbols omitted)`;
+    return result;
   }
 
   // Nested tree → indent
@@ -145,7 +149,7 @@ interface DirSummary { path: string; file_count: number; symbol_count: number; l
 export function formatRepoOutline(data: { directories: DirSummary[]; total_symbols: number; total_files: number }): string {
   const header = `${data.total_files} files, ${data.total_symbols} symbols`;
   const lines = data.directories.map((d) =>
-    `${d.path} (${d.file_count} files, ${d.symbol_count} symbols) [${d.languages.join(",")}]`
+    `${String(d.symbol_count).padStart(4)} sym  ${d.path} (${d.file_count}f)`
   );
   return `${header}\n${lines.join("\n")}`;
 }
@@ -312,6 +316,48 @@ export function formatTraceRoute(data: RouteResult | string): string {
   return parts.join("\n");
 }
 
+// ── Diff outline ──────────────────────────────────
+
+interface DiffOutlineResult {
+  added: Array<{ name: string; kind: string; file: string; start_line: number }>;
+  modified: Array<{ name: string; kind: string; file: string; start_line: number }>;
+  deleted: string[];
+}
+
+export function formatDiffOutline(data: DiffOutlineResult): string {
+  const parts: string[] = [];
+  if (data.added.length > 0) {
+    parts.push(`added (${data.added.length}):`);
+    for (const s of data.added.slice(0, 50)) parts.push(`  + ${s.file}:${s.start_line} ${s.kind} ${s.name}`);
+    if (data.added.length > 50) parts.push(`  ... +${data.added.length - 50} more`);
+  }
+  if (data.modified.length > 0) {
+    parts.push(`modified (${data.modified.length}):`);
+    for (const s of data.modified.slice(0, 50)) parts.push(`  ~ ${s.file}:${s.start_line} ${s.kind} ${s.name}`);
+    if (data.modified.length > 50) parts.push(`  ... +${data.modified.length - 50} more`);
+  }
+  if (data.deleted.length > 0) {
+    parts.push(`deleted files (${data.deleted.length}):`);
+    for (const f of data.deleted) parts.push(`  - ${f}`);
+  }
+  if (parts.length === 0) return "(no changes)";
+  return parts.join("\n");
+}
+
+// ── Changed symbols ───────────────────────────────
+
+interface ChangedFileSymbols { file: string; symbols: string[]; diff?: string }
+
+export function formatChangedSymbols(data: ChangedFileSymbols[]): string {
+  if (data.length === 0) return "(no changed symbols)";
+  return data.map((f) => {
+    const MAX_PER_FILE = 10;
+    const shown = f.symbols.slice(0, MAX_PER_FILE).join(", ");
+    const more = f.symbols.length > MAX_PER_FILE ? ` +${f.symbols.length - MAX_PER_FILE} more` : "";
+    return `${f.file} (${f.symbols.length}): ${shown}${more}`;
+  }).join("\n");
+}
+
 // ── Impact analysis ───────────────────────────────
 
 interface ImpactResult {
@@ -324,37 +370,34 @@ interface ImpactResult {
 
 export function formatImpactAnalysis(data: ImpactResult): string {
   const parts: string[] = [];
-  parts.push(`changed files: ${data.changed_files.join(", ")}`);
+  parts.push(`changed: ${data.changed_files.join(", ")}`);
 
   if (data.risk_scores.length > 0) {
-    parts.push("\nrisk scores:");
+    parts.push("\nrisk:");
     for (const r of data.risk_scores) {
-      parts.push(`  [${r.risk}] ${r.file} (score=${r.score})`);
+      parts.push(`  [${r.risk}] ${r.file}`);
     }
   }
 
   if (data.affected_symbols.length > 0) {
-    parts.push(`\naffected symbols (${data.affected_symbols.length}):`);
-    for (const s of data.affected_symbols.slice(0, 30)) {
+    const MAX_SHOW = 15;
+    parts.push(`\naffected (${data.affected_symbols.length}):`);
+    for (const s of data.affected_symbols.slice(0, MAX_SHOW)) {
       parts.push(`  ${s.file}:${s.start_line} ${s.kind} ${s.name}`);
     }
-    if (data.affected_symbols.length > 30) parts.push(`  ... +${data.affected_symbols.length - 30} more`);
+    if (data.affected_symbols.length > MAX_SHOW) parts.push(`  +${data.affected_symbols.length - MAX_SHOW} more`);
   }
 
   if (data.affected_tests.length > 0) {
-    parts.push("\naffected tests:");
-    for (const t of data.affected_tests) {
-      parts.push(`  ${t.test_file}: ${t.reason}`);
+    parts.push("\ntests:");
+    for (const t of data.affected_tests.slice(0, 10)) {
+      parts.push(`  ${t.test_file}`);
     }
   }
 
-  const depEntries = Object.entries(data.dependency_graph);
-  if (depEntries.length > 0) {
-    parts.push(`\ndependency graph (${depEntries.length} files):`);
-    for (const [file, deps] of depEntries.slice(0, 20)) {
-      parts.push(`  ${file} → ${deps.join(", ")}`);
-    }
-  }
+  // Omit dep graph — too verbose, agent rarely uses it
+  const depCount = Object.keys(data.dependency_graph).length;
+  if (depCount > 0) parts.push(`\n(${depCount} files in dependency graph — omitted for brevity)`);
 
   return parts.join("\n");
 }

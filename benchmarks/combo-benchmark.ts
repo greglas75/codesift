@@ -1,17 +1,11 @@
 /**
- * COMBO benchmark: measures real-world tool combination patterns from usage data.
+ * Unified benchmark: top 13 tool sequences from usage data, native vs Sift.
+ * Real queries from usage.jsonl — exact calls agents made in 188 sessions.
  *
- * Based on analysis of 3,427 calls across 188 sessions, this benchmark tests
- * the 7 most frequent tool combination patterns and compares them against
- * optimal single-call alternatives.
- *
- * Flow 1 (59×): search_symbols + search_text → get_context_bundle
- * Flow 2 (864 self-loops): search_text × 3 → codebase_retrieval batch
- * Flow 3 (153 ping-pong): codebase_retrieval + search_text × 2 → single CR high budget
- * Flow 4 (47×): get_file_tree + search_text → codebase_retrieval combined
- * Flow 5 (47×): search_patterns + search_text → search_patterns only
- * Flow 6 (85 self-loops): search_symbols × 3 → codebase_retrieval symbol batch
- * Flow 7 (111×): search_text → search_symbols → search_text → findAndShow
+ * Sequences discovered via n-gram analysis on deduplicated session tool chains:
+ *   2-element: st→cr(82×), cr→st(81×), ss→st(64×), st→ss(57×), tree→st(50×)
+ *   3-element: pat→st→pat(39×), st→pat→st(40×), st→cr→st(41×), st→ss→st(27×), st→tree→st(27×)
+ *   4-element: pat→st→pat→st(37×), st→pat→st→pat(35×), cr→st→cr→st(12×)
  *
  * Run: npx tsx benchmarks/combo-benchmark.ts
  */
@@ -19,48 +13,37 @@ import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import * as fs from "fs";
 import * as path from "path";
+import { homedir } from "os";
 import { searchSymbols, searchText } from "../src/tools/search-tools.js";
-import { getContextBundle, findAndShow, formatSymbolCompact, formatBundleCompact } from "../src/tools/symbol-tools.js";
-import { getFileTree } from "../src/tools/outline-tools.js";
+import { getFileTree, getFileOutline } from "../src/tools/outline-tools.js";
 import { searchPatterns } from "../src/tools/pattern-tools.js";
 import { codebaseRetrieval } from "../src/retrieval/codebase-retrieval.js";
-import { getCodeIndex } from "../src/tools/index-tools.js";
-import { formatSearchSymbols, formatSearchPatterns, formatFileTree } from "../src/formatters.js";
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-type RepoDef = { id: string; root: string; label: string };
-
-const REPOS: RepoDef[] = [
-  { id: "local/codesift-mcp", root: "/Users/greglas/DEV/codesift-mcp", label: "codesift-mcp" },
-  { id: "local/translation-qa", root: "/Users/greglas/DEV/translation-qa", label: "translation-qa" },
-  { id: "local/promptvault", root: "/Users/greglas/DEV/Methodology Platform/promptvault", label: "promptvault" },
-];
+import { getCodeIndex, listAllRepos } from "../src/tools/index-tools.js";
+import { formatSearchSymbols, formatSearchPatterns, formatFileTree, formatFileOutline } from "../src/formatters.js";
 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
 function tokStr(s: string): number { return Math.ceil(s.length / 4); }
-function tokJson(v: unknown): number { return Math.ceil(JSON.stringify(v, null, 2).length / 4); }
 function pct(current: number, baseline: number): string {
   if (baseline === 0) return current === 0 ? "0%" : "n/a";
   const d = Math.round(((current - baseline) / baseline) * 100);
   return `${d > 0 ? "+" : ""}${d}%`;
 }
+function fmtTime(ms: number): string { return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`; }
+function fmtNum(n: number): string { return n.toLocaleString("en-US"); }
 
 const RG_EXCLUDES = "--glob=!node_modules --glob=!.git --glob=!.next --glob=!dist --glob=!.codesift --glob=!coverage --glob=!.playwright-mcp --glob=!*.d.ts --glob=!generated";
-const GREP_HEAD_LIMIT = 250;
 
-function runRg(root: string, pattern: string, extra = ""): { output: string; ms: number; lines: number } {
-  const cmd = `rg --no-heading -n ${extra} ${RG_EXCLUDES} -- '${pattern.replace(/'/g, "'\\''")}' '${root}' | head -${GREP_HEAD_LIMIT}`;
+function runRg(root: string, pattern: string, extra = ""): { output: string; ms: number } {
+  const escaped = pattern.replace(/'/g, "'\\''");
+  const cmd = `rg --no-heading -n ${extra} ${RG_EXCLUDES} -- '${escaped}' '${root}' | head -250`;
   const start = performance.now();
   let output = "";
   try { output = execSync(cmd, { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024, timeout: 30000, shell: "/bin/sh" }); }
   catch (err: unknown) { if (err && typeof err === "object" && "stdout" in err) output = String((err as { stdout?: string }).stdout ?? ""); }
-  return { output, ms: Math.round(performance.now() - start), lines: output.split("\n").filter(Boolean).length };
+  return { output, ms: Math.round(performance.now() - start) };
 }
 
 function runFind(root: string, pattern: string): { output: string; ms: number } {
@@ -72,146 +55,113 @@ function runFind(root: string, pattern: string): { output: string; ms: number } 
   return { output, ms: Math.round(performance.now() - start) };
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface ComboRow {
-  flow: string;
-  query: string;
-  repo: string;
-  nativeTok: number;
-  nativeMs: number;
-  currentTok: number;
-  optimalTok: number;
-  currentMs: number;
-  optimalMs: number;
-  currentCalls: number;
-  optimalCalls: number;
+function readFileSafe(p: string): string {
+  try { return readFileSync(p, "utf-8"); } catch { return ""; }
 }
 
-const FLOW_META: Record<string, { description: string; current: string; optimal: string; usageCount: number }> = {
-  ss_then_st: {
-    description: "search_symbols + search_text → get_context_bundle",
-    current: "searchSymbols(top_k=1) + searchText(context_lines=3)",
-    optimal: "getContextBundle (symbol + imports + siblings)",
-    usageCount: 59,
-  },
-  st_x3_batch: {
-    description: "search_text × 3 → codebase_retrieval batch",
-    current: "3× sequential searchText(auto_group)",
-    optimal: "1× codebaseRetrieval with 3 text queries",
-    usageCount: 864,
-  },
-  cr_drilldown: {
-    description: "codebase_retrieval + search_text × 2 → single CR high budget",
-    current: "codebaseRetrieval(5K) + 2× searchText drill-down",
-    optimal: "1× codebaseRetrieval(15K) with all 3 queries",
-    usageCount: 153,
-  },
-  tree_then_st: {
-    description: "get_file_tree + search_text → codebase_retrieval combined",
-    current: "getFileTree(compact) + searchText(auto_group)",
-    optimal: "1× codebaseRetrieval with file_tree + text",
-    usageCount: 47,
-  },
-  patterns_then_st: {
-    description: "search_patterns + search_text → search_patterns only",
-    current: "searchPatterns + searchText(context_lines=3) (redundant)",
-    optimal: "searchPatterns only (already includes context)",
-    usageCount: 47,
-  },
-  ss_x3_batch: {
-    description: "search_symbols × 3 → codebase_retrieval symbol batch",
-    current: "3× sequential searchSymbols(top_k=3, include_source)",
-    optimal: "1× codebaseRetrieval with 3 symbol queries",
-    usageCount: 85,
-  },
-  st_ss_st_pingpong: {
-    description: "search_text → search_symbols → search_text → findAndShow",
-    current: "searchText + searchSymbols(top_k=1) + searchText(context=2)",
-    optimal: "findAndShow(includeRefs=true)",
-    usageCount: 111,
-  },
-};
-
 // ---------------------------------------------------------------------------
-// Query sets
+// Usage data
 // ---------------------------------------------------------------------------
 
-const FLOW1_QUERIES = ["searchText", "getFileTree", "loadConfig", "buildBM25Index", "handleError", "validate", "parse", "create"];
+interface UsageEntry { ts: number; tool: string; repo: string; args_summary: Record<string, unknown>; session_id: string }
 
-const FLOW2_TRIPLES = [
-  ["TODO", "FIXME", "HACK"],
-  ["error", "catch", "throw"],
-  ["async", "await", "Promise"],
-  ["config", "env", "settings"],
-  ["export", "default", "module"],
-  ["create", "update", "delete"],
-  ["import", "require", "from"],
-  ["test", "describe", "expect"],
-];
-
-const FLOW3_TRIPLES = [
-  ["searchSymbols", "BM25", "score"],
-  ["codebaseRetrieval", "SubQuery", "tokenBudget"],
-  ["getFileTree", "buildTree", "pathDepth"],
-  ["loadConfig", "registryPath", "defaultTokenBudget"],
-  ["findReferences", "wordBoundary", "ripgrep"],
-  ["searchPatterns", "BUILTIN_PATTERNS", "PatternMatch"],
-  ["getContextBundle", "extractImportLines", "siblings"],
-  ["assembleContext", "estimateTokens", "truncated"],
-];
-
-const FLOW4_QUERIES = ["export", "import", "interface", "function", "class", "const", "async", "config"];
-
-const FLOW5_PAIRS = [
-  { pattern: "empty-catch", followUp: "catch" },
-  { pattern: "console-log", followUp: "console.log" },
-  { pattern: "any-type", followUp: ": any" },
-  { pattern: "empty-catch", followUp: "try" },
-  { pattern: "console-log", followUp: "console.warn" },
-  { pattern: "any-type", followUp: "as any" },
-];
-
-const FLOW6_TRIPLES = [
-  ["search", "index", "parse"],
-  ["create", "update", "delete"],
-  ["format", "validate", "transform"],
-  ["load", "save", "cache"],
-  ["handle", "process", "dispatch"],
-  ["build", "compile", "bundle"],
-  ["connect", "disconnect", "close"],
-  ["encode", "decode", "compress"],
-];
-
-const FLOW7_PAIRS = [
-  ["searchText", "BM25"],
-  ["getFileTree", "buildTree"],
-  ["loadConfig", "registryPath"],
-  ["findReferences", "wordBoundary"],
-  ["formatSymbolCompact", "CodeSymbol"],
-  ["codebaseRetrieval", "SubQuery"],
-  ["searchPatterns", "BUILTIN_PATTERNS"],
-  ["getContextBundle", "extractImportLines"],
-];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function printRow(query: string, row: ComboRow): void {
-  console.log(
-    `${query.padEnd(28)} ${String(row.nativeTok).padStart(8)} ${String(row.currentTok).padStart(8)} ${String(row.optimalTok).padStart(8)} ` +
-    `${pct(row.optimalTok, row.nativeTok).padStart(9)} ${String(row.nativeMs).padStart(7)} ${String(row.currentMs).padStart(7)} ${String(row.optimalMs).padStart(7)}`
-  );
+function loadUsageEntries(): UsageEntry[] {
+  const raw = readFileSync(path.join(homedir(), ".codesift", "usage.jsonl"), "utf-8");
+  const entries: UsageEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try { const e = JSON.parse(line); if (e.tool && e.session_id) entries.push(e); } catch { /* skip */ }
+  }
+  return entries;
 }
 
-function printTableHeader(): void {
-  console.log(
-    `${"query".padEnd(28)} ${"nat_tok".padStart(8)} ${"cur_tok".padStart(8)} ${"opt_tok".padStart(8)} ` +
-    `${"nat→opt".padStart(9)} ${"nat_ms".padStart(7)} ${"cur_ms".padStart(7)} ${"opt_ms".padStart(7)}`
-  );
+// ---------------------------------------------------------------------------
+// Types & table
+// ---------------------------------------------------------------------------
+
+interface Row { category: string; task: string; repo: string; nativeTok: number; nativeMs: number; siftTok: number; siftMs: number }
+
+const COL = { cat: 22, runs: 4, natTok: 10, siftTok: 10, diff: 8, natTime: 8, siftTime: 8, wins: 5 };
+
+function hLine(l: string, m: string, r: string): string {
+  return `${l}${"─".repeat(COL.cat+2)}${m}${"─".repeat(COL.runs+2)}${m}${"─".repeat(COL.natTok+2)}${m}${"─".repeat(COL.siftTok+2)}${m}${"─".repeat(COL.diff+2)}${m}${"─".repeat(COL.natTime+2)}${m}${"─".repeat(COL.siftTime+2)}${m}${"─".repeat(COL.wins+2)}${r}`;
+}
+
+function tblRow(cat: string, runs: string, natTok: string, siftTok: string, diff: string, natT: string, siftT: string, wins: string): string {
+  return `│ ${cat.padEnd(COL.cat)} │ ${runs.padStart(COL.runs)} │ ${natTok.padStart(COL.natTok)} │ ${siftTok.padStart(COL.siftTok)} │ ${diff.padStart(COL.diff)} │ ${natT.padStart(COL.natTime)} │ ${siftT.padStart(COL.siftTime)} │ ${wins.padStart(COL.wins)} │`;
+}
+
+// ---------------------------------------------------------------------------
+// Native & Sift call replay
+// ---------------------------------------------------------------------------
+
+const PAT_RX: Record<string, string> = { "empty-catch": "catch\\s*\\{", "console-log": "console\\.log\\(", "any-type": ": any[^A-Za-z]", "scaffolding": "TODO|FIXME|HACK", "unbounded-findmany": "findMany\\(" };
+
+function runNativeCall(root: string, e: UsageEntry): { output: string; ms: number } {
+  const q = (e.args_summary.query as string) ?? "";
+  const fp = e.args_summary.file_pattern as string | undefined;
+  switch (e.tool) {
+    case "search_text":
+      return runRg(root, q, `${fp ? `--glob=${fp} ` : ""}${e.args_summary.context_lines ? `-C ${e.args_summary.context_lines}` : ""}`);
+    case "search_symbols":
+      return runRg(root, q, `--glob=*.ts --glob=*.tsx -A 10${fp ? ` --glob=${fp}` : ""}`);
+    case "codebase_retrieval":
+      return runRg(root, q || "export", "--glob=*.ts --glob=*.tsx");
+    case "search_patterns":
+      return runRg(root, PAT_RX[q] ?? (q || "TODO"), "--glob=*.ts");
+    case "get_file_tree":
+      return runFind(root, "-name '*.ts' -o -name '*.tsx'");
+    case "get_file_outline": {
+      const fp2 = e.args_summary.file_path as string;
+      const start = performance.now();
+      const content = readFileSafe(path.join(root, fp2 || ""));
+      return { output: content, ms: Math.round(performance.now() - start) };
+    }
+    default:
+      return { output: "", ms: 0 };
+  }
+}
+
+async function runSiftCall(e: UsageEntry): Promise<{ text: string; ms: number }> {
+  const start = performance.now();
+  let text = "";
+  try {
+    switch (e.tool) {
+      case "search_text": {
+        text = await searchText(e.repo, e.args_summary.query as string, { compact: true, file_pattern: e.args_summary.file_pattern as string | undefined, context_lines: e.args_summary.context_lines as number | undefined, regex: e.args_summary.regex as boolean | undefined });
+        break;
+      }
+      case "search_symbols": {
+        const r = await searchSymbols(e.repo, e.args_summary.query as string, { top_k: 5, include_source: true, file_pattern: e.args_summary.file_pattern as string | undefined });
+        text = formatSearchSymbols(r);
+        break;
+      }
+      case "codebase_retrieval": {
+        const types = e.args_summary.query_types;
+        const budget = (e.args_summary.token_budget as number) ?? 10000;
+        const queryArr = Array.isArray(types) ? (types as string[]).map(t => ({ type: t, query: (e.args_summary.query as string) ?? "code" })) : [{ type: "text", query: "code" }];
+        const r = await codebaseRetrieval(e.repo, queryArr, budget);
+        text = JSON.stringify(r, null, 2);
+        break;
+      }
+      case "search_patterns": {
+        const q = e.args_summary.query as string | undefined;
+        if (q) { const r = await searchPatterns(e.repo, q); text = formatSearchPatterns(r); }
+        break;
+      }
+      case "get_file_tree": {
+        const r = await getFileTree(e.repo, { compact: true, path_prefix: e.args_summary.path_prefix as string | undefined });
+        text = formatFileTree(r);
+        break;
+      }
+      case "get_file_outline": {
+        const fp = e.args_summary.file_path as string;
+        if (fp) { const r = await getFileOutline(e.repo, fp); text = formatFileOutline(r); }
+        break;
+      }
+    }
+  } catch { /* skip */ }
+  return { text, ms: Math.round(performance.now() - start) };
 }
 
 // ---------------------------------------------------------------------------
@@ -220,483 +170,163 @@ function printTableHeader(): void {
 
 async function main(): Promise<void> {
   const startedAt = new Date();
-  const allRows: ComboRow[] = [];
+  const allRows: Row[] = [];
 
-  // Pre-warm indexes
-  console.log("Pre-warming indexes...");
-  for (const repo of REPOS) {
-    await getCodeIndex(repo.id);
+  console.log("Loading usage.jsonl...");
+  const entries = loadUsageEntries();
+  console.log(`  ${entries.length} entries loaded`);
+
+  const sessions = new Map<string, UsageEntry[]>();
+  for (const e of entries) {
+    if (!sessions.has(e.session_id)) sessions.set(e.session_id, []);
+    sessions.get(e.session_id)!.push(e);
   }
-  console.log("Indexes ready.\n");
+  for (const calls of Array.from(sessions.values())) calls.sort((a, b) => a.ts - b.ts);
 
-  // ═══════════════════════════════════════════════════════
-  // Flow 1: search_symbols + search_text → get_context_bundle
-  // Usage: 59 transitions (24% of search_symbols)
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 1: search_symbols + search_text → get_context_bundle ═══");
-  console.log("Usage data: 59 transitions. Current: 2 calls | Optimal: 1 call\n");
+  const repoList = await listAllRepos({ compact: true }) as string[];
+  const available = new Set(repoList);
+  console.log(`  ${available.size} repos indexed`);
 
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
+  const usedRepos = new Set<string>();
+  for (const e of entries) if (e.repo && available.has(e.repo)) usedRepos.add(e.repo);
+  console.log(`  Pre-warming ${usedRepos.size} repos...`);
+  const warmStart = performance.now();
+  for (const repo of Array.from(usedRepos)) await getCodeIndex(repo);
+  console.log(`  Warmed in ${fmtTime(Math.round(performance.now() - warmStart))}\n`);
 
-    for (const q of FLOW1_QUERIES) {
-      // Native: Grep for function def + Grep for usages (what agent does with system tools)
+  const rootCache = new Map<string, string>();
+  async function getRoot(repo: string): Promise<string | null> {
+    if (rootCache.has(repo)) return rootCache.get(repo)!;
+    const idx = await getCodeIndex(repo);
+    const root = (idx as { root?: string })?.root;
+    if (root) { rootCache.set(repo, root); return root; }
+    return null;
+  }
+
+  // Deduplicate consecutive same-tool calls
+  const SKIP = new Set(["list_repos", "usage_stats", "index_folder", "index_file", "index_conversations", "suggest_queries"]);
+  function dedup(calls: UsageEntry[]): UsageEntry[] {
+    const r = [calls[0]!];
+    for (let i = 1; i < calls.length; i++) {
+      if (calls[i]!.tool !== calls[i - 1]!.tool) r.push(calls[i]!);
+    }
+    return r;
+  }
+
+  // Extract all instances of a specific tool sequence from sessions
+  function extractNgrams(pattern: string[]): UsageEntry[][] {
+    const n = pattern.length;
+    const instances: UsageEntry[][] = [];
+    for (const rawCalls of Array.from(sessions.values())) {
+      const calls = dedup(rawCalls).filter(c => !SKIP.has(c.tool));
+      for (let i = 0; i <= calls.length - n; i++) {
+        const slice = calls.slice(i, i + n);
+        if (slice.every((c, j) => c.tool === pattern[j]) && slice[0]!.repo && available.has(slice[0]!.repo)) {
+          instances.push(slice);
+        }
+      }
+    }
+    return instances;
+  }
+
+  // ---------------------------------------------------------------------------
+  // The 13 sequences (top 5 bigrams, top 5 trigrams, top 3 4-grams)
+  // ---------------------------------------------------------------------------
+
+  const SEQUENCES: Array<{ name: string; pattern: string[] }> = [
+    // 2-element
+    { name: "st→cr", pattern: ["search_text", "codebase_retrieval"] },
+    { name: "cr→st", pattern: ["codebase_retrieval", "search_text"] },
+    { name: "ss→st", pattern: ["search_symbols", "search_text"] },
+    { name: "st→ss", pattern: ["search_text", "search_symbols"] },
+    { name: "tree→st", pattern: ["get_file_tree", "search_text"] },
+    // 3-element
+    { name: "pat→st→pat", pattern: ["search_patterns", "search_text", "search_patterns"] },
+    { name: "st→pat→st", pattern: ["search_text", "search_patterns", "search_text"] },
+    { name: "st→cr→st", pattern: ["search_text", "codebase_retrieval", "search_text"] },
+    { name: "st→ss→st", pattern: ["search_text", "search_symbols", "search_text"] },
+    { name: "st→tree→st", pattern: ["search_text", "get_file_tree", "search_text"] },
+    // 4-element
+    { name: "pat→st→pat→st", pattern: ["search_patterns", "search_text", "search_patterns", "search_text"] },
+    { name: "st→pat→st→pat", pattern: ["search_text", "search_patterns", "search_text", "search_patterns"] },
+    { name: "cr→st→cr→st", pattern: ["codebase_retrieval", "search_text", "codebase_retrieval", "search_text"] },
+  ];
+
+  for (const seq of SEQUENCES) {
+    const instances = extractNgrams(seq.pattern);
+    console.log(`═══ ${seq.pattern.join(" → ")} (${instances.length} instances) ═══`);
+
+    for (const calls of instances) {
+      const root = await getRoot(calls[0]!.repo);
+      if (!root) continue;
+
+      const repoShort = calls[0]!.repo.split("/")[1] ?? calls[0]!.repo;
+      const label = calls.map(c => ((c.args_summary?.query as string) ?? "-").slice(0, 15)).join("→");
+
+      // Native
       const natStart = performance.now();
-      const grepDef = runRg(repo.root, `(export )?(async )?function ${q}`, "--glob=*.ts -A 20");
-      const grepUsage = runRg(repo.root, q, "--glob=*.ts -C 3");
+      let natTok = 0;
+      for (const c of calls) { natTok += tokStr(runNativeCall(root, c).output); }
       const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(grepDef.output) + tokStr(grepUsage.output);
 
-      // Current: searchSymbols → searchText
-      const curStart = performance.now();
-      const symResults = await searchSymbols(repo.id, q, { top_k: 1, include_source: true });
-      const textResults = await searchText(repo.id, q, { context_lines: 3, compact: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = (symResults[0] ? tokStr(formatSearchSymbols(symResults)) : 0) + tokStr(textResults);
+      // Sift
+      const siftStart = performance.now();
+      let siftTok = 0;
+      for (const c of calls) { siftTok += tokStr((await runSiftCall(c)).text); }
+      const siftMs = Math.round(performance.now() - siftStart);
 
-      // Optimal: getContextBundle
-      const optStart = performance.now();
-      const bundle = await getContextBundle(repo.id, q);
-      const optMs = Math.round(performance.now() - optStart);
-      if (!bundle) continue;
-      const optTok = tokStr(formatBundleCompact(bundle));
-
-      const row: ComboRow = { flow: "ss_then_st", query: q, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
+      const row: Row = { category: seq.name, task: label, repo: calls[0]!.repo, nativeTok: natTok, nativeMs: natMs, siftTok, siftMs };
       allRows.push(row);
-      printRow(q, row);
+      console.log(`  ${(repoShort + ":" + label).slice(0,55).padEnd(55)} ${String(natTok).padStart(7)} ${String(siftTok).padStart(7)} ${pct(siftTok, natTok).padStart(7)} ${String(natMs).padStart(6)} ${String(siftMs).padStart(6)}`);
     }
     console.log();
   }
 
-  // ═══════════════════════════════════════════════════════
-  // Flow 2: search_text × 3 → codebase_retrieval batch
-  // Usage: 864 search_text self-loops
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 2: search_text × 3 → codebase_retrieval batch ═══");
-  console.log("Usage data: 864 self-loops. Current: 3 calls | Optimal: 1 call\n");
-
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
-
-    for (const [q1, q2, q3] of FLOW2_TRIPLES) {
-      const label = `${q1}+${q2}+${q3}`;
-
-      // Native: 3× sequential rg
-      const natStart = performance.now();
-      const g1 = runRg(repo.root, q1, "--glob=*.ts");
-      const g2 = runRg(repo.root, q2, "--glob=*.ts");
-      const g3 = runRg(repo.root, q3, "--glob=*.ts");
-      const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(g1.output) + tokStr(g2.output) + tokStr(g3.output);
-
-      // Current: 3× sequential searchText
-      const curStart = performance.now();
-      const r1 = await searchText(repo.id, q1, { auto_group: true, compact: true });
-      const r2 = await searchText(repo.id, q2, { auto_group: true, compact: true });
-      const r3 = await searchText(repo.id, q3, { auto_group: true, compact: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = tokStr(r1) + tokStr(r2) + tokStr(r3);
-
-      // Optimal: 1× codebaseRetrieval batch
-      const optStart = performance.now();
-      const batch = await codebaseRetrieval(repo.id, [
-        { type: "text", query: q1 },
-        { type: "text", query: q2 },
-        { type: "text", query: q3 },
-      ], 10000);
-      const optMs = Math.round(performance.now() - optStart);
-      const optTok = tokJson(batch);
-
-      const row: ComboRow = { flow: "st_x3_batch", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
-      allRows.push(row);
-      printRow(label, row);
-    }
-    console.log();
+  // ---------------------------------------------------------------------------
+  // Summary
+  // ---------------------------------------------------------------------------
+  const categories = Array.from(new Set(allRows.map(r => r.category)));
+  const byCategory: Record<string, { natTok: number; siftTok: number; natMs: number; siftMs: number; wins: number; count: number }> = {};
+  for (const cat of categories) {
+    const rows = allRows.filter(r => r.category === cat);
+    byCategory[cat] = {
+      natTok: rows.reduce((s, r) => s + r.nativeTok, 0),
+      siftTok: rows.reduce((s, r) => s + r.siftTok, 0),
+      natMs: rows.reduce((s, r) => s + r.nativeMs, 0),
+      siftMs: rows.reduce((s, r) => s + r.siftMs, 0),
+      wins: rows.filter(r => r.siftTok < r.nativeTok).length,
+      count: rows.length,
+    };
   }
 
-  // ═══════════════════════════════════════════════════════
-  // Flow 3: codebase_retrieval + search_text × 2 → single CR high budget
-  // Usage: 153 ping-pong transitions
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 3: CR + search_text × 2 → single CR high budget ═══");
-  console.log("Usage data: 153 transitions. Current: 3 calls | Optimal: 1 call\n");
-
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
-
-    for (const [primary, drill1, drill2] of FLOW3_TRIPLES) {
-      const label = `${primary}→${drill1},${drill2}`;
-
-      // Native: 3× rg (initial + 2 drill-downs with context)
-      const natStart = performance.now();
-      const gPrimary = runRg(repo.root, primary, "--glob=*.ts");
-      const gDrill1 = runRg(repo.root, drill1, "--glob=*.ts -C 2");
-      const gDrill2 = runRg(repo.root, drill2, "--glob=*.ts -C 2");
-      const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(gPrimary.output) + tokStr(gDrill1.output) + tokStr(gDrill2.output);
-
-      // Current: CR(5K) + 2× searchText drill-down
-      const curStart = performance.now();
-      const crResult = await codebaseRetrieval(repo.id, [
-        { type: "text", query: primary },
-      ], 5000);
-      const drillR1 = await searchText(repo.id, drill1, { context_lines: 2, compact: true });
-      const drillR2 = await searchText(repo.id, drill2, { context_lines: 2, compact: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = tokJson(crResult) + tokStr(drillR1) + tokStr(drillR2);
-
-      // Optimal: single CR with all 3 queries + higher budget
-      const optStart = performance.now();
-      const batchResult = await codebaseRetrieval(repo.id, [
-        { type: "text", query: primary },
-        { type: "text", query: drill1, context_lines: 2 },
-        { type: "text", query: drill2, context_lines: 2 },
-      ], 15000);
-      const optMs = Math.round(performance.now() - optStart);
-      const optTok = tokJson(batchResult);
-
-      const row: ComboRow = { flow: "cr_drilldown", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
-      allRows.push(row);
-      printRow(label.slice(0, 28), row);
-    }
-    console.log();
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // Flow 4: get_file_tree + search_text → codebase_retrieval combined
-  // Usage: 47 transitions (26% of get_file_tree)
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 4: get_file_tree + search_text → CR combined ═══");
-  console.log("Usage data: 47 transitions. Current: 2 calls | Optimal: 1 call\n");
-
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
-
-    for (const q of FLOW4_QUERIES) {
-      // Native: find (file tree) + rg (text search)
-      const natStart = performance.now();
-      const findResult = runFind(repo.root, "-name '*.ts' -o -name '*.tsx'");
-      const grepResult = runRg(repo.root, q, "--glob=*.ts");
-      const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(findResult.output) + tokStr(grepResult.output);
-
-      // Current: getFileTree + searchText
-      const curStart = performance.now();
-      const tree = await getFileTree(repo.id, { compact: true });
-      const textResult = await searchText(repo.id, q, { auto_group: true, compact: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = tokStr(formatFileTree(tree)) + tokStr(textResult);
-
-      // Optimal: single codebaseRetrieval
-      const optStart = performance.now();
-      const batch = await codebaseRetrieval(repo.id, [
-        { type: "file_tree", compact: true },
-        { type: "text", query: q },
-      ], 10000);
-      const optMs = Math.round(performance.now() - optStart);
-      const optTok = tokJson(batch);
-
-      const row: ComboRow = { flow: "tree_then_st", query: q, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
-      allRows.push(row);
-      printRow(q, row);
-    }
-    console.log();
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // Flow 5: search_patterns + search_text → search_patterns only
-  // Usage: 47 transitions (39% of search_patterns)
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 5: search_patterns + search_text → patterns only ═══");
-  console.log("Usage data: 47 transitions. Current: 2 calls | Optimal: 1 call\n");
-
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
-
-    for (const { pattern, followUp } of FLOW5_PAIRS) {
-      const label = `${pattern}+${followUp}`;
-
-      // Native: rg for pattern + rg for follow-up with context
-      const PATTERN_REGEX: Record<string, string> = {
-        "empty-catch": "catch\\s*\\{\\s*\\}",
-        "console-log": "console\\.log\\(",
-        "any-type": ": any[^A-Za-z]",
-      };
-      const natStart = performance.now();
-      const gPat = runRg(repo.root, PATTERN_REGEX[pattern] ?? pattern, "--glob=*.ts");
-      const gFollow = runRg(repo.root, followUp, "--glob=*.ts -C 3");
-      const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(gPat.output) + tokStr(gFollow.output);
-
-      // Current: searchPatterns + redundant searchText
-      const curStart = performance.now();
-      const patResult = await searchPatterns(repo.id, pattern);
-      const followUpResult = await searchText(repo.id, followUp, { context_lines: 3, compact: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = tokStr(formatSearchPatterns(patResult)) + tokStr(followUpResult);
-
-      // Optimal: searchPatterns alone (already includes context per match)
-      const optStart = performance.now();
-      const optResult = await searchPatterns(repo.id, pattern);
-      const optMs = Math.round(performance.now() - optStart);
-      const optTok = tokStr(formatSearchPatterns(optResult));
-
-      const row: ComboRow = { flow: "patterns_then_st", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 2, optimalCalls: 1 };
-      allRows.push(row);
-      printRow(label, row);
-    }
-    console.log();
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // Flow 6: search_symbols × 3 → codebase_retrieval symbol batch
-  // Usage: 85 search_symbols self-loops
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 6: search_symbols × 3 → CR symbol batch ═══");
-  console.log("Usage data: 85 self-loops. Current: 3 calls | Optimal: 1 call\n");
-
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
-
-    for (const [q1, q2, q3] of FLOW6_TRIPLES) {
-      const label = `${q1}+${q2}+${q3}`;
-
-      // Native: 3× rg for function definitions with context
-      const natStart = performance.now();
-      const g1 = runRg(repo.root, `(export )?(async )?function ${q1}[A-Z]`, "--glob=*.ts -A 20");
-      const g2 = runRg(repo.root, `(export )?(async )?function ${q2}[A-Z]`, "--glob=*.ts -A 20");
-      const g3 = runRg(repo.root, `(export )?(async )?function ${q3}[A-Z]`, "--glob=*.ts -A 20");
-      const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(g1.output) + tokStr(g2.output) + tokStr(g3.output);
-
-      // Current: 3× sequential searchSymbols
-      const curStart = performance.now();
-      const s1 = await searchSymbols(repo.id, q1, { top_k: 3, include_source: true });
-      const s2 = await searchSymbols(repo.id, q2, { top_k: 3, include_source: true });
-      const s3 = await searchSymbols(repo.id, q3, { top_k: 3, include_source: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = tokStr(formatSearchSymbols(s1)) + tokStr(formatSearchSymbols(s2)) + tokStr(formatSearchSymbols(s3));
-
-      // Optimal: 1× codebaseRetrieval symbol batch
-      const optStart = performance.now();
-      const batch = await codebaseRetrieval(repo.id, [
-        { type: "symbols", query: q1, top_k: 3 },
-        { type: "symbols", query: q2, top_k: 3 },
-        { type: "symbols", query: q3, top_k: 3 },
-      ], 10000);
-      const optMs = Math.round(performance.now() - optStart);
-      const optTok = tokJson(batch);
-
-      const row: ComboRow = { flow: "ss_x3_batch", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
-      allRows.push(row);
-      printRow(label, row);
-    }
-    console.log();
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // Flow 7: search_text → search_symbols → search_text → findAndShow
-  // Usage: 111 transitions (52 ST→SS + 59 SS→ST)
-  // ═══════════════════════════════════════════════════════
-  console.log("═══ Flow 7: ST → SS → ST ping-pong → findAndShow ═══");
-  console.log("Usage data: 111 transitions. Current: 3 calls | Optimal: 1 call\n");
-
-  for (const repo of REPOS) {
-    console.log(`repo: ${repo.label}`);
-    printTableHeader();
-
-    for (const [symbolQuery, relatedQuery] of FLOW7_PAIRS) {
-      const label = `${symbolQuery}→${relatedQuery}`;
-
-      // Native: rg(text) + rg(function def) + rg(related with context)
-      const natStart = performance.now();
-      const gText = runRg(repo.root, symbolQuery, "--glob=*.ts");
-      const gDef = runRg(repo.root, `(export )?(async )?function ${symbolQuery}`, "--glob=*.ts -A 20");
-      const gRelated = runRg(repo.root, relatedQuery, "--glob=*.ts -C 2");
-      const natMs = Math.round(performance.now() - natStart);
-      const nativeTok = tokStr(gText.output) + tokStr(gDef.output) + tokStr(gRelated.output);
-
-      // Current: searchText → searchSymbols → searchText
-      const curStart = performance.now();
-      const textR1 = await searchText(repo.id, symbolQuery, { compact: true });
-      const symR = await searchSymbols(repo.id, symbolQuery, { top_k: 1, include_source: true });
-      const textR2 = await searchText(repo.id, relatedQuery, { context_lines: 2, compact: true });
-      const curMs = Math.round(performance.now() - curStart);
-      const curTok = tokStr(textR1) + (symR[0] ? tokStr(formatSearchSymbols(symR)) : 0) + tokStr(textR2);
-
-      // Optimal: findAndShow with refs
-      const optStart = performance.now();
-      const found = await findAndShow(repo.id, symbolQuery, true);
-      const optMs = Math.round(performance.now() - optStart);
-      if (!found) continue;
-      const optTok = tokStr(formatSymbolCompact(found.symbol)) + (found.references ? tokStr(JSON.stringify(found.references.length)) : 0);
-
-      const row: ComboRow = { flow: "st_ss_st_pingpong", query: label, repo: repo.label, nativeTok, nativeMs: natMs, currentTok: curTok, optimalTok: optTok, currentMs: curMs, optimalMs: optMs, currentCalls: 3, optimalCalls: 1 };
-      allRows.push(row);
-      printRow(label, row);
-    }
-    console.log();
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // Summary — box table format
-  // ═══════════════════════════════════════════════════════
-
-  const flowIds = Object.keys(FLOW_META);
-  const byFlow: Record<string, { natTok: number; curTok: number; optTok: number; natMs: number; curMs: number; optMs: number; optWins: number; curWins: number; ties: number; count: number; curCalls: number; optCalls: number }> = {};
-
-  for (const fid of flowIds) {
-    const rows = allRows.filter(r => r.flow === fid);
-    if (rows.length === 0) continue;
-
-    const natTok = rows.reduce((s, r) => s + r.nativeTok, 0);
-    const curTok = rows.reduce((s, r) => s + r.currentTok, 0);
-    const optTok = rows.reduce((s, r) => s + r.optimalTok, 0);
-    const natMs = rows.reduce((s, r) => s + r.nativeMs, 0);
-    const curMs = rows.reduce((s, r) => s + r.currentMs, 0);
-    const optMs = rows.reduce((s, r) => s + r.optimalMs, 0);
-    const curCalls = rows.reduce((s, r) => s + r.currentCalls, 0);
-    const optCalls = rows.reduce((s, r) => s + r.optimalCalls, 0);
-    const optWins = rows.filter(r => r.optimalTok < r.nativeTok).length;
-    const curWins = rows.filter(r => r.nativeTok <= r.optimalTok).length;
-    const ties = rows.filter(r => r.nativeTok === r.optimalTok).length;
-
-    byFlow[fid] = { natTok, curTok, optTok, natMs, curMs, optMs, optWins, curWins, ties, count: rows.length, curCalls, optCalls };
-  }
-
-  // Format time as seconds string
-  function fmtTime(ms: number): string {
-    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-  }
-
-  // Format number with commas
-  function fmtNum(n: number): string {
-    return n.toLocaleString("en-US");
-  }
-
-  // Column widths
-  const C = { combo: 38, runs: 4, natTok: 10, curTok: 10, optTok: 10, diff: 14, natTime: 8, curTime: 8, optTime: 8, wins: 5 };
-
-  function hLine(left: string, mid: string, right: string): string {
-    return `${left}${"─".repeat(C.combo + 2)}${mid}${"─".repeat(C.runs + 2)}${mid}${"─".repeat(C.natTok + 2)}${mid}${"─".repeat(C.curTok + 2)}${mid}${"─".repeat(C.optTok + 2)}${mid}${"─".repeat(C.diff + 2)}${mid}${"─".repeat(C.natTime + 2)}${mid}${"─".repeat(C.curTime + 2)}${mid}${"─".repeat(C.optTime + 2)}${mid}${"─".repeat(C.wins + 2)}${right}`;
-  }
-
-  function dataRow(combo: string, runs: string, natTok: string, curTok: string, optTok: string, diff: string, natTime: string, curTime: string, optTime: string, wins: string): string {
-    return `│ ${combo.padEnd(C.combo)} │ ${runs.padStart(C.runs)} │ ${natTok.padStart(C.natTok)} │ ${curTok.padStart(C.curTok)} │ ${optTok.padStart(C.optTok)} │ ${diff.padStart(C.diff)} │ ${natTime.padStart(C.natTime)} │ ${curTime.padStart(C.curTime)} │ ${optTime.padStart(C.optTime)} │ ${wins.padStart(C.wins)} │`;
-  }
-
-  console.log("\n═══ SUMMARY ═══\n");
+  console.log("═══ SUMMARY ═══\n");
   console.log(hLine("┌", "┬", "┐"));
-  console.log(dataRow("Kombinacja", "Runs", "Tok", "Tok Sift", "Tok Sift", "Token diff", "Czas", "Czas", "Czas", "Wins"));
-  console.log(dataRow("", "", "natywne", "CURRENT", "OPTIMAL", "nat→cur→opt", "natywny", "Current", "Optimal", ""));
+  console.log(tblRow("Narzędzie", "Runs", "Tok", "Tok", "Token", "Czas", "Czas", "Wins"));
+  console.log(tblRow("", "", "natywne", "Sift", "diff", "natywny", "Sift", ""));
   console.log(hLine("├", "┼", "┤"));
-
-  const shortNames: Record<string, string> = {
-    ss_then_st: "search_symbols+search_text→bundle",
-    st_x3_batch: "search_text×3→CR_batch",
-    cr_drilldown: "CR+search_text×2→CR_high_bud",
-    tree_then_st: "get_file_tree+search_text→CR",
-    patterns_then_st: "search_patterns+search_text→pat",
-    ss_x3_batch: "search_symbols×3→CR_sym_batch",
-    st_ss_st_pingpong: "ST→SS→ST→findAndShow",
-  };
-
-  for (const fid of flowIds) {
-    const f = byFlow[fid];
-    if (!f) continue;
-
-    // Token diff chain: native→current→optimal
-    const natCurDiff = pct(f.curTok, f.natTok);
-    const natOptDiff = pct(f.optTok, f.natTok);
-    const diffStr = `${natCurDiff}→${natOptDiff}`;
-
-    console.log(dataRow(
-      shortNames[fid] ?? fid,
-      String(f.count),
-      fmtNum(f.natTok),
-      fmtNum(f.curTok),
-      fmtNum(f.optTok),
-      diffStr,
-      fmtTime(f.natMs),
-      fmtTime(f.curMs),
-      fmtTime(f.optMs),
-      `${f.optWins}/${f.count}`,
-    ));
+  for (const cat of categories) {
+    const c = byCategory[cat]!;
+    console.log(tblRow(cat, String(c.count), fmtNum(c.natTok), fmtNum(c.siftTok), pct(c.siftTok, c.natTok), fmtTime(c.natMs), fmtTime(c.siftMs), `${c.wins}/${c.count}`));
   }
-
   console.log(hLine("├", "┼", "┤"));
-
-  // Aggregate row
-  const totNatTok = Object.values(byFlow).reduce((s, f) => s + f.natTok, 0);
-  const totCurTok = Object.values(byFlow).reduce((s, f) => s + f.curTok, 0);
-  const totOptTok = Object.values(byFlow).reduce((s, f) => s + f.optTok, 0);
-  const totNatMs = Object.values(byFlow).reduce((s, f) => s + f.natMs, 0);
-  const totCurMs = Object.values(byFlow).reduce((s, f) => s + f.curMs, 0);
-  const totOptMs = Object.values(byFlow).reduce((s, f) => s + f.optMs, 0);
-  const totCurCalls = Object.values(byFlow).reduce((s, f) => s + f.curCalls, 0);
-  const totOptCalls = Object.values(byFlow).reduce((s, f) => s + f.optCalls, 0);
-  const totOptWins = Object.values(byFlow).reduce((s, f) => s + f.optWins, 0);
-
-  console.log(dataRow(
-    `AGGREGATE (${totCurCalls}→${totOptCalls} calls)`,
-    String(allRows.length),
-    fmtNum(totNatTok),
-    fmtNum(totCurTok),
-    fmtNum(totOptTok),
-    `${pct(totCurTok, totNatTok)}→${pct(totOptTok, totNatTok)}`,
-    fmtTime(totNatMs),
-    fmtTime(totCurMs),
-    fmtTime(totOptMs),
-    `${totOptWins}/${allRows.length}`,
-  ));
+  const totNat = Object.values(byCategory).reduce((s, c) => s + c.natTok, 0);
+  const totSift = Object.values(byCategory).reduce((s, c) => s + c.siftTok, 0);
+  const totNatMs = Object.values(byCategory).reduce((s, c) => s + c.natMs, 0);
+  const totSiftMs = Object.values(byCategory).reduce((s, c) => s + c.siftMs, 0);
+  const totWins = Object.values(byCategory).reduce((s, c) => s + c.wins, 0);
+  console.log(tblRow("AGGREGATE", String(allRows.length), fmtNum(totNat), fmtNum(totSift), pct(totSift, totNat), fmtTime(totNatMs), fmtTime(totSiftMs), `${totWins}/${allRows.length}`));
   console.log(hLine("└", "┴", "┘"));
 
-  // ═══════════════════════════════════════════════════════
-  // Save JSON
-  // ═══════════════════════════════════════════════════════
+  // Save
   const resultsDir = path.join(process.cwd(), "benchmarks", "results");
   fs.mkdirSync(resultsDir, { recursive: true });
   const stamp = startedAt.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outPath = path.join(resultsDir, `combo-${stamp}.json`);
-
   const summary = {
-    byFlow: Object.fromEntries(Object.entries(byFlow).map(([fid, f]) => [fid, {
-      description: FLOW_META[fid]!.description,
-      usageCount: FLOW_META[fid]!.usageCount,
-      nativeTokTotal: f.natTok,
-      currentTokTotal: f.curTok,
-      optimalTokTotal: f.optTok,
-      natToOptDiff: pct(f.optTok, f.natTok),
-      nativeMsTotal: f.natMs,
-      currentMsTotal: f.curMs,
-      optimalMsTotal: f.optMs,
-      currentCallsTotal: f.curCalls,
-      optimalCallsTotal: f.optCalls,
-      optimalWins: f.optWins,
-      totalRuns: f.count,
-    }])),
-    aggregate: {
-      totalNativeTok: totNatTok,
-      totalCurrentTok: totCurTok,
-      totalOptimalTok: totOptTok,
-      natToOptSavings: pct(totOptTok, totNatTok),
-      totalNativeMs: totNatMs,
-      totalCurrentMs: totCurMs,
-      totalOptimalMs: totOptMs,
-      totalCurrentCalls: totCurCalls,
-      totalOptimalCalls: totOptCalls,
-      optimalWins: totOptWins,
-      totalRuns: allRows.length,
-    },
+    byCategory: Object.fromEntries(Object.entries(byCategory).map(([cat, c]) => [cat, { ...c, tokenDiff: pct(c.siftTok, c.natTok) }])),
+    aggregate: { totalNativeTok: totNat, totalSiftTok: totSift, tokenDiff: pct(totSift, totNat), totalNativeMs: totNatMs, totalSiftMs: totSiftMs, siftWins: totWins, totalRuns: allRows.length },
   };
-
-  fs.writeFileSync(outPath, JSON.stringify({ startedAt: startedAt.toISOString(), usageDataNote: "Based on 3,427 calls across 188 sessions (2026-03-24 to 2026-03-30)", rows: allRows, summary }, null, 2));
+  fs.writeFileSync(outPath, JSON.stringify({ startedAt: startedAt.toISOString(), note: "Top 13 tool sequences from n-gram analysis, real queries from usage.jsonl", rows: allRows, summary }, null, 2));
   console.log(`\nsaved: ${outPath}`);
 }
 

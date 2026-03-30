@@ -1,0 +1,2485 @@
+{
+  "startedAt": "2026-03-30T14:47:29.862Z",
+  "note": "Unified benchmark — all tools, real queries from usage.jsonl",
+  "rows": [
+    {
+      "category": "search_text",
+      "task": "saveToTranslationMemory",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 77,
+      "siftTok": 0,
+      "siftMs": 53
+    },
+    {
+      "category": "search_text",
+      "task": "runDeepQA",
+      "repo": "local/translation-qa",
+      "nativeTok": 524,
+      "nativeMs": 160,
+      "siftTok": 409,
+      "siftMs": 79
+    },
+    {
+      "category": "search_text",
+      "task": "auto-review",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 39,
+      "siftTok": 0,
+      "siftMs": 34
+    },
+    {
+      "category": "search_text",
+      "task": "auto.review",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 40,
+      "siftTok": 0,
+      "siftMs": 36
+    },
+    {
+      "category": "search_text",
+      "task": "strings/ui-",
+      "repo": "local/translation-qa",
+      "nativeTok": 73,
+      "nativeMs": 127,
+      "siftTok": 56,
+      "siftMs": 83
+    },
+    {
+      "category": "search_text",
+      "task": "inngest.createFunction",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 48,
+      "siftTok": 0,
+      "siftMs": 94
+    },
+    {
+      "category": "search_text",
+      "task": "runPipelineStep",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 42,
+      "siftTok": 0,
+      "siftMs": 37
+    },
+    {
+      "category": "search_text",
+      "task": "runQuickQA\\|runDeepQA\\|autoFix",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 39,
+      "siftTok": 0,
+      "siftMs": 31
+    },
+    {
+      "category": "search_text",
+      "task": "language-pipeline-config",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 49,
+      "siftTok": 0,
+      "siftMs": 35
+    },
+    {
+      "category": "search_text",
+      "task": "CORS_ORIGINS",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 15,
+      "siftTok": 0,
+      "siftMs": 10
+    },
+    {
+      "category": "search_text",
+      "task": "detect",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 24,
+      "siftTok": 0,
+      "siftMs": 10
+    },
+    {
+      "category": "search_text",
+      "task": "sites/detect",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 20,
+      "siftTok": 0,
+      "siftMs": 11
+    },
+    {
+      "category": "search_text",
+      "task": "devWebOrigin",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 22,
+      "siftTok": 0,
+      "siftMs": 14
+    },
+    {
+      "category": "search_text",
+      "task": "useDetect\\|useSiteDetect\\|detectMut\\|detect",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 17,
+      "siftTok": 0,
+      "siftMs": 12
+    },
+    {
+      "category": "search_text",
+      "task": "useSiteDetection",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 23,
+      "siftTok": 0,
+      "siftMs": 12
+    },
+    {
+      "category": "search_symbols",
+      "task": "OrganizationService",
+      "repo": "local/translation-qa",
+      "nativeTok": 6688,
+      "nativeMs": 83,
+      "siftTok": 522,
+      "siftMs": 3740
+    },
+    {
+      "category": "search_symbols",
+      "task": "export",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6413,
+      "nativeMs": 21,
+      "siftTok": 3,
+      "siftMs": 525
+    },
+    {
+      "category": "search_symbols",
+      "task": "SiteStyleProfile",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7205,
+      "nativeMs": 22,
+      "siftTok": 686,
+      "siftMs": 6
+    },
+    {
+      "category": "search_symbols",
+      "task": "SiteStyleDnaVariant",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5336,
+      "nativeMs": 54,
+      "siftTok": 595,
+      "siftMs": 8
+    },
+    {
+      "category": "search_symbols",
+      "task": "CheckContext",
+      "repo": "local/translation-qa",
+      "nativeTok": 6681,
+      "nativeMs": 88,
+      "siftTok": 65,
+      "siftMs": 17
+    },
+    {
+      "category": "search_symbols",
+      "task": "QAIssue",
+      "repo": "local/translation-qa",
+      "nativeTok": 7667,
+      "nativeMs": 29,
+      "siftTok": 75,
+      "siftMs": 8
+    },
+    {
+      "category": "search_symbols",
+      "task": "inngest.createFunction",
+      "repo": "local/translation-qa",
+      "nativeTok": 6994,
+      "nativeMs": 99,
+      "siftTok": 172,
+      "siftMs": 29
+    },
+    {
+      "category": "search_symbols",
+      "task": "qa-check",
+      "repo": "local/translation-qa",
+      "nativeTok": 6185,
+      "nativeMs": 50,
+      "siftTok": 3,
+      "siftMs": 27
+    },
+    {
+      "category": "search_symbols",
+      "task": "PipelineConfigSchema",
+      "repo": "local/translation-qa",
+      "nativeTok": 5875,
+      "nativeMs": 117,
+      "siftTok": 418,
+      "siftMs": 12
+    },
+    {
+      "category": "search_symbols",
+      "task": "ProjectEntry ProjectConfig",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 107,
+      "siftTok": 710,
+      "siftMs": 42
+    },
+    {
+      "category": "search_symbols",
+      "task": "detect",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7199,
+      "nativeMs": 22,
+      "siftTok": 481,
+      "siftMs": 1
+    },
+    {
+      "category": "search_symbols",
+      "task": "useSiteDetection",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 2692,
+      "nativeMs": 31,
+      "siftTok": 245,
+      "siftMs": 4
+    },
+    {
+      "category": "search_symbols",
+      "task": "Button",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7871,
+      "nativeMs": 21,
+      "siftTok": 243,
+      "siftMs": 4
+    },
+    {
+      "category": "search_symbols",
+      "task": "GroupTranslationService",
+      "repo": "local/translation-qa",
+      "nativeTok": 345,
+      "nativeMs": 97,
+      "siftTok": 405,
+      "siftMs": 29
+    },
+    {
+      "category": "search_symbols",
+      "task": "runNativeReview",
+      "repo": "local/translation-qa",
+      "nativeTok": 1579,
+      "nativeMs": 128,
+      "siftTok": 169,
+      "siftMs": 17
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/inngest/functions/translate-all-pipeline/steps",
+      "repo": "local/translation-qa",
+      "nativeTok": 3105,
+      "nativeMs": 0,
+      "siftTok": 256,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/inngest/functions/translate-all-pipeline/index",
+      "repo": "local/translation-qa",
+      "nativeTok": 3040,
+      "nativeMs": 0,
+      "siftTok": 10,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "apps/api/src/lib/logger.ts",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 359,
+      "nativeMs": 0,
+      "siftTok": 73,
+      "siftMs": 1
+    },
+    {
+      "category": "get_file_outline",
+      "task": "__tests__/services/language-pipeline-config.test.t",
+      "repo": "local/translation-qa",
+      "nativeTok": 3419,
+      "nativeMs": 0,
+      "siftTok": 1450,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "docs/COMPLETE_TRANSLATION_PROCESS.md",
+      "repo": "local/translation-qa",
+      "nativeTok": 16203,
+      "nativeMs": 1,
+      "siftTok": 2338,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/inngest/functions/translate-all-pipeline/step-",
+      "repo": "local/translation-qa",
+      "nativeTok": 873,
+      "nativeMs": 0,
+      "siftTok": 61,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/inngest/functions/translate-all-pipeline/types",
+      "repo": "local/translation-qa",
+      "nativeTok": 930,
+      "nativeMs": 0,
+      "siftTok": 125,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/inngest/functions/translate-all-pipeline/steps",
+      "repo": "local/translation-qa",
+      "nativeTok": 1442,
+      "nativeMs": 0,
+      "siftTok": 125,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/services/translation/translation-orchestrator.",
+      "repo": "local/translation-qa",
+      "nativeTok": 3538,
+      "nativeMs": 0,
+      "siftTok": 1762,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/services/native-review/native-review-pipeline.",
+      "repo": "local/translation-qa",
+      "nativeTok": 2647,
+      "nativeMs": 0,
+      "siftTok": 1606,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/services/language-pair-router.service.ts",
+      "repo": "local/translation-qa",
+      "nativeTok": 3165,
+      "nativeMs": 0,
+      "siftTok": 1647,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/qa/qa-orchestrator/utils/check-result-mapper.t",
+      "repo": "local/translation-qa",
+      "nativeTok": 1167,
+      "nativeMs": 0,
+      "siftTok": 502,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/qa/checks/brackets-check.ts",
+      "repo": "local/translation-qa",
+      "nativeTok": 424,
+      "nativeMs": 0,
+      "siftTok": 105,
+      "siftMs": 5
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/qa/checks/placeholders-check.ts",
+      "repo": "local/translation-qa",
+      "nativeTok": 332,
+      "nativeMs": 0,
+      "siftTok": 88,
+      "siftMs": 8
+    },
+    {
+      "category": "get_file_outline",
+      "task": "lib/qa/qa-orchestrator.service.ts",
+      "repo": "local/translation-qa",
+      "nativeTok": 533,
+      "nativeMs": 0,
+      "siftTok": 203,
+      "siftMs": 7
+    },
+    {
+      "category": "get_file_tree",
+      "task": "apps/api/src",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7468,
+      "nativeMs": 122,
+      "siftTok": 4084,
+      "siftMs": 7
+    },
+    {
+      "category": "get_file_tree",
+      "task": "app/admin/ui-translation",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 21,
+      "siftTok": 130,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "__tests__/services",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 21,
+      "siftTok": 5674,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "apps/web/src/routes/sites",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7468,
+      "nativeMs": 36,
+      "siftTok": 566,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "lib/inngest/functions/translate-project/steps",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 42,
+      "siftTok": 254,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "lib/services/quality-estimation",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 20,
+      "siftTok": 100,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "lib/services/i18n",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 18,
+      "siftTok": 117,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "lib/qa",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 18,
+      "siftTok": 1958,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "lib/qa/profiles",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 19,
+      "siftTok": 15,
+      "siftMs": 0
+    },
+    {
+      "category": "get_file_tree",
+      "task": "__tests__/qa",
+      "repo": "local/translation-qa",
+      "nativeTok": 4021,
+      "nativeMs": 31,
+      "siftTok": 1207,
+      "siftMs": 0
+    },
+    {
+      "category": "find_and_show",
+      "task": "logClickEvent",
+      "repo": "local/Rewards-API",
+      "nativeTok": 4931,
+      "nativeMs": 131,
+      "siftTok": 439,
+      "siftMs": 2090
+    },
+    {
+      "category": "find_and_show",
+      "task": "detectDeviceType",
+      "repo": "local/Rewards-API",
+      "nativeTok": 6283,
+      "nativeMs": 99,
+      "siftTok": 242,
+      "siftMs": 8
+    },
+    {
+      "category": "find_and_show",
+      "task": "stripHtmlToText",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7371,
+      "nativeMs": 13,
+      "siftTok": 56,
+      "siftMs": 11
+    },
+    {
+      "category": "find_and_show",
+      "task": "getKnowledgeMap",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 7577,
+      "nativeMs": 16,
+      "siftTok": 558,
+      "siftMs": 181
+    },
+    {
+      "category": "find_and_show",
+      "task": "KnowledgeMap",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 6624,
+      "nativeMs": 14,
+      "siftTok": 72,
+      "siftMs": 1
+    },
+    {
+      "category": "find_and_show",
+      "task": "findCircularDeps",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 1026,
+      "nativeMs": 31,
+      "siftTok": 567,
+      "siftMs": 1
+    },
+    {
+      "category": "find_and_show",
+      "task": "CircularDep",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 2509,
+      "nativeMs": 46,
+      "siftTok": 56,
+      "siftMs": 1
+    },
+    {
+      "category": "find_and_show",
+      "task": "getLanguageName",
+      "repo": "local/translation-qa",
+      "nativeTok": 6395,
+      "nativeMs": 31,
+      "siftTok": 84,
+      "siftMs": 54
+    },
+    {
+      "category": "find_and_show",
+      "task": "saveResultsStep",
+      "repo": "local/translation-qa",
+      "nativeTok": 7642,
+      "nativeMs": 110,
+      "siftTok": 65,
+      "siftMs": 13
+    },
+    {
+      "category": "find_and_show",
+      "task": "saveTranslationResults",
+      "repo": "local/translation-qa",
+      "nativeTok": 8876,
+      "nativeMs": 78,
+      "siftTok": 1163,
+      "siftMs": 26
+    },
+    {
+      "category": "assemble_context",
+      "task": "authentication system JWT auth module strategy gua",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 2242,
+      "nativeMs": 139,
+      "siftTok": 1940,
+      "siftMs": 2892
+    },
+    {
+      "category": "assemble_context",
+      "task": "project structure",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 138,
+      "nativeMs": 18,
+      "siftTok": 574,
+      "siftMs": 63
+    },
+    {
+      "category": "assemble_context",
+      "task": "UI components React frontend",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 1909,
+      "nativeMs": 17,
+      "siftTok": 1536,
+      "siftMs": 0
+    },
+    {
+      "category": "assemble_context",
+      "task": "features capabilities handlers strategies",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 0,
+      "nativeMs": 16,
+      "siftTok": 863,
+      "siftMs": 4
+    },
+    {
+      "category": "assemble_context",
+      "task": "translateProject index function steps evaluation s",
+      "repo": "local/translation-qa",
+      "nativeTok": 5713,
+      "nativeMs": 125,
+      "siftTok": 464,
+      "siftMs": 50
+    },
+    {
+      "category": "assemble_context",
+      "task": "createProject full function ProjectEntry upsert cr",
+      "repo": "local/translation-qa",
+      "nativeTok": 8168,
+      "nativeMs": 60,
+      "siftTok": 530,
+      "siftMs": 70
+    },
+    {
+      "category": "assemble_context",
+      "task": "PipelineOptions type skipAnalysis skipDictionaryRe",
+      "repo": "local/translation-qa",
+      "nativeTok": 7868,
+      "nativeMs": 114,
+      "siftTok": 324,
+      "siftMs": 72
+    },
+    {
+      "category": "assemble_context",
+      "task": "projects-list service filter WHERE i18n hidden pro",
+      "repo": "local/translation-qa",
+      "nativeTok": 8203,
+      "nativeMs": 136,
+      "siftTok": 276,
+      "siftMs": 43
+    },
+    {
+      "category": "assemble_context",
+      "task": "test patterns i18n inngest pipeline",
+      "repo": "local/translation-qa",
+      "nativeTok": 5574,
+      "nativeMs": 15,
+      "siftTok": 801,
+      "siftMs": 21
+    },
+    {
+      "category": "assemble_context",
+      "task": "adapter interface survey platform",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 6476,
+      "nativeMs": 15,
+      "siftTok": 2478,
+      "siftMs": 0
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "translateAllPipeline callees:2",
+      "repo": "local/translation-qa",
+      "nativeTok": 3228,
+      "nativeMs": 134,
+      "siftTok": 1598,
+      "siftMs": 418
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "translateParallelStep callees:2",
+      "repo": "local/translation-qa",
+      "nativeTok": 5037,
+      "nativeMs": 100,
+      "siftTok": 1959,
+      "siftMs": 391
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "executeRun callees:3",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 4386,
+      "nativeMs": 16,
+      "siftTok": 694,
+      "siftMs": 9
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "getCodeIndex callers:2",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 5738,
+      "nativeMs": 14,
+      "siftTok": 1371,
+      "siftMs": 20
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "useArticleStream callees:2",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 2322,
+      "nativeMs": 28,
+      "siftTok": 512,
+      "siftMs": 29
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "analyzeDocument callees:2",
+      "repo": "local/promptvault",
+      "nativeTok": 8595,
+      "nativeMs": 55,
+      "siftTok": 431,
+      "siftMs": 50
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "detectOutdatedTranslations callers:3",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 3956,
+      "nativeMs": 26,
+      "siftTok": 233,
+      "siftMs": 27
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "onArticleSaved callers:3",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 4279,
+      "nativeMs": 27,
+      "siftTok": 419,
+      "siftMs": 29
+    },
+    {
+      "category": "trace_call_chain",
+      "task": "detectAiText callers:3",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7585,
+      "nativeMs": 45,
+      "siftTok": 489,
+      "siftMs": 26
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "inngest.createFunction→inngest.createFuncti",
+      "repo": "local/translation-qa",
+      "nativeTok": 6935,
+      "nativeMs": 64,
+      "siftTok": 172,
+      "siftMs": 60
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "Logger→export class Logger",
+      "repo": "local/translation-qa",
+      "nativeTok": 6538,
+      "nativeMs": 50,
+      "siftTok": 3,
+      "siftMs": 36
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "detect→sites/detect",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 7292,
+      "nativeMs": 27,
+      "siftTok": 481,
+      "siftMs": 11
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "useSiteDetection→useSiteDetection",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 1701,
+      "nativeMs": 41,
+      "siftTok": 245,
+      "siftMs": 14
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "Button→NODE_ENV",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 39,
+      "siftTok": 243,
+      "siftMs": 15
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "QAProfile getProfile thre→getScopedAnthropic",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 123,
+      "siftTok": 393,
+      "siftMs": 101
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "getProfile→getProfile",
+      "repo": "local/translation-qa",
+      "nativeTok": 7034,
+      "nativeMs": 157,
+      "siftTok": 338,
+      "siftMs": 88
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "QAProfile getProfile thre→saveToTranslationMem",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 175,
+      "siftTok": 250,
+      "siftMs": 72
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "QAProfile getProfile→getProfile",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 126,
+      "siftTok": 126,
+      "siftMs": 70
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "QAChecksService runQuickQ→getScopedAnthropic",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 121,
+      "siftTok": 698,
+      "siftMs": 64
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "Public decorator IS_PUBLI→@Public()",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 7773,
+      "nativeMs": 42,
+      "siftTok": 1530,
+      "siftMs": 171
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "signOut getUserByToken up→getUserByToken",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 4453,
+      "nativeMs": 38,
+      "siftTok": 674,
+      "siftMs": 19
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "MainLayout checkAuthentic→@Roles\\(",
+      "repo": "local/tgmdev-rs_admin-878b2d75a27a",
+      "nativeTok": 0,
+      "nativeMs": 44,
+      "siftTok": 779,
+      "siftMs": 88
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "createRespondentSession w→sameSite\\|samesite\\|",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 0,
+      "nativeMs": 49,
+      "siftTok": 809,
+      "siftMs": 20
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "verify session calculateS→res\\.cookie\\|respons",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 0,
+      "nativeMs": 48,
+      "siftTok": 613,
+      "siftMs": 23
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "Secret decorator→PUBLIC_API_SECRET_KE",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 6135,
+      "nativeMs": 40,
+      "siftTok": 649,
+      "siftMs": 16
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "TranslationsDashboard tra→translations.retrans",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 43,
+      "siftTok": 336,
+      "siftMs": 20
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "AdminAuthService→AdminUserStore",
+      "repo": "local/country-data",
+      "nativeTok": 0,
+      "nativeMs": 50,
+      "siftTok": 376,
+      "siftMs": 380
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "useClerkAuthSafe clerkEna→V.*__.*admin_users|C",
+      "repo": "local/country-data",
+      "nativeTok": 1943,
+      "nativeMs": 111,
+      "siftTok": 1795,
+      "siftMs": 93
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "moderation report abuse→CAN_MANAGE_ORGS CAN_",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 0,
+      "nativeMs": 99,
+      "siftTok": 587,
+      "siftMs": 23
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "SurveyAlias aliasCode see→createDefaultAlias\\|",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 0,
+      "nativeMs": 93,
+      "siftTok": 3,
+      "siftMs": 47
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "i18n translate→I18nPromptBuilder",
+      "repo": "local/translation-qa",
+      "nativeTok": 578,
+      "nativeMs": 295,
+      "siftTok": 829,
+      "siftMs": 251
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "PromptAssemblyService→LanguagePairRouter",
+      "repo": "local/translation-qa",
+      "nativeTok": 7177,
+      "nativeMs": 76,
+      "siftTok": 401,
+      "siftMs": 51
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "ClerkAuthProvider→@clerk/clerk-react",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 332,
+      "nativeMs": 94,
+      "siftTok": 312,
+      "siftMs": 22
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "useRole→useUser",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5954,
+      "nativeMs": 52,
+      "siftTok": 302,
+      "siftMs": 21
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "ContentTypeProfile QAProf→content_type_profile",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 268,
+      "siftTok": 193,
+      "siftMs": 183
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "getLanguageName→export function getL",
+      "repo": "local/translation-qa",
+      "nativeTok": 6409,
+      "nativeMs": 87,
+      "siftTok": 3,
+      "siftMs": 111
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "verifySurveyAccess→export/responses.*pa",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 8430,
+      "nativeMs": 65,
+      "siftTok": 3,
+      "siftMs": 45
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "middleware→writeFile|writeFileS",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 2528,
+      "nativeMs": 34,
+      "siftTok": 3,
+      "siftMs": 10
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "isTestFileStrict→SAVINGS_MULTIPLIER",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 1974,
+      "nativeMs": 67,
+      "siftTok": 195,
+      "siftMs": 16
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "makeSymbol→parseFile",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 5921,
+      "nativeMs": 42,
+      "siftTok": 536,
+      "siftMs": 12
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "email import handler→emails/import",
+      "repo": "local/Rewards-API",
+      "nativeTok": 194,
+      "nativeMs": 96,
+      "siftTok": 152,
+      "siftMs": 45
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "buildTranslationPrompt pr→from '@/lib/services",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 398,
+      "siftTok": 427,
+      "siftMs": 134
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "PromptCacheEntry getPromp→FormalityChecker",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 240,
+      "siftTok": 315,
+      "siftMs": 124
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "AnalysisResult ProjectAna→interface SegmentGro",
+      "repo": "local/translation-qa",
+      "nativeTok": 53,
+      "nativeMs": 266,
+      "siftTok": 692,
+      "siftMs": 220
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "IProofreadingUnitReposito→withTenant.*auth.*te",
+      "repo": "local/translation-qa",
+      "nativeTok": 7525,
+      "nativeMs": 81,
+      "siftTok": 665,
+      "siftMs": 45
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "QuestionGroup AgentModel→parsePass1Response",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 112,
+      "siftTok": 28,
+      "siftMs": 49
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "alignWordWithAI→createGetRequest cre",
+      "repo": "local/translation-qa",
+      "nativeTok": 5060,
+      "nativeMs": 124,
+      "siftTok": 377,
+      "siftMs": 98
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "buildGlossaryHybrid→TenantRequest",
+      "repo": "local/translation-qa",
+      "nativeTok": 13790,
+      "nativeMs": 278,
+      "siftTok": 6280,
+      "siftMs": 184
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "extractTermsWithFlash→export.*SessionWithU",
+      "repo": "local/translation-qa",
+      "nativeTok": 5845,
+      "nativeMs": 267,
+      "siftTok": 196,
+      "siftMs": 243
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "SegmentEditor props→statusFilters",
+      "repo": "local/translation-qa",
+      "nativeTok": 976,
+      "nativeMs": 199,
+      "siftTok": 1476,
+      "siftMs": 148
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "ProofreadingEditorLayout →convertToSimpleGloss",
+      "repo": "local/translation-qa",
+      "nativeTok": 46,
+      "nativeMs": 144,
+      "siftTok": 187,
+      "siftMs": 55
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "evalScript→evalScript",
+      "repo": "local/translation-qa",
+      "nativeTok": 5367,
+      "nativeMs": 156,
+      "siftTok": 3,
+      "siftMs": 67
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "useStreamArticleV2→source_brief",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 1568,
+      "nativeMs": 88,
+      "siftTok": 577,
+      "siftMs": 111
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "LegalDocument→model LegalDocument",
+      "repo": "local/promptvault",
+      "nativeTok": 7545,
+      "nativeMs": 74,
+      "siftTok": 616,
+      "siftMs": 659
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "bullmq queue job worker→fetch.*fetch|Promise",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 53,
+      "siftTok": 228,
+      "siftMs": 15
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "buildHeuristicStyleProfil→\\.limit\\(|\\.offset\\(",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 50,
+      "siftTok": 392,
+      "siftMs": 13
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "onArticleSaved→streaming response s",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6297,
+      "nativeMs": 40,
+      "siftTok": 434,
+      "siftMs": 22
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "Hono middleware compressi→MAX_CONCURRENT|pLimi",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 43,
+      "siftTok": 329,
+      "siftMs": 12
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "schema index primary fore→countPendingInvitati",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 58,
+      "siftTok": 115,
+      "siftMs": 36
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "streaming response→await db.update.*art",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 557,
+      "nativeMs": 66,
+      "siftTok": 250,
+      "siftMs": 29
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "GET POST PATCH DELETE PUT→export const",
+      "repo": "local/promptvault",
+      "nativeTok": 0,
+      "nativeMs": 66,
+      "siftTok": 3,
+      "siftMs": 36
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "codeframe→user correction",
+      "repo": "local/coding-ui",
+      "nativeTok": 5528,
+      "nativeMs": 51,
+      "siftTok": 437,
+      "siftMs": 1417
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "generate→BullMQ|bullmq|Queue|",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6556,
+      "nativeMs": 43,
+      "siftTok": 578,
+      "siftMs": 31
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "sync→inngest|Inngest",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6882,
+      "nativeMs": 39,
+      "siftTok": 638,
+      "siftMs": 22
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "CreateUserDto→user_test_orgadmin",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 2918,
+      "nativeMs": 172,
+      "siftTok": 134,
+      "siftMs": 66
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "ACTION_CONFIGS→/projects/new",
+      "repo": "local/translation-qa",
+      "nativeTok": 1383,
+      "nativeMs": 193,
+      "siftTok": 541,
+      "siftMs": 56
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "GenerateState→style-analyze",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 2457,
+      "nativeMs": 51,
+      "siftTok": 1167,
+      "siftMs": 17
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "count→void.*catch",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6961,
+      "nativeMs": 34,
+      "siftTok": 157,
+      "siftMs": 22
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "useApiMutation→DOMAIN_NICHES",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6627,
+      "nativeMs": 23,
+      "siftTok": 359,
+      "siftMs": 15
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "listArticles→400",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 4507,
+      "nativeMs": 26,
+      "siftTok": 284,
+      "siftMs": 14
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "renderPrompt→Accept",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 6993,
+      "nativeMs": 22,
+      "siftTok": 386,
+      "siftMs": 20
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "TeamTable TeamDetailView→StepIndicator",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 180,
+      "siftTok": 595,
+      "siftMs": 37
+    },
+    {
+      "category": "combo:ss→st",
+      "task": "LanguagePatternsTab→aria-label.*delete\\|",
+      "repo": "local/translation-qa",
+      "nativeTok": 2425,
+      "nativeMs": 123,
+      "siftTok": 414,
+      "siftMs": 58
+    },
+    {
+      "category": "combo:st×3",
+      "task": "saveToTranslat+saveToTranslat+runDeepQA",
+      "repo": "local/translation-qa",
+      "nativeTok": 524,
+      "nativeMs": 207,
+      "siftTok": 409,
+      "siftMs": 235
+    },
+    {
+      "category": "combo:st×3",
+      "task": "saveToTranslat+runDeepQA+auto-review",
+      "repo": "local/translation-qa",
+      "nativeTok": 524,
+      "nativeMs": 152,
+      "siftTok": 409,
+      "siftMs": 141
+    },
+    {
+      "category": "combo:st×3",
+      "task": "runDeepQA+auto-review+auto.review",
+      "repo": "local/translation-qa",
+      "nativeTok": 524,
+      "nativeMs": 159,
+      "siftTok": 409,
+      "siftMs": 159
+    },
+    {
+      "category": "combo:st×3",
+      "task": "runPipelineSte+runQuickQA\\|ru+language-pip",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 135,
+      "siftTok": 0,
+      "siftMs": 117
+    },
+    {
+      "category": "combo:st×3",
+      "task": "sites/detect+devWebOrigin+useDetect\\|u",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 55,
+      "siftTok": 0,
+      "siftMs": 38
+    },
+    {
+      "category": "combo:st×3",
+      "task": "getLanguageNam+getProfile+minScoreForT",
+      "repo": "local/translation-qa",
+      "nativeTok": 707,
+      "nativeMs": 263,
+      "siftTok": 525,
+      "siftMs": 205
+    },
+    {
+      "category": "combo:st×3",
+      "task": "getProfile+minScoreForTM+export.*getP",
+      "repo": "local/translation-qa",
+      "nativeTok": 707,
+      "nativeMs": 307,
+      "siftTok": 525,
+      "siftMs": 339
+    },
+    {
+      "category": "combo:st×3",
+      "task": "vi.mock.*lib/l+mock.*logger\\|+MockLogger",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 116,
+      "siftTok": 0,
+      "siftMs": 107
+    },
+    {
+      "category": "combo:st×3",
+      "task": "getProfile+qa_profile+QAStatus",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 113,
+      "siftTok": 0,
+      "siftMs": 108
+    },
+    {
+      "category": "combo:st×3",
+      "task": "projectConfigR+import { db } +QAStatus",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 82,
+      "siftTok": 0,
+      "siftMs": 106
+    },
+    {
+      "category": "combo:st×3",
+      "task": "getProfile+qa_status+qa_profile",
+      "repo": "local/translation-qa",
+      "nativeTok": 1604,
+      "nativeMs": 142,
+      "siftTok": 1199,
+      "siftMs": 147
+    },
+    {
+      "category": "combo:st×3",
+      "task": "qa_status+qa_profile+enum QAStatu",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 105,
+      "siftTok": 0,
+      "siftMs": 97
+    },
+    {
+      "category": "combo:st×3",
+      "task": "qa_profile+enum QAStatus+import.*db.*",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 109,
+      "siftTok": 0,
+      "siftMs": 103
+    },
+    {
+      "category": "combo:st×3",
+      "task": "enum QAStatus+import.*db.*fr+from '@/lib/",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 137,
+      "siftTok": 0,
+      "siftMs": 94
+    },
+    {
+      "category": "combo:st×3",
+      "task": "import.*db.*fr+from '@/lib/db+from '@/lib/",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 150,
+      "siftTok": 0,
+      "siftMs": 103
+    },
+    {
+      "category": "combo:st×3",
+      "task": "qa_status+qa-profiles\\|q+minScoreForA",
+      "repo": "local/translation-qa",
+      "nativeTok": 620,
+      "nativeMs": 206,
+      "siftTok": 471,
+      "siftMs": 169
+    },
+    {
+      "category": "combo:st×3",
+      "task": "qa-profiles\\|q+minScoreForApp+QAStatus",
+      "repo": "local/translation-qa",
+      "nativeTok": 620,
+      "nativeMs": 216,
+      "siftTok": 471,
+      "siftMs": 192
+    },
+    {
+      "category": "combo:st×3",
+      "task": "minScoreForApp+QAStatus+qa_profile",
+      "repo": "local/translation-qa",
+      "nativeTok": 620,
+      "nativeMs": 207,
+      "siftTok": 471,
+      "siftMs": 184
+    },
+    {
+      "category": "combo:st×3",
+      "task": "export async f+saveToTranslat+translation_",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 101,
+      "siftTok": 0,
+      "siftMs": 99
+    },
+    {
+      "category": "combo:st×3",
+      "task": "saveToTranslat+translation_me+translation_",
+      "repo": "local/translation-qa",
+      "nativeTok": 0,
+      "nativeMs": 106,
+      "siftTok": 0,
+      "siftMs": 92
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→detect",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 5467,
+      "siftTok": 566,
+      "siftMs": 11
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→getLanguageNameSync",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 96,
+      "siftTok": 15,
+      "siftMs": 29
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→vi.mock.*lib/logger",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 49,
+      "siftTok": 1207,
+      "siftMs": 48
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→getProfile",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 52,
+      "siftTok": 15,
+      "siftMs": 30
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→getProfile",
+      "repo": "local/translation-qa",
+      "nativeTok": 5639,
+      "nativeMs": 113,
+      "siftTok": 1214,
+      "siftMs": 104
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→qa_status",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 51,
+      "siftTok": 1958,
+      "siftMs": 31
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→checkICUSyntax\\|checkMaxLength",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 57,
+      "siftTok": 15,
+      "siftMs": 36
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→onFormalityChange.*handleFormalityC",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 68,
+      "siftTok": 30,
+      "siftMs": 45
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→model I18nApp",
+      "repo": "local/translation-qa",
+      "nativeTok": 4083,
+      "nativeMs": 153,
+      "siftTok": 44,
+      "siftMs": 108
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→model I18nApp|model I18nLocaleConfi",
+      "repo": "local/translation-qa",
+      "nativeTok": 4382,
+      "nativeMs": 128,
+      "siftTok": 349,
+      "siftMs": 118
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→i18n-api-key|i18n-translate\\.functi",
+      "repo": "local/translation-qa",
+      "nativeTok": 7033,
+      "nativeMs": 141,
+      "siftTok": 7505,
+      "siftMs": 115
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→i18n\\.validator|migrate-ui-translat",
+      "repo": "local/translation-qa",
+      "nativeTok": 7224,
+      "nativeMs": 177,
+      "siftTok": 1397,
+      "siftMs": 133
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→export const checkMaxLength|i18n-pr",
+      "repo": "local/translation-qa",
+      "nativeTok": 5181,
+      "nativeMs": 149,
+      "siftTok": 1478,
+      "siftMs": 134
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→lib/qa/checks/max-length-check.ts",
+      "repo": "local/translation-qa",
+      "nativeTok": 4066,
+      "nativeMs": 140,
+      "siftTok": 5739,
+      "siftMs": 106
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→dangerouslySetInnerHTML",
+      "repo": "local/Shield",
+      "nativeTok": 43105,
+      "nativeMs": 1046,
+      "siftTok": 1132,
+      "siftMs": 23
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→innerHTML",
+      "repo": "local/Shield",
+      "nativeTok": 55684,
+      "nativeMs": 430,
+      "siftTok": 912,
+      "siftMs": 29
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→NEXT_PUBLIC_API_URL\\|JWT_SECRET\\|lo",
+      "repo": "local/tgmdev-rs_admin-878b2d75a27a",
+      "nativeTok": 5323,
+      "nativeMs": 40,
+      "siftTok": 829,
+      "siftMs": 12
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→APP_GUARD",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 5859,
+      "nativeMs": 68,
+      "siftTok": 6710,
+      "siftMs": 24
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→organizationId",
+      "repo": "local/tgmdev-rs_admin-878b2d75a27a",
+      "nativeTok": 5527,
+      "nativeMs": 39,
+      "siftTok": 125,
+      "siftMs": 15
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→middleware",
+      "repo": "local/tgmdev-rs_admin-878b2d75a27a",
+      "nativeTok": 5484,
+      "nativeMs": 50,
+      "siftTok": 4288,
+      "siftMs": 18
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→AnyFilesInterceptor\\(\\)",
+      "repo": "local/tgmdev-rs_be-3b7cfce0264b",
+      "nativeTok": 5752,
+      "nativeMs": 67,
+      "siftTok": 6302,
+      "siftMs": 18
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→translations",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 4480,
+      "siftTok": 63,
+      "siftMs": 11
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→organizations.*features",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 5544,
+      "nativeMs": 7989,
+      "siftTok": 48,
+      "siftMs": 31
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→orgId.*user\\|currentUser.*orgId\\|au",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 5544,
+      "nativeMs": 5513,
+      "siftTok": 310,
+      "siftMs": 48
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→api\\/auth\\/me",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 5544,
+      "nativeMs": 3269,
+      "siftTok": 8926,
+      "siftMs": 17
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→lib/services/i18n",
+      "repo": "local/translation-qa",
+      "nativeTok": 5443,
+      "nativeMs": 93,
+      "siftTok": 1228,
+      "siftMs": 89
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→dashboard",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 6564,
+      "nativeMs": 320,
+      "siftTok": 3704,
+      "siftMs": 41
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→analytics.*project.*count\\|project.",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 65,
+      "siftTok": 626,
+      "siftMs": 33
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→favicon",
+      "repo": "local/translation-qa",
+      "nativeTok": 6362,
+      "nativeMs": 192,
+      "siftTok": 442,
+      "siftMs": 251
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→errorHandler",
+      "repo": "local/Mobi 2",
+      "nativeTok": 5170,
+      "nativeMs": 1877,
+      "siftTok": 2,
+      "siftMs": 41
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→i18n_app_id i18n_locale",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 66,
+      "siftTok": 145,
+      "siftMs": 33
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→--bg-primary --accent --text",
+      "repo": "local/codesift-dashboard",
+      "nativeTok": 1678,
+      "nativeMs": 561,
+      "siftTok": 692,
+      "siftMs": 10
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→useMemo",
+      "repo": "local/translation-qa",
+      "nativeTok": 9012,
+      "nativeMs": 72,
+      "siftTok": 9538,
+      "siftMs": 42
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→WORKER_API_URL",
+      "repo": "local/Rewards-API",
+      "nativeTok": 5272,
+      "nativeMs": 2562,
+      "siftTok": 1118,
+      "siftMs": 35
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→TODO|FIXME|HACK",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 6194,
+      "siftTok": 1144,
+      "siftMs": 31
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→article-generate",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 3321,
+      "siftTok": 2,
+      "siftMs": 26
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→TODO|FIXME|HACK",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 3223,
+      "siftTok": 955,
+      "siftMs": 11
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→risk-status.service",
+      "repo": "local/promptvault",
+      "nativeTok": 5637,
+      "nativeMs": 3311,
+      "siftTok": 3081,
+      "siftMs": 177
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→risk-query.service",
+      "repo": "local/promptvault",
+      "nativeTok": 7332,
+      "nativeMs": 1361,
+      "siftTok": 1268,
+      "siftMs": 41
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→pLimit|p-limit|concurrency",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 6460,
+      "siftTok": 6634,
+      "siftMs": 12
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→export const GET|export const POST|",
+      "repo": "local/promptvault",
+      "nativeTok": 5637,
+      "nativeMs": 4208,
+      "siftTok": 3788,
+      "siftMs": 13
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→risks",
+      "repo": "local/promptvault",
+      "nativeTok": 5637,
+      "nativeMs": 1406,
+      "siftTok": 3081,
+      "siftMs": 13
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→documents/upload",
+      "repo": "local/promptvault",
+      "nativeTok": 5667,
+      "nativeMs": 1446,
+      "siftTok": 3098,
+      "siftMs": 27
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→inngest|background.*job|job.*queue|",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 6394,
+      "siftTok": 4084,
+      "siftMs": 24
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→useAppTranslation",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 14831,
+      "nativeMs": 7083,
+      "siftTok": 5475,
+      "siftMs": 48
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→translate",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 61,
+      "siftTok": 2117,
+      "siftMs": 58
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→testClient",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 5852,
+      "nativeMs": 6727,
+      "siftTok": 21,
+      "siftMs": 12
+    },
+    {
+      "category": "combo:tree→st",
+      "task": "tree→aria-label",
+      "repo": "local/translation-qa",
+      "nativeTok": 4035,
+      "nativeMs": 75,
+      "siftTok": 195,
+      "siftMs": 28
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→React.memo",
+      "repo": "local/translation-qa",
+      "nativeTok": 779,
+      "nativeMs": 49,
+      "siftTok": 613,
+      "siftMs": 50
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→useCallback",
+      "repo": "local/translation-qa",
+      "nativeTok": 8819,
+      "nativeMs": 29,
+      "siftTok": 5334,
+      "siftMs": 51
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→redis|upstash|Redis",
+      "repo": "local/translation-qa",
+      "nativeTok": 882,
+      "nativeMs": 35,
+      "siftTok": 0,
+      "siftMs": 39
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/tgm-survey-platform",
+      "nativeTok": 0,
+      "nativeMs": 24,
+      "siftTok": 0,
+      "siftMs": 52
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/codesift-mcp",
+      "nativeTok": 0,
+      "nativeMs": 17,
+      "siftTok": 0,
+      "siftMs": 27
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/Rewards-API",
+      "nativeTok": 0,
+      "nativeMs": 24,
+      "siftTok": 0,
+      "siftMs": 23
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/Rewards-API",
+      "nativeTok": 0,
+      "nativeMs": 22,
+      "siftTok": 0,
+      "siftMs": 14
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/Rewards-API",
+      "nativeTok": 0,
+      "nativeMs": 21,
+      "siftTok": 0,
+      "siftMs": 32
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→JSON\\.parse\\(",
+      "repo": "local/Rewards-API",
+      "nativeTok": 46520,
+      "nativeMs": 55,
+      "siftTok": 0,
+      "siftMs": 63
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→JSON\\.parse\\(",
+      "repo": "local/Portal & Access",
+      "nativeTok": 4389,
+      "nativeMs": 176,
+      "siftTok": 0,
+      "siftMs": 166
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/Mobi 2",
+      "nativeTok": 38,
+      "nativeMs": 101,
+      "siftTok": 0,
+      "siftMs": 82
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeGreaterThan\\(0\\)",
+      "repo": "local/Mobi 2",
+      "nativeTok": 0,
+      "nativeMs": 74,
+      "siftTok": 0,
+      "siftMs": 43
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→expect\\(true\\)\\.toBe\\(",
+      "repo": "local/Offer Module",
+      "nativeTok": 47,
+      "nativeMs": 95,
+      "siftTok": 0,
+      "siftMs": 85
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→expect\\([^)]+\\.length\\",
+      "repo": "local/Offer Module",
+      "nativeTok": 2562,
+      "nativeMs": 66,
+      "siftTok": 0,
+      "siftMs": 78
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeGreaterThan\\(0\\)",
+      "repo": "local/Prefetch",
+      "nativeTok": 0,
+      "nativeMs": 18,
+      "siftTok": 0,
+      "siftMs": 11
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.(toBeTruthy|toBeFals",
+      "repo": "local/Prefetch",
+      "nativeTok": 0,
+      "nativeMs": 20,
+      "siftTok": 0,
+      "siftMs": 21
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/Offer Module",
+      "nativeTok": 9856,
+      "nativeMs": 29,
+      "siftTok": 6525,
+      "siftMs": 81
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→(describe|it|test)\\.(s",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 0,
+      "nativeMs": 25,
+      "siftTok": 0,
+      "siftMs": 43
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 604,
+      "nativeMs": 32,
+      "siftTok": 0,
+      "siftMs": 19
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeGreaterThan\\(0\\)",
+      "repo": "local/tgmresearch",
+      "nativeTok": 113,
+      "nativeMs": 26,
+      "siftTok": 0,
+      "siftMs": 14
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.toBeDefined\\(\\)",
+      "repo": "local/coding-ui",
+      "nativeTok": 1801,
+      "nativeMs": 51,
+      "siftTok": 0,
+      "siftMs": 59
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→vi\\.fn\\(\\)|vi\\.mock\\(|",
+      "repo": "local/coding-ui",
+      "nativeTok": 6826,
+      "nativeMs": 23,
+      "siftTok": 0,
+      "siftMs": 22
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→(describe|it|test)\\.(s",
+      "repo": "local/country-data",
+      "nativeTok": 155,
+      "nativeMs": 45,
+      "siftTok": 0,
+      "siftMs": 63
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→expect\\([^)]+\\.length\\",
+      "repo": "local/country-data",
+      "nativeTok": 1078,
+      "nativeMs": 32,
+      "siftTok": 0,
+      "siftMs": 29
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/Mobi 2",
+      "nativeTok": 74,
+      "nativeMs": 574,
+      "siftTok": 61,
+      "siftMs": 413
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/Offer Module",
+      "nativeTok": 9756,
+      "nativeMs": 37,
+      "siftTok": 6126,
+      "siftMs": 292
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/Prefetch",
+      "nativeTok": 0,
+      "nativeMs": 22,
+      "siftTok": 0,
+      "siftMs": 10
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/tgm-survey-tester",
+      "nativeTok": 544,
+      "nativeMs": 26,
+      "siftTok": 400,
+      "siftMs": 10
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/tgmresearch",
+      "nativeTok": 1135,
+      "nativeMs": 112,
+      "siftTok": 925,
+      "siftMs": 61
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/coding-ui",
+      "nativeTok": 2110,
+      "nativeMs": 56,
+      "siftTok": 1683,
+      "siftMs": 45
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/country-data",
+      "nativeTok": 592,
+      "nativeMs": 43,
+      "siftTok": 498,
+      "siftMs": 32
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/easyAds",
+      "nativeTok": 35,
+      "nativeMs": 29,
+      "siftTok": 28,
+      "siftMs": 14
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wczasywazji-portal-next",
+      "nativeTok": 0,
+      "nativeMs": 18,
+      "siftTok": 0,
+      "siftMs": 21
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wczasywazji-portal",
+      "nativeTok": 0,
+      "nativeMs": 19,
+      "siftTok": 0,
+      "siftMs": 10
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wczasywazji.pl",
+      "nativeTok": 1692,
+      "nativeMs": 2465,
+      "siftTok": 1411,
+      "siftMs": 1865
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wczasywazji",
+      "nativeTok": 0,
+      "nativeMs": 15,
+      "siftTok": 0,
+      "siftMs": 16
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wirtualnagrecja",
+      "nativeTok": 98,
+      "nativeMs": 49,
+      "siftTok": 72,
+      "siftMs": 23
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wycieczki-editor",
+      "nativeTok": 0,
+      "nativeMs": 21,
+      "siftTok": 0,
+      "siftMs": 9
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wycieczki-wczasywazji-cms",
+      "nativeTok": 0,
+      "nativeMs": 15,
+      "siftTok": 0,
+      "siftMs": 23
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/wycieczki.wczasywazji.pl",
+      "nativeTok": 331,
+      "nativeMs": 144,
+      "siftTok": 234,
+      "siftMs": 53
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/promptvault",
+      "nativeTok": 2075,
+      "nativeMs": 79,
+      "siftTok": 1425,
+      "siftMs": 64
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/MYA",
+      "nativeTok": 67816,
+      "nativeMs": 60,
+      "siftTok": 5718,
+      "siftMs": 47
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→as any",
+      "repo": "local/zuvo-plugin",
+      "nativeTok": 491,
+      "nativeMs": 21,
+      "siftTok": 371,
+      "siftMs": 13
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\w+!\\.\\w+",
+      "repo": "local/rs-admin",
+      "nativeTok": 0,
+      "nativeMs": 22,
+      "siftTok": 0,
+      "siftMs": 14
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→\\.select\\(\\)|\\.select\\",
+      "repo": "local/AI Content Studio",
+      "nativeTok": 0,
+      "nativeMs": 10,
+      "siftTok": 0,
+      "siftMs": 13
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→} catch {",
+      "repo": "local/promptvault",
+      "nativeTok": 0,
+      "nativeMs": 10,
+      "siftTok": 622,
+      "siftMs": 26
+    },
+    {
+      "category": "combo:pat→st",
+      "task": "pat→getSiteConfig",
+      "repo": "local/tgmpanel-cms",
+      "nativeTok": 560,
+      "nativeMs": 16,
+      "siftTok": 412,
+      "siftMs": 13
+    }
+  ],
+  "summary": {
+    "byCategory": {
+      "search_text": {
+        "natTok": 597,
+        "siftTok": 465,
+        "natMs": 742,
+        "siftMs": 551,
+        "wins": 2,
+        "count": 15,
+        "tokenDiff": "-22%"
+      },
+      "search_symbols": {
+        "natTok": 78730,
+        "siftTok": 4792,
+        "natMs": 969,
+        "siftMs": 4469,
+        "wins": 13,
+        "count": 15,
+        "tokenDiff": "-94%"
+      },
+      "get_file_outline": {
+        "natTok": 41177,
+        "siftTok": 10351,
+        "natMs": 1,
+        "siftMs": 76,
+        "wins": 15,
+        "count": 15,
+        "tokenDiff": "-75%"
+      },
+      "get_file_tree": {
+        "natTok": 47104,
+        "siftTok": 14105,
+        "natMs": 348,
+        "siftMs": 7,
+        "wins": 9,
+        "count": 10,
+        "tokenDiff": "-70%"
+      },
+      "find_and_show": {
+        "natTok": 59234,
+        "siftTok": 3302,
+        "natMs": 569,
+        "siftMs": 2386,
+        "wins": 10,
+        "count": 10,
+        "tokenDiff": "-94%"
+      },
+      "assemble_context": {
+        "natTok": 46291,
+        "siftTok": 9786,
+        "natMs": 655,
+        "siftMs": 3215,
+        "wins": 8,
+        "count": 10,
+        "tokenDiff": "-79%"
+      },
+      "trace_call_chain": {
+        "natTok": 45126,
+        "siftTok": 7706,
+        "natMs": 445,
+        "siftMs": 999,
+        "wins": 9,
+        "count": 9,
+        "tokenDiff": "-83%"
+      },
+      "combo:ss→st": {
+        "natTok": 197167,
+        "siftTok": 33309,
+        "natMs": 6516,
+        "siftMs": 6273,
+        "wins": 38,
+        "count": 64,
+        "tokenDiff": "-83%"
+      },
+      "combo:st×3": {
+        "natTok": 6450,
+        "siftTok": 4889,
+        "natMs": 3068,
+        "siftMs": 2835,
+        "wins": 9,
+        "count": 20,
+        "tokenDiff": "-24%"
+      },
+      "combo:tree→st": {
+        "natTok": 352382,
+        "siftTok": 103615,
+        "natMs": 86910,
+        "siftMs": 2390,
+        "wins": 41,
+        "count": 48,
+        "tokenDiff": "-71%"
+      },
+      "combo:pat→st": {
+        "natTok": 171778,
+        "siftTok": 32458,
+        "natMs": 4952,
+        "siftMs": 4254,
+        "wins": 29,
+        "count": 47,
+        "tokenDiff": "-81%"
+      }
+    },
+    "aggregate": {
+      "totalNativeTok": 1046036,
+      "totalSiftTok": 224778,
+      "tokenDiff": "-79%",
+      "totalNativeMs": 105175,
+      "totalSiftMs": 27455,
+      "siftWins": 183,
+      "totalRuns": 263
+    }
+  }
+}

@@ -77,3 +77,4 @@ Commits pending review. Auto-managed:
 - df63251 (2026-03-29) review-fix: reset turnCounter in beforeEach to prevent test ordering flakiness
 - c71914f (2026-03-30) perf: optimize all MCP tools — ripgrep backend, compact text output, index caching
 - e1d6ee8 (2026-03-30) perf: optimize get_knowledge_map, go_to_definition, formatters
+- 1c25521 (2026-03-30) perf: optimize impact_analysis, add text formatters, reduce caps

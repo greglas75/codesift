@@ -26,7 +26,7 @@ import { scanSecrets } from "./tools/secret-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -549,7 +549,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
     },
-    handler: (args) => diffOutline(args.repo as string, args.since as string, args.until as string | undefined),
+    handler: async (args) => {
+      const result = await diffOutline(args.repo as string, args.since as string, args.until as string | undefined);
+      return formatDiffOutline(result as never);
+    },
   },
   {
     name: "changed_symbols",
@@ -560,10 +563,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_diff: z.boolean().optional().describe("Include unified diff per changed file (truncated to 500 chars)"),
     },
-    handler: (args) => {
+    handler: async (args) => {
       const opts: { include_diff?: boolean } = {};
       if (args.include_diff === true) opts.include_diff = true;
-      return changedSymbols(args.repo as string, args.since as string, args.until as string | undefined, opts);
+      const result = await changedSymbols(args.repo as string, args.since as string, args.until as string | undefined, opts);
+      return formatChangedSymbols(result as never);
     },
   },
 

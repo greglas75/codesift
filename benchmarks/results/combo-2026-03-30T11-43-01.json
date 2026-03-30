@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-03-30T11:43:01.443Z",
+  "note": "Real tasks from usage.jsonl — exact queries agents used",
+  "rows": [],
+  "summary": {
+    "byFlow": {},
+    "aggregate": {
+      "totalNativeTok": 0,
+      "totalSiftTok": 0,
+      "tokenDiff": "0%",
+      "totalNativeMs": 0,
+      "totalSiftMs": 0,
+      "siftWins": 0,
+      "totalRuns": 0
+    }
+  }
+}
