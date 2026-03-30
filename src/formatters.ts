@@ -3,6 +3,7 @@
  * Raw text uses ~50-70% fewer tokens than JSON for the same data.
  */
 import type { CodeSymbol, SymbolKind } from "./types.js";
+import type { ReviewDiffResult, ReviewFinding } from "./tools/review-diff-tools.js";
 
 // ── Search symbols ────────────────────────────────
 
@@ -450,4 +451,59 @@ export function formatCommunities(data: CommunitiesResult | string): string {
     return `[${c.name}] ${c.symbol_count} symbols, cohesion=${c.cohesion.toFixed(2)}\n  ${filesStr}${more}`;
   });
   return `${header}\n\n${lines.join("\n\n")}`;
+}
+
+// ── Review diff ───────────────────────────────────
+
+const MAX_T3_FINDINGS = 10;
+const STATUS_ICON: Record<string, string> = { pass: "✓", fail: "✗", warn: "~", error: "!", timeout: "?" };
+
+export function formatReviewDiff(data: unknown): string {
+  const r = data as ReviewDiffResult;
+  const parts: string[] = [];
+  parts.push(`review_diff: ${r.verdict} (score=${r.score}) | ${r.diff_stats?.files_reviewed ?? 0} files | ${r.duration_ms}ms`);
+
+  if (r.checks && r.checks.length > 0) {
+    parts.push("─── checks ───");
+    for (const c of r.checks) {
+      const icon = STATUS_ICON[c.status] ?? "?";
+      const summary = c.summary ? ` (${c.summary})` : "";
+      parts.push(`  ${icon} ${c.check}: ${c.status}${summary}`);
+    }
+  }
+
+  if (r.error) {
+    parts.push(`error: ${r.error}`);
+    return parts.join("\n");
+  }
+
+  const t1 = (r.findings ?? []).filter((f: ReviewFinding) => f.check === "secrets" || f.check === "breaking");
+  const t2 = (r.findings ?? []).filter((f: ReviewFinding) => ["coupling", "complexity", "dead-code", "blast-radius", "bug-patterns"].includes(f.check));
+  const t3 = (r.findings ?? []).filter((f: ReviewFinding) => !t1.includes(f) && !t2.includes(f));
+
+  if (t1.length > 0) {
+    parts.push("─── T1 findings (blocking) ───");
+    for (const f of t1) {
+      const loc = f.file ? `[${f.file}${f.line ? `:${f.line}` : ""}]` : "";
+      parts.push(`  ${loc} ${f.message}`);
+    }
+  }
+  if (t2.length > 0) {
+    parts.push("─── T2 findings (important) ───");
+    for (const f of t2) {
+      const loc = f.file ? `[${f.file}${f.line ? `:${f.line}` : ""}]` : "";
+      parts.push(`  ${loc} ${f.message}`);
+    }
+  }
+  if (t3.length > 0) {
+    parts.push("─── T3 findings (info) ───");
+    const shown = t3.slice(0, MAX_T3_FINDINGS);
+    for (const f of shown) {
+      const loc = f.file ? `[${f.file}${f.line ? `:${f.line}` : ""}]` : "";
+      parts.push(`  ${loc} ${f.message}`);
+    }
+    if (t3.length > MAX_T3_FINDINGS) parts.push(`  (showing ${MAX_T3_FINDINGS} of ${t3.length})`);
+  }
+
+  return parts.join("\n");
 }

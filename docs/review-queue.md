@@ -84,3 +84,11 @@ Commits pending review. Auto-managed:
 - 1514323 (2026-03-30) docs: update README + CLAUDE.md for 48 tools + combo benchmark results
 - 1e88023 (2026-03-30) benchmark: add CodeSift vs jCodeMunch head-to-head comparison
 - f8cae5d (2026-04-05) perf: group by file in compact format (learned from jcodemunch)
+- a1ed7b3 (2026-04-05) chore: gitignore competitor benchmark files (keep local only)
+- 9193a4c (2026-04-05) feat(review-diff): add types, tier assignment, scoring, and verdict functions
+- a08a6c1 (2026-04-05) feat(review-diff): add orchestrator with pre-flight, diff parse, and result assembly
+- ab4fc0f (2026-04-05) feat(review-diff): compose blast-radius, secrets, and dead-code checks
+- edad16b (2026-04-05) feat(review-diff): compose bug-patterns, hotspots, and complexity checks
+- 722069f (2026-04-05) feat(review-diff): add co-change coupling check with Jaccard algorithm
+- accf405 (2026-04-05) feat(review-diff): add breaking change detection via export diff between refs
+- 811b560 (2026-04-05) feat(review-diff): add test gap detection via naming convention and import graph
