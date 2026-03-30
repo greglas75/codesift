@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25, applyCutoff } from "../search/bm25.js";
@@ -68,6 +69,7 @@ export interface SearchTextOptions {
   max_results?: number | undefined;
   group_by_file?: boolean | undefined;
   auto_group?: boolean | undefined;
+  compact?: boolean | undefined;
 }
 
 // ── Private helpers ─────────────────────────────────────
@@ -146,6 +148,211 @@ function compileSearchRegex(query: string): RegExp {
     throw new Error(`Invalid regex pattern: ${message}`);
   }
 }
+
+// ── Ripgrep backend ────────────────────────────────────
+
+/** Directories always excluded from ripgrep search */
+const RG_EXCLUDE_DIRS = [
+  "node_modules", ".git", ".next", "dist", ".codesift", "coverage",
+  ".playwright-mcp", "__pycache__", ".mypy_cache", ".tox",
+];
+
+/** Detect whether `rg` (ripgrep) is available on this system. Cached at module level. */
+let rgAvailable: boolean | null = null;
+function hasRipgrep(): boolean {
+  if (rgAvailable !== null) return rgAvailable;
+  try {
+    execFileSync("rg", ["--version"], { stdio: "pipe", timeout: 2000 });
+    rgAvailable = true;
+  } catch {
+    rgAvailable = false;
+  }
+  return rgAvailable;
+}
+
+/**
+ * Search via ripgrep — fast C-based search, parses `rg -n` output.
+ * Falls back to Node.js search if rg is not available.
+ */
+function searchWithRipgrep(
+  root: string,
+  query: string,
+  options: { regex?: boolean; filePattern?: string | undefined; maxResults: number; contextLines: number },
+): TextMatch[] {
+  const args: string[] = [
+    "-n",                    // line numbers
+    "--no-heading",          // flat output
+    "--max-columns", String(MAX_LINE_CHARS),
+    "--max-columns-preview", // show truncated preview
+    "--max-count", String(Math.min(options.maxResults * 2, 5000)), // per-file cap (generous to hit global max)
+  ];
+
+  if (!options.regex) {
+    args.push("-F"); // fixed string (literal)
+  }
+
+  if (options.contextLines > 0) {
+    args.push("-C", String(options.contextLines));
+  }
+
+  // File pattern → rg glob
+  if (options.filePattern) {
+    // Handle patterns like "src/**" or "*.ts"
+    args.push("--glob", options.filePattern);
+  }
+
+  // Exclude dirs
+  for (const dir of RG_EXCLUDE_DIRS) {
+    args.push("--glob", `!${dir}`);
+  }
+
+  args.push("--", query, root);
+
+  let stdout: string;
+  try {
+    stdout = execFileSync("rg", args, {
+      encoding: "utf-8",
+      maxBuffer: 20 * 1024 * 1024, // 20MB
+      timeout: SEARCH_TIMEOUT_MS,
+    });
+  } catch (err: unknown) {
+    // rg exits 1 = no matches, 2 = error
+    if (err && typeof err === "object" && "status" in err) {
+      const exitCode = (err as { status: number }).status;
+      if (exitCode === 1) return []; // no matches
+      if ("stdout" in err && typeof (err as { stdout: unknown }).stdout === "string") {
+        stdout = (err as { stdout: string }).stdout;
+        if (!stdout) return [];
+      } else {
+        return [];
+      }
+    } else {
+      return [];
+    }
+  }
+
+  const matches: TextMatch[] = [];
+  const rootPrefix = root.endsWith("/") ? root : root + "/";
+
+  // Parse context blocks: lines separated by "--" separators
+  const blocks = options.contextLines > 0
+    ? stdout.split(/^--$/m)
+    : [stdout];
+
+  for (const block of blocks) {
+    if (matches.length >= options.maxResults) break;
+
+    const lines = block.split("\n").filter(Boolean);
+    // In context mode, find the actual match line (has `:` separator) vs context (has `-` separator)
+    // In non-context mode, all lines are matches
+    for (const rawLine of lines) {
+      if (matches.length >= options.maxResults) break;
+
+      // rg format: /abs/path/file.ts:42:content  (match)
+      // rg format: /abs/path/file.ts-40-content   (context, only with -C)
+      // We only want match lines (with `:` after line number)
+      const matchResult = rawLine.match(/^(.+?):(\d+):(.*)/);
+      if (!matchResult) continue;
+
+      const [, absPath, lineNumStr, content] = matchResult;
+      if (!absPath || !lineNumStr || content === undefined) continue;
+
+      const relPath = absPath.startsWith(rootPrefix)
+        ? absPath.slice(rootPrefix.length)
+        : absPath;
+
+      matches.push({
+        file: relPath,
+        line: parseInt(lineNumStr, 10),
+        content: content,
+      });
+    }
+  }
+
+  // For context mode, we need to re-parse to attach context_before/context_after
+  // But context_lines=0 is the default now, so this path is rarely hit
+  if (options.contextLines > 0 && blocks.length > 1) {
+    return parseRipgrepContextBlocks(stdout, rootPrefix, options.maxResults, options.contextLines);
+  }
+
+  return matches;
+}
+
+/**
+ * Parse rg output with context lines (-C N) into TextMatch[] with context_before/context_after.
+ */
+function parseRipgrepContextBlocks(
+  stdout: string,
+  rootPrefix: string,
+  maxResults: number,
+  contextLines: number,
+): TextMatch[] {
+  const matches: TextMatch[] = [];
+  const blocks = stdout.split(/^--$/m);
+
+  for (const block of blocks) {
+    if (matches.length >= maxResults) break;
+
+    const lines = block.split("\n").filter(Boolean);
+    // Separate match lines from context lines
+    // Match: path:line:content  Context: path-line-content
+    const parsed: Array<{ path: string; line: number; content: string; isMatch: boolean }> = [];
+
+    for (const raw of lines) {
+      // Try match line first (colon after line number)
+      const matchLine = raw.match(/^(.+?):(\d+):(.*)/);
+      if (matchLine && matchLine[1] && matchLine[2] && matchLine[3] !== undefined) {
+        parsed.push({
+          path: matchLine[1].startsWith(rootPrefix) ? matchLine[1].slice(rootPrefix.length) : matchLine[1],
+          line: parseInt(matchLine[2], 10),
+          content: matchLine[3],
+          isMatch: true,
+        });
+        continue;
+      }
+      // Try context line (hyphen after line number)
+      const ctxLine = raw.match(/^(.+?)-(\d+)-(.*)/);
+      if (ctxLine && ctxLine[1] && ctxLine[2] && ctxLine[3] !== undefined) {
+        parsed.push({
+          path: ctxLine[1].startsWith(rootPrefix) ? ctxLine[1].slice(rootPrefix.length) : ctxLine[1],
+          line: parseInt(ctxLine[2], 10),
+          content: ctxLine[3],
+          isMatch: false,
+        });
+      }
+    }
+
+    // Build TextMatch for each match line with surrounding context
+    for (let i = 0; i < parsed.length; i++) {
+      const p = parsed[i]!;
+      if (!p.isMatch) continue;
+      if (matches.length >= maxResults) break;
+
+      const contextBefore: string[] = [];
+      const contextAfter: string[] = [];
+
+      // Collect context before
+      for (let j = Math.max(0, i - contextLines); j < i; j++) {
+        const ctx = parsed[j];
+        if (ctx && !ctx.isMatch) contextBefore.push(ctx.content);
+      }
+      // Collect context after
+      for (let j = i + 1; j <= Math.min(parsed.length - 1, i + contextLines); j++) {
+        const ctx = parsed[j];
+        if (ctx && !ctx.isMatch) contextAfter.push(ctx.content);
+      }
+
+      const match: TextMatch = { file: p.path, line: p.line, content: p.content };
+      if (contextBefore.length > 0) match.context_before = contextBefore;
+      if (contextAfter.length > 0) match.context_after = contextAfter;
+      matches.push(match);
+    }
+  }
+
+  return matches;
+}
+
+// ── Node.js fallback search ───────────────────────────
 
 /** Search file content for line matches, collecting context lines around each hit. */
 function searchFileForMatches(
@@ -298,13 +505,18 @@ export async function searchText(
 export async function searchText(
   repo: string,
   query: string,
+  options?: SearchTextOptions & { compact: true },
+): Promise<string>;
+export async function searchText(
+  repo: string,
+  query: string,
   options?: SearchTextOptions,
 ): Promise<TextMatch[]>;
 export async function searchText(
   repo: string,
   query: string,
   options?: SearchTextOptions,
-): Promise<TextMatch[] | TextMatchGroup[]> {
+): Promise<TextMatch[] | TextMatchGroup[] | string> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
@@ -314,43 +526,69 @@ export async function searchText(
   const filePattern = options?.file_pattern;
   const maxResults = options?.max_results
     ?? (useRegex && !filePattern ? DEFAULT_MAX_REGEX_RESULTS : DEFAULT_MAX_TEXT_MATCHES);
-  const contextLines = options?.context_lines ?? 2;
+  const contextLines = options?.context_lines ?? 0; // OPT-2: default 0 (was 2) — saves ~30 tokens/match
 
-  const regex = useRegex ? compileSearchRegex(query) : null;
-
-  // Use indexed file list when file_pattern is specified (skip expensive filesystem walk)
-  let allFiles: string[];
-  if (filePattern) {
-    allFiles = index.files.map((f) => f.path);
-  } else {
-    allFiles = await walkDirectory(index.root, {
-      fileFilter: (ext) => !BINARY_EXTENSIONS.has(ext),
-      maxFiles: MAX_WALK_FILES,
-      relative: true,
-    });
+  // Validate regex safety before passing to ripgrep
+  if (useRegex) {
+    compileSearchRegex(query); // throws on ReDoS patterns
   }
 
-  const matches: TextMatch[] = [];
-  const searchStart = Date.now();
+  let matches: TextMatch[];
 
-  for (const filePath of allFiles) {
-    if (matches.length >= maxResults) break;
-    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break;
+  // OPT-1: Use ripgrep when available (10x faster)
+  if (hasRipgrep()) {
+    matches = searchWithRipgrep(index.root, query, {
+      regex: useRegex,
+      filePattern: filePattern,
+      maxResults: maxResults,
+      contextLines: contextLines,
+    });
+  } else {
+    // Node.js fallback
+    const regex = useRegex ? compileSearchRegex(query) : null;
 
-    if (filePattern && !matchFilePattern(filePath, filePattern)) continue;
-
-    const fullPath = join(index.root, filePath);
-    let content: string;
-    try {
-      content = await readFile(fullPath, "utf-8");
-    } catch {
-      continue;
+    let allFiles: string[];
+    if (filePattern) {
+      allFiles = index.files.map((f) => f.path);
+    } else {
+      allFiles = await walkDirectory(index.root, {
+        fileFilter: (ext) => !BINARY_EXTENSIONS.has(ext),
+        maxFiles: MAX_WALK_FILES,
+        relative: true,
+      });
     }
 
-    const fileMatches = searchFileForMatches(
-      content, filePath, query, regex, contextLines, maxResults - matches.length,
-    );
-    matches.push(...fileMatches);
+    matches = [];
+    const searchStart = Date.now();
+
+    for (const filePath of allFiles) {
+      if (matches.length >= maxResults) break;
+      if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break;
+
+      if (filePattern && !matchFilePattern(filePath, filePattern)) continue;
+
+      const fullPath = join(index.root, filePath);
+      let content: string;
+      try {
+        content = await readFile(fullPath, "utf-8");
+      } catch {
+        continue;
+      }
+
+      const fileMatches = searchFileForMatches(
+        content, filePath, query, regex, contextLines, maxResults - matches.length,
+      );
+      matches.push(...fileMatches);
+    }
+  }
+
+  // OPT-3: Compact format — grep-like `file:line: content` output, ~50% less tokens than JSON
+  // Auto-enable when auto_group is set (caller is optimization-aware) and results are small
+  const useCompact = options?.compact
+    ?? (options?.auto_group && contextLines === 0 && matches.length > 0 && matches.length <= AUTO_GROUP_THRESHOLD);
+
+  if (useCompact && !options?.group_by_file) {
+    return matches.map((m) => `${m.file}:${m.line}: ${m.content}`).join("\n");
   }
 
   // Estimate response size; force grouping when output would be enormous

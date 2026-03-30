@@ -5,7 +5,7 @@ import {
   type SubQueryResult,
   type CodebaseRetrievalResult,
 } from "./retrieval-schemas.js";
-import { estimateTokens, truncateSymbolSource } from "./retrieval-utils.js";
+import { estimateTokens } from "./retrieval-utils.js";
 import { handleSemanticQuery, handleHybridQuery } from "./semantic-handlers.js";
 import {
   MAX_QUERIES,
@@ -34,21 +34,21 @@ async function executeSubQuery(
         file_pattern: query.file_pattern,
         include_source: true,
         top_k: query.top_k ?? 5,
+        source_chars: query.source_chars ?? DEFAULT_SOURCE_CHARS,
       });
-      const sourceLimit = query.source_chars ?? DEFAULT_SOURCE_CHARS;
-      const data = results.map((r) => truncateSymbolSource(r.symbol, sourceLimit));
-      const text = JSON.stringify(data);
-      return { type: query.type, data, tokens: estimateTokens(text) };
+      const text = JSON.stringify(results);
+      return { type: query.type, data: results, tokens: estimateTokens(text) };
     }
 
     case "text": {
       const { searchText } = await import("../tools/search-tools.js");
       const results = await searchText(repo, query.query, {
         regex: query.regex,
-        context_lines: query.context_lines,
+        context_lines: query.context_lines ?? 0,
         file_pattern: query.file_pattern,
+        auto_group: true,
       });
-      const text = JSON.stringify(results);
+      const text = typeof results === "string" ? results : JSON.stringify(results);
       return { type: query.type, data: results, tokens: estimateTokens(text) };
     }
 
@@ -58,7 +58,7 @@ async function executeSubQuery(
         path_prefix: query.path ?? query.path_prefix,
         name_pattern: query.name_pattern,
         depth: query.depth,
-        compact: query.compact,
+        compact: query.compact ?? true,
         min_symbols: query.min_symbols,
       });
       const text = JSON.stringify(result);

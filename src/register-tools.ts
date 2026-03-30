@@ -4,7 +4,7 @@ import { wrapTool } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
-import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle } from "./tools/symbol-tools.js";
+import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
@@ -26,6 +26,7 @@ import { scanSecrets } from "./tools/secret-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -125,16 +126,19 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       token_budget: zNum().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
       rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
-    handler: (args) => searchSymbols(args.repo as string, args.query as string, {
-      kind: args.kind as SymbolKind | undefined,
-      file_pattern: args.file_pattern as string | undefined,
-      include_source: args.include_source as boolean | undefined,
-      top_k: args.top_k as number | undefined,
-      source_chars: args.source_chars as number | undefined,
-      detail_level: args.detail_level as "compact" | "standard" | "full" | undefined,
-      token_budget: args.token_budget as number | undefined,
-      rerank: args.rerank as boolean | undefined,
-    }),
+    handler: async (args) => {
+      const results = await searchSymbols(args.repo as string, args.query as string, {
+        kind: args.kind as SymbolKind | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        include_source: args.include_source as boolean | undefined,
+        top_k: args.top_k as number | undefined,
+        source_chars: args.source_chars as number | undefined,
+        detail_level: args.detail_level as "compact" | "standard" | "full" | undefined,
+        token_budget: args.token_budget as number | undefined,
+        rerank: args.rerank as boolean | undefined,
+      });
+      return formatSearchSymbols(results);
+    },
   },
   {
     name: "ast_query",
@@ -190,13 +194,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       compact: z.boolean().optional().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
       min_symbols: zNum().describe("Only include files with at least this many symbols"),
     },
-    handler: (args) => getFileTree(args.repo as string, {
-      path_prefix: args.path_prefix as string | undefined,
-      name_pattern: args.name_pattern as string | undefined,
-      depth: args.depth as number | undefined,
-      compact: args.compact as boolean | undefined,
-      min_symbols: args.min_symbols as number | undefined,
-    }),
+    handler: async (args) => {
+      const result = await getFileTree(args.repo as string, {
+        path_prefix: args.path_prefix as string | undefined,
+        name_pattern: args.name_pattern as string | undefined,
+        depth: args.depth as number | undefined,
+        compact: args.compact as boolean | undefined,
+        min_symbols: args.min_symbols as number | undefined,
+      });
+      return formatFileTree(result as never);
+    },
   },
   {
     name: "get_file_outline",
@@ -205,7 +212,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       file_path: z.string().describe("Relative file path within the repository"),
     },
-    handler: (args) => getFileOutline(args.repo as string, args.file_path as string),
+    handler: async (args) => {
+      const result = await getFileOutline(args.repo as string, args.file_path as string);
+      return formatFileOutline(result as never);
+    },
   },
   {
     name: "get_repo_outline",
@@ -213,7 +223,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
     },
-    handler: (args) => getRepoOutline(args.repo as string),
+    handler: async (args) => {
+      const result = await getRepoOutline(args.repo as string);
+      return formatRepoOutline(result as never);
+    },
   },
 
   {
@@ -222,7 +235,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
     },
-    handler: (args) => suggestQueries(args.repo as string),
+    handler: async (args) => {
+      const result = await suggestQueries(args.repo as string);
+      return formatSuggestQueries(result as never);
+    },
   },
 
   // --- Symbol retrieval ---
@@ -233,7 +249,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       symbol_id: z.string().describe("Unique symbol identifier"),
     },
-    handler: (args) => getSymbol(args.repo as string, args.symbol_id as string),
+    handler: async (args) => {
+      const sym = await getSymbol(args.repo as string, args.symbol_id as string);
+      return sym ? formatSymbolCompact(sym) : null;
+    },
   },
   {
     name: "get_symbols",
@@ -245,7 +264,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         z.string().transform((s) => JSON.parse(s) as string[]),
       ]).describe("Array of symbol identifiers. Can be passed as JSON string."),
     },
-    handler: (args) => getSymbols(args.repo as string, args.symbol_ids as string[]),
+    handler: async (args) => {
+      const syms = await getSymbols(args.repo as string, args.symbol_ids as string[]);
+      return formatSymbolsCompact(syms);
+    },
   },
   {
     name: "find_and_show",
@@ -255,7 +277,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Symbol name or query to search for"),
       include_refs: z.boolean().optional().describe("Include locations that reference this symbol"),
     },
-    handler: (args) => findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined),
+    handler: async (args) => {
+      const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
+      if (!result) return null;
+      let text = formatSymbolCompact(result.symbol);
+      if (result.references) {
+        text += `\n\n--- references ---\n${formatRefsCompact(result.references)}`;
+      }
+      return text;
+    },
   },
   {
     name: "get_context_bundle",
@@ -264,7 +294,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Symbol name to find"),
     },
-    handler: (args) => getContextBundle(args.repo as string, args.symbol_name as string),
+    handler: async (args) => {
+      const bundle = await getContextBundle(args.repo as string, args.symbol_name as string);
+      if (!bundle) return null;
+      return formatBundleCompact(bundle);
+    },
   },
 
   // --- References & call graph ---
@@ -278,12 +312,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
     },
-    handler: (args) => {
+    handler: async (args) => {
       const names = args.symbol_names as string[] | undefined;
       if (names && names.length > 0) {
         return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
       }
-      return findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
+      const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
+      // Compact format: drop col, use file:line: context (matches grep output)
+      return formatRefsCompact(refs);
     },
   },
   {
@@ -298,12 +334,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_tests: z.boolean().optional().describe("Include test files in trace results (default: false)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (flowchart diagram)"),
     },
-    handler: (args) => traceCallChain(args.repo as string, args.symbol_name as string, args.direction as Direction, {
-      depth: args.depth as number | undefined,
-      include_source: args.include_source as boolean | undefined,
-      include_tests: args.include_tests as boolean | undefined,
-      output_format: args.output_format as "json" | "mermaid" | undefined,
-    }),
+    handler: async (args) => {
+      const result = await traceCallChain(args.repo as string, args.symbol_name as string, args.direction as Direction, {
+        depth: args.depth as number | undefined,
+        include_source: args.include_source as boolean | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        output_format: args.output_format as "json" | "mermaid" | undefined,
+      });
+      return formatCallTree(result as never);
+    },
   },
   {
     name: "impact_analysis",
@@ -330,7 +369,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (sequence diagram)"),
     },
-    handler: (args) => traceRoute(args.repo as string, args.path as string, args.output_format as "json" | "mermaid" | undefined),
+    handler: async (args) => {
+      const result = await traceRoute(args.repo as string, args.path as string, args.output_format as "json" | "mermaid" | undefined);
+      return formatTraceRoute(result as never);
+    },
   },
 
   {
@@ -401,12 +443,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       resolution: zNum().describe("Louvain resolution: higher = more smaller communities, lower = fewer larger (default: 1.0)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (graph diagram)"),
     },
-    handler: (args) => detectCommunities(
-      args.repo as string,
-      args.focus as string | undefined,
-      args.resolution as number | undefined,
-      args.output_format as "json" | "mermaid" | undefined,
-    ),
+    handler: async (args) => {
+      const result = await detectCommunities(
+        args.repo as string,
+        args.focus as string | undefined,
+        args.resolution as number | undefined,
+        args.output_format as "json" | "mermaid" | undefined,
+      );
+      return formatCommunities(result as never);
+    },
   },
 
   {
@@ -441,11 +486,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args) => {
       const { classifySymbolRoles } = await import("./tools/graph-tools.js");
-      return classifySymbolRoles(args.repo as string, {
+      const result = await classifySymbolRoles(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
         include_tests: args.include_tests as boolean | undefined,
         top_n: args.top_n as number | undefined,
       });
+      return formatRoles(result as never);
     },
   },
 
@@ -460,13 +506,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("Context compression level: L0=full source (default), L1=signatures only, L2=file summaries, L3=directory overview"),
       rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
-    handler: (args) => assembleContext(
-      args.repo as string,
-      args.query as string,
-      args.token_budget as number | undefined,
-      args.level as "L0" | "L1" | "L2" | "L3" | undefined,
-      args.rerank as boolean | undefined,
-    ),
+    handler: async (args) => {
+      const result = await assembleContext(
+        args.repo as string,
+        args.query as string,
+        args.token_budget as number | undefined,
+        args.level as "L0" | "L1" | "L2" | "L3" | undefined,
+        args.rerank as boolean | undefined,
+      );
+      return formatAssembleContext(result as never);
+    },
   },
   {
     name: "get_knowledge_map",
@@ -532,11 +581,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         .describe("Array of sub-queries (symbols, text, file_tree, outline, references, call_chain, impact, context, knowledge_map). Can be passed as JSON string."),
       token_budget: zNum().describe("Maximum total tokens across all sub-query results"),
     },
-    handler: (args) => codebaseRetrieval(
-      args.repo as string,
-      args.queries as Array<{ type: string } & Record<string, unknown>>,
-      args.token_budget as number | undefined,
-    ),
+    handler: async (args) => {
+      const result = await codebaseRetrieval(
+        args.repo as string,
+        args.queries as Array<{ type: string } & Record<string, unknown>>,
+        args.token_budget as number | undefined,
+      );
+      // Format as text sections instead of JSON envelope
+      const sections = result.results.map((r) => {
+        const dataStr = typeof r.data === "string" ? r.data : JSON.stringify(r.data, null, 2);
+        return `--- ${r.type} ---\n${dataStr}`;
+      });
+      let output = sections.join("\n\n");
+      if (result.truncated) output += "\n\n(truncated: token budget exceeded)";
+      return output;
+    },
   },
 
   // --- Analysis ---
@@ -548,10 +607,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: z.boolean().optional().describe("Include test files in scan (default: false)"),
     },
-    handler: (args) => findDeadCode(args.repo as string, {
-      file_pattern: args.file_pattern as string | undefined,
-      include_tests: args.include_tests as boolean | undefined,
-    }),
+    handler: async (args) => {
+      const result = await findDeadCode(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+      });
+      return formatDeadCode(result as never);
+    },
   },
   {
     name: "analyze_complexity",
@@ -563,12 +625,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       min_complexity: zNum().describe("Minimum cyclomatic complexity to include (default: 1)"),
       include_tests: z.boolean().optional().describe("Include test files (default: false)"),
     },
-    handler: (args) => analyzeComplexity(args.repo as string, {
-      file_pattern: args.file_pattern as string | undefined,
-      top_n: args.top_n as number | undefined,
-      min_complexity: args.min_complexity as number | undefined,
-      include_tests: args.include_tests as boolean | undefined,
-    }),
+    handler: async (args) => {
+      const result = await analyzeComplexity(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        top_n: args.top_n as number | undefined,
+        min_complexity: args.min_complexity as number | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+      });
+      return formatComplexity(result as never);
+    },
   },
   {
     name: "find_clones",
@@ -580,12 +645,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       min_lines: zNum().describe("Minimum normalized lines to consider (default: 10)"),
       include_tests: z.boolean().optional().describe("Include test files (default: false)"),
     },
-    handler: (args) => findClones(args.repo as string, {
-      file_pattern: args.file_pattern as string | undefined,
-      min_similarity: args.min_similarity as number | undefined,
-      min_lines: args.min_lines as number | undefined,
-      include_tests: args.include_tests as boolean | undefined,
-    }),
+    handler: async (args) => {
+      const result = await findClones(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        min_similarity: args.min_similarity as number | undefined,
+        min_lines: args.min_lines as number | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+      });
+      return formatClones(result as never);
+    },
   },
   {
     name: "frequency_analysis",
@@ -620,11 +688,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       top_n: zNum().describe("Return top N hotspots (default: 30)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
     },
-    handler: (args) => analyzeHotspots(args.repo as string, {
-      since_days: args.since_days as number | undefined,
-      top_n: args.top_n as number | undefined,
-      file_pattern: args.file_pattern as string | undefined,
-    }),
+    handler: async (args) => {
+      const result = await analyzeHotspots(args.repo as string, {
+        since_days: args.since_days as number | undefined,
+        top_n: args.top_n as number | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+      });
+      return formatHotspots(result as never);
+    },
   },
 
   // --- Cross-repo ---
@@ -670,11 +741,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_tests: z.boolean().optional().describe("Include test files (default: false)"),
       max_results: zNum().describe("Max results (default: 50)"),
     },
-    handler: (args) => searchPatterns(args.repo as string, args.pattern as string, {
-      file_pattern: args.file_pattern as string | undefined,
-      include_tests: args.include_tests as boolean | undefined,
-      max_results: args.max_results as number | undefined,
-    }),
+    handler: async (args) => {
+      const result = await searchPatterns(args.repo as string, args.pattern as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+      return formatSearchPatterns(result as never);
+    },
   },
   {
     name: "list_patterns",
@@ -711,11 +785,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       project: z.string().optional().describe("Project path to search (default: current project)"),
       limit: zNum().optional().describe("Maximum results to return (default: 10, max: 50)"),
     },
-    handler: async (args) => searchConversations(
-      args.query as string,
-      args.project as string | undefined,
-      args.limit as number | undefined,
-    ),
+    handler: async (args) => {
+      const result = await searchConversations(args.query as string, args.project as string | undefined, args.limit as number | undefined);
+      return formatConversations(result as never);
+    },
   },
   {
     name: "find_conversations_for_symbol",
@@ -725,11 +798,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Code repository to resolve the symbol from (e.g., 'local/my-project')"),
       limit: zNum().optional().describe("Maximum conversation results (default: 5)"),
     },
-    handler: async (args) => findConversationsForSymbol(
-      args.symbol_name as string,
-      args.repo as string,
-      args.limit as number | undefined,
-    ),
+    handler: async (args) => {
+      const result = await findConversationsForSymbol(args.symbol_name as string, args.repo as string, args.limit as number | undefined);
+      return formatConversations(result as never);
+    },
   },
 
   {
@@ -739,10 +811,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Search query — keywords, natural language, or concept"),
       limit: zNum().optional().describe("Maximum results across all projects (default: 10)"),
     },
-    handler: async (args) => searchAllConversations(
-      args.query as string,
-      args.limit as number | undefined,
-    ),
+    handler: async (args) => {
+      const result = await searchAllConversations(args.query as string, args.limit as number | undefined);
+      return formatConversations(result as never);
+    },
   },
 
   // --- Security ---
@@ -756,15 +828,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       exclude_tests: z.boolean().optional().describe("Exclude test file findings (default: true)"),
       severity: z.enum(["critical", "high", "medium", "low"]).optional().describe("Minimum severity level"),
     },
-    handler: async (args) => scanSecrets(
-      args.repo as string,
-      {
+    handler: async (args) => {
+      const result = await scanSecrets(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
         min_confidence: args.min_confidence as "high" | "medium" | "low" | undefined,
         exclude_tests: args.exclude_tests as boolean | undefined,
         severity: args.severity as SecretSeverity | undefined,
-      },
-    ),
+      });
+      return formatSecrets(result as never);
+    },
   },
 
   // --- Stats ---

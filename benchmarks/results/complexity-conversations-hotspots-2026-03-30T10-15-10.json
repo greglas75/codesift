@@ -1,0 +1,248 @@
+{
+  "startedAt": "2026-03-30T10:15:10.543Z",
+  "rows": [
+    {
+      "flow": "analyze_complexity",
+      "query": "all",
+      "repo": "codesift-mcp",
+      "nativeTok": 7531,
+      "siftTok": 175,
+      "nativeMs": 275,
+      "siftMs": 6
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "src/tools",
+      "repo": "codesift-mcp",
+      "nativeTok": 379,
+      "siftTok": 167,
+      "nativeMs": 137,
+      "siftMs": 2
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "services",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 5,
+      "nativeMs": 139,
+      "siftMs": 1
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "all",
+      "repo": "translation-qa",
+      "nativeTok": 8089,
+      "siftTok": 226,
+      "nativeMs": 8585,
+      "siftMs": 71
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "src/tools",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 5,
+      "nativeMs": 8340,
+      "siftMs": 8
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "services",
+      "repo": "translation-qa",
+      "nativeTok": 9016,
+      "siftTok": 226,
+      "nativeMs": 8005,
+      "siftMs": 24
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "all",
+      "repo": "promptvault",
+      "nativeTok": 9470,
+      "siftTok": 260,
+      "nativeMs": 3237,
+      "siftMs": 16
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "src/tools",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 5,
+      "nativeMs": 1179,
+      "siftMs": 2
+    },
+    {
+      "flow": "analyze_complexity",
+      "query": "services",
+      "repo": "promptvault",
+      "nativeTok": 9794,
+      "siftTok": 249,
+      "nativeMs": 1161,
+      "siftMs": 5
+    },
+    {
+      "flow": "search_conversations",
+      "query": "benchmark optimization",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 203,
+      "nativeMs": 0,
+      "siftMs": 1536
+    },
+    {
+      "flow": "search_conversations",
+      "query": "token reduction",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 150,
+      "nativeMs": 0,
+      "siftMs": 492
+    },
+    {
+      "flow": "search_conversations",
+      "query": "ripgrep backend",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 397,
+      "nativeMs": 0,
+      "siftMs": 794
+    },
+    {
+      "flow": "search_conversations",
+      "query": "BM25 search",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 354,
+      "nativeMs": 0,
+      "siftMs": 346
+    },
+    {
+      "flow": "search_conversations",
+      "query": "compact format",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 429,
+      "nativeMs": 0,
+      "siftMs": 513
+    },
+    {
+      "flow": "search_conversations",
+      "query": "benchmark optimization",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 203,
+      "nativeMs": 0,
+      "siftMs": 533
+    },
+    {
+      "flow": "search_conversations",
+      "query": "token reduction",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 150,
+      "nativeMs": 0,
+      "siftMs": 557
+    },
+    {
+      "flow": "search_conversations",
+      "query": "ripgrep backend",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 397,
+      "nativeMs": 0,
+      "siftMs": 413
+    },
+    {
+      "flow": "search_conversations",
+      "query": "BM25 search",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 354,
+      "nativeMs": 0,
+      "siftMs": 935
+    },
+    {
+      "flow": "search_conversations",
+      "query": "compact format",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 429,
+      "nativeMs": 0,
+      "siftMs": 387
+    },
+    {
+      "flow": "search_conversations",
+      "query": "benchmark optimization",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 203,
+      "nativeMs": 0,
+      "siftMs": 537
+    },
+    {
+      "flow": "search_conversations",
+      "query": "token reduction",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 150,
+      "nativeMs": 0,
+      "siftMs": 536
+    },
+    {
+      "flow": "search_conversations",
+      "query": "ripgrep backend",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 397,
+      "nativeMs": 0,
+      "siftMs": 536
+    },
+    {
+      "flow": "search_conversations",
+      "query": "BM25 search",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 354,
+      "nativeMs": 0,
+      "siftMs": 548
+    },
+    {
+      "flow": "search_conversations",
+      "query": "compact format",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 429,
+      "nativeMs": 0,
+      "siftMs": 1233
+    },
+    {
+      "flow": "analyze_hotspots",
+      "query": "90d",
+      "repo": "codesift-mcp",
+      "nativeTok": 217,
+      "siftTok": 11,
+      "nativeMs": 213,
+      "siftMs": 104
+    },
+    {
+      "flow": "analyze_hotspots",
+      "query": "90d",
+      "repo": "translation-qa",
+      "nativeTok": 351,
+      "siftTok": 11,
+      "nativeMs": 2331,
+      "siftMs": 1316
+    },
+    {
+      "flow": "analyze_hotspots",
+      "query": "90d",
+      "repo": "promptvault",
+      "nativeTok": 305,
+      "siftTok": 11,
+      "nativeMs": 1057,
+      "siftMs": 777
+    }
+  ]
+}

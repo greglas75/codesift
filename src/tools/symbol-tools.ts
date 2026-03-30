@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { searchBM25, type BM25Index } from "../search/bm25.js";
 import { findReferencesLsp } from "../lsp/lsp-tools.js";
@@ -8,7 +9,7 @@ import { detectFrameworks, isFrameworkEntryPoint } from "../utils/framework-dete
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
-const MAX_REFERENCES = 200;
+const MAX_REFERENCES = 100;
 const MAX_DEAD_CODE_RESULTS = 100;
 const MAX_CONTEXT_LENGTH = 200; // Truncate context lines to prevent huge output from minified files
 
@@ -42,6 +43,17 @@ async function requireBM25Index(repo: string): Promise<BM25Index> {
 function wordBoundaryPattern(name: string): RegExp {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`\\b${escaped}\\b`);
+}
+
+/**
+ * Strip internal/BM25 fields from CodeSymbol for leaner output.
+ * Removes: repo, tokens, start_col, end_col. Shortens id (strips repo prefix).
+ */
+function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "start_col" | "end_col"> {
+  const { repo: _repo, tokens: _tokens, start_col: _sc, end_col: _ec, id, ...rest } = sym;
+  // Strip "local/reponame:" prefix from id
+  const shortId = id.includes(":") ? id.slice(id.indexOf(":") + 1) : id;
+  return { ...rest, id: shortId };
 }
 
 /**
@@ -86,7 +98,7 @@ export async function getSymbol(
   if (source !== undefined) {
     result.source = source;
   }
-  return result;
+  return stripSymbol(result) as CodeSymbol;
 }
 
 /**
@@ -148,7 +160,7 @@ export async function getSymbols(
   const ordered: CodeSymbol[] = [];
   for (const id of symbolIds) {
     const sym = results.get(id);
-    if (sym) ordered.push(sym);
+    if (sym) ordered.push(stripSymbol(sym) as CodeSymbol);
   }
 
   return ordered;
@@ -216,7 +228,107 @@ export async function findReferencesBatch(
   return result;
 }
 
-const SEARCH_TIMEOUT_MS = 30_000; // 30s timeout for file scanning
+const SEARCH_TIMEOUT_MS = 30_000;
+
+/** Directories to exclude from ripgrep reference search */
+const RG_EXCLUDE_DIRS = [
+  "node_modules", ".git", ".next", "dist", ".codesift", "coverage",
+  ".playwright-mcp", "__pycache__", "__snapshots__",
+];
+
+/** Detect whether `rg` (ripgrep) is available. Cached at module level. */
+let rgAvailable: boolean | null = null;
+function hasRipgrep(): boolean {
+  if (rgAvailable !== null) return rgAvailable;
+  try {
+    execFileSync("rg", ["--version"], { stdio: "pipe", timeout: 2000 });
+    rgAvailable = true;
+  } catch {
+    rgAvailable = false;
+  }
+  return rgAvailable;
+}
+
+/**
+ * Find references using ripgrep with word-boundary matching.
+ * Returns compact `file:line: context` string when results ≤ threshold.
+ */
+function findReferencesWithRipgrep(
+  root: string,
+  symbolName: string,
+  maxResults: number,
+  filePattern?: string,
+): Reference[] | string {
+  const args: string[] = [
+    "-n", "--no-heading", "-w",
+    "--max-columns", String(MAX_CONTEXT_LENGTH),
+    "--max-columns-preview",
+    "--max-count", String(Math.min(maxResults * 2, 5000)),
+  ];
+
+  // Exclude noise dirs
+  for (const dir of RG_EXCLUDE_DIRS) {
+    args.push("--glob", `!${dir}`);
+  }
+  // Exclude noise extensions
+  for (const ext of [".snap", ".lock", ".map", ".svg", ".png", ".jpg", ".ico", ".woff", ".woff2", ".md", ".json", ".yaml", ".yml", ".toml", ".css", ".scss", ".html"]) {
+    args.push("--glob", `!*${ext}`);
+  }
+
+  if (filePattern) {
+    args.push("--glob", filePattern);
+  } else {
+    // Default to code files only (matches what agent would grep for)
+    args.push("--type-add", "code:*.{ts,tsx,js,jsx,py,go,rs,java,rb,php,vue,svelte}");
+    args.push("--type", "code");
+  }
+
+  args.push("--", symbolName, root);
+
+  let stdout: string;
+  try {
+    stdout = execFileSync("rg", args, {
+      encoding: "utf-8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: SEARCH_TIMEOUT_MS,
+    });
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "status" in err) {
+      if ((err as { status: number }).status === 1) return []; // no matches
+      if ("stdout" in err && typeof (err as { stdout: unknown }).stdout === "string") {
+        stdout = (err as { stdout: string }).stdout;
+        if (!stdout) return [];
+      } else {
+        return [];
+      }
+    } else {
+      return [];
+    }
+  }
+
+  const rootPrefix = root.endsWith("/") ? root : root + "/";
+  const lines = stdout.split("\n").filter(Boolean);
+  const refs: Reference[] = [];
+
+  for (const rawLine of lines) {
+    if (refs.length >= maxResults) break;
+
+    const match = rawLine.match(/^(.+?):(\d+):(.*)/);
+    if (!match || !match[1] || !match[2] || match[3] === undefined) continue;
+
+    const absPath = match[1];
+    const relPath = absPath.startsWith(rootPrefix) ? absPath.slice(rootPrefix.length) : absPath;
+    if (isNoisePath(relPath)) continue;
+
+    refs.push({
+      file: relPath,
+      line: parseInt(match[2], 10),
+      context: match[3].length > MAX_CONTEXT_LENGTH ? match[3].slice(0, MAX_CONTEXT_LENGTH) + "..." : match[3],
+    });
+  }
+
+  return refs;
+}
 
 export async function findReferences(
   repo: string,
@@ -227,12 +339,25 @@ export async function findReferences(
   const lspRefs = await findReferencesLsp(repo, symbolName);
   if (lspRefs !== null) return lspRefs;
 
-  // Fallback: grep-based search
+  // Use ripgrep when available (10x+ faster than Node.js file walk)
+  if (hasRipgrep()) {
+    const index = await requireCodeIndex(repo);
+    const result = findReferencesWithRipgrep(index.root, symbolName, MAX_REFERENCES, filePattern);
+    // ripgrep helper may return compact string; convert back to Reference[]
+    if (typeof result === "string") {
+      return result.split("\n").filter(Boolean).map((line) => {
+        const m = line.match(/^(.+?):(\d+): (.*)/);
+        return m ? { file: m[1]!, line: parseInt(m[2]!, 10), context: m[3]! } : { file: "", line: 0, context: line };
+      });
+    }
+    return result;
+  }
+
+  // Node.js fallback
   const index = await requireCodeIndex(repo);
   const pattern = wordBoundaryPattern(symbolName);
   const searchStart = Date.now();
 
-  // Optional file pattern filter
   const fileFilter = filePattern
     ? new RegExp(filePattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*"))
     : null;
@@ -241,17 +366,16 @@ export async function findReferences(
 
   for (const fileEntry of index.files) {
     if (refs.length >= MAX_REFERENCES) break;
-    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break; // Prevent 285s+ hangs
+    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break;
 
     if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
-    // Skip non-code files (audits, docs, snapshots) unless user explicitly filtered
     if (!filePattern && isNoisePath(fileEntry.path)) continue;
 
     let content: string;
     try {
       content = await readFile(join(index.root, fileEntry.path), "utf-8");
     } catch {
-      continue; // File may have been deleted
+      continue;
     }
 
     const lines = content.split("\n");
@@ -266,7 +390,6 @@ export async function findReferences(
         refs.push({
           file: fileEntry.path,
           line: i + 1,
-          col: match.index + 1,
           context: rawContext.length > MAX_CONTEXT_LENGTH
             ? rawContext.slice(0, MAX_CONTEXT_LENGTH) + "..."
             : rawContext,
@@ -276,6 +399,42 @@ export async function findReferences(
   }
 
   return refs;
+}
+
+/** Format references as compact string for MCP output (drops col, no JSON overhead). */
+export function formatRefsCompact(refs: Reference[]): string {
+  return refs.map((r) => `${r.file}:${r.line}: ${r.context}`).join("\n");
+}
+
+/** Format a CodeSymbol as compact text: header line + source. ~70% less tokens than JSON. */
+export function formatSymbolCompact(sym: CodeSymbol): string {
+  const loc = `${sym.file}:${sym.start_line}-${sym.end_line}`;
+  const sig = sym.signature ? ` ${sym.signature}` : "";
+  const header = `${loc} ${sym.kind} ${sym.name}${sig}`;
+  if (!sym.source) return header;
+  return `${header}\n${sym.source}`;
+}
+
+/** Format multiple CodeSymbols as compact text, separated by blank lines. */
+export function formatSymbolsCompact(syms: CodeSymbol[]): string {
+  return syms.map(formatSymbolCompact).join("\n\n");
+}
+
+/** Format ContextBundle as compact text. */
+export function formatBundleCompact(bundle: { symbol: CodeSymbol; imports: string[]; siblings: Array<{ name: string; kind: string; start_line: number; end_line: number }>; types_used: string[] }): string {
+  const parts: string[] = [];
+  parts.push(formatSymbolCompact(bundle.symbol as CodeSymbol));
+  if (bundle.imports.length > 0) {
+    parts.push(`\n--- imports ---\n${bundle.imports.join("\n")}`);
+  }
+  if (bundle.siblings.length > 0) {
+    const sibLines = bundle.siblings.map((s) => `  ${s.kind} ${s.name} :${s.start_line}-${s.end_line}`);
+    parts.push(`\n--- siblings ---\n${sibLines.join("\n")}`);
+  }
+  if (bundle.types_used.length > 0) {
+    parts.push(`\n--- types used ---\n${bundle.types_used.join(", ")}`);
+  }
+  return parts.join("");
 }
 
 /**
@@ -298,7 +457,7 @@ export async function findAndShow(
   if (!fullSymbol) return null;
 
   if (includeRefs) {
-    const references = await findReferences(repo, fullSymbol.name);
+    const references = await findReferences(repo, fullSymbol.name as string);
     return { symbol: fullSymbol, references };
   }
 

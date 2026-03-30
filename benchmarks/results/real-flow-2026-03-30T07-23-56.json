@@ -1,0 +1,626 @@
+{
+  "startedAt": "2026-03-30T07:23:56.299Z",
+  "rows": [
+    {
+      "flow": "get_symbol",
+      "query": "searchText",
+      "repo": "codesift-mcp",
+      "nativeTok": 1497,
+      "siftTok": 643,
+      "nativeMs": 27,
+      "siftMs": 138
+    },
+    {
+      "flow": "get_symbol",
+      "query": "create",
+      "repo": "codesift-mcp",
+      "nativeTok": 4987,
+      "siftTok": 51,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "handleError",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 70,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "validate",
+      "repo": "codesift-mcp",
+      "nativeTok": 1985,
+      "siftTok": 58,
+      "nativeMs": 19,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "config",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 327,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "parse",
+      "repo": "codesift-mcp",
+      "nativeTok": 3983,
+      "siftTok": 215,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "render",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 454,
+      "nativeMs": 18,
+      "siftMs": 0
+    },
+    {
+      "flow": "get_symbol",
+      "query": "export",
+      "repo": "codesift-mcp",
+      "nativeTok": 0,
+      "siftTok": 430,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "searchText",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 1245,
+      "nativeMs": 114,
+      "siftMs": 3718
+    },
+    {
+      "flow": "get_symbol",
+      "query": "create",
+      "repo": "translation-qa",
+      "nativeTok": 7005,
+      "siftTok": 116,
+      "nativeMs": 21,
+      "siftMs": 15
+    },
+    {
+      "flow": "get_symbol",
+      "query": "handleError",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 631,
+      "nativeMs": 111,
+      "siftMs": 19
+    },
+    {
+      "flow": "get_symbol",
+      "query": "validate",
+      "repo": "translation-qa",
+      "nativeTok": 6594,
+      "siftTok": 125,
+      "nativeMs": 33,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_symbol",
+      "query": "config",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 335,
+      "nativeMs": 101,
+      "siftMs": 7
+    },
+    {
+      "flow": "get_symbol",
+      "query": "parse",
+      "repo": "translation-qa",
+      "nativeTok": 6253,
+      "siftTok": 210,
+      "nativeMs": 26,
+      "siftMs": 8
+    },
+    {
+      "flow": "get_symbol",
+      "query": "render",
+      "repo": "translation-qa",
+      "nativeTok": 7124,
+      "siftTok": 110,
+      "nativeMs": 33,
+      "siftMs": 17
+    },
+    {
+      "flow": "get_symbol",
+      "query": "export",
+      "repo": "translation-qa",
+      "nativeTok": 1977,
+      "siftTok": 469,
+      "nativeMs": 95,
+      "siftMs": 4
+    },
+    {
+      "flow": "get_symbol",
+      "query": "searchText",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 1096,
+      "nativeMs": 36,
+      "siftMs": 628
+    },
+    {
+      "flow": "get_symbol",
+      "query": "create",
+      "repo": "promptvault",
+      "nativeTok": 6738,
+      "siftTok": 267,
+      "nativeMs": 16,
+      "siftMs": 4
+    },
+    {
+      "flow": "get_symbol",
+      "query": "handleError",
+      "repo": "promptvault",
+      "nativeTok": 518,
+      "siftTok": 100,
+      "nativeMs": 40,
+      "siftMs": 4
+    },
+    {
+      "flow": "get_symbol",
+      "query": "validate",
+      "repo": "promptvault",
+      "nativeTok": 8110,
+      "siftTok": 151,
+      "nativeMs": 38,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "config",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 109,
+      "nativeMs": 38,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbol",
+      "query": "parse",
+      "repo": "promptvault",
+      "nativeTok": 8301,
+      "siftTok": 486,
+      "nativeMs": 21,
+      "siftMs": 2
+    },
+    {
+      "flow": "get_symbol",
+      "query": "render",
+      "repo": "promptvault",
+      "nativeTok": 8337,
+      "siftTok": 99,
+      "nativeMs": 29,
+      "siftMs": 2
+    },
+    {
+      "flow": "get_symbol",
+      "query": "export",
+      "repo": "promptvault",
+      "nativeTok": 705,
+      "siftTok": 363,
+      "nativeMs": 41,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbols",
+      "query": "create",
+      "repo": "codesift-mcp",
+      "nativeTok": 4339,
+      "siftTok": 1498,
+      "nativeMs": 18,
+      "siftMs": 3
+    },
+    {
+      "flow": "get_symbols",
+      "query": "handle",
+      "repo": "codesift-mcp",
+      "nativeTok": 5900,
+      "siftTok": 494,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbols",
+      "query": "validate",
+      "repo": "codesift-mcp",
+      "nativeTok": 1368,
+      "siftTok": 279,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbols",
+      "query": "get",
+      "repo": "codesift-mcp",
+      "nativeTok": 5488,
+      "siftTok": 857,
+      "nativeMs": 12,
+      "siftMs": 2
+    },
+    {
+      "flow": "get_symbols",
+      "query": "parse",
+      "repo": "codesift-mcp",
+      "nativeTok": 3983,
+      "siftTok": 1434,
+      "nativeMs": 17,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_symbols",
+      "query": "create",
+      "repo": "translation-qa",
+      "nativeTok": 6296,
+      "siftTok": 956,
+      "nativeMs": 26,
+      "siftMs": 44
+    },
+    {
+      "flow": "get_symbols",
+      "query": "handle",
+      "repo": "translation-qa",
+      "nativeTok": 7349,
+      "siftTok": 888,
+      "nativeMs": 31,
+      "siftMs": 9
+    },
+    {
+      "flow": "get_symbols",
+      "query": "validate",
+      "repo": "translation-qa",
+      "nativeTok": 6742,
+      "siftTok": 747,
+      "nativeMs": 25,
+      "siftMs": 10
+    },
+    {
+      "flow": "get_symbols",
+      "query": "get",
+      "repo": "translation-qa",
+      "nativeTok": 6244,
+      "siftTok": 3416,
+      "nativeMs": 20,
+      "siftMs": 25
+    },
+    {
+      "flow": "get_symbols",
+      "query": "parse",
+      "repo": "translation-qa",
+      "nativeTok": 6510,
+      "siftTok": 669,
+      "nativeMs": 32,
+      "siftMs": 11
+    },
+    {
+      "flow": "get_symbols",
+      "query": "create",
+      "repo": "promptvault",
+      "nativeTok": 6724,
+      "siftTok": 2508,
+      "nativeMs": 15,
+      "siftMs": 10
+    },
+    {
+      "flow": "get_symbols",
+      "query": "handle",
+      "repo": "promptvault",
+      "nativeTok": 7256,
+      "siftTok": 201,
+      "nativeMs": 37,
+      "siftMs": 2
+    },
+    {
+      "flow": "get_symbols",
+      "query": "validate",
+      "repo": "promptvault",
+      "nativeTok": 8133,
+      "siftTok": 651,
+      "nativeMs": 36,
+      "siftMs": 2
+    },
+    {
+      "flow": "get_symbols",
+      "query": "get",
+      "repo": "promptvault",
+      "nativeTok": 6840,
+      "siftTok": 1696,
+      "nativeMs": 14,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_symbols",
+      "query": "parse",
+      "repo": "promptvault",
+      "nativeTok": 8446,
+      "siftTok": 1626,
+      "nativeMs": 21,
+      "siftMs": 3
+    },
+    {
+      "flow": "find_references",
+      "query": "searchText",
+      "repo": "codesift-mcp",
+      "nativeTok": 1818,
+      "siftTok": 4025,
+      "nativeMs": 17,
+      "siftMs": 37
+    },
+    {
+      "flow": "find_references",
+      "query": "getCodeIndex",
+      "repo": "codesift-mcp",
+      "nativeTok": 2594,
+      "siftTok": 3391,
+      "nativeMs": 17,
+      "siftMs": 18
+    },
+    {
+      "flow": "find_references",
+      "query": "loadConfig",
+      "repo": "codesift-mcp",
+      "nativeTok": 1548,
+      "siftTok": 2199,
+      "nativeMs": 17,
+      "siftMs": 19
+    },
+    {
+      "flow": "find_references",
+      "query": "CodeSymbol",
+      "repo": "codesift-mcp",
+      "nativeTok": 4676,
+      "siftTok": 4775,
+      "nativeMs": 17,
+      "siftMs": 13
+    },
+    {
+      "flow": "find_references",
+      "query": "TextMatch",
+      "repo": "codesift-mcp",
+      "nativeTok": 652,
+      "siftTok": 968,
+      "nativeMs": 33,
+      "siftMs": 13
+    },
+    {
+      "flow": "find_references",
+      "query": "searchText",
+      "repo": "translation-qa",
+      "nativeTok": 929,
+      "siftTok": 723,
+      "nativeMs": 114,
+      "siftMs": 140
+    },
+    {
+      "flow": "find_references",
+      "query": "getCodeIndex",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 99,
+      "siftMs": 138
+    },
+    {
+      "flow": "find_references",
+      "query": "loadConfig",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 95,
+      "nativeMs": 97,
+      "siftMs": 143
+    },
+    {
+      "flow": "find_references",
+      "query": "CodeSymbol",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 100,
+      "siftMs": 140
+    },
+    {
+      "flow": "find_references",
+      "query": "TextMatch",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 107,
+      "siftMs": 147
+    },
+    {
+      "flow": "find_references",
+      "query": "searchText",
+      "repo": "promptvault",
+      "nativeTok": 250,
+      "siftTok": 173,
+      "nativeMs": 38,
+      "siftMs": 45
+    },
+    {
+      "flow": "find_references",
+      "query": "getCodeIndex",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 38,
+      "siftMs": 40
+    },
+    {
+      "flow": "find_references",
+      "query": "loadConfig",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 37,
+      "siftMs": 43
+    },
+    {
+      "flow": "find_references",
+      "query": "CodeSymbol",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 37,
+      "siftMs": 41
+    },
+    {
+      "flow": "find_references",
+      "query": "TextMatch",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 38,
+      "siftMs": 46
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "searchText",
+      "repo": "codesift-mcp",
+      "nativeTok": 2107,
+      "siftTok": 1424,
+      "nativeMs": 18,
+      "siftMs": 6
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "getFileTree",
+      "repo": "codesift-mcp",
+      "nativeTok": 2037,
+      "siftTok": 1071,
+      "nativeMs": 16,
+      "siftMs": 3
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "buildBM25Index",
+      "repo": "codesift-mcp",
+      "nativeTok": 2572,
+      "siftTok": 1273,
+      "nativeMs": 16,
+      "siftMs": 3
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "processPayment",
+      "repo": "codesift-mcp",
+      "nativeTok": 3175,
+      "siftTok": 366,
+      "nativeMs": 16,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "createRisk",
+      "repo": "codesift-mcp",
+      "nativeTok": 3118,
+      "siftTok": 579,
+      "nativeMs": 16,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "searchText",
+      "repo": "translation-qa",
+      "nativeTok": 1423,
+      "siftTok": 1199,
+      "nativeMs": 99,
+      "siftMs": 73
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "getFileTree",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 445,
+      "nativeMs": 113,
+      "siftMs": 49
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "buildBM25Index",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 563,
+      "nativeMs": 159,
+      "siftMs": 26
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "processPayment",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 107,
+      "nativeMs": 120,
+      "siftMs": 42
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "createRisk",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 256,
+      "nativeMs": 228,
+      "siftMs": 29
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "searchText",
+      "repo": "promptvault",
+      "nativeTok": 1234,
+      "siftTok": 1363,
+      "nativeMs": 54,
+      "siftMs": 18
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "getFileTree",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 328,
+      "nativeMs": 37,
+      "siftMs": 18
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "buildBM25Index",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 334,
+      "nativeMs": 35,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "processPayment",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 700,
+      "nativeMs": 35,
+      "siftMs": 5
+    },
+    {
+      "flow": "get_context_bundle",
+      "query": "createRisk",
+      "repo": "promptvault",
+      "nativeTok": 2865,
+      "siftTok": 725,
+      "nativeMs": 40,
+      "siftMs": 10
+    }
+  ]
+}

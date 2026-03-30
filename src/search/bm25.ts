@@ -28,6 +28,8 @@ export interface BM25Index {
   symbols: Map<string, CodeSymbol>;
   /** Import centrality: file -> log-scaled importer count (for search ranking bonus) */
   centrality: Map<string, number>;
+  /** Pre-computed per-document field lengths (avoids O(n*m) recomputation per search) */
+  fieldLengths: Map<string, Record<FieldName, number>>;
 }
 
 /**
@@ -122,14 +124,17 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
   };
 
   const symbolMap = new Map<string, CodeSymbol>();
+  const fieldLengths = new Map<string, Record<FieldName, number>>();
 
   for (const symbol of symbols) {
     symbolMap.set(symbol.id, symbol);
     const fieldTokens = getFieldTokens(symbol);
+    const lengths: Record<FieldName, number> = { name: 0, signature: 0, docstring: 0, body: 0, comments: 0 };
 
     for (const field of fieldNames) {
       const tokens = fieldTokens[field];
       totalFieldLengths[field] += tokens.length;
+      lengths[field] = tokens.length;
 
       const tf = countTermFrequencies(tokens);
       for (const [token, freq] of tf) {
@@ -141,6 +146,7 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
         postings.set(symbol.id, freq);
       }
     }
+    fieldLengths.set(symbol.id, lengths);
   }
 
   const docCount = symbols.length;
@@ -181,7 +187,7 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
     centrality.set(file, Math.log2(1 + count));
   }
 
-  return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality };
+  return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality, fieldLengths };
 }
 
 export function searchBM25(
@@ -206,32 +212,8 @@ export function searchBM25(
   // Track which query tokens matched per document
   const matchedTokens = new Map<string, Set<string>>();
 
-  // Pre-compute field lengths per document per field
-  // We derive field length from the sum of term frequencies in each field's postings
-  const fieldLengths = new Map<string, Record<FieldName, number>>();
-
-  for (const [symbolId] of index.symbols) {
-    const lengths: Record<FieldName, number> = {
-      name: 0,
-      signature: 0,
-      docstring: 0,
-      body: 0,
-      comments: 0,
-    };
-    fieldLengths.set(symbolId, lengths);
-  }
-
-  // Compute field lengths by summing all term frequencies per doc per field
-  for (const field of fieldNames) {
-    for (const [, postings] of index.fields[field]) {
-      for (const [symbolId, freq] of postings) {
-        const lengths = fieldLengths.get(symbolId);
-        if (lengths) {
-          lengths[field] += freq;
-        }
-      }
-    }
-  }
+  // Use precomputed field lengths from index (built once at index time)
+  const { fieldLengths } = index;
 
   for (const qToken of queryTokens) {
     for (const field of fieldNames) {

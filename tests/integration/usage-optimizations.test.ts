@@ -186,7 +186,7 @@ describe("OPT-1: auto group_by_file", () => {
 
     // Grouped should be significantly smaller
     expect(groupedTokens).toBeLessThan(ungroupedTokens);
-    expect(reduction).toBeGreaterThan(50); // At least 50% reduction
+    expect(reduction).toBeGreaterThan(40); // At least 40% reduction (lower with context_lines=0 default)
   });
 
   it("OPTIMIZATION: auto_group returns grouped format when match count exceeds threshold", async () => {
@@ -208,19 +208,17 @@ describe("OPT-1: auto group_by_file", () => {
     expect(tokens).toBeLessThan(ungroupedTokens);
   });
 
-  it("OPTIMIZATION: auto_group preserves ungrouped format for low match counts", async () => {
+  it("OPTIMIZATION: auto_group returns compact string for low match counts", async () => {
     const repo = await indexLargeFixture();
 
     // "loadConfig" appears only a few times — below threshold
     const result = await searchText(repo, "loadConfig", { auto_group: true });
 
-    // Should NOT be grouped for low-cardinality results
-    expect(result.length).toBeGreaterThan(0);
-    // Low match count = full TextMatch[] format with content
-    for (const m of result) {
-      expect(m).toHaveProperty("content");
-      expect(m).toHaveProperty("line");
-    }
+    // Low match count + auto_group + context_lines=0 → compact string format
+    expect(typeof result).toBe("string");
+    expect((result as string).length).toBeGreaterThan(0);
+    // Compact format: file:line: content
+    expect((result as string)).toContain("loadConfig");
   });
 });
 

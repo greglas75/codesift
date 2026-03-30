@@ -28,6 +28,7 @@ const GIT_PULL_TIMEOUT_MS = 60_000;
 // Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
 const bm25Indexes = new Map<string, BM25Index>();
+const codeIndexes = new Map<string, CodeIndex>();
 const embeddingCaches = new Map<string, Map<string, Float32Array>>();
 
 /**
@@ -384,9 +385,10 @@ export async function indexFolder(
     }
   }
 
-  // Build and cache BM25 index
+  // Build and cache BM25 index; invalidate code index cache
   const bm25 = buildBM25Index(symbols);
   bm25Indexes.set(repoName, bm25);
+  codeIndexes.delete(repoName);
 
   // Sanity check: don't overwrite a complete index with a partial one
   // (WASM crash or walk failure can produce truncated results)
@@ -605,6 +607,7 @@ async function handleFileChange(
 
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
+  codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
 }
 
@@ -621,6 +624,7 @@ async function handleFileDelete(
 
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
+  codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
   scanOnDeleted(repoName, relativeFile);
 }
@@ -653,6 +657,7 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
 
   // Remove in-memory caches
   bm25Indexes.delete(repoName);
+  codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
 
   // Delete index file + embedding files + chunk files
@@ -737,6 +742,7 @@ export async function indexFile(filePath: string): Promise<{
 
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(matchingRepo.name);
+  codeIndexes.delete(matchingRepo.name);
   embeddingCaches.delete(matchingRepo.name);
 
   let secretsWarning: string | undefined;
@@ -829,6 +835,7 @@ export async function ensureIndexFresh(repoName: string): Promise<{
   });
 
   bm25Indexes.delete(repoName);
+  codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
 
   freshnessChecked.set(repoName, Date.now());
@@ -876,11 +883,18 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
 export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> {
   await ensureIndexFresh(repoName);
 
+  const cached = codeIndexes.get(repoName);
+  if (cached) return cached;
+
   const config = loadConfig();
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return null;
 
-  return loadIndex(meta.index_path);
+  const index = await loadIndex(meta.index_path);
+  if (!index) return null;
+
+  codeIndexes.set(repoName, index);
+  return index;
 }
 
 /**

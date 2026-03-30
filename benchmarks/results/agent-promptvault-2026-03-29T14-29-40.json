@@ -1,0 +1,38 @@
+[
+  {
+    "taskId": "R3",
+    "method": "standard",
+    "repo": "tgm-survey",
+    "durationMs": 0,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "totalTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheCreationTokens": 0,
+    "costUsd": 0,
+    "numTurns": 0,
+    "answer": "ERROR: Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\nError: Input must be provided either through stdin or as a prompt argument when using --print\n",
+    "correctness": 0,
+    "completeness": 0,
+    "confidence": "LOW",
+    "pass": false
+  },
+  {
+    "taskId": "R3",
+    "method": "codesift-bm25",
+    "repo": "tgm-survey",
+    "durationMs": 115905,
+    "inputTokens": 14,
+    "outputTokens": 4626,
+    "totalTokens": 4640,
+    "cacheReadTokens": 565170,
+    "cacheCreationTokens": 60954,
+    "costUsd": 0.4675604999999999,
+    "numTurns": 10,
+    "answer": "Here is the complete auth system analysis:\n\n---\n\n## Authentication System — TGM Survey Platform\n\n### 1. Auth Provider: Clerk (fully migrated)\n\n**Clerk** (`@clerk/express` + `@clerk/react`) is the sole auth provider. The legacy custom JWT system has been removed on branch `feat/clerk-only-auth` (PR #111). Clerk instance: `dashing-bass-97.clerk.accounts.dev`.\n\nThe old JWT-based `AuthService`/`JwtStrategy` is gone. `JWT_SECRET` still exists but only for **preview link tokens** (share links), not user authentication (`apps/api/src/auth/jwt-secrets.ts:70`).\n\n---\n\n### 2. Login Flow — Step by Step\n\n**Frontend (Designer SPA):**\n\n1. **Entry point:** `apps/designer/src/App.tsx:14` — `ClerkLoginPage` is lazy-loaded for unauthenticated routes.\n2. **Clerk provider wraps the app:** `ClerkAuthProvider` (`apps/designer/src/auth/ClerkAuthProvider.tsx:78`) wraps the tree in `<ClerkProvider publishableKey={VITE_CLERK_PUBLISHABLE_KEY}>`.\n3. **Bridge component:** `ClerkAuthBridge` (`ClerkAuthProvider.tsx:20`) uses Clerk hooks: `useUser()`, `useSession()`, `useClerk()`.\n4. **Token injection:** On session load, `ClerkAuthBridge` calls `setClerkTokenGetter(() => session.getToken())` — this injects Clerk's token getter into the API client module (`apps/designer/src/api/client-utils.ts:51`).\n5. **Every API call** fetches `session.getToken()` and sends it as `Authorization: Bearer <clerk-jwt>`.\n\n**Backend (NestJS API):**\n\n6. **Production middleware:** In `apps/api/src/main.ts:112`, `clerkMiddleware` from `@clerk/express` is mounted **only if `NODE_ENV === 'production' && CLERK_SECRET_KEY` is set**. It verifies the JWT and populates `req.auth.userId` + `req.auth.sessionClaims`.\n7. **Dev/test path:** `clerkMiddleware` is **skipped** in dev — the guard handles it directly via Bearer token fallback.\n8. **Guard resolves identity** (`apps/api/src/auth/clerk.guard.ts:43`):\n   - Strategy 1: Read `req.auth?.userId` (set by clerkMiddleware in prod)\n   - Strategy 2: If empty, decode the Bearer JWT manually (base64url decode `payload.sub` — no signature verification, trusts Clerk SDK in dev)\n9. **DB lookup:** `prisma.user.findUnique({ where: { clerkId: clerkUserId } })` — resolves the Clerk user to a DB user record.\n10. **Session hydration:** `req.user` is populated with `{ userId, orgId, clerkUserId, email, role, name }` from the DB record.\n\n**tRPC path** mirrors the same flow via `createContext()` at `apps/api/src/trpc/context.ts:46` — same `extractClerkUserId()` → DB lookup → sets `ctx.user`.\n\n---\n\n### 3. Guard Chain Protecting Routes\n\nRegistered as global `APP_GUARD` in `apps/api/src/app.module.ts:98–110`:\n\n| Order | Guard | File | Purpose |\n|-------|-------|------|---------|\n| 1 | `ClerkAuthGuard` | `apps/api/src/auth/clerk.guard.ts:24` | Resolve Clerk identity → DB user → set `req.user`. Short-circuits if `@Public()` decorator present. |\n| 2 | `RolesGuard` | `apps/api/src/common/guards/roles.guard.ts:6` | Check `@Roles()` decorator against `req.user.role`. |\n| 3 | `FeatureGateGuard` | `apps/api/src/modules/feature-gate/feature-gate.guard.ts:21` | Per-org feature flag enforcement. |\n| 4 | `ThrottlerGuard` | (NestJS standard) | Rate limiting. |\n\nAdditionally, `OrgScopeGuard` (`apps/api/src/common/guards/org-scope.guard.ts:9`) is applied at the controller level where needed — it checks `req.params.orgId === req.user.orgId`, with `super_admin` role bypassing the check.\n\nPublic endpoints are decorated with `@Public()` which sets the `IS_PUBLIC_KEY` reflection metadata; `ClerkAuthGuard.canActivate()` checks this first and returns `true` immediately.\n\n---\n\n### 4. Session/Token State Storage\n\n- **Frontend:** Clerk SDK manages session state entirely in-memory. No custom localStorage, Redux, or Zustand stores for auth. Token is fetched on demand via `session.getToken()` (`ClerkAuthProvider.tsx:28`). The `AuthContext` (`apps/designer/src/auth/AuthContext.tsx`) just re-exports `ClerkAuthProvider`.\n- **Backend:** Fully **stateless** — no server-side session storage for user auth. Each request is verified fresh via Clerk middleware or JWT decode + DB lookup. Redis is used for survey cache and rate limiting, **not** user sessions.\n\n---\n\n### 5. Clerk Integration Status\n\n**Clerk is already fully integrated.** The migration is complete:\n- `ClerkAuthGuard` is the sole global auth guard (`app.module.ts:99`)\n- Frontend wraps entire app in `ClerkProvider` with Clerk's `useUser()`/`useSession()`\n- DB users have a `clerkId` field for the Clerk→DB mapping\n- Dev Bearer fallback handles local development without the middleware\n- Runner app is unaffected (public endpoints, no auth)\n\nNo migration needed — it's done. The only outstanding item is 157 e2e tests failing due to seed users missing `clerkId` values.\n\n---\n\nBENCHMARK_REPORT_START\ntool_calls: 8\nconfidence: HIGH\ncomplete: Yes\nBENCHMARK_REPORT_END",
+    "correctness": 0,
+    "completeness": 1,
+    "confidence": "HIGH",
+    "pass": false
+  }
+]

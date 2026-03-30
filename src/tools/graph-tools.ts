@@ -168,8 +168,9 @@ function buildCallTree(
  * Strip the `source` field from a CodeSymbol, keeping compact metadata.
  */
 function stripSource(sym: CodeSymbol): CodeSymbol {
-  const { source: _, ...rest } = sym;
-  return rest;
+  const { source: _, repo: _r, tokens: _t, start_col: _sc, end_col: _ec, id, ...rest } = sym;
+  const shortId = id.includes(":") ? id.slice(id.indexOf(":") + 1) : id;
+  return { ...rest, id: shortId } as CodeSymbol;
 }
 
 /**

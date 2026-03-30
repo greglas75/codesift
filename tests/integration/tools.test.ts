@@ -480,7 +480,9 @@ describe("symbol_tools", () => {
 
       expect(result).not.toBeNull();
       expect(result!.name).toBe("processPayment");
-      expect(result!.id).toBe(targetSym!.id);
+      // id is stripped of repo prefix (e.g. "local/test-project:file:name:line" → "file:name:line")
+      const expectedId = targetSym!.id.includes(":") ? targetSym!.id.slice(targetSym!.id.indexOf(":") + 1) : targetSym!.id;
+      expect(result!.id).toBe(expectedId);
       expect(result!.kind).toBe("function");
       expect(result!.file).toBe("src/payment.ts");
       expect(result!.source).toContain("function processPayment");
@@ -546,7 +548,8 @@ describe("symbol_tools", () => {
       const results = await getSymbols(repo, [validId, "nonexistent:id:0"]);
 
       expect(results.length).toBe(1);
-      expect(results[0]!.id).toBe(validId);
+      const expectedId = validId.includes(":") ? validId.slice(validId.indexOf(":") + 1) : validId;
+      expect(results[0]!.id).toBe(expectedId);
     });
   });
 
