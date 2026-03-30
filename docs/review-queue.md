@@ -83,3 +83,4 @@ Commits pending review. Auto-managed:
 - e89f365 (2026-03-30) perf: final optimizations — file_tree cap 250, changed_symbols cap 5/file
 - 1514323 (2026-03-30) docs: update README + CLAUDE.md for 48 tools + combo benchmark results
 - 1e88023 (2026-03-30) benchmark: add CodeSift vs jCodeMunch head-to-head comparison
+- f8cae5d (2026-04-05) perf: group by file in compact format (learned from jcodemunch)
