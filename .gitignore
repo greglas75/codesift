@@ -12,3 +12,9 @@ audits/
 audit/
 audit-results/
 codesift-report.html
+
+# Competitor benchmarks — local only, not for public repo
+benchmarks/codesift-vs-jcodemunch*.py
+benchmarks/_cs-batch-runner.ts
+benchmarks/results/codesift-vs-jcodemunch-*.json
+benchmarks/results/cs-vs-jcm-*.json
