@@ -28,6 +28,7 @@ import {
   checkComplexityDelta,
   checkCouplingGaps,
   checkBreakingChanges,
+  checkTestGaps,
 } from "../../src/tools/review-diff-tools.js";
 import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
@@ -267,7 +268,16 @@ describe("reviewDiff orchestrator", () => {
   const mockedAnalyzeComplexityOrch = vi.mocked(analyzeComplexity);
   const mockedExecFileSyncOrch = vi.mocked(execFileSync);
 
-  const fakeIndex = makeFakeIndex();
+  // Include test files so checkTestGaps (now wired) doesn't produce findings
+  // for the standard changed files used in orchestrator tests (src/a.ts, src/b.ts)
+  const fakeIndex = makeFakeIndex({
+    files: [
+      { path: "src/a.ts", language: "typescript", symbol_count: 1, last_modified: 0 },
+      { path: "src/b.ts", language: "typescript", symbol_count: 1, last_modified: 0 },
+      { path: "src/a.test.ts", language: "typescript", symbol_count: 1, last_modified: 0 },
+      { path: "src/b.test.ts", language: "typescript", symbol_count: 1, last_modified: 0 },
+    ],
+  });
 
   const emptyImpactResult = {
     changed_files: [],
@@ -1275,5 +1285,108 @@ describe("checkBreakingChanges", () => {
     expect(result.check).toBe("breaking");
     expect(result.status).toBe("error");
     expect(result.findings).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check adapter — checkTestGaps (naming + import graph)
+// ---------------------------------------------------------------------------
+
+describe("checkTestGaps", () => {
+  // 1. Gap detected: src/auth.ts changed, no test by naming, no test imports it → T3 finding
+  it("returns T3 finding when source file has no naming match and no import match", async () => {
+    const index = makeFakeIndex({
+      files: [
+        { path: "src/auth.ts", language: "typescript", symbol_count: 3, last_modified: 0 },
+        { path: "src/other.ts", language: "typescript", symbol_count: 1, last_modified: 0 },
+      ],
+      symbols: [],
+    });
+
+    const result = await checkTestGaps(index, ["src/auth.ts"]);
+
+    expect(result.check).toBe("test-gaps");
+    expect(result.status).toBe("warn");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.check).toBe("test-gaps");
+    expect(result.findings[0]!.severity).toBe("warn");
+    expect(result.findings[0]!.file).toBe("src/auth.ts");
+  });
+
+  // 2. Test exists by naming: src/auth.test.ts in index → no finding
+  it("returns no finding when a matching test file exists by naming convention", async () => {
+    const index = makeFakeIndex({
+      files: [
+        { path: "src/auth.ts", language: "typescript", symbol_count: 3, last_modified: 0 },
+        { path: "src/auth.test.ts", language: "typescript", symbol_count: 5, last_modified: 0 },
+      ],
+      symbols: [],
+    });
+
+    const result = await checkTestGaps(index, ["src/auth.ts"]);
+
+    expect(result.check).toBe("test-gaps");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  // 3. Test exists by import: tests/integration.test.ts imports auth.ts → no finding
+  it("returns no finding when a test file imports the source file", async () => {
+    const index = makeFakeIndex({
+      files: [
+        { path: "src/auth.ts", language: "typescript", symbol_count: 3, last_modified: 0 },
+        { path: "tests/integration.test.ts", language: "typescript", symbol_count: 10, last_modified: 0 },
+      ],
+      symbols: [
+        {
+          id: "local/test-repo:tests/integration.test.ts:integrationSuite:1",
+          repo: "local/test-repo",
+          name: "integrationSuite",
+          kind: "test_suite",
+          file: "tests/integration.test.ts",
+          start_line: 1,
+          end_line: 100,
+          source: `import { login } from '../src/auth';\ndescribe('integration', () => {});`,
+        },
+      ],
+    });
+
+    const result = await checkTestGaps(index, ["src/auth.ts"]);
+
+    expect(result.check).toBe("test-gaps");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  // 4. Test file itself changed: src/auth.test.ts in changedFiles → skipped
+  it("skips test files in changedFiles", async () => {
+    const index = makeFakeIndex({
+      files: [
+        { path: "src/auth.test.ts", language: "typescript", symbol_count: 5, last_modified: 0 },
+      ],
+      symbols: [],
+    });
+
+    const result = await checkTestGaps(index, ["src/auth.test.ts"]);
+
+    expect(result.check).toBe("test-gaps");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  // 5. Non-source file: package.json changed → skipped
+  it("skips non-source files like package.json", async () => {
+    const index = makeFakeIndex({
+      files: [
+        { path: "package.json", language: "json", symbol_count: 0, last_modified: 0 },
+      ],
+      symbols: [],
+    });
+
+    const result = await checkTestGaps(index, ["package.json"]);
+
+    expect(result.check).toBe("test-gaps");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
   });
 });
