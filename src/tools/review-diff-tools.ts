@@ -7,8 +7,12 @@
 
 import { changedSymbols } from "./diff-tools.js";
 import { getCodeIndex } from "./index-tools.js";
+import { impactAnalysis } from "./impact-tools.js";
+import { scanSecrets } from "./secret-tools.js";
+import { findDeadCode } from "./symbol-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
 import picomatch from "picomatch";
+import type { CodeIndex } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -222,23 +226,169 @@ function withTimeout<T>(
 }
 
 // ---------------------------------------------------------------------------
-// Stub check runner (Task 2: stubs only — real checks come in later tasks)
+// Check adapters
+// ---------------------------------------------------------------------------
+
+/**
+ * Blast-radius check: run impactAnalysis and map affected_symbols to T2 findings.
+ */
+export async function checkBlastRadius(
+  index: CodeIndex,
+  since: string,
+  until: string,
+): Promise<CheckResult> {
+  const start = Date.now();
+  try {
+    const result = await impactAnalysis(index.repo, since, { until });
+    const findings: ReviewFinding[] = result.affected_symbols.map((sym) => ({
+      check: "blast-radius",
+      severity: "warn",
+      message: `Symbol "${sym.name}" in ${sym.file} is affected by changes`,
+      file: sym.file,
+      symbol: sym.name,
+    }));
+    return {
+      check: "blast-radius",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} affected symbol(s) found`
+        : "No blast radius detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "blast-radius",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Secrets check: run scanSecrets scoped to changedFiles and map findings to T1.
+ */
+export async function checkSecrets(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+  try {
+    // Build a glob pattern that matches any of the changed files
+    const filePattern =
+      changedFiles.length === 1
+        ? changedFiles[0]!
+        : `{${changedFiles.join(",")}}`;
+
+    const result = await scanSecrets(index.repo, { file_pattern: filePattern });
+
+    const findings: ReviewFinding[] = result.findings.map((f) => ({
+      check: "secrets",
+      severity: "error",
+      message: `Secret detected: ${f.rule} (${f.severity}) — ${f.masked_secret}`,
+      file: f.file,
+      line: f.line,
+    }));
+
+    return {
+      check: "secrets",
+      status: findings.length > 0 ? "fail" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} secret(s) detected`
+        : "No secrets detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "secrets",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Dead-code check: run findDeadCode scoped to changedFiles and map candidates to T2 findings.
+ */
+export async function checkDeadCode(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+  try {
+    // Build a glob pattern that matches any of the changed files
+    const filePattern =
+      changedFiles.length === 1
+        ? changedFiles[0]!
+        : `{${changedFiles.join(",")}}`;
+
+    const result = await findDeadCode(index.repo, { file_pattern: filePattern });
+
+    const findings: ReviewFinding[] = result.candidates.map((c) => ({
+      check: "dead-code",
+      severity: "warn",
+      message: `"${c.name}" appears unused — ${c.reason}`,
+      file: c.file,
+      line: c.start_line,
+      symbol: c.name,
+    }));
+
+    return {
+      check: "dead-code",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} dead-code candidate(s) found`
+        : "No dead code detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "dead-code",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Check runner — dispatches to real adapters or stubs for unimplemented checks
 // ---------------------------------------------------------------------------
 
 async function runCheck(
   checkName: string,
   _repo: string,
-  _changedFiles: string[],
+  changedFiles: string[],
+  index: CodeIndex,
+  since: string,
+  until: string,
 ): Promise<CheckResult> {
-  const tier = findingTier(checkName);
-  return {
-    check: checkName,
-    status: "pass",
-    tier,
-    findings: [],
-    duration_ms: 0,
-    summary: "No findings",
-  } as CheckResult & { tier: number };
+  switch (checkName) {
+    case "blast-radius":
+      return checkBlastRadius(index, since, until);
+    case "secrets":
+      return checkSecrets(index, changedFiles);
+    case "dead-code":
+      return checkDeadCode(index, changedFiles);
+    default: {
+      const tier = findingTier(checkName);
+      return {
+        check: checkName,
+        status: "pass",
+        tier,
+        findings: [],
+        duration_ms: 0,
+        summary: "No findings",
+      } as CheckResult & { tier: number };
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +526,10 @@ export async function reviewDiff(
   // Fan-out: run checks with timeout
   // -----------------------------------------------------------------------
   const checkPromises = enabledChecks.map((checkName) =>
-    withTimeout(runCheck(checkName, repo, changedFiles), checkTimeoutMs),
+    withTimeout(
+      runCheck(checkName, repo, changedFiles, index, since, until ?? "HEAD"),
+      checkTimeoutMs,
+    ),
   );
 
   const settled = await Promise.allSettled(checkPromises);

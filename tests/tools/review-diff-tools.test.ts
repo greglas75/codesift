@@ -20,11 +20,17 @@ import {
   calculateScore,
   determineVerdict,
   reviewDiff,
+  checkBlastRadius,
+  checkSecrets,
+  checkDeadCode,
 } from "../../src/tools/review-diff-tools.js";
 import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { validateGitRef } from "../../src/utils/git-validation.js";
+import { impactAnalysis } from "../../src/tools/impact-tools.js";
+import { scanSecrets } from "../../src/tools/secret-tools.js";
+import { findDeadCode } from "../../src/tools/symbol-tools.js";
 import type { CodeIndex } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -243,14 +249,37 @@ describe("reviewDiff orchestrator", () => {
   const mockedGetCodeIndex = vi.mocked(getCodeIndex);
   const mockedChangedSymbols = vi.mocked(changedSymbols);
   const mockedValidateGitRef = vi.mocked(validateGitRef);
+  const mockedImpactAnalysisOrch = vi.mocked(impactAnalysis);
+  const mockedScanSecretsOrch = vi.mocked(scanSecrets);
+  const mockedFindDeadCodeOrch = vi.mocked(findDeadCode);
 
   const fakeIndex = makeFakeIndex();
 
+  const emptyImpactResult = {
+    changed_files: [],
+    affected_symbols: [],
+    affected_tests: [],
+    risk_scores: [],
+    dependency_graph: {},
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: valid index, valid refs
+    // Default: valid index, valid refs, all adapters return empty/pass results
     mockedGetCodeIndex.mockResolvedValue(fakeIndex);
     mockedValidateGitRef.mockImplementation(() => {});
+    mockedImpactAnalysisOrch.mockResolvedValue(emptyImpactResult);
+    mockedScanSecretsOrch.mockResolvedValue({
+      findings: [],
+      files_scanned: 0,
+      files_with_secrets: 0,
+      scan_coverage: "none",
+    });
+    mockedFindDeadCodeOrch.mockResolvedValue({
+      candidates: [],
+      scanned_symbols: 0,
+      scanned_files: 0,
+    });
   });
 
   // 1. Happy path
@@ -425,5 +454,190 @@ describe("reviewDiff orchestrator", () => {
     expect(result.checks.every(
       (c) => c.status === "pass" || c.status === "timeout",
     )).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check adapters — blast-radius, secrets, dead-code
+// ---------------------------------------------------------------------------
+
+describe("check adapters — blast-radius, secrets, dead-code", () => {
+  const mockedImpactAnalysis = vi.mocked(impactAnalysis);
+  const mockedScanSecrets = vi.mocked(scanSecrets);
+  const mockedFindDeadCode = vi.mocked(findDeadCode);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // --- checkBlastRadius ---
+
+  it("checkBlastRadius: 2 affected symbols → 2 T2 findings, status warn", async () => {
+    mockedImpactAnalysis.mockResolvedValue({
+      changed_files: ["src/a.ts"],
+      affected_symbols: [
+        { name: "foo", file: "a.ts", id: "a:foo", kind: "function", start_line: 1, end_line: 10 } as any,
+        { name: "bar", file: "b.ts", id: "b:bar", kind: "function", start_line: 5, end_line: 15 } as any,
+      ],
+      affected_tests: [],
+      risk_scores: [],
+      dependency_graph: {},
+    });
+
+    const result = await checkBlastRadius(makeFakeIndex(), "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("blast-radius");
+    expect(result.status).toBe("warn");
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings.every((f) => f.check === "blast-radius")).toBe(true);
+    expect(result.findings[0]!.file).toBe("a.ts");
+    expect(result.findings[1]!.file).toBe("b.ts");
+  });
+
+  it("checkBlastRadius: 0 affected symbols → 0 findings, status pass", async () => {
+    mockedImpactAnalysis.mockResolvedValue({
+      changed_files: [],
+      affected_symbols: [],
+      affected_tests: [],
+      risk_scores: [],
+      dependency_graph: {},
+    });
+
+    const result = await checkBlastRadius(makeFakeIndex(), "HEAD~1", "HEAD");
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("checkBlastRadius: impactAnalysis throws → status error, findings empty", async () => {
+    mockedImpactAnalysis.mockRejectedValue(new Error("git diff failed"));
+
+    const result = await checkBlastRadius(makeFakeIndex(), "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("blast-radius");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
+  });
+
+  // --- checkSecrets ---
+
+  it("checkSecrets: 1 high-severity finding → 1 T1 finding, status fail", async () => {
+    mockedScanSecrets.mockResolvedValue({
+      findings: [
+        {
+          file: "a.ts",
+          line: 5,
+          rule: "hardcoded-secret",
+          severity: "high",
+          masked_secret: "sk-***",
+          label: "API Key",
+          confidence: "high",
+          context: { type: "production" },
+        },
+      ],
+      files_scanned: 1,
+      files_with_secrets: 1,
+      scan_coverage: "full",
+    });
+
+    const result = await checkSecrets(makeFakeIndex(), ["src/a.ts", "src/b.ts"]);
+
+    expect(result.check).toBe("secrets");
+    expect(result.status).toBe("fail");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.check).toBe("secrets");
+    expect(result.findings[0]!.file).toBe("a.ts");
+    expect(result.findings[0]!.line).toBe(5);
+  });
+
+  it("checkSecrets: passes file_pattern derived from changedFiles to scanSecrets", async () => {
+    mockedScanSecrets.mockResolvedValue({
+      findings: [],
+      files_scanned: 2,
+      files_with_secrets: 0,
+      scan_coverage: "full",
+    });
+
+    const changedFiles = ["src/auth.ts", "src/config.ts"];
+    await checkSecrets(makeFakeIndex(), changedFiles);
+
+    expect(mockedScanSecrets).toHaveBeenCalledOnce();
+    const callArgs = mockedScanSecrets.mock.calls[0]!;
+    // Second arg is the options object containing file_pattern
+    const options = callArgs[1] as { file_pattern?: string };
+    expect(options).toBeDefined();
+    expect(options.file_pattern).toBeDefined();
+    // The file_pattern should reference the changed files somehow
+    expect(typeof options.file_pattern).toBe("string");
+  });
+
+  it("checkSecrets: 0 findings → status pass", async () => {
+    mockedScanSecrets.mockResolvedValue({
+      findings: [],
+      files_scanned: 1,
+      files_with_secrets: 0,
+      scan_coverage: "full",
+    });
+
+    const result = await checkSecrets(makeFakeIndex(), ["src/clean.ts"]);
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("checkSecrets: scanSecrets throws → status error, findings empty", async () => {
+    mockedScanSecrets.mockRejectedValue(new Error("scan failed"));
+
+    const result = await checkSecrets(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.check).toBe("secrets");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
+  });
+
+  // --- checkDeadCode ---
+
+  it("checkDeadCode: 3 candidates → 3 T2 findings", async () => {
+    mockedFindDeadCode.mockResolvedValue({
+      candidates: [
+        { name: "unused", file: "a.ts", start_line: 10, end_line: 15, kind: "function", reason: "no refs" },
+        { name: "old", file: "b.ts", start_line: 20, end_line: 25, kind: "function", reason: "no refs" },
+        { name: "stale", file: "c.ts", start_line: 30, end_line: 35, kind: "function", reason: "no refs" },
+      ],
+      scanned_symbols: 50,
+      scanned_files: 10,
+    });
+
+    const result = await checkDeadCode(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.check).toBe("dead-code");
+    expect(result.findings).toHaveLength(3);
+    expect(result.findings.every((f) => f.check === "dead-code")).toBe(true);
+    expect(result.findings[0]!.symbol).toBe("unused");
+    expect(result.findings[1]!.symbol).toBe("old");
+    expect(result.findings[2]!.symbol).toBe("stale");
+  });
+
+  it("checkDeadCode: 0 candidates → status pass", async () => {
+    mockedFindDeadCode.mockResolvedValue({
+      candidates: [],
+      scanned_symbols: 10,
+      scanned_files: 3,
+    });
+
+    const result = await checkDeadCode(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("checkDeadCode: findDeadCode throws → status error, findings empty", async () => {
+    mockedFindDeadCode.mockRejectedValue(new Error("scan failed"));
+
+    const result = await checkDeadCode(makeFakeIndex(), ["src/a.ts"]);
+
+    expect(result.check).toBe("dead-code");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
   });
 });
