@@ -27,6 +27,7 @@ import {
   checkHotspots,
   checkComplexityDelta,
   checkCouplingGaps,
+  checkBreakingChanges,
 } from "../../src/tools/review-diff-tools.js";
 import type { ReviewFinding, CheckResult, ReviewDiffOptions } from "../../src/tools/review-diff-tools.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
@@ -1105,5 +1106,174 @@ describe("checkCouplingGaps", () => {
     expect(result.status).toBe("error");
     expect(result.findings).toEqual([]);
     expect(result.summary).toContain("git log failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check adapter — breaking changes (export diff between refs)
+// ---------------------------------------------------------------------------
+
+describe("checkBreakingChanges", () => {
+  const mockedExecFileSync = vi.mocked(execFileSync);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Helper: build execFileSync mock that routes git show / git diff --find-renames
+  function mockGitCalls(
+    showMap: Record<string, string>,
+    renameOutput = "",
+  ): void {
+    mockedExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      const argArr = args as string[];
+      // git diff --find-renames --name-status ...
+      if (argArr[0] === "diff" && argArr[1] === "--find-renames") {
+        return renameOutput;
+      }
+      // git show <ref>:<file>
+      if (argArr[0] === "show" && typeof argArr[1] === "string") {
+        const refFile = argArr[1]; // e.g. "HEAD~1:src/a.ts"
+        const file = refFile.split(":").slice(1).join(":");
+        if (file in showMap) return showMap[file]!;
+        throw new Error(`fatal: path '${file}' does not exist in '${refFile.split(":")[0]}'`);
+      }
+      return "";
+    });
+  }
+
+  it("detects removed export: old has foo+bar+Baz, current has foo+Baz → 1 T1 finding for bar", async () => {
+    const oldSource = [
+      "export function foo() {}",
+      "export function bar() {}",
+      "export class Baz {}",
+    ].join("\n");
+
+    mockGitCalls({ "src/a.ts": oldSource });
+
+    const index = makeFakeIndex({
+      symbols: [
+        { id: "x:src/a.ts:foo:1", repo: "local/test-repo", name: "foo", kind: "function", file: "src/a.ts", start_line: 1, end_line: 5 },
+        { id: "x:src/a.ts:Baz:6", repo: "local/test-repo", name: "Baz", kind: "class", file: "src/a.ts", start_line: 6, end_line: 10 },
+      ],
+    });
+
+    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/a.ts"], "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("fail");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.symbol).toBe("bar");
+    expect(result.findings[0]!.file).toBe("src/a.ts");
+    expect(result.findings[0]!.severity).toBe("error");
+  });
+
+  it("detects renamed export: old AuthConfig → current AuthSettings → T1 finding for AuthConfig", async () => {
+    const oldSource = "export function AuthConfig() {}";
+
+    mockGitCalls({ "src/auth.ts": oldSource });
+
+    const index = makeFakeIndex({
+      symbols: [
+        { id: "x:src/auth.ts:AuthSettings:1", repo: "local/test-repo", name: "AuthSettings", kind: "function", file: "src/auth.ts", start_line: 1, end_line: 5 },
+      ],
+    });
+
+    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/auth.ts"], "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("fail");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.symbol).toBe("AuthConfig");
+  });
+
+  it("no finding when new exports are added (additions are not breaking)", async () => {
+    const oldSource = "export function foo() {}";
+
+    mockGitCalls({ "src/a.ts": oldSource });
+
+    const index = makeFakeIndex({
+      symbols: [
+        { id: "x:src/a.ts:foo:1", repo: "local/test-repo", name: "foo", kind: "function", file: "src/a.ts", start_line: 1, end_line: 5 },
+        { id: "x:src/a.ts:bar:6", repo: "local/test-repo", name: "bar", kind: "function", file: "src/a.ts", start_line: 6, end_line: 10 },
+        { id: "x:src/a.ts:Baz:11", repo: "local/test-repo", name: "Baz", kind: "class", file: "src/a.ts", start_line: 11, end_line: 15 },
+      ],
+    });
+
+    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/a.ts"], "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("skips non-TS/JS files: .py file in diff → no findings", async () => {
+    mockGitCalls({});
+
+    const index = makeFakeIndex();
+
+    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/main.py"], "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("skips new files when git show fails (file didn't exist at since ref)", async () => {
+    // git show will throw for "src/new-file.ts" (not in showMap)
+    mockGitCalls({});
+
+    const index = makeFakeIndex({
+      symbols: [
+        { id: "x:src/new-file.ts:newFn:1", repo: "local/test-repo", name: "newFn", kind: "function", file: "src/new-file.ts", start_line: 1, end_line: 5 },
+      ],
+    });
+
+    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/new-file.ts"], "HEAD~1", "HEAD");
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("suppresses findings for renamed files detected via --find-renames", async () => {
+    const oldSource = "export function oldFn() {}";
+
+    // The file was renamed from src/old.ts → src/new.ts
+    // git show still works for the old path, but we suppress because it's a rename
+    mockGitCalls(
+      { "src/old.ts": oldSource },
+      "R100\tsrc/old.ts\tsrc/new.ts",
+    );
+
+    const index = makeFakeIndex({
+      symbols: [
+        { id: "x:src/new.ts:newFn:1", repo: "local/test-repo", name: "newFn", kind: "function", file: "src/new.ts", start_line: 1, end_line: 5 },
+      ],
+    });
+
+    // Both old and new paths may appear in changedFiles
+    const result = await checkBreakingChanges(
+      index, "/tmp/test-repo", ["src/old.ts", "src/new.ts"], "HEAD~1", "HEAD",
+    );
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("returns error status on general error (e.g. null changedFiles)", async () => {
+    mockGitCalls({});
+
+    const index = makeFakeIndex();
+
+    // Pass null as changedFiles to trigger TypeError in .filter()
+    const result = await checkBreakingChanges(
+      index, "/tmp/test-repo", null as unknown as string[], "HEAD~1", "HEAD",
+    );
+
+    expect(result.check).toBe("breaking");
+    expect(result.status).toBe("error");
+    expect(result.findings).toEqual([]);
   });
 });

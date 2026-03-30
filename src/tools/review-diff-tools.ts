@@ -622,6 +622,128 @@ export async function checkCouplingGaps(
   }
 }
 
+/**
+ * Breaking changes check: detect exported symbols removed between `since` and
+ * current index.  For each changed .ts/.js file, `git show` retrieves the old
+ * source and a regex extracts export names.  These are compared against the
+ * current index symbols.  Missing exports → T1 "breaking" findings.
+ *
+ * File-level renames (detected via `git diff --find-renames`) are suppressed
+ * because renames naturally lose old export names.
+ */
+export async function checkBreakingChanges(
+  index: CodeIndex,
+  repoRoot: string,
+  changedFiles: string[],
+  since: string,
+  until: string,
+): Promise<CheckResult> {
+  const start = Date.now();
+  const TS_JS_RE = /\.(tsx?|jsx?)$/;
+  const EXPORT_NAMED_RE =
+    /export\s+(?:async\s+)?(?:function|class|const|let|var|type|interface|enum)\s+(\w+)/g;
+  const EXPORT_DEFAULT_RE = /export\s+default/g;
+
+  try {
+    // 1. Detect renames so we can suppress findings for renamed files
+    let renameRaw = "";
+    try {
+      renameRaw = execFileSync(
+        "git",
+        [
+          "diff",
+          "--find-renames",
+          "--name-status",
+          `${since}..${until || "HEAD"}`,
+        ],
+        { cwd: repoRoot, encoding: "utf-8", timeout: 10_000 },
+      );
+    } catch {
+      // If rename detection fails, proceed without suppression
+    }
+
+    const renamedFiles = new Set<string>();
+    for (const line of renameRaw.split("\n")) {
+      if (line.startsWith("R")) {
+        // R100\told-path\tnew-path  (tab-separated)
+        const parts = line.split("\t");
+        if (parts[1]) renamedFiles.add(parts[1]);
+        if (parts[2]) renamedFiles.add(parts[2]);
+      }
+    }
+
+    // 2. Filter to TS/JS files, exclude renames
+    const tsJsFiles = changedFiles.filter(
+      (f) => TS_JS_RE.test(f) && !renamedFiles.has(f),
+    );
+
+    const findings: ReviewFinding[] = [];
+
+    // 3. For each file, compare old exports vs current exports
+    for (const file of tsJsFiles) {
+      try {
+        const oldSource = execFileSync(
+          "git",
+          ["show", `${since}:${file}`],
+          { cwd: repoRoot, encoding: "utf-8", timeout: 10_000 },
+        );
+
+        // Extract old export names
+        const oldExports = new Set<string>();
+        let match: RegExpExecArray | null;
+        while ((match = EXPORT_NAMED_RE.exec(oldSource)) !== null) {
+          oldExports.add(match[1]!);
+        }
+        while ((match = EXPORT_DEFAULT_RE.exec(oldSource)) !== null) {
+          oldExports.add("default");
+        }
+
+        if (oldExports.size === 0) continue;
+
+        // Get current exports from index: top-level symbols in this file
+        const currentExports = new Set(
+          index.symbols
+            .filter((s) => s.file === file && !s.parent)
+            .map((s) => s.name),
+        );
+
+        // Removed = in old but not in current
+        for (const name of oldExports) {
+          if (!currentExports.has(name)) {
+            findings.push({
+              check: "breaking",
+              severity: "error",
+              message: `Removed export "${name}" from ${file} — may break downstream consumers`,
+              file,
+              symbol: name,
+            });
+          }
+        }
+      } catch {
+        // git show failed → file didn't exist at `since` (new file), skip
+      }
+    }
+
+    return {
+      check: "breaking",
+      status: findings.length > 0 ? "fail" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} removed export(s) detected`
+        : "No breaking changes detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "breaking",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Check runner — dispatches to real adapters or stubs for unimplemented checks
 // ---------------------------------------------------------------------------
@@ -649,6 +771,8 @@ async function runCheck(
       return checkComplexityDelta(index, changedFiles);
     case "coupling":
       return checkCouplingGaps(index.root, changedFiles);
+    case "breaking":
+      return checkBreakingChanges(index, index.root, changedFiles, since, until);
     default: {
       const tier = findingTier(checkName);
       return {
