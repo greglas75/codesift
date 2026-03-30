@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 44 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 48 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 ## Quick install
 
@@ -24,7 +24,21 @@ codesift retrieve local/my-project \
 
 ## Benchmark results
 
-Measured on a real 4,127-file TypeScript codebase (70 tasks, CodeSift CLI vs Bash grep/Read).
+### Combo benchmark (real-world tool sequences)
+
+603 real tasks from usage.jsonl — exact query sequences agents used across 33 repos. Native (grep/find/read) vs CodeSift.
+
+| Sequence | Runs | Tok native | Tok Sift | Delta | Wins |
+|----------|------|-----------|----------|-------|------|
+| search_symbols → search_text | 65 | 235,823 | 32,890 | **-86%** | 41/65 |
+| search_patterns → search_text → search_patterns | 39 | 185,433 | 28,556 | **-85%** | 30/39 |
+| 4-gram: pat→st→pat→st | 37 | 376,391 | 51,980 | **-86%** | 25/37 |
+| search_text → search_symbols → search_text | 27 | 112,571 | 21,823 | **-81%** | 18/27 |
+| search_text → search_patterns → search_text | 40 | 309,924 | 63,219 | **-80%** | 25/40 |
+| get_file_tree → search_text | 50 | 388,210 | 122,653 | **-68%** | 43/50 |
+| **AGGREGATE** | **603** | **4,584,153** | **1,860,130** | **-59%** | **447/603** |
+
+### Per-category (70 tasks, single-tool)
 
 | Category | CodeSift | Bash grep | Delta |
 |----------|----------|-----------|-------|
@@ -34,8 +48,6 @@ Measured on a real 4,127-file TypeScript codebase (70 tasks, CodeSift CLI vs Bas
 | Code Retrieval | 57,703 tok | 60,482 tok | **-5%** |
 | Relationships | 52,312 tok | 60,810 tok | **-14%** |
 | Semantic Search | 7.8/10 quality | 6.5/10 | **+20% quality** |
-
-CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, being optimized). Relationship tracing is being rewritten for AST-level accuracy.
 
 ## Performance features
 
@@ -138,7 +150,7 @@ CodeSift wins 4 of 6 categories. Symbol search is at parity (verbose output, bei
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (44 total)
+## MCP tools (48 total)
 
 When running as an MCP server, CodeSift exposes these tools:
 
@@ -155,7 +167,8 @@ When running as an MCP server, CodeSift exposes these tools:
 | **Diff** | `diff_outline`, `changed_symbols` |
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget, incl. `type: "conversation"`) |
 | **Security** | `scan_secrets` (AST-aware secret detection, ~1,100 rules, masked output) |
-| **Analysis** | `find_dead_code` (framework-aware), `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns` (9 built-in incl. scaffolding), `list_patterns` |
+| **Analysis** | `find_dead_code` (framework-aware), `analyze_complexity`, `find_clones`, `analyze_hotspots`, `search_patterns` (9 built-in incl. scaffolding), `list_patterns`, `frequency_analysis` (AST subtree clustering) |
+| **Architecture** | `classify_roles` (symbol role classification via call graph), `check_boundaries` (architecture boundary enforcement), `ast_query` (structural grep via tree-sitter) |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
 | **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
 | **Utility** | `generate_claude_md`, `usage_stats` (with token savings tracking) |
@@ -264,7 +277,7 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 44 tools to AI agents.
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 48 tools to AI agents.
 
 ### OpenAI Codex
 
@@ -432,7 +445,7 @@ BSL-1.1
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (44) | src/register-tools.ts (grep 'name: "' count: 44) |
+| Tool count (48) | src/register-tools.ts (grep 'name: "' count: 48) |
 | Quick install | package.json:bin (line 8-11) |
 | Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |
