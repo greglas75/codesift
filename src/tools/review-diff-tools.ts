@@ -246,20 +246,23 @@ export async function checkBlastRadius(
   const start = Date.now();
   try {
     const result = await impactAnalysis(index.repo, since, { until });
-    const findings: ReviewFinding[] = result.affected_symbols.map((sym) => ({
+    const MAX_BLAST_FINDINGS = 10;
+    const allFindings: ReviewFinding[] = result.affected_symbols.map((sym) => ({
       check: "blast-radius",
       severity: "warn",
       message: `Symbol "${sym.name}" in ${sym.file} is affected by changes`,
       file: sym.file,
       symbol: sym.name,
     }));
+    const findings = allFindings.slice(0, MAX_BLAST_FINDINGS);
+    const totalCount = allFindings.length;
     return {
       check: "blast-radius",
       status: findings.length > 0 ? "warn" : "pass",
       findings,
       duration_ms: Date.now() - start,
-      summary: findings.length > 0
-        ? `${findings.length} affected symbol(s) found`
+      summary: totalCount > 0
+        ? `${totalCount} affected symbol(s) found${totalCount > MAX_BLAST_FINDINGS ? ` (showing ${MAX_BLAST_FINDINGS})` : ""}`
         : "No blast radius detected",
     };
   } catch (err: unknown) {
@@ -288,7 +291,7 @@ export async function checkSecrets(
         ? changedFiles[0]!
         : `{${changedFiles.join(",")}}`;
 
-    const result = await scanSecrets(index.repo, { file_pattern: filePattern });
+    const result = await scanSecrets(index.repo, { file_pattern: filePattern, min_confidence: "high" });
 
     const findings: ReviewFinding[] = result.findings.map((f) => ({
       check: "secrets",
@@ -780,6 +783,9 @@ export async function checkTestGaps(
     // -----------------------------------------------------------------------
     const dir = path.dirname(sourceFile);
     const base = path.basename(sourceFile).replace(SOURCE_EXTENSIONS, "");
+    // Check co-located tests, __tests__/ dir, AND tests/ mirror directory
+    // e.g., src/tools/foo.ts → tests/tools/foo.test.ts
+    const testsDir = dir.replace(/^src\//, "tests/");
     const candidates = [
       path.join(dir, `${base}.test.ts`),
       path.join(dir, `${base}.spec.ts`),
@@ -789,6 +795,11 @@ export async function checkTestGaps(
       path.join(dir, `${base}.spec.js`),
       path.join(dir, "__tests__", `${base}.ts`),
       path.join(dir, "__tests__", `${base}.test.ts`),
+      // Mirror in tests/ directory (common layout)
+      path.join(testsDir, `${base}.test.ts`),
+      path.join(testsDir, `${base}.spec.ts`),
+      path.join(testsDir, `${base}.test.tsx`),
+      path.join(testsDir, `${base}.test.js`),
     ];
 
     const foundByNaming = candidates.some((c) => indexFilePaths.has(c));
