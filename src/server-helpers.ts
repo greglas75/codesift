@@ -1,4 +1,7 @@
 import { trackToolCall, addSavings } from "./storage/usage-tracker.js";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -7,6 +10,7 @@ import { trackToolCall, addSavings } from "./storage/usage-tracker.js";
 export const HIGH_CARDINALITY_THRESHOLD = 50;
 export const CHARS_PER_TOKEN = 4;
 export const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
+const PERSIST_THRESHOLD_CHARS = 200_000; // ~50k tokens — persist full output to disk
 
 /** Estimated token multiplier vs manual grep/Read approach (from benchmark data) */
 const SAVINGS_MULTIPLIER: Record<string, number> = {
@@ -203,13 +207,32 @@ function estimateSavings(toolName: string, resultTokens: number): { tokens: numb
   return { tokens: saved, cost: saved * OPUS_COST_PER_TOKEN };
 }
 
+/** Persist oversized output to a temp file, return the file path. */
+function persistLargeOutput(text: string, toolName: string): string {
+  const dir = join(tmpdir(), "codesift-output");
+  mkdirSync(dir, { recursive: true });
+  const ts = Date.now();
+  const filePath = join(dir, `${toolName}-${ts}.json`);
+  writeFileSync(filePath, text, "utf-8");
+  return filePath;
+}
+
 function formatResponse(text: string, toolName: string, args: Record<string, unknown>, data: unknown): ToolResponse {
+  // Large output management: persist to disk when output is very large
+  let persistedPath: string | undefined;
+  if (text.length > PERSIST_THRESHOLD_CHARS) {
+    persistedPath = persistLargeOutput(text, toolName);
+  }
+
   // Hard cap: truncate oversized responses
   const maxChars = MAX_RESPONSE_TOKENS * CHARS_PER_TOKEN;
   if (text.length > maxChars) {
     const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
+    const fullSizeInfo = persistedPath
+      ? `\n📄 Full output (${estimatedTokens.toLocaleString()} tokens) saved to: ${persistedPath}`
+      : "";
     text = text.slice(0, maxChars) +
-      `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.`;
+      `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.${fullSizeInfo}`;
   }
 
   // Token savings estimate

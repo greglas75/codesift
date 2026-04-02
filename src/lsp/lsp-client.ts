@@ -75,6 +75,7 @@ export class LspClient {
           definition: { dynamicRegistration: false },
           hover: { dynamicRegistration: false, contentFormat: ["plaintext", "markdown"] },
           rename: { dynamicRegistration: false, prepareSupport: true },
+          callHierarchy: { dynamicRegistration: false },
         },
       },
     });

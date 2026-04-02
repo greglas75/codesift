@@ -218,6 +218,130 @@ export async function findReferencesLsp(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Call Hierarchy — LSP textDocument/prepareCallHierarchy + callHierarchy/*
+// ---------------------------------------------------------------------------
+
+export interface CallHierarchyItem {
+  name: string;
+  kind: string;
+  file: string;
+  line: number;
+  detail?: string;
+}
+
+export interface CallHierarchyResult {
+  symbol: CallHierarchyItem;
+  incoming: CallHierarchyItem[];
+  outgoing: CallHierarchyItem[];
+  via: "lsp" | "unavailable";
+  hint?: string;
+}
+
+/** LSP SymbolKind enum → human-readable */
+function lspSymbolKindName(kind: number): string {
+  const names: Record<number, string> = {
+    1: "file", 2: "module", 3: "namespace", 4: "package", 5: "class",
+    6: "method", 7: "property", 8: "field", 9: "constructor", 10: "enum",
+    11: "interface", 12: "function", 13: "variable", 14: "constant",
+    15: "string", 16: "number", 17: "boolean", 18: "array", 19: "object",
+    20: "key", 21: "null", 22: "enum_member", 23: "struct", 24: "event",
+    25: "operator", 26: "type_parameter",
+  };
+  return names[kind] ?? "unknown";
+}
+
+/**
+ * Get call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing).
+ * Uses LSP textDocument/prepareCallHierarchy + callHierarchy/incomingCalls + callHierarchy/outgoingCalls.
+ */
+export async function getCallHierarchy(
+  repo: string,
+  symbolName: string,
+  filePath?: string,
+  line?: number,
+  character?: number,
+): Promise<CallHierarchyResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  if (!pos) return { symbol: { name: symbolName, kind: "unknown", file: "", line: 0 }, incoming: [], outgoing: [], via: "unavailable", hint: "Symbol not found in index" };
+
+  const language = detectLanguage(pos.filePath);
+  if (!language) return { symbol: { name: symbolName, kind: "unknown", file: pos.filePath, line: pos.line }, incoming: [], outgoing: [], via: "unavailable", hint: "Unsupported language for LSP" };
+
+  const manager = getLspManager();
+  const client = await manager.getClient(index.root, language);
+  if (!client) {
+    const serverName = manager.getServerName(language);
+    return { symbol: { name: symbolName, kind: "unknown", file: pos.filePath, line: pos.line }, incoming: [], outgoing: [], via: "unavailable", hint: `Install ${serverName ?? "a language server"} for call hierarchy` };
+  }
+
+  const fileUri = pathToFileURL(join(index.root, pos.filePath)).href;
+  const rootUri = pathToFileURL(index.root).href + "/";
+
+  try {
+    const content = await readFile(join(index.root, pos.filePath), "utf-8");
+    await client.openFile(fileUri, content, language);
+
+    // Prepare call hierarchy
+    const items = await client.request<Array<{
+      name: string;
+      kind: number;
+      uri: string;
+      range: { start: { line: number; character: number } };
+      detail?: string;
+    }>>("textDocument/prepareCallHierarchy", {
+      textDocument: { uri: fileUri },
+      position: { line: pos.line, character: pos.character },
+    });
+
+    if (!items || items.length === 0) {
+      return { symbol: { name: symbolName, kind: "unknown", file: pos.filePath, line: pos.line }, incoming: [], outgoing: [], via: "unavailable", hint: "No call hierarchy item at this position" };
+    }
+
+    const item = items[0]!;
+    const symbol: CallHierarchyItem = {
+      name: item.name,
+      kind: lspSymbolKindName(item.kind),
+      file: item.uri.replace(rootUri, ""),
+      line: item.range.start.line + 1,
+      ...(item.detail ? { detail: item.detail } : {}),
+    };
+
+    // Fetch incoming and outgoing calls in parallel
+    const [incomingRaw, outgoingRaw] = await Promise.all([
+      client.request<Array<{
+        from: { name: string; kind: number; uri: string; range: { start: { line: number } }; detail?: string };
+      }>>("callHierarchy/incomingCalls", { item }).catch(() => [] as never[]),
+      client.request<Array<{
+        to: { name: string; kind: number; uri: string; range: { start: { line: number } }; detail?: string };
+      }>>("callHierarchy/outgoingCalls", { item }).catch(() => [] as never[]),
+    ]);
+
+    const incoming: CallHierarchyItem[] = (incomingRaw ?? []).map((c) => ({
+      name: c.from.name,
+      kind: lspSymbolKindName(c.from.kind),
+      file: c.from.uri.replace(rootUri, ""),
+      line: c.from.range.start.line + 1,
+      ...(c.from.detail ? { detail: c.from.detail } : {}),
+    }));
+
+    const outgoing: CallHierarchyItem[] = (outgoingRaw ?? []).map((c) => ({
+      name: c.to.name,
+      kind: lspSymbolKindName(c.to.kind),
+      file: c.to.uri.replace(rootUri, ""),
+      line: c.to.range.start.line + 1,
+      ...(c.to.detail ? { detail: c.to.detail } : {}),
+    }));
+
+    return { symbol, incoming, outgoing, via: "lsp" };
+  } catch {
+    return { symbol: { name: symbolName, kind: "unknown", file: pos.filePath, line: pos.line }, incoming: [], outgoing: [], via: "unavailable", hint: "LSP call hierarchy request failed" };
+  }
+}
+
 interface RenameEdit {
   file: string;
   changes: number;
