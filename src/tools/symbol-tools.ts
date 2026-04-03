@@ -134,18 +134,19 @@ export async function getSymbols(
     group.push(sym);
   }
 
-  // Read each file once, extract source for all symbols in that file
+  // Read all files in parallel, extract source for all symbols in each file
   const results = new Map<string, CodeSymbol>();
 
-  for (const [file, symbols] of byFile) {
-    let fileContent: string | undefined;
-    try {
-      fileContent = await readFile(join(index.root, file), "utf-8");
-    } catch {
-      // File may have been deleted since indexing
-    }
+  const fileEntries = [...byFile.entries()];
+  const fileContents = await Promise.all(
+    fileEntries.map(([file]) =>
+      readFile(join(index.root, file), "utf-8").catch(() => undefined),
+    ),
+  );
 
-    const lines = fileContent?.split("\n");
+  for (let i = 0; i < fileEntries.length; i++) {
+    const [, symbols] = fileEntries[i]!;
+    const lines = fileContents[i]?.split("\n");
 
     for (const sym of symbols) {
       const result = { ...sym };
@@ -532,16 +533,19 @@ export async function getContextBundle(
  * Extract type/interface names referenced in source by matching against known symbols.
  */
 function extractTypesUsed(source: string, allSymbols: CodeSymbol[]): string[] {
-  const typeSymbols = allSymbols.filter((s) =>
-    s.kind === "interface" || s.kind === "type" || s.kind === "enum",
-  );
+  const typeNames = allSymbols
+    .filter((s) => (s.kind === "interface" || s.kind === "type" || s.kind === "enum") && s.name.length >= 3)
+    .map((s) => s.name);
 
+  if (typeNames.length === 0) return [];
+
+  // Single combined regex instead of N separate tests (O(n) vs O(n*m))
+  const escaped = typeNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const combined = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
   const used = new Set<string>();
-  for (const sym of typeSymbols) {
-    if (sym.name.length < 3) continue;
-    if (wordBoundaryPattern(sym.name).test(source)) {
-      used.add(sym.name);
-    }
+  let m;
+  while ((m = combined.exec(source)) !== null) {
+    used.add(m[1]!);
   }
 
   return [...used].sort();
@@ -560,6 +564,7 @@ export interface DeadCodeResult {
   candidates: DeadCodeCandidate[];
   scanned_symbols: number;
   scanned_files: number;
+  truncated?: boolean;
 }
 
 // Kinds that are typically exported and should have external references
@@ -649,5 +654,6 @@ export async function findDeadCode(
     candidates,
     scanned_symbols: exportedSymbols.length,
     scanned_files: fileContents.size,
+    ...(candidates.length >= MAX_DEAD_CODE_RESULTS ? { truncated: true } : {}),
   };
 }

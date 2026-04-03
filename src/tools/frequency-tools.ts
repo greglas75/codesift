@@ -201,7 +201,7 @@ export async function frequencyAnalysis(
   const totalClustersFound = allClusters.length;
   const topClusters = allClusters.slice(0, topN);
 
-  const CHARS_PER_TOKEN = 4;
+  const CHARS_PER_TOKEN = 3.5;
   let budgetClusters = topClusters;
   if (options?.token_budget) {
     const summaryTokens = 200;

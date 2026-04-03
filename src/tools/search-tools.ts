@@ -20,7 +20,7 @@ const BM25_FILTER_MULTIPLIER = 5; // Widen BM25 candidate set when filters activ
 const BM25_FILTER_MIN_K = 200; // Minimum candidate set size when filters active
 const DEFAULT_SOURCE_CHARS_NARROW = 200; // Source truncation without file_pattern (reduce waste)
 const DEFAULT_SOURCE_CHARS_WIDE = 500; // Source truncation with file_pattern
-const CHARS_PER_TOKEN = 4; // Approximate chars-per-token for budget calculation
+const CHARS_PER_TOKEN = 3.5; // Approximate chars-per-token for budget calculation
 const DEFAULT_MAX_REGEX_RESULTS = 50; // Regex without file_pattern — tighter cap to limit timeout
 const JSON_OVERHEAD_PER_MATCH = 40; // Estimated JSON serialization overhead per TextMatch
 

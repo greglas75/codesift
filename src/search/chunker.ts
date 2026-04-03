@@ -6,7 +6,7 @@ import type { CodeChunk } from "../types.js";
 
 const CHUNK_TOKENS = 400;           // target tokens per chunk
 const OVERLAP_TOKENS = 80;          // overlap between consecutive chunks
-const CHARS_PER_TOKEN = 4;          // rough approximation
+const CHARS_PER_TOKEN = 4;          // intentionally high for chunk sizing (smaller chunks = safe)
 
 const CHUNK_CHARS = CHUNK_TOKENS * CHARS_PER_TOKEN;   // 1600
 const OVERLAP_CHARS = OVERLAP_TOKENS * CHARS_PER_TOKEN; // 320

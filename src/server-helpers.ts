@@ -7,10 +7,10 @@ import { tmpdir } from "node:os";
 // Constants
 // ---------------------------------------------------------------------------
 
-export const HIGH_CARDINALITY_THRESHOLD = 50;
+const HIGH_CARDINALITY_THRESHOLD = 50;
 /** ~3.5 chars/token for compact JSON + text formatters. Matches retrieval-constants.ts (3). */
-export const CHARS_PER_TOKEN = 3.5;
-export const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
+const CHARS_PER_TOKEN = 3.5;
+const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
 const PERSIST_THRESHOLD_CHARS = 200_000; // ~50k tokens — persist full output to disk
 
 /** Estimated token multiplier vs manual grep/Read approach (from benchmark data) */

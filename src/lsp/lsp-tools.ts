@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getLspManager } from "./lsp-manager.js";
 import { getCodeIndex, indexFile } from "../tools/index-tools.js";
+import { withTimeout } from "../retrieval/retrieval-utils.js";
 import type { CodeIndex, Reference } from "../types.js";
+
+const LSP_TIMEOUT_MS = 10_000;
 
 /** Map file extension to LSP language ID. */
 export function detectLanguage(filePath: string): string | null {
@@ -60,10 +63,14 @@ export async function goToDefinition(
       const content = await readFile(join(index.root, pos.filePath), "utf-8");
       await client.openFile(fileUri, content, language);
 
-      const result = await client.request<unknown>("textDocument/definition", {
-        textDocument: { uri: fileUri },
-        position: { line: pos.line, character: pos.character },
-      });
+      const result = await withTimeout(
+        client.request<unknown>("textDocument/definition", {
+          textDocument: { uri: fileUri },
+          position: { line: pos.line, character: pos.character },
+        }),
+        LSP_TIMEOUT_MS,
+        "LSP definition",
+      );
 
       const loc = Array.isArray(result) ? result[0] : result;
       if (loc && typeof loc === "object") {
@@ -137,10 +144,14 @@ export async function getTypeInfo(
     const content = await readFile(join(index.root, pos.filePath), "utf-8");
     await client.openFile(fileUri, content, language);
 
-    const result = await client.request<{ contents: unknown }>("textDocument/hover", {
-      textDocument: { uri: fileUri },
-      position: { line: pos.line, character: pos.character },
-    });
+    const result = await withTimeout(
+      client.request<{ contents: unknown }>("textDocument/hover", {
+        textDocument: { uri: fileUri },
+        position: { line: pos.line, character: pos.character },
+      }),
+      LSP_TIMEOUT_MS,
+      "LSP hover",
+    );
 
     if (!result?.contents) return { via: "unavailable", hint: "No hover info at this position" };
 
@@ -198,11 +209,15 @@ export async function findReferencesLsp(
     const content = await readFile(join(index.root, pos.filePath), "utf-8");
     await client.openFile(fileUri, content, language);
 
-    const result = await client.request<unknown[]>("textDocument/references", {
-      textDocument: { uri: fileUri },
-      position: { line: pos.line, character: pos.character },
-      context: { includeDeclaration: false },
-    });
+    const result = await withTimeout(
+      client.request<unknown[]>("textDocument/references", {
+        textDocument: { uri: fileUri },
+        position: { line: pos.line, character: pos.character },
+        context: { includeDeclaration: false },
+      }),
+      LSP_TIMEOUT_MS,
+      "LSP references",
+    );
 
     if (!Array.isArray(result)) return null;
 
@@ -286,16 +301,20 @@ export async function getCallHierarchy(
     await client.openFile(fileUri, content, language);
 
     // Prepare call hierarchy
-    const items = await client.request<Array<{
-      name: string;
-      kind: number;
-      uri: string;
-      range: { start: { line: number; character: number } };
-      detail?: string;
-    }>>("textDocument/prepareCallHierarchy", {
-      textDocument: { uri: fileUri },
-      position: { line: pos.line, character: pos.character },
-    });
+    const items = await withTimeout(
+      client.request<Array<{
+        name: string;
+        kind: number;
+        uri: string;
+        range: { start: { line: number; character: number } };
+        detail?: string;
+      }>>("textDocument/prepareCallHierarchy", {
+        textDocument: { uri: fileUri },
+        position: { line: pos.line, character: pos.character },
+      }),
+      LSP_TIMEOUT_MS,
+      "LSP prepareCallHierarchy",
+    );
 
     if (!items || items.length === 0) {
       return { symbol: { name: symbolName, kind: "unknown", file: pos.filePath, line: pos.line }, incoming: [], outgoing: [], via: "unavailable", hint: "No call hierarchy item at this position" };
@@ -312,12 +331,20 @@ export async function getCallHierarchy(
 
     // Fetch incoming and outgoing calls in parallel
     const [incomingRaw, outgoingRaw] = await Promise.all([
-      client.request<Array<{
-        from: { name: string; kind: number; uri: string; range: { start: { line: number } }; detail?: string };
-      }>>("callHierarchy/incomingCalls", { item }).catch(() => [] as never[]),
-      client.request<Array<{
-        to: { name: string; kind: number; uri: string; range: { start: { line: number } }; detail?: string };
-      }>>("callHierarchy/outgoingCalls", { item }).catch(() => [] as never[]),
+      withTimeout(
+        client.request<Array<{
+          from: { name: string; kind: number; uri: string; range: { start: { line: number } }; detail?: string };
+        }>>("callHierarchy/incomingCalls", { item }),
+        LSP_TIMEOUT_MS,
+        "LSP incomingCalls",
+      ).catch(() => [] as never[]),
+      withTimeout(
+        client.request<Array<{
+          to: { name: string; kind: number; uri: string; range: { start: { line: number } }; detail?: string };
+        }>>("callHierarchy/outgoingCalls", { item }),
+        LSP_TIMEOUT_MS,
+        "LSP outgoingCalls",
+      ).catch(() => [] as never[]),
     ]);
 
     const incoming: CallHierarchyItem[] = (incomingRaw ?? []).map((c) => ({
@@ -377,24 +404,32 @@ export async function renameSymbol(
 
   // Validate rename is possible
   try {
-    await client.request("textDocument/prepareRename", {
-      textDocument: { uri: fileUri },
-      position: { line: pos.line, character: pos.character },
-    });
+    await withTimeout(
+      client.request("textDocument/prepareRename", {
+        textDocument: { uri: fileUri },
+        position: { line: pos.line, character: pos.character },
+      }),
+      LSP_TIMEOUT_MS,
+      "LSP prepareRename",
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Cannot rename at this position: ${msg}`);
   }
 
   // Execute rename
-  const workspaceEdit = await client.request<{
-    changes?: Record<string, Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }>>;
-    documentChanges?: Array<{ textDocument: { uri: string }; edits: Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }> }>;
-  }>("textDocument/rename", {
-    textDocument: { uri: fileUri },
-    position: { line: pos.line, character: pos.character },
-    newName,
-  });
+  const workspaceEdit = await withTimeout(
+    client.request<{
+      changes?: Record<string, Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }>>;
+      documentChanges?: Array<{ textDocument: { uri: string }; edits: Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }> }>;
+    }>("textDocument/rename", {
+      textDocument: { uri: fileUri },
+      position: { line: pos.line, character: pos.character },
+      newName,
+    }),
+    LSP_TIMEOUT_MS,
+    "LSP rename",
+  );
 
   // Normalize workspace edits
   const fileEdits = new Map<string, Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }>>();

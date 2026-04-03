@@ -12,6 +12,15 @@ import {
 } from "./retrieval-utils.js";
 import { DEFAULT_TOP_K, DEFAULT_SOURCE_CHARS, EMBED_TIMEOUT_MS, RRF_K } from "./retrieval-constants.js";
 
+function formatSemanticResults(results: Array<{ symbol: { file: string; start_line: number; kind: string; name: string; signature?: string; source?: string } }>): string {
+  if (results.length === 0) return "(no results)";
+  return results.map((r) => {
+    const s = r.symbol;
+    const header = `${s.file}:${s.start_line} ${s.kind} ${s.name}${s.signature ? ` ${s.signature}` : ""}`;
+    return s.source ? `${header}\n${s.source}` : header;
+  }).join("\n\n");
+}
+
 // ---------------------------------------------------------------------------
 // Shared semantic context loader (CQ14 — eliminates duplication)
 // ---------------------------------------------------------------------------
@@ -130,9 +139,10 @@ export async function handleSemanticQuery(
   if (!primaryVec) throw new Error("Embedding provider returned no vector");
 
   const results = searchSemantic(new Float32Array(primaryVec), filteredEmbeddings, symbolMap, ctx.topK);
-  const data = results.map((r) => truncateSymbolSource(r.symbol, sourceLimit));
-  const text = JSON.stringify(data);
-  return { type: "semantic", data, tokens: estimateTokens(text) };
+  // Truncate source then format as text (avoid double JSON serialization)
+  const truncated = results.map((r) => ({ ...r, symbol: truncateSymbolSource(r.symbol, sourceLimit) }));
+  const text = formatSemanticResults(truncated);
+  return { type: "semantic", data: text, tokens: estimateTokens(text) };
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +183,16 @@ export async function handleHybridQuery(
     if (!match) continue;
     if (ctx.excludeTests && isTestFile(match.file)) continue;
     const list = fileToChunks.get(match.file) ?? [];
-    for (const chunk of list) {
-      if (chunk.startLine <= match.line && match.line <= chunk.endLine) {
+    // Binary search for covering chunk (list is sorted by startLine)
+    let lo = 0, hi = list.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const chunk = list[mid]!;
+      if (chunk.endLine < match.line) {
+        lo = mid + 1;
+      } else if (chunk.startLine > match.line) {
+        hi = mid - 1;
+      } else {
         rrfScores.set(chunk.id, (rrfScores.get(chunk.id) ?? 0) + 1 / (RRF_K + rank + 1));
         break;
       }

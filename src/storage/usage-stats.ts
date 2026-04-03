@@ -1,8 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import type { UsageEntry } from "./usage-tracker.js";
-import { getCumulativeSavings } from "./usage-tracker.js";
+import { getCumulativeSavings, getUsagePath } from "./usage-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,10 +47,6 @@ export interface UsageStats {
 // Loading
 // ---------------------------------------------------------------------------
 
-function getUsagePath(): string {
-  const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
-  return join(dataDir, "usage.jsonl");
-}
 
 function isValidEntry(value: unknown): value is UsageEntry {
   if (typeof value !== "object" || value === null) return false;

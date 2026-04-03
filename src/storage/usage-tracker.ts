@@ -28,7 +28,7 @@ export interface UsageEntry {
 // Path
 // ---------------------------------------------------------------------------
 
-function getUsagePath(): string {
+export function getUsagePath(): string {
   const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
   return join(dataDir, "usage.jsonl");
 }

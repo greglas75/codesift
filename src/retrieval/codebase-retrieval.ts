@@ -158,30 +158,37 @@ export async function codebaseRetrieval(
 
   const limited = queries.slice(0, MAX_QUERIES);
 
-  // Execute sub-queries sequentially to avoid parallel filesystem walks
-  // (6 concurrent searchText walks on 600+ files = OOM / connection closed)
-  const subResults: SubQueryResult[] = [];
-  for (const raw of limited) {
+  // Execute sub-queries with bounded concurrency (max 3 parallel)
+  // to balance speed vs memory (full parallel on 600+ files = OOM)
+  const MAX_CONCURRENCY = 3;
+  const subResults: SubQueryResult[] = new Array(limited.length);
+
+  const tasks = limited.map((raw, idx) => async () => {
     const parsed = SubQuerySchema.safeParse(raw);
     if (!parsed.success) {
       const message = `Invalid sub-query: ${parsed.error.issues.map((i) => i.message).join(", ")}`;
-      subResults.push({
+      subResults[idx] = {
         type: (raw as { type?: string })?.type ?? "unknown",
         data: { error: message },
         tokens: estimateTokens(message),
-      });
-      continue;
+      };
+      return;
     }
     try {
-      subResults.push(await executeSubQuery(repo, parsed.data));
+      subResults[idx] = await executeSubQuery(repo, parsed.data);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      subResults.push({
+      subResults[idx] = {
         type: parsed.data.type,
         data: { error: message },
         tokens: estimateTokens(message),
-      });
+      };
     }
+  });
+
+  // Simple bounded concurrency without external deps
+  for (let i = 0; i < tasks.length; i += MAX_CONCURRENCY) {
+    await Promise.all(tasks.slice(i, i + MAX_CONCURRENCY).map((t) => t()));
   }
 
   // Enforce token budget — include results until budget is exceeded
