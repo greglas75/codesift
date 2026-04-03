@@ -45,7 +45,7 @@ describe("Fix 1: get_file_tree duplicate path detection", () => {
     // Second call — same path
     const hint = buildResponseHint("get_file_tree", { repo: "local/proj", path_prefix: "src" }, []);
     expect(hint).not.toBeNull();
-    expect(hint).toContain("already fetched");
+    expect(hint).toContain("Duplicate");
     expect(hint).toContain("src");
   });
 
@@ -68,7 +68,7 @@ describe("Fix 1: get_file_tree duplicate path detection", () => {
 
     const hint = buildResponseHint("get_file_tree", { repo: "local/proj" }, []);
     expect(hint).not.toBeNull();
-    expect(hint).toContain("(root)");
+    expect(hint).toContain("/");
   });
 
   it("should reset path tracking on resetSessionState", () => {
@@ -96,7 +96,7 @@ describe("Fix 3: search_symbols detail_level hint", () => {
     );
     expect(hint).not.toBeNull();
     expect(hint).toContain("detail_level='compact'");
-    expect(hint).toContain("8 symbols");
+    expect(hint).toContain("8 results");
   });
 
   it("should not hint when detail_level is set", () => {

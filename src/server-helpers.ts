@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 // ---------------------------------------------------------------------------
 
 export const HIGH_CARDINALITY_THRESHOLD = 50;
-export const CHARS_PER_TOKEN = 4;
+/** ~3.5 chars/token for compact JSON + text formatters. Matches retrieval-constants.ts (3). */
+export const CHARS_PER_TOKEN = 3.5;
 export const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
 const PERSIST_THRESHOLD_CHARS = 200_000; // ~50k tokens — persist full output to disk
 
@@ -145,55 +146,50 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
 
   if (toolName === "search_text" && Array.isArray(data) && data.length > HIGH_CARDINALITY_THRESHOLD) {
     if (!args["group_by_file"] && !args["auto_group"]) {
-      hints.push(`⚡ ${data.length} matches — use group_by_file=true or auto_group=true to reduce output by ~70%.`);
+      hints.push(`⚡ ${data.length} matches — add group_by_file=true (-70% output).`);
     }
   }
 
   if (consecutiveCount >= SEQUENTIAL_HINT_THRESHOLD && BATCHABLE_TOOLS.has(toolName)) {
     const batchTool = toolName === "get_symbol" ? "get_symbols" : "codebase_retrieval";
-    hints.push(`⚡ ${consecutiveCount} consecutive ${toolName} calls. Batch into one ${batchTool} call.`);
+    hints.push(`⚡ ${consecutiveCount}x ${toolName} — batch into ${batchTool}.`);
   }
 
   if (toolName === "list_repos" && listReposCallCount > 1) {
-    hints.push(`⚡ list_repos called ${listReposCallCount}x. Result is static — cache from first call.`);
+    hints.push(`⚡ list_repos ${listReposCallCount}x — result is static, cache it.`);
   }
 
   if (toolName === "search_symbols" && args["include_source"] && !args["file_pattern"]) {
-    hints.push(`⚡ search_symbols with include_source=true but no file_pattern scans entire repo. Add file_pattern to reduce tokens.`);
+    hints.push(`⚡ include_source without file_pattern — add file_pattern.`);
   }
 
-  // --- Fix 1: get_file_tree duplicate path detection ---
   if (toolName === "get_file_tree") {
     const repo = typeof args["repo"] === "string" ? args["repo"] : "";
     const pathPrefix = typeof args["path_prefix"] === "string" ? args["path_prefix"] : "";
     const pathKey = `${repo}\0${pathPrefix}`;
     if (fileTreePaths.has(pathKey)) {
-      hints.push(`⚡ get_file_tree("${pathPrefix || "(root)"}") was already fetched this session. Cache the result to avoid repeated calls.`);
+      hints.push(`⚡ Duplicate get_file_tree("${pathPrefix || "/"}") — cache result.`);
     }
     fileTreePaths.add(pathKey);
   }
 
-  // --- Fix 3: search_symbols detail_level hint ---
   if (toolName === "search_symbols" && !args["detail_level"]) {
     const resultCount = Array.isArray(data) ? data.length : 0;
     if (resultCount > 5) {
-      hints.push(`⚡ ${resultCount} symbols returned. Use detail_level='compact' (~15 tok/result) for discovery, or 'full' for complete source.`);
+      hints.push(`⚡ ${resultCount} results — use detail_level='compact' for ~15 tok/result.`);
     }
   }
 
-  // --- Fix 5: search_symbols + get_symbol → suggest get_context_bundle ---
   if (toolName === "get_symbol" && sessionSearchSymbolsCalled) {
-    hints.push(`⚡ Consider get_context_bundle(repo, symbol_name) — returns symbol + imports + siblings + callers in 1 call.`);
+    hints.push(`⚡ Try get_context_bundle — symbol+imports+siblings in 1 call.`);
   }
 
-  // --- Fix 6: 3+ get_symbol → suggest assemble_context ---
   if (toolName === "get_symbol" && sessionGetSymbolCount >= 3) {
-    hints.push(`⚡ ${sessionGetSymbolCount}x get_symbol this session — try assemble_context(repo, query, level='L1') for batch retrieval (3x more symbols per budget).`);
+    hints.push(`⚡ ${sessionGetSymbolCount}x get_symbol — use assemble_context(level='L1').`);
   }
 
-  // --- Fix 7: question-word text queries → suggest semantic search ---
   if (toolName === "search_text" && typeof args["query"] === "string" && QUESTION_PATTERN.test(args["query"])) {
-    hints.push(`⚡ Text search with question words — consider codebase_retrieval with type:'semantic' for meaning-based search.`);
+    hints.push(`⚡ Question query — try codebase_retrieval type:'semantic'.`);
   }
 
   return hints.length > 0 ? hints.join("\n") : null;
@@ -239,7 +235,7 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
   const savings = estimateSavings(toolName, Math.round(text.length / CHARS_PER_TOKEN));
   if (savings) {
     const costStr = savings.cost >= 0.01 ? `$${savings.cost.toFixed(2)}` : `$${savings.cost.toFixed(4)}`;
-    text = `⚡ Saved ~${savings.tokens.toLocaleString()} tokens vs manual approach (${costStr} at Opus rates)\n\n` + text;
+    text = `⚡ ~${savings.tokens.toLocaleString()} tok saved\n\n` + text;
     addSavings(savings.tokens);
   }
 
@@ -262,7 +258,7 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
       return Promise.resolve({
         content: [{
           type: "text" as const,
-          text: cached + "\n\n⚡ Deduplicated: identical call returned cached result (30s TTL).",
+          text: cached + "\n⚡ cached",
         }],
       });
     }
@@ -273,7 +269,7 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
       return pending.then((response) => ({
         content: [{
           type: "text" as const,
-          text: (response.content[0]?.text ?? "") + "\n\n⚡ Deduplicated: coalesced with in-flight identical request.",
+          text: (response.content[0]?.text ?? "") + "\n⚡ deduped",
         }],
       }));
     }
@@ -283,7 +279,7 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
       const start = performance.now();
       try {
         const data = await fn();
-        const text = JSON.stringify(data, null, 2);
+        const text = typeof data === "string" ? data : JSON.stringify(data);
         const elapsed = performance.now() - start;
         trackToolCall(toolName, args, text, data, elapsed);
         trackSequentialCalls(toolName);

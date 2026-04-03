@@ -459,7 +459,6 @@ describe("OPT-4: response hints", () => {
 
     expect(hint).not.toBeNull();
     expect(hint).toContain("group_by_file");
-    expect(hint).toContain("auto_group");
     expect(hint).toContain("100");
   });
 

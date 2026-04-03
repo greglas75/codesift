@@ -217,7 +217,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "indexing",
     searchHint: "list indexed repositories repos available",
     outputSchema: OutputSchemas.repoList,
-    description: "List all indexed repository names. Returns just names by default. Set compact=false for full metadata (paths, counts). Call ONCE per session — result is permanently cached (repo list doesn't change).",
+    description: "List indexed repos. Set compact=false for full metadata. Cached per session.",
     schema: {
       compact: z.boolean().optional().describe("Return just repo names (default: true). Set false for full metadata including root path, index_path, file/symbol counts."),
     },
@@ -238,7 +238,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "index_file",
     category: "indexing",
     searchHint: "re-index single file update incremental",
-    description: "Re-index a single file instantly after editing. Finds the repo automatically, updates symbols and BM25 index. Skips if file mtime unchanged. Much faster than index_folder for single-file updates.",
+    description: "Re-index a single file after editing. Auto-finds repo, skips if unchanged.",
     schema: {
       path: z.string().describe("Absolute path to the file to re-index"),
     },
@@ -251,7 +251,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search",
     searchHint: "search find symbols functions classes types methods by name signature",
     outputSchema: OutputSchemas.searchResults,
-    description: "Search for code symbols (functions, classes, types) by name or signature. Use detail_level='compact' for discovery (~15 tok/result), 'standard' for signatures+source (default), 'full' for complete source.",
+    description: "Search symbols by name/signature. detail_level: compact (~15 tok), standard (default), full.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query string"),
@@ -282,7 +282,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "ast_query",
     category: "search",
     searchHint: "AST tree-sitter query structural pattern matching code shape",
-    description: "Search for AST patterns using tree-sitter query language. Finds code by structural shape, not text. Example: '(function_declaration name: (identifier) @name)' finds all functions. Use for anti-pattern detection, structural grep, and code shape matching.",
+    description: "Search AST patterns via tree-sitter S-expressions. Finds code by structural shape.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Tree-sitter query in S-expression syntax"),
@@ -303,7 +303,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "search_text",
     category: "search",
     searchHint: "full-text search grep regex keyword content files",
-    description: "Full-text search across all files in a repository. For conceptual questions (how/where/why), use codebase_retrieval with type:'semantic' instead — it finds code by meaning, not keywords.",
+    description: "Full-text search across all files. For conceptual queries use codebase_retrieval type:'semantic'.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query or regex pattern"),
@@ -330,7 +330,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "outline",
     searchHint: "file tree directory structure listing files symbols",
     outputSchema: OutputSchemas.fileTree,
-    description: "Get the file tree of a repository with symbol counts per file. Use compact=true for a flat list of paths (10-50x less output). Result is cached for 5 minutes — avoid calling the same path_prefix twice.",
+    description: "File tree with symbol counts. compact=true for flat list (10-50x less output). Cached 5min.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
@@ -383,7 +383,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "suggest_queries",
     category: "outline",
     searchHint: "suggest queries explore unfamiliar repo onboarding first call",
-    description: "Suggest useful queries for exploring an unfamiliar repo. Returns top files by symbol density, kind distribution, and ready-to-use example queries. Ideal first call when starting work on a new codebase.",
+    description: "Suggest queries for exploring a new repo. Returns top files, kind distribution, examples.",
     schema: {
       repo: z.string().describe("Repository identifier"),
     },
@@ -399,7 +399,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "symbols",
     searchHint: "get retrieve single symbol source code by ID",
     outputSchema: OutputSchemas.symbol,
-    description: "Retrieve a single symbol by its unique ID with full source code. For 2+ symbols use get_symbols (batch). After search_symbols, prefer get_context_bundle for symbol + imports + siblings in 1 call. For 3+ reads, use assemble_context(level='L1').",
+    description: "Get symbol by ID with source. For batch: get_symbols. For context: get_context_bundle.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_id: z.string().describe("Unique symbol identifier"),
@@ -450,7 +450,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "get_context_bundle",
     category: "symbols",
     searchHint: "context bundle symbol imports siblings callers one call",
-    description: "Get a symbol with its file imports and sibling symbols in one call. Saves 2-3 round-trips vs separate get_symbol + search_text + get_file_outline.",
+    description: "Symbol + imports + siblings in one call. Saves 2-3 round-trips.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Symbol name to find"),
@@ -468,7 +468,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "graph",
     searchHint: "find references usages callers who uses symbol",
     outputSchema: OutputSchemas.references,
-    description: "Find all references to a symbol across the codebase. Pass symbol_names (array) to batch-search multiple symbols in one file pass — much faster than sequential calls on large repos.",
+    description: "Find all references to a symbol. Pass symbol_names array for batch search.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
@@ -491,7 +491,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "graph",
     searchHint: "trace call chain callers callees dependency graph mermaid",
     outputSchema: OutputSchemas.callTree,
-    description: "Trace the call chain of a symbol — who calls it (callers) or what it calls (callees). Source code is excluded by default for compact output; set include_source=true to include it. Set output_format='mermaid' for a Mermaid flowchart diagram.",
+    description: "Trace call chain: callers or callees. output_format='mermaid' for diagram.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Name of the symbol to trace"),
@@ -516,7 +516,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "graph",
     searchHint: "impact analysis blast radius git changes affected symbols",
     outputSchema: OutputSchemas.impactAnalysis,
-    description: "Analyze the blast radius of recent git changes — which symbols and files are affected. Source code is excluded by default for compact output.",
+    description: "Blast radius of git changes — affected symbols and files.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       since: z.string().describe("Git ref to compare from (e.g. HEAD~3, commit SHA, branch)"),
@@ -538,7 +538,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "trace_route",
     category: "graph",
     searchHint: "trace HTTP route handler API endpoint service database NestJS Express Next.js",
-    description: "Trace an HTTP route: find handler function, trace to service calls, identify DB operations. Supports NestJS decorators, Next.js App Router, and Express patterns.",
+    description: "Trace HTTP route → handler → service → DB. NestJS, Next.js, Express.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
@@ -582,7 +582,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "lsp",
     searchHint: "type information hover documentation return type parameters LSP",
     outputSchema: OutputSchemas.typeInfo,
-    description: "Get type information for a symbol (return type, parameter types, documentation). Requires a language server — returns hint if not available.",
+    description: "Get type info via LSP hover (return type, params, docs). Hint if LSP unavailable.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Symbol name to get type info for"),
@@ -604,7 +604,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "lsp",
     searchHint: "rename symbol refactor LSP type-safe all files",
     outputSchema: OutputSchemas.renameResult,
-    description: "Rename a symbol across all files using LSP refactoring. Type-safe, handles imports and references. Requires a language server — no fallback.",
+    description: "Rename symbol across all files via LSP. Type-safe, updates imports/refs.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Current name of the symbol to rename"),
@@ -628,7 +628,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "lsp",
     searchHint: "call hierarchy incoming outgoing calls who calls what calls LSP callers callees",
     outputSchema: OutputSchemas.callHierarchy,
-    description: "Get the call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing). Uses LSP for precise, type-aware results. Complements trace_call_chain which uses static analysis.",
+    description: "LSP call hierarchy: incoming + outgoing calls. Complements trace_call_chain.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_name: z.string().describe("Symbol name to get call hierarchy for"),
@@ -679,7 +679,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "detect_communities",
     category: "architecture",
     searchHint: "community detection clusters modules Louvain import graph boundaries",
-    description: "Detect code clusters/modules using Louvain community detection on the import graph. Discovers hidden architectural boundaries. Use focus to narrow scope.",
+    description: "Louvain community detection on import graph. Discovers module boundaries.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       focus: z.string().optional().describe("Path substring to filter files (e.g. 'src/lib')"),
@@ -701,7 +701,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "check_boundaries",
     category: "architecture",
     searchHint: "boundary rules architecture enforcement imports CI gate hexagonal onion",
-    description: "Check architecture boundary rules against the import graph. Define which modules can/cannot import from other modules. Rules use path substring matching (e.g. 'src/domain' matches 'src/domain/user.ts'). Use for CI gates, architectural drift prevention, and onion/hexagonal architecture enforcement.",
+    description: "Check architecture boundary rules against imports. Path substring matching.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       rules: z.array(z.object({
@@ -724,7 +724,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "classify_roles",
     category: "architecture",
     searchHint: "classify roles entry core utility dead leaf symbol architecture",
-    description: "Classify each symbol's architectural role (entry/core/utility/dead/leaf) based on call graph connectivity. Entry points have many callees, few callers. Utilities have many callers, few callees. Core has both. Dead has no callers.",
+    description: "Classify symbol roles (entry/core/utility/dead/leaf) by call graph connectivity.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -747,7 +747,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "assemble_context",
     category: "context",
     searchHint: "assemble context token budget L0 L1 L2 L3 source signatures summaries",
-    description: "Assemble a focused code context for a query within a token budget. Use level to control density: L0=full source, L1=signatures only (5-10x denser), L2=file summaries, L3=directory overview.",
+    description: "Assemble code context within token budget. L0=source, L1=signatures, L2=files, L3=dirs.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Natural language query describing what context is needed"),
@@ -837,7 +837,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search",
     searchHint: "batch retrieval multi-query semantic hybrid token budget",
     outputSchema: OutputSchemas.batchResults,
-    description: "Batch multiple search and retrieval queries into a single call with shared token budget. Semantic and hybrid sub-queries exclude test files by default (set exclude_tests:false to include them).",
+    description: "Batch multi-query retrieval with shared token budget. Supports symbols/text/semantic/hybrid.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       queries: z
@@ -871,7 +871,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "dead code unused exports unreferenced symbols cleanup",
     outputSchema: OutputSchemas.deadCode,
-    description: "Find potentially dead code: exported symbols with zero references outside their defining file. Useful for identifying unused exports to clean up.",
+    description: "Find dead code: exported symbols with zero external references.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -890,7 +890,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "complexity cyclomatic nesting refactoring functions",
     outputSchema: OutputSchemas.complexity,
-    description: "Analyze cyclomatic complexity of functions in a repository. Returns top N most complex functions with nesting depth, branch count, and line count. Useful for prioritizing refactoring.",
+    description: "Top N most complex functions by cyclomatic complexity, nesting, lines.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -913,7 +913,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "code clones duplicates copy-paste detection similar functions",
     outputSchema: OutputSchemas.clones,
-    description: "Find code clones: pairs of functions with similar normalized source (copy-paste detection). Uses hash bucketing + line-similarity scoring.",
+    description: "Find code clones: similar function pairs via hash bucketing + line-similarity.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -935,7 +935,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "frequency_analysis",
     category: "analysis",
     searchHint: "frequency analysis common patterns AST shape clusters",
-    description: "Find the most common code structures by normalizing AST and grouping by shape. Discovers emergent patterns invisible to regex: functions with the same control flow but different variable names are grouped together. Returns TOP N clusters with examples. For similar-but-not-identical pairs, use find_clones instead.",
+    description: "Group functions by normalized AST shape. Finds emergent patterns invisible to regex.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       top_n: zNum().optional().describe("Number of clusters to return (default: 30)"),
@@ -961,7 +961,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "analyze_hotspots",
     category: "analysis",
     searchHint: "hotspots git churn bug-prone change frequency complexity",
-    description: "Analyze git churn hotspots: files with high change frequency × complexity. Higher hotspot_score = more likely to contain bugs. Uses git log --numstat.",
+    description: "Git churn hotspots: change frequency × complexity. Higher score = more bug-prone.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       since_days: zNum().describe("Look back N days (default: 90)"),
@@ -1019,7 +1019,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "search_patterns",
     category: "patterns",
     searchHint: "search patterns anti-patterns CQ violations useEffect empty-catch console-log",
-    description: "Search for structural code patterns (anti-patterns, CQ violations). Built-in patterns: useEffect-no-cleanup, empty-catch, any-type, console-log, await-in-loop, no-error-type, toctou, unbounded-findmany. Or pass custom regex.",
+    description: "Search structural patterns/anti-patterns. Built-in or custom regex.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       pattern: z.string().describe("Built-in pattern name or custom regex"),
@@ -1073,7 +1073,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "search_conversations",
     category: "conversations",
     searchHint: "search conversations past sessions history BM25 semantic",
-    description: "Search past Claude Code conversations in a SINGLE project using hybrid BM25+semantic search. Use search_all_conversations to search across ALL projects.",
+    description: "Search conversations in one project (BM25+semantic). For all projects: search_all_conversations.",
     schema: {
       query: z.string().describe("Search query — keywords or natural language"),
       project: z.string().optional().describe("Project path to search (default: current project)"),
@@ -1088,7 +1088,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "find_conversations_for_symbol",
     category: "conversations",
     searchHint: "find conversations symbol discussion cross-reference code",
-    description: "Find past conversations that discussed a specific code symbol. Cross-references code intelligence with conversation history.",
+    description: "Find conversations that discussed a code symbol. Cross-refs code + history.",
     schema: {
       symbol_name: z.string().describe("Name of the code symbol to search for in conversations"),
       repo: z.string().describe("Code repository to resolve the symbol from (e.g., 'local/my-project')"),
@@ -1104,7 +1104,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "search_all_conversations",
     category: "conversations",
     searchHint: "search all conversations every project cross-project",
-    description: "Search ALL indexed Claude Code conversation projects at once. Use this when you don't know which project a conversation was in. Returns results from all projects ranked by relevance.",
+    description: "Search ALL conversation projects at once, ranked by relevance.",
     schema: {
       query: z.string().describe("Search query — keywords, natural language, or concept"),
       limit: zNum().optional().describe("Maximum results across all projects (default: 10)"),
@@ -1121,7 +1121,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "security",
     searchHint: "scan secrets API keys tokens passwords credentials security",
     outputSchema: OutputSchemas.secrets,
-    description: "Scan repository for hardcoded secrets (API keys, tokens, passwords, connection strings). Returns masked findings with severity, confidence, and AST context. Uses ~1,100 detection rules.",
+    description: "Scan for hardcoded secrets (API keys, tokens, passwords). ~1,100 rules.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Glob pattern to filter scanned files"),
@@ -1145,7 +1145,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "consolidate_memories",
     category: "conversations",
     searchHint: "consolidate memories dream knowledge MEMORY.md decisions solutions patterns",
-    description: "Consolidate conversation history into a MEMORY.md knowledge file. Extracts decisions, solutions, patterns, and architecture insights from past sessions. Run periodically to build institutional knowledge.",
+    description: "Consolidate conversations into MEMORY.md — decisions, solutions, patterns.",
     schema: {
       project_path: z.string().optional().describe("Project path (auto-detects from cwd if omitted)"),
       output_path: z.string().optional().describe("Custom output file path (default: MEMORY.md in project root)"),
@@ -1163,7 +1163,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "read_memory",
     category: "conversations",
     searchHint: "read memory MEMORY.md institutional knowledge past decisions",
-    description: "Read the consolidated MEMORY.md knowledge file for the current project. Contains extracted decisions, solutions, and patterns from past conversations.",
+    description: "Read MEMORY.md knowledge file with past decisions and patterns.",
     schema: {
       project_path: z.string().optional().describe("Project path (default: current directory)"),
     },
@@ -1179,7 +1179,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "create_analysis_plan",
     category: "meta",
     searchHint: "create plan multi-step analysis workflow coordinator scratchpad",
-    description: "Create a multi-step analysis plan with a shared scratchpad. Define steps with tool calls, dependencies, and result keys. Steps execute sequentially respecting dependencies. Scratchpad persists knowledge across steps.",
+    description: "Create multi-step analysis plan with shared scratchpad and dependencies.",
     schema: {
       title: z.string().describe("Plan title describing the analysis goal"),
       steps: z.union([
@@ -1205,7 +1205,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "scratchpad_write",
     category: "meta",
     searchHint: "scratchpad write store knowledge cross-step data persist",
-    description: "Write a key-value entry to a plan's scratchpad. Use to store intermediate results, findings, or context that later steps can read.",
+    description: "Write key-value to plan scratchpad for cross-step knowledge sharing.",
     schema: {
       plan_id: z.string().describe("Analysis plan identifier"),
       key: z.string().describe("Key name for the entry"),
@@ -1241,7 +1241,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "update_step_status",
     category: "meta",
     searchHint: "update step status plan progress completed failed",
-    description: "Update the status of a step in an analysis plan. Automatically updates plan status based on step completion.",
+    description: "Update step status in plan. Auto-updates plan status on completion.",
     schema: {
       plan_id: z.string().describe("Analysis plan identifier"),
       step_id: z.string().describe("Step identifier (e.g. step_1)"),
@@ -1392,7 +1392,7 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
   // Always register discover_tools meta-tool
   server.tool(
     "discover_tools",
-    "Search the CodeSift tool catalog by keyword or category. Use when you need a specialized tool beyond the core set (search, index, outline, retrieval). Returns matching tool names with descriptions. Categories: indexing, search, outline, symbols, graph, lsp, architecture, context, diff, analysis, patterns, conversations, security, reporting, cross-repo, meta.",
+    "Search tool catalog by keyword or category. Returns matching tools with descriptions.",
     {
       query: z.string().describe("Keywords to search for (e.g. 'dead code', 'complexity', 'rename', 'secrets')"),
       category: z.string().optional().describe("Filter by category (e.g. 'analysis', 'lsp', 'architecture')"),

@@ -13,6 +13,12 @@ import {
   CHARS_PER_TOKEN,
   DEFAULT_SOURCE_CHARS,
 } from "./retrieval-constants.js";
+import {
+  formatSearchSymbols, formatFileTree, formatFileOutline,
+  formatCallTree, formatImpactAnalysis, formatAssembleContext,
+  formatKnowledgeMap, formatConversations,
+} from "../formatters.js";
+import { formatRefsCompact } from "../tools/symbol-tools.js";
 
 // Re-export for backward compatibility (tests + server import from here)
 export { estimateTokens, decomposeQuery } from "./retrieval-utils.js";
@@ -36,8 +42,8 @@ async function executeSubQuery(
         top_k: query.top_k ?? 5,
         source_chars: query.source_chars ?? DEFAULT_SOURCE_CHARS,
       });
-      const text = JSON.stringify(results);
-      return { type: query.type, data: results, tokens: estimateTokens(text) };
+      const text = formatSearchSymbols(results);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "text": {
@@ -61,22 +67,22 @@ async function executeSubQuery(
         compact: query.compact ?? true,
         min_symbols: query.min_symbols,
       });
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatFileTree(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "outline": {
       const { getFileOutline } = await import("../tools/outline-tools.js");
       const result = await getFileOutline(repo, query.file_path);
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatFileOutline(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "references": {
       const { findReferences } = await import("../tools/symbol-tools.js");
       const results = await findReferences(repo, query.symbol_name);
-      const text = JSON.stringify(results);
-      return { type: query.type, data: results, tokens: estimateTokens(text) };
+      const text = formatRefsCompact(results);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "call_chain": {
@@ -90,8 +96,8 @@ async function executeSubQuery(
           include_source: query.include_source ?? false,
         },
       );
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatCallTree(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "impact": {
@@ -105,22 +111,22 @@ async function executeSubQuery(
           include_source: query.include_source ?? false,
         },
       );
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatImpactAnalysis(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "context": {
       const { assembleContext } = await import("../tools/context-tools.js");
       const result = await assembleContext(repo, query.query, query.max_tokens);
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatAssembleContext(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "knowledge_map": {
       const { getKnowledgeMap } = await import("../tools/context-tools.js");
       const result = await getKnowledgeMap(repo, query.focus, query.depth);
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatKnowledgeMap(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "semantic":
@@ -132,8 +138,8 @@ async function executeSubQuery(
     case "conversation": {
       const { searchConversations } = await import("../tools/conversation-tools.js");
       const result = await searchConversations(query.query, query.project, query.limit);
-      const text = JSON.stringify(result);
-      return { type: query.type, data: result, tokens: estimateTokens(text) };
+      const text = formatConversations(result as never);
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
   }
 }
