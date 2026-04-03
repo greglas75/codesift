@@ -12,3 +12,5 @@ audits/
 audit/
 audit-results/
 codesift-report.html
+__pycache__/
+.claude/
