@@ -136,31 +136,47 @@ export function errorResult(message: string): ToolResponse {
 
 const QUESTION_PATTERN = /^(how|where|why|what|when|which)\b/i;
 
+// ---------------------------------------------------------------------------
+// Hint codes — compact symbols decoded via CLAUDE.md legend.
+// Each hint costs ~3-5 tokens instead of 20-50 tokens in verbose form.
+// Legend lives in CLAUDE.md so LLM sees it once per session.
+// ---------------------------------------------------------------------------
+//
+// H1(n)  = >50 matches, add group_by_file=true
+// H2(n,t)= consecutive identical tool calls, batch them
+// H3(n)  = list_repos called multiple times, result is static
+// H4     = include_source without file_pattern, add file_pattern
+// H5(p)  = duplicate get_file_tree path, cache result
+// H6(n)  = many search_symbols results without detail_level, use compact
+// H7     = get_symbol after search_symbols, use get_context_bundle instead
+// H8(n)  = 3+ get_symbol calls, use assemble_context(level='L1')
+// H9     = question-word text query, use semantic search
+// ---------------------------------------------------------------------------
+
 /**
  * Build optimization hints based on response data + call patterns.
+ * Returns compact hint codes (decoded in CLAUDE.md).
  */
 export function buildResponseHint(toolName: string, args: Record<string, unknown>, data: unknown): string | null {
   const hints: string[] = [];
 
-  // --- Existing hints ---
-
   if (toolName === "search_text" && Array.isArray(data) && data.length > HIGH_CARDINALITY_THRESHOLD) {
     if (!args["group_by_file"] && !args["auto_group"]) {
-      hints.push(`⚡ ${data.length} matches — add group_by_file=true (-70% output).`);
+      hints.push(`⚡H1(${data.length})`);
     }
   }
 
   if (consecutiveCount >= SEQUENTIAL_HINT_THRESHOLD && BATCHABLE_TOOLS.has(toolName)) {
     const batchTool = toolName === "get_symbol" ? "get_symbols" : "codebase_retrieval";
-    hints.push(`⚡ ${consecutiveCount}x ${toolName} — batch into ${batchTool}.`);
+    hints.push(`⚡H2(${consecutiveCount},${batchTool})`);
   }
 
   if (toolName === "list_repos" && listReposCallCount > 1) {
-    hints.push(`⚡ list_repos ${listReposCallCount}x — result is static, cache it.`);
+    hints.push(`⚡H3(${listReposCallCount})`);
   }
 
   if (toolName === "search_symbols" && args["include_source"] && !args["file_pattern"]) {
-    hints.push(`⚡ include_source without file_pattern — add file_pattern.`);
+    hints.push(`⚡H4`);
   }
 
   if (toolName === "get_file_tree") {
@@ -168,7 +184,7 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
     const pathPrefix = typeof args["path_prefix"] === "string" ? args["path_prefix"] : "";
     const pathKey = `${repo}\0${pathPrefix}`;
     if (fileTreePaths.has(pathKey)) {
-      hints.push(`⚡ Duplicate get_file_tree("${pathPrefix || "/"}") — cache result.`);
+      hints.push(`⚡H5(${pathPrefix || "/"})`);
     }
     fileTreePaths.add(pathKey);
   }
@@ -176,23 +192,23 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
   if (toolName === "search_symbols" && !args["detail_level"]) {
     const resultCount = Array.isArray(data) ? data.length : 0;
     if (resultCount > 5) {
-      hints.push(`⚡ ${resultCount} results — use detail_level='compact' for ~15 tok/result.`);
+      hints.push(`⚡H6(${resultCount})`);
     }
   }
 
   if (toolName === "get_symbol" && sessionSearchSymbolsCalled) {
-    hints.push(`⚡ Try get_context_bundle — symbol+imports+siblings in 1 call.`);
+    hints.push(`⚡H7`);
   }
 
   if (toolName === "get_symbol" && sessionGetSymbolCount >= 3) {
-    hints.push(`⚡ ${sessionGetSymbolCount}x get_symbol — use assemble_context(level='L1').`);
+    hints.push(`⚡H8(${sessionGetSymbolCount})`);
   }
 
   if (toolName === "search_text" && typeof args["query"] === "string" && QUESTION_PATTERN.test(args["query"])) {
-    hints.push(`⚡ Question query — try codebase_retrieval type:'semantic'.`);
+    hints.push(`⚡H9`);
   }
 
-  return hints.length > 0 ? hints.join("\n") : null;
+  return hints.length > 0 ? hints.join(" ") : null;
 }
 
 function estimateSavings(toolName: string, resultTokens: number): { tokens: number; cost: number } | null {
@@ -234,7 +250,6 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
   // Token savings estimate
   const savings = estimateSavings(toolName, Math.round(text.length / CHARS_PER_TOKEN));
   if (savings) {
-    const costStr = savings.cost >= 0.01 ? `$${savings.cost.toFixed(2)}` : `$${savings.cost.toFixed(4)}`;
     text = `⚡ ~${savings.tokens.toLocaleString()} tok saved\n\n` + text;
     addSavings(savings.tokens);
   }

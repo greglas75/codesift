@@ -45,7 +45,7 @@ describe("Fix 1: get_file_tree duplicate path detection", () => {
     // Second call — same path
     const hint = buildResponseHint("get_file_tree", { repo: "local/proj", path_prefix: "src" }, []);
     expect(hint).not.toBeNull();
-    expect(hint).toContain("Duplicate");
+    expect(hint).toContain("H5");
     expect(hint).toContain("src");
   });
 
@@ -68,7 +68,7 @@ describe("Fix 1: get_file_tree duplicate path detection", () => {
 
     const hint = buildResponseHint("get_file_tree", { repo: "local/proj" }, []);
     expect(hint).not.toBeNull();
-    expect(hint).toContain("/");
+    expect(hint).toContain("H5");
   });
 
   it("should reset path tracking on resetSessionState", () => {
@@ -95,8 +95,8 @@ describe("Fix 3: search_symbols detail_level hint", () => {
       makeSymbols(8),
     );
     expect(hint).not.toBeNull();
-    expect(hint).toContain("detail_level='compact'");
-    expect(hint).toContain("8 results");
+    expect(hint).toContain("H6");
+    expect(hint).toContain("8");
   });
 
   it("should not hint when detail_level is set", () => {
@@ -140,7 +140,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       [],
     );
     expect(hint).not.toBeNull();
-    expect(hint).toContain("semantic");
+    expect(hint).toContain("H9");
   });
 
   it("should hint when query starts with 'where'", () => {
@@ -150,7 +150,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       [],
     );
     expect(hint).not.toBeNull();
-    expect(hint).toContain("semantic");
+    expect(hint).toContain("H9");
   });
 
   it("should hint when query starts with 'why'", () => {
@@ -160,7 +160,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       [],
     );
     expect(hint).not.toBeNull();
-    expect(hint).toContain("semantic");
+    expect(hint).toContain("H9");
   });
 
   it("should hint for 'what', 'when', 'which'", () => {
@@ -172,7 +172,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
         [],
       );
       expect(hint).not.toBeNull();
-      expect(hint).toContain("semantic");
+      expect(hint).toContain("H9");
     }
   });
 
@@ -201,7 +201,7 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
       [],
     );
     expect(hint).not.toBeNull();
-    expect(hint).toContain("semantic");
+    expect(hint).toContain("H9");
   });
 
   it("should not hint when question word is mid-query", () => {
@@ -227,7 +227,7 @@ describe("Fix 5: search_symbols + get_symbol → get_context_bundle hint", () =>
     trackSequentialCalls("get_symbol");
     const hint = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-1" }, {});
     expect(hint).not.toBeNull();
-    expect(hint).toContain("get_context_bundle");
+    expect(hint).toContain("H7");
   });
 
   it("should not hint on get_symbol without prior search_symbols", () => {
@@ -243,7 +243,7 @@ describe("Fix 5: search_symbols + get_symbol → get_context_bundle hint", () =>
     trackSequentialCalls("get_symbol");
     const hint = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-1" }, {});
     expect(hint).not.toBeNull();
-    expect(hint).toContain("get_context_bundle");
+    expect(hint).toContain("H7");
   });
 });
 
@@ -268,9 +268,8 @@ describe("Fix 6: 3+ get_symbol → assemble_context hint", () => {
     trackSequentialCalls("get_symbol");
     const hint = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-3" }, {});
     expect(hint).not.toBeNull();
-    expect(hint).toContain("assemble_context");
-    expect(hint).toContain("level='L1'");
-    expect(hint).toContain("3x get_symbol");
+    expect(hint).toContain("H8");
+    expect(hint).toContain("3");
   });
 
   it("should include count on 5th call", () => {
@@ -279,7 +278,8 @@ describe("Fix 6: 3+ get_symbol → assemble_context hint", () => {
     }
     const hint = buildResponseHint("get_symbol", { repo: "local/proj", symbol_id: "sym-5" }, {});
     expect(hint).not.toBeNull();
-    expect(hint).toContain("5x get_symbol");
+    expect(hint).toContain("H8");
+    expect(hint).toContain("5");
   });
 
   it("should reset count on resetSessionState", () => {
@@ -303,7 +303,8 @@ describe("Existing hints: search_text high cardinality", () => {
     const data = Array.from({ length: 60 }, (_, i) => ({ line: i }));
     const hint = buildResponseHint("search_text", { repo: "local/proj", query: "import" }, data);
     expect(hint).not.toBeNull();
-    expect(hint).toContain("group_by_file=true");
+    expect(hint).toContain("H1");
+    expect(hint).toContain("60");
   });
 
   it("should not hint when group_by_file is already set", () => {
@@ -325,6 +326,6 @@ describe("Existing hints: search_symbols without file_pattern", () => {
       [],
     );
     expect(hint).not.toBeNull();
-    expect(hint).toContain("file_pattern");
+    expect(hint).toContain("H4");
   });
 });

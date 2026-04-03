@@ -458,7 +458,7 @@ describe("OPT-4: response hints", () => {
     const hint = buildResponseHint("search_text", { repo: "local/test" }, fakeData);
 
     expect(hint).not.toBeNull();
-    expect(hint).toContain("group_by_file");
+    expect(hint).toContain("H1");
     expect(hint).toContain("100");
   });
 
@@ -513,7 +513,7 @@ describe("OPT-4: response hints", () => {
     const hint = buildResponseHint("search_symbols", { repo: "local/test" }, fakeData);
 
     expect(hint).not.toBeNull();
-    expect(hint).toContain("detail_level='compact'");
+    expect(hint).toContain("H6");
   });
 
   it("INTEGRATION: hint appears in real search with many results", async () => {
