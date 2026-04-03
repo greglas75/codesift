@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { wrapTool } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
-import { searchSymbols, searchText } from "./tools/search-tools.js";
+import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
@@ -300,10 +300,32 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "semantic_search",
+    category: "search",
+    searchHint: "semantic meaning intent concept embedding vector natural language",
+    description: "Search code by meaning using embeddings. For intent-based queries: 'error handling', 'auth flow'. Requires indexed embeddings.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      query: z.string().describe("Natural language query describing what you're looking for"),
+      top_k: zNum().describe("Number of results (default: 10)"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      exclude_tests: z.boolean().optional().describe("Exclude test files from results"),
+      rerank: z.boolean().optional().describe("Re-rank results with cross-encoder for better precision"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof semanticSearch>[2] = {};
+      if (args.top_k != null) opts.top_k = args.top_k as number;
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.exclude_tests != null) opts.exclude_tests = args.exclude_tests as boolean;
+      if (args.rerank != null) opts.rerank = args.rerank as boolean;
+      return semanticSearch(args.repo as string, args.query as string, opts);
+    },
+  },
+  {
     name: "search_text",
     category: "search",
     searchHint: "full-text search grep regex keyword content files",
-    description: "Full-text search across all files. For conceptual queries use codebase_retrieval type:'semantic'.",
+    description: "Full-text search across all files. For conceptual queries use semantic_search.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query or regex pattern"),
@@ -698,6 +720,32 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 
   {
+    name: "find_circular_deps",
+    category: "architecture",
+    searchHint: "circular dependency cycle import loop detection",
+    description: "Detect circular dependencies in the import graph via DFS. Returns file-level cycles.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      max_cycles: zNum().describe("Maximum cycles to report (default: 50)"),
+    },
+    handler: async (args) => {
+      const { findCircularDeps } = await import("./tools/graph-tools.js");
+      const opts: Parameters<typeof findCircularDeps>[1] = {};
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.max_cycles != null) opts.max_cycles = args.max_cycles as number;
+      const result = await findCircularDeps(args.repo as string, opts);
+      if (result.cycles.length === 0) {
+        return `No circular dependencies found (scanned ${result.total_files} files, ${result.total_edges} edges)`;
+      }
+      const lines = [`${result.cycles.length} circular dependencies found (${result.total_files} files, ${result.total_edges} edges):\n`];
+      for (const c of result.cycles) {
+        lines.push(`  ${c.cycle.join(" → ")}`);
+      }
+      return lines.join("\n");
+    },
+  },
+  {
     name: "check_boundaries",
     category: "architecture",
     searchHint: "boundary rules architecture enforcement imports CI gate hexagonal onion",
@@ -883,6 +931,32 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         include_tests: args.include_tests as boolean | undefined,
       });
       return formatDeadCode(result as never);
+    },
+  },
+  {
+    name: "find_unused_imports",
+    category: "analysis",
+    searchHint: "unused imports dead cleanup lint",
+    description: "Find imported names never referenced in the file body. Complements find_dead_code.",
+    schema: {
+      repo: z.string().describe("Repository identifier"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      include_tests: z.boolean().optional().describe("Include test files in scan (default: false)"),
+    },
+    handler: async (args) => {
+      const { findUnusedImports } = await import("./tools/symbol-tools.js");
+      const opts: Parameters<typeof findUnusedImports>[1] = {};
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.include_tests != null) opts.include_tests = args.include_tests as boolean;
+      const result = await findUnusedImports(args.repo as string, opts);
+      if (result.unused.length === 0) {
+        return `No unused imports found (scanned ${result.scanned_files} files)`;
+      }
+      const lines = [`${result.unused.length} unused imports (${result.scanned_files} files scanned)${result.truncated ? " [truncated]" : ""}:\n`];
+      for (const u of result.unused) {
+        lines.push(`  ${u.file}:${u.line} — "${u.imported_name}"`);
+      }
+      return lines.join("\n");
     },
   },
   {

@@ -378,5 +378,86 @@ function classifyRole(callers: number, callees: number): SymbolRole {
   return "leaf";
 }
 
+// ---------------------------------------------------------------------------
+// Circular dependency detection via DFS on import graph
+// ---------------------------------------------------------------------------
+
+export interface CircularDep {
+  cycle: string[];   // file paths forming the cycle
+  length: number;
+}
+
+export interface CircularDepsResult {
+  cycles: CircularDep[];
+  total_files: number;
+  total_edges: number;
+}
+
+export async function findCircularDeps(
+  repo: string,
+  options?: { max_cycles?: number; file_pattern?: string },
+): Promise<CircularDepsResult> {
+  const { collectImportEdges } = await import("../utils/import-graph.js");
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found`);
+
+  const edges = await collectImportEdges(index);
+  const filteredEdges = options?.file_pattern
+    ? edges.filter((e) => e.from.includes(options.file_pattern!) || e.to.includes(options.file_pattern!))
+    : edges;
+
+  // Build directed adjacency (from → to only)
+  const adj = new Map<string, string[]>();
+  for (const edge of filteredEdges) {
+    let list = adj.get(edge.from);
+    if (!list) { list = []; adj.set(edge.from, list); }
+    list.push(edge.to);
+  }
+
+  const maxCycles = options?.max_cycles ?? 50;
+  const cycles: CircularDep[] = [];
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+  const stack: string[] = [];
+
+  function dfs(node: string): void {
+    if (cycles.length >= maxCycles) return;
+    if (inStack.has(node)) {
+      // Found a cycle — extract it
+      const cycleStart = stack.indexOf(node);
+      if (cycleStart >= 0) {
+        const cycle = [...stack.slice(cycleStart), node];
+        cycles.push({ cycle, length: cycle.length - 1 });
+      }
+      return;
+    }
+    if (visited.has(node)) return;
+
+    visited.add(node);
+    inStack.add(node);
+    stack.push(node);
+
+    for (const neighbor of adj.get(node) ?? []) {
+      dfs(neighbor);
+      if (cycles.length >= maxCycles) return;
+    }
+
+    stack.pop();
+    inStack.delete(node);
+  }
+
+  for (const node of adj.keys()) {
+    if (!visited.has(node) && cycles.length < maxCycles) {
+      dfs(node);
+    }
+  }
+
+  return {
+    cycles,
+    total_files: new Set([...filteredEdges.map((e) => e.from), ...filteredEdges.map((e) => e.to)]).size,
+    total_edges: filteredEdges.length,
+  };
+}
+
 // Export shared utilities for impact-tools and testing
 export { buildAdjacencyIndex, extractCallSites, buildCallTree, stripSource, isTestFile, classifyRole };

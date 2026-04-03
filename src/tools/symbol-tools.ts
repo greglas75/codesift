@@ -657,3 +657,113 @@ export async function findDeadCode(
     ...(candidates.length >= MAX_DEAD_CODE_RESULTS ? { truncated: true } : {}),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Unused import detection
+// ---------------------------------------------------------------------------
+
+const MAX_UNUSED_IMPORTS = 200;
+
+export interface UnusedImport {
+  file: string;
+  line: number;
+  import_text: string;
+  imported_name: string;
+}
+
+export interface UnusedImportsResult {
+  unused: UnusedImport[];
+  scanned_files: number;
+  truncated?: boolean;
+}
+
+/**
+ * Find imports whose imported names are never referenced in the file body.
+ * Supports ES module named imports: import { A, B } from '...'
+ */
+export async function findUnusedImports(
+  repo: string,
+  options?: { file_pattern?: string; include_tests?: boolean },
+): Promise<UnusedImportsResult> {
+  const index = await requireCodeIndex(repo);
+  const includeTests = options?.include_tests ?? false;
+
+  const unused: UnusedImport[] = [];
+  let scannedFiles = 0;
+
+  for (const file of index.files) {
+    if (unused.length >= MAX_UNUSED_IMPORTS) break;
+    if (!includeTests && isTestFile(file.path)) continue;
+    if (options?.file_pattern && !file.path.includes(options.file_pattern)) continue;
+
+    // Only analyze JS/TS files
+    if (!/\.(ts|tsx|js|jsx|mjs)$/.test(file.path)) continue;
+
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch {
+      continue;
+    }
+    scannedFiles++;
+
+    const lines = source.split("\n");
+
+    // Find named import lines: import { A, B, C } from '...'
+    // Also: import A from '...'  and  import * as A from '...'
+    const importRegex = /^import\s+(?:type\s+)?(?:\{([^}]+)\}|(\*\s+as\s+\w+)|(\w+)).*from\s+['"][^'"]+['"]/;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!.trim();
+      if (!line.startsWith("import ")) continue;
+      // Stop scanning imports when we hit non-import code
+      if (i > 0 && !line.startsWith("import") && !line.startsWith("//") && !line.startsWith("/*") && line.length > 0 && !lines[i]!.trim().startsWith("*") && !lines[i]!.trim().startsWith("}")) {
+        // Could be multi-line import continuation, keep going
+      }
+
+      const match = importRegex.exec(line);
+      if (!match) continue;
+
+      const names: string[] = [];
+      if (match[1]) {
+        // Named imports: { A, B as C, type D }
+        for (const part of match[1].split(",")) {
+          const trimmed = part.trim().replace(/^type\s+/, "");
+          if (!trimmed) continue;
+          // Handle "A as B" — the local name is B
+          const asMatch = /(\w+)\s+as\s+(\w+)/.exec(trimmed);
+          names.push(asMatch ? asMatch[2]! : trimmed);
+        }
+      } else if (match[2]) {
+        // Namespace import: * as A
+        const nsMatch = /\*\s+as\s+(\w+)/.exec(match[2]);
+        if (nsMatch) names.push(nsMatch[1]!);
+      } else if (match[3]) {
+        // Default import: import A
+        names.push(match[3]);
+      }
+
+      // Check each imported name against rest of file
+      const bodyAfterImports = lines.slice(i + 1).join("\n");
+      for (const name of names) {
+        if (name.length < 2) continue;
+        const nameRegex = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+        if (!nameRegex.test(bodyAfterImports)) {
+          unused.push({
+            file: file.path,
+            line: i + 1,
+            import_text: line,
+            imported_name: name,
+          });
+          if (unused.length >= MAX_UNUSED_IMPORTS) break;
+        }
+      }
+    }
+  }
+
+  return {
+    unused,
+    scanned_files: scannedFiles,
+    ...(unused.length >= MAX_UNUSED_IMPORTS ? { truncated: true } : {}),
+  };
+}

@@ -609,3 +609,29 @@ export async function searchText(
 
   return matches;
 }
+
+// ---------------------------------------------------------------------------
+// Semantic search — standalone wrapper around retrieval infrastructure
+// ---------------------------------------------------------------------------
+
+export async function semanticSearch(
+  repo: string,
+  query: string,
+  options?: {
+    top_k?: number;
+    file_pattern?: string;
+    exclude_tests?: boolean;
+    rerank?: boolean;
+  },
+): Promise<string> {
+  const { handleSemanticQuery } = await import("../retrieval/semantic-handlers.js");
+  const result = await handleSemanticQuery(repo, {
+    type: "semantic",
+    query,
+    top_k: options?.top_k,
+    file_filter: options?.file_pattern,
+    exclude_tests: options?.exclude_tests,
+    rerank: options?.rerank,
+  });
+  return typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+}
