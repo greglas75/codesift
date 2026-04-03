@@ -55,7 +55,7 @@ async function executeSubQuery(
         auto_group: true,
       });
       const text = typeof results === "string" ? results : JSON.stringify(results);
-      return { type: query.type, data: results, tokens: estimateTokens(text) };
+      return { type: query.type, data: text, tokens: estimateTokens(text) };
     }
 
     case "file_tree": {

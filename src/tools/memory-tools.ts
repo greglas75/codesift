@@ -250,7 +250,7 @@ export async function consolidateMemories(
     });
 
     for (const m of items.slice(0, 20)) {
-      const confBadge = m.confidence === "high" ? "" : m.confidence === "medium" ? " (?)" : " (?)";
+      const confBadge = m.confidence === "high" ? "" : m.confidence === "medium" ? " (?)" : " (??)";
       sections.push(`### ${m.summary}${confBadge}`);
       if (m.timestamp) {
         sections.push(`_${m.timestamp}_`);
