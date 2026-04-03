@@ -219,7 +219,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.repoList,
     description: "List indexed repos. Set compact=false for full metadata. Cached per session.",
     schema: {
-      compact: z.boolean().optional().describe("Return just repo names (default: true). Set false for full metadata including root path, index_path, file/symbol counts."),
+      compact: z.boolean().optional().describe("true=names only (default), false=full metadata"),
     },
     handler: (args) => listAllRepos({ compact: (args.compact as boolean | undefined) ?? true }),
   },
@@ -260,7 +260,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_source: z.boolean().optional().describe("Include full source code of each symbol"),
       top_k: zNum().describe("Maximum number of results to return (default 50)"),
       source_chars: zNum().describe("Truncate each symbol's source to N characters (reduces output size)"),
-      detail_level: z.enum(["compact", "standard", "full"]).optional().describe("Output detail: compact (~15 tok/result, id+name+kind+file+line), standard (default, +signature+source), full (unlimited source)"),
+      detail_level: z.enum(["compact", "standard", "full"]).optional().describe("compact (~15 tok), standard (default), full (all source)"),
       token_budget: zNum().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
       rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
@@ -311,8 +311,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       context_lines: zNum().describe("Number of context lines around each match"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
       max_results: zNum().describe("Maximum number of matching lines to return (default 200)"),
-      group_by_file: z.boolean().optional().describe("Group results by file — returns {file, count, lines[], first_match} instead of every line. 80-90% less output for high-cardinality searches."),
-      auto_group: z.boolean().optional().describe("Automatically switch to group_by_file when result count exceeds 50 matches. Recommended for exploratory searches where match count is unknown."),
+      group_by_file: z.boolean().optional().describe("Group by file: {file, count, lines[], first_match}. ~80% less output."),
+      auto_group: z.boolean().optional().describe("Auto group_by_file when >50 matches."),
     },
     handler: (args) => searchText(args.repo as string, args.query as string, {
       regex: args.regex as boolean | undefined,
@@ -752,7 +752,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Natural language query describing what context is needed"),
       token_budget: zNum().describe("Maximum tokens for the assembled context"),
-      level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("Context compression level: L0=full source (default), L1=signatures only, L2=file summaries, L3=directory overview"),
+      level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("L0=source (default), L1=signatures, L2=files, L3=dirs"),
       rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
     handler: async (args) => {
@@ -845,7 +845,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           z.array(z.object({ type: z.string() }).passthrough()),
           z.string().transform((s) => JSON.parse(s) as Array<{ type: string } & Record<string, unknown>>),
         ])
-        .describe("Array of sub-queries (symbols, text, file_tree, outline, references, call_chain, impact, context, knowledge_map). Can be passed as JSON string."),
+        .describe("Sub-queries array (symbols/text/file_tree/outline/references/call_chain/impact/context/knowledge_map). JSON string OK."),
       token_budget: zNum().describe("Maximum total tokens across all sub-query results"),
     },
     handler: async (args) => {
@@ -856,7 +856,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       );
       // Format as text sections instead of JSON envelope
       const sections = result.results.map((r) => {
-        const dataStr = typeof r.data === "string" ? r.data : JSON.stringify(r.data, null, 2);
+        const dataStr = typeof r.data === "string" ? r.data : JSON.stringify(r.data);
         return `--- ${r.type} ---\n${dataStr}`;
       });
       let output = sections.join("\n\n");
@@ -1191,7 +1191,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           depends_on: z.array(z.string()).optional(),
         })),
         z.string().transform((s) => JSON.parse(s) as Array<{ description: string; tool: string; args: Record<string, unknown>; result_key?: string; depends_on?: string[] }>),
-      ]).describe("Array of analysis steps. Each step has a description, tool name, args, and optional result_key for scratchpad storage."),
+      ]).describe("Steps array: {description, tool, args, result_key?, depends_on?}. JSON string OK."),
     },
     handler: async (args) => {
       const result = await createAnalysisPlan(

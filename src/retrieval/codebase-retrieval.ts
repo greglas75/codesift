@@ -194,13 +194,9 @@ export async function codebaseRetrieval(
       truncated = true;
       const remaining = budget - totalTokens;
       if (remaining > MIN_TRUNCATION_TOKENS) {
-        const truncatedText = JSON.stringify(result.data).slice(0, remaining * CHARS_PER_TOKEN);
-        let truncatedData: unknown;
-        try {
-          truncatedData = JSON.parse(truncatedText);
-        } catch {
-          truncatedData = { partial: true, note: "Result truncated to fit token budget" };
-        }
+        // Data is typically a formatted string after OPT-2; slice directly
+        const dataStr = typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+        const truncatedData = dataStr.slice(0, remaining * CHARS_PER_TOKEN) + "\n(truncated)";
         results.push({
           type: result.type,
           data: truncatedData,
