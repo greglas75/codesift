@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, open } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { searchBM25, type BM25Index } from "../search/bm25.js";
@@ -74,7 +74,6 @@ async function extractSource(
   // Fast path: use byte offsets to read exact range
   if (startByte != null && endByte != null && endByte > startByte) {
     try {
-      const { open } = await import("node:fs/promises");
       const fh = await open(filePath, "r");
       try {
         const length = endByte - startByte;

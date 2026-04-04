@@ -1,6 +1,6 @@
 import type Parser from "web-tree-sitter";
 import type { CodeSymbol } from "../../types.js";
-import { getNodeName, makeSymbol } from "./_shared.js";
+import { getNodeName, makeSymbol, MAX_SOURCE_LENGTH } from "./_shared.js";
 
 /** Matches top-level SCREAMING_CASE identifiers like MAX_RETRIES, API_URL */
 const SCREAMING_CASE_RE = /^[A-Z][A-Z0-9_]+$/;
@@ -119,6 +119,9 @@ function trimClassBody(node: Parser.SyntaxNode, source: string): string {
   }
 
   result += "\n}";
+  if (result.length > MAX_SOURCE_LENGTH) {
+    return result.slice(0, MAX_SOURCE_LENGTH) + "...";
+  }
   return result;
 }
 
