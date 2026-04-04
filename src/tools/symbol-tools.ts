@@ -521,7 +521,7 @@ function extractImportLines(source: string): string[] {
   const lines = source.split("\n");
   return lines.filter((line) => {
     const trimmed = line.trim();
-    return trimmed.startsWith("import ") || trimmed.startsWith("const ") && trimmed.includes("require(");
+    return trimmed.startsWith("import ") || (trimmed.startsWith("const ") && trimmed.includes("require("));
   });
 }
 

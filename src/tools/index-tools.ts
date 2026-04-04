@@ -18,6 +18,7 @@ import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
 import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "./secret-tools.js";
+import { getGraphPath } from "../storage/graph-store.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -666,7 +667,8 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   const embeddingMetaPath = getEmbeddingMetaPath(meta.index_path);
   const chunkPath = getChunkPath(meta.index_path);
   const chunkEmbeddingPath = getChunkEmbeddingPath(meta.index_path);
-  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath]) {
+  const graphStorePath = getGraphPath(meta.index_path);
+  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath, graphStorePath]) {
     try { await unlink(fp); } catch { /* File may not exist */ }
   }
 
