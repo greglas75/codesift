@@ -65,21 +65,26 @@ export async function saveEmbeddings(
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
 ): Promise<void> {
-  const tmpPath = embeddingPath + ".tmp";
+  const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
 
+  // Register error listener immediately to prevent unhandled error crash
+  let streamError: Error | null = null;
+  stream.on("error", (err) => { streamError = err; });
+
   try {
     for (const [id, vec] of embeddings) {
+      if (streamError) throw streamError;
       const line = JSON.stringify({ id, vec: Array.from(vec) }) + "\n";
       const canContinue = stream.write(line);
       if (!canContinue) {
         await new Promise<void>((resolve) => stream.once("drain", resolve));
       }
     }
+    if (streamError) throw streamError;
     await new Promise<void>((resolve, reject) => {
-      stream.end(() => resolve());
-      stream.on("error", reject);
+      stream.end(() => streamError ? reject(streamError) : resolve());
     });
     // Atomic rename
     const { rename } = await import("node:fs/promises");
