@@ -49,8 +49,8 @@ function wordBoundaryPattern(name: string): RegExp {
  * Strip internal/BM25 fields from CodeSymbol for leaner output.
  * Removes: repo, tokens, start_col, end_col. Shortens id (strips repo prefix).
  */
-function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "start_col" | "end_col"> {
-  const { repo: _repo, tokens: _tokens, start_col: _sc, end_col: _ec, id, ...rest } = sym;
+function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "start_col" | "end_col" | "start_byte" | "end_byte"> {
+  const { repo: _repo, tokens: _tokens, start_col: _sc, end_col: _ec, start_byte: _sb, end_byte: _eb, id, ...rest } = sym;
   // Strip "local/reponame:" prefix from id
   const shortId = id.includes(":") ? id.slice(id.indexOf(":") + 1) : id;
   return { ...rest, id: shortId };
@@ -58,6 +58,7 @@ function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "sta
 
 /**
  * Read a source file and extract lines for a symbol (1-based, inclusive).
+ * Uses byte offsets when available for precise reads without loading full file.
  * Returns undefined if the file cannot be read.
  */
 async function extractSource(
@@ -65,9 +66,32 @@ async function extractSource(
   file: string,
   startLine: number,
   endLine: number,
+  startByte?: number,
+  endByte?: number,
 ): Promise<string | undefined> {
+  const filePath = join(repoRoot, file);
+
+  // Fast path: use byte offsets to read exact range
+  if (startByte != null && endByte != null && endByte > startByte) {
+    try {
+      const { open } = await import("node:fs/promises");
+      const fh = await open(filePath, "r");
+      try {
+        const length = endByte - startByte;
+        const buf = Buffer.alloc(length);
+        await fh.read(buf, 0, length, startByte);
+        return buf.toString("utf-8");
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      // Fall through to line-based extraction
+    }
+  }
+
+  // Fallback: line-based extraction
   try {
-    const content = await readFile(join(repoRoot, file), "utf-8");
+    const content = await readFile(filePath, "utf-8");
     const lines = content.split("\n");
     return lines.slice(startLine - 1, endLine).join("\n");
   } catch {
@@ -77,12 +101,17 @@ async function extractSource(
 
 /**
  * Retrieve a single symbol by ID with fresh source from disk.
+ * When include_related is true (default), auto-prefetches:
+ *  - children (for classes/interfaces) — saves follow-up get_symbols call
+ *  - symbols in the same file that reference this symbol — saves find_references call
  */
 export async function getSymbol(
   repo: string,
   symbolId: string,
-): Promise<CodeSymbol | null> {
+  options?: { include_related?: boolean },
+): Promise<{ symbol: CodeSymbol; related?: CodeSymbol[] } | null> {
   const index = await requireCodeIndex(repo);
+  const includeRelated = options?.include_related ?? true;
 
   const symbol = index.symbols.find((s) => s.id === symbolId);
   if (!symbol) return null;
@@ -92,13 +121,33 @@ export async function getSymbol(
     symbol.file,
     symbol.start_line,
     symbol.end_line,
+    symbol.start_byte,
+    symbol.end_byte,
   );
 
   const result = { ...symbol };
   if (source !== undefined) {
     result.source = source;
   }
-  return stripSymbol(result) as CodeSymbol;
+
+  const stripped = stripSymbol(result) as CodeSymbol;
+
+  if (!includeRelated) {
+    return { symbol: stripped };
+  }
+
+  // Prefetch children for classes/interfaces
+  const related: CodeSymbol[] = [];
+  if (symbol.kind === "class" || symbol.kind === "interface") {
+    const children = index.symbols.filter((s) => s.parent === symbol.id);
+    for (const child of children.slice(0, 20)) {
+      related.push(stripSymbol(child) as CodeSymbol);
+    }
+  }
+
+  const out: { symbol: CodeSymbol; related?: CodeSymbol[] } = { symbol: stripped };
+  if (related.length > 0) out.related = related;
+  return out;
 }
 
 /**
@@ -454,8 +503,9 @@ export async function findAndShow(
   const topResult = results[0];
   if (!topResult) return null;
 
-  const fullSymbol = await getSymbol(repo, topResult.symbol.id);
-  if (!fullSymbol) return null;
+  const fullResult = await getSymbol(repo, topResult.symbol.id, { include_related: false });
+  if (!fullResult) return null;
+  const fullSymbol = fullResult.symbol;
 
   if (includeRefs) {
     const references = await findReferences(repo, fullSymbol.name as string);
@@ -500,8 +550,9 @@ export async function getContextBundle(
   const index = await requireCodeIndex(repo);
 
   // Get full symbol with source
-  const fullSymbol = await getSymbol(repo, topResult.symbol.id);
-  if (!fullSymbol) return null;
+  const fullResult = await getSymbol(repo, topResult.symbol.id, { include_related: false });
+  if (!fullResult) return null;
+  const fullSymbol = fullResult.symbol;
 
   // Read the file to extract imports
   let fileSource: string;

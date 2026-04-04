@@ -85,6 +85,43 @@ function getDocstring(
   return undefined;
 }
 
+/**
+ * Build a trimmed "shell" of a class — keeps field declarations and method
+ * signatures but replaces method bodies with `{ … }`.
+ * This lets agents see the class shape cheaply (~20 tokens for a 200-line class)
+ * while individual methods are still indexed with full source.
+ */
+function trimClassBody(node: Parser.SyntaxNode, source: string): string {
+  const body = node.childForFieldName("body");
+  if (!body) return source.slice(node.startIndex, node.endIndex);
+
+  // Build the class header (everything before the body `{`)
+  let result = source.slice(node.startIndex, body.startIndex + 1); // includes opening `{`
+
+  for (const child of body.namedChildren) {
+    if (
+      child.type === "method_definition" ||
+      child.type === "abstract_method_signature"
+    ) {
+      // Find the statement_block (body) of the method
+      const methodBody = child.childForFieldName("body");
+      if (methodBody) {
+        // Signature = everything before the body, then ` { … }`
+        result += "\n  " + source.slice(child.startIndex, methodBody.startIndex).trimEnd() + " { … }";
+      } else {
+        // Abstract method or no body — include as-is
+        result += "\n  " + source.slice(child.startIndex, child.endIndex);
+      }
+    } else {
+      // Fields, decorators, etc. — include as-is
+      result += "\n  " + source.slice(child.startIndex, child.endIndex);
+    }
+  }
+
+  result += "\n}";
+  return result;
+}
+
 function getSignature(
   node: Parser.SyntaxNode,
   source: string,
@@ -182,12 +219,15 @@ export function extractTypeScriptSymbols(
           parentId,
           docstring: getDocstring(node, source),
         });
-        symbols.push(sym);
 
-        // Walk class body with this class as parent
+        // Walk class body with this class as parent (before trimming so children get full source)
         for (const child of node.namedChildren) {
           walk(child, sym.id);
         }
+
+        // Replace class source with trimmed shell (signatures only, no method bodies)
+        sym.source = trimClassBody(node, source);
+        symbols.push(sym);
         return;
       }
 

@@ -44,6 +44,8 @@ export function makeSymbol(
     file: filePath,
     start_line: startLine,
     end_line: endLine,
+    start_byte: node.startIndex,
+    end_byte: node.endIndex,
     source: extractNodeSource(node, source),
     tokens: tokenizeIdentifier(name),
   };

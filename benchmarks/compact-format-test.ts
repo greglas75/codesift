@@ -21,8 +21,9 @@ async function main() {
     for (const q of queries) {
       const results = await searchSymbols(repo.id, q, { top_k: 1, include_source: false, detail_level: "compact" });
       if (!results[0]) continue;
-      const sym = await getSymbol(repo.id, results[0].symbol.id);
-      if (!sym) continue;
+      const symResult = await getSymbol(repo.id, results[0].symbol.id);
+      if (!symResult) continue;
+      const sym = symResult.symbol;
       const jsonTok = Math.ceil(JSON.stringify(sym, null, 2).length / 4);
       const compactTok = Math.ceil(formatSymbolCompact(sym).length / 4);
       totalJson += jsonTok;

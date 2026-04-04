@@ -91,8 +91,8 @@ async function main(): Promise<void> {
       const searchResult = await searchSymbols(repo.id, q, { top_k: 1, kind: "function", include_source: false, detail_level: "compact" });
       let siftOutput = "";
       if (searchResult[0]) {
-        const sym = await getSymbol(repo.id, searchResult[0].symbol.id);
-        if (sym) siftOutput = formatSymbolCompact(sym);
+        const symResult = await getSymbol(repo.id, searchResult[0].symbol.id);
+        if (symResult) siftOutput = formatSymbolCompact(symResult.symbol);
       }
       const siftMs = Math.round(performance.now() - siftStart);
       const siftTok = tokStr(siftOutput);

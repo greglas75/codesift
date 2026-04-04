@@ -199,7 +199,7 @@ export async function embedSymbols(
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
     const existing = await loadEmbeddings(embeddingPath);
-    const embeddings = await batchEmbed(symbolTexts, existing, provider.embed.bind(provider), config.embeddingBatchSize);
+    const embeddings = await batchEmbed(symbolTexts, existing, provider.embed.bind(provider), config.embeddingBatchSize, repoName);
     await saveEmbeddings(embeddingPath, embeddings);
     await saveEmbeddingMeta(metaPath, {
       model: provider.model,
@@ -281,6 +281,7 @@ async function embedChunks(
         existingChunkEmbeddings,
         provider.embed.bind(provider),
         CHUNK_EMBEDDING_BATCH_SIZE,
+        `${repoName}:chunks`,
       );
       await saveChunks(chunkPath, allChunks);
       await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);

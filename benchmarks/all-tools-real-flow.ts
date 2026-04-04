@@ -172,7 +172,7 @@ async function main(): Promise<void> {
           const t = performance.now();
           const sr = await searchSymbols(repo.id, q, { top_k: 1, kind: "function", include_source: false, detail_level: "compact" });
           let tok = 0;
-          if (sr[0]) { const s = await getSymbol(repo.id, sr[0].symbol.id); if (s) tok = tokStr(formatSymbolCompact(s)); }
+          if (sr[0]) { const r = await getSymbol(repo.id, sr[0].symbol.id); if (r) tok = tokStr(formatSymbolCompact(r.symbol)); }
           return { tok, ms: Math.round(performance.now()-t) };
         },
       );

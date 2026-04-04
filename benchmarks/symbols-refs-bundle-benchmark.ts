@@ -87,7 +87,7 @@ async function main(): Promise<void> {
       const siftStart = performance.now();
       const siftResult = await getSymbol(repo.id, symbolId);
       const siftMs = Math.round(performance.now() - siftStart);
-      const siftTok = siftResult ? tokStr(formatSymbolCompact(siftResult)) : 0;
+      const siftTok = siftResult ? tokStr(formatSymbolCompact(siftResult.symbol)) : 0;
 
       allRows.push({ tool: "get_symbol", query: q, repo: repo.label, nativeTok, siftTok, nativeMs, siftMs });
       console.log(`${q.padEnd(26)} ${String(nativeTok).padStart(8)} ${String(siftTok).padStart(9)} ${pct(siftTok, nativeTok).padStart(6)} ${String(nativeMs).padStart(7)} ${String(siftMs).padStart(7)}`);

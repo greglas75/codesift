@@ -36,8 +36,9 @@ const OPUS_COST_PER_TOKEN = 30 / 1_000_000; // $30/1M input tokens
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
 const SEQUENTIAL_HINT_THRESHOLD = 3;
 const CACHE_TTL_MS = 30_000; // 30s default for search results
-const CACHE_TTL_STATIC_MS = 300_000; // 5min for static data (list_repos)
-const CACHE_MAX_SIZE = 50;
+const CACHE_TTL_STATIC_MS = 300_000; // 5min for static data (file tree, outline)
+const CACHE_TTL_SYMBOL_MS = 120_000; // 2min for symbol reads (stable unless re-indexed)
+const CACHE_MAX_SIZE = 200;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,7 +73,10 @@ function getCacheKey(toolName: string, args: Record<string, unknown>): string {
   return `${toolName}\0${JSON.stringify(args, Object.keys(args).sort())}`;
 }
 
-const STATIC_TOOLS = new Set(["list_repos", "get_repo_outline", "get_file_tree"]);
+const STATIC_TOOLS = new Set(["list_repos", "get_repo_outline", "get_file_tree", "get_file_outline", "get_knowledge_map", "detect_communities"]);
+
+/** Tools whose data changes only when symbols change — use medium TTL */
+const SYMBOL_TOOLS = new Set(["get_symbol", "get_symbols", "get_context_bundle", "find_references", "find_dead_code", "find_circular_deps", "find_unused_imports", "analyze_complexity"]);
 
 /** Tools whose cache NEVER expires within a session (repo list doesn't change mid-session) */
 const SESSION_PERMANENT_TOOLS = new Set(["list_repos"]);
@@ -85,7 +89,9 @@ function getCached(key: string): string | null {
   // Session-permanent tools never expire (repo list doesn't change mid-session)
   if (SESSION_PERMANENT_TOOLS.has(toolName)) return entry.text;
 
-  const ttl = STATIC_TOOLS.has(toolName) ? CACHE_TTL_STATIC_MS : CACHE_TTL_MS;
+  const ttl = STATIC_TOOLS.has(toolName) ? CACHE_TTL_STATIC_MS
+    : SYMBOL_TOOLS.has(toolName) ? CACHE_TTL_SYMBOL_MS
+    : CACHE_TTL_MS;
   if (Date.now() - entry.ts > ttl) {
     responseCache.delete(key);
     return null;

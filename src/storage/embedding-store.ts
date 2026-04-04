@@ -126,14 +126,29 @@ export async function loadEmbeddingMeta(
   }
 }
 
+/** Simple hash for content-change detection (FNV-1a 32-bit). */
+function contentHash(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** Track content hashes so we re-embed when symbol content changes. */
+const embeddingContentHashes = new Map<string, Map<string, number>>();
+
 /**
  * Batch-embed symbols using the given provider, appending to existing embeddings.
- * Only embeds symbols that don't already have an embedding.
+ * Skips symbols whose ID exists AND content hash hasn't changed.
+ * Re-embeds symbols whose content changed even if ID is the same.
  *
  * @param symbolTexts - Map of symbolId → text to embed
  * @param existing - Existing embeddings to skip
  * @param embedFn - The provider's embed function
  * @param batchSize - How many texts per API call
+ * @param cacheKey - Optional key to track content hashes across calls
  * @returns Map of symbolId → Float32Array (existing + new)
  */
 export async function batchEmbed(
@@ -141,15 +156,19 @@ export async function batchEmbed(
   existing: Map<string, Float32Array>,
   embedFn: (texts: string[]) => Promise<number[][]>,
   batchSize: number,
+  cacheKey?: string,
 ): Promise<Map<string, Float32Array>> {
   const result = new Map(existing);
+  const hashes = cacheKey ? (embeddingContentHashes.get(cacheKey) ?? new Map<string, number>()) : new Map<string, number>();
 
-  // Find symbols that need embedding
+  // Find symbols that need embedding (new or content changed)
   const toEmbed: Array<{ id: string; text: string }> = [];
   for (const [id, text] of symbolTexts) {
-    if (!existing.has(id)) {
+    const hash = contentHash(text);
+    if (!existing.has(id) || hashes.get(id) !== hash) {
       toEmbed.push({ id, text });
     }
+    hashes.set(id, hash);
   }
 
   // Process in batches (only symbols that need embedding)
@@ -172,6 +191,11 @@ export async function batchEmbed(
   const stale = [...result.keys()].filter((id) => !symbolTexts.has(id));
   for (const id of stale) {
     result.delete(id);
+    hashes.delete(id);
+  }
+
+  if (cacheKey) {
+    embeddingContentHashes.set(cacheKey, hashes);
   }
 
   return result;

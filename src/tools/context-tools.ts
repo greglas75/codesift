@@ -2,7 +2,10 @@ import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { collectImportEdges } from "../utils/import-graph.js";
+import { getGraphPath, loadGraph, saveGraph, computeIndexHash } from "../storage/graph-store.js";
+import { getRepo } from "../storage/registry.js";
 import type { CodeSymbol, CodeIndex } from "../types.js";
+import type { PersistentGraph } from "../storage/graph-store.js";
 
 export type ContextLevel = "L0" | "L1" | "L2" | "L3";
 
@@ -341,11 +344,59 @@ export async function getKnowledgeMap(
 
 /**
  * Collect import edges between modules using shared import graph utility.
+ * Uses persistent graph cache when available to avoid recomputing edges.
  */
 async function collectEdges(
   index: CodeIndex,
   moduleMap: Map<string, KnowledgeMapModule>,
 ): Promise<KnowledgeMapEdge[]> {
+  // Try loading cached graph
+  const config = loadConfig();
+  const meta = await getRepo(config.registryPath, index.repo);
+  if (meta) {
+    const graphPath = getGraphPath(meta.index_path);
+    const indexHash = computeIndexHash(index.files);
+    const cached = await loadGraph(graphPath, indexHash);
+    if (cached) {
+      return cached.edges
+        .filter((e) => e.kind === "imports" && moduleMap.has(e.from) && moduleMap.has(e.to))
+        .map((e) => ({ from: e.from, to: e.to }));
+    }
+
+    // Compute and cache
+    const importEdges = await collectImportEdges(index);
+    const edges = importEdges
+      .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
+      .map((e) => ({ from: e.from, to: e.to }));
+
+    // Build degree maps
+    const inDeg = new Map<string, number>();
+    const outDeg = new Map<string, number>();
+    for (const e of edges) {
+      outDeg.set(e.from, (outDeg.get(e.from) ?? 0) + 1);
+      inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1);
+    }
+
+    const graph: PersistentGraph = {
+      index_hash: indexHash,
+      computed_at: Date.now(),
+      edges: importEdges.map((e) => ({ from: e.from, to: e.to, kind: "imports" as const })),
+      modules: index.files.map((f) => ({
+        path: f.path,
+        symbol_count: f.symbol_count,
+        in_degree: inDeg.get(f.path) ?? 0,
+        out_degree: outDeg.get(f.path) ?? 0,
+      })),
+      circular_deps: [],
+    };
+
+    // Fire and forget — don't block the response
+    saveGraph(graphPath, graph).catch(() => {});
+
+    return edges;
+  }
+
+  // Fallback: no meta available
   const importEdges = await collectImportEdges(index);
   return importEdges
     .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))

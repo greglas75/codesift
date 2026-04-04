@@ -28,6 +28,8 @@ export interface FileLocation {
   end_line: number;     // 1-based
   start_col?: number;
   end_col?: number;
+  start_byte?: number;  // byte offset in file — enables precise disk reads
+  end_byte?: number;    // byte offset in file
 }
 
 export interface CodeSymbol extends FileLocation {

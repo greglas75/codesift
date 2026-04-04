@@ -479,13 +479,13 @@ describe("symbol_tools", () => {
       const result = await getSymbol(repo, targetSym!.id);
 
       expect(result).not.toBeNull();
-      expect(result!.name).toBe("processPayment");
+      expect(result!.symbol.name).toBe("processPayment");
       // id is stripped of repo prefix (e.g. "local/test-project:file:name:line" → "file:name:line")
       const expectedId = targetSym!.id.includes(":") ? targetSym!.id.slice(targetSym!.id.indexOf(":") + 1) : targetSym!.id;
-      expect(result!.id).toBe(expectedId);
-      expect(result!.kind).toBe("function");
-      expect(result!.file).toBe("src/payment.ts");
-      expect(result!.source).toContain("function processPayment");
+      expect(result!.symbol.id).toBe(expectedId);
+      expect(result!.symbol.kind).toBe("function");
+      expect(result!.symbol.file).toBe("src/payment.ts");
+      expect(result!.symbol.source).toContain("function processPayment");
     });
 
     it("returns null for non-existent symbol ID", async () => {

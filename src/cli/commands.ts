@@ -164,7 +164,7 @@ async function handleSymbol(args: string[], flags: Flags): Promise<void> {
   if (result === null) {
     die(`Symbol not found: ${id}`);
   }
-  output(result, flags);
+  output(result.symbol, flags);
 }
 
 async function handleSymbolsBatch(args: string[], flags: Flags): Promise<void> {

@@ -421,14 +421,22 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "symbols",
     searchHint: "get retrieve single symbol source code by ID",
     outputSchema: OutputSchemas.symbol,
-    description: "Get symbol by ID with source. For batch: get_symbols. For context: get_context_bundle.",
+    description: "Get symbol by ID with source. Auto-prefetches children for classes. For batch: get_symbols. For context: get_context_bundle.",
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_id: z.string().describe("Unique symbol identifier"),
+      include_related: z.boolean().optional().describe("Include children/related symbols (default: true)"),
     },
     handler: async (args) => {
-      const sym = await getSymbol(args.repo as string, args.symbol_id as string);
-      return sym ? formatSymbolCompact(sym) : null;
+      const opts: { include_related?: boolean } = {};
+      if (args.include_related != null) opts.include_related = args.include_related as boolean;
+      const result = await getSymbol(args.repo as string, args.symbol_id as string, opts);
+      if (!result) return null;
+      let text = formatSymbolCompact(result.symbol);
+      if (result.related && result.related.length > 0) {
+        text += "\n\n--- children ---\n" + result.related.map((s) => `${s.kind} ${s.name}${s.signature ? s.signature : ""} [${s.file}:${s.start_line}]`).join("\n");
+      }
+      return text;
     },
   },
   {
@@ -1476,13 +1484,16 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
     })(),
   );
 
-  // In deferred mode, register a generic handler for deferred tools
+  // In deferred mode, register non-core tools with minimal schema to reduce token overhead.
+  // LLM discovers these via discover_tools and can still call them — full schema is present server-side.
   if (deferNonCore) {
     for (const tool of TOOL_DEFINITIONS) {
       if (!CORE_TOOL_NAMES.has(tool.name)) {
+        // Minimal registration: short description, accept any args (validation in handler)
         server.tool(
           tool.name,
-          tool.description,
+          `[deferred] ${tool.description.split(".")[0]}.`,
+          // Register with full schema so calls work — MCP protocol requires it
           tool.schema,
           async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
         );
