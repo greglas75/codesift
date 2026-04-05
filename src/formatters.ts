@@ -5,6 +5,40 @@
 import type { CodeSymbol, SymbolKind } from "./types.js";
 import type { ReviewDiffResult, ReviewFinding } from "./tools/review-diff-tools.js";
 
+// ── Table formatter ──────────────────────────────
+
+export function formatTable(
+  headers: string[],
+  rows: Array<string[]>,
+  options?: { maxColWidth?: number }
+): string {
+  const maxCol = options?.maxColWidth ?? 40;
+  const colCount = headers.length;
+
+  // Compute column widths
+  const widths = headers.map((h, i) => {
+    const cellWidths = rows.map((r) => {
+      const cell = r[i] ?? "";
+      return cell.length > maxCol ? maxCol : cell.length;
+    });
+    return Math.min(maxCol, Math.max(h.length, ...cellWidths, 1));
+  });
+
+  const pad = (s: string, w: number) => {
+    if (s.length > w) return s.slice(0, w - 3) + "...";
+    return s.padEnd(w);
+  };
+
+  const formatRow = (cells: string[]) =>
+    headers.map((_, i) => pad(cells[i] ?? "", widths[i])).join("  ");
+
+  const headerLine = formatRow(headers);
+  const separator = widths.map((w) => "-".repeat(w)).join("  ");
+  const dataLines = rows.map((r) => formatRow(r.slice(0, colCount)));
+
+  return [headerLine, separator, ...dataLines].join("\n");
+}
+
 // ── Search symbols ────────────────────────────────
 
 interface SearchResult {
