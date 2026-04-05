@@ -14,7 +14,7 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-registerTools(server);
+registerTools(server, { deferNonCore: true });
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

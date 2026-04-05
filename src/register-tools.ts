@@ -1,5 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+
+/** Boolean that also accepts "true"/"false" strings (LLMs often send strings instead of booleans) */
+const zBool = () => z.union([z.boolean(), z.string().transform((s) => s === "true")]).optional();
 import { wrapTool } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
@@ -158,18 +161,20 @@ export type ToolCategory =
   | "cross-repo"
   | "meta";
 
-/** Tools always registered — high-frequency, essential for basic workflows */
+/** Tools always registered with full schema — top 10 by usage (91% of calls) + essentials */
 const CORE_TOOL_NAMES = new Set([
-  "index_folder",
-  "index_repo",
-  "list_repos",
-  "search_symbols",
-  "search_text",
-  "get_file_tree",
-  "get_file_outline",
-  "codebase_retrieval",
-  "suggest_queries",
-  "discover_tools",
+  "search_text",           // #1: 1536 calls, 36%
+  "codebase_retrieval",    // #2: 510 calls, 12%
+  "get_file_outline",      // #3: 342 calls, 8%
+  "search_symbols",        // #4: 321 calls, 8%
+  "list_repos",            // #5: 223 calls, 5%
+  "get_file_tree",         // #6: 218 calls, 5%
+  "index_file",            // #7: 163 calls, 4% — lightweight schema
+  "get_symbol",            // #8: 135 calls, 3%
+  "index_conversations",   // #9: 125 calls, 3% — lightweight schema
+  "search_patterns",       // #10: 122 calls, 3%
+  "index_folder",          // essential: repo onboarding
+  "discover_tools",        // meta: discovers deferred tools
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -190,7 +195,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Index a local folder, extracting symbols and building the search index",
     schema: {
       path: z.string().describe("Absolute path to the folder to index"),
-      incremental: z.boolean().optional().describe("Only re-index changed files"),
+      incremental: zBool().describe("Only re-index changed files"),
       include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
     },
     handler: (args) => indexFolder(args.path as string, {
@@ -220,7 +225,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.repoList,
     description: "List indexed repos. Set compact=false for full metadata. Cached per session.",
     schema: {
-      compact: z.boolean().optional().describe("true=names only (default), false=full metadata"),
+      compact: zBool().describe("true=names only (default), false=full metadata"),
     },
     handler: (args) => listAllRepos({ compact: (args.compact as boolean | undefined) ?? true }),
   },
@@ -258,12 +263,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Search query string"),
       kind: z.string().optional().describe("Filter by symbol kind (function, class, etc.)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
-      include_source: z.boolean().optional().describe("Include full source code of each symbol"),
+      include_source: zBool().describe("Include full source code of each symbol"),
       top_k: zNum().describe("Maximum number of results to return (default 50)"),
       source_chars: zNum().describe("Truncate each symbol's source to N characters (reduces output size)"),
       detail_level: z.enum(["compact", "standard", "full"]).optional().describe("compact (~15 tok), standard (default), full (all source)"),
       token_budget: zNum().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
-      rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
+      rerank: zBool().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
     handler: async (args) => {
       const results = await searchSymbols(args.repo as string, args.query as string, {
@@ -310,8 +315,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Natural language query describing what you're looking for"),
       top_k: zNum().describe("Number of results (default: 10)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      exclude_tests: z.boolean().optional().describe("Exclude test files from results"),
-      rerank: z.boolean().optional().describe("Re-rank results with cross-encoder for better precision"),
+      exclude_tests: zBool().describe("Exclude test files from results"),
+      rerank: zBool().describe("Re-rank results with cross-encoder for better precision"),
     },
     handler: async (args) => {
       const opts: Parameters<typeof semanticSearch>[2] = {};
@@ -330,12 +335,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Search query or regex pattern"),
-      regex: z.boolean().optional().describe("Treat query as a regex pattern"),
+      regex: zBool().describe("Treat query as a regex pattern"),
       context_lines: zNum().describe("Number of context lines around each match"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
       max_results: zNum().describe("Maximum number of matching lines to return (default 200)"),
-      group_by_file: z.boolean().optional().describe("Group by file: {file, count, lines[], first_match}. ~80% less output."),
-      auto_group: z.boolean().optional().describe("Auto group_by_file when >50 matches."),
+      group_by_file: zBool().describe("Group by file: {file, count, lines[], first_match}. ~80% less output."),
+      auto_group: zBool().describe("Auto group_by_file when >50 matches."),
     },
     handler: (args) => searchText(args.repo as string, args.query as string, {
       regex: args.regex as boolean | undefined,
@@ -359,7 +364,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
       name_pattern: z.string().optional().describe("Glob pattern to filter file names"),
       depth: zNum().describe("Maximum directory depth to traverse"),
-      compact: z.boolean().optional().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
+      compact: zBool().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
       min_symbols: zNum().describe("Only include files with at least this many symbols"),
     },
     handler: async (args) => {
@@ -426,7 +431,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       symbol_id: z.string().describe("Unique symbol identifier"),
-      include_related: z.boolean().optional().describe("Include children/related symbols (default: true)"),
+      include_related: zBool().describe("Include children/related symbols (default: true)"),
     },
     handler: async (args) => {
       const opts: { include_related?: boolean } = {};
@@ -465,7 +470,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       query: z.string().describe("Symbol name or query to search for"),
-      include_refs: z.boolean().optional().describe("Include locations that reference this symbol"),
+      include_refs: zBool().describe("Include locations that reference this symbol"),
     },
     handler: async (args) => {
       const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
@@ -528,8 +533,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       symbol_name: z.string().describe("Name of the symbol to trace"),
       direction: z.enum(["callers", "callees"]).describe("Trace direction"),
       depth: zNum().describe("Maximum depth to traverse the call graph (default: 1)"),
-      include_source: z.boolean().optional().describe("Include full source code of each symbol (default: false)"),
-      include_tests: z.boolean().optional().describe("Include test files in trace results (default: false)"),
+      include_source: zBool().describe("Include full source code of each symbol (default: false)"),
+      include_tests: zBool().describe("Include test files in trace results (default: false)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (flowchart diagram)"),
     },
     handler: async (args) => {
@@ -553,7 +558,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       since: z.string().describe("Git ref to compare from (e.g. HEAD~3, commit SHA, branch)"),
       depth: zNum().describe("Depth of dependency traversal"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
-      include_source: z.boolean().optional().describe("Include full source code of affected symbols (default: false)"),
+      include_source: zBool().describe("Include full source code of affected symbols (default: false)"),
     },
     handler: async (args) => {
       const result = await impactAnalysis(args.repo as string, args.since as string, {
@@ -785,7 +790,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      include_tests: zBool().describe("Include test files (default: false)"),
       top_n: zNum().describe("Maximum number of symbols to return (default: 100)"),
     },
     handler: async (args) => {
@@ -810,7 +815,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       query: z.string().describe("Natural language query describing what context is needed"),
       token_budget: zNum().describe("Maximum tokens for the assembled context"),
       level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("L0=source (default), L1=signatures, L2=files, L3=dirs"),
-      rerank: z.boolean().optional().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
+      rerank: zBool().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
     },
     handler: async (args) => {
       const result = await assembleContext(
@@ -865,7 +870,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
-      include_diff: z.boolean().optional().describe("Include unified diff per changed file (truncated to 500 chars)"),
+      include_diff: zBool().describe("Include unified diff per changed file (truncated to 500 chars)"),
     },
     handler: async (args) => {
       const opts: { include_diff?: boolean } = {};
@@ -932,7 +937,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      include_tests: z.boolean().optional().describe("Include test files in scan (default: false)"),
+      include_tests: zBool().describe("Include test files in scan (default: false)"),
     },
     handler: async (args) => {
       const result = await findDeadCode(args.repo as string, {
@@ -950,7 +955,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      include_tests: z.boolean().optional().describe("Include test files in scan (default: false)"),
+      include_tests: zBool().describe("Include test files in scan (default: false)"),
     },
     handler: async (args) => {
       const { findUnusedImports } = await import("./tools/symbol-tools.js");
@@ -979,7 +984,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       top_n: zNum().describe("Return top N most complex functions (default: 30)"),
       min_complexity: zNum().describe("Minimum cyclomatic complexity to include (default: 1)"),
-      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      include_tests: zBool().describe("Include test files (default: false)"),
     },
     handler: async (args) => {
       const result = await analyzeComplexity(args.repo as string, {
@@ -1002,7 +1007,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       min_similarity: zNum().describe("Minimum similarity threshold 0-1 (default: 0.7)"),
       min_lines: zNum().describe("Minimum normalized lines to consider (default: 10)"),
-      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      include_tests: zBool().describe("Include test files (default: false)"),
     },
     handler: async (args) => {
       const result = await findClones(args.repo as string, {
@@ -1025,7 +1030,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       min_nodes: zNum().optional().describe("Minimum AST nodes in a subtree to include (default: 5)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       kind: z.string().optional().describe("Filter by symbol kind, comma-separated (default: function,method)"),
-      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      include_tests: zBool().describe("Include test files (default: false)"),
       token_budget: zNum().optional().describe("Max tokens for response"),
     },
     handler: async (args) => frequencyAnalysis(
@@ -1072,7 +1077,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo_pattern: z.string().optional().describe("Filter repos by name pattern (e.g. 'local/tgm')"),
       kind: z.string().optional().describe("Filter by symbol kind"),
       top_k: zNum().describe("Max results per repo (default: 10)"),
-      include_source: z.boolean().optional().describe("Include source code"),
+      include_source: zBool().describe("Include source code"),
     },
     handler: (args) => crossRepoSearchSymbols(args.query as string, {
       repo_pattern: args.repo_pattern as string | undefined,
@@ -1107,7 +1112,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       pattern: z.string().describe("Built-in pattern name or custom regex"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      include_tests: z.boolean().optional().describe("Include test files (default: false)"),
+      include_tests: zBool().describe("Include test files (default: false)"),
       max_results: zNum().describe("Max results (default: 50)"),
     },
     handler: async (args) => {
@@ -1148,7 +1153,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Index Claude Code conversation history for search. Scans JSONL files in ~/.claude/projects/ for the given project path.",
     schema: {
       project_path: z.string().optional().describe("Path to the Claude project conversations directory. Auto-detects from cwd if omitted."),
-      quiet: z.boolean().optional().describe("Suppress output (used by session-end hook)"),
+      quiet: zBool().describe("Suppress output (used by session-end hook)"),
     },
     handler: async (args) => indexConversations(args.project_path as string | undefined),
   },
@@ -1209,7 +1214,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().describe("Repository identifier"),
       file_pattern: z.string().optional().describe("Glob pattern to filter scanned files"),
       min_confidence: z.enum(["high", "medium", "low"]).optional().describe("Minimum confidence level (default: medium)"),
-      exclude_tests: z.boolean().optional().describe("Exclude test file findings (default: true)"),
+      exclude_tests: zBool().describe("Exclude test file findings (default: true)"),
       severity: z.enum(["critical", "high", "medium", "low"]).optional().describe("Minimum severity level"),
     },
     handler: async (args) => {
@@ -1471,12 +1476,24 @@ export function discoverTools(query: string, category?: string): {
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 15)
-    .map((s) => ({
-      name: s.tool.name,
-      category: s.tool.category ?? "uncategorized",
-      description: s.tool.description.slice(0, 200),
-      is_core: CORE_TOOL_NAMES.has(s.tool.name),
-    }));
+    .map((s) => {
+      // Look up full definition to extract param info for deferred tools
+      const fullDef = TOOL_DEFINITIONS.find((t) => t.name === s.tool.name);
+      const params = fullDef
+        ? Object.entries(fullDef.schema).map(([key, val]) => {
+            const zodVal = val as z.ZodTypeAny;
+            const isOptional = zodVal.isOptional?.() ?? false;
+            return `${key}${isOptional ? "?" : ""}: ${zodVal.description ?? "string"}`;
+          })
+        : [];
+      return {
+        name: s.tool.name,
+        category: s.tool.category ?? "uncategorized",
+        description: s.tool.description.slice(0, 200),
+        params: params.length > 0 ? params : undefined,
+        is_core: CORE_TOOL_NAMES.has(s.tool.name),
+      };
+    });
 
   return {
     query,
@@ -1521,17 +1538,23 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
     })(),
   );
 
-  // In deferred mode, register non-core tools with minimal schema to reduce token overhead.
-  // LLM discovers these via discover_tools and can still call them — full schema is present server-side.
+  // In deferred mode, register non-core tools with MINIMAL schema to reduce token overhead.
+  // Full schema lives server-side — handler validates args internally.
+  // LLM discovers these via discover_tools, which returns full descriptions + param lists.
   if (deferNonCore) {
     for (const tool of TOOL_DEFINITIONS) {
       if (!CORE_TOOL_NAMES.has(tool.name)) {
-        // Minimal registration: short description, accept any args (validation in handler)
+        // Minimal schema: only repo param (most tools need it), rest passed through
+        const minimalSchema: Record<string, z.ZodTypeAny> = {};
+        if ("repo" in tool.schema) {
+          minimalSchema["repo"] = z.string().describe("Repository identifier");
+        }
+        // Accept any additional args via passthrough
+        const desc = tool.description.split(".")[0] + ". Use discover_tools for full params.";
         server.tool(
           tool.name,
-          `[deferred] ${tool.description.split(".")[0]}.`,
-          // Register with full schema so calls work — MCP protocol requires it
-          tool.schema,
+          desc,
+          minimalSchema,
           async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
         );
       }
