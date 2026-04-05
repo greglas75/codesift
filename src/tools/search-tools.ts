@@ -70,6 +70,7 @@ export interface SearchTextOptions {
   group_by_file?: boolean | undefined;
   auto_group?: boolean | undefined;
   compact?: boolean | undefined;
+  ranked?: boolean | undefined;
 }
 
 // ── Private helpers ─────────────────────────────────────

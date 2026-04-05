@@ -92,12 +92,21 @@ export interface Reference {
   context: string;        // surrounding line text
 }
 
+export interface ContainingSymbol {
+  name: string;
+  kind: SymbolKind;
+  start_line: number;
+  end_line: number;
+  in_degree: number;
+}
+
 export interface TextMatch {
   file: string;
   line: number;
   content: string;
   context_before?: string[];
   context_after?: string[];
+  containing_symbol?: ContainingSymbol;
 }
 
 export interface TextMatchGroup {

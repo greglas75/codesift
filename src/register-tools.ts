@@ -353,6 +353,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_results: zNum().describe("Maximum number of matching lines to return (default 200)"),
       group_by_file: zBool().describe("Group by file: {file, count, lines[], first_match}. ~80% less output."),
       auto_group: zBool().describe("Auto group_by_file when >50 matches."),
+      ranked: z.boolean().optional().describe("Classify hits by containing symbol and rank by centrality"),
     },
     handler: (args) => searchText(args.repo as string, args.query as string, {
       regex: args.regex as boolean | undefined,
@@ -361,6 +362,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_results: args.max_results as number | undefined,
       group_by_file: args.group_by_file as boolean | undefined,
       auto_group: args.auto_group as boolean | undefined,
+      ranked: args.ranked as boolean | undefined,
     }),
   },
 
