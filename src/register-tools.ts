@@ -3,7 +3,7 @@ import { z } from "zod";
 
 /** Boolean that also accepts "true"/"false" strings (LLMs often send strings instead of booleans) */
 const zBool = () => z.union([z.boolean(), z.string().transform((s) => s === "true")]).optional();
-import { wrapTool } from "./server-helpers.js";
+import { wrapTool, registerShortener } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
 import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
@@ -30,6 +30,7 @@ import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
+import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff } from "./formatters.js";
@@ -1630,4 +1631,9 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
       }
     }
   }
+
+  // Register progressive shorteners for analysis tools with large outputs
+  registerShortener("analyze_complexity", { compact: formatComplexityCompact, counts: formatComplexityCounts });
+  registerShortener("find_clones", { compact: formatClonesCompact, counts: formatClonesCounts });
+  registerShortener("analyze_hotspots", { compact: formatHotspotsCompact, counts: formatHotspotsCounts });
 }
