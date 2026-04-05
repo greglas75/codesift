@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { UsageEntry } from "./usage-tracker.js";
 import { getCumulativeSavings, getUsagePath } from "./usage-tracker.js";
+import { formatTable } from "../formatters.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -245,15 +246,14 @@ export function formatUsageReport(stats: UsageStats): string {
 
   // Tool breakdown
   lines.push("--- Tool Breakdown ---");
-  const maxToolLen = Math.max(...stats.tools.map((t) => t.tool.length), 4);
-  lines.push(
-    `${"Tool".padEnd(maxToolLen)}  ${"Calls".padStart(6)}  ${"Tokens".padStart(8)}  ${"Avg ms".padStart(7)}  ${"Avg tok".padStart(7)}`,
-  );
-  for (const t of stats.tools) {
-    lines.push(
-      `${t.tool.padEnd(maxToolLen)}  ${String(t.total_calls).padStart(6)}  ${String(t.total_result_tokens).padStart(8)}  ${String(t.avg_elapsed_ms).padStart(7)}  ${String(t.avg_result_tokens).padStart(7)}`,
-    );
-  }
+  const toolRows = stats.tools.map((t) => [
+    t.tool,
+    String(t.total_calls),
+    String(t.total_result_tokens),
+    String(t.avg_elapsed_ms),
+    String(t.avg_result_tokens),
+  ]);
+  lines.push(formatTable(["Tool", "Calls", "Tokens", "Avg ms", "Avg tok"], toolRows));
   lines.push("");
 
   // codebase_retrieval query type breakdown
@@ -261,15 +261,16 @@ export function formatUsageReport(stats: UsageStats): string {
     const crTool = stats.tools.find((t) => t.tool === "codebase_retrieval");
     const totalQueries = stats.query_types.reduce((sum, qt) => sum + qt.query_count, 0);
     lines.push("--- codebase_retrieval Query Types ---");
-    lines.push(
-      `${"Type".padEnd(14)}  ${"Queries".padStart(8)}  ${"%".padStart(5)}  ${"In calls".padStart(9)}`,
-    );
-    for (const qt of stats.query_types) {
+    const qtRows = stats.query_types.map((qt) => {
       const pct = totalQueries > 0 ? Math.round((qt.query_count / totalQueries) * 100) : 0;
-      lines.push(
-        `${qt.type.padEnd(14)}  ${String(qt.query_count).padStart(8)}  ${(pct + "%").padStart(5)}  ${(qt.call_count + "/" + (crTool?.total_calls ?? "?")).padStart(9)}`,
-      );
-    }
+      return [
+        qt.type,
+        String(qt.query_count),
+        `${pct}%`,
+        `${qt.call_count}/${crTool?.total_calls ?? "?"}`,
+      ];
+    });
+    lines.push(formatTable(["Type", "Queries", "%", "In calls"], qtRows));
     lines.push("");
   }
 

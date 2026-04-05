@@ -149,11 +149,16 @@ interface ComplexityEntry { name: string; kind: string; file: string; start_line
 
 export function formatComplexity(data: { functions: ComplexityEntry[]; summary: Record<string, number> }): string {
   if (data.functions.length === 0) return "(no functions found)";
-  const lines = data.functions.map((f) =>
-    `CC=${String(f.cyclomatic_complexity).padStart(2)} nest=${f.max_nesting_depth} ${String(f.lines).padStart(4)}L ${f.file}:${f.start_line} ${f.name}`
-  );
+  const rows = data.functions.map((f) => [
+    String(f.cyclomatic_complexity),
+    String(f.max_nesting_depth),
+    String(f.lines),
+    `${f.file}:${f.start_line}`,
+    f.name,
+  ]);
   const s = data.summary;
-  return `${lines.join("\n")}\n\navg_complexity=${s.avg_complexity} max=${s.max_complexity} total=${s.total_functions}`;
+  const table = formatTable(["CC", "NEST", "LINES", "FILE:LINE", "NAME"], rows);
+  return `${table}\n\navg_complexity=${s.avg_complexity} max=${s.max_complexity} total=${s.total_functions}`;
 }
 
 // ── Find clones ───────────────────────────────────
@@ -162,10 +167,14 @@ interface ClonePair { symbol_a: { name: string; file: string; start_line: number
 
 export function formatClones(data: { clones: ClonePair[]; scanned_symbols: number; threshold: number }): string {
   if (data.clones.length === 0) return `(no clones found, threshold=${data.threshold}, scanned ${data.scanned_symbols} symbols)`;
-  const lines = data.clones.map((c) =>
-    `${Math.round(c.similarity * 100)}% (${c.shared_lines}L) ${c.symbol_a.file}:${c.symbol_a.start_line} ${c.symbol_a.name} ↔ ${c.symbol_b.file}:${c.symbol_b.start_line} ${c.symbol_b.name}`
-  );
-  return `scanned ${data.scanned_symbols} symbols, threshold=${data.threshold}\n${lines.join("\n")}`;
+  const rows = data.clones.map((c) => [
+    `${Math.round(c.similarity * 100)}%`,
+    String(c.shared_lines),
+    `${c.symbol_a.file}:${c.symbol_a.start_line} ${c.symbol_a.name}`,
+    `${c.symbol_b.file}:${c.symbol_b.start_line} ${c.symbol_b.name}`,
+  ]);
+  const table = formatTable(["SIM%", "SHARED", "SYMBOL_A", "SYMBOL_B"], rows);
+  return `scanned ${data.scanned_symbols} symbols, threshold=${data.threshold}\n${table}`;
 }
 
 // ── Analyze hotspots ──────────────────────────────
@@ -174,10 +183,14 @@ interface HotspotEntry { file: string; commits: number; lines_changed: number; s
 
 export function formatHotspots(data: { hotspots: HotspotEntry[]; period: string }): string {
   if (data.hotspots.length === 0) return `(no hotspots found, period: ${data.period})`;
-  const lines = data.hotspots.map((h) =>
-    `score=${String(h.hotspot_score).padStart(6)} commits=${String(h.commits).padStart(3)} changed=${String(h.lines_changed).padStart(5)} ${h.file}`
-  );
-  return `period: ${data.period}\n${lines.join("\n")}`;
+  const rows = data.hotspots.map((h) => [
+    String(h.hotspot_score),
+    String(h.commits),
+    String(h.lines_changed),
+    h.file,
+  ]);
+  const table = formatTable(["SCORE", "COMMITS", "CHANGED", "FILE"], rows);
+  return `period: ${data.period}\n${table}`;
 }
 
 // ── Repo outline ──────────────────────────────────
