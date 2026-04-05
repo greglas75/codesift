@@ -583,6 +583,21 @@ export async function searchText(
     }
   }
 
+  // Ranked mode: classify hits with symbol context, deduplicate, and sort by centrality.
+  // Takes precedence over auto_group/compact — returns TextMatch[] with containing_symbol.
+  if (options?.ranked && matches.length > 0) {
+    try {
+      const { classifyHitsWithSymbols } = await import("./search-ranker.js");
+      const bm25Idx = await getBM25Index(repo);
+      if (bm25Idx) {
+        matches = await classifyHitsWithSymbols(matches, index, { centrality: bm25Idx.centrality });
+      }
+    } catch {
+      // Graceful fallback — return unranked matches if pipeline fails
+    }
+    return matches;
+  }
+
   // OPT-3: Compact format — grep-like `file:line: content` output, ~50% less tokens than JSON
   // Auto-enable when auto_group is set (caller is optimization-aware) and results are small
   const useCompact = options?.compact
