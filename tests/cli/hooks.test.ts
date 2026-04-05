@@ -5,7 +5,16 @@ import { tmpdir } from "node:os";
 
 // Static import — handlePrecheckRead reads env vars at call time, not module load time,
 // so module caching in singleFork mode is not a problem.
-import { handlePrecheckRead } from "../../src/cli/hooks.js";
+import { handlePrecheckRead, handlePostindexFile } from "../../src/cli/hooks.js";
+
+// ---------------------------------------------------------------------------
+// Mock indexFile so handlePostindexFile doesn't hit real storage
+// ---------------------------------------------------------------------------
+const mockIndexFile = vi.fn().mockResolvedValue({ indexed: 1 });
+
+vi.mock("../../src/tools/index-tools.js", () => ({
+  indexFile: (...args: unknown[]) => mockIndexFile(...args),
+}));
 
 describe("handlePrecheckRead", () => {
   let exitCode: number | undefined;
@@ -131,5 +140,82 @@ describe("handlePrecheckRead", () => {
 
     expect(exitCode).toBe(0); // 150 < 200 default
     rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handlePostindexFile tests
+// ---------------------------------------------------------------------------
+
+describe("handlePostindexFile", () => {
+  let exitCode: number | undefined;
+
+  beforeEach(() => {
+    exitCode = undefined;
+    mockIndexFile.mockClear();
+    vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+      exitCode = code ?? 0;
+      return undefined as never;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env["HOOK_TOOL_INPUT"];
+  });
+
+  it("calls indexFile for a .ts file Edit event", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Edit",
+      tool_input: { file_path: "/project/src/foo.ts" },
+    });
+
+    await handlePostindexFile();
+
+    expect(mockIndexFile).toHaveBeenCalledWith("/project/src/foo.ts");
+    expect(exitCode).toBe(0);
+  });
+
+  it("does NOT call indexFile for a .json file", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Edit",
+      tool_input: { file_path: "/project/package.json" },
+    });
+
+    await handlePostindexFile();
+
+    expect(mockIndexFile).not.toHaveBeenCalled();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 when HOOK_TOOL_INPUT not set", async () => {
+    delete process.env["HOOK_TOOL_INPUT"];
+
+    await handlePostindexFile();
+
+    expect(mockIndexFile).not.toHaveBeenCalled();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 on malformed JSON (never blocks the agent)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = "not json{{{";
+
+    await handlePostindexFile();
+
+    expect(mockIndexFile).not.toHaveBeenCalled();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 even when indexFile rejects (fire-and-forget safety)", async () => {
+    mockIndexFile.mockRejectedValueOnce(new Error("index failure"));
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Write",
+      tool_input: { file_path: "/project/src/bar.ts" },
+    });
+
+    await handlePostindexFile();
+
+    expect(exitCode).toBe(0);
   });
 });

@@ -148,8 +148,64 @@ async function setupCursor(): Promise<SetupResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Claude Code hooks — .claude/settings.local.json
+// ---------------------------------------------------------------------------
+
+const PRE_TOOL_USE_HOOK = {
+  matcher: "Read",
+  hooks: [{ type: "command", command: "codesift precheck-read" }],
+};
+
+const POST_TOOL_USE_HOOK = {
+  matcher: "Write|Edit",
+  hooks: [{ type: "command", command: "codesift postindex-file" }],
+};
+
+type HookEntry = { matcher: string; hooks: unknown[] };
+type HooksSection = Record<string, HookEntry[]>;
+
+export async function setupClaudeHooks(): Promise<void> {
+  const configDir = join(homedir(), ".claude");
+  const settingsPath = join(configDir, "settings.local.json");
+
+  await ensureDir(configDir);
+
+  let settings: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    settings = await readJsonFile(settingsPath);
+  }
+
+  if (typeof settings["hooks"] !== "object" || settings["hooks"] === null) {
+    settings["hooks"] = {};
+  }
+  const hooks = settings["hooks"] as HooksSection;
+
+  // PreToolUse — add if not already present for matcher "Read"
+  if (!Array.isArray(hooks["PreToolUse"])) {
+    hooks["PreToolUse"] = [];
+  }
+  if (!hooks["PreToolUse"].some((h) => h.matcher === PRE_TOOL_USE_HOOK.matcher)) {
+    hooks["PreToolUse"].push(PRE_TOOL_USE_HOOK);
+  }
+
+  // PostToolUse — add if not already present for matcher "Write|Edit"
+  if (!Array.isArray(hooks["PostToolUse"])) {
+    hooks["PostToolUse"] = [];
+  }
+  if (!hooks["PostToolUse"].some((h) => h.matcher === POST_TOOL_USE_HOOK.matcher)) {
+    hooks["PostToolUse"].push(POST_TOOL_USE_HOOK);
+  }
+
+  await writeJsonFile(settingsPath, settings);
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
+
+export interface SetupOptions {
+  hooks?: boolean;
+}
 
 const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
   codex: setupCodex,
@@ -157,14 +213,18 @@ const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
   cursor: setupCursor,
 };
 
-export async function setup(platform: string): Promise<SetupResult> {
+export async function setup(platform: string, options?: SetupOptions): Promise<SetupResult> {
   const handler = PLATFORM_HANDLERS[platform as Platform];
   if (!handler) {
     throw new Error(
       `Unknown platform: "${platform}". Supported: ${SUPPORTED_PLATFORMS.join(", ")}`,
     );
   }
-  return handler();
+  const result = await handler();
+  if (platform === "claude" && options?.hooks) {
+    await setupClaudeHooks();
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

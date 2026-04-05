@@ -514,4 +514,12 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "patterns": handlePatterns,
   "find-clones": handleFindClones,
   "setup": handleSetup,
+  "precheck-read": async () => {
+    const { handlePrecheckRead } = await import("./hooks.js");
+    await handlePrecheckRead();
+  },
+  "postindex-file": async () => {
+    const { handlePostindexFile } = await import("./hooks.js");
+    await handlePostindexFile();
+  },
 };

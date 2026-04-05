@@ -119,9 +119,64 @@ export async function handlePrecheckRead(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// handlePostindexFile — placeholder for Task 9
+// handlePostindexFile
+//
+// PostToolUse hook for Write/Edit tools. When the agent writes or edits a
+// code file, re-index that file so the CodeSift index stays up to date.
+//
+// Env vars:
+//   HOOK_TOOL_INPUT  — JSON string with tool_input.file_path
+//
+// Always exits 0 (fire-and-forget — never block the agent on hook errors).
 // ---------------------------------------------------------------------------
 
 export async function handlePostindexFile(): Promise<void> {
-  process.exit(0);
+  try {
+    const input = process.env["HOOK_TOOL_INPUT"];
+    if (!input) {
+      process.exit(0);
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input);
+    } catch {
+      process.exit(0);
+      return;
+    }
+
+    const filePath =
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "tool_input" in parsed &&
+      parsed.tool_input !== null &&
+      typeof parsed.tool_input === "object" &&
+      "file_path" in parsed.tool_input &&
+      typeof (parsed.tool_input as Record<string, unknown>).file_path === "string"
+        ? ((parsed.tool_input as Record<string, unknown>).file_path as string)
+        : null;
+
+    if (!filePath) {
+      process.exit(0);
+      return;
+    }
+
+    const ext = extname(filePath).toLowerCase();
+    if (!CODE_EXTENSIONS.has(ext)) {
+      process.exit(0);
+      return;
+    }
+
+    try {
+      const { indexFile } = await import("../tools/index-tools.js");
+      await indexFile(filePath);
+    } catch {
+      // CQ8: fire-and-forget — never crash, never block the agent
+    }
+
+    process.exit(0);
+  } catch {
+    process.exit(0);
+  }
 }

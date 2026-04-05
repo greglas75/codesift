@@ -46,6 +46,8 @@ Commands:
 
   setup <platform>                Configure codesift-mcp in an AI coding tool
                                   Platforms: codex, claude, cursor
+  precheck-read                   PreToolUse hook: deny large file reads (hook handler)
+  postindex-file                  PostToolUse hook: re-index edited files (hook handler)
 
 Flags:
   --help            Show help for a command
@@ -391,6 +393,31 @@ Options:
   --threshold        Minimum similarity threshold 0-1 (default: 0.7)
   --min-lines        Minimum normalized lines to consider (default: 10)
   --include-tests    Include test files (default: false)`,
+
+  "precheck-read": `codesift precheck-read
+
+PreToolUse hook handler for the Read tool.
+Exits 2 (deny) when the agent attempts to read a large code file, redirecting
+to CodeSift tools instead. Exits 0 (allow) otherwise.
+
+This command is designed to be installed as a Claude Code PreToolUse hook via:
+  codesift setup claude --hooks
+
+Env vars:
+  HOOK_TOOL_INPUT                 JSON with tool_input.file_path (set by Claude Code)
+  CODESIFT_READ_HOOK_MIN_LINES    Override line threshold (default: 200)`,
+
+  "postindex-file": `codesift postindex-file
+
+PostToolUse hook handler for Write/Edit tools.
+Re-indexes the file that was just written or edited, keeping the CodeSift index
+in sync with the agent's edits. Always exits 0 (fire-and-forget).
+
+This command is designed to be installed as a Claude Code PostToolUse hook via:
+  codesift setup claude --hooks
+
+Env vars:
+  HOOK_TOOL_INPUT    JSON with tool_input.file_path (set by Claude Code)`,
 
   setup: `codesift setup <platform>
 

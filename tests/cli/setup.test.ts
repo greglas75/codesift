@@ -15,7 +15,7 @@ vi.mock("node:os", async () => {
 });
 
 // Import after mock so the module picks up our homedir
-const { setup, formatSetupResult, SUPPORTED_PLATFORMS } = await import(
+const { setup, formatSetupResult, SUPPORTED_PLATFORMS, setupClaudeHooks } = await import(
   "../../src/cli/setup.js"
 );
 
@@ -253,5 +253,87 @@ describe("setup", () => {
 
     const second = await setup("codex");
     expect(second.status).toBe("already_configured");
+  });
+
+  // -------------------------------------------------------------------------
+  // Hook installation via setup("claude", { hooks: true })
+  // -------------------------------------------------------------------------
+
+  describe("hook installation", () => {
+    it("setup('claude', { hooks: true }) writes PreToolUse + PostToolUse entries", async () => {
+      const result = await setup("claude", { hooks: true });
+      expect(result.status).toBe("created");
+
+      const settingsPath = join(tempHome, ".claude", "settings.local.json");
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+      const preToolUse = settings.hooks?.PreToolUse as Array<{ matcher: string }> | undefined;
+      expect(preToolUse).toBeDefined();
+      expect(preToolUse!.some((h) => h.matcher === "Read")).toBe(true);
+
+      const postToolUse = settings.hooks?.PostToolUse as Array<{ matcher: string }> | undefined;
+      expect(postToolUse).toBeDefined();
+      expect(postToolUse!.some((h) => h.matcher === "Write|Edit")).toBe(true);
+    });
+
+    it("hook installation is idempotent (no duplicates on second run)", async () => {
+      await setup("claude", { hooks: true });
+      await setup("claude", { hooks: true });
+
+      const settingsPath = join(tempHome, ".claude", "settings.local.json");
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+      const preToolUse = settings.hooks?.PreToolUse as Array<{ matcher: string }> | undefined;
+      const preReadCount = preToolUse!.filter((h) => h.matcher === "Read").length;
+      expect(preReadCount).toBe(1);
+
+      const postToolUse = settings.hooks?.PostToolUse as Array<{ matcher: string }> | undefined;
+      const postWriteCount = postToolUse!.filter((h) => h.matcher === "Write|Edit").length;
+      expect(postWriteCount).toBe(1);
+    });
+
+    it("setup('claude') without hooks flag does NOT write hook entries", async () => {
+      await setup("claude");
+
+      const settingsPath = join(tempHome, ".claude", "settings.local.json");
+      // File should NOT exist because no hooks flag was passed
+      let exists = true;
+      try {
+        await readFile(settingsPath, "utf-8");
+      } catch {
+        exists = false;
+      }
+      expect(exists).toBe(false);
+    });
+
+    it("merges hooks into existing settings.local.json without overwriting other hooks", async () => {
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      const settingsPath = join(claudeDir, "settings.local.json");
+
+      // Write existing Stop hook
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          hooks: {
+            Stop: [{ matcher: "", hooks: [{ type: "command", command: "existing-stop-hook" }] }],
+          },
+        }),
+        "utf-8",
+      );
+
+      await setup("claude", { hooks: true });
+
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+      // Existing Stop hook must be preserved
+      const stopHooks = settings.hooks?.Stop as Array<unknown> | undefined;
+      expect(stopHooks).toBeDefined();
+      expect(stopHooks!.length).toBe(1);
+
+      // New hooks must be added
+      expect(settings.hooks?.PreToolUse).toBeDefined();
+      expect(settings.hooks?.PostToolUse).toBeDefined();
+    });
   });
 });
