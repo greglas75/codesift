@@ -1,0 +1,221 @@
+{
+  "date": "2026-04-05T09:23:33.097Z",
+  "rows": [
+    {
+      "technique": "T1: Cache",
+      "test": "search_text(TODO)",
+      "before": {
+        "tok": 948,
+        "ms": 52
+      },
+      "after": {
+        "tok": 948,
+        "ms": 9
+      }
+    },
+    {
+      "technique": "T1: Cache",
+      "test": "search_symbols(searchText)",
+      "before": {
+        "tok": 2150,
+        "ms": 140
+      },
+      "after": {
+        "tok": 2150,
+        "ms": 1
+      }
+    },
+    {
+      "technique": "T1: Cache",
+      "test": "get_file_tree(src)",
+      "before": {
+        "tok": 1499,
+        "ms": 6
+      },
+      "after": {
+        "tok": 1499,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T1: Cache",
+      "test": "get_file_outline(register-tools)",
+      "before": {
+        "tok": 1160,
+        "ms": 1
+      },
+      "after": {
+        "tok": 1160,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T1: Cache",
+      "test": "list_repos",
+      "before": {
+        "tok": 3253,
+        "ms": 0
+      },
+      "after": {
+        "tok": 3253,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T3: ClassTrim",
+      "test": "LspManager",
+      "before": {
+        "tok": 1436,
+        "ms": 0
+      },
+      "after": {
+        "tok": 624,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T3: ClassTrim",
+      "test": "VoyageProvider",
+      "before": {
+        "tok": 239,
+        "ms": 0
+      },
+      "after": {
+        "tok": 130,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T3: ClassTrim",
+      "test": "OpenAIProvider",
+      "before": {
+        "tok": 229,
+        "ms": 0
+      },
+      "after": {
+        "tok": 125,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T3: ClassTrim",
+      "test": "OllamaProvider",
+      "before": {
+        "tok": 923,
+        "ms": 0
+      },
+      "after": {
+        "tok": 412,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T3: ClassTrim",
+      "test": "UserService",
+      "before": {
+        "tok": 206,
+        "ms": 0
+      },
+      "after": {
+        "tok": 103,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T4: Prefetch",
+      "test": "class:LspManager",
+      "before": {
+        "tok": 712,
+        "ms": 0
+      },
+      "after": {
+        "tok": 3128,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T4: Prefetch",
+      "test": "class:VoyageProvider",
+      "before": {
+        "tok": 203,
+        "ms": 0
+      },
+      "after": {
+        "tok": 778,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T4: Prefetch",
+      "test": "class:OpenAIProvider",
+      "before": {
+        "tok": 198,
+        "ms": 0
+      },
+      "after": {
+        "tok": 768,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T4: Prefetch",
+      "test": "function:measure",
+      "before": {
+        "tok": 214,
+        "ms": 0
+      },
+      "after": {
+        "tok": 214,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T4: Prefetch",
+      "test": "function:main",
+      "before": {
+        "tok": 754,
+        "ms": 0
+      },
+      "after": {
+        "tok": 754,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T4: Prefetch",
+      "test": "function:pct",
+      "before": {
+        "tok": 162,
+        "ms": 0
+      },
+      "after": {
+        "tok": 162,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "T6: SchemaCompress",
+      "test": "62 tools",
+      "before": {
+        "tok": 12400,
+        "ms": 0
+      },
+      "after": {
+        "tok": 3560,
+        "ms": 0
+      }
+    },
+    {
+      "technique": "E2E",
+      "test": "understand function",
+      "before": {
+        "tok": 5822,
+        "ms": 20
+      },
+      "after": {
+        "tok": 2152,
+        "ms": 1
+      }
+    }
+  ]
+}

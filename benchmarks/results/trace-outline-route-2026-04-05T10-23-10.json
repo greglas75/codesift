@@ -1,0 +1,176 @@
+{
+  "startedAt": "2026-04-05T10:23:10.585Z",
+  "rows": [
+    {
+      "flow": "trace_call_chain",
+      "query": "searchText",
+      "repo": "codesift-mcp",
+      "nativeTok": 4036,
+      "siftTok": 710,
+      "nativeMs": 101,
+      "siftMs": 40
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "loadConfig",
+      "repo": "codesift-mcp",
+      "nativeTok": 2657,
+      "siftTok": 1467,
+      "nativeMs": 140,
+      "siftMs": 23
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "getCodeIndex",
+      "repo": "codesift-mcp",
+      "nativeTok": 5003,
+      "siftTok": 1236,
+      "nativeMs": 114,
+      "siftMs": 25
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "buildBM25Index",
+      "repo": "codesift-mcp",
+      "nativeTok": 1343,
+      "siftTok": 651,
+      "nativeMs": 124,
+      "siftMs": 26
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "searchText",
+      "repo": "translation-qa",
+      "nativeTok": 1315,
+      "siftTok": 18,
+      "nativeMs": 331,
+      "siftMs": 334
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "loadConfig",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 158,
+      "siftMs": 5
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "getCodeIndex",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 155,
+      "siftMs": 5
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "buildBM25Index",
+      "repo": "translation-qa",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 167,
+      "siftMs": 5
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "searchText",
+      "repo": "promptvault",
+      "nativeTok": 290,
+      "siftTok": 0,
+      "nativeMs": 107,
+      "siftMs": 2
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "loadConfig",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 63,
+      "siftMs": 1
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "getCodeIndex",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 60,
+      "siftMs": 1
+    },
+    {
+      "flow": "trace_call_chain",
+      "query": "buildBM25Index",
+      "repo": "promptvault",
+      "nativeTok": 0,
+      "siftTok": 0,
+      "nativeMs": 60,
+      "siftMs": 1
+    },
+    {
+      "flow": "get_repo_outline",
+      "query": "full",
+      "repo": "codesift-mcp",
+      "nativeTok": 266,
+      "siftTok": 294,
+      "nativeMs": 166,
+      "siftMs": 6
+    },
+    {
+      "flow": "get_repo_outline",
+      "query": "full",
+      "repo": "translation-qa",
+      "nativeTok": 1089,
+      "siftTok": 1049,
+      "nativeMs": 10119,
+      "siftMs": 2
+    },
+    {
+      "flow": "get_repo_outline",
+      "query": "full",
+      "repo": "promptvault",
+      "nativeTok": 1055,
+      "siftTok": 1034,
+      "nativeMs": 3128,
+      "siftMs": 1
+    },
+    {
+      "flow": "trace_route",
+      "query": "/api/projects",
+      "repo": "translation-qa",
+      "nativeTok": 33183,
+      "siftTok": 100,
+      "nativeMs": 71,
+      "siftMs": 744
+    },
+    {
+      "flow": "trace_route",
+      "query": "/api/projects/create-stream",
+      "repo": "translation-qa",
+      "nativeTok": 23205,
+      "siftTok": 61,
+      "nativeMs": 169,
+      "siftMs": 688
+    },
+    {
+      "flow": "trace_route",
+      "query": "/api/v1/organizations",
+      "repo": "promptvault",
+      "nativeTok": 37272,
+      "siftTok": 23,
+      "nativeMs": 84,
+      "siftMs": 123
+    },
+    {
+      "flow": "trace_route",
+      "query": "/api/v1/rate-limits",
+      "repo": "promptvault",
+      "nativeTok": 28209,
+      "siftTok": 22,
+      "nativeMs": 72,
+      "siftMs": 117
+    }
+  ]
+}
