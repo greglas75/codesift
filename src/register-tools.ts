@@ -48,6 +48,17 @@ export const zNum = () =>
   ]).optional();
 
 // ---------------------------------------------------------------------------
+// Registered tool handles — populated by registerTools(), used by describe_tools reveal
+// ---------------------------------------------------------------------------
+
+const toolHandles = new Map<string, any>();
+
+/** Get a registered tool handle by name (for testing and describe_tools reveal) */
+export function getToolHandle(name: string) {
+  return toolHandles.get(name);
+}
+
+// ---------------------------------------------------------------------------
 // Tool definition type
 // ---------------------------------------------------------------------------
 
@@ -1561,23 +1572,22 @@ export function discoverTools(query: string, category?: string): {
 export function registerTools(server: McpServer, options?: { deferNonCore?: boolean }): void {
   const deferNonCore = options?.deferNonCore ?? false;
 
-  for (const tool of TOOL_DEFINITIONS) {
-    if (deferNonCore && !CORE_TOOL_NAMES.has(tool.name)) {
-      // Register deferred tool with minimal description, no schema
-      // The tool is still callable — schema validation happens at handler level
-      continue; // Skip deferred tools in minimal mode
-    }
+  // Clear handles from any previous registration (e.g. tests calling registerTools multiple times)
+  toolHandles.clear();
 
-    server.tool(
+  // Register ALL tools with full schema; store returned handles
+  for (const tool of TOOL_DEFINITIONS) {
+    const handle = server.tool(
       tool.name,
       tool.description,
       tool.schema,
       async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
     );
+    toolHandles.set(tool.name, handle);
   }
 
   // Always register discover_tools meta-tool
-  server.tool(
+  const discoverHandle = server.tool(
     "discover_tools",
     "Search tool catalog by keyword or category. Returns matching tools with descriptions.",
     {
@@ -1588,26 +1598,35 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
       return discoverTools(args.query as string, args.category as string | undefined);
     })(),
   );
+  toolHandles.set("discover_tools", discoverHandle);
 
-  // In deferred mode, register non-core tools with MINIMAL schema to reduce token overhead.
-  // Full schema lives server-side — handler validates args internally.
-  // LLM discovers these via discover_tools, which returns full descriptions + param lists.
-  if (deferNonCore) {
-    for (const tool of TOOL_DEFINITIONS) {
-      if (!CORE_TOOL_NAMES.has(tool.name)) {
-        // Minimal schema: only repo param (most tools need it), rest passed through
-        const minimalSchema: Record<string, z.ZodTypeAny> = {};
-        if ("repo" in tool.schema) {
-          minimalSchema["repo"] = z.string().describe("Repository identifier");
+  // Register describe_tools meta-tool — returns full schema for specific tools by name
+  const describeHandle = server.tool(
+    "describe_tools",
+    "Get full schema for specific tools by name. Use after discover_tools to see params before calling.",
+    {
+      names: z.array(z.string()).describe("Tool names to describe"),
+      reveal: zBool().describe("If true, enable tools in ListTools so the LLM can call them"),
+    },
+    async (args) => wrapTool("describe_tools", args as Record<string, unknown>, async () => {
+      const result = describeTools(args.names as string[]);
+      if (args.reveal === true) {
+        for (const t of result.tools) {
+          const h = toolHandles.get(t.name);
+          if (h) h.enable();
         }
-        // Accept any additional args via passthrough
-        const desc = tool.description.split(".")[0] + ". Use discover_tools for full params.";
-        server.tool(
-          tool.name,
-          desc,
-          minimalSchema,
-          async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
-        );
+      }
+      return result;
+    })(),
+  );
+  toolHandles.set("describe_tools", describeHandle);
+
+  // In deferred mode, disable non-core tools (they remain registered but hidden from ListTools).
+  // LLM discovers them via discover_tools, then reveals with describe_tools(reveal: true).
+  if (deferNonCore) {
+    for (const [name, handle] of toolHandles) {
+      if (!CORE_TOOL_NAMES.has(name) && name !== "discover_tools" && name !== "describe_tools") {
+        handle.disable();
       }
     }
   }
