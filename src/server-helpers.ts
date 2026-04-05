@@ -12,6 +12,8 @@ const HIGH_CARDINALITY_THRESHOLD = 50;
 const CHARS_PER_TOKEN = 3.5;
 const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
 const PERSIST_THRESHOLD_CHARS = 200_000; // ~50k tokens — persist full output to disk
+const COMPACT_THRESHOLD = 52_500;   // ~15K tokens at 3.5 chars/tok
+const COUNTS_THRESHOLD = 87_500;    // ~25K tokens
 
 /** Estimated token multiplier vs manual grep/Read approach (from benchmark data) */
 const SAVINGS_MULTIPLIER: Record<string, number> = {
@@ -48,6 +50,25 @@ export interface ToolResponse {
   [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Progressive response shortening — registry + cascade
+// ---------------------------------------------------------------------------
+
+interface ShorteningEntry {
+  compact?: (data: unknown) => string;
+  counts?: (data: unknown) => string;
+}
+
+const SHORTENING_REGISTRY = new Map<string, ShorteningEntry>();
+
+export function registerShortener(toolName: string, entry: ShorteningEntry): void {
+  SHORTENING_REGISTRY.set(toolName, entry);
+}
+
+export function resetShorteningRegistry(): void {
+  SHORTENING_REGISTRY.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +261,24 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
   let persistedPath: string | undefined;
   if (text.length > PERSIST_THRESHOLD_CHARS) {
     persistedPath = persistLargeOutput(text, toolName);
+  }
+
+  // Progressive cascade: try registered shorteners before hard truncation
+  const skipCascade =
+    toolName === "codebase_retrieval" ||
+    typeof args?.detail_level === "string" ||
+    typeof args?.token_budget === "number";
+
+  if (!skipCascade) {
+    const entry = SHORTENING_REGISTRY.get(toolName);
+    if (entry) {
+      if (text.length > COMPACT_THRESHOLD && entry.compact) {
+        text = "[compact] " + entry.compact(data);
+      }
+      if (text.length > COUNTS_THRESHOLD && entry.counts) {
+        text = "[counts] " + entry.counts(data);
+      }
+    }
   }
 
   // Hard cap: truncate oversized responses
