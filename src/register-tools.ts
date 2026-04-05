@@ -1440,6 +1440,59 @@ function buildToolSummaries(): ToolSummary[] {
 }
 
 /**
+ * Extract structured param info from a ToolDefinition's Zod schema.
+ */
+function extractToolParams(def: ToolDefinition): Array<{ name: string; required: boolean; description: string }> {
+  return Object.entries(def.schema).map(([key, val]) => {
+    const zodVal = val as z.ZodTypeAny;
+    const isOptional = zodVal.isOptional?.() ?? false;
+    return {
+      name: key,
+      required: !isOptional,
+      description: zodVal.description ?? "",
+    };
+  });
+}
+
+interface DescribeToolsResult {
+  tools: Array<{
+    name: string;
+    category: string;
+    description: string;
+    is_core: boolean;
+    params: Array<{ name: string; required: boolean; description: string }>;
+  }>;
+  not_found: string[];
+}
+
+/**
+ * Return full param details for a specific list of tool names.
+ * Unknown names are collected in not_found.
+ */
+export function describeTools(names: string[]): DescribeToolsResult {
+  const capped = names.slice(0, 100); // CQ6 cap
+  const tools: DescribeToolsResult["tools"] = [];
+  const not_found: string[] = [];
+
+  for (const name of capped) {
+    const def = TOOL_DEFINITIONS.find((t) => t.name === name);
+    if (!def) {
+      not_found.push(name);
+      continue;
+    }
+    tools.push({
+      name: def.name,
+      category: def.category ?? "uncategorized",
+      description: def.description,
+      is_core: CORE_TOOL_NAMES.has(def.name),
+      params: extractToolParams(def),
+    });
+  }
+
+  return { tools, not_found };
+}
+
+/**
  * Search tool catalog by keyword. Returns matching tools with descriptions.
  * Uses simple token matching against name + description + searchHint + category.
  */
@@ -1480,11 +1533,9 @@ export function discoverTools(query: string, category?: string): {
       // Look up full definition to extract param info for deferred tools
       const fullDef = TOOL_DEFINITIONS.find((t) => t.name === s.tool.name);
       const params = fullDef
-        ? Object.entries(fullDef.schema).map(([key, val]) => {
-            const zodVal = val as z.ZodTypeAny;
-            const isOptional = zodVal.isOptional?.() ?? false;
-            return `${key}${isOptional ? "?" : ""}: ${zodVal.description ?? "string"}`;
-          })
+        ? extractToolParams(fullDef).map(
+            (p) => `${p.name}${p.required ? "" : "?"}: ${p.description || "string"}`,
+          )
         : [];
       return {
         name: s.tool.name,
