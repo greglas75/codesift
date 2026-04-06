@@ -424,26 +424,36 @@ Env vars:
   setup: `codesift setup <platform>
 
 Configure codesift-mcp as an MCP server in an AI coding tool.
+By default, installs the MCP server config, rules file, and hooks (where supported).
 
 Platforms:
-  codex     Add to ~/.codex/config.toml (OpenAI Codex CLI & IDE)
-  claude    Add to ~/.claude/settings.json (Claude Code)
-  cursor    Add to ~/.cursor/mcp.json (Cursor IDE)
-  gemini    Add to ~/.gemini/settings.json (Gemini CLI)
+  codex     Add to ~/.codex/config.toml + AGENTS.md rules (OpenAI Codex CLI & IDE)
+  claude    Add to ~/.claude/settings.json + rules + hooks (Claude Code)
+  cursor    Add to ~/.cursor/mcp.json + .cursor/rules/codesift.mdc (Cursor IDE)
+  gemini    Add to ~/.gemini/settings.json + GEMINI.md rules (Gemini CLI)
   all       Configure all platforms at once
 
 Options:
-  --json    Output result as JSON instead of human-readable text
-  --hooks   (claude only) Install PreToolUse + PostToolUse hooks
+  --json        Output result as JSON instead of human-readable text
+  --hooks       (claude only) Install PreToolUse + PostToolUse hooks (default: on for claude)
+  --no-hooks    Skip hook installation
+  --rules       Install platform rules file (default: on)
+  --no-rules    Skip rules file installation
+  --force       Overwrite rules file even if it has been modified by the user
 
 What it does:
   - Creates the config file if it doesn't exist
   - Adds the codesift MCP server entry if not already present
+  - Installs the CodeSift rules file for the platform (use --no-rules to skip)
+  - Installs Claude Code hooks for claude platform (use --no-hooks to skip)
   - Skips if already configured (safe to run multiple times)
 
 Examples:
   codesift setup codex
   codesift setup claude
+  codesift setup claude --no-hooks
+  codesift setup claude --no-rules
+  codesift setup claude --force
   codesift setup cursor
   codesift setup gemini
   codesift setup all`,
