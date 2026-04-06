@@ -451,13 +451,27 @@ async function handlePatterns(args: string[], flags: Flags): Promise<void> {
 
 async function handleSetup(args: string[], flags: Flags): Promise<void> {
   const platform = args[0];
-  const { setup, formatSetupResult, SUPPORTED_PLATFORMS } = await import("./setup.js");
+  const { setup, setupAll, formatSetupResult, SUPPORTED_PLATFORMS } = await import("./setup.js");
 
   if (!platform) {
-    die(`Missing platform. Usage: codesift setup <${SUPPORTED_PLATFORMS.join("|")}>`);
+    die(`Missing platform. Usage: codesift setup <${SUPPORTED_PLATFORMS.join("|")}|all>`);
   }
 
-  const result = await setup(platform);
+  const hooks = getBoolFlag(flags, "hooks") ?? false;
+
+  if (platform === "all") {
+    const results = await setupAll({ hooks });
+    if (getBoolFlag(flags, "json")) {
+      output(results, flags);
+    } else {
+      for (const result of results) {
+        process.stdout.write(formatSetupResult(result) + "\n");
+      }
+    }
+    return;
+  }
+
+  const result = await setup(platform, { hooks });
 
   if (getBoolFlag(flags, "json")) {
     output(result, flags);

@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 // Types
 // ---------------------------------------------------------------------------
 
-export const SUPPORTED_PLATFORMS = ["codex", "claude", "cursor"] as const;
+export const SUPPORTED_PLATFORMS = ["codex", "claude", "cursor", "gemini"] as const;
 export type Platform = (typeof SUPPORTED_PLATFORMS)[number];
 
 export interface SetupResult {
@@ -148,6 +148,34 @@ async function setupCursor(): Promise<SetupResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Gemini CLI — ~/.gemini/settings.json
+// ---------------------------------------------------------------------------
+
+async function setupGemini(): Promise<SetupResult> {
+  const configDir = join(homedir(), ".gemini");
+  const configPath = join(configDir, "settings.json");
+
+  await ensureDir(configDir);
+
+  if (existsSync(configPath)) {
+    const settings = await readJsonFile(configPath);
+    const mcpServers = settings["mcpServers"] as Record<string, unknown> | undefined;
+    if (mcpServers?.["codesift"]) {
+      return { platform: "gemini", config_path: configPath, status: "already_configured" };
+    }
+    if (!settings["mcpServers"]) {
+      settings["mcpServers"] = {};
+    }
+    (settings["mcpServers"] as Record<string, unknown>)["codesift"] = { ...MCP_SERVER_ENTRY };
+    await writeJsonFile(configPath, settings);
+    return { platform: "gemini", config_path: configPath, status: "updated" };
+  }
+
+  await writeJsonFile(configPath, { mcpServers: { codesift: { ...MCP_SERVER_ENTRY } } });
+  return { platform: "gemini", config_path: configPath, status: "created" };
+}
+
+// ---------------------------------------------------------------------------
 // Claude Code hooks — .claude/settings.local.json
 // ---------------------------------------------------------------------------
 
@@ -211,13 +239,14 @@ const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
   codex: setupCodex,
   claude: setupClaude,
   cursor: setupCursor,
+  gemini: setupGemini,
 };
 
 export async function setup(platform: string, options?: SetupOptions): Promise<SetupResult> {
   const handler = PLATFORM_HANDLERS[platform as Platform];
   if (!handler) {
     throw new Error(
-      `Unknown platform: "${platform}". Supported: ${SUPPORTED_PLATFORMS.join(", ")}`,
+      `Unknown platform: "${platform}". Supported: ${SUPPORTED_PLATFORMS.join(", ")}, all`,
     );
   }
   const result = await handler();
@@ -225,6 +254,15 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
     await setupClaudeHooks();
   }
   return result;
+}
+
+export async function setupAll(options?: SetupOptions): Promise<SetupResult[]> {
+  const results: SetupResult[] = [];
+  for (const platform of SUPPORTED_PLATFORMS) {
+    const result = await setup(platform, platform === "claude" ? options : undefined);
+    results.push(result);
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------------

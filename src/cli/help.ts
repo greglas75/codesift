@@ -45,7 +45,7 @@ Commands:
   find-clones <repo>              Find copy-paste code clones
 
   setup <platform>                Configure codesift-mcp in an AI coding tool
-                                  Platforms: codex, claude, cursor
+                                  Platforms: codex, claude, cursor, gemini, all
   precheck-read                   PreToolUse hook: deny large file reads (hook handler)
   postindex-file                  PostToolUse hook: re-index edited files (hook handler)
 
@@ -59,6 +59,8 @@ Flags:
 Examples:
   codesift setup codex                          Set up MCP in OpenAI Codex
   codesift setup claude                         Set up MCP in Claude Code
+  codesift setup gemini                         Set up MCP in Gemini CLI
+  codesift setup all                            Set up MCP in all platforms
   codesift index /path/to/project
   codesift repos
   codesift search local/my-project "createUser"
@@ -427,9 +429,12 @@ Platforms:
   codex     Add to ~/.codex/config.toml (OpenAI Codex CLI & IDE)
   claude    Add to ~/.claude/settings.json (Claude Code)
   cursor    Add to ~/.cursor/mcp.json (Cursor IDE)
+  gemini    Add to ~/.gemini/settings.json (Gemini CLI)
+  all       Configure all platforms at once
 
 Options:
   --json    Output result as JSON instead of human-readable text
+  --hooks   (claude only) Install PreToolUse + PostToolUse hooks
 
 What it does:
   - Creates the config file if it doesn't exist
@@ -439,5 +444,7 @@ What it does:
 Examples:
   codesift setup codex
   codesift setup claude
-  codesift setup cursor`,
+  codesift setup cursor
+  codesift setup gemini
+  codesift setup all`,
 };

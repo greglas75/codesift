@@ -2,11 +2,35 @@
 
 CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 48 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
-## Quick install
+## Install
 
 ```bash
 npm install -g codesift-mcp
 ```
+
+Then configure your AI coding tool (pick one, or use `all`):
+
+```bash
+codesift setup claude    # Claude Code
+codesift setup codex     # OpenAI Codex CLI
+codesift setup cursor    # Cursor IDE
+codesift setup gemini    # Gemini CLI (Antigravity)
+codesift setup all       # All platforms at once
+```
+
+## Update
+
+After installing a new version of codesift-mcp, re-run setup to ensure all platforms point to the latest:
+
+```bash
+# Update the package
+npm update -g codesift-mcp
+
+# Re-configure all platforms (safe — skips if already configured)
+codesift setup all
+```
+
+If you use `npx -y codesift-mcp` (the default), each platform automatically picks up the latest published version on next session start — no manual re-setup needed. The `setup all` command is only necessary if you switch from a local build to the npm package or vice versa.
 
 ## Quick start
 
@@ -353,6 +377,35 @@ Add this to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in your project:
   }
 }
 ```
+
+### Gemini CLI
+
+Add this to `~/.gemini/settings.json`, or to `.gemini/settings.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "codesift": {
+      "command": "npx",
+      "args": ["-y", "codesift-mcp"]
+    }
+  }
+}
+```
+
+You can also use the Gemini CLI:
+
+```bash
+gemini mcp add codesift -s user npx -- -y codesift-mcp
+```
+
+### All platforms at once
+
+```bash
+codesift setup all
+```
+
+This configures Codex, Claude Code, Cursor, and Gemini CLI in one command. Safe to run multiple times — skips platforms that are already configured.
 
 ## Semantic search
 

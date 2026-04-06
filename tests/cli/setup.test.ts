@@ -15,7 +15,7 @@ vi.mock("node:os", async () => {
 });
 
 // Import after mock so the module picks up our homedir
-const { setup, formatSetupResult, SUPPORTED_PLATFORMS, setupClaudeHooks } = await import(
+const { setup, setupAll, formatSetupResult, SUPPORTED_PLATFORMS, setupClaudeHooks } = await import(
   "../../src/cli/setup.js"
 );
 
@@ -40,6 +40,7 @@ describe("setup", () => {
     expect(SUPPORTED_PLATFORMS).toContain("codex");
     expect(SUPPORTED_PLATFORMS).toContain("claude");
     expect(SUPPORTED_PLATFORMS).toContain("cursor");
+    expect(SUPPORTED_PLATFORMS).toContain("gemini");
   });
 
   // -------------------------------------------------------------------------
@@ -205,6 +206,89 @@ describe("setup", () => {
 
       const result = await setup("cursor");
       expect(result.status).toBe("already_configured");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Gemini CLI
+  // -------------------------------------------------------------------------
+
+  describe("gemini", () => {
+    it("creates settings.json when none exists", async () => {
+      const result = await setup("gemini");
+
+      expect(result.status).toBe("created");
+      expect(result.platform).toBe("gemini");
+      expect(result.config_path).toBe(join(tempHome, ".gemini", "settings.json"));
+
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift).toEqual({
+        command: "npx",
+        args: ["-y", "codesift-mcp"],
+      });
+    });
+
+    it("adds to existing settings.json preserving other keys", async () => {
+      const configDir = join(tempHome, ".gemini");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "settings.json"),
+        JSON.stringify({ theme: "dark", mcpServers: { other: { command: "foo" } } }),
+        "utf-8",
+      );
+
+      const result = await setup("gemini");
+      expect(result.status).toBe("updated");
+
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.theme).toBe("dark");
+      expect(content.mcpServers.other.command).toBe("foo");
+      expect(content.mcpServers.codesift).toEqual({
+        command: "npx",
+        args: ["-y", "codesift-mcp"],
+      });
+    });
+
+    it("skips when already configured", async () => {
+      const configDir = join(tempHome, ".gemini");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "settings.json"),
+        JSON.stringify({ mcpServers: { codesift: { command: "npx" } } }),
+        "utf-8",
+      );
+
+      const result = await setup("gemini");
+      expect(result.status).toBe("already_configured");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // setupAll
+  // -------------------------------------------------------------------------
+
+  describe("setupAll", () => {
+    it("configures all platforms", async () => {
+      const results = await setupAll();
+
+      expect(results).toHaveLength(SUPPORTED_PLATFORMS.length);
+      for (const result of results) {
+        expect(result.status).toBe("created");
+      }
+      const platforms = results.map((r) => r.platform);
+      expect(platforms).toContain("codex");
+      expect(platforms).toContain("claude");
+      expect(platforms).toContain("cursor");
+      expect(platforms).toContain("gemini");
+    });
+
+    it("is idempotent — second run returns already_configured for all", async () => {
+      await setupAll();
+      const results = await setupAll();
+
+      for (const result of results) {
+        expect(result.status).toBe("already_configured");
+      }
     });
   });
 
