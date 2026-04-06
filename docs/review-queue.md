@@ -92,3 +92,35 @@ Commits pending review. Auto-managed:
 - 722069f (2026-04-05) feat(review-diff): add co-change coupling check with Jaccard algorithm
 - accf405 (2026-04-05) feat(review-diff): add breaking change detection via export diff between refs
 - 811b560 (2026-04-05) feat(review-diff): add test gap detection via naming convention and import graph
+- faaca68 (2026-04-05) feat(review-diff): add formatter and register MCP tool
+- 2cecebb (2026-04-05) test(review-diff): add integration smoke test with real git repo
+- 99817f0 (2026-04-05) fix(review-diff): reduce false positives — secrets min_confidence high, blast-radius cap 10, test-gaps check tests/ dir
+- 8f862ad (2026-04-05) feat: add formatTable utility for tabular output formatting
+- 2c99ef4 (2026-04-05) refactor: use formatTable in hotspots, complexity, clones, usage report formatters
+- ef73ea7 (2026-04-05) perf: token optimization — compress rules, fix boolean coercion, activate deferred tools
+- 050cb9d (2026-04-05) benchmark: add 2026-04-05 results — combo, search, symbols, outline, trace, new techniques
+- 0cf2360 (2026-04-05) feat: add describeTools function for on-demand tool schema retrieval
+- 28b7ccc (2026-04-05) test: add baseline tests for formatResponse before cascade changes
+- cb42312 (2026-04-05) feat: disable non-core tools in ListTools, add describe_tools meta-tool
+- 1b4337c (2026-04-05) feat: add progressive response shortening cascade in formatResponse
+- ef77489 (2026-04-05) feat: add compact and counts formatters for complexity, clones, hotspots
+- 184a4ed (2026-04-05) feat: add precheck-read hook for enforcing CodeSift tool usage
+- 5957ad1 (2026-04-05) feat: add postindex-file hook and setup --hooks integration
+- 512acff (2026-04-05) feat: add ContainingSymbol type and ranked param for search_text v2
+- edcb119 (2026-04-05) feat: add 4-phase symbol promotion pipeline for search_text
+- 6bedb21 (2026-04-05) feat: wire ranked mode into searchText with auto_group precedence
+- 2146a80 (2026-04-05) docs: update CLAUDE.md with new tool discovery, ranked search, hooks, cascade
+- 4caea29 (2026-04-06) feat: add Gemini CLI platform and setup-all command
+- 5c1dbee (2026-04-06) feat: add CODESIFT_INSTRUCTIONS compact guidance for MCP instructions field
+- f4c2a8c (2026-04-06) fix: default hooks and rules to true in setup command, parse --force flag
+- c97cdbc (2026-04-06) feat: send CODESIFT_INSTRUCTIONS via MCP instructions field to all clients
+- ceb2212 (2026-04-06) feat: add rules/ directory with platform-specific guidance templates
+- bc84203 (2026-04-06) feat: include behavioral guidance in generate_claude_md output
+- 14f0cad (2026-04-06) feat: install platform-specific rules files during setup with version tracking
+- 022e8de (2026-04-06) feat: append-mode rules for Codex AGENTS.md and Gemini GEMINI.md
+- 85eb07f (2026-04-06) feat: verbose setup output showing all installed files and flags
+- 4dbc71f (2026-04-06) fix: resolve TypeScript errors in setup.ts (unused param, nullable array access)
+- bc9f05a (2026-04-06) fix: embedding content-hash skip gate, review_diff category, core tools test assertion
+- 6ba1e03 (2026-04-06) fix: formatTable null-safety, route symbol ID matching, test data assertions
+- 889cc0c (2026-04-06) fix: resolve TypeScript errors in review-diff-tools PromiseSettledResult handling
+- ba1ccfe (2026-04-06) docs: update README with 63 tools, new benchmarks, setup --rules/--hooks, MCP instructions
