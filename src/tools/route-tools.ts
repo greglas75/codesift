@@ -320,8 +320,15 @@ export async function traceRoute(
   const allCalleeSymbols: CodeSymbol[] = [];
 
   for (const handler of handlers) {
-    // Find the full symbol in index
-    const fullSym = index.symbols.find((s) => s.id === handler.symbol.id);
+    // Find the full symbol in index.
+    // handler.symbol has a stripped ID (no repo prefix, from stripSource), so match
+    // by file + name + start_line instead of id to avoid the prefix mismatch.
+    const fullSym = index.symbols.find(
+      (s) =>
+        s.file === handler.symbol.file &&
+        s.name === handler.symbol.name &&
+        s.start_line === handler.symbol.start_line,
+    );
     if (!fullSym) continue;
 
     const tree = buildCallTree(fullSym, adjacency, "callees", 3);

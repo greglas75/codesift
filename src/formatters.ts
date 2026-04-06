@@ -30,7 +30,7 @@ export function formatTable(
   };
 
   const formatRow = (cells: string[]) =>
-    headers.map((_, i) => pad(cells[i] ?? "", widths[i])).join("  ");
+    headers.map((_, i) => pad(cells[i] ?? "", widths[i] ?? 10)).join("  ");
 
   const headerLine = formatRow(headers);
   const separator = widths.map((w) => "-".repeat(w)).join("  ");

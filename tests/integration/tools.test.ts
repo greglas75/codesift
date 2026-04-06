@@ -32,7 +32,17 @@ beforeEach(async () => {
 afterEach(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
   resetConfigCache();
-  await rm(tmpDir, { recursive: true, force: true });
+  // Retry cleanup to handle a race condition: background fire-and-forget tasks
+  // (embedding writes, graph cache saves) may still be writing into .codesift/
+  // when rm() starts, causing an ENOTEMPTY on the final rmdir() call.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await rm(tmpDir, { recursive: true, force: true });
+      break;
+    } catch {
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 50));
+    }
+  }
 });
 
 /**
@@ -1426,8 +1436,12 @@ describe("codebase_retrieval", () => {
 
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("file_tree");
-    const data = result.results[0]!.data as Array<{ name: string }>;
-    expect(data).toHaveLength(3); // 3 files in fixture src/
+    // data is a formatted string (one file entry per line)
+    const data = result.results[0]!.data as string;
+    expect(typeof data).toBe("string");
+    // 3 files in fixture src/: types.ts, user-service.ts, payment.ts
+    const lines = data.trim().split("\n").filter((l) => l.includes("src/"));
+    expect(lines.length).toBe(3);
   });
 
   it("handles outline sub-query", async () => {
@@ -1439,8 +1453,12 @@ describe("codebase_retrieval", () => {
 
     expect(result.results.length).toBe(1);
     expect(result.results[0]!.type).toBe("outline");
-    const data = result.results[0]!.data as { symbols: Array<{ name: string }> };
-    expect(data.symbols.length).toBeGreaterThanOrEqual(3); // types.ts has User, PaymentInfo, UserRole
+    // data is a formatted string with one symbol per line
+    const data = result.results[0]!.data as string;
+    expect(typeof data).toBe("string");
+    // types.ts has User, PaymentInfo, UserRole — at least 3 symbols
+    const symbolLines = data.trim().split("\n").filter((l) => l.trim().length > 0);
+    expect(symbolLines.length).toBeGreaterThanOrEqual(3);
   });
 
   it("handles references sub-query", async () => {
