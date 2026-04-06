@@ -1,0 +1,187 @@
+<!-- codesift-rules v0.1.0 hash:PLACEHOLDER -->
+
+# CodeSift MCP — Agent Rules (Gemini / GEMINI.md)
+
+## Setup
+
+Run once per session:
+
+1. `list_repos()` — get the repo identifier (e.g. `local/codesift-mcp`). **Never call again** — cache the result.
+2. If the repo is missing: `index_folder(path=<root>)` once to index it.
+3. Use `"local/<folder-name>"` as the `repo` parameter for all tool calls.
+
+## Tool Discovery
+
+**63 MCP tools total** (13 core visible + 50 deferred/hidden).
+
+Only ~13 core tools appear in ListTools. Hidden tools are discovered on demand:
+
+- `discover_tools(query="dead code")` — keyword search across all 63 tools
+- `describe_tools(names=["find_dead_code"])` — get full parameter schema
+- `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
+
+Core tools always visible: `search_text`, `search_symbols`, `get_file_outline`, `get_file_tree`, `get_symbol`, `get_symbols`, `find_references`, `find_and_show`, `codebase_retrieval`, `semantic_search`, `list_repos`, `index_file`, `discover_tools`, `describe_tools`.
+
+## Tool Mapping
+
+Use this table to pick the right tool for each task:
+
+| Task | Tool |
+|------|------|
+| text pattern search | `search_text(file_pattern=)` |
+| find function/class/type | `search_symbols(include_source=true)` |
+| file structure/outline | `get_file_outline` |
+| find files | `get_file_tree(compact=true)` |
+| read 1 symbol | `get_symbol` |
+| read 2+ symbols | `get_symbols` (batch) |
+| find usages | `find_references` |
+| symbol + refs in 1 call | `find_and_show(include_refs=true)` |
+| call chain | `trace_call_chain` |
+| blast radius | `impact_analysis(since="HEAD~3")` |
+| concept question | `semantic_search` or `codebase_retrieval(queries=[{type:"semantic",...}])` |
+| multi-search 3+ | `codebase_retrieval(queries=[...])` |
+| symbol in context | `get_context_bundle` |
+| dead code | `find_dead_code` |
+| complexity | `analyze_complexity` |
+| copy-paste | `find_clones` |
+| anti-patterns | `search_patterns` |
+| git churn | `analyze_hotspots` |
+| cross-repo | `cross_repo_search` |
+| circular deps | `find_circular_deps` or `get_knowledge_map(focus=)` |
+| mermaid diagram | `trace_call_chain(output_format="mermaid")` |
+| affected tests | `impact_analysis` → `.affected_tests` |
+| explore new repo | `suggest_queries` |
+| re-index 1 file | `index_file(path=)` |
+| route trace | `trace_route` |
+| code modules | `detect_communities(focus=)` |
+| go to definition | `go_to_definition` |
+| return type | `get_type_info` |
+| cross-file rename | `rename_symbol` |
+| scan secrets | `scan_secrets` |
+| search past sessions | `search_conversations` |
+| symbol ↔ conversation | `find_conversations_for_symbol` |
+| index conversations | `index_conversations` |
+| structural diff | `diff_outline(since=)` |
+| what changed | `changed_symbols(since=)` |
+
+## When to Use (Situational Triggers)
+
+| Situation | Tool |
+|-----------|------|
+| refactor/clean up | `analyze_complexity(top_n=10)` |
+| dead code/unused | `find_dead_code` |
+| unused imports | `find_unused_imports` |
+| DRY/duplication | `find_clones(min_similarity=0.7)` |
+| architecture/deps | `detect_communities(focus="src")` |
+| module boundaries | `check_boundaries` |
+| symbol roles (hub/leaf/bridge) | `classify_roles` |
+| structural code patterns | `ast_query` |
+| diagram/visualize | `trace_call_chain(output_format="mermaid")` |
+| hotspots/tech debt | `analyze_hotspots(since_days=90)` |
+| unfamiliar symbol | `get_context_bundle` |
+| new repo | `suggest_queries` |
+| trace endpoint | `trace_route` |
+| dense context (5+ symbols) | `assemble_context(level="L1")` |
+| overview only | `assemble_context(level="L3")` |
+| review git diff | `review_diff` |
+| code review / PR | `changed_symbols(since="HEAD~N")` + `diff_outline` |
+| quick symbol + refs | `find_and_show(include_refs=true)` |
+| error seen before | `search_conversations` |
+| before refactoring complex fn | `find_conversations_for_symbol` |
+| "we discussed this" | `search_conversations` |
+| secrets/leaked keys | `scan_secrets` |
+| security audit | `scan_secrets(min_confidence="high")` |
+| code audit | `search_patterns("empty-catch")` |
+| past decisions | `find_conversations_for_symbol` |
+
+## Key Parameters
+
+### search_symbols
+- `detail_level="compact"` — locations only (~15 tok/result vs ~150 default)
+- `token_budget=N` — cap output instead of guessing `top_k`
+- `file_pattern=` — always pass when scope is known (e.g. `"*.ts"`, `"src/tools/"`)
+- `kind=` — filter by type: `function`, `class`, `type`, `interface`
+- `include_source=true` — include source code in results
+
+### search_text
+- `group_by_file=true` — ~80% output reduction on many matches
+- `auto_group=true` — auto-switch to grouped above 50 matches
+- `ranked=true` — classifies hits by containing function, deduplicates (max 2/function), ranks by centrality. Returns `containing_symbol` field. Takes precedence over `auto_group`.
+- `file_pattern=` — always pass when scope is known
+
+### assemble_context levels
+- `L0` — full source (use when editing)
+- `L1` — signatures only (3× more symbols fit, use when reading)
+- `L2` — file summaries
+- `L3` — directory overview (91% less tokens, use for orientation)
+
+### codebase_retrieval
+- Always pass `token_budget` to cap output
+- Batch 3+ searches: `queries=[{type:"semantic",...},{type:"text",...}]`
+
+### get_knowledge_map
+- **ALWAYS pass `focus=`** — without it returns 129K+ tokens
+
+## Hint Codes
+
+The server appends hint codes to responses to guide tool usage. Act on them immediately.
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| `H1(n)` | n matches returned | Add `group_by_file=true` |
+| `H2(n,tool)` | n consecutive identical calls | Batch into one `tool` call |
+| `H3(n)` | `list_repos` called n times | Reuse cached value |
+| `H4` | `include_source` without `file_pattern` | Add `file_pattern` |
+| `H5(path)` | Duplicate `get_file_tree` | Use cached result |
+| `H6(n)` | n results without `detail_level` | Add `detail_level='compact'` |
+| `H7` | `get_symbol` after `search_symbols` | Use `get_context_bundle` |
+| `H8(n)` | n× `get_symbol` calls | Use `assemble_context(level='L1')` |
+| `H9` | Question-word text query | Use semantic search |
+
+## ALWAYS
+
+- Use `semantic_search` or `codebase_retrieval(type:"semantic")` for conceptual questions
+- Use `trace_route` FIRST for any API endpoint — NEVER multiple `search_text` + `trace_call_chain`
+- Use `detect_communities` BEFORE `get_knowledge_map` — NEVER `knowledge_map` without communities first
+- Use `index_file(path)` after editing — NEVER `index_folder` (9ms vs 3-8s)
+- Pass `include_source=true` on `search_symbols`
+- Use `get_symbols` (batch) for 2+ symbols — NEVER sequential `get_symbol`
+- Batch 3+ searches into `codebase_retrieval`
+- Use `search_conversations` when encountering error/bug that may have been solved before
+- Use `Read` tool when file path is already known — CodeSift excels at discovery
+
+## NEVER
+
+- Call `index_folder` if repo already in `list_repos` — file watcher auto-updates
+- Call `list_repos` more than once per session
+- Use manual Edit on multiple files for rename — use `rename_symbol`
+- Read entire file just to get a return type — use `get_type_info`
+- Index worktrees — use the main repo index
+- Call `get_knowledge_map` without `focus=` parameter
+
+## Response Cascade
+
+Large responses auto-shorten to stay within token limits:
+
+| Threshold | Format | Annotation |
+|-----------|--------|------------|
+| > 52,500 chars | compact format | `[compact]` prepended |
+| > 87,500 chars | counts only | `[counts]` prepended |
+| > 105,000 chars | hard truncate | `[truncated]` prepended |
+
+Cascade is **skipped** when `detail_level` or `token_budget` is explicitly set.
+
+## Hooks
+
+Setup auto-indexing and read-redirect hooks for Claude Code:
+
+```
+codesift setup claude --hooks
+```
+
+Installs two hooks in `.claude/settings.local.json`:
+
+- **PreToolUse** (`precheck-read`) — redirects `Read` on large code files to CodeSift tools
+- **PostToolUse** (`postindex-file`) — auto-runs `index_file` after `Edit` or `Write`
+
+This ensures the index stays current without manual `index_file` calls after every edit.

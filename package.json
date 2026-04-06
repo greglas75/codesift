@@ -12,6 +12,7 @@
   "main": "./dist/server.js",
   "files": [
     "dist",
+    "rules",
     "src/parser/languages",
     "README.md",
     "LICENSE"

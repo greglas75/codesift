@@ -31,6 +31,7 @@ export default defineConfig({
           name: "core",
           include: [
             "tests/instructions*.test.ts",
+            "tests/rules-content.test.ts",
             "tests/cli/**/*.test.ts",
             "tests/formatters/**/*.test.ts",
             "tests/lsp/**/*.test.ts",
