@@ -31,9 +31,32 @@ Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts
 ### CLI hooks (NEW)
 `codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift) and PostToolUse (auto index-file after Edit/Write). Hooks go to `.claude/settings.local.json`.
 
+## After adding/changing features — update checklist
+
+When you add a new tool, change tool count, update benchmarks, or modify behavior:
+
+1. **This repo (codesift-mcp):**
+   - `src/instructions.ts` — update if ALWAYS/NEVER rules or hint codes changed
+   - `rules/codesift.md` + `rules/codesift.mdc` + `rules/codex.md` + `rules/gemini.md` — update tool mapping
+   - `CLAUDE.md` — update architecture section, tool count
+   - `README.md` — update tool count, benchmarks, feature table
+   - Bump version: `npm version patch/minor` → `npm publish --ignore-scripts`
+
+2. **Website (../codesift-website):**
+   - `public/llms.txt` — update features, install instructions, tool count
+   - `public/llms-full.txt` — update header, add new articles
+   - Components with tool count: Hero, FeatureGrid, Footer, Problem, Nav, Pricing, BaseLayout
+   - Pages: index, tools/index, how-it-works, benchmarks, articles/index
+   - Build + deploy: `npm run build && wrangler pages deploy dist --project-name codesift-website --commit-dirty=true`
+
+3. **Quick grep to find all places with a number (e.g., tool count):**
+   ```bash
+   grep -rn "64 tools\|64 MCP" src/ ../codesift-website/src/
+   ```
+
 ## Architecture
 
-**63 MCP tools** (13 core + 50 deferred) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection
+**64 MCP tools** (13 core + 51 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection
 
 **src/tools/** (21 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
 **src/lsp/** (4 files) — LSP bridge (6 languages)
@@ -44,4 +67,6 @@ Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts
 **src/utils/** (6 files) — Import graph, glob, walk, git validation
 **src/cli/** (4 files) — CLI commands + hooks.ts (PreToolUse/PostToolUse)
 **src/formatters-shortening.ts** — Compact/counts formatters for progressive cascade
-**tests/** — 830+ tests (Vitest)
+**src/instructions.ts** — CODESIFT_INSTRUCTIONS (~800 tok) sent via MCP instructions field
+**rules/** — Platform-specific rules (claude.md, cursor.mdc, codex.md, gemini.md)
+**tests/** — 895+ tests (Vitest)
