@@ -113,9 +113,10 @@ const DELIMITER_END = "<!-- codesift-rules-end -->";
 
 async function installRulesAppendMode(
   platform: string,
-  options?: SetupOptions,
+  _options?: SetupOptions,
 ): Promise<InstallRulesResult> {
   const config = APPEND_MODE_PLATFORMS[platform];
+  if (!config) return { path: "", action: "error", error: `No append config for ${platform}` };
   const targetPath = join(process.cwd(), config.targetFile);
 
   try {
@@ -202,7 +203,7 @@ export async function installRules(
     // Check if target already exists
     if (existsSync(targetPath)) {
       const existingContent = await readFile(targetPath, "utf-8");
-      const firstLine = existingContent.split("\n")[0];
+      const firstLine = existingContent.split("\n")[0] ?? "";
       const match = HEADER_REGEX.exec(firstLine);
 
       if (match) {
