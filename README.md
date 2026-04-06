@@ -1,6 +1,8 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 48 search, retrieval, and analysis tools via CLI or MCP server. It uses 20-33% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 63 search, retrieval, and analysis tools via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+
+**Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
 ## Install
 
@@ -11,26 +13,32 @@ npm install -g codesift-mcp
 Then configure your AI coding tool (pick one, or use `all`):
 
 ```bash
-codesift setup claude    # Claude Code
-codesift setup codex     # OpenAI Codex CLI
-codesift setup cursor    # Cursor IDE
-codesift setup gemini    # Gemini CLI (Antigravity)
+codesift setup claude    # Claude Code — config + rules + hooks
+codesift setup codex     # Codex CLI — config + AGENTS.md rules
+codesift setup cursor    # Cursor IDE — config + .cursor/rules
+codesift setup gemini    # Gemini CLI — config + GEMINI.md rules
 codesift setup all       # All platforms at once
 ```
 
+**What `setup` installs (all by default):**
+
+| Component | What it does | Opt-out |
+|-----------|-------------|---------|
+| **MCP config** | Registers codesift-mcp server | (required) |
+| **Rules file** | Tool mapping, hints, ALWAYS/NEVER rules for your AI agent | `--no-rules` |
+| **Hooks** (Claude only) | Auto-index after Edit/Write, redirect large Read to CodeSift | `--no-hooks` |
+
+Additionally, every MCP client receives ~800 tokens of compact guidance automatically via the MCP `instructions` field — zero setup needed.
+
 ## Update
 
-After installing a new version of codesift-mcp, re-run setup to ensure all platforms point to the latest:
-
 ```bash
-# Update the package
 npm update -g codesift-mcp
-
-# Re-configure all platforms (safe — skips if already configured)
-codesift setup all
+codesift setup all              # Updates rules files to latest version
+codesift setup all --force      # Force-update even if you modified rules
 ```
 
-If you use `npx -y codesift-mcp` (the default), each platform automatically picks up the latest published version on next session start — no manual re-setup needed. The `setup all` command is only necessary if you switch from a local build to the npm package or vice versa.
+If you use `npx -y codesift-mcp` (the default), each platform automatically picks up the latest published version on next session start. Re-run `setup` to update rules files to the latest version.
 
 ## Quick start
 
@@ -50,28 +58,26 @@ codesift retrieve local/my-project \
 
 ### Combo benchmark (real-world tool sequences)
 
-603 real tasks from usage.jsonl — exact query sequences agents used across 33 repos. Native (grep/find/read) vs CodeSift.
+772 real tasks from usage.jsonl — exact query sequences agents used across 33+ repos. Native (grep/find/read) vs CodeSift.
 
 | Sequence | Runs | Tok native | Tok Sift | Delta | Wins |
 |----------|------|-----------|----------|-------|------|
-| search_symbols → search_text | 65 | 235,823 | 32,890 | **-86%** | 41/65 |
-| search_patterns → search_text → search_patterns | 39 | 185,433 | 28,556 | **-85%** | 30/39 |
-| 4-gram: pat→st→pat→st | 37 | 376,391 | 51,980 | **-86%** | 25/37 |
-| search_text → search_symbols → search_text | 27 | 112,571 | 21,823 | **-81%** | 18/27 |
-| search_text → search_patterns → search_text | 40 | 309,924 | 63,219 | **-80%** | 25/40 |
-| get_file_tree → search_text | 50 | 388,210 | 122,653 | **-68%** | 43/50 |
-| **AGGREGATE** | **603** | **4,584,153** | **1,860,130** | **-59%** | **447/603** |
+| pat→st→pat→st (4-gram) | 37 | 377,258 | 36,758 | **-90%** | 28/37 |
+| pat→st→pat | 39 | 186,436 | 20,500 | **-89%** | 31/39 |
+| st→pat→st→pat | 35 | 307,490 | 35,905 | **-88%** | 25/35 |
+| ss→st | 78 | 202,837 | 36,408 | **-82%** | 35/78 |
+| st→pat→st | 40 | 250,240 | 44,424 | **-82%** | 27/40 |
+| st→tree→st | 28 | 262,703 | 61,093 | **-77%** | 22/28 |
+| tree→st | 57 | 380,324 | 133,578 | **-65%** | 44/57 |
+| **AGGREGATE** | **772** | **5,130,240** | **1,994,825** | **-61%** | **542/772** |
 
-### Per-category (70 tasks, single-tool)
+### Per-tool (single-tool benchmark)
 
-| Category | CodeSift | Bash grep | Delta |
-|----------|----------|-----------|-------|
-| Text Search | 48,930 tok | 72,993 tok | **-33%** |
-| Symbol Search | 63,829 tok | 60,282 tok | +6% |
-| File Structure | 36,580 tok | 45,489 tok | **-20%** |
-| Code Retrieval | 57,703 tok | 60,482 tok | **-5%** |
-| Relationships | 52,312 tok | 60,810 tok | **-14%** |
-| Semantic Search | 7.8/10 quality | 6.5/10 | **+20% quality** |
+| Tool | Tok native | Tok Sift | Delta |
+|------|-----------|----------|-------|
+| search_text vs rg | 1,015,245 | 49,718 | **-95%** |
+| search_symbols vs rg | 192,486 | 34,186 | **-82%** |
+| get_file_outline vs Read | 91,796 | 58,229 | **-37%** |
 
 ## Performance features
 
@@ -91,8 +97,13 @@ codesift retrieve local/my-project \
 | **Framework-aware dead code** | Whitelist React hooks, NestJS lifecycle, Next.js handlers | <10% false positives (was ~40%) |
 | **Mermaid diagrams** | `detect_communities`, `get_knowledge_map`, `trace_route` output Mermaid | Paste-ready architecture diagrams |
 | **HTML report** | `generate_report` → standalone browser report | Complexity, dead code, hotspots, communities |
-| **30K token hard cap** | Truncate any response exceeding 30K tokens | Last-resort safety net |
-| **Sequential hints** | Prepended hints suggest batching after 3+ consecutive calls | Guides agents toward codebase_retrieval |
+| **Progressive cascade** | >15K tok → compact format, >25K → counts only, >30K → truncate | Auto-adjusting response size |
+| **Tool visibility** | Non-core tools hidden via MCP `disable()`, discoverable on demand | ~10K fewer tokens in system prompt |
+| **MCP instructions** | ~800 tok of agent guidance sent automatically to every client | Zero-setup onboarding |
+| **Ranked search** | `search_text(ranked=true)` classifies hits by containing symbol, deduplicates | Saves 1-3 follow-up calls |
+| **PreToolUse hooks** | Redirect large-file Read to CodeSift outline/search | Prevents 5K+ token file dumps |
+| **PostToolUse hooks** | Auto-reindex after Edit/Write | Always-fresh index |
+| **Sequential hints** | Prepended hints (H1-H9) suggest batching after 3+ consecutive calls | Guides agents toward efficient usage |
 
 ## CLI commands
 
@@ -174,9 +185,9 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (48 total)
+## MCP tools (63 total — 13 core + 50 discoverable)
 
-When running as an MCP server, CodeSift exposes these tools:
+When running as an MCP server, CodeSift exposes 13 core tools directly. The remaining 50 tools are discoverable via `discover_tools` and `describe_tools` to minimize system prompt token overhead.
 
 | Category | Tools |
 |----------|-------|
@@ -195,7 +206,8 @@ When running as an MCP server, CodeSift exposes these tools:
 | **Architecture** | `classify_roles` (symbol role classification via call graph), `check_boundaries` (architecture boundary enforcement), `ast_query` (structural grep via tree-sitter) |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
 | **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
-| **Utility** | `generate_claude_md`, `usage_stats` (with token savings tracking) |
+| **Tool discovery** | `discover_tools` (keyword search across hidden tools), `describe_tools` (full schema on demand, optional `reveal`) |
+| **Utility** | `generate_claude_md` (architecture + behavioral guidance), `usage_stats` (with token savings tracking) |
 
 ### Conversation search
 
@@ -301,7 +313,7 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing all 48 tools to AI agents.
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 63 tools to AI agents (13 core visible + 50 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -486,7 +498,7 @@ cd codesift-mcp
 npm install
 npm run download-wasm   # Download tree-sitter WASM grammars
 npm run build           # TypeScript compilation
-npm test                # Run tests (Vitest, 570+ tests)
+npm test                # Run tests (Vitest, 895+ tests)
 npm run test:coverage   # Coverage report
 npm run lint            # Type check (tsc --noEmit)
 ```
@@ -498,7 +510,7 @@ BSL-1.1
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (48) | src/register-tools.ts (grep 'name: "' count: 48) |
+| Tool count (63) | src/register-tools.ts (TOOL_DEFINITIONS + discover_tools + describe_tools) |
 | Quick install | package.json:bin (line 8-11) |
 | Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |
