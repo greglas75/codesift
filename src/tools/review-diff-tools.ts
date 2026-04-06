@@ -1030,17 +1030,18 @@ export async function reviewDiff(
 
   for (let i = 0; i < settled.length; i++) {
     const outcome = settled[i];
-    const checkName = enabledChecks[i];
+    const checkName = enabledChecks[i] ?? `check_${i}`;
 
-    if (outcome.status === "rejected") {
+    if (!outcome || outcome.status === "rejected") {
       checkResults.push({
         check: checkName,
         status: "error",
         findings: [],
         duration_ms: 0,
-        summary: `Error: ${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)}`,
+        summary: `Error: ${outcome && outcome.status === "rejected" && outcome.reason instanceof Error ? outcome.reason.message : String(outcome?.status === "rejected" ? outcome.reason : "unknown")}`,
       });
     } else if (
+      outcome.status === "fulfilled" &&
       outcome.value &&
       typeof outcome.value === "object" &&
       "status" in outcome.value &&
@@ -1053,7 +1054,7 @@ export async function reviewDiff(
         duration_ms: checkTimeoutMs,
         summary: `Timed out after ${checkTimeoutMs}ms`,
       });
-    } else {
+    } else if (outcome.status === "fulfilled") {
       checkResults.push(outcome.value as CheckResult);
     }
   }
