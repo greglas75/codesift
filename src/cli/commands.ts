@@ -457,10 +457,12 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
     die(`Missing platform. Usage: codesift setup <${SUPPORTED_PLATFORMS.join("|")}|all>`);
   }
 
-  const hooks = getBoolFlag(flags, "hooks") ?? false;
+  const hooks = getBoolFlag(flags, "hooks") ?? true;
+  const rules = getBoolFlag(flags, "rules") ?? true;
+  const force = getBoolFlag(flags, "force") ?? false;
 
   if (platform === "all") {
-    const results = await setupAll({ hooks });
+    const results = await setupAll({ hooks, rules, force });
     if (getBoolFlag(flags, "json")) {
       output(results, flags);
     } else {
@@ -471,7 +473,7 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
     return;
   }
 
-  const result = await setup(platform, { hooks });
+  const result = await setup(platform, { hooks, rules, force });
 
   if (getBoolFlag(flags, "json")) {
     output(result, flags);

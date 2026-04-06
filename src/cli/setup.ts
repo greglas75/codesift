@@ -233,6 +233,8 @@ export async function setupClaudeHooks(): Promise<void> {
 
 export interface SetupOptions {
   hooks?: boolean;
+  rules?: boolean;
+  force?: boolean;
 }
 
 const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
