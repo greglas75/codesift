@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
 import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 // Mock homedir to use a temp directory
@@ -15,9 +16,8 @@ vi.mock("node:os", async () => {
 });
 
 // Import after mock so the module picks up our homedir
-const { setup, setupAll, formatSetupResult, SUPPORTED_PLATFORMS, setupClaudeHooks } = await import(
-  "../../src/cli/setup.js"
-);
+const { setup, setupAll, formatSetupResult, SUPPORTED_PLATFORMS, setupClaudeHooks, installRules } =
+  await import("../../src/cli/setup.js");
 
 describe("setup", () => {
   beforeEach(async () => {
@@ -418,6 +418,115 @@ describe("setup", () => {
       // New hooks must be added
       expect(settings.hooks?.PreToolUse).toBeDefined();
       expect(settings.hooks?.PostToolUse).toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // installRules
+  // -------------------------------------------------------------------------
+
+  describe("installRules", () => {
+    it("setup('claude', { rules: true }) creates .claude/rules/codesift.md", async () => {
+      await setup("claude", { rules: true });
+
+      const rulesPath = join(tempHome, ".claude", "rules", "codesift.md");
+      expect(existsSync(rulesPath)).toBe(true);
+
+      const content = await readFile(rulesPath, "utf-8");
+      expect(content).toMatch(/^<!-- codesift-rules v/);
+      expect(content).toContain("Tool Mapping");
+    });
+
+    it("setup('cursor', { rules: true }) creates .cursor/rules/codesift.mdc", async () => {
+      await setup("cursor", { rules: true });
+
+      const rulesPath = join(tempHome, ".cursor", "rules", "codesift.mdc");
+      expect(existsSync(rulesPath)).toBe(true);
+
+      const content = await readFile(rulesPath, "utf-8");
+      expect(content).toMatch(/<!-- codesift-rules v/);
+      expect(content).toContain("Tool Mapping");
+    });
+
+    it("re-run with same version and unmodified content → skipped", async () => {
+      await setup("claude", { rules: true });
+      const result = await installRules("claude", tempHome, { rules: true });
+
+      expect(result.action).toBe("skipped");
+    });
+
+    it("user-modified rules file → skipped with warning (no overwrite)", async () => {
+      await setup("claude", { rules: true });
+
+      // Simulate user modification
+      const rulesPath = join(tempHome, ".claude", "rules", "codesift.md");
+      const original = await readFile(rulesPath, "utf-8");
+      await writeFile(rulesPath, original + "\n## My Custom Section\n", "utf-8");
+
+      const result = await installRules("claude", tempHome, { rules: true });
+
+      expect(result.action).toBe("skipped");
+      expect(result.warning).toBeDefined();
+      expect(result.warning).toMatch(/modified/i);
+
+      // File should NOT be overwritten
+      const content = await readFile(rulesPath, "utf-8");
+      expect(content).toContain("My Custom Section");
+    });
+
+    it("force: true on modified file → force-updated", async () => {
+      await setup("claude", { rules: true });
+
+      // Simulate user modification
+      const rulesPath = join(tempHome, ".claude", "rules", "codesift.md");
+      const original = await readFile(rulesPath, "utf-8");
+      await writeFile(rulesPath, original + "\n## My Custom Section\n", "utf-8");
+
+      const result = await installRules("claude", tempHome, { rules: true, force: true });
+
+      expect(result.action).toBe("force-updated");
+
+      // File should be overwritten — no custom section
+      const content = await readFile(rulesPath, "utf-8");
+      expect(content).not.toContain("My Custom Section");
+    });
+
+    it("setup('claude', { rules: false }) → no rules file created", async () => {
+      await setup("claude", { rules: false });
+
+      const rulesPath = join(tempHome, ".claude", "rules", "codesift.md");
+      expect(existsSync(rulesPath)).toBe(false);
+    });
+
+    it("auto-creates .claude/rules/ directory if absent", async () => {
+      const rulesDir = join(tempHome, ".claude", "rules");
+      expect(existsSync(rulesDir)).toBe(false);
+
+      await installRules("claude", tempHome, { rules: true });
+
+      expect(existsSync(rulesDir)).toBe(true);
+      expect(existsSync(join(rulesDir, "codesift.md"))).toBe(true);
+    });
+
+    it("codex/gemini platforms return early (not supported yet)", async () => {
+      const codexResult = await installRules("codex", tempHome, { rules: true });
+      expect(codexResult.action).toBe("skipped");
+
+      const geminiResult = await installRules("gemini", tempHome, { rules: true });
+      expect(geminiResult.action).toBe("skipped");
+    });
+
+    it("version change with unmodified template hash → updated", async () => {
+      await setup("claude", { rules: true });
+
+      const rulesPath = join(tempHome, ".claude", "rules", "codesift.md");
+      const content = await readFile(rulesPath, "utf-8");
+      // Simulate an older version header but keep the same body hash
+      const modified = content.replace(/v[\d.]+/, "v0.0.1");
+      await writeFile(rulesPath, modified, "utf-8");
+
+      const result = await installRules("claude", tempHome, { rules: true });
+      expect(result.action).toBe("updated");
     });
   });
 });

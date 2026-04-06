@@ -3,9 +3,11 @@
 // ---------------------------------------------------------------------------
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,6 +20,13 @@ export interface SetupResult {
   platform: string;
   config_path: string;
   status: "created" | "updated" | "already_configured";
+}
+
+export interface InstallRulesResult {
+  path: string;
+  action: "created" | "updated" | "skipped" | "force-updated" | "error";
+  warning?: string;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +71,133 @@ async function readJsonFile(path: string): Promise<Record<string, unknown>> {
 
 async function writeJsonFile(path: string, data: Record<string, unknown>): Promise<void> {
   await writeFile(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
+}
+
+// ---------------------------------------------------------------------------
+// resolvePackageFile — find a file relative to the package root
+// ---------------------------------------------------------------------------
+
+function resolvePackageFile(relativePath: string): string {
+  const thisDir = dirname(fileURLToPath(import.meta.url));
+  // Try dist/../<path> first, then src/../../<path>
+  for (const base of [join(thisDir, ".."), join(thisDir, "..", "..")]) {
+    const candidate = join(base, relativePath);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(`Could not resolve package file: ${relativePath}`);
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+// ---------------------------------------------------------------------------
+// installRules — install platform-specific rules file
+// ---------------------------------------------------------------------------
+
+const RULES_FILES: Record<string, { source: string; targetDir: string; targetFile: string }> = {
+  claude: { source: "rules/codesift.md", targetDir: ".claude/rules", targetFile: "codesift.md" },
+  cursor: { source: "rules/codesift.mdc", targetDir: ".cursor/rules", targetFile: "codesift.mdc" },
+};
+
+const HEADER_REGEX = /^<!-- codesift-rules v([\d.]+) hash:(\w+) -->/;
+
+export async function installRules(
+  platform: string,
+  homeDir: string,
+  options?: SetupOptions,
+): Promise<InstallRulesResult> {
+  const rulesConfig = RULES_FILES[platform];
+  if (!rulesConfig) {
+    return { path: "", action: "skipped" };
+  }
+
+  const targetPath = join(homeDir, rulesConfig.targetDir, rulesConfig.targetFile);
+
+  try {
+    // Resolve source file and read it
+    const sourcePath = resolvePackageFile(rulesConfig.source);
+    const sourceContent = await readFile(sourcePath, "utf-8");
+
+    // Read version from package.json
+    const pkgPath = resolvePackageFile("package.json");
+    const pkgRaw = await readFile(pkgPath, "utf-8");
+    const pkg: unknown = JSON.parse(pkgRaw);
+    const version =
+      typeof pkg === "object" && pkg !== null && "version" in pkg
+        ? String((pkg as Record<string, unknown>)["version"])
+        : "unknown";
+
+    // Compute hash of the source content body (everything after the header line)
+    const sourceBody = sourceContent.replace(HEADER_REGEX, "").trimStart();
+    const sourceHash = sha256(sourceBody);
+
+    // Build the new file content with updated header
+    const header = `<!-- codesift-rules v${version} hash:${sourceHash} -->`;
+    const newContent = header + "\n" + sourceBody;
+
+    // Check if target already exists
+    if (existsSync(targetPath)) {
+      const existingContent = await readFile(targetPath, "utf-8");
+      const firstLine = existingContent.split("\n")[0];
+      const match = HEADER_REGEX.exec(firstLine);
+
+      if (match) {
+        const existingVersion = match[1];
+        const existingHash = match[2];
+
+        // Always verify actual body hash to detect user edits
+        const existingBody = existingContent.replace(HEADER_REGEX, "").trimStart();
+        const existingBodyHash = sha256(existingBody);
+        const bodyUnmodified = existingBodyHash === sourceHash;
+
+        if (bodyUnmodified) {
+          // Body matches source template
+          if (existingVersion === version && existingHash === sourceHash) {
+            // Same version, same hash, same body → nothing to do
+            return { path: targetPath, action: "skipped" };
+          }
+          // Version or header hash differs but body matches → safe update
+          await writeFile(targetPath, newContent, "utf-8");
+          return { path: targetPath, action: "updated" };
+        }
+
+        // Body has been modified by user
+        if (!options?.force) {
+          return {
+            path: targetPath,
+            action: "skipped",
+            warning: `Rules file has been modified by user. Use --force to overwrite.`,
+          };
+        }
+        // Force overwrite
+        await writeFile(targetPath, newContent, "utf-8");
+        return { path: targetPath, action: "force-updated" };
+      }
+
+      // No valid header found — treat as user-owned file
+      if (!options?.force) {
+        return {
+          path: targetPath,
+          action: "skipped",
+          warning: `Rules file has been modified by user. Use --force to overwrite.`,
+        };
+      }
+      await writeFile(targetPath, newContent, "utf-8");
+      return { path: targetPath, action: "force-updated" };
+    }
+
+    // Target doesn't exist — create dir and write
+    const targetDir = join(homeDir, rulesConfig.targetDir);
+    await ensureDir(targetDir);
+    await writeFile(targetPath, newContent, "utf-8");
+    return { path: targetPath, action: "created" };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { path: targetPath, action: "error", error: msg };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +390,9 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
   const result = await handler();
   if (platform === "claude" && options?.hooks) {
     await setupClaudeHooks();
+  }
+  if (options?.rules && (platform === "claude" || platform === "cursor")) {
+    await installRules(platform, homedir(), options);
   }
   return result;
 }
