@@ -3,16 +3,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig } from "./config.js";
 import { registerTools } from "./register-tools.js";
 import { autoDiscoverConversations } from "./tools/conversation-tools.js";
+import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
 
 loadConfig();
 
-const server = new McpServer({
-  name: "codesift-mcp",
-  version: "0.1.0",
-});
+const server = new McpServer(
+  { name: "codesift-mcp", version: "0.1.0" },
+  { instructions: CODESIFT_INSTRUCTIONS }
+);
 
 registerTools(server, { deferNonCore: true });
 
