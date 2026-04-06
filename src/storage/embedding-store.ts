@@ -170,7 +170,8 @@ export async function batchEmbed(
   const toEmbed: Array<{ id: string; text: string }> = [];
   for (const [id, text] of symbolTexts) {
     const hash = contentHash(text);
-    if (!existing.has(id) || hashes.get(id) !== hash) {
+    const needsEmbed = !existing.has(id) || (cacheKey !== undefined && hashes.get(id) !== hash);
+    if (needsEmbed) {
       toEmbed.push({ id, text });
     }
     hashes.set(id, hash);

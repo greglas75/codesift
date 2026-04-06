@@ -1385,6 +1385,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   // --- Review diff ---
   {
     name: "review_diff",
+    category: "diff",
+    searchHint: "review diff static analysis git changes secrets breaking-changes complexity dead-code blast-radius",
     description: "Run 9 parallel static analysis checks on a git diff: secrets, breaking changes, coupling gaps, complexity, dead-code, blast-radius, bug-patterns, test-gaps, hotspots. Returns a scored verdict (pass/warn/fail) with tiered findings.",
     schema: {
       repo: z.string().describe("Repository identifier"),

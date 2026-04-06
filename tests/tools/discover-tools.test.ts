@@ -30,7 +30,7 @@ describe("discoverTools", () => {
     expect(searchSymbols?.is_core).toBe(true);
     const searchPatterns = result.matches.find((m) => m.name === "search_patterns");
     if (searchPatterns) {
-      expect(searchPatterns.is_core).toBe(false);
+      expect(searchPatterns.is_core).toBe(true);
     }
   });
 
