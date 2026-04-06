@@ -42,6 +42,7 @@ Use this table to pick the right tool for each task:
 | find usages | `find_references` |
 | symbol + refs in 1 call | `find_and_show(include_refs=true)` |
 | call chain | `trace_call_chain` |
+| callers/callees of function | `get_call_hierarchy(direction="incoming")` |
 | blast radius | `impact_analysis(since="HEAD~3")` |
 | concept question | `semantic_search` or `codebase_retrieval(queries=[{type:"semantic",...}])` |
 | multi-search 3+ | `codebase_retrieval(queries=[...])` |
