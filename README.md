@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 63 search, retrieval, and analysis tools via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 64 search, retrieval, and analysis tools via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 **Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
@@ -185,7 +185,7 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (63 total — 13 core + 50 discoverable)
+## MCP tools (63 total — 13 core + 51 discoverable)
 
 When running as an MCP server, CodeSift exposes 13 core tools directly. The remaining 50 tools are discoverable via `discover_tools` and `describe_tools` to minimize system prompt token overhead.
 
@@ -290,6 +290,8 @@ scan_secrets(repo="local/my-project", file_pattern="src/config/**")
 | Get type info | `get_type_info` | Return types + docs via LSP hover — no file reading |
 | Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
 | Detect hardcoded secrets | `scan_secrets` | ~1,100 rules, AST-aware, masked output, auto-cached |
+| Ranked text search | `search_text(ranked=true)` | Classifies hits by function, saves follow-up get_symbol calls |
+| Find hidden tools | `discover_tools` + `describe_tools` | 51 tools hidden by default — search by keyword, get full schema |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -313,7 +315,7 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 63 tools to AI agents (13 core visible + 50 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 64 tools to AI agents (13 core visible + 50 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -472,9 +474,11 @@ All configuration is via environment variables.
 
 5. **File watcher** -- chokidar watches indexed folders for changes. Modified files are re-parsed and the index is updated incrementally.
 
-6. **Response guards** -- Multiple layers prevent token waste: auto-grouping at 80K chars, 30K token hard cap, response dedup cache (30s), in-flight request coalescing, sequential call hints, and source truncation.
+6. **Response guards** -- Multiple layers prevent token waste: progressive cascade (>15K tok → compact, >25K → counts, >30K → truncate), response dedup cache (30s), in-flight request coalescing, H1-H9 sequential hints, and source truncation.
 
-7. **LSP bridge** (optional) -- When a language server is installed (typescript-language-server, pylsp, gopls, rust-analyzer, solargraph, intelephense), CodeSift uses it for type-safe `find_references`, precise `go_to_definition`, `get_type_info` via hover, and cross-file `rename_symbol`. Falls back to tree-sitter/grep when LSP is unavailable. Lazy start + 5 min idle kill — zero overhead when not used.
+7. **Agent onboarding** -- MCP `instructions` field sends ~800 tokens of guidance (tool discovery, hints, ALWAYS/NEVER rules) to every client automatically. `codesift setup` installs full rules files per platform + Claude Code hooks for enforcement.
+
+8. **LSP bridge** (optional) -- When a language server is installed (typescript-language-server, pylsp, gopls, rust-analyzer, solargraph, intelephense), CodeSift uses it for type-safe `find_references`, precise `go_to_definition`, `get_type_info` via hover, and cross-file `rename_symbol`. Falls back to tree-sitter/grep when LSP is unavailable. Lazy start + 5 min idle kill — zero overhead when not used.
 
 ## Glob pattern support
 
@@ -566,7 +570,7 @@ BSL-1.1
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (63) | src/register-tools.ts (TOOL_DEFINITIONS + discover_tools + describe_tools) |
+| Tool count (64) | src/register-tools.ts (62 in TOOL_DEFINITIONS + discover_tools + describe_tools) |
 | Quick install | package.json:bin (line 8-11) |
 | Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |
