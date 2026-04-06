@@ -503,6 +503,62 @@ npm run test:coverage   # Coverage report
 npm run lint            # Type check (tsc --noEmit)
 ```
 
+## Publishing a new version
+
+After making changes, follow these steps to publish to npm:
+
+```bash
+# 1. Ensure clean working tree
+git status              # No uncommitted changes
+
+# 2. Build and verify
+npm run build           # Must succeed with 0 errors
+npm test                # Must pass (flaky ast-query tests may fail in full suite — OK if they pass individually)
+
+# 3. Bump version (choose one)
+npm version patch       # 0.2.0 → 0.2.1 (bug fixes)
+npm version minor       # 0.2.0 → 0.3.0 (new features)
+npm version major       # 0.2.0 → 1.0.0 (breaking changes)
+# This creates a git commit + tag automatically
+
+# 4. Publish to npm
+npm publish --ignore-scripts
+# npm will open browser for WebAuthn/Keychain authentication
+# Press Enter, confirm in browser, done
+
+# 5. Push to GitHub (commit + tag)
+git push && git push --tags
+```
+
+### What gets published
+
+The `files` field in `package.json` controls what ships:
+- `dist/` — compiled JavaScript
+- `rules/` — platform-specific agent rules (codesift.md, codesift.mdc, codex.md, gemini.md)
+- `src/parser/languages/` — tree-sitter WASM grammars
+- `README.md`, `LICENSE`
+
+### After publishing
+
+Users update with:
+```bash
+npm update -g codesift-mcp        # Update package
+codesift setup all                 # Update rules files to latest version
+```
+
+If using `npx -y codesift-mcp` (the default in MCP config), the latest version is picked up automatically on next session start.
+
+### Checklist before publishing
+
+- [ ] `npm run build` — 0 TypeScript errors
+- [ ] `npm test` — 895+ tests pass
+- [ ] `rules/codesift.md` updated if hints or tools changed
+- [ ] `src/instructions.ts` updated if rules changed (compact version)
+- [ ] `README.md` updated if features added
+- [ ] `CLAUDE.md` updated if architecture changed
+- [ ] Version bumped via `npm version`
+- [ ] Changes committed and pushed to GitHub
+
 ## License
 
 BSL-1.1
