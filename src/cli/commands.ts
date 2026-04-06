@@ -451,35 +451,28 @@ async function handlePatterns(args: string[], flags: Flags): Promise<void> {
 
 async function handleSetup(args: string[], flags: Flags): Promise<void> {
   const platform = args[0];
-  const { setup, setupAll, formatSetupResult, SUPPORTED_PLATFORMS } = await import("./setup.js");
+  const { formatSetupLines, SUPPORTED_PLATFORMS } = await import("./setup.js");
 
   if (!platform) {
     die(`Missing platform. Usage: codesift setup <${SUPPORTED_PLATFORMS.join("|")}|all>`);
+    return;
   }
 
   const hooks = getBoolFlag(flags, "hooks") ?? true;
   const rules = getBoolFlag(flags, "rules") ?? true;
   const force = getBoolFlag(flags, "force") ?? false;
+  const options = { hooks, rules, force };
 
   if (platform === "all") {
-    const results = await setupAll({ hooks, rules, force });
-    if (getBoolFlag(flags, "json")) {
-      output(results, flags);
-    } else {
-      for (const result of results) {
-        process.stdout.write(formatSetupResult(result) + "\n");
-      }
+    for (const p of SUPPORTED_PLATFORMS) {
+      const lines = await formatSetupLines(p, p === "claude" ? options : { rules });
+      for (const line of lines) process.stdout.write(line + "\n");
     }
     return;
   }
 
-  const result = await setup(platform, { hooks, rules, force });
-
-  if (getBoolFlag(flags, "json")) {
-    output(result, flags);
-  } else {
-    process.stdout.write(formatSetupResult(result) + "\n");
-  }
+  const lines = await formatSetupLines(platform, options);
+  for (const line of lines) process.stdout.write(line + "\n");
 }
 
 async function handleFindClones(args: string[], flags: Flags): Promise<void> {

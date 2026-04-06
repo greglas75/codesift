@@ -12,6 +12,7 @@ const mockSearchPatterns = vi.fn().mockResolvedValue({ matches: [], pattern: "em
 const mockFindClones = vi.fn().mockResolvedValue({ clones: [], summary: {} });
 const mockSetup = vi.fn().mockResolvedValue({ platform: "claude", config_path: "/test", status: "created" });
 const mockSetupAll = vi.fn().mockResolvedValue([]);
+const mockFormatSetupLines = vi.fn().mockResolvedValue(["✓ created /test"]);
 
 vi.mock("../../src/tools/complexity-tools.js", () => ({
   analyzeComplexity: mockAnalyzeComplexity,
@@ -40,6 +41,7 @@ vi.mock("../../src/cli/setup.js", () => ({
   setup: mockSetup,
   setupAll: mockSetupAll,
   formatSetupResult: vi.fn().mockReturnValue("setup result"),
+  formatSetupLines: mockFormatSetupLines,
   SUPPORTED_PLATFORMS: ["claude", "cursor", "codex", "gemini"],
 }));
 
@@ -336,33 +338,33 @@ describe("find-clones command", () => {
 
 describe("handleSetup", () => {
   beforeEach(() => {
-    mockSetup.mockClear();
-    mockSetupAll.mockClear();
+    mockFormatSetupLines.mockReset();
+    mockFormatSetupLines.mockResolvedValue(["✓ created /test"]);
   });
 
   it("defaults hooks and rules to true", async () => {
     await COMMAND_MAP["setup"]!(["claude"], {});
-    expect(mockSetup).toHaveBeenCalledWith("claude", expect.objectContaining({ hooks: true, rules: true }));
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ hooks: true, rules: true }));
   });
 
   it("respects --hooks false", async () => {
     await COMMAND_MAP["setup"]!(["claude"], { hooks: "false" });
-    expect(mockSetup).toHaveBeenCalledWith("claude", expect.objectContaining({ hooks: false }));
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ hooks: false }));
   });
 
   it("respects --no-rules flag", async () => {
     await COMMAND_MAP["setup"]!(["claude"], { rules: "false" });
-    expect(mockSetup).toHaveBeenCalledWith("claude", expect.objectContaining({ rules: false }));
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ rules: false }));
   });
 
   it("respects --force flag", async () => {
     await COMMAND_MAP["setup"]!(["claude"], { force: "true" });
-    expect(mockSetup).toHaveBeenCalledWith("claude", expect.objectContaining({ force: true }));
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ force: true }));
   });
 
   it("defaults force to false", async () => {
     await COMMAND_MAP["setup"]!(["claude"], {});
-    expect(mockSetup).toHaveBeenCalledWith("claude", expect.objectContaining({ force: false }));
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ force: false }));
   });
 
   it("dies when platform is missing", async () => {
