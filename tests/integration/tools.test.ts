@@ -1338,6 +1338,38 @@ describe("generate_tools", () => {
       expect(result.path).toBe(outputPath);
       expect(result.content).toContain("Architecture Overview");
     });
+
+    it("includes CodeSift Usage Hints section", async () => {
+      const repo = await indexFixture();
+
+      const result = await generateClaudeMd(repo);
+
+      expect(result.content).toMatch(/CodeSift Usage/i);
+    });
+
+    it("includes H1 hint code in output", async () => {
+      const repo = await indexFixture();
+
+      const result = await generateClaudeMd(repo);
+
+      expect(result.content).toContain("H1");
+    });
+
+    it("includes discover_tools reference in output", async () => {
+      const repo = await indexFixture();
+
+      const result = await generateClaudeMd(repo);
+
+      expect(result.content).toContain("discover_tools");
+    });
+
+    it("still contains Architecture Overview after adding hints (regression)", async () => {
+      const repo = await indexFixture();
+
+      const result = await generateClaudeMd(repo);
+
+      expect(result.content).toContain("Architecture Overview");
+    });
   });
 });
 

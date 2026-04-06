@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
+import { CODESIFT_INSTRUCTIONS } from "../instructions.js";
 import type { CodeIndex, FileEntry } from "../types.js";
 
 export interface GenerateClaudeMdResult {
@@ -157,6 +158,9 @@ export async function generateClaudeMd(
   }
 
   lines.push("");
+  lines.push("## CodeSift Usage Hints");
+  lines.push("");
+  lines.push(CODESIFT_INSTRUCTIONS);
 
   const content = lines.join("\n");
 
