@@ -102,6 +102,62 @@ const RULES_FILES: Record<string, { source: string; targetDir: string; targetFil
   cursor: { source: "rules/codesift.mdc", targetDir: ".cursor/rules", targetFile: "codesift.mdc" },
 };
 
+// Append-mode platforms write a delimited block into a file in the cwd
+const APPEND_MODE_PLATFORMS: Record<string, { source: string; targetFile: string }> = {
+  codex: { source: "rules/codex.md", targetFile: "AGENTS.md" },
+  gemini: { source: "rules/gemini.md", targetFile: "GEMINI.md" },
+};
+
+const DELIMITER_START = "<!-- codesift-rules-start -->";
+const DELIMITER_END = "<!-- codesift-rules-end -->";
+
+async function installRulesAppendMode(
+  platform: string,
+  options?: SetupOptions,
+): Promise<InstallRulesResult> {
+  const config = APPEND_MODE_PLATFORMS[platform];
+  const targetPath = join(process.cwd(), config.targetFile);
+
+  try {
+    const sourcePath = resolvePackageFile(config.source);
+    const sourceContent = (await readFile(sourcePath, "utf-8")).trimEnd();
+
+    const block = `${DELIMITER_START}\n${sourceContent}\n${DELIMITER_END}`;
+
+    if (existsSync(targetPath)) {
+      const existing = await readFile(targetPath, "utf-8");
+
+      if (existing.includes(DELIMITER_START) && existing.includes(DELIMITER_END)) {
+        // Replace the delimited block in-place
+        const replaced = existing.replace(
+          new RegExp(
+            `${escapeRegex(DELIMITER_START)}[\\s\\S]*?${escapeRegex(DELIMITER_END)}`,
+          ),
+          block,
+        );
+        await writeFile(targetPath, replaced, "utf-8");
+        return { path: targetPath, action: "updated" };
+      }
+
+      // Append block to existing content
+      const newContent = existing.trimEnd() + "\n\n" + block + "\n";
+      await writeFile(targetPath, newContent, "utf-8");
+      return { path: targetPath, action: "updated" };
+    }
+
+    // Create new file with block
+    await writeFile(targetPath, block + "\n", "utf-8");
+    return { path: targetPath, action: "created" };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { path: targetPath, action: "error", error: msg };
+  }
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const HEADER_REGEX = /^<!-- codesift-rules v([\d.]+) hash:(\w+) -->/;
 
 export async function installRules(
@@ -109,6 +165,11 @@ export async function installRules(
   homeDir: string,
   options?: SetupOptions,
 ): Promise<InstallRulesResult> {
+  // Append-mode platforms (codex, gemini) write into cwd
+  if (APPEND_MODE_PLATFORMS[platform]) {
+    return installRulesAppendMode(platform, options);
+  }
+
   const rulesConfig = RULES_FILES[platform];
   if (!rulesConfig) {
     return { path: "", action: "skipped" };
@@ -391,7 +452,7 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
   if (platform === "claude" && options?.hooks) {
     await setupClaudeHooks();
   }
-  if (options?.rules && (platform === "claude" || platform === "cursor")) {
+  if (options?.rules) {
     await installRules(platform, homedir(), options);
   }
   return result;
@@ -411,11 +472,51 @@ export async function setupAll(options?: SetupOptions): Promise<SetupResult[]> {
 // ---------------------------------------------------------------------------
 
 const STATUS_MESSAGES: Record<SetupResult["status"], (r: SetupResult) => string> = {
-  created: (r) => `Created ${r.config_path} with CodeSift MCP server.`,
-  updated: (r) => `Added CodeSift MCP server to ${r.config_path}.`,
-  already_configured: (r) => `CodeSift MCP already configured in ${r.config_path}. No changes made.`,
+  created: (r) => `✓ Created ${r.config_path}`,
+  updated: (r) => `✓ Added CodeSift MCP server to ${r.config_path}`,
+  already_configured: (r) => `✓ already configured ${r.config_path}`,
 };
 
-export function formatSetupResult(result: SetupResult): string {
-  return STATUS_MESSAGES[result.status](result);
+const RULES_ACTION_LABELS: Partial<Record<InstallRulesResult["action"], string>> = {
+  created: "created",
+  updated: "updated",
+  "force-updated": "force-updated",
+};
+
+export function formatSetupResult(result: SetupResult, rulesResult?: InstallRulesResult): string {
+  const lines: string[] = [STATUS_MESSAGES[result.status](result)];
+  if (rulesResult && RULES_ACTION_LABELS[rulesResult.action] && rulesResult.path) {
+    lines.push(`✓ ${RULES_ACTION_LABELS[rulesResult.action]} ${rulesResult.path}`);
+  }
+  return lines.join("\n");
+}
+
+export async function formatSetupLines(
+  platform: string,
+  options?: SetupOptions,
+): Promise<string[]> {
+  const handler = PLATFORM_HANDLERS[platform as Platform];
+  if (!handler) {
+    throw new Error(
+      `Unknown platform: "${platform}". Supported: ${SUPPORTED_PLATFORMS.join(", ")}, all`,
+    );
+  }
+  const result = await handler();
+  const lines: string[] = [STATUS_MESSAGES[result.status](result)];
+
+  if (options?.rules) {
+    const rulesResult = await installRules(platform, homedir(), options);
+    const label = RULES_ACTION_LABELS[rulesResult.action];
+    if (label && rulesResult.path) {
+      lines.push(`✓ ${label} ${rulesResult.path}`);
+    }
+  }
+
+  if (platform === "claude" && options?.hooks) {
+    await setupClaudeHooks();
+    const hooksPath = join(homedir(), ".claude", "settings.local.json");
+    lines.push(`✓ hooks configured ${hooksPath}`);
+  }
+
+  return lines;
 }

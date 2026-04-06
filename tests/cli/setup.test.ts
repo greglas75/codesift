@@ -16,8 +16,20 @@ vi.mock("node:os", async () => {
 });
 
 // Import after mock so the module picks up our homedir
-const { setup, setupAll, formatSetupResult, SUPPORTED_PLATFORMS, setupClaudeHooks, installRules } =
+const { setup, setupAll, formatSetupResult, formatSetupLines, SUPPORTED_PLATFORMS, setupClaudeHooks, installRules } =
   await import("../../src/cli/setup.js");
+
+// ---------------------------------------------------------------------------
+// Test helper: run setup and collect output lines
+// ---------------------------------------------------------------------------
+
+async function setupWithLines(
+  platform: string,
+  options?: Parameters<typeof setup>[1],
+): Promise<{ lines: string[] }> {
+  const lines = await formatSetupLines(platform, options);
+  return { lines };
+}
 
 describe("setup", () => {
   beforeEach(async () => {
@@ -325,6 +337,79 @@ describe("setup", () => {
       });
       expect(msg).toContain("already configured");
     });
+
+    it("includes rules file path when rules were installed (action: created)", () => {
+      const msg = formatSetupResult(
+        {
+          platform: "claude",
+          config_path: "/home/.claude/settings.json",
+          status: "created",
+        },
+        { path: "/home/.claude/rules/codesift.md", action: "created" },
+      );
+      expect(msg).toContain("/home/.claude/rules/codesift.md");
+      expect(msg).toContain("created");
+    });
+
+    it("includes rules file path when rules were updated (action: updated)", () => {
+      const msg = formatSetupResult(
+        {
+          platform: "claude",
+          config_path: "/home/.claude/settings.json",
+          status: "updated",
+        },
+        { path: "/home/.claude/rules/codesift.md", action: "updated" },
+      );
+      expect(msg).toContain("/home/.claude/rules/codesift.md");
+      expect(msg).toContain("updated");
+    });
+
+    it("omits rules line when rules result action is skipped", () => {
+      const msg = formatSetupResult(
+        {
+          platform: "claude",
+          config_path: "/home/.claude/settings.json",
+          status: "created",
+        },
+        { path: "/home/.claude/rules/codesift.md", action: "skipped" },
+      );
+      expect(msg).not.toContain("/home/.claude/rules/codesift.md");
+    });
+
+    it("omits rules line when no rules result passed", () => {
+      const msg = formatSetupResult({
+        platform: "codex",
+        config_path: "/home/.codex/config.toml",
+        status: "created",
+      });
+      // No rules path in output
+      expect(msg).not.toContain("rules");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // setup output lines — claude with config + rules + hooks
+  // -------------------------------------------------------------------------
+
+  describe("setup output lines", () => {
+    it("setup('claude', { rules: true, hooks: true }) produces config + rules + hooks lines", async () => {
+      const { lines } = await setupWithLines("claude", { rules: true, hooks: true });
+
+      // config line
+      expect(lines.some((l) => l.includes("settings.json"))).toBe(true);
+      // rules line
+      expect(lines.some((l) => l.includes("codesift.md"))).toBe(true);
+      // hooks line
+      expect(lines.some((l) => l.toLowerCase().includes("hook"))).toBe(true);
+    });
+
+    it("setup('codex') produces only config line (no rules, no hooks)", async () => {
+      const { lines } = await setupWithLines("codex");
+
+      expect(lines.some((l) => l.includes("config.toml"))).toBe(true);
+      expect(lines.some((l) => l.includes("codesift.md"))).toBe(false);
+      expect(lines.some((l) => l.toLowerCase().includes("hook"))).toBe(false);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -508,12 +593,135 @@ describe("setup", () => {
       expect(existsSync(join(rulesDir, "codesift.md"))).toBe(true);
     });
 
-    it("codex/gemini platforms return early (not supported yet)", async () => {
-      const codexResult = await installRules("codex", tempHome, { rules: true });
-      expect(codexResult.action).toBe("skipped");
+    // -----------------------------------------------------------------------
+    // Codex — append-mode rules into AGENTS.md in cwd
+    // -----------------------------------------------------------------------
 
-      const geminiResult = await installRules("gemini", tempHome, { rules: true });
-      expect(geminiResult.action).toBe("skipped");
+    describe("codex append-mode rules", () => {
+      let tempCwd: string;
+
+      beforeEach(async () => {
+        tempCwd = await mkdtemp(join(tmpdir(), "codesift-codex-cwd-"));
+        vi.spyOn(process, "cwd").mockReturnValue(tempCwd);
+      });
+
+      afterEach(async () => {
+        vi.restoreAllMocks();
+        await rm(tempCwd, { recursive: true, force: true });
+      });
+
+      it("creates AGENTS.md with delimited block when file does not exist", async () => {
+        const result = await installRules("codex", tempHome, { rules: true });
+
+        expect(result.action).toBe("created");
+        const agentsPath = join(tempCwd, "AGENTS.md");
+        expect(existsSync(agentsPath)).toBe(true);
+
+        const content = await readFile(agentsPath, "utf-8");
+        expect(content).toContain("<!-- codesift-rules-start -->");
+        expect(content).toContain("<!-- codesift-rules-end -->");
+        expect(result.path).toBe(agentsPath);
+      });
+
+      it("re-run codex: block replaced in-place, not duplicated", async () => {
+        await installRules("codex", tempHome, { rules: true });
+        await installRules("codex", tempHome, { rules: true });
+
+        const agentsPath = join(tempCwd, "AGENTS.md");
+        const content = await readFile(agentsPath, "utf-8");
+
+        const startCount = (content.match(/<!-- codesift-rules-start -->/g) ?? []).length;
+        const endCount = (content.match(/<!-- codesift-rules-end -->/g) ?? []).length;
+        expect(startCount).toBe(1);
+        expect(endCount).toBe(1);
+      });
+
+      it("appends block to AGENTS.md that already has user content", async () => {
+        const agentsPath = join(tempCwd, "AGENTS.md");
+        await writeFile(agentsPath, "# My Project\n\nSome instructions.\n", "utf-8");
+
+        await installRules("codex", tempHome, { rules: true });
+
+        const content = await readFile(agentsPath, "utf-8");
+        expect(content).toContain("# My Project");
+        expect(content).toContain("<!-- codesift-rules-start -->");
+        expect(content).toContain("<!-- codesift-rules-end -->");
+      });
+
+      it("preserves existing user content before block on re-run", async () => {
+        const agentsPath = join(tempCwd, "AGENTS.md");
+        await writeFile(agentsPath, "# My Project\n\nSome instructions.\n", "utf-8");
+
+        await installRules("codex", tempHome, { rules: true });
+        await installRules("codex", tempHome, { rules: true });
+
+        const content = await readFile(agentsPath, "utf-8");
+        expect(content).toContain("# My Project");
+
+        // Only one block pair
+        const startCount = (content.match(/<!-- codesift-rules-start -->/g) ?? []).length;
+        expect(startCount).toBe(1);
+      });
+
+      it("setup('codex', { rules: true }) uses installRules codex path", async () => {
+        const result = await setup("codex", { rules: true });
+        expect(result.platform).toBe("codex");
+
+        const agentsPath = join(tempCwd, "AGENTS.md");
+        expect(existsSync(agentsPath)).toBe(true);
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // Gemini — append-mode rules into GEMINI.md in cwd
+    // -----------------------------------------------------------------------
+
+    describe("gemini append-mode rules", () => {
+      let tempCwd: string;
+
+      beforeEach(async () => {
+        tempCwd = await mkdtemp(join(tmpdir(), "codesift-gemini-cwd-"));
+        vi.spyOn(process, "cwd").mockReturnValue(tempCwd);
+      });
+
+      afterEach(async () => {
+        vi.restoreAllMocks();
+        await rm(tempCwd, { recursive: true, force: true });
+      });
+
+      it("creates GEMINI.md with delimited block when file does not exist", async () => {
+        const result = await installRules("gemini", tempHome, { rules: true });
+
+        expect(result.action).toBe("created");
+        const geminiPath = join(tempCwd, "GEMINI.md");
+        expect(existsSync(geminiPath)).toBe(true);
+
+        const content = await readFile(geminiPath, "utf-8");
+        expect(content).toContain("<!-- codesift-rules-start -->");
+        expect(content).toContain("<!-- codesift-rules-end -->");
+        expect(result.path).toBe(geminiPath);
+      });
+
+      it("re-run gemini: block replaced in-place, not duplicated", async () => {
+        await installRules("gemini", tempHome, { rules: true });
+        await installRules("gemini", tempHome, { rules: true });
+
+        const geminiPath = join(tempCwd, "GEMINI.md");
+        const content = await readFile(geminiPath, "utf-8");
+
+        const startCount = (content.match(/<!-- codesift-rules-start -->/g) ?? []).length;
+        const endCount = (content.match(/<!-- codesift-rules-end -->/g) ?? []).length;
+        expect(startCount).toBe(1);
+        expect(endCount).toBe(1);
+      });
+
+      it("setup('gemini', { rules: true }) uses installRules gemini path", async () => {
+        const result = await setup("gemini", { rules: true });
+        expect(result.platform).toBe("gemini");
+
+        const geminiPath = join(tempCwd, "GEMINI.md");
+        expect(existsSync(geminiPath)).toBe(true);
+      });
     });
 
     it("version change with unmodified template hash → updated", async () => {
