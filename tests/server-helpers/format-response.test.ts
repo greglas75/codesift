@@ -1,9 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { wrapTool, resetSessionState, registerShortener, resetShorteningRegistry } from "../../src/server-helpers.js";
 
+let tmpDir: string;
+
 describe("formatResponse behavior (via wrapTool)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-test-"));
+    process.env["CODESIFT_DATA_DIR"] = join(tmpDir, ".codesift");
     resetSessionState();
+  });
+
+  afterEach(async () => {
+    delete process.env["CODESIFT_DATA_DIR"];
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   });
 
   it("passes short response through with savings hint", async () => {
@@ -37,12 +49,16 @@ describe("formatResponse behavior (via wrapTool)", () => {
 });
 
 describe("progressive cascade", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-test-"));
+    process.env["CODESIFT_DATA_DIR"] = join(tmpDir, ".codesift");
     resetSessionState();
     resetShorteningRegistry();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    delete process.env["CODESIFT_DATA_DIR"];
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     resetShorteningRegistry();
   });
 

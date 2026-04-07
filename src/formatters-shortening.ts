@@ -83,6 +83,51 @@ export function formatClonesCounts(raw: unknown): string {
   return `${data.clones.length} clone pairs (threshold=${data.threshold}, scanned ${data.scanned_symbols})`;
 }
 
+// ── Trace route ───────────────────────────────────
+
+interface TraceRouteResult {
+  path: string;
+  handlers: Array<{ file: string; method?: string; framework: string; symbol?: { name: string; kind: string; file: string; start_line: number } }>;
+  call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
+  db_calls: Array<{ symbol_name: string; file: string; line: number; operation: string }>;
+}
+
+const MAX_CHAIN_COMPACT = 20;
+
+export function formatTraceRouteCompact(raw: unknown): string {
+  const data = raw as TraceRouteResult;
+  const parts: string[] = [`route: ${data.path}`];
+  if (data.handlers.length > 0) {
+    parts.push(`handlers (${data.handlers.length}):`);
+    for (const h of data.handlers) {
+      const sym = h.symbol ? `${h.symbol.kind} ${h.symbol.name}` : "?";
+      parts.push(`  ${h.file} ${sym}`);
+    }
+  }
+  if (data.call_chain.length > 0) {
+    const capped = data.call_chain.slice(0, MAX_CHAIN_COMPACT);
+    parts.push(`call chain (${data.call_chain.length}, showing ${capped.length}):`);
+    for (const c of capped) {
+      parts.push(`${"  ".repeat(c.depth + 1)}${c.file}:${c.name}`);
+    }
+    if (data.call_chain.length > MAX_CHAIN_COMPACT) {
+      parts.push(`  ... +${data.call_chain.length - MAX_CHAIN_COMPACT} more`);
+    }
+  }
+  if (data.db_calls.length > 0) {
+    parts.push(`DB calls (${data.db_calls.length}):`);
+    for (const d of data.db_calls.slice(0, 10)) {
+      parts.push(`  ${d.file}:${d.line} ${d.operation}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+export function formatTraceRouteCounts(raw: unknown): string {
+  const data = raw as TraceRouteResult;
+  return `route ${data.path}: ${data.handlers.length} handlers, ${data.call_chain.length} call chain nodes, ${data.db_calls.length} DB calls`;
+}
+
 // ── Analyze hotspots ───────────────────────────────
 
 const MAX_HOTSPOTS_COMPACT = 15;

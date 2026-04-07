@@ -27,7 +27,7 @@ const SAVINGS_MULTIPLIER: Record<string, number> = {
   trace_call_chain: 4.0,
   impact_analysis: 3.0,
   detect_communities: 2.0,
-  trace_route: 4.0,
+  trace_route: 2.0,
   get_context_bundle: 3.0,
   scan_secrets: 1.2,
   frequency_analysis: 2.0,
