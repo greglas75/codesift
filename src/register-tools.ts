@@ -780,11 +780,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Check architecture boundary rules against imports. Path substring matching.",
     schema: {
       repo: z.string().describe("Repository identifier"),
-      rules: z.array(z.object({
-        from: z.string().describe("Path substring matching source files (e.g. 'src/domain')"),
-        cannot_import: z.array(z.string()).optional().describe("Path patterns that matched files must NOT import"),
-        can_only_import: z.array(z.string()).optional().describe("Path patterns that matched files may ONLY import (allowlist)"),
-      })).describe("Array of boundary rules to check"),
+      rules: z.union([
+        z.array(z.object({
+          from: z.string().describe("Path substring matching source files (e.g. 'src/domain')"),
+          cannot_import: z.array(z.string()).optional().describe("Path patterns that matched files must NOT import"),
+          can_only_import: z.array(z.string()).optional().describe("Path patterns that matched files may ONLY import (allowlist)"),
+        })),
+        z.string().transform((s) => JSON.parse(s) as Array<{ from: string; cannot_import?: string[]; can_only_import?: string[] }>),
+      ]).describe("Array of boundary rules to check. JSON string OK."),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
     },
     handler: async (args) => {

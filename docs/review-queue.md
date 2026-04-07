@@ -124,3 +124,10 @@ Commits pending review. Auto-managed:
 - 6ba1e03 (2026-04-06) fix: formatTable null-safety, route symbol ID matching, test data assertions
 - 889cc0c (2026-04-06) fix: resolve TypeScript errors in review-diff-tools PromiseSettledResult handling
 - ba1ccfe (2026-04-06) docs: update README with 63 tools, new benchmarks, setup --rules/--hooks, MCP instructions
+- fe3dbcf (2026-04-06) release: v0.2.2 — setup output shows all installed files
+- dc98717 (2026-04-06) docs: fix tool count to 64, add ranked search and tool discovery to usage guide
+- a5a9217 (2026-04-06) docs: add get_call_hierarchy to rules files tool mapping
+- 93fd7d9 (2026-04-06) docs: add post-feature update checklist to CLAUDE.md, fix tool count to 64
+- a699c08 (2026-04-06) fix: add missing shebang to server.ts bin entry
+- f77630b (2026-04-06) release: v0.2.3 — fix shebang for global install
+- 3064ad6 (2026-04-07) fix: describe_tools array coercion, trace_route shortener, test usage isolation
