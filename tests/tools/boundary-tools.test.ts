@@ -1,15 +1,22 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { checkBoundaries } from "../../src/tools/boundary-tools.js";
 import { indexFolder } from "../../src/tools/index-tools.js";
+import { resetConfigCache } from "../../src/config.js";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 let repo: string;
 let testDir: string;
+let dataDir: string;
 
 beforeAll(async () => {
+  dataDir = mkdtempSync(path.join(tmpdir(), "codesift-boundary-data-"));
+  process.env["CODESIFT_DATA_DIR"] = path.join(dataDir, ".codesift");
+  resetConfigCache();
+
   testDir = mkdtempSync(path.join(tmpdir(), "boundary-test-"));
   execSync("git init", { cwd: testDir, stdio: "ignore" });
   execSync("git config user.email test@test.com && git config user.name Test", { cwd: testDir, stdio: "ignore" });
@@ -45,6 +52,12 @@ beforeAll(async () => {
   const result = await indexFolder(testDir, { watch: false });
   repo = result.repo;
 }, 30_000);
+
+afterAll(async () => {
+  delete process.env["CODESIFT_DATA_DIR"];
+  resetConfigCache();
+  await rm(dataDir, { recursive: true, force: true }).catch(() => {});
+});
 
 describe("checkBoundaries", () => {
   it("detects cannot_import violation", async () => {
