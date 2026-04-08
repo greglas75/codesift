@@ -34,6 +34,7 @@ export interface NegativeEntry {
   repo: string;
   ts: number;
   stale: boolean;
+  filePattern?: string;
 }
 
 export interface SessionState {
@@ -90,9 +91,10 @@ export function resetSession(): void {
 // Recording — called from wrapTool() on every tool call
 // ---------------------------------------------------------------------------
 
-/** Tools whose file_path/path arg should be tracked in exploredFiles */
-const SINGLE_FILE_TOOLS = new Set([
-  "get_file_outline", "index_file",
+/** Search tools that produce negative evidence on zero results */
+export const SEARCH_TOOL_SET = new Set([
+  "search_text", "search_symbols", "codebase_retrieval",
+  "semantic_search", "find_references",
 ]);
 
 function addSymbol(symbolId: string, name: string, file: string): void {
@@ -187,9 +189,22 @@ export function recordToolCall(
 
   // Append to queries if args.query exists
   const query = args["query"] as string | undefined;
+  const repo = (args["repo"] ?? "") as string;
   if (query && typeof query === "string") {
-    const repo = (args["repo"] ?? "") as string;
     state.queries.push({ tool, query, repo, ts: now, resultCount: resultChunks });
+  }
+
+  // Negative evidence: search tool with zero results
+  if (SEARCH_TOOL_SET.has(tool) && extractResultChunks(resultData) === 0) {
+    const filePattern = args["file_pattern"] as string | undefined;
+    state.negativeEvidence.push({
+      tool,
+      query: (query ?? "") as string,
+      repo,
+      ts: now,
+      stale: false,
+      filePattern,
+    });
   }
 }
 
@@ -203,4 +218,34 @@ export function recordCacheHit(
   _args: Record<string, unknown>,
 ): void {
   state.callCount++;
+}
+
+// ---------------------------------------------------------------------------
+// Negative evidence invalidation — called from watcher
+// ---------------------------------------------------------------------------
+
+import { dirname } from "node:path";
+
+/**
+ * Mark negative evidence entries as stale when a file changes.
+ * Scoped to the changed file's subtree — entries with a filePattern
+ * in a different subtree are not affected.
+ */
+export function invalidateNegativeEvidence(repo: string, changedFile: string): void {
+  const changedDir = dirname(changedFile);
+  for (const entry of state.negativeEvidence) {
+    if (entry.repo !== repo) continue;
+    if (entry.stale) continue;
+
+    if (!entry.filePattern) {
+      // No filePattern specified — any file change in the same repo invalidates
+      entry.stale = true;
+    } else {
+      // Check if changed file is in the same subtree as the filePattern
+      const patternDir = dirname(entry.filePattern);
+      if (changedDir.startsWith(patternDir) || patternDir.startsWith(changedDir)) {
+        entry.stale = true;
+      }
+    }
+  }
 }

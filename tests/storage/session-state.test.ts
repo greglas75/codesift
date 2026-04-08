@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   resetSession,
   getSessionState,
   getCallCount,
   recordToolCall,
   recordCacheHit,
+  invalidateNegativeEvidence,
+  SEARCH_TOOL_SET,
 } from "../../src/storage/session-state.js";
 import { getSessionId } from "../../src/storage/usage-tracker.js";
 
@@ -191,6 +193,83 @@ describe("session-state", () => {
     it("does NOT append to negativeEvidence even for search tools", () => {
       recordCacheHit("search_text", { query: "missing", repo: "local/test" });
       expect(getSessionState().negativeEvidence).toHaveLength(0);
+    });
+  });
+
+  describe("negative evidence", () => {
+    it("records negative evidence when search tool returns zero results", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      const state = getSessionState();
+      expect(state.negativeEvidence).toHaveLength(1);
+      expect(state.negativeEvidence[0]).toMatchObject({
+        tool: "search_text",
+        query: "missing",
+        repo: "local/test",
+        stale: false,
+      });
+    });
+
+    it("does NOT record negative evidence for non-search tools with zero results", () => {
+      recordToolCall("get_file_tree", { path_prefix: "src/", repo: "local/test" }, 0, { files: [] });
+      expect(getSessionState().negativeEvidence).toHaveLength(0);
+    });
+
+    it("does NOT include session tools in SEARCH_TOOL_SET", () => {
+      expect(SEARCH_TOOL_SET.has("get_session_snapshot")).toBe(false);
+      expect(SEARCH_TOOL_SET.has("get_session_context")).toBe(false);
+    });
+
+    it("includes expected search tools in SEARCH_TOOL_SET", () => {
+      expect(SEARCH_TOOL_SET.has("search_text")).toBe(true);
+      expect(SEARCH_TOOL_SET.has("search_symbols")).toBe(true);
+      expect(SEARCH_TOOL_SET.has("codebase_retrieval")).toBe(true);
+      expect(SEARCH_TOOL_SET.has("semantic_search")).toBe(true);
+      expect(SEARCH_TOOL_SET.has("find_references")).toBe(true);
+    });
+  });
+
+  describe("TTL staleness", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("entry younger than 120s is not stale", () => {
+      vi.setSystemTime(1000000);
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      vi.setSystemTime(1000000 + 119_999); // just under 120s
+      const state = getSessionState();
+      // isStale is evaluated lazily — check via negativeEvidence entry
+      expect(state.negativeEvidence[0]?.stale).toBe(false);
+    });
+  });
+
+  describe("invalidateNegativeEvidence", () => {
+    it("marks matching entries stale when file changes in relevant subtree", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/test", file_pattern: "src/tools/*" }, 0, { matches: [] });
+      invalidateNegativeEvidence("local/test", "src/tools/new-file.ts");
+      expect(getSessionState().negativeEvidence[0]?.stale).toBe(true);
+    });
+
+    it("does NOT mark entries stale for unrelated subtree changes", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/test", file_pattern: "src/tools/*" }, 0, { matches: [] });
+      invalidateNegativeEvidence("local/test", "tests/something.test.ts");
+      expect(getSessionState().negativeEvidence[0]?.stale).toBe(false);
+    });
+
+    it("marks entries stale when no file_pattern (same repo = relevant)", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      invalidateNegativeEvidence("local/test", "src/anything.ts");
+      expect(getSessionState().negativeEvidence[0]?.stale).toBe(true);
+    });
+
+    it("does NOT mark entries from different repo", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/other" }, 0, { matches: [] });
+      invalidateNegativeEvidence("local/test", "src/tools/new-file.ts");
+      expect(getSessionState().negativeEvidence[0]?.stale).toBe(false);
     });
   });
 });
