@@ -432,4 +432,87 @@ describe("session-state", () => {
       expect(getSessionState().negativeEvidence[0]?.stale).toBe(false);
     });
   });
+
+  describe("sidecar file management", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const os = require("node:os");
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codesift-test-"));
+      vi.stubEnv("CODESIFT_DATA_DIR", tmpDir);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("flushSidecar writes JSON to session file", async () => {
+      const { flushSidecar } = await import("../../src/storage/session-state.js");
+      recordToolCall("search_text", { query: "test", repo: "local/test" }, 1, { matches: [{}] });
+      await flushSidecar();
+      const sessionId = getSessionState().sessionId;
+      const sidecarPath = path.join(tmpDir, `session-${sessionId}.json`);
+      expect(fs.existsSync(sidecarPath)).toBe(true);
+      const data = JSON.parse(fs.readFileSync(sidecarPath, "utf-8"));
+      expect(data.callCount).toBe(1);
+    });
+
+    it("roundtrips Map data through serialization", async () => {
+      const { flushSidecar, deserializeState } = await import("../../src/storage/session-state.js");
+      recordToolCall("search_symbols", { query: "fn", repo: "local/test" }, 1, {
+        symbols: [{ id: "sym1", name: "fn1", file: "a.ts" }],
+      });
+      await flushSidecar();
+      const sessionId = getSessionState().sessionId;
+      const sidecarPath = path.join(tmpDir, `session-${sessionId}.json`);
+      const raw = JSON.parse(fs.readFileSync(sidecarPath, "utf-8"));
+      const restored = deserializeState(raw);
+      expect(restored.exploredSymbols).toBeInstanceOf(Map);
+      expect(restored.exploredSymbols.get("sym1")?.name).toBe("fn1");
+    });
+
+    it("cleanupSidecar removes the sidecar file", async () => {
+      const { flushSidecar, cleanupSidecar } = await import("../../src/storage/session-state.js");
+      await flushSidecar();
+      const sessionId = getSessionState().sessionId;
+      const sidecarPath = path.join(tmpDir, `session-${sessionId}.json`);
+      expect(fs.existsSync(sidecarPath)).toBe(true);
+      cleanupSidecar();
+      expect(fs.existsSync(sidecarPath)).toBe(false);
+    });
+
+    it("cleanupOrphanSidecars removes files older than 24h", async () => {
+      const { cleanupOrphanSidecars } = await import("../../src/storage/session-state.js");
+      // Create an old file
+      const oldPath = path.join(tmpDir, "session-old-uuid.json");
+      fs.writeFileSync(oldPath, "{}");
+      const oldTime = Date.now() / 1000 - 25 * 3600; // 25h ago
+      fs.utimesSync(oldPath, oldTime, oldTime);
+      // Create a fresh file
+      const freshPath = path.join(tmpDir, "session-fresh-uuid.json");
+      fs.writeFileSync(freshPath, "{}");
+
+      cleanupOrphanSidecars();
+
+      expect(fs.existsSync(oldPath)).toBe(false);
+      expect(fs.existsSync(freshPath)).toBe(true);
+    });
+
+    it("CQ22: resetSession cancels pending debounce timer", async () => {
+      const { scheduleSidecarFlush } = await import("../../src/storage/session-state.js");
+      vi.useFakeTimers();
+      recordToolCall("search_text", { query: "test", repo: "local/test" }, 1, { matches: [{}] });
+      scheduleSidecarFlush();
+      resetSession();
+      vi.advanceTimersByTime(2000);
+      const sessionId = getSessionState().sessionId;
+      const files = fs.readdirSync(tmpDir).filter((f: string) => f.startsWith("session-"));
+      // No sidecar should have been written after reset
+      expect(files.length).toBe(0);
+      vi.useRealTimers();
+    });
+  });
 });

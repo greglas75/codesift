@@ -1,4 +1,7 @@
 import { getSessionId, extractResultChunks } from "./usage-tracker.js";
+import { writeFileSync, renameSync, unlinkSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,6 +69,7 @@ function createInitialState(): SessionState {
 }
 
 let state: SessionState = createInitialState();
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ---------------------------------------------------------------------------
 // Public API — read access
@@ -85,6 +89,11 @@ export function getCallCount(): number {
 
 export function resetSession(): void {
   state = createInitialState();
+  // Clear any pending sidecar flush timer (CQ22)
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +281,6 @@ export function recordCacheHit(
 // Negative evidence invalidation — called from watcher
 // ---------------------------------------------------------------------------
 
-import { dirname } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -380,3 +388,94 @@ export function invalidateNegativeEvidence(repo: string, changedFile: string): v
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Sidecar file management
+// ---------------------------------------------------------------------------
+
+function getDataDir(): string {
+  return process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+}
+
+function getSidecarPath(): string {
+  return join(getDataDir(), `session-${state.sessionId}.json`);
+}
+
+/** Serialize state for JSON — converts Maps to plain objects */
+function serializeState(): Record<string, unknown> {
+  return {
+    sessionId: state.sessionId,
+    startedAt: state.startedAt,
+    callCount: state.callCount,
+    exploredSymbols: Object.fromEntries(state.exploredSymbols),
+    exploredFiles: Object.fromEntries(state.exploredFiles),
+    queries: state.queries,
+    negativeEvidence: state.negativeEvidence,
+    h10Emitted: state.h10Emitted,
+  };
+}
+
+/** Deserialize sidecar JSON back to SessionState shape (reconstructs Maps) */
+export function deserializeState(raw: Record<string, unknown>): SessionState {
+  return {
+    sessionId: String(raw["sessionId"] ?? ""),
+    startedAt: Number(raw["startedAt"] ?? 0),
+    callCount: Number(raw["callCount"] ?? 0),
+    exploredSymbols: new Map(Object.entries((raw["exploredSymbols"] ?? {}) as Record<string, SymbolEntry>)),
+    exploredFiles: new Map(Object.entries((raw["exploredFiles"] ?? {}) as Record<string, FileEntry>)),
+    queries: (raw["queries"] ?? []) as QueryEntry[],
+    negativeEvidence: (raw["negativeEvidence"] ?? []) as NegativeEntry[],
+    h10Emitted: Boolean(raw["h10Emitted"] ?? false),
+  };
+}
+
+/** Write current state to sidecar file atomically (tmp + rename) */
+export async function flushSidecar(): Promise<void> {
+  try {
+    const dataDir = getDataDir();
+    mkdirSync(dataDir, { recursive: true });
+    const finalPath = getSidecarPath();
+    const tmpPath = finalPath + ".tmp";
+    writeFileSync(tmpPath, JSON.stringify(serializeState()), "utf-8");
+    renameSync(tmpPath, finalPath);
+  } catch {
+    // Best-effort — never block
+  }
+}
+
+/** Remove sidecar file (sync, called on process exit) */
+export function cleanupSidecar(): void {
+  try {
+    unlinkSync(getSidecarPath());
+  } catch {
+    // Ignore — file may not exist
+  }
+}
+
+/** Remove orphan sidecar files older than 24h */
+export function cleanupOrphanSidecars(): void {
+  try {
+    const dataDir = getDataDir();
+    const files = readdirSync(dataDir).filter(f => f.startsWith("session-") && f.endsWith(".json"));
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    for (const file of files) {
+      const fullPath = join(dataDir, file);
+      const stats = statSync(fullPath);
+      if (stats.mtimeMs < cutoff) {
+        unlinkSync(fullPath);
+      }
+    }
+  } catch {
+    // Best-effort
+  }
+}
+
+/** Debounced sidecar flush */
+export function scheduleSidecarFlush(): void {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    flushSidecar().catch(() => {});
+    debounceTimer = null;
+  }, 1000);
+}
+
