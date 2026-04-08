@@ -221,6 +221,11 @@ describe("session-state", () => {
       expect(SEARCH_TOOL_SET.has("get_session_context")).toBe(false);
     });
 
+    it("does NOT record negative evidence when result is an error", () => {
+      recordToolCall("search_text", { query: "foo", repo: "local/test" }, 0, { error: "connection failed" });
+      expect(getSessionState().negativeEvidence).toHaveLength(0);
+    });
+
     it("includes expected search tools in SEARCH_TOOL_SET", () => {
       expect(SEARCH_TOOL_SET.has("search_text")).toBe(true);
       expect(SEARCH_TOOL_SET.has("search_symbols")).toBe(true);

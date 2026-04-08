@@ -236,11 +236,9 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
     hints.push(`⚡H9`);
   }
 
-  // H10: Session snapshot reminder after 50 calls
-  const sessionState = getSessionState();
-  if (getCallCount() >= 50 && !sessionState.h10Emitted) {
+  // H10: Session snapshot reminder after 50 calls (read-only check; flag set by wrapTool)
+  if (getCallCount() >= 50 && !getSessionState().h10Emitted) {
     hints.push(`⚡H10 50+ tool calls this session → call get_session_snapshot to preserve context`);
-    sessionState.h10Emitted = true;
   }
 
   return hints.length > 0 ? hints.join(" ") : null;
@@ -355,6 +353,9 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         trackSequentialCalls(toolName);
         recordSessionCall(toolName, args, extractResultChunks(data), data);
         scheduleSidecarFlush();
+        // Mark H10 emitted after recording (side-effect belongs in wrapTool, not buildResponseHint)
+        const ss = getSessionState();
+        if (getCallCount() >= 50 && !ss.h10Emitted) ss.h10Emitted = true;
 
         setCache(cacheKey, text);
         return formatResponse(text, toolName, args, data);

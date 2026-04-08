@@ -30,7 +30,7 @@ import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
-import { formatSnapshot, getContext } from "./storage/session-state.js";
+import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
@@ -1449,7 +1449,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Filter to specific repo. Default: most recent repo."),
     },
     handler: async (args: { repo?: string }) => {
-      const { getSessionState } = await import("./storage/session-state.js");
       return formatSnapshot(getSessionState(), args.repo);
     },
   },

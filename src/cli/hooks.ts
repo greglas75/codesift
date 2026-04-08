@@ -220,7 +220,7 @@ export async function handlePrecompactSnapshot(): Promise<void> {
         ? ((parsed as Record<string, unknown>).session_id as string)
         : null;
 
-    if (!sessionId) {
+    if (!sessionId || !/^[a-f0-9-]+$/i.test(sessionId)) {
       process.exit(0);
       return;
     }
@@ -245,7 +245,8 @@ export async function handlePrecompactSnapshot(): Promise<void> {
     const snapshot = formatSnapshot(sessionState);
 
     if (snapshot) {
-      process.stdout.write(snapshot);
+      process.stdout.write(snapshot, () => process.exit(0));
+      return;
     }
 
     process.exit(0);

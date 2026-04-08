@@ -1,4 +1,4 @@
-import { getSessionId, extractResultChunks } from "./usage-tracker.js";
+import { getSessionId } from "./usage-tracker.js";
 import { writeFileSync, renameSync, unlinkSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -245,8 +245,9 @@ export function recordToolCall(
     state.queries.push({ tool, query, repo, ts: now, resultCount: resultChunks });
   }
 
-  // Negative evidence: search tool with zero results
-  if (SEARCH_TOOL_SET.has(tool) && extractResultChunks(resultData) === 0) {
+  // Negative evidence: search tool with zero results (skip error results)
+  const isError = resultData !== null && typeof resultData === "object" && "error" in (resultData as Record<string, unknown>);
+  if (SEARCH_TOOL_SET.has(tool) && resultChunks === 0 && !isError) {
     const filePattern = args["file_pattern"] as string | undefined;
     state.negativeEvidence.push({
       tool,
@@ -335,9 +336,9 @@ export function formatSnapshot(sessionState: SessionState, repo?: string): strin
   const negQueries = negEntries.map(e => `${e.tool}:"${e.query}"`);
   const tier4 = truncateList(negQueries, 5, "NOT_FOUND");
 
-  // Tier 5: Last 3 queries
+  // Tier 5: Last 3 queries (filtered by repo)
   const recentQueries = sessionState.queries
-    .filter(q => !effectiveRepo || !repo || q.repo === effectiveRepo)
+    .filter(q => !repo ? (!effectiveRepo || q.repo === effectiveRepo) : q.repo === repo)
     .slice(-3)
     .reverse();
   const qStrings = recentQueries.map(q => `${q.tool}:"${q.query}"`);
