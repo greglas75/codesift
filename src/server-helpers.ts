@@ -1,4 +1,5 @@
-import { trackToolCall, addSavings } from "./storage/usage-tracker.js";
+import { trackToolCall, addSavings, extractResultChunks } from "./storage/usage-tracker.js";
+import { recordToolCall as recordSessionCall, recordCacheHit, getCallCount, getSessionState, resetSession, scheduleSidecarFlush } from "./storage/session-state.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -235,6 +236,13 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
     hints.push(`⚡H9`);
   }
 
+  // H10: Session snapshot reminder after 50 calls
+  const sessionState = getSessionState();
+  if (getCallCount() >= 50 && !sessionState.h10Emitted) {
+    hints.push(`⚡H10 50+ tool calls this session → call get_session_snapshot to preserve context`);
+    sessionState.h10Emitted = true;
+  }
+
   return hints.length > 0 ? hints.join(" ") : null;
 }
 
@@ -315,6 +323,8 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
     const cached = getCached(cacheKey);
     if (cached) {
       trackSequentialCalls(toolName);
+      recordCacheHit(toolName, args);
+      scheduleSidecarFlush();
       return Promise.resolve({
         content: [{
           type: "text" as const,
@@ -343,6 +353,8 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         const elapsed = performance.now() - start;
         trackToolCall(toolName, args, text, data, elapsed);
         trackSequentialCalls(toolName);
+        recordSessionCall(toolName, args, extractResultChunks(data), data);
+        scheduleSidecarFlush();
 
         setCache(cacheKey, text);
         return formatResponse(text, toolName, args, data);
@@ -351,6 +363,8 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         const message = err instanceof Error ? err.message : String(err);
         trackToolCall(toolName, args, message, { error: message }, elapsed);
         trackSequentialCalls(toolName);
+        recordSessionCall(toolName, args, 0, { error: message });
+        scheduleSidecarFlush();
         return errorResult(message);
       } finally {
         inflight.delete(cacheKey);
@@ -373,4 +387,5 @@ export function resetSessionState(): void {
   sessionSearchSymbolsCalled = false;
   sessionGetSymbolCount = 0;
   responseCache.clear();
+  resetSession();
 }
