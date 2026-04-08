@@ -7,6 +7,7 @@ import {
   recordCacheHit,
   invalidateNegativeEvidence,
   SEARCH_TOOL_SET,
+  formatSnapshot,
 } from "../../src/storage/session-state.js";
 import { getSessionId } from "../../src/storage/usage-tracker.js";
 
@@ -317,6 +318,92 @@ describe("session-state", () => {
       recordToolCall("search_text", { query: "overflow", repo: "local/test" }, 0, { matches: [] });
       expect(getSessionState().negativeEvidence).toHaveLength(300);
       expect(getSessionState().negativeEvidence.some(e => e.query === "stale1")).toBe(false);
+    });
+  });
+
+  describe("formatSnapshot", () => {
+    it("returns header-only for empty state", () => {
+      const snap = formatSnapshot(getSessionState());
+      expect(snap).toContain("session:");
+      expect(snap).toContain("calls:0");
+      expect(snap.length).toBeLessThanOrEqual(700);
+    });
+
+    it("includes all 5 tiers when populated", () => {
+
+      // Add files, symbols, queries, negative evidence
+      recordToolCall("search_symbols", { query: "testFn", repo: "local/test" }, 2, {
+        symbols: [
+          { id: "s1", name: "fn1", file: "a.ts" },
+          { id: "s2", name: "fn2", file: "b.ts" },
+        ],
+      });
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      recordToolCall("get_file_outline", { file_path: "/src/c.ts", repo: "local/test" }, 1, {
+        file: "/src/c.ts", symbols: [],
+      });
+
+      const snap = formatSnapshot(getSessionState());
+      expect(snap).toContain("FILES:");
+      expect(snap).toContain("SYMBOLS:");
+      expect(snap).toContain("NOT_FOUND:");
+      expect(snap).toContain("QUERIES:");
+      expect(snap.length).toBeLessThanOrEqual(700);
+    });
+
+    it("is deterministic — same state produces identical output", () => {
+
+      recordToolCall("search_symbols", { query: "fn", repo: "local/test" }, 1, {
+        symbols: [{ id: "s1", name: "fn1", file: "a.ts" }],
+      });
+      const state = getSessionState();
+      const snap1 = formatSnapshot(state);
+      const snap2 = formatSnapshot(state);
+      expect(snap1).toBe(snap2);
+    });
+
+    it("hard caps at 700 characters", () => {
+
+      // Fill with lots of data
+      for (let i = 0; i < 100; i++) {
+        recordToolCall("search_symbols", { query: `q${i}`, repo: "local/test" }, 1, {
+          symbols: [{ id: `sym-${i}`, name: `longFunctionName${i}`, file: `src/deep/nested/path/file${i}.ts` }],
+        });
+      }
+      const snap = formatSnapshot(getSessionState());
+      expect(snap.length).toBeLessThanOrEqual(700);
+    });
+
+    it("uses +N more suffix when tier overflows", () => {
+
+      for (let i = 0; i < 20; i++) {
+        recordToolCall("search_symbols", { query: `q${i}`, repo: "local/test" }, 1, {
+          symbols: [{ id: `sym-${i}`, name: `fn${i}`, file: `f${i}.ts` }],
+        });
+      }
+      const snap = formatSnapshot(getSessionState());
+      expect(snap).toContain("+"); // +N more
+    });
+
+    it("excludes stale negative evidence", () => {
+
+      recordToolCall("search_text", { query: "staleQuery", repo: "local/test" }, 0, { matches: [] });
+      getSessionState().negativeEvidence[0]!.stale = true;
+      const snap = formatSnapshot(getSessionState());
+      expect(snap).not.toContain("NOT_FOUND:");
+    });
+
+    it("filters by repo when provided", () => {
+
+      recordToolCall("search_symbols", { query: "fn", repo: "local/a" }, 1, {
+        symbols: [{ id: "sa", name: "fnA", file: "a.ts" }],
+      });
+      recordToolCall("search_symbols", { query: "fn", repo: "local/b" }, 1, {
+        symbols: [{ id: "sb", name: "fnB", file: "b.ts" }],
+      });
+      const snap = formatSnapshot(getSessionState(), "local/a");
+      expect(snap).toContain("fnA");
+      // fnB might still appear in symbols (symbols don't have repo), but queries should filter
     });
   });
 

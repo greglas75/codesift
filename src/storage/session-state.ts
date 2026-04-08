@@ -274,6 +274,89 @@ export function recordCacheHit(
 
 import { dirname } from "node:path";
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const SNAPSHOT_CHAR_BUDGET = 700;
+const STALENESS_TTL_MS = 120_000;
+
+// ---------------------------------------------------------------------------
+// Staleness check
+// ---------------------------------------------------------------------------
+
+export function isStale(entry: NegativeEntry): boolean {
+  return entry.stale || (Date.now() - entry.ts > STALENESS_TTL_MS);
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot — pure function, can be called from CLI hook too
+// ---------------------------------------------------------------------------
+
+function truncateList(items: string[], max: number, label: string): string {
+  if (items.length === 0) return "";
+  const shown = items.slice(0, max);
+  const rest = items.length - max;
+  const suffix = rest > 0 ? ` +${rest} more` : "";
+  return `${label}: ${shown.join(", ")}${suffix}`;
+}
+
+export function formatSnapshot(sessionState: SessionState, repo?: string): string {
+  const lines: string[] = [];
+  const effectiveRepo = repo ?? sessionState.queries[sessionState.queries.length - 1]?.repo ?? "";
+
+  // Tier 1: Header (~15 tokens)
+  lines.push(`session:${sessionState.sessionId.slice(0, 8)} calls:${sessionState.callCount} started:${new Date(sessionState.startedAt).toISOString().slice(0, 16)}`);
+
+  // Tier 2: Top 5 files by accessCount
+  const files = [...sessionState.exploredFiles.values()]
+    .sort((a, b) => b.accessCount - a.accessCount || b.lastSeen - a.lastSeen);
+  const fileNames = files.map(f => f.path.split("/").pop() ?? f.path);
+  const tier2 = truncateList(fileNames, 5, "FILES");
+
+  // Tier 3: Top 10 symbols by lastSeen
+  const symbols = [...sessionState.exploredSymbols.values()]
+    .sort((a, b) => b.lastSeen - a.lastSeen);
+  const symNames = symbols.map(s => s.name);
+  const tier3 = truncateList(symNames, 10, "SYMBOLS");
+
+  // Tier 4: Top 5 non-stale negative evidence
+  const negEntries = sessionState.negativeEvidence
+    .filter(e => !isStale(e))
+    .sort((a, b) => b.ts - a.ts);
+  const negQueries = negEntries.map(e => `${e.tool}:"${e.query}"`);
+  const tier4 = truncateList(negQueries, 5, "NOT_FOUND");
+
+  // Tier 5: Last 3 queries
+  const recentQueries = sessionState.queries
+    .filter(q => !effectiveRepo || !repo || q.repo === effectiveRepo)
+    .slice(-3)
+    .reverse();
+  const qStrings = recentQueries.map(q => `${q.tool}:"${q.query}"`);
+  const tier5 = truncateList(qStrings, 3, "QUERIES");
+
+  // Build with budget dropping
+  const tiers = [tier2, tier3, tier4, tier5].filter(t => t.length > 0);
+  for (const tier of tiers) {
+    lines.push(tier);
+  }
+
+  let result = lines.join("\n");
+
+  // Drop tiers from the bottom if over budget
+  while (result.length > SNAPSHOT_CHAR_BUDGET && lines.length > 1) {
+    lines.pop();
+    result = lines.join("\n");
+  }
+
+  // Final hard cap (shouldn't be needed, but safety net)
+  if (result.length > SNAPSHOT_CHAR_BUDGET) {
+    result = result.slice(0, SNAPSHOT_CHAR_BUDGET - 3) + "...";
+  }
+
+  return result;
+}
+
 /**
  * Mark negative evidence entries as stale when a file changes.
  * Scoped to the changed file's subtree — entries with a filePattern
