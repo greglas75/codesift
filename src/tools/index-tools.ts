@@ -1,5 +1,5 @@
 import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
-import { join, relative, extname, resolve, basename } from "node:path";
+import { join, relative, extname, resolve, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { parseFile } from "../parser/parser-manager.js";
@@ -906,6 +906,41 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
 
   codeIndexes.set(repoName, index);
   return index;
+}
+
+/**
+ * Walk up from dir until a .git directory is found. Returns the git root or null.
+ */
+async function findGitRoot(dir: string): Promise<string | null> {
+  let current = resolve(dir);
+  while (true) {
+    try {
+      await stat(join(current, ".git"));
+      return current;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Called at server startup. If the CWD is inside a git repo that isn't indexed yet,
+ * index it automatically in the background so tools work without manual setup.
+ */
+export async function autoIndexCurrentRepo(cwd: string): Promise<void> {
+  const gitRoot = await findGitRoot(cwd);
+  if (!gitRoot) return;
+
+  const repoName = getRepoName(gitRoot);
+  const config = loadConfig();
+  const existing = await getRepo(config.registryPath, repoName);
+  if (existing) return;
+
+  console.error(`[codesift] Auto-indexing ${repoName} (first use)...`);
+  await indexFolder(gitRoot);
+  console.error(`[codesift] Auto-index complete: ${repoName}`);
 }
 
 /**

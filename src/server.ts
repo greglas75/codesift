@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig } from "./config.js";
 import { registerTools } from "./register-tools.js";
 import { autoDiscoverConversations } from "./tools/conversation-tools.js";
+import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 
 // Re-export for test compatibility
@@ -32,6 +33,11 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("CodeSift MCP server started");
+
+  // Auto-index current repo on first use (background, non-blocking)
+  autoIndexCurrentRepo(process.cwd()).catch((err: unknown) => {
+    console.error("[codesift] auto-index failed:", err);
+  });
 
   // Auto-discover conversations for current project (background, non-blocking)
   autoDiscoverConversations(process.cwd()).catch((err: unknown) => {
