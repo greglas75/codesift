@@ -247,6 +247,79 @@ describe("session-state", () => {
     });
   });
 
+  describe("cap enforcement", () => {
+    it("evicts oldest symbol by lastSeen when exceeding 500", () => {
+      vi.useFakeTimers();
+      // Fill with 500 symbols
+      for (let i = 0; i < 500; i++) {
+        vi.setSystemTime(1000 + i);
+        recordToolCall("search_symbols", { query: `s${i}`, repo: "local/test" }, 1, {
+          symbols: [{ id: `sym-${i}`, name: `fn${i}`, file: `f${i}.ts` }],
+        });
+      }
+      expect(getSessionState().exploredSymbols.size).toBe(500);
+
+      // Add one more — oldest (sym-0, lastSeen=1000) should be evicted
+      vi.setSystemTime(2000);
+      recordToolCall("search_symbols", { query: "new", repo: "local/test" }, 1, {
+        symbols: [{ id: "sym-new", name: "fnNew", file: "new.ts" }],
+      });
+      expect(getSessionState().exploredSymbols.size).toBe(500);
+      expect(getSessionState().exploredSymbols.has("sym-0")).toBe(false);
+      expect(getSessionState().exploredSymbols.has("sym-new")).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("evicts oldest file by lastSeen when exceeding 300", () => {
+      vi.useFakeTimers();
+      for (let i = 0; i < 300; i++) {
+        vi.setSystemTime(1000 + i);
+        recordToolCall("get_file_outline", { file_path: `/src/f${i}.ts`, repo: "local/test" }, 1, {
+          file: `/src/f${i}.ts`, symbols: [],
+        });
+      }
+      expect(getSessionState().exploredFiles.size).toBe(300);
+
+      vi.setSystemTime(2000);
+      recordToolCall("get_file_outline", { file_path: "/src/new.ts", repo: "local/test" }, 1, {
+        file: "/src/new.ts", symbols: [],
+      });
+      expect(getSessionState().exploredFiles.size).toBe(300);
+      expect(getSessionState().exploredFiles.has("/src/f0.ts")).toBe(false);
+      expect(getSessionState().exploredFiles.has("/src/new.ts")).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it("FIFO evicts oldest query when exceeding 200", () => {
+      for (let i = 0; i < 201; i++) {
+        recordToolCall("search_text", { query: `q${i}`, repo: "local/test" }, 1, { matches: [{}] });
+      }
+      const queries = getSessionState().queries;
+      expect(queries).toHaveLength(200);
+      expect(queries[0]?.query).toBe("q1"); // q0 evicted
+      expect(queries[199]?.query).toBe("q200");
+    });
+
+    it("evicts stale negative evidence first, then FIFO", () => {
+      // Add 2 stale + 298 fresh = 300
+      recordToolCall("search_text", { query: "stale1", repo: "local/test" }, 0, { matches: [] });
+      recordToolCall("search_text", { query: "stale2", repo: "local/test" }, 0, { matches: [] });
+      // Mark first two stale
+      getSessionState().negativeEvidence[0]!.stale = true;
+      getSessionState().negativeEvidence[1]!.stale = true;
+
+      for (let i = 0; i < 298; i++) {
+        recordToolCall("search_text", { query: `fresh${i}`, repo: "local/test" }, 0, { matches: [] });
+      }
+      expect(getSessionState().negativeEvidence).toHaveLength(300);
+
+      // Add one more — stale should be evicted first
+      recordToolCall("search_text", { query: "overflow", repo: "local/test" }, 0, { matches: [] });
+      expect(getSessionState().negativeEvidence).toHaveLength(300);
+      expect(getSessionState().negativeEvidence.some(e => e.query === "stale1")).toBe(false);
+    });
+  });
+
   describe("invalidateNegativeEvidence", () => {
     it("marks matching entries stale when file changes in relevant subtree", () => {
       recordToolCall("search_text", { query: "missing", repo: "local/test", file_pattern: "src/tools/*" }, 0, { matches: [] });

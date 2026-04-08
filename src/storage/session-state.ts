@@ -91,6 +91,48 @@ export function resetSession(): void {
 // Recording — called from wrapTool() on every tool call
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Caps
+// ---------------------------------------------------------------------------
+
+const MAX_SYMBOLS = 500;
+const MAX_FILES = 300;
+const MAX_QUERIES = 200;
+const MAX_NEGATIVE_EVIDENCE = 300;
+
+function evictLRU<V extends { lastSeen: number }>(map: Map<string, V>, maxSize: number): void {
+  while (map.size > maxSize) {
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [key, entry] of map) {
+      if (entry.lastSeen < oldestTime) {
+        oldestTime = entry.lastSeen;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey) map.delete(oldestKey);
+    else break;
+  }
+}
+
+function enforceQueryCap(): void {
+  while (state.queries.length > MAX_QUERIES) {
+    state.queries.shift();
+  }
+}
+
+function enforceNegativeEvidenceCap(): void {
+  while (state.negativeEvidence.length > MAX_NEGATIVE_EVIDENCE) {
+    // Evict stale entries first, then oldest
+    const staleIdx = state.negativeEvidence.findIndex(e => e.stale);
+    if (staleIdx !== -1) {
+      state.negativeEvidence.splice(staleIdx, 1);
+    } else {
+      state.negativeEvidence.shift();
+    }
+  }
+}
+
 /** Search tools that produce negative evidence on zero results */
 export const SEARCH_TOOL_SET = new Set([
   "search_text", "search_symbols", "codebase_retrieval",
@@ -205,7 +247,13 @@ export function recordToolCall(
       stale: false,
       filePattern,
     });
+    enforceNegativeEvidenceCap();
   }
+
+  // Enforce caps
+  evictLRU(state.exploredSymbols, MAX_SYMBOLS);
+  evictLRU(state.exploredFiles, MAX_FILES);
+  enforceQueryCap();
 }
 
 /**
