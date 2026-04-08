@@ -2,7 +2,7 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 63 MCP tools (13 core visible, 50 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 66 MCP tools (14 core, 52 hidden via disable()).
 
 DISCOVERY
   discover_tools(query="dead code")    → keyword search → returns tool names
@@ -34,15 +34,14 @@ ALWAYS
 NEVER
   Call index_folder if repo is already in list_repos (file watcher auto-updates).
   Call list_repos more than once per session.
-  Use get_knowledge_map without detect_communities first (returns 129K+ tokens).
-  Use multiple sequential search_text + trace_call_chain for an endpoint — use trace_route.
-  Read entire file just for a return type — use get_type_info.
+  Use get_knowledge_map without detect_communities first (129K+ tokens).
+  Use sequential search_text + trace_call_chain for endpoint — use trace_route.
+  Read entire file for a return type — use get_type_info.
 
 KEY PARAMS
   search_symbols:  detail_level=compact (~15 tok/result) | token_budget=N | kind=function/class/type
-  search_text:     group_by_file=true (-80% output) | auto_group=true (auto-switch >50 matches)
-                   ranked=true → classifies hits by containing function, deduplicates (max 2/fn),
-                   ranks by centrality; returns TextMatch.containing_symbol; saves 1-3 follow-ups
+  search_text:     group_by_file=true (-80% output) | auto_group=true (>50 matches)
+                   ranked=true → classify by function, dedup (max 2/fn), rank by centrality
   assemble_context: level=L0 (full source) | L1 (signatures, 3-5x denser) | L2 (summaries) | L3 (dirs)
   codebase_retrieval: always pass token_budget; batch 3+ queries
   get_knowledge_map: ALWAYS pass focus= to avoid 129K+ token dumps
@@ -68,4 +67,5 @@ TOOL MAPPING (quick ref)
   mermaid diagram   → trace_call_chain(output_format="mermaid")
   API endpoint      → trace_route (FIRST) | secrets → scan_secrets
   past sessions     → search_conversations | changed code → changed_symbols(since=)
+  session snapshot  → get_session_snapshot | session → get_session_context
 `;

@@ -14,6 +14,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 | `H7` | `get_symbol` after `search_symbols` | Use `get_context_bundle` |
 | `H8(n)` | n× `get_symbol` calls | Use `assemble_context(level='L1')` |
 | `H9` | Question-word text query | Use semantic search |
+| `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context |
 
 ## Tool Discovery (NEW — agents read this)
 
@@ -29,7 +30,7 @@ To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
 Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts only, >105K → hard truncate. Skipped when `detail_level` or `token_budget` is explicitly set. Annotation `[compact]` or `[counts]` prepended.
 
 ### CLI hooks (NEW)
-`codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift) and PostToolUse (auto index-file after Edit/Write). Hooks go to `.claude/settings.local.json`.
+`codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift), PostToolUse (auto index-file after Edit/Write), and PreCompact (inject session snapshot before context compaction). Hooks go to `.claude/settings.local.json`.
 
 ## After adding/changing features — update checklist
 
@@ -56,16 +57,16 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 ## Architecture
 
-**64 MCP tools** (13 core + 51 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection
+**66 MCP tools** (14 core + 52 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context
 
 **src/tools/** (21 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
 **src/lsp/** (4 files) — LSP bridge (6 languages)
 **src/parser/extractors/** (10 files) — Language extractors (TS, JS, Python, Go, Rust, Prisma, MD, Astro, Conversation)
-**src/storage/** (8 files) — Index persistence, embeddings, usage tracker, watcher
+**src/storage/** (9 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
 **src/retrieval/** (5 files) — codebase_retrieval batch engine, semantic/hybrid search
 **src/search/** (4 files) — BM25F index with centrality bonus, semantic embeddings
 **src/utils/** (6 files) — Import graph, glob, walk, git validation
-**src/cli/** (4 files) — CLI commands + hooks.ts (PreToolUse/PostToolUse)
+**src/cli/** (4 files) — CLI commands + hooks.ts (PreToolUse/PostToolUse/PreCompact)
 **src/formatters-shortening.ts** — Compact/counts formatters for progressive cascade
 **src/instructions.ts** — CODESIFT_INSTRUCTIONS (~800 tok) sent via MCP instructions field
 **rules/** — Platform-specific rules (claude.md, cursor.mdc, codex.md, gemini.md)

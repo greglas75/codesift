@@ -8,6 +8,16 @@ import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
+export { resetSession } from "./storage/session-state.js";
+import { cleanupSidecar, cleanupOrphanSidecars } from "./storage/session-state.js";
+
+// Clean up orphan sidecar files from previous sessions
+cleanupOrphanSidecars();
+
+// Register sidecar cleanup on process exit
+process.on("exit", () => {
+  cleanupSidecar();
+});
 
 loadConfig();
 
