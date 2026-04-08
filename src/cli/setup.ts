@@ -387,6 +387,11 @@ const POST_TOOL_USE_HOOK = {
   hooks: [{ type: "command", command: "codesift postindex-file" }],
 };
 
+const PRECOMPACT_HOOK = {
+  matcher: "",
+  hooks: [{ type: "command", command: "codesift precompact-snapshot" }],
+};
+
 type HookEntry = { matcher: string; hooks: unknown[] };
 type HooksSection = Record<string, HookEntry[]>;
 
@@ -420,6 +425,14 @@ export async function setupClaudeHooks(): Promise<void> {
   }
   if (!hooks["PostToolUse"].some((h) => h.matcher === POST_TOOL_USE_HOOK.matcher)) {
     hooks["PostToolUse"].push(POST_TOOL_USE_HOOK);
+  }
+
+  // PreCompact — add if not already present
+  if (!Array.isArray(hooks["PreCompact"])) {
+    hooks["PreCompact"] = [];
+  }
+  if (!hooks["PreCompact"].some((h) => h.matcher === PRECOMPACT_HOOK.matcher)) {
+    hooks["PreCompact"].push(PRECOMPACT_HOOK);
   }
 
   await writeJsonFile(settingsPath, settings);

@@ -593,6 +593,14 @@ async function handleFileChange(
   // Invalidate cached findings so the next scan sees the updated file contents.
   scanOnChanged(repoName, relativeFile);
 
+  // Invalidate negative evidence for this file's subtree
+  try {
+    const { invalidateNegativeEvidence } = await import("../storage/session-state.js");
+    invalidateNegativeEvidence(repoName, relativeFile);
+  } catch {
+    // Best-effort — session-state may not be loaded
+  }
+
   const result = await parseOneFile(fullPath, repoRoot, repoName);
   if (!result) return;
 
