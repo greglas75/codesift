@@ -6,7 +6,8 @@
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, join } from "node:path";
+import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -177,6 +178,79 @@ export async function handlePostindexFile(): Promise<void> {
 
     process.exit(0);
   } catch {
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// handlePrecompactSnapshot
+//
+// PreCompact hook for Claude Code. Reads the sidecar JSON file written by
+// the MCP server process, formats a compact snapshot, and writes it to stdout.
+// Claude Code injects stdout content into context before compaction.
+//
+// Env vars:
+//   HOOK_TOOL_INPUT  — JSON string with session_id
+//
+// Always exits 0 — never blocks compaction.
+// ---------------------------------------------------------------------------
+
+export async function handlePrecompactSnapshot(): Promise<void> {
+  try {
+    const input = process.env["HOOK_TOOL_INPUT"];
+    if (!input) {
+      process.exit(0);
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input);
+    } catch {
+      process.exit(0);
+      return;
+    }
+
+    // Extract session_id from hook input
+    const sessionId =
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "session_id" in parsed &&
+      typeof (parsed as Record<string, unknown>).session_id === "string"
+        ? ((parsed as Record<string, unknown>).session_id as string)
+        : null;
+
+    if (!sessionId) {
+      process.exit(0);
+      return;
+    }
+
+    // Read sidecar file
+    const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+    const sidecarPath = join(dataDir, `session-${sessionId}.json`);
+
+    let raw: Record<string, unknown>;
+    try {
+      const content = readFileSync(sidecarPath, "utf-8");
+      raw = JSON.parse(content) as Record<string, unknown>;
+    } catch {
+      // Sidecar missing or invalid — exit gracefully
+      process.exit(0);
+      return;
+    }
+
+    // Deserialize and format snapshot
+    const { deserializeState, formatSnapshot } = await import("../storage/session-state.js");
+    const sessionState = deserializeState(raw);
+    const snapshot = formatSnapshot(sessionState);
+
+    if (snapshot) {
+      process.stdout.write(snapshot);
+    }
+
+    process.exit(0);
+  } catch {
+    // CQ8: never crash — never block compaction
     process.exit(0);
   }
 }

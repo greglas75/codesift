@@ -531,4 +531,8 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
     const { handlePostindexFile } = await import("./hooks.js");
     await handlePostindexFile();
   },
+  "precompact-snapshot": async () => {
+    const { handlePrecompactSnapshot } = await import("./hooks.js");
+    await handlePrecompactSnapshot();
+  },
 };
