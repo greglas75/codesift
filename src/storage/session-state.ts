@@ -365,6 +365,39 @@ export function formatSnapshot(sessionState: SessionState, repo?: string): strin
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// getContext — full session state as structured JSON
+// ---------------------------------------------------------------------------
+
+export function getContext(repo?: string, includeStale = false): Record<string, unknown> {
+  const symbols = [...state.exploredSymbols.values()];
+  const files = [...state.exploredFiles.values()];
+  const queries = repo
+    ? state.queries.filter(q => q.repo === repo)
+    : [...state.queries];
+  const negativeEvidence = state.negativeEvidence.filter(e => {
+    if (!includeStale && isStale(e)) return false;
+    if (repo && e.repo !== repo) return false;
+    return true;
+  });
+
+  return {
+    session_id: state.sessionId,
+    started_at: new Date(state.startedAt).toISOString(),
+    call_count: state.callCount,
+    explored_files: { count: files.length, items: files },
+    explored_symbols: { count: symbols.length, items: symbols },
+    queries: { count: queries.length, items: queries },
+    negative_evidence: { count: negativeEvidence.length, items: negativeEvidence },
+    caps: {
+      symbols_capped: state.exploredSymbols.size >= MAX_SYMBOLS,
+      files_capped: state.exploredFiles.size >= MAX_FILES,
+      queries_capped: state.queries.length >= MAX_QUERIES,
+      negative_evidence_capped: state.negativeEvidence.length >= MAX_NEGATIVE_EVIDENCE,
+    },
+  };
+}
+
 /**
  * Mark negative evidence entries as stale when a file changes.
  * Scoped to the changed file's subtree — entries with a filePattern

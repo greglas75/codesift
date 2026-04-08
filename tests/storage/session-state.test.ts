@@ -8,6 +8,7 @@ import {
   invalidateNegativeEvidence,
   SEARCH_TOOL_SET,
   formatSnapshot,
+  getContext,
 } from "../../src/storage/session-state.js";
 import { getSessionId } from "../../src/storage/usage-tracker.js";
 
@@ -430,6 +431,44 @@ describe("session-state", () => {
       recordToolCall("search_text", { query: "missing", repo: "local/other" }, 0, { matches: [] });
       invalidateNegativeEvidence("local/test", "src/tools/new-file.ts");
       expect(getSessionState().negativeEvidence[0]?.stale).toBe(false);
+    });
+  });
+
+  describe("getContext", () => {
+    it("returns structured JSON with all fields", () => {
+      recordToolCall("search_symbols", { query: "fn", repo: "local/test" }, 1, {
+        symbols: [{ id: "s1", name: "fn1", file: "a.ts" }],
+      });
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      const ctx = getContext();
+      expect(ctx.session_id).toBe(getSessionState().sessionId);
+      expect(ctx.call_count).toBe(2);
+      expect(ctx.explored_symbols.count).toBe(1);
+      expect(ctx.explored_files.count).toBeGreaterThanOrEqual(0);
+      expect(ctx.queries.count).toBe(2);
+      expect(ctx.negative_evidence.count).toBe(1);
+      expect(ctx.caps).toBeDefined();
+    });
+
+    it("filters by repo when provided", () => {
+      recordToolCall("search_text", { query: "a", repo: "local/a" }, 1, { matches: [{}] });
+      recordToolCall("search_text", { query: "b", repo: "local/b" }, 1, { matches: [{}] });
+      const ctx = getContext("local/a");
+      expect(ctx.queries.items.every((q: { repo: string }) => q.repo === "local/a")).toBe(true);
+    });
+
+    it("excludes stale negative evidence by default", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      getSessionState().negativeEvidence[0]!.stale = true;
+      const ctx = getContext();
+      expect(ctx.negative_evidence.count).toBe(0);
+    });
+
+    it("includes stale negative evidence when include_stale=true", () => {
+      recordToolCall("search_text", { query: "missing", repo: "local/test" }, 0, { matches: [] });
+      getSessionState().negativeEvidence[0]!.stale = true;
+      const ctx = getContext(undefined, true);
+      expect(ctx.negative_evidence.count).toBe(1);
     });
   });
 
