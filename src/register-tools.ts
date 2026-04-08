@@ -30,6 +30,7 @@ import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
+import { formatSnapshot, getContext } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
@@ -187,6 +188,7 @@ const CORE_TOOL_NAMES = new Set([
   "search_patterns",       // #10: 122 calls, 3%
   "index_folder",          // essential: repo onboarding
   "discover_tools",        // meta: discovers deferred tools
+  "get_session_snapshot",  // session: compaction survival (core — always visible)
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -1436,6 +1438,35 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return { report: formatUsageReport(stats) };
     },
   },
+
+  // ── Session context tools ───────────────────────────────────────────────
+  {
+    name: "get_session_snapshot",
+    category: "session",
+    searchHint: "session context snapshot compaction summary explored symbols files queries",
+    description: "Get a compact ~200 token snapshot of what was explored in this session. Designed to survive context compaction. Call proactively before long tasks.",
+    schema: {
+      repo: z.string().optional().describe("Filter to specific repo. Default: most recent repo."),
+    },
+    handler: async (args: { repo?: string }) => {
+      const { getSessionState } = await import("./storage/session-state.js");
+      return formatSnapshot(getSessionState(), args.repo);
+    },
+  },
+  {
+    name: "get_session_context",
+    category: "session",
+    searchHint: "session context full explored symbols files queries negative evidence",
+    description: "Get full session context: explored symbols, files, queries, and negative evidence (searched but not found). Use get_session_snapshot for a compact version.",
+    schema: {
+      repo: z.string().optional().describe("Filter to specific repo"),
+      include_stale: zBool().describe("Include stale negative evidence entries (default: false)"),
+    },
+    handler: async (args: { repo?: string; include_stale?: boolean | string }) => {
+      const includeStale = args.include_stale === true || args.include_stale === "true";
+      return getContext(args.repo, includeStale);
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1644,4 +1675,18 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
   registerShortener("find_clones", { compact: formatClonesCompact, counts: formatClonesCounts });
   registerShortener("analyze_hotspots", { compact: formatHotspotsCompact, counts: formatHotspotsCounts });
   registerShortener("trace_route", { compact: formatTraceRouteCompact, counts: formatTraceRouteCounts });
+  registerShortener("get_session_context", {
+    compact: (text: string) => {
+      try {
+        const data = JSON.parse(text);
+        return `session:${data.session_id?.slice(0, 8)} calls:${data.call_count} files:${data.explored_files?.count} symbols:${data.explored_symbols?.count} queries:${data.queries?.count} neg:${data.negative_evidence?.count}`;
+      } catch { return text.slice(0, 500); }
+    },
+    counts: (text: string) => {
+      try {
+        const data = JSON.parse(text);
+        return `files:${data.explored_files?.count} symbols:${data.explored_symbols?.count} queries:${data.queries?.count} neg:${data.negative_evidence?.count}`;
+      } catch { return "parse error"; }
+    },
+  });
 }
