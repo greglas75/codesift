@@ -34,14 +34,14 @@
     "@sanity-labs/secret-scan": "^1.1.0",
     "chokidar": "^4.0.0",
     "ignore": "^6.0.0",
-    "picomatch": "^4.0.3",
+    "picomatch": "^4.0.4",
     "web-tree-sitter": "^0.24.0",
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^3.0.0",
-    "openai": "^4.0.0",
-    "voyageai": "^0.1.0"
+    "openai": "^6.0.0",
+    "voyageai": "^0.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
