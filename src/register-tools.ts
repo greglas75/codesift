@@ -29,6 +29,7 @@ import { scanSecrets } from "./tools/secret-tools.js";
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
+import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
@@ -1465,6 +1466,32 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const includeStale = args.include_stale === true || args.include_stale === "true";
       return getContext(args.repo, includeStale);
     },
+  },
+
+  // --- Project Analysis ---
+  {
+    name: "analyze_project",
+    category: "analysis",
+    searchHint: "project profile stack conventions middleware routes rate-limits auth detection",
+    description: "Analyze a repository to extract stack, file classifications, and framework-specific conventions. Returns a structured project profile (schema v1.0) with file:line evidence for convention-level facts.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      force: zBool().describe("Ignore cached results and re-analyze"),
+    },
+    handler: async (args) => {
+      const result = await analyzeProject(args.repo as string, {
+        force: args.force as boolean | undefined,
+      });
+      return result;
+    },
+  },
+  {
+    name: "get_extractor_versions",
+    category: "meta",
+    searchHint: "extractor version cache invalidation profile",
+    description: "Return current extractor versions without triggering analysis. Used for cache invalidation.",
+    schema: {},
+    handler: async () => getExtractorVersions(),
   },
 ];
 
