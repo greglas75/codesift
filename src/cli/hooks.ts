@@ -36,101 +36,77 @@ function readRawInput(): string | null {
   return null;
 }
 
+interface HookInput {
+  filePath: string | null;
+  sessionId: string | null;
+  command: string | null;
+}
+
+const EMPTY_INPUT: HookInput = Object.freeze({ filePath: null, sessionId: null, command: null });
+
 /**
- * Extract file_path from any platform's hook input format.
+ * Parse hook input JSON once, extracting all fields across all platforms.
+ *
+ * Supported formats:
+ *   Claude Code / Codex: { tool_input: { file_path, command }, session_id }
+ *   Gemini CLI:          { tool: { input: { path|file_path, command } }, sessionId }
+ *   Cline:               { preToolUse|postToolUse: { args: { file_path } } }
  */
-function extractFilePath(raw: string): string | null {
+function parseHookInput(raw: string): HookInput {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return null;
+    return EMPTY_INPUT;
   }
-  if (parsed === null || typeof parsed !== "object") return null;
+  if (parsed === null || typeof parsed !== "object") return EMPTY_INPUT;
   const obj = parsed as Record<string, unknown>;
 
-  // Claude Code / Codex: { tool_input: { file_path: "..." } }
+  let filePath: string | null = null;
+  let command: string | null = null;
+
+  // Claude Code / Codex: { tool_input: { file_path, command } }
   if (obj["tool_input"] && typeof obj["tool_input"] === "object") {
     const ti = obj["tool_input"] as Record<string, unknown>;
-    if (typeof ti["file_path"] === "string") return ti["file_path"];
+    if (typeof ti["file_path"] === "string") filePath = ti["file_path"];
+    if (typeof ti["command"] === "string") command = ti["command"];
   }
 
-  // Gemini CLI: { tool: { input: { path: "..." } } }
+  // Gemini CLI: { tool: { input: { path|file_path, command } } }
   if (obj["tool"] && typeof obj["tool"] === "object") {
     const tool = obj["tool"] as Record<string, unknown>;
     if (tool["input"] && typeof tool["input"] === "object") {
       const input = tool["input"] as Record<string, unknown>;
-      if (typeof input["path"] === "string") return input["path"];
-      if (typeof input["file_path"] === "string") return input["file_path"];
+      if (filePath === null) {
+        if (typeof input["path"] === "string") filePath = input["path"];
+        else if (typeof input["file_path"] === "string") filePath = input["file_path"];
+      }
+      if (command === null && typeof input["command"] === "string") command = input["command"];
     }
   }
 
-  // Cline: { preToolUse: { args: { file_path: "..." } } }
-  // or:    { postToolUse: { args: { file_path: "..." } } }
-  for (const key of ["preToolUse", "postToolUse"]) {
-    if (obj[key] && typeof obj[key] === "object") {
-      const hook = obj[key] as Record<string, unknown>;
-      if (hook["args"] && typeof hook["args"] === "object") {
-        const args = hook["args"] as Record<string, unknown>;
-        if (typeof args["file_path"] === "string") return args["file_path"];
+  // Cline: { preToolUse|postToolUse: { args: { file_path } } }
+  if (filePath === null) {
+    for (const key of ["preToolUse", "postToolUse"]) {
+      if (obj[key] && typeof obj[key] === "object") {
+        const hook = obj[key] as Record<string, unknown>;
+        if (hook["args"] && typeof hook["args"] === "object") {
+          const args = hook["args"] as Record<string, unknown>;
+          if (typeof args["file_path"] === "string") {
+            filePath = args["file_path"];
+            break;
+          }
+        }
       }
     }
   }
 
-  return null;
-}
+  // Session ID: top-level { session_id } or { sessionId }
+  let sessionId: string | null = null;
+  if (typeof obj["session_id"] === "string") sessionId = obj["session_id"];
+  else if (typeof obj["sessionId"] === "string") sessionId = obj["sessionId"];
 
-/**
- * Extract session_id from any platform's hook input format.
- */
-function extractSessionId(raw: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object") return null;
-  const obj = parsed as Record<string, unknown>;
-
-  // Claude Code: { session_id: "..." }
-  if (typeof obj["session_id"] === "string") return obj["session_id"];
-
-  // Gemini: may have sessionId or similar
-  if (typeof obj["sessionId"] === "string") return obj["sessionId"];
-
-  return null;
-}
-
-/**
- * Extract bash command from hook input (Claude/Codex/Gemini).
- */
-function extractCommand(raw: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object") return null;
-  const obj = parsed as Record<string, unknown>;
-
-  // Claude Code / Codex: { tool_input: { command: "..." } }
-  if (obj["tool_input"] && typeof obj["tool_input"] === "object") {
-    const ti = obj["tool_input"] as Record<string, unknown>;
-    if (typeof ti["command"] === "string") return ti["command"];
-  }
-
-  // Gemini: { tool: { input: { command: "..." } } }
-  if (obj["tool"] && typeof obj["tool"] === "object") {
-    const tool = obj["tool"] as Record<string, unknown>;
-    if (tool["input"] && typeof tool["input"] === "object") {
-      const input = tool["input"] as Record<string, unknown>;
-      if (typeof input["command"] === "string") return input["command"];
-    }
-  }
-
-  return null;
+  return { filePath, sessionId, command };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +155,7 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
-    const filePath = extractFilePath(raw);
+    const { filePath } = parseHookInput(raw);
     if (!filePath) {
       process.exit(0);
       return;
@@ -264,7 +240,7 @@ export async function handlePrecheckBash(): Promise<void> {
       return;
     }
 
-    const command = extractCommand(raw);
+    const { command } = parseHookInput(raw);
     if (!command) {
       process.exit(0);
       return;
@@ -319,7 +295,7 @@ export async function handlePostindexFile(): Promise<void> {
       return;
     }
 
-    const filePath = extractFilePath(raw);
+    const { filePath } = parseHookInput(raw);
     if (!filePath) {
       process.exit(0);
       return;
@@ -365,7 +341,7 @@ export async function handlePrecompactSnapshot(): Promise<void> {
       return;
     }
 
-    const sessionId = extractSessionId(raw);
+    const { sessionId } = parseHookInput(raw);
 
     if (!sessionId || !/^[a-f0-9-]+$/i.test(sessionId)) {
       process.exit(0);
