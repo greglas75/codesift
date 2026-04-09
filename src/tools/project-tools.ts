@@ -19,6 +19,7 @@ export const EXTRACTOR_VERSIONS = {
   stack_detector: "1.0.0",
   file_classifier: "1.0.0",
   hono: "1.0.0",
+  nestjs: "1.0.0",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,32 @@ export interface RouteMountEntry {
 export interface AuthPatterns {
   auth_middleware: string | null;
   groups: Record<string, { requires_auth: boolean; middleware: string[] }>;
+}
+
+// NestJS-specific conventions
+export interface NestConventions {
+  modules: NestModuleEntry[];
+  global_guards: NestProviderEntry[];
+  global_filters: NestProviderEntry[];
+  global_pipes: NestProviderEntry[];
+  controllers: string[];
+  throttler: { ttl: number; limit: number } | null;
+}
+
+export interface NestModuleEntry {
+  name: string;
+  file: string;
+  line: number;
+  imported_from: string | null;
+  is_global: boolean;
+}
+
+export interface NestProviderEntry {
+  name: string;
+  token: string; // APP_GUARD, APP_FILTER, etc.
+  file: string;
+  line: number;
+  imported_from: string | null;
 }
 
 export interface GenerationMetadata {
@@ -678,6 +705,147 @@ export function extractHonoConventions(
   };
 }
 
+// ---------------------------------------------------------------------------
+// NestJS Extractor
+// ---------------------------------------------------------------------------
+
+export function extractNestConventions(
+  source: string,
+  filePath: string,
+): NestConventions {
+  const lines = source.split("\n");
+
+  // Build import map
+  const importMap = new Map<string, string>();
+  for (const line of lines) {
+    const defaultImport = line.match(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/);
+    if (defaultImport) {
+      const names = defaultImport[1]!.split(",").map((n) => n.trim().split(/\s+as\s+/).pop()!.trim());
+      for (const name of names) {
+        importMap.set(name, defaultImport[2]!);
+      }
+    }
+  }
+
+  const modules: NestModuleEntry[] = [];
+  const global_guards: NestProviderEntry[] = [];
+  const global_filters: NestProviderEntry[] = [];
+  const global_pipes: NestProviderEntry[] = [];
+  const controllers: string[] = [];
+  let throttler: NestConventions["throttler"] = null;
+
+  let inImports = false;
+  let inProviders = false;
+  let inControllers = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const lineNum = i + 1;
+
+    // Track @Module sections
+    if (/imports:\s*\[/.test(line)) inImports = true;
+    if (/providers:\s*\[/.test(line)) inProviders = true;
+    if (/controllers:\s*\[/.test(line)) inControllers = true;
+    if (inImports && /^\s*\]/.test(line)) inImports = false;
+    if (inProviders && /^\s*\]/.test(line)) inProviders = false;
+    if (inControllers && /^\s*\]/.test(line)) inControllers = false;
+
+    // Extract module imports
+    if (inImports) {
+      // Match: ModuleName, or ModuleName.forRoot(), or ModuleName.forRootAsync({...})
+      const moduleMatch = line.match(/^\s+(\w+Module)(?:\.for(?:Root|Feature)(?:Async)?\s*\()?/);
+      if (moduleMatch) {
+        const name = moduleMatch[1]!;
+        const isGlobal = /isGlobal:\s*true/.test(line) || /ConfigModule|SentryModule/.test(name);
+        modules.push({
+          name,
+          file: filePath,
+          line: lineNum,
+          imported_from: importMap.get(name) ?? null,
+          is_global: isGlobal,
+        });
+      }
+
+      // Extract ThrottlerModule config
+      if (/ThrottlerModule/.test(line)) {
+        // Scan ahead for ttl and limit
+        for (let j = i; j < Math.min(i + 15, lines.length); j++) {
+          const ttlMatch = lines[j]!.match(/ttl:\s*(\d+)/);
+          const limitMatch = lines[j]!.match(/limit:\s*(?:.*?:\s*)?(\d+)/);
+          if (ttlMatch && !throttler) {
+            throttler = { ttl: parseInt(ttlMatch[1]!), limit: 60 };
+          }
+          if (limitMatch && throttler) {
+            // Take the production value (non-development)
+            const allLimits = lines[j]!.match(/(\d+)/g);
+            if (allLimits && allLimits.length > 0) {
+              throttler.limit = parseInt(allLimits[allLimits.length - 1]!);
+            }
+          }
+        }
+      }
+    }
+
+    // Extract controllers
+    if (inControllers) {
+      const ctrlMatch = line.match(/(\w+Controller)\b/);
+      if (ctrlMatch) controllers.push(ctrlMatch[1]!);
+    }
+
+    // Extract global providers (APP_GUARD, APP_FILTER, APP_PIPE)
+    if (inProviders) {
+      if (/provide:\s*APP_GUARD/.test(line)) {
+        // Scan for useClass on next lines
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          const useClassMatch = lines[j]!.match(/useClass:\s*(\w+)/);
+          if (useClassMatch) {
+            global_guards.push({
+              name: useClassMatch[1]!,
+              token: "APP_GUARD",
+              file: filePath,
+              line: j + 1,
+              imported_from: importMap.get(useClassMatch[1]!) ?? null,
+            });
+            break;
+          }
+        }
+      }
+      if (/provide:\s*APP_FILTER/.test(line)) {
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          const useClassMatch = lines[j]!.match(/useClass:\s*(\w+)/);
+          if (useClassMatch) {
+            global_filters.push({
+              name: useClassMatch[1]!,
+              token: "APP_FILTER",
+              file: filePath,
+              line: j + 1,
+              imported_from: importMap.get(useClassMatch[1]!) ?? null,
+            });
+            break;
+          }
+        }
+      }
+      if (/provide:\s*APP_PIPE/.test(line)) {
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          const useClassMatch = lines[j]!.match(/useClass:\s*(\w+)/);
+          if (useClassMatch) {
+            global_pipes.push({
+              name: useClassMatch[1]!,
+              token: "APP_PIPE",
+              file: filePath,
+              line: j + 1,
+              imported_from: importMap.get(useClassMatch[1]!) ?? null,
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return { modules, global_guards, global_filters, global_pipes, controllers, throttler };
+}
+
 function inferScope(path: string): string {
   if (path === "*") return "global";
   if (path.includes("/admin")) return "admin";
@@ -725,7 +893,13 @@ export async function analyzeProject(
     return buildSummary(failedProfile, "(not written — no index)");
   }
 
-  const projectRoot = index.root;
+  // Prefer real project root over conversation index root (~/.claude/projects/...)
+  // The conversation index root points to Claude's project dir, not the actual git repo
+  let projectRoot = index.root;
+  if (projectRoot.includes("/.claude/projects/")) {
+    // Fall back to CWD which is the actual project directory
+    projectRoot = process.cwd();
+  }
   files_analyzed = index.file_count;
 
   // Step 1: Stack detection
@@ -736,28 +910,39 @@ export async function analyzeProject(
 
   // Step 3: Framework-specific convention extraction
   let conventions: Conventions | undefined;
+  let nestConventions: NestConventions | undefined;
   let status: ProjectProfile["status"] = "complete";
 
   if (stack.framework === "hono") {
-    // Find the ORCHESTRATOR file from critical tier
     const orchestratorFile = file_classifications.critical.find(
       (f) => f.code_type === "ORCHESTRATOR",
     );
-
     if (orchestratorFile) {
       try {
-        const appSource = await readFile(
-          join(projectRoot, orchestratorFile.path),
-          "utf-8",
-        );
+        const appSource = await readFile(join(projectRoot, orchestratorFile.path), "utf-8");
         conventions = extractHonoConventions(appSource, orchestratorFile.path);
-      } catch (err) {
+      } catch {
         status = "partial";
         skip_reasons["hono_extractor_error"] = 1;
       }
     } else {
       status = "partial";
       skip_reasons["no_orchestrator_file"] = 1;
+    }
+  } else if (stack.framework === "nestjs") {
+    // Find app.module.ts
+    const moduleFile = index.files.find((f) => f.path.endsWith("app.module.ts"));
+    if (moduleFile) {
+      try {
+        const moduleSource = await readFile(join(projectRoot, moduleFile.path), "utf-8");
+        nestConventions = extractNestConventions(moduleSource, moduleFile.path);
+      } catch {
+        status = "partial";
+        skip_reasons["nestjs_extractor_error"] = 1;
+      }
+    } else {
+      status = "partial";
+      skip_reasons["no_app_module_file"] = 1;
     }
   } else {
     // No framework-specific extractor available
@@ -777,6 +962,7 @@ export async function analyzeProject(
     stack,
     file_classifications,
     ...(conventions ? { conventions } : {}),
+    ...(nestConventions ? { nest_conventions: nestConventions } : {}),
     generation_metadata: {
       files_analyzed,
       files_skipped,
@@ -828,6 +1014,12 @@ export interface ProfileSummary {
     rate_limits: number;
     route_mounts: number;
     auth_groups: number;
+  } | {
+    modules: number;
+    global_guards: number;
+    global_filters: number;
+    controllers: number;
+    has_throttler: boolean;
   } | null;
   duration_ms: number;
 }
@@ -854,6 +1046,12 @@ function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSumm
       rate_limits: profile.conventions.rate_limits.length,
       route_mounts: profile.conventions.route_mounts.length,
       auth_groups: Object.keys(profile.conventions.auth_patterns.groups).length,
+    } : (profile as any).nest_conventions ? {
+      modules: (profile as any).nest_conventions.modules.length,
+      global_guards: (profile as any).nest_conventions.global_guards.length,
+      global_filters: (profile as any).nest_conventions.global_filters.length,
+      controllers: (profile as any).nest_conventions.controllers.length,
+      has_throttler: !!(profile as any).nest_conventions.throttler,
     } : null,
     duration_ms: profile.generation_metadata.duration_ms,
   };

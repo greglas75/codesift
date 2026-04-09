@@ -6,6 +6,7 @@ import {
   detectStack,
   classifyFiles,
   extractHonoConventions,
+  extractNestConventions,
   getExtractorVersions,
   EXTRACTOR_VERSIONS,
 } from "../../src/tools/project-tools.js";
@@ -488,6 +489,11 @@ describe("profile schema conformance", () => {
     }
   });
 
+  it("extractors include nestjs version", () => {
+    const versions = getExtractorVersions();
+    expect(versions).toHaveProperty("nestjs");
+  });
+
   it("stack-level facts have detected_from (not line)", async () => {
     const root = await createFixture("schema-test", {
       "package.json": JSON.stringify({ dependencies: { hono: "^4.0.0" } }),
@@ -495,5 +501,106 @@ describe("profile schema conformance", () => {
     const stack = await detectStack(root);
     expect(stack.detected_from.length).toBeGreaterThan(0);
     expect(stack.detected_from[0]).toContain("package.json");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NestJS Extractor Tests
+// ---------------------------------------------------------------------------
+
+const NEST_MODULE_SOURCE = `import { Module } from '@nestjs/common';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ConfigModule } from '@nestjs/config';
+import { PrismaModule } from './prisma/prisma.module';
+import { AuthModule } from './auth/auth.module';
+import { SurveyModule } from './modules/survey/survey.module';
+import { HealthController } from './health.controller';
+import { ClerkAuthGuard } from './auth/clerk.guard';
+import { RolesGuard } from './common/guards/roles.guard';
+import { SentryGlobalFilter } from '@sentry/nestjs/setup';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+    ThrottlerModule.forRootAsync({
+      useFactory: () => ({
+        throttlers: [{ ttl: 60000, limit: 60 }],
+      }),
+    }),
+    PrismaModule,
+    AuthModule,
+    SurveyModule,
+  ],
+  controllers: [HealthController],
+  providers: [
+    {
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ClerkAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
+})
+export class AppModule {}
+`;
+
+describe("extractNestConventions", () => {
+  it("extracts module imports", () => {
+    const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+    expect(conv.modules.length).toBeGreaterThanOrEqual(5);
+    const prisma = conv.modules.find((m) => m.name === "PrismaModule");
+    expect(prisma).toBeDefined();
+    expect(prisma!.imported_from).toBe("./prisma/prisma.module");
+  });
+
+  it("extracts global guards with APP_GUARD token", () => {
+    const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+    expect(conv.global_guards.length).toBe(3);
+    const names = conv.global_guards.map((g) => g.name);
+    expect(names).toContain("ClerkAuthGuard");
+    expect(names).toContain("RolesGuard");
+    expect(names).toContain("ThrottlerGuard");
+  });
+
+  it("extracts global filters", () => {
+    const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+    expect(conv.global_filters.length).toBe(1);
+    expect(conv.global_filters[0]!.name).toBe("SentryGlobalFilter");
+  });
+
+  it("extracts controllers", () => {
+    const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+    expect(conv.controllers).toContain("HealthController");
+  });
+
+  it("extracts throttler config", () => {
+    const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+    expect(conv.throttler).toBeDefined();
+    expect(conv.throttler!.ttl).toBe(60000);
+  });
+
+  it("resolves imported_from for guards", () => {
+    const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+    const clerk = conv.global_guards.find((g) => g.name === "ClerkAuthGuard");
+    expect(clerk!.imported_from).toBe("./auth/clerk.guard");
+  });
+
+  it("handles source with no @Module decorator", () => {
+    const conv = extractNestConventions("const x = 1;\n", "plain.ts");
+    expect(conv.modules).toEqual([]);
+    expect(conv.global_guards).toEqual([]);
   });
 });
