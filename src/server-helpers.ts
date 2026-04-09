@@ -1,8 +1,23 @@
 import { trackToolCall, addSavings, extractResultChunks } from "./storage/usage-tracker.js";
 import { recordToolCall as recordSessionCall, recordCacheHit, getCallCount, getSessionState, resetSession, scheduleSidecarFlush } from "./storage/session-state.js";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
+
+// ---------------------------------------------------------------------------
+// Auto-resolve repo from CWD — eliminates mandatory list_repos on session start
+// ---------------------------------------------------------------------------
+
+const DEFAULT_REPO = `local/${basename(process.cwd())}`;
+
+/** Tools that accept a `repo` param and should auto-resolve from CWD */
+const TOOLS_WITHOUT_REPO = new Set(["list_repos", "index_folder", "index_repo", "index_conversations", "discover_tools", "describe_tools", "search_conversations", "search_all_conversations", "get_session_snapshot", "get_session_context", "usage_stats", "test_tool"]);
+
+function resolveRepo(toolName: string, args: Record<string, unknown>): void {
+  if (!TOOLS_WITHOUT_REPO.has(toolName) && !args["repo"]) {
+    args["repo"] = DEFAULT_REPO;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -315,6 +330,7 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
 
 export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => Promise<T>): () => Promise<ToolResponse> {
   return () => {
+    resolveRepo(toolName, args);
     const cacheKey = getCacheKey(toolName, args);
 
     // 1. Return completed cache hit

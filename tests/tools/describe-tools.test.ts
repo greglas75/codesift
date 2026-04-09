@@ -49,10 +49,10 @@ describe("describeTools", () => {
     expect(tool.description).toBeDefined();
     expect(tool.is_core).toBe(true);
     expect(tool.params.length).toBeGreaterThan(0);
-    // search_text has repo (required) and query (required) params
+    // search_text has repo (optional, auto-resolved from CWD) and query (required) params
     const repo = tool.params.find(p => p.name === "repo");
     expect(repo).toBeDefined();
-    expect(repo!.required).toBe(true);
+    expect(repo!.required).toBe(false);
     const query = tool.params.find(p => p.name === "query");
     expect(query).toBeDefined();
     expect(query!.required).toBe(true);

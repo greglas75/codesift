@@ -237,7 +237,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "indexing",
     searchHint: "list indexed repositories repos available",
     outputSchema: OutputSchemas.repoList,
-    description: "List indexed repos. Set compact=false for full metadata. Cached per session.",
+    description: "List indexed repos. Only needed for multi-repo discovery — single-repo tools auto-resolve from CWD. Set compact=false for full metadata.",
     schema: {
       compact: zBool().describe("true=names only (default), false=full metadata"),
     },
@@ -249,7 +249,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "clear cache invalidate re-index refresh",
     description: "Clear the index cache for a repository, forcing full re-index on next use",
     schema: {
-      repo: z.string().describe("Repository identifier (e.g. local/my-project)"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     },
     handler: (args) => invalidateCache(args.repo as string),
   },
@@ -273,7 +273,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.searchResults,
     description: "Search symbols by name/signature. detail_level: compact (~15 tok), standard (default), full.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Search query string"),
       kind: z.string().optional().describe("Filter by symbol kind (function, class, etc.)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
@@ -304,7 +304,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "AST tree-sitter query structural pattern matching code shape",
     description: "Search AST patterns via tree-sitter S-expressions. Finds code by structural shape.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Tree-sitter query in S-expression syntax"),
       language: z.string().describe("Tree-sitter grammar: typescript, javascript, python, go, rust, java, ruby, php"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -325,7 +325,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "semantic meaning intent concept embedding vector natural language",
     description: "Search code by meaning using embeddings. For intent-based queries: 'error handling', 'auth flow'. Requires indexed embeddings.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Natural language query describing what you're looking for"),
       top_k: zNum().describe("Number of results (default: 10)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -347,7 +347,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "full-text search grep regex keyword content files",
     description: "Full-text search across all files. For conceptual queries use semantic_search.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Search query or regex pattern"),
       regex: zBool().describe("Treat query as a regex pattern"),
       context_lines: zNum().describe("Number of context lines around each match"),
@@ -376,7 +376,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.fileTree,
     description: "File tree with symbol counts. compact=true for flat list (10-50x less output). Cached 5min.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
       name_pattern: z.string().optional().describe("Glob pattern to filter file names"),
       depth: zNum().describe("Maximum directory depth to traverse"),
@@ -401,7 +401,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.fileOutline,
     description: "Get the symbol outline of a single file (functions, classes, exports)",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_path: z.string().describe("Relative file path within the repository"),
     },
     handler: async (args) => {
@@ -415,7 +415,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "repository outline overview directory structure high-level",
     description: "Get a high-level outline of the entire repository grouped by directory",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     },
     handler: async (args) => {
       const result = await getRepoOutline(args.repo as string);
@@ -429,7 +429,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "suggest queries explore unfamiliar repo onboarding first call",
     description: "Suggest queries for exploring a new repo. Returns top files, kind distribution, examples.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     },
     handler: async (args) => {
       const result = await suggestQueries(args.repo as string);
@@ -445,7 +445,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.symbol,
     description: "Get symbol by ID with source. Auto-prefetches children for classes. For batch: get_symbols. For context: get_context_bundle.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_id: z.string().describe("Unique symbol identifier"),
       include_related: zBool().describe("Include children/related symbols (default: true)"),
     },
@@ -467,7 +467,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "batch get multiple symbols by IDs",
     description: "Retrieve multiple symbols by ID in a single batch call",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_ids: z.union([
         z.array(z.string()),
         z.string().transform((s) => JSON.parse(s) as string[]),
@@ -484,7 +484,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "find symbol by name show source code references",
     description: "Find a symbol by name and show its source, optionally including references",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Symbol name or query to search for"),
       include_refs: zBool().describe("Include locations that reference this symbol"),
     },
@@ -504,7 +504,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "context bundle symbol imports siblings callers one call",
     description: "Symbol + imports + siblings in one call. Saves 2-3 round-trips.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to find"),
     },
     handler: async (args) => {
@@ -522,7 +522,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.references,
     description: "Find all references to a symbol. Pass symbol_names array for batch search.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
       symbol_names: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional()
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
@@ -545,7 +545,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.callTree,
     description: "Trace call chain: callers or callees. output_format='mermaid' for diagram.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Name of the symbol to trace"),
       direction: z.enum(["callers", "callees"]).describe("Trace direction"),
       depth: zNum().describe("Maximum depth to traverse the call graph (default: 1)"),
@@ -570,7 +570,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.impactAnalysis,
     description: "Blast radius of git changes — affected symbols and files.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().describe("Git ref to compare from (e.g. HEAD~3, commit SHA, branch)"),
       depth: zNum().describe("Depth of dependency traversal"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
@@ -592,7 +592,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "trace HTTP route handler API endpoint service database NestJS Express Next.js",
     description: "Trace HTTP route → handler → service → DB. NestJS, Next.js, Express.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (sequence diagram)"),
     },
@@ -609,7 +609,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.definition,
     description: "Go to the definition of a symbol. Uses LSP when available for type-safe precision, falls back to index search.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to find definition of"),
       file_path: z.string().optional().describe("File containing the symbol reference (for LSP precision)"),
       line: zNum().describe("0-based line number of the reference"),
@@ -636,7 +636,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.typeInfo,
     description: "Get type info via LSP hover (return type, params, docs). Hint if LSP unavailable.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to get type info for"),
       file_path: z.string().optional().describe("File containing the symbol"),
       line: zNum().describe("0-based line number"),
@@ -658,7 +658,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.renameResult,
     description: "Rename symbol across all files via LSP. Type-safe, updates imports/refs.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Current name of the symbol to rename"),
       new_name: z.string().describe("New name for the symbol"),
       file_path: z.string().optional().describe("File containing the symbol"),
@@ -682,7 +682,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.callHierarchy,
     description: "LSP call hierarchy: incoming + outgoing calls. Complements trace_call_chain.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to get call hierarchy for"),
       file_path: z.string().optional().describe("File containing the symbol (for LSP precision)"),
       line: zNum().describe("0-based line number"),
@@ -733,7 +733,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "community detection clusters modules Louvain import graph boundaries",
     description: "Louvain community detection on import graph. Discovers module boundaries.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Path substring to filter files (e.g. 'src/lib')"),
       resolution: zNum().describe("Louvain resolution: higher = more smaller communities, lower = fewer larger (default: 1.0)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (graph diagram)"),
@@ -755,7 +755,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "circular dependency cycle import loop detection",
     description: "Detect circular dependencies in the import graph via DFS. Returns file-level cycles.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       max_cycles: zNum().describe("Maximum cycles to report (default: 50)"),
     },
@@ -781,7 +781,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "boundary rules architecture enforcement imports CI gate hexagonal onion",
     description: "Check architecture boundary rules against imports. Path substring matching.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       rules: z.union([
         z.array(z.object({
           from: z.string().describe("Path substring matching source files (e.g. 'src/domain')"),
@@ -807,7 +807,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "classify roles entry core utility dead leaf symbol architecture",
     description: "Classify symbol roles (entry/core/utility/dead/leaf) by call graph connectivity.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       top_n: zNum().describe("Maximum number of symbols to return (default: 100)"),
@@ -830,7 +830,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "assemble context token budget L0 L1 L2 L3 source signatures summaries",
     description: "Assemble code context within token budget. L0=source, L1=signatures, L2=files, L3=dirs.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Natural language query describing what context is needed"),
       token_budget: zNum().describe("Maximum tokens for the assembled context"),
       level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("L0=source (default), L1=signatures, L2=files, L3=dirs"),
@@ -853,7 +853,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "knowledge map module dependency graph architecture overview mermaid",
     description: "Get the module dependency map showing how files and directories relate",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Focus on a specific module or directory"),
       depth: zNum().describe("Maximum depth of the dependency graph"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (dependency diagram)"),
@@ -871,7 +871,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "diff outline structural changes git refs compare",
     description: "Get a structural outline of what changed between two git refs",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
     },
@@ -886,7 +886,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "changed symbols added modified removed git diff",
     description: "List symbols that were added, modified, or removed between two git refs",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_diff: zBool().describe("Include unified diff per changed file (truncated to 500 chars)"),
@@ -906,7 +906,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "generate CLAUDE.md project summary documentation",
     description: "Generate a CLAUDE.md project summary file from the repository index",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       output_path: z.string().optional().describe("Custom output file path"),
     },
     handler: (args) => generateClaudeMd(args.repo as string, args.output_path as string | undefined),
@@ -920,7 +920,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.batchResults,
     description: "Batch multi-query retrieval with shared token budget. Supports symbols/text/semantic/hybrid.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       queries: z
         .union([
           z.array(z.object({ type: z.string() }).passthrough()),
@@ -954,7 +954,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.deadCode,
     description: "Find dead code: exported symbols with zero external references.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files in scan (default: false)"),
     },
@@ -972,7 +972,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "unused imports dead cleanup lint",
     description: "Find imported names never referenced in the file body. Complements find_dead_code.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files in scan (default: false)"),
     },
@@ -999,7 +999,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.complexity,
     description: "Top N most complex functions by cyclomatic complexity, nesting, lines.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       top_n: zNum().describe("Return top N most complex functions (default: 30)"),
       min_complexity: zNum().describe("Minimum cyclomatic complexity to include (default: 1)"),
@@ -1022,7 +1022,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.clones,
     description: "Find code clones: similar function pairs via hash bucketing + line-similarity.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       min_similarity: zNum().describe("Minimum similarity threshold 0-1 (default: 0.7)"),
       min_lines: zNum().describe("Minimum normalized lines to consider (default: 10)"),
@@ -1044,7 +1044,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "frequency analysis common patterns AST shape clusters",
     description: "Group functions by normalized AST shape. Finds emergent patterns invisible to regex.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       top_n: zNum().optional().describe("Number of clusters to return (default: 30)"),
       min_nodes: zNum().optional().describe("Minimum AST nodes in a subtree to include (default: 5)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -1070,7 +1070,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "hotspots git churn bug-prone change frequency complexity",
     description: "Git churn hotspots: change frequency × complexity. Higher score = more bug-prone.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since_days: zNum().describe("Look back N days (default: 90)"),
       top_n: zNum().describe("Return top N hotspots (default: 30)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
@@ -1128,7 +1128,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "search patterns anti-patterns CQ violations useEffect empty-catch console-log",
     description: "Search structural patterns/anti-patterns. Built-in or custom regex.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       pattern: z.string().describe("Built-in pattern name or custom regex"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
@@ -1159,7 +1159,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "generate HTML report complexity dead code hotspots architecture browser",
     description: "Generate a standalone HTML report with complexity, dead code, hotspots, and architecture. Opens in any browser.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     },
     handler: (args) => generateReport(args.repo as string),
   },
@@ -1230,7 +1230,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     outputSchema: OutputSchemas.secrets,
     description: "Scan for hardcoded secrets (API keys, tokens, passwords). ~1,100 rules.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter scanned files"),
       min_confidence: z.enum(["high", "medium", "low"]).optional().describe("Minimum confidence level (default: medium)"),
       exclude_tests: zBool().describe("Exclude test file findings (default: true)"),
@@ -1394,7 +1394,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "review diff static analysis git changes secrets breaking-changes complexity dead-code blast-radius",
     description: "Run 9 parallel static analysis checks on a git diff: secrets, breaking changes, coupling gaps, complexity, dead-code, blast-radius, bug-patterns, test-gaps, hotspots. Returns a scored verdict (pass/warn/fail) with tiered findings.",
     schema: {
-      repo: z.string().describe("Repository identifier"),
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().optional().describe("Base git ref (default: HEAD~1)"),
       until: z.string().optional().describe("Target ref. Default: HEAD. Special: WORKING, STAGED"),
       checks: z.string().optional().describe("Comma-separated check names (default: all)"),

@@ -13,7 +13,7 @@ DISCOVERY
 HINT CODES (appear in tool responses — take the suggested action immediately)
   H1(n)       n matches returned → add group_by_file=true
   H2(n,tool)  n consecutive identical calls → batch into one tool call
-  H3(n)       list_repos called n times → reuse cached value (call once/session)
+  H3(n)       list_repos called n times → repo auto-resolves from CWD, no need to call
   H4          include_source without file_pattern → add file_pattern
   H5(path)    duplicate get_file_tree → use cached result
   H6(n)       n results without detail_level → add detail_level=compact
@@ -22,7 +22,7 @@ HINT CODES (appear in tool responses — take the suggested action immediately)
   H9          question-word text query → use semantic_search or codebase_retrieval(type:semantic)
 
 ALWAYS
-  Call list_repos once per session — cache and reuse the result.
+  repo param auto-resolves from CWD — skip list_repos for single-repo sessions.
   Use semantic_search or codebase_retrieval(type:semantic) for conceptual/question queries.
   Pass file_pattern when scope is known (cuts noise and tokens).
   Use get_symbols (batch) for 2+ symbols — never sequential get_symbol calls.
@@ -32,8 +32,8 @@ ALWAYS
   Use trace_route first for any API endpoint trace.
 
 NEVER
-  Call index_folder if repo is already in list_repos (file watcher auto-updates).
-  Call list_repos more than once per session.
+  Call index_folder if repo is already indexed (file watcher auto-updates).
+  Call list_repos in single-repo sessions — repo auto-resolves from CWD.
   Use get_knowledge_map without detect_communities first (129K+ tokens).
   Use sequential search_text + trace_call_chain for endpoint — use trace_route.
   Read entire file for a return type — use get_type_info.
