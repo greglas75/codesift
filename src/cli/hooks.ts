@@ -1,13 +1,137 @@
 // ---------------------------------------------------------------------------
-// CLI hooks — Claude Code PreToolUse / PostToolUse hook handlers
+// CLI hooks — Cross-platform PreToolUse / PostToolUse hook handlers
 // ---------------------------------------------------------------------------
+// Supports Claude Code, Codex, Gemini CLI, and Cline.
+//
+// Input sources:
+//   Claude Code / Codex: HOOK_TOOL_INPUT env var (JSON)
+//   Gemini CLI / Cline:  stdin (JSON), triggered by --stdin flag
+//
 // Exit codes: 0 = allow, 2 = deny (with redirect message on stdout)
-// The hook command receives tool input via HOOK_TOOL_INPUT env var as JSON.
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { homedir } from "node:os";
+
+// ---------------------------------------------------------------------------
+// Cross-platform input parsing
+// ---------------------------------------------------------------------------
+
+/**
+ * Read raw hook input from env var (Claude/Codex) or stdin (Gemini/Cline).
+ */
+function readRawInput(): string | null {
+  const envInput = process.env["HOOK_TOOL_INPUT"];
+  if (envInput) return envInput;
+
+  if (process.argv.includes("--stdin")) {
+    try {
+      return readFileSync(0, "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract file_path from any platform's hook input format.
+ */
+function extractFilePath(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+
+  // Claude Code / Codex: { tool_input: { file_path: "..." } }
+  if (obj["tool_input"] && typeof obj["tool_input"] === "object") {
+    const ti = obj["tool_input"] as Record<string, unknown>;
+    if (typeof ti["file_path"] === "string") return ti["file_path"];
+  }
+
+  // Gemini CLI: { tool: { input: { path: "..." } } }
+  if (obj["tool"] && typeof obj["tool"] === "object") {
+    const tool = obj["tool"] as Record<string, unknown>;
+    if (tool["input"] && typeof tool["input"] === "object") {
+      const input = tool["input"] as Record<string, unknown>;
+      if (typeof input["path"] === "string") return input["path"];
+      if (typeof input["file_path"] === "string") return input["file_path"];
+    }
+  }
+
+  // Cline: { preToolUse: { args: { file_path: "..." } } }
+  // or:    { postToolUse: { args: { file_path: "..." } } }
+  for (const key of ["preToolUse", "postToolUse"]) {
+    if (obj[key] && typeof obj[key] === "object") {
+      const hook = obj[key] as Record<string, unknown>;
+      if (hook["args"] && typeof hook["args"] === "object") {
+        const args = hook["args"] as Record<string, unknown>;
+        if (typeof args["file_path"] === "string") return args["file_path"];
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract session_id from any platform's hook input format.
+ */
+function extractSessionId(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+
+  // Claude Code: { session_id: "..." }
+  if (typeof obj["session_id"] === "string") return obj["session_id"];
+
+  // Gemini: may have sessionId or similar
+  if (typeof obj["sessionId"] === "string") return obj["sessionId"];
+
+  return null;
+}
+
+/**
+ * Extract bash command from hook input (Claude/Codex/Gemini).
+ */
+function extractCommand(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+
+  // Claude Code / Codex: { tool_input: { command: "..." } }
+  if (obj["tool_input"] && typeof obj["tool_input"] === "object") {
+    const ti = obj["tool_input"] as Record<string, unknown>;
+    if (typeof ti["command"] === "string") return ti["command"];
+  }
+
+  // Gemini: { tool: { input: { command: "..." } } }
+  if (obj["tool"] && typeof obj["tool"] === "object") {
+    const tool = obj["tool"] as Record<string, unknown>;
+    if (tool["input"] && typeof tool["input"] === "object") {
+      const input = tool["input"] as Record<string, unknown>;
+      if (typeof input["command"] === "string") return input["command"];
+    }
+  }
+
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -49,32 +173,13 @@ const DEFAULT_MIN_LINES = 200;
 
 export async function handlePrecheckRead(): Promise<void> {
   try {
-    const input = process.env["HOOK_TOOL_INPUT"];
-    if (!input) {
+    const raw = readRawInput();
+    if (!raw) {
       process.exit(0);
       return;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(input);
-    } catch {
-      // Malformed JSON — allow (never block the agent on hook errors)
-      process.exit(0);
-      return;
-    }
-
-    const filePath =
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "tool_input" in parsed &&
-      parsed.tool_input !== null &&
-      typeof parsed.tool_input === "object" &&
-      "file_path" in parsed.tool_input &&
-      typeof (parsed.tool_input as Record<string, unknown>).file_path === "string"
-        ? ((parsed.tool_input as Record<string, unknown>).file_path as string)
-        : null;
-
+    const filePath = extractFilePath(raw);
     if (!filePath) {
       process.exit(0);
       return;
@@ -143,9 +248,9 @@ function isFileFindCommand(cmd: string): boolean {
 }
 
 function isContentGrepCommand(cmd: string): boolean {
-  // grep -r/--recursive (but not git grep)
+  // grep -r/-R/--recursive (but not git grep)
   const hasRecursiveGrep =
-    /\bgrep\b.*(?:\s-\w*r\w*\s|--recursive)/.test(cmd) && !/\bgit\s+grep\b/.test(cmd);
+    /\bgrep\b.*(?:\s-\w*[rR]\w*\s|--recursive)/.test(cmd) && !/\bgit\s+grep\b/.test(cmd);
   // standalone rg (not as part of another word like "org")
   const hasRg = /(?:^|[\s;&|])rg\s/.test(cmd);
   return hasRecursiveGrep || hasRg;
@@ -153,31 +258,13 @@ function isContentGrepCommand(cmd: string): boolean {
 
 export async function handlePrecheckBash(): Promise<void> {
   try {
-    const input = process.env["HOOK_TOOL_INPUT"];
-    if (!input) {
+    const raw = readRawInput();
+    if (!raw) {
       process.exit(0);
       return;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(input);
-    } catch {
-      process.exit(0);
-      return;
-    }
-
-    const command =
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "tool_input" in parsed &&
-      parsed.tool_input !== null &&
-      typeof parsed.tool_input === "object" &&
-      "command" in parsed.tool_input &&
-      typeof (parsed.tool_input as Record<string, unknown>).command === "string"
-        ? ((parsed.tool_input as Record<string, unknown>).command as string)
-        : null;
-
+    const command = extractCommand(raw);
     if (!command) {
       process.exit(0);
       return;
@@ -226,31 +313,13 @@ export async function handlePrecheckBash(): Promise<void> {
 
 export async function handlePostindexFile(): Promise<void> {
   try {
-    const input = process.env["HOOK_TOOL_INPUT"];
-    if (!input) {
+    const raw = readRawInput();
+    if (!raw) {
       process.exit(0);
       return;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(input);
-    } catch {
-      process.exit(0);
-      return;
-    }
-
-    const filePath =
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "tool_input" in parsed &&
-      parsed.tool_input !== null &&
-      typeof parsed.tool_input === "object" &&
-      "file_path" in parsed.tool_input &&
-      typeof (parsed.tool_input as Record<string, unknown>).file_path === "string"
-        ? ((parsed.tool_input as Record<string, unknown>).file_path as string)
-        : null;
-
+    const filePath = extractFilePath(raw);
     if (!filePath) {
       process.exit(0);
       return;
@@ -290,28 +359,13 @@ export async function handlePostindexFile(): Promise<void> {
 
 export async function handlePrecompactSnapshot(): Promise<void> {
   try {
-    const input = process.env["HOOK_TOOL_INPUT"];
-    if (!input) {
+    const raw = readRawInput();
+    if (!raw) {
       process.exit(0);
       return;
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(input);
-    } catch {
-      process.exit(0);
-      return;
-    }
-
-    // Extract session_id from hook input
-    const sessionId =
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "session_id" in parsed &&
-      typeof (parsed as Record<string, unknown>).session_id === "string"
-        ? ((parsed as Record<string, unknown>).session_id as string)
-        : null;
+    const sessionId = extractSessionId(raw);
 
     if (!sessionId || !/^[a-f0-9-]+$/i.test(sessionId)) {
       process.exit(0);
@@ -322,10 +376,10 @@ export async function handlePrecompactSnapshot(): Promise<void> {
     const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
     const sidecarPath = join(dataDir, `session-${sessionId}.json`);
 
-    let raw: Record<string, unknown>;
+    let sidecarData: Record<string, unknown>;
     try {
       const content = readFileSync(sidecarPath, "utf-8");
-      raw = JSON.parse(content) as Record<string, unknown>;
+      sidecarData = JSON.parse(content) as Record<string, unknown>;
     } catch {
       // Sidecar missing or invalid — exit gracefully
       process.exit(0);
@@ -334,7 +388,7 @@ export async function handlePrecompactSnapshot(): Promise<void> {
 
     // Deserialize and format snapshot
     const { deserializeState, formatSnapshot } = await import("../storage/session-state.js");
-    const sessionState = deserializeState(raw);
+    const sessionState = deserializeState(sidecarData);
     const snapshot = formatSnapshot(sessionState);
 
     if (snapshot) {

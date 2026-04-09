@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import type { HookPlatform } from "./platform.js";
+import { setupClineHooks } from "./shell-templates.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +45,17 @@ tool_timeout_sec = 120
 const MCP_SERVER_ENTRY = {
   command: "npx",
   args: ["-y", "codesift-mcp"],
+};
+
+interface JsonPlatformConfig {
+  configDirName: string;
+  configFileName: string;
+}
+
+const JSON_PLATFORM_CONFIGS: Record<string, JsonPlatformConfig> = {
+  claude: { configDirName: ".claude", configFileName: "settings.json" },
+  cursor: { configDirName: ".cursor", configFileName: "mcp.json" },
+  gemini: { configDirName: ".gemini", configFileName: "settings.json" },
 };
 
 // ---------------------------------------------------------------------------
@@ -111,6 +124,10 @@ const APPEND_MODE_PLATFORMS: Record<string, { source: string; targetFile: string
 const DELIMITER_START = "<!-- codesift-rules-start -->";
 const DELIMITER_END = "<!-- codesift-rules-end -->";
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function installRulesAppendMode(
   platform: string,
   _options?: SetupOptions,
@@ -153,10 +170,6 @@ async function installRulesAppendMode(
     const msg = err instanceof Error ? err.message : String(err);
     return { path: targetPath, action: "error", error: msg };
   }
-}
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const HEADER_REGEX = /^<!-- codesift-rules v([\d.]+) hash:(\w+) -->/;
@@ -207,39 +220,19 @@ export async function installRules(
       const match = HEADER_REGEX.exec(firstLine);
 
       if (match) {
-        const existingVersion = match[1];
-        const existingHash = match[2];
-
-        // Always verify actual body hash to detect user edits
         const existingBody = existingContent.replace(HEADER_REGEX, "").trimStart();
-        const existingBodyHash = sha256(existingBody);
-        const bodyUnmodified = existingBodyHash === sourceHash;
+        const bodyUnmodified = sha256(existingBody) === sourceHash;
 
         if (bodyUnmodified) {
-          // Body matches source template
-          if (existingVersion === version && existingHash === sourceHash) {
-            // Same version, same hash, same body → nothing to do
+          if (match[1] === version && match[2] === sourceHash) {
             return { path: targetPath, action: "skipped" };
           }
-          // Version or header hash differs but body matches → safe update
           await writeFile(targetPath, newContent, "utf-8");
           return { path: targetPath, action: "updated" };
         }
-
-        // Body has been modified by user
-        if (!options?.force) {
-          return {
-            path: targetPath,
-            action: "skipped",
-            warning: `Rules file has been modified by user. Use --force to overwrite.`,
-          };
-        }
-        // Force overwrite
-        await writeFile(targetPath, newContent, "utf-8");
-        return { path: targetPath, action: "force-updated" };
       }
 
-      // No valid header found — treat as user-owned file
+      // Body modified or no valid header — treat as user-owned file
       if (!options?.force) {
         return {
           path: targetPath,
@@ -263,7 +256,7 @@ export async function installRules(
 }
 
 // ---------------------------------------------------------------------------
-// Codex — ~/.codex/config.toml
+// Codex — ~/.codex/config.toml (unique TOML format)
 // ---------------------------------------------------------------------------
 
 async function setupCodex(): Promise<SetupResult> {
@@ -289,12 +282,15 @@ async function setupCodex(): Promise<SetupResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code — ~/.claude/settings.json
+// JSON-based platform setup (Claude, Cursor, Gemini)
 // ---------------------------------------------------------------------------
 
-async function setupClaude(): Promise<SetupResult> {
-  const configDir = join(homedir(), ".claude");
-  const configPath = join(configDir, "settings.json");
+async function setupJsonPlatform(platform: string): Promise<SetupResult> {
+  const config = JSON_PLATFORM_CONFIGS[platform];
+  if (!config) throw new Error(`No JSON config for platform: ${platform}`);
+
+  const configDir = join(homedir(), config.configDirName);
+  const configPath = join(configDir, config.configFileName);
 
   await ensureDir(configDir);
 
@@ -302,150 +298,184 @@ async function setupClaude(): Promise<SetupResult> {
     const settings = await readJsonFile(configPath);
     const mcpServers = settings["mcpServers"] as Record<string, unknown> | undefined;
     if (mcpServers?.["codesift"]) {
-      return { platform: "claude", config_path: configPath, status: "already_configured" };
+      return { platform, config_path: configPath, status: "already_configured" };
     }
     if (!settings["mcpServers"]) {
       settings["mcpServers"] = {};
     }
     (settings["mcpServers"] as Record<string, unknown>)["codesift"] = { ...MCP_SERVER_ENTRY };
     await writeJsonFile(configPath, settings);
-    return { platform: "claude", config_path: configPath, status: "updated" };
+    return { platform, config_path: configPath, status: "updated" };
   }
 
-  // Create new file
   await writeJsonFile(configPath, { mcpServers: { codesift: { ...MCP_SERVER_ENTRY } } });
-  return { platform: "claude", config_path: configPath, status: "created" };
+  return { platform, config_path: configPath, status: "created" };
 }
 
 // ---------------------------------------------------------------------------
-// Cursor — ~/.cursor/mcp.json
+// Hook helpers — shared patterns for idempotent hook installation
 // ---------------------------------------------------------------------------
 
-async function setupCursor(): Promise<SetupResult> {
-  const configDir = join(homedir(), ".cursor");
-  const configPath = join(configDir, "mcp.json");
+type HookEntry = { matcher: string; hooks: unknown[] };
+type HooksSection = Record<string, HookEntry[]>;
 
-  await ensureDir(configDir);
-
+/** Load or create a hooks section from a JSON config file. */
+async function loadHooksSection(configPath: string): Promise<{ root: Record<string, unknown>; hooks: HooksSection }> {
+  let root: Record<string, unknown> = {};
   if (existsSync(configPath)) {
-    const config = await readJsonFile(configPath);
-    const mcpServers = config["mcpServers"] as Record<string, unknown> | undefined;
-    if (mcpServers?.["codesift"]) {
-      return { platform: "cursor", config_path: configPath, status: "already_configured" };
-    }
-    if (!config["mcpServers"]) {
-      config["mcpServers"] = {};
-    }
-    (config["mcpServers"] as Record<string, unknown>)["codesift"] = { ...MCP_SERVER_ENTRY };
-    await writeJsonFile(configPath, config);
-    return { platform: "cursor", config_path: configPath, status: "updated" };
+    root = await readJsonFile(configPath);
   }
-
-  await writeJsonFile(configPath, { mcpServers: { codesift: { ...MCP_SERVER_ENTRY } } });
-  return { platform: "cursor", config_path: configPath, status: "created" };
+  if (typeof root["hooks"] !== "object" || root["hooks"] === null || Array.isArray(root["hooks"])) {
+    root["hooks"] = {};
+  }
+  return { root, hooks: root["hooks"] as HooksSection };
 }
 
-// ---------------------------------------------------------------------------
-// Gemini CLI — ~/.gemini/settings.json
-// ---------------------------------------------------------------------------
-
-async function setupGemini(): Promise<SetupResult> {
-  const configDir = join(homedir(), ".gemini");
-  const configPath = join(configDir, "settings.json");
-
-  await ensureDir(configDir);
-
-  if (existsSync(configPath)) {
-    const settings = await readJsonFile(configPath);
-    const mcpServers = settings["mcpServers"] as Record<string, unknown> | undefined;
-    if (mcpServers?.["codesift"]) {
-      return { platform: "gemini", config_path: configPath, status: "already_configured" };
-    }
-    if (!settings["mcpServers"]) {
-      settings["mcpServers"] = {};
-    }
-    (settings["mcpServers"] as Record<string, unknown>)["codesift"] = { ...MCP_SERVER_ENTRY };
-    await writeJsonFile(configPath, settings);
-    return { platform: "gemini", config_path: configPath, status: "updated" };
+/** Idempotent: ensure hooks[event] array exists, add entry if matcher not present. */
+function ensureHookEntry(hooks: HooksSection, event: string, entry: HookEntry): void {
+  if (!Array.isArray(hooks[event])) {
+    hooks[event] = [];
   }
+  if (!hooks[event].some((h) => h.matcher === entry.matcher)) {
+    hooks[event].push(entry);
+  }
+}
 
-  await writeJsonFile(configPath, { mcpServers: { codesift: { ...MCP_SERVER_ENTRY } } });
-  return { platform: "gemini", config_path: configPath, status: "created" };
+/** Check if any hook in entries has a codesift command (content-based dedup). */
+function hasCodesiftHook(entries: HookEntry[]): boolean {
+  return entries.some((h) =>
+    (h.hooks as Array<Record<string, unknown>>)?.some?.((hk) =>
+      typeof hk === "object" && hk !== null && typeof hk["command"] === "string" && (hk["command"] as string).includes("codesift"),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Claude Code hooks — .claude/settings.local.json
 // ---------------------------------------------------------------------------
 
-const PRE_TOOL_USE_HOOK = {
-  matcher: "Read",
-  hooks: [{ type: "command", command: "codesift precheck-read" }],
+const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
+  PreToolUse: [
+    { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read" }] },
+    { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash" }] },
+  ],
+  PostToolUse: [
+    { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file" }] },
+  ],
+  PreCompact: [
+    { matcher: "", hooks: [{ type: "command", command: "codesift precompact-snapshot" }] },
+  ],
 };
-
-const PRE_TOOL_USE_BASH_HOOK = {
-  matcher: "Bash",
-  hooks: [{ type: "command", command: "codesift precheck-bash" }],
-};
-
-const POST_TOOL_USE_HOOK = {
-  matcher: "Write|Edit",
-  hooks: [{ type: "command", command: "codesift postindex-file" }],
-};
-
-const PRECOMPACT_HOOK = {
-  matcher: "",
-  hooks: [{ type: "command", command: "codesift precompact-snapshot" }],
-};
-
-type HookEntry = { matcher: string; hooks: unknown[] };
-type HooksSection = Record<string, HookEntry[]>;
 
 export async function setupClaudeHooks(): Promise<void> {
   const configDir = join(homedir(), ".claude");
   const settingsPath = join(configDir, "settings.local.json");
-
   await ensureDir(configDir);
 
-  let settings: Record<string, unknown> = {};
-  if (existsSync(settingsPath)) {
-    settings = await readJsonFile(settingsPath);
+  const { root, hooks } = await loadHooksSection(settingsPath);
+
+  for (const [event, entries] of Object.entries(CLAUDE_HOOKS)) {
+    for (const entry of entries) {
+      ensureHookEntry(hooks, event, entry);
+    }
   }
 
-  if (typeof settings["hooks"] !== "object" || settings["hooks"] === null) {
-    settings["hooks"] = {};
-  }
-  const hooks = settings["hooks"] as HooksSection;
+  await writeJsonFile(settingsPath, root);
+}
 
-  // PreToolUse — add if not already present for matcher "Read"
-  if (!Array.isArray(hooks["PreToolUse"])) {
-    hooks["PreToolUse"] = [];
-  }
-  if (!hooks["PreToolUse"].some((h) => h.matcher === PRE_TOOL_USE_HOOK.matcher)) {
-    hooks["PreToolUse"].push(PRE_TOOL_USE_HOOK);
-  }
+// ---------------------------------------------------------------------------
+// Codex CLI hooks — ~/.codex/hooks.json
+// ---------------------------------------------------------------------------
+// Codex only has the Bash tool — Read-redirect and PostToolUse don't apply.
+// No PreCompact event. Install: Stop (conversation indexing) only.
+// ---------------------------------------------------------------------------
 
-  // PreToolUse — add if not already present for matcher "Bash"
-  if (!hooks["PreToolUse"].some((h) => h.matcher === PRE_TOOL_USE_BASH_HOOK.matcher)) {
-    hooks["PreToolUse"].push(PRE_TOOL_USE_BASH_HOOK);
-  }
+export async function setupCodexHooks(): Promise<void> {
+  const configDir = process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
+  const hooksPath = join(configDir, "hooks.json");
+  await ensureDir(configDir);
 
-  // PostToolUse — add if not already present for matcher "Write|Edit"
-  if (!Array.isArray(hooks["PostToolUse"])) {
-    hooks["PostToolUse"] = [];
-  }
-  if (!hooks["PostToolUse"].some((h) => h.matcher === POST_TOOL_USE_HOOK.matcher)) {
-    hooks["PostToolUse"].push(POST_TOOL_USE_HOOK);
-  }
+  const { root, hooks } = await loadHooksSection(hooksPath);
 
-  // PreCompact — add if not already present
-  if (!Array.isArray(hooks["PreCompact"])) {
-    hooks["PreCompact"] = [];
+  if (!Array.isArray(hooks["Stop"])) {
+    hooks["Stop"] = [];
   }
-  if (!hooks["PreCompact"].some((h) => h.matcher === PRECOMPACT_HOOK.matcher)) {
-    hooks["PreCompact"].push(PRECOMPACT_HOOK);
+  if (!hasCodesiftHook(hooks["Stop"])) {
+    hooks["Stop"].push({
+      matcher: "",
+      hooks: [{ type: "command", command: "codesift index-conversations --quiet" }],
+    });
   }
 
-  await writeJsonFile(settingsPath, settings);
+  await writeJsonFile(hooksPath, root);
+}
+
+// ---------------------------------------------------------------------------
+// Gemini CLI hooks — ~/.gemini/settings.json
+// ---------------------------------------------------------------------------
+// Gemini uses different event names and tool names:
+//   PreToolUse → BeforeTool, PostToolUse → AfterTool,
+//   PreCompact → PreCompress, Stop → SessionEnd
+//   Read → read_file, Edit → replace, Write → write_file
+// Gemini passes hook input via stdin (not HOOK_TOOL_INPUT env var).
+// ---------------------------------------------------------------------------
+
+const GEMINI_HOOKS: Record<string, HookEntry> = {
+  BeforeTool: {
+    matcher: "read_file",
+    hooks: [{ type: "command", command: "codesift precheck-read --stdin" }],
+  },
+  AfterTool: {
+    matcher: "write_file|replace",
+    hooks: [{ type: "command", command: "codesift postindex-file --stdin" }],
+  },
+  PreCompress: {
+    matcher: "",
+    hooks: [{ type: "command", command: "codesift precompact-snapshot --stdin" }],
+  },
+  SessionEnd: {
+    matcher: "",
+    hooks: [{ type: "command", command: "codesift index-conversations --quiet" }],
+  },
+};
+
+export async function setupGeminiHooks(): Promise<void> {
+  const configDir = join(homedir(), ".gemini");
+  const settingsPath = join(configDir, "settings.json");
+  await ensureDir(configDir);
+
+  const { root, hooks } = await loadHooksSection(settingsPath);
+
+  for (const [eventName, hookEntry] of Object.entries(GEMINI_HOOKS)) {
+    if (!Array.isArray(hooks[eventName])) {
+      hooks[eventName] = [];
+    }
+    if (!hasCodesiftHook(hooks[eventName])) {
+      hooks[eventName].push(hookEntry);
+    }
+  }
+
+  await writeJsonFile(settingsPath, root);
+}
+
+// ---------------------------------------------------------------------------
+// Auto-install hooks for detected platform
+// ---------------------------------------------------------------------------
+
+export { setupClineHooks };
+
+const PLATFORM_HOOK_INSTALLERS: Partial<Record<HookPlatform, () => Promise<void>>> = {
+  claude: setupClaudeHooks,
+  codex: setupCodexHooks,
+  gemini: setupGeminiHooks,
+  cline: setupClineHooks,
+};
+
+export async function setupHooksForPlatform(platform: HookPlatform): Promise<void> {
+  const installer = PLATFORM_HOOK_INSTALLERS[platform];
+  if (installer) {
+    await installer();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -460,9 +490,9 @@ export interface SetupOptions {
 
 const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
   codex: setupCodex,
-  claude: setupClaude,
-  cursor: setupCursor,
-  gemini: setupGemini,
+  claude: () => setupJsonPlatform("claude"),
+  cursor: () => setupJsonPlatform("cursor"),
+  gemini: () => setupJsonPlatform("gemini"),
 };
 
 export async function setup(platform: string, options?: SetupOptions): Promise<SetupResult> {
@@ -473,12 +503,17 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
     );
   }
   const result = await handler();
-  if (platform === "claude" && options?.hooks) {
-    await setupClaudeHooks();
-    // Auto-install rules with hooks — agents need rules to know the full tool mapping
-    await installRules(platform, homedir(), options);
+  if (options?.hooks) {
+    const hookInstaller = PLATFORM_HOOK_INSTALLERS[platform as HookPlatform];
+    if (hookInstaller) {
+      await hookInstaller();
+    }
+    if (platform === "claude") {
+      // Auto-install rules with hooks — agents need rules to know the full tool mapping
+      await installRules(platform, homedir(), options);
+    }
   }
-  if (options?.rules) {
+  if (options?.rules && !(options?.hooks && platform === "claude")) {
     await installRules(platform, homedir(), options);
   }
   return result;
@@ -487,7 +522,7 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
 export async function setupAll(options?: SetupOptions): Promise<SetupResult[]> {
   const results: SetupResult[] = [];
   for (const platform of SUPPORTED_PLATFORMS) {
-    const result = await setup(platform, platform === "claude" ? options : undefined);
+    const result = await setup(platform, options);
     results.push(result);
   }
   return results;
@@ -538,10 +573,18 @@ export async function formatSetupLines(
     }
   }
 
-  if (platform === "claude" && options?.hooks) {
-    await setupClaudeHooks();
-    const hooksPath = join(homedir(), ".claude", "settings.local.json");
-    lines.push(`✓ hooks configured ${hooksPath}`);
+  if (options?.hooks) {
+    const hookInstaller = PLATFORM_HOOK_INSTALLERS[platform as HookPlatform];
+    if (hookInstaller) {
+      await hookInstaller();
+      const hookPaths: Record<string, string> = {
+        claude: join(homedir(), ".claude", "settings.local.json"),
+        codex: join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "hooks.json"),
+        gemini: join(homedir(), ".gemini", "settings.json"),
+      };
+      const hooksPath = hookPaths[platform] ?? "hooks";
+      lines.push(`✓ hooks configured ${hooksPath}`);
+    }
   }
 
   return lines;

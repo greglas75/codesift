@@ -282,6 +282,40 @@ describe("handlePrecheckBash", () => {
     expect(exitCode).toBe(0);
   });
 
+  it("exits 2 for grep -R (uppercase recursive)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'grep -Rn "handleRequest" src/' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+    expect(stdoutOutput).toContain("search_text");
+  });
+
+  it("exits 2 for grep --recursive (long form)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'grep --recursive "TODO" src/' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+  });
+
+  it("exits 0 for non-recursive grep (single file)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'grep "pattern" src/server.ts' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+  });
+
   it("exits 0 when HOOK_TOOL_INPUT not set", async () => {
     delete process.env["HOOK_TOOL_INPUT"];
     await handlePrecheckBash();
