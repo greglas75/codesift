@@ -539,14 +539,33 @@ export function extractHonoConventions(
 ): Conventions {
   const calls = parseHonoCalls(source);
 
+  // Build import map: variable name → import path
+  const importMap = new Map<string, string>();
+  for (const line of source.split("\n")) {
+    // import adminContests from "./routes/admin/contests/index.js";
+    const defaultImport = line.match(/import\s+(\w+)\s+from\s+["']([^"']+)["']/);
+    if (defaultImport) {
+      importMap.set(defaultImport[1]!, defaultImport[2]!);
+    }
+    // import { clerkAuth } from "./middleware/auth.js";
+    const namedImport = line.match(/import\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']/);
+    if (namedImport) {
+      const names = namedImport[1]!.split(",").map((n) => n.trim().split(/\s+as\s+/).pop()!.trim());
+      for (const name of names) {
+        importMap.set(name, namedImport[2]!);
+      }
+    }
+  }
+
   const middleware_chains: MiddlewareChain[] = [];
   const rate_limits: RateLimitEntry[] = [];
   const route_mounts: RouteMountEntry[] = [];
   const authGroups: Record<string, { requires_auth: boolean; middleware: string[] }> = {};
   let auth_middleware: string | null = null;
 
-  // Group middleware by scope
+  // Group middleware by scope — deduplicate same middleware on different paths
   const scopeChains = new Map<string, { name: string; line: number; order: number }[]>();
+  const scopeMwSeen = new Map<string, Set<string>>(); // scope → set of middleware names already in chain
 
   let globalOrder = 0;
   const scopeOrders = new Map<string, number>();
@@ -563,16 +582,25 @@ export function extractHonoConventions(
           max: rl.max,
           window: rl.window,
           applied_to_path: call.path !== "*" ? call.path : null,
-          method: null, // .use() doesn't bind to a specific method
+          method: null,
         });
       } else if (mwName) {
         const scope = call.path === "*" ? "global" : inferScope(call.path ?? "");
-        const currentOrder = scope === "global"
-          ? ++globalOrder
-          : (scopeOrders.set(scope, (scopeOrders.get(scope) ?? 0) + 1), scopeOrders.get(scope)!);
 
-        if (!scopeChains.has(scope)) scopeChains.set(scope, []);
-        scopeChains.get(scope)!.push({ name: mwName, line: call.line, order: currentOrder });
+        // Deduplicate: same middleware applied to different paths in same scope
+        // e.g. publicTenantResolver on /api/contests/*, /api/translations/*, /api/r/*
+        if (!scopeMwSeen.has(scope)) scopeMwSeen.set(scope, new Set());
+        const seen = scopeMwSeen.get(scope)!;
+
+        if (!seen.has(mwName)) {
+          seen.add(mwName);
+          const currentOrder = scope === "global"
+            ? ++globalOrder
+            : (scopeOrders.set(scope, (scopeOrders.get(scope) ?? 0) + 1), scopeOrders.get(scope)!);
+
+          if (!scopeChains.has(scope)) scopeChains.set(scope, []);
+          scopeChains.get(scope)!.push({ name: mwName, line: call.line, order: currentOrder });
+        }
 
         // Detect auth middleware
         if (/auth|clerk|jwt|session|passport/i.test(mwName)) {
@@ -580,20 +608,25 @@ export function extractHonoConventions(
           const group = inferScope(call.path ?? "");
           if (!authGroups[group]) authGroups[group] = { requires_auth: false, middleware: [] };
           authGroups[group].requires_auth = true;
-          authGroups[group].middleware.push(mwName);
+          if (!authGroups[group].middleware.includes(mwName)) {
+            authGroups[group].middleware.push(mwName);
+          }
         } else if (scope !== "global") {
           const group = scope;
           if (!authGroups[group]) authGroups[group] = { requires_auth: false, middleware: [] };
-          authGroups[group].middleware.push(mwName);
+          if (!authGroups[group].middleware.includes(mwName)) {
+            authGroups[group].middleware.push(mwName);
+          }
         }
       }
     } else if (call.type === "route") {
+      const varName = call.args.trim();
       route_mounts.push({
         file: filePath,
         line: call.line,
         mount_path: call.path ?? "",
-        imported_from: call.args.includes("/") ? call.args : null,
-        exported_as: call.args.includes("/") ? null : call.args,
+        imported_from: importMap.get(varName) ?? null,
+        exported_as: varName,
       });
 
       // Infer route group for auth detection

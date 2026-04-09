@@ -345,12 +345,13 @@ describe("extractHonoConventions", () => {
     expect(registerLimit?.applied_to_path).toContain("register");
   });
 
-  it("extracts route mounts with mount_path", () => {
+  it("extracts route mounts with mount_path and imported_from", () => {
     const conv = extractHonoConventions(HONO_APP_SOURCE, "app.ts");
     expect(conv.route_mounts.length).toBeGreaterThan(0);
     const adminContest = conv.route_mounts.find((r) => r.mount_path === "/api/admin/contests");
     expect(adminContest).toBeDefined();
     expect(adminContest!.exported_as).toBe("adminContests");
+    expect(adminContest!.imported_from).toBe("./routes/admin/contests/index.js");
   });
 
   it("captures all route mounts", () => {
@@ -390,6 +391,31 @@ describe("extractHonoConventions", () => {
     const conv = extractHonoConventions(HONO_APP_SOURCE, "app.ts");
     expect(conv.auth_patterns.groups["webhook"]).toBeDefined();
     expect(conv.auth_patterns.groups["webhook"]?.requires_auth).toBe(false);
+  });
+
+  // Bug fix: dedup same middleware on different paths
+  it("deduplicates same middleware applied to different paths in same scope", () => {
+    const conv = extractHonoConventions(HONO_APP_SOURCE, "app.ts");
+    const pub = conv.middleware_chains.find((c) => c.scope === "public");
+    expect(pub).toBeDefined();
+    // publicTenantResolver appears on 3 paths but should be listed once in the chain
+    const ptNames = pub!.chain.filter((m) => m.name === "publicTenantResolver");
+    expect(ptNames.length).toBe(1);
+  });
+
+  it("deduplicates middleware in auth group lists", () => {
+    const conv = extractHonoConventions(HONO_APP_SOURCE, "app.ts");
+    const pubGroup = conv.auth_patterns.groups["public"];
+    expect(pubGroup).toBeDefined();
+    const ptCount = pubGroup!.middleware.filter((m) => m === "publicTenantResolver").length;
+    expect(ptCount).toBe(1);
+  });
+
+  it("resolves imported_from for route mounts via import map", () => {
+    const conv = extractHonoConventions(HONO_APP_SOURCE, "app.ts");
+    const webhook = conv.route_mounts.find((r) => r.exported_as === "webhookSurvey");
+    expect(webhook).toBeDefined();
+    expect(webhook!.imported_from).toBe("./routes/webhooks/survey.js");
   });
 });
 
