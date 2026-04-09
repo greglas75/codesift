@@ -20,6 +20,11 @@ export const EXTRACTOR_VERSIONS = {
   file_classifier: "1.0.0",
   hono: "1.0.0",
   nestjs: "1.0.0",
+  nextjs: "1.0.0",
+  express: "1.0.0",
+  react: "1.0.0",
+  python: "1.0.0",
+  php: "1.0.0",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -199,19 +204,83 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
     }
   }
 
+  // Python framework detection (if no JS framework found)
+  if (!framework) {
+    const pyproject = await readJson(join(projectRoot, "pyproject.toml")) ?? null;
+    const requirements = await readFile(join(projectRoot, "requirements.txt"), "utf-8").catch(() => "");
+    const pipfile = await readFile(join(projectRoot, "Pipfile"), "utf-8").catch(() => "");
+    const pyDeps = requirements + pipfile + (pyproject ? JSON.stringify(pyproject) : "");
+
+    if (pyDeps.includes("fastapi")) {
+      framework = "fastapi";
+      detected_from.push("python:fastapi");
+    } else if (pyDeps.includes("django")) {
+      framework = "django";
+      detected_from.push("python:django");
+    } else if (pyDeps.includes("flask")) {
+      framework = "flask";
+      detected_from.push("python:flask");
+    }
+  }
+
+  // PHP framework detection
+  if (!framework) {
+    const composer = await readJson(join(projectRoot, "composer.json"));
+    if (composer) {
+      const phpDeps = { ...composer.require, ...composer["require-dev"] };
+      if (phpDeps?.["laravel/framework"]) {
+        framework = "laravel";
+        framework_version = phpDeps["laravel/framework"]?.replace(/^[\^~>=<]/, "") ?? null;
+        detected_from.push("composer.json:require.laravel/framework");
+      } else if (phpDeps?.["symfony/framework-bundle"]) {
+        framework = "symfony";
+        detected_from.push("composer.json:require.symfony/framework-bundle");
+      }
+    }
+  }
+
   // Language detection
   let language = "javascript";
   let language_version: string | null = null;
-  const tsconfig = await readJson(join(projectRoot, "tsconfig.json"));
-  if (tsconfig) {
-    language = "typescript";
-    language_version = tsconfig?.compilerOptions?.target ?? null;
-    detected_from.push("tsconfig.json");
+
+  // Check for Python first
+  if (["fastapi", "django", "flask"].includes(framework ?? "")) {
+    language = "python";
+    detected_from.push("framework implies python");
+  } else if (await fileExists(join(projectRoot, "pyproject.toml")) || await fileExists(join(projectRoot, "requirements.txt"))) {
+    language = "python";
+    detected_from.push("pyproject.toml or requirements.txt");
+  }
+
+  // Check for PHP
+  if (["laravel", "symfony"].includes(framework ?? "")) {
+    language = "php";
+    detected_from.push("framework implies php");
+  }
+
+  // TypeScript/JavaScript (only if not already Python/PHP)
+  if (language === "javascript") {
+    const tsconfig = await readJson(join(projectRoot, "tsconfig.json"));
+    if (tsconfig) {
+      language = "typescript";
+      language_version = tsconfig?.compilerOptions?.target ?? null;
+      detected_from.push("tsconfig.json");
+    }
   }
 
   // Test runner detection
   let test_runner: string | null = null;
-  if (pkg) {
+  if (language === "python") {
+    if (await fileExists(join(projectRoot, "pytest.ini")) || await fileExists(join(projectRoot, "conftest.py"))) {
+      test_runner = "pytest";
+      detected_from.push("pytest.ini or conftest.py");
+    }
+  } else if (language === "php") {
+    if (await fileExists(join(projectRoot, "phpunit.xml")) || await fileExists(join(projectRoot, "phpunit.xml.dist"))) {
+      test_runner = "phpunit";
+      detected_from.push("phpunit.xml");
+    }
+  } else if (pkg) {
     const devDeps = pkg.devDependencies ?? {};
     if (devDeps["vitest"]) {
       test_runner = "vitest";
@@ -846,6 +915,298 @@ export function extractNestConventions(
   return { modules, global_guards, global_filters, global_pipes, controllers, throttler };
 }
 
+// ---------------------------------------------------------------------------
+// Next.js Extractor
+// ---------------------------------------------------------------------------
+
+export interface NextConventions {
+  pages: { path: string; type: "page" | "api" | "layout" | "loading" | "error" }[];
+  middleware: { file: string; matchers: string[] } | null;
+  api_routes: { path: string; methods: string[]; file: string }[];
+  config: {
+    app_router: boolean;
+    src_dir: boolean;
+    i18n: boolean;
+  };
+}
+
+export function extractNextConventions(
+  projectRoot: string,
+  files: { path: string }[],
+): NextConventions {
+  const pages: NextConventions["pages"] = [];
+  const api_routes: NextConventions["api_routes"] = [];
+  let middleware: NextConventions["middleware"] = null;
+
+  const hasAppDir = files.some((f) => f.path.includes("/app/"));
+  const hasSrcDir = files.some((f) => f.path.startsWith("src/"));
+  const hasI18n = files.some((f) => f.path.includes("[locale]") || f.path.includes("i18n"));
+
+  for (const file of files) {
+    const p = file.path;
+
+    // Middleware
+    if (/^(src\/)?middleware\.(ts|js)$/.test(p)) {
+      middleware = { file: p, matchers: [] };
+    }
+
+    // App Router pages
+    if (/\/app\/.*\/page\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "page" });
+    }
+    if (/\/app\/.*\/layout\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "layout" });
+    }
+    if (/\/app\/.*\/loading\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "loading" });
+    }
+    if (/\/app\/.*\/error\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "error" });
+    }
+
+    // API routes (App Router)
+    if (/\/app\/api\/.*\/route\.(ts|js)$/.test(p)) {
+      api_routes.push({ path: p, methods: [], file: p });
+    }
+
+    // Pages Router API routes
+    if (/\/pages\/api\//.test(p)) {
+      api_routes.push({ path: p, methods: [], file: p });
+    }
+  }
+
+  return {
+    pages,
+    middleware,
+    api_routes,
+    config: { app_router: hasAppDir, src_dir: hasSrcDir, i18n: hasI18n },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Express Extractor (similar to Hono but different patterns)
+// ---------------------------------------------------------------------------
+
+export interface ExpressConventions {
+  middleware: { name: string; file: string; line: number }[];
+  routers: { mount_path: string; file: string; line: number; imported_from: string | null }[];
+  error_handlers: { file: string; line: number }[];
+}
+
+export function extractExpressConventions(
+  source: string,
+  filePath: string,
+): ExpressConventions {
+  const lines = source.split("\n");
+  const middleware: ExpressConventions["middleware"] = [];
+  const routers: ExpressConventions["routers"] = [];
+  const error_handlers: ExpressConventions["error_handlers"] = [];
+
+  // Import map
+  const importMap = new Map<string, string>();
+  for (const line of lines) {
+    const req = line.match(/(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+    if (req) importMap.set(req[1]!, req[2]!);
+    const imp = line.match(/import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"]([^'"]+)['"]/);
+    if (imp) {
+      const names = imp[1] ? imp[1].split(",").map((n) => n.trim()) : [imp[2]!];
+      for (const n of names) importMap.set(n, imp[3]!);
+    }
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const lineNum = i + 1;
+
+    // app.use(middleware)
+    const useMatch = line.match(/app\.use\s*\(\s*(\w+)\s*\)/);
+    if (useMatch) {
+      middleware.push({ name: useMatch[1]!, file: filePath, line: lineNum });
+      continue;
+    }
+
+    // app.use("/path", router)
+    const routeMatch = line.match(/app\.use\s*\(\s*['"]([^'"]+)['"]\s*,\s*(\w+)\s*\)/);
+    if (routeMatch) {
+      routers.push({
+        mount_path: routeMatch[1]!,
+        file: filePath,
+        line: lineNum,
+        imported_from: importMap.get(routeMatch[2]!) ?? null,
+      });
+      continue;
+    }
+
+    // Error handler: (err, req, res, next) => ...
+    if (/app\.use\s*\(\s*(?:function\s*)?\(\s*err\s*,/.test(line) || /app\.use\s*\(\s*\(\s*err\s*:/.test(line)) {
+      error_handlers.push({ file: filePath, line: lineNum });
+    }
+  }
+
+  return { middleware, routers, error_handlers };
+}
+
+// ---------------------------------------------------------------------------
+// React Extractor (component-level conventions)
+// ---------------------------------------------------------------------------
+
+export interface ReactConventions {
+  state_management: string | null; // redux, zustand, context, jotai, etc.
+  routing: string | null; // react-router, tanstack-router, etc.
+  ui_library: string | null; // mui, chakra, shadcn, etc.
+  component_count: { pages: number; components: number; hooks: number };
+}
+
+export function extractReactConventions(
+  files: { path: string }[],
+  deps: Record<string, string>,
+): ReactConventions {
+  // State management
+  let state_management: string | null = null;
+  if (deps["@reduxjs/toolkit"] || deps["redux"]) state_management = "redux";
+  else if (deps["zustand"]) state_management = "zustand";
+  else if (deps["jotai"]) state_management = "jotai";
+  else if (deps["recoil"]) state_management = "recoil";
+  else if (deps["mobx"]) state_management = "mobx";
+
+  // Routing
+  let routing: string | null = null;
+  if (deps["react-router-dom"] || deps["react-router"]) routing = "react-router";
+  else if (deps["@tanstack/react-router"]) routing = "tanstack-router";
+  else if (deps["wouter"]) routing = "wouter";
+
+  // UI library
+  let ui_library: string | null = null;
+  if (deps["@mui/material"]) ui_library = "mui";
+  else if (deps["@chakra-ui/react"]) ui_library = "chakra";
+  else if (deps["antd"]) ui_library = "antd";
+  else if (deps["@radix-ui/react-dialog"] || deps["@radix-ui/themes"]) ui_library = "radix";
+  else if (deps["tailwindcss"]) ui_library = "tailwind";
+
+  // Component counts
+  let pages = 0, components = 0, hooks = 0;
+  for (const f of files) {
+    if (/\/pages?\//.test(f.path) && /\.(tsx|jsx)$/.test(f.path)) pages++;
+    else if (/\/components?\//.test(f.path) && /\.(tsx|jsx)$/.test(f.path)) components++;
+    if (/\/hooks?\//.test(f.path) || /\.hook\.(ts|js)$/.test(f.path)) hooks++;
+  }
+
+  return {
+    state_management,
+    routing,
+    ui_library,
+    component_count: { pages, components, hooks },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Python Extractor
+// ---------------------------------------------------------------------------
+
+export interface PythonConventions {
+  framework_type: "fastapi" | "django" | "flask" | null;
+  routers: { path: string; file: string }[];
+  middleware: string[];
+  models_dir: string | null;
+  test_framework: string | null;
+}
+
+export function extractPythonConventions(
+  files: { path: string }[],
+): PythonConventions {
+  const routers: PythonConventions["routers"] = [];
+  const middlewareSet = new Set<string>();
+  let models_dir: string | null = null;
+  let framework_type: PythonConventions["framework_type"] = null;
+
+  for (const f of files) {
+    // FastAPI routers
+    if (/router\.py$|routes?\.py$/.test(f.path)) {
+      routers.push({ path: f.path, file: f.path });
+      if (!framework_type) framework_type = "fastapi";
+    }
+    // Django views/urls
+    if (/views\.py$|urls\.py$/.test(f.path)) {
+      routers.push({ path: f.path, file: f.path });
+      if (!framework_type) framework_type = "django";
+    }
+    // Flask blueprints
+    if (/blueprint/.test(f.path)) {
+      routers.push({ path: f.path, file: f.path });
+      if (!framework_type) framework_type = "flask";
+    }
+    // Middleware
+    if (/middleware/.test(f.path) && f.path.endsWith(".py")) {
+      middlewareSet.add(f.path);
+    }
+    // Models
+    if (/models?\.py$/.test(f.path) && !models_dir) {
+      const dir = f.path.split("/").slice(0, -1).join("/");
+      models_dir = dir || null;
+    }
+  }
+
+  // Test framework detection
+  let test_framework: string | null = null;
+  if (files.some((f) => /conftest\.py$/.test(f.path) || /test_.*\.py$/.test(f.path))) {
+    test_framework = "pytest";
+  } else if (files.some((f) => /tests?\.py$/.test(f.path))) {
+    test_framework = "unittest";
+  }
+
+  return {
+    framework_type,
+    routers,
+    middleware: [...middlewareSet],
+    models_dir,
+    test_framework,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// PHP/Laravel Extractor
+// ---------------------------------------------------------------------------
+
+export interface PhpConventions {
+  controllers: { name: string; path: string }[];
+  middleware: { name: string; path: string }[];
+  models: { name: string; path: string }[];
+  routes_files: string[];
+  migrations_count: number;
+}
+
+export function extractPhpConventions(
+  files: { path: string }[],
+): PhpConventions {
+  const controllers: PhpConventions["controllers"] = [];
+  const middleware: PhpConventions["middleware"] = [];
+  const models: PhpConventions["models"] = [];
+  const routes_files: string[] = [];
+  let migrations_count = 0;
+
+  for (const f of files) {
+    const name = f.path.split("/").pop()?.replace(/\.php$/, "") ?? "";
+
+    if (/Controller\.php$/.test(f.path)) {
+      controllers.push({ name, path: f.path });
+    }
+    if (/\/[Mm]iddleware\//.test(f.path) && f.path.endsWith(".php")) {
+      middleware.push({ name, path: f.path });
+    }
+    if (/\/[Mm]odels?\//.test(f.path) && f.path.endsWith(".php")) {
+      models.push({ name, path: f.path });
+    }
+    if (/routes\//.test(f.path) && f.path.endsWith(".php")) {
+      routes_files.push(f.path);
+    }
+    if (/migrations?\//.test(f.path)) {
+      migrations_count++;
+    }
+  }
+
+  return { controllers, middleware, models, routes_files, migrations_count };
+}
+
 function inferScope(path: string): string {
   if (path === "*") return "global";
   if (path.includes("/admin")) return "admin";
@@ -911,42 +1272,60 @@ export async function analyzeProject(
   // Step 3: Framework-specific convention extraction
   let conventions: Conventions | undefined;
   let nestConventions: NestConventions | undefined;
+  let nextConventions: NextConventions | undefined;
+  let expressConventions: ExpressConventions | undefined;
+  let reactConventions: ReactConventions | undefined;
+  let pythonConventions: PythonConventions | undefined;
+  let phpConventions: PhpConventions | undefined;
   let status: ProjectProfile["status"] = "complete";
 
-  if (stack.framework === "hono") {
-    const orchestratorFile = file_classifications.critical.find(
-      (f) => f.code_type === "ORCHESTRATOR",
-    );
-    if (orchestratorFile) {
-      try {
+  const fw = stack.framework;
+
+  try {
+    if (fw === "hono") {
+      const orchestratorFile = file_classifications.critical.find((f) => f.code_type === "ORCHESTRATOR");
+      if (orchestratorFile) {
         const appSource = await readFile(join(projectRoot, orchestratorFile.path), "utf-8");
         conventions = extractHonoConventions(appSource, orchestratorFile.path);
-      } catch {
+      } else {
         status = "partial";
-        skip_reasons["hono_extractor_error"] = 1;
+        skip_reasons["no_orchestrator_file"] = 1;
       }
-    } else {
-      status = "partial";
-      skip_reasons["no_orchestrator_file"] = 1;
-    }
-  } else if (stack.framework === "nestjs") {
-    // Find app.module.ts
-    const moduleFile = index.files.find((f) => f.path.endsWith("app.module.ts"));
-    if (moduleFile) {
-      try {
+    } else if (fw === "nestjs") {
+      const moduleFile = index.files.find((f) => f.path.endsWith("app.module.ts"));
+      if (moduleFile) {
         const moduleSource = await readFile(join(projectRoot, moduleFile.path), "utf-8");
         nestConventions = extractNestConventions(moduleSource, moduleFile.path);
-      } catch {
+      } else {
         status = "partial";
-        skip_reasons["nestjs_extractor_error"] = 1;
+        skip_reasons["no_app_module_file"] = 1;
       }
+    } else if (fw === "nextjs") {
+      nextConventions = extractNextConventions(projectRoot, index.files);
+    } else if (fw === "express") {
+      const entryFile = file_classifications.critical.find((f) => f.code_type === "ORCHESTRATOR")
+        ?? index.files.find((f) => /\/(app|server|index)\.(ts|js)$/.test(f.path));
+      if (entryFile) {
+        const appSource = await readFile(join(projectRoot, entryFile.path), "utf-8");
+        expressConventions = extractExpressConventions(appSource, entryFile.path);
+      } else {
+        status = "partial";
+        skip_reasons["no_entry_file"] = 1;
+      }
+    } else if (fw === "react") {
+      const pkg = await readJson(join(projectRoot, "package.json"));
+      const allDeps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+      reactConventions = extractReactConventions(index.files, allDeps);
+    } else if (fw === "fastapi" || fw === "django" || fw === "flask") {
+      pythonConventions = extractPythonConventions(index.files);
+    } else if (fw === "laravel" || fw === "symfony") {
+      phpConventions = extractPhpConventions(index.files);
     } else {
       status = "partial";
-      skip_reasons["no_app_module_file"] = 1;
     }
-  } else {
-    // No framework-specific extractor available
+  } catch {
     status = "partial";
+    skip_reasons[`${fw ?? "unknown"}_extractor_error`] = 1;
   }
 
   const profile: ProjectProfile = {
@@ -963,6 +1342,11 @@ export async function analyzeProject(
     file_classifications,
     ...(conventions ? { conventions } : {}),
     ...(nestConventions ? { nest_conventions: nestConventions } : {}),
+    ...(nextConventions ? { next_conventions: nextConventions } : {}),
+    ...(expressConventions ? { express_conventions: expressConventions } : {}),
+    ...(reactConventions ? { react_conventions: reactConventions } : {}),
+    ...(pythonConventions ? { python_conventions: pythonConventions } : {}),
+    ...(phpConventions ? { php_conventions: phpConventions } : {}),
     generation_metadata: {
       files_analyzed,
       files_skipped,
@@ -1009,19 +1393,59 @@ export interface ProfileSummary {
     routine: number;
     total_analyzed: number;
   };
-  conventions_summary: {
-    middleware_chains: number;
-    rate_limits: number;
-    route_mounts: number;
-    auth_groups: number;
-  } | {
-    modules: number;
-    global_guards: number;
-    global_filters: number;
-    controllers: number;
-    has_throttler: boolean;
-  } | null;
+  conventions_summary: Record<string, unknown> | null;
   duration_ms: number;
+}
+
+function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conventions_summary"] {
+  const p = profile as any;
+  if (p.conventions) return {
+    middleware_chains: p.conventions.middleware_chains.length,
+    rate_limits: p.conventions.rate_limits.length,
+    route_mounts: p.conventions.route_mounts.length,
+    auth_groups: Object.keys(p.conventions.auth_patterns.groups).length,
+  };
+  if (p.nest_conventions) return {
+    type: "nestjs",
+    modules: p.nest_conventions.modules.length,
+    global_guards: p.nest_conventions.global_guards.length,
+    global_filters: p.nest_conventions.global_filters.length,
+    controllers: p.nest_conventions.controllers.length,
+    has_throttler: !!p.nest_conventions.throttler,
+  };
+  if (p.next_conventions) return {
+    type: "nextjs",
+    pages: p.next_conventions.pages.length,
+    api_routes: p.next_conventions.api_routes.length,
+    has_middleware: !!p.next_conventions.middleware,
+    app_router: p.next_conventions.config.app_router,
+  };
+  if (p.express_conventions) return {
+    type: "express",
+    middleware: p.express_conventions.middleware.length,
+    routers: p.express_conventions.routers.length,
+    error_handlers: p.express_conventions.error_handlers.length,
+  };
+  if (p.react_conventions) return {
+    type: "react",
+    ...p.react_conventions.component_count,
+    state_management: p.react_conventions.state_management,
+    ui_library: p.react_conventions.ui_library,
+  };
+  if (p.python_conventions) return {
+    type: "python",
+    routers: p.python_conventions.routers.length,
+    middleware: p.python_conventions.middleware.length,
+    framework_type: p.python_conventions.framework_type,
+  };
+  if (p.php_conventions) return {
+    type: "php",
+    controllers: p.php_conventions.controllers.length,
+    middleware: p.php_conventions.middleware.length,
+    models: p.php_conventions.models.length,
+    migrations: p.php_conventions.migrations_count,
+  };
+  return null;
 }
 
 function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSummary {
@@ -1041,18 +1465,7 @@ function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSumm
       routine: profile.file_classifications?.routine.count ?? 0,
       total_analyzed: profile.generation_metadata.files_analyzed,
     },
-    conventions_summary: profile.conventions ? {
-      middleware_chains: profile.conventions.middleware_chains.length,
-      rate_limits: profile.conventions.rate_limits.length,
-      route_mounts: profile.conventions.route_mounts.length,
-      auth_groups: Object.keys(profile.conventions.auth_patterns.groups).length,
-    } : (profile as any).nest_conventions ? {
-      modules: (profile as any).nest_conventions.modules.length,
-      global_guards: (profile as any).nest_conventions.global_guards.length,
-      global_filters: (profile as any).nest_conventions.global_filters.length,
-      controllers: (profile as any).nest_conventions.controllers.length,
-      has_throttler: !!(profile as any).nest_conventions.throttler,
-    } : null,
+    conventions_summary: buildConventionsSummary(profile),
     duration_ms: profile.generation_metadata.duration_ms,
   };
 }
