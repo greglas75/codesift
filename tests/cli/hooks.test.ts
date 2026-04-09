@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 
 // Static import — handlePrecheckRead reads env vars at call time, not module load time,
 // so module caching in singleFork mode is not a problem.
-import { handlePrecheckRead, handlePostindexFile } from "../../src/cli/hooks.js";
+import { handlePrecheckRead, handlePrecheckBash, handlePostindexFile } from "../../src/cli/hooks.js";
 
 // ---------------------------------------------------------------------------
 // Mock indexFile so handlePostindexFile doesn't hit real storage
@@ -140,6 +140,158 @@ describe("handlePrecheckRead", () => {
 
     expect(exitCode).toBe(0); // 150 < 200 default
     rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handlePrecheckBash tests
+// ---------------------------------------------------------------------------
+
+describe("handlePrecheckBash", () => {
+  let exitCode: number | undefined;
+  let stdoutOutput: string;
+
+  beforeEach(() => {
+    exitCode = undefined;
+    stdoutOutput = "";
+    vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+      exitCode = code ?? 0;
+      return undefined as never;
+    });
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutOutput += String(chunk);
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env["HOOK_TOOL_INPUT"];
+  });
+
+  it("exits 2 for find with -name (file exploration)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'find /project -type f -name "*.ts"' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+    expect(stdoutOutput).toContain("get_file_tree");
+  });
+
+  it("exits 2 for find with -iname", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'find . -iname "*.tsx" ! -path "*/node_modules/*"' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+  });
+
+  it("exits 0 for find with -exec (destructive)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'find . -name "*.tmp" -exec rm {} \\;' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 for find with -delete", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'find . -name "*.log" -delete' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 2 for grep -r (recursive grep)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'grep -r "handleRequest" src/' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+    expect(stdoutOutput).toContain("search_text");
+  });
+
+  it("exits 2 for grep -rn (recursive with line numbers)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'grep -rn "TODO" .' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+  });
+
+  it("exits 2 for rg (ripgrep)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'rg "createUser" --type ts' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(2);
+    expect(stdoutOutput).toContain("search_text");
+  });
+
+  it("exits 0 for git grep (not intercepted)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'git grep "pattern" HEAD' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 for regular bash commands", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 for git commands", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "git status" },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 when HOOK_TOOL_INPUT not set", async () => {
+    delete process.env["HOOK_TOOL_INPUT"];
+    await handlePrecheckBash();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 on malformed JSON", async () => {
+    process.env["HOOK_TOOL_INPUT"] = "not json {{{";
+    await handlePrecheckBash();
+    expect(exitCode).toBe(0);
   });
 });
 

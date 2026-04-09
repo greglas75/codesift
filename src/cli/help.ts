@@ -47,6 +47,7 @@ Commands:
   setup <platform>                Configure codesift-mcp in an AI coding tool
                                   Platforms: codex, claude, cursor, gemini, all
   precheck-read                   PreToolUse hook: deny large file reads (hook handler)
+  precheck-bash                   PreToolUse hook: redirect find/grep to CodeSift (hook handler)
   postindex-file                  PostToolUse hook: re-index edited files (hook handler)
 
 Flags:
@@ -408,6 +409,20 @@ This command is designed to be installed as a Claude Code PreToolUse hook via:
 Env vars:
   HOOK_TOOL_INPUT                 JSON with tool_input.file_path (set by Claude Code)
   CODESIFT_READ_HOOK_MIN_LINES    Override line threshold (default: 200)`,
+
+  "precheck-bash": `codesift precheck-bash
+
+PreToolUse hook handler for the Bash tool.
+Exits 2 (deny) when the agent attempts to run file-finding (find ... -name) or
+content-searching (grep -r, rg) commands, redirecting to CodeSift tools instead.
+Exits 0 (allow) for all other Bash commands.
+
+This ensures sub-agents (Explore, Plan, etc.) use the CodeSift index rather than
+raw shell commands. Installed as a Claude Code PreToolUse hook via:
+  codesift setup claude --hooks
+
+Env vars:
+  HOOK_TOOL_INPUT    JSON with tool_input.command (set by Claude Code)`,
 
   "postindex-file": `codesift postindex-file
 

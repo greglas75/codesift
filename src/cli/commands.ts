@@ -527,6 +527,10 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
     const { handlePrecheckRead } = await import("./hooks.js");
     await handlePrecheckRead();
   },
+  "precheck-bash": async () => {
+    const { handlePrecheckBash } = await import("./hooks.js");
+    await handlePrecheckBash();
+  },
   "postindex-file": async () => {
     const { handlePostindexFile } = await import("./hooks.js");
     await handlePostindexFile();

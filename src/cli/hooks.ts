@@ -120,6 +120,99 @@ export async function handlePrecheckRead(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// handlePrecheckBash
+//
+// PreToolUse hook for the Bash tool. When the agent attempts to run file-
+// finding (find ... -name) or content-searching (grep -r, rg) commands,
+// deny and redirect to CodeSift tools instead.
+//
+// This ensures sub-agents (Explore, Plan, etc.) use the CodeSift index
+// rather than raw shell commands, even when they don't have CodeSift rules
+// in their context.
+//
+// Env vars:
+//   HOOK_TOOL_INPUT  — JSON string with tool_input.command
+// ---------------------------------------------------------------------------
+
+function isFileFindCommand(cmd: string): boolean {
+  const hasFind = /\bfind\s/.test(cmd);
+  const hasNameFilter = /\s-i?name\s/.test(cmd);
+  // Don't intercept destructive operations
+  const hasDestructive = /\s-(?:exec|delete|ok)\b|\brm\s|\bmv\s/.test(cmd);
+  return hasFind && hasNameFilter && !hasDestructive;
+}
+
+function isContentGrepCommand(cmd: string): boolean {
+  // grep -r/--recursive (but not git grep)
+  const hasRecursiveGrep =
+    /\bgrep\b.*(?:\s-\w*r\w*\s|--recursive)/.test(cmd) && !/\bgit\s+grep\b/.test(cmd);
+  // standalone rg (not as part of another word like "org")
+  const hasRg = /(?:^|[\s;&|])rg\s/.test(cmd);
+  return hasRecursiveGrep || hasRg;
+}
+
+export async function handlePrecheckBash(): Promise<void> {
+  try {
+    const input = process.env["HOOK_TOOL_INPUT"];
+    if (!input) {
+      process.exit(0);
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input);
+    } catch {
+      process.exit(0);
+      return;
+    }
+
+    const command =
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "tool_input" in parsed &&
+      parsed.tool_input !== null &&
+      typeof parsed.tool_input === "object" &&
+      "command" in parsed.tool_input &&
+      typeof (parsed.tool_input as Record<string, unknown>).command === "string"
+        ? ((parsed.tool_input as Record<string, unknown>).command as string)
+        : null;
+
+    if (!command) {
+      process.exit(0);
+      return;
+    }
+
+    if (isFileFindCommand(command)) {
+      process.stdout.write(
+        `CodeSift has repos pre-indexed. Use CodeSift MCP tools instead of find:\n` +
+          `  list_repos() — get repo identifier (call once)\n` +
+          `  get_file_tree(repo="local/<name>", compact=true, name_pattern="*.ts")\n` +
+          `  search_symbols(repo="local/<name>", query="test", kind="function")\n`,
+      );
+      process.exit(2);
+      return;
+    }
+
+    if (isContentGrepCommand(command)) {
+      process.stdout.write(
+        `CodeSift has repos pre-indexed. Use CodeSift MCP tools instead of grep/rg:\n` +
+          `  list_repos() — get repo identifier (call once)\n` +
+          `  search_text(repo="local/<name>", query="pattern", file_pattern="*.ts")\n` +
+          `  search_symbols(repo="local/<name>", query="name", include_source=true)\n`,
+      );
+      process.exit(2);
+      return;
+    }
+
+    process.exit(0);
+  } catch {
+    // CQ8: never crash — always fall back to allow
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // handlePostindexFile
 //
 // PostToolUse hook for Write/Edit tools. When the agent writes or edits a

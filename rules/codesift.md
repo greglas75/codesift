@@ -10,6 +10,17 @@ Run once per session:
 2. If the repo is missing: `index_folder(path=<root>)` once to index it.
 3. Use `"local/<folder-name>"` as the `repo` parameter for all tool calls.
 
+## PREFER CodeSift over Bash/Glob/Grep
+
+When CodeSift MCP tools are available, ALWAYS prefer them over shell commands:
+- `Bash(find ... -name)` → use `get_file_tree(repo, compact=true, name_pattern="*.ts")`
+- `Bash(grep -r ...)` or `Bash(rg ...)` → use `search_text(repo, query, file_pattern=)`
+- `Glob(pattern)` for code discovery → use `get_file_tree(repo, name_pattern=)`
+- `Grep(pattern)` for code search → use `search_text(repo, query)`
+
+This applies to ALL agents including sub-agents spawned via the Agent tool.
+Call `list_repos()` once to get the repo identifier, then use CodeSift tools for all exploration.
+
 ## Tool Discovery
 
 **66 MCP tools total** (14 core + 52 discoverable).
@@ -180,9 +191,11 @@ Setup auto-indexing and read-redirect hooks for Claude Code:
 codesift setup claude --hooks
 ```
 
-Installs two hooks in `.claude/settings.local.json`:
+Installs hooks in `.claude/settings.local.json` and rules in `~/.claude/rules/codesift.md`:
 
 - **PreToolUse** (`precheck-read`) — redirects `Read` on large code files to CodeSift tools
+- **PreToolUse** (`precheck-bash`) — redirects `find`/`grep`/`rg` in Bash to CodeSift tools
 - **PostToolUse** (`postindex-file`) — auto-runs `index_file` after `Edit` or `Write`
+- **PreCompact** (`precompact-snapshot`) — injects session snapshot before context compaction
 
-This ensures the index stays current without manual `index_file` calls after every edit.
+This ensures the index stays current and sub-agents use CodeSift tools automatically.

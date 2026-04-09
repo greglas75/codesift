@@ -382,6 +382,11 @@ const PRE_TOOL_USE_HOOK = {
   hooks: [{ type: "command", command: "codesift precheck-read" }],
 };
 
+const PRE_TOOL_USE_BASH_HOOK = {
+  matcher: "Bash",
+  hooks: [{ type: "command", command: "codesift precheck-bash" }],
+};
+
 const POST_TOOL_USE_HOOK = {
   matcher: "Write|Edit",
   hooks: [{ type: "command", command: "codesift postindex-file" }],
@@ -417,6 +422,11 @@ export async function setupClaudeHooks(): Promise<void> {
   }
   if (!hooks["PreToolUse"].some((h) => h.matcher === PRE_TOOL_USE_HOOK.matcher)) {
     hooks["PreToolUse"].push(PRE_TOOL_USE_HOOK);
+  }
+
+  // PreToolUse — add if not already present for matcher "Bash"
+  if (!hooks["PreToolUse"].some((h) => h.matcher === PRE_TOOL_USE_BASH_HOOK.matcher)) {
+    hooks["PreToolUse"].push(PRE_TOOL_USE_BASH_HOOK);
   }
 
   // PostToolUse — add if not already present for matcher "Write|Edit"
@@ -465,6 +475,8 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
   const result = await handler();
   if (platform === "claude" && options?.hooks) {
     await setupClaudeHooks();
+    // Auto-install rules with hooks — agents need rules to know the full tool mapping
+    await installRules(platform, homedir(), options);
   }
   if (options?.rules) {
     await installRules(platform, homedir(), options);
