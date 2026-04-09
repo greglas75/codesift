@@ -131,3 +131,32 @@ Commits pending review. Auto-managed:
 - a699c08 (2026-04-06) fix: add missing shebang to server.ts bin entry
 - f77630b (2026-04-06) release: v0.2.3 — fix shebang for global install
 - 3064ad6 (2026-04-07) fix: describe_tools array coercion, trace_route shortener, test usage isolation
+- 85735f4 (2026-04-07) fix: add JSON string coercion to check_boundaries rules parameter
+- a05c3ef (2026-04-07) fix: isolate boundary-tools tests with own CODESIFT_DATA_DIR
+- ecd0029 (2026-04-08) fix: upgrade openai ^6, picomatch ^4.0.4, voyageai ^0.2.1
+- b2d11ca (2026-04-08) release: v0.2.4
+- a0ce651 (2026-04-08) add session-state module with types and reset function
+- f5493a9 (2026-04-08) add recordToolCall with symbol, file, and query extraction
+- 9b45cad (2026-04-08) add negative evidence recording with TTL and watcher invalidation
+- a3bef9b (2026-04-08) add session state cap enforcement with LRU and stale-first eviction
+- 22c1560 (2026-04-08) add formatSnapshot with priority-tiered 700-char budget
+- 5e119ff (2026-04-08) add sidecar file management with atomic writes and orphan cleanup
+- de4e9f4 (2026-04-08) add getContext for full session state as structured JSON
+- 9fc9fb2 (2026-04-08) integrate session tracking into wrapTool and add H10 hint code
+- 96902fe (2026-04-08) register session snapshot and context as MCP tools
+- 55cded8 (2026-04-08) add precompact-snapshot CLI hook for context compaction survival
+- 42df041 (2026-04-08) install PreCompact hook and wire watcher to negative evidence invalidation
+- 2a6fb23 (2026-04-08) wire session cleanup on exit and update instructions and docs
+- 8f41297 (2026-04-08) review-fix: prevent false negative evidence on errors, flush stdout before exit, fix repo filter, validate sessionId
+- 971b3ab (2026-04-08) feat: auto-index current repo on server startup
+- 8e0b0bc (2026-04-08) release: v0.2.5
+- 4ffd955 (2026-04-09) docs: fix tool count (63/64→66), file counts, test count across all docs
+- 4db20e3 (2026-04-09) feat: auto-resolve repo param from CWD, eliminate mandatory list_repos
+- 4642489 (2026-04-09) feat: precheck-bash hook to redirect find/grep to CodeSift in sub-agents
+- 32ce3ab (2026-04-09) docs: update all rules files to reflect repo auto-resolve from CWD
+- f71535f (2026-04-09) fix: grep -R bypass, double installRules, add missing hook tests
+- d18fe5e (2026-04-09) refactor(hooks): consolidate 3 extract* functions into single parseHookInput parser
+- c6ed202 (2026-04-09) feat: add analyze_project + get_extractor_versions tools — project profile analysis
+- 1a63366 (2026-04-09) release: v0.2.7 — feat: analyze_project + get_extractor_versions tools
+- dfffd27 (2026-04-09) fix: stack detector scans workspace package.json in monorepos
+- c7b2eec (2026-04-09) release: v0.2.8 — fix: monorepo workspace scanning for stack detection

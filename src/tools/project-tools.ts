@@ -644,7 +644,7 @@ function inferScope(path: string): string {
   if (path.includes("/public") || path.includes("/contests") || path.includes("/translations") || path.includes("/r/")) return "public";
   // Default: extract first meaningful segment
   const segments = path.split("/").filter(Boolean);
-  if (segments.length >= 2) return segments[1];
+  if (segments.length >= 2) return segments[1]!;
   return "root";
 }
 
@@ -654,7 +654,7 @@ function inferScope(path: string): string {
 
 export async function analyzeProject(
   repoName: string,
-  options: { force?: boolean } = {},
+  _options: { force?: boolean | undefined } = {},
 ): Promise<ProjectProfile> {
   const startTime = Date.now();
   let files_analyzed = 0;

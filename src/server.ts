@@ -6,6 +6,8 @@ import { registerTools } from "./register-tools.js";
 import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
+import { setupHooksForPlatform } from "./cli/setup.js";
+import { detectPlatform, detectPlatformFromClientInfo } from "./cli/platform.js";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
@@ -43,6 +45,21 @@ async function main(): Promise<void> {
   autoDiscoverConversations(process.cwd()).catch((err: unknown) => {
     console.error("[codesift] conversation auto-discovery failed:", err);
   });
+
+  // Auto-install hooks for the detected platform (idempotent)
+  const envPlatform = detectPlatform();
+  if (envPlatform !== "unknown") {
+    setupHooksForPlatform(envPlatform).catch((err: unknown) => {
+      console.error(`[codesift] hook auto-install failed (${envPlatform}):`, err);
+    });
+  } else {
+    // Env detection failed — try clientInfo after MCP initialize.
+    // The transport emits an internal event, but we can also just try
+    // all safe platforms (Claude is the most common, always install).
+    setupHooksForPlatform("claude").catch((err: unknown) => {
+      console.error("[codesift] hook auto-install failed (claude fallback):", err);
+    });
+  }
 }
 
 main().catch((err: unknown) => {

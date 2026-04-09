@@ -16,7 +16,7 @@ vi.mock("node:os", async () => {
 });
 
 // Import after mock so the module picks up our homedir
-const { setup, setupAll, formatSetupResult, formatSetupLines, SUPPORTED_PLATFORMS, setupClaudeHooks, installRules } =
+const { setup, setupAll, formatSetupResult, formatSetupLines, SUPPORTED_PLATFORMS, setupClaudeHooks, setupCodexHooks, setupGeminiHooks, setupHooksForPlatform, installRules } =
   await import("../../src/cli/setup.js");
 
 // ---------------------------------------------------------------------------
@@ -735,6 +735,190 @@ describe("setup", () => {
 
       const result = await installRules("claude", tempHome, { rules: true });
       expect(result.action).toBe("updated");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Codex hooks
+  // -------------------------------------------------------------------------
+
+  describe("setupCodexHooks", () => {
+    it("creates hooks.json with Stop hook when none exists", async () => {
+      await setupCodexHooks();
+
+      const hooksPath = join(tempHome, ".codex", "hooks.json");
+      expect(existsSync(hooksPath)).toBe(true);
+
+      const content = JSON.parse(await readFile(hooksPath, "utf-8"));
+      expect(content.hooks.Stop).toHaveLength(1);
+      expect(content.hooks.Stop[0].hooks[0].command).toContain("codesift index-conversations");
+    });
+
+    it("is idempotent — no duplicates on second run", async () => {
+      await setupCodexHooks();
+      await setupCodexHooks();
+
+      const hooksPath = join(tempHome, ".codex", "hooks.json");
+      const content = JSON.parse(await readFile(hooksPath, "utf-8"));
+      expect(content.hooks.Stop).toHaveLength(1);
+    });
+
+    it("preserves existing hooks in hooks.json", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "hooks.json"),
+        JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] }] } }),
+        "utf-8",
+      );
+
+      await setupCodexHooks();
+
+      const content = JSON.parse(await readFile(join(configDir, "hooks.json"), "utf-8"));
+      expect(content.hooks.PreToolUse).toHaveLength(1);
+      expect(content.hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
+      expect(content.hooks.Stop).toHaveLength(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Gemini hooks
+  // -------------------------------------------------------------------------
+
+  describe("setupGeminiHooks", () => {
+    it("adds all 4 hooks to settings.json when none exists", async () => {
+      await setupGeminiHooks();
+
+      const settingsPath = join(tempHome, ".gemini", "settings.json");
+      expect(existsSync(settingsPath)).toBe(true);
+
+      const content = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(content.hooks.BeforeTool).toHaveLength(1);
+      expect(content.hooks.BeforeTool[0].matcher).toBe("read_file");
+      expect(content.hooks.AfterTool).toHaveLength(1);
+      expect(content.hooks.AfterTool[0].matcher).toBe("write_file|replace");
+      expect(content.hooks.PreCompress).toHaveLength(1);
+      expect(content.hooks.SessionEnd).toHaveLength(1);
+    });
+
+    it("is idempotent — no duplicates on second run", async () => {
+      await setupGeminiHooks();
+      await setupGeminiHooks();
+
+      const settingsPath = join(tempHome, ".gemini", "settings.json");
+      const content = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(content.hooks.BeforeTool).toHaveLength(1);
+      expect(content.hooks.AfterTool).toHaveLength(1);
+      expect(content.hooks.PreCompress).toHaveLength(1);
+      expect(content.hooks.SessionEnd).toHaveLength(1);
+    });
+
+    it("preserves existing mcpServers when adding hooks", async () => {
+      const configDir = join(tempHome, ".gemini");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "settings.json"),
+        JSON.stringify({ mcpServers: { codesift: { command: "npx" } } }),
+        "utf-8",
+      );
+
+      await setupGeminiHooks();
+
+      const content = JSON.parse(await readFile(join(configDir, "settings.json"), "utf-8"));
+      expect(content.mcpServers.codesift.command).toBe("npx");
+      expect(content.hooks.BeforeTool).toHaveLength(1);
+    });
+
+    it("uses Gemini event names (BeforeTool not PreToolUse)", async () => {
+      await setupGeminiHooks();
+
+      const settingsPath = join(tempHome, ".gemini", "settings.json");
+      const content = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(content.hooks.PreToolUse).toBeUndefined();
+      expect(content.hooks.PostToolUse).toBeUndefined();
+      expect(content.hooks.PreCompact).toBeUndefined();
+      expect(content.hooks.Stop).toBeUndefined();
+    });
+
+    it("uses --stdin flag in commands for Gemini", async () => {
+      await setupGeminiHooks();
+
+      const settingsPath = join(tempHome, ".gemini", "settings.json");
+      const content = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(content.hooks.BeforeTool[0].hooks[0].command).toContain("--stdin");
+      expect(content.hooks.AfterTool[0].hooks[0].command).toContain("--stdin");
+      expect(content.hooks.PreCompress[0].hooks[0].command).toContain("--stdin");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // setupHooksForPlatform
+  // -------------------------------------------------------------------------
+
+  describe("setupHooksForPlatform", () => {
+    it("installs Claude hooks for platform 'claude'", async () => {
+      await setupHooksForPlatform("claude");
+      const hooksPath = join(tempHome, ".claude", "settings.local.json");
+      expect(existsSync(hooksPath)).toBe(true);
+      const content = JSON.parse(await readFile(hooksPath, "utf-8"));
+      expect(content.hooks.PreToolUse).toBeDefined();
+    });
+
+    it("installs Codex hooks for platform 'codex'", async () => {
+      await setupHooksForPlatform("codex");
+      const hooksPath = join(tempHome, ".codex", "hooks.json");
+      expect(existsSync(hooksPath)).toBe(true);
+    });
+
+    it("installs Gemini hooks for platform 'gemini'", async () => {
+      await setupHooksForPlatform("gemini");
+      const settingsPath = join(tempHome, ".gemini", "settings.json");
+      expect(existsSync(settingsPath)).toBe(true);
+      const content = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(content.hooks.BeforeTool).toBeDefined();
+    });
+
+    it("does nothing for platform 'unknown'", async () => {
+      await setupHooksForPlatform("unknown");
+      // Should not throw, should not create any files
+      expect(existsSync(join(tempHome, ".claude", "settings.local.json"))).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // CLI setup with --hooks for non-Claude platforms
+  // -------------------------------------------------------------------------
+
+  describe("setup --hooks for all platforms", () => {
+    it("setup('codex', { hooks: true }) installs Codex hooks", async () => {
+      const result = await setup("codex", { hooks: true });
+      expect(result.platform).toBe("codex");
+
+      const hooksPath = join(tempHome, ".codex", "hooks.json");
+      expect(existsSync(hooksPath)).toBe(true);
+    });
+
+    it("setup('gemini', { hooks: true }) installs Gemini hooks", async () => {
+      const result = await setup("gemini", { hooks: true });
+      expect(result.platform).toBe("gemini");
+
+      const settingsPath = join(tempHome, ".gemini", "settings.json");
+      const content = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(content.hooks.BeforeTool).toBeDefined();
+    });
+
+    it("setup('all', { hooks: true }) via setupAll installs hooks for all supported platforms", async () => {
+      await setupAll({ hooks: true });
+
+      // Claude hooks
+      expect(existsSync(join(tempHome, ".claude", "settings.local.json"))).toBe(true);
+      // Codex hooks
+      expect(existsSync(join(tempHome, ".codex", "hooks.json"))).toBe(true);
+      // Gemini hooks
+      const geminiSettings = JSON.parse(
+        await readFile(join(tempHome, ".gemini", "settings.json"), "utf-8"),
+      );
+      expect(geminiSettings.hooks.BeforeTool).toBeDefined();
     });
   });
 });

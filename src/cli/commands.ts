@@ -465,7 +465,7 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
 
   if (platform === "all") {
     for (const p of SUPPORTED_PLATFORMS) {
-      const lines = await formatSetupLines(p, p === "claude" ? options : { rules });
+      const lines = await formatSetupLines(p, options);
       for (const line of lines) process.stdout.write(line + "\n");
     }
     return;
