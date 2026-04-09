@@ -6,10 +6,10 @@ import {
   detectStack,
   classifyFiles,
   extractHonoConventions,
-  analyzeProject,
   getExtractorVersions,
   EXTRACTOR_VERSIONS,
 } from "../../src/tools/project-tools.js";
+import type { ProfileSummary } from "../../src/tools/project-tools.js";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -233,6 +233,26 @@ describe("classifyFiles", () => {
     const result = classifyFiles(index);
     const appFile = result.critical.find((f) => f.path === "src/app.ts");
     expect(appFile?.has_tests).toBe(true);
+  });
+
+  it("classifies shallow index.ts as critical (entry point)", () => {
+    const index = mockIndex("/tmp/test", [
+      "src/index.ts",
+      "apps/api/src/index.ts",
+    ]);
+    const result = classifyFiles(index);
+    expect(result.critical.some((f) => f.path === "src/index.ts")).toBe(true);
+    expect(result.critical.some((f) => f.path === "apps/api/src/index.ts")).toBe(true);
+  });
+
+  it("does NOT classify deep index.ts as critical (barrel re-export)", () => {
+    const index = mockIndex("/tmp/test", [
+      "app/projects/components/AgentReview/index.ts",
+      "app/projects/components/context/index.ts",
+    ]);
+    const result = classifyFiles(index);
+    expect(result.critical.some((f) => f.path.includes("AgentReview"))).toBe(false);
+    expect(result.critical.some((f) => f.path.includes("context/index"))).toBe(false);
   });
 
   it("skips test files from classification", () => {

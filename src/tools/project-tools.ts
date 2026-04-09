@@ -6,7 +6,7 @@
  * the zuvo project-profile schema v1.0.
  */
 
-import { readFile, access, readdir } from "node:fs/promises";
+import { readFile, writeFile, access, readdir, mkdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex } from "../types.js";
@@ -335,12 +335,23 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
 // ---------------------------------------------------------------------------
 
 const CRITICAL_PATH_PATTERNS = [
-  /\/(app|main|server|index)\.(ts|js|tsx|jsx)$/,
+  /\/(app|main|server)\.(ts|js|tsx|jsx)$/,
   /\/middleware\//,
   /\/security\//,
   /\/auth\//,
   /\/crypto\//,
 ];
+
+/** index.ts is critical ONLY at shallow depth (src/index.ts, apps/api/src/index.ts) — not barrel re-exports */
+function isEntryPointIndex(path: string): boolean {
+  if (!/\/index\.(ts|js|tsx|jsx)$/.test(path)) return false;
+  // Count path depth — barrel files are deep (components/Foo/index.ts = 3+ segments after src)
+  const parts = path.split("/");
+  const srcIdx = parts.indexOf("src");
+  if (srcIdx === -1) return parts.length <= 3; // no src dir — shallow if <=3 segments
+  const depthAfterSrc = parts.length - srcIdx - 2; // segments between src/ and index.ts
+  return depthAfterSrc <= 1; // src/index.ts (0) or src/app/index.ts (1) = critical
+}
 
 const IMPORTANT_PATH_PATTERNS = [
   /\/services?\//,
@@ -421,7 +432,7 @@ export function classifyFiles(index: CodeIndex): FileClassifications {
     const dependents = importerCount.get(file.path) ?? 0;
 
     // Tier assignment
-    const isCritical = CRITICAL_PATH_PATTERNS.some((p) => p.test(file.path)) || dependents > 5;
+    const isCritical = CRITICAL_PATH_PATTERNS.some((p) => p.test(file.path)) || isEntryPointIndex(file.path) || dependents > 5;
     const isImportant = IMPORTANT_PATH_PATTERNS.some((p) => p.test(file.path)) || file.symbol_count > 3;
     const isRoutine = ROUTINE_PATH_PATTERNS.some((p) => p.test(file.path));
 
@@ -686,7 +697,7 @@ function inferScope(path: string): string {
 export async function analyzeProject(
   repoName: string,
   _options: { force?: boolean | undefined } = {},
-): Promise<ProjectProfile> {
+): Promise<ProfileSummary> {
   const startTime = Date.now();
   let files_analyzed = 0;
   let files_skipped = 0;
@@ -694,7 +705,7 @@ export async function analyzeProject(
 
   const index = await getCodeIndex(repoName);
   if (!index) {
-    return {
+    const failedProfile: ProjectProfile = {
       version: "1.0",
       generated_at: new Date().toISOString(),
       generated_by: {
@@ -711,6 +722,7 @@ export async function analyzeProject(
         duration_ms: Date.now() - startTime,
       },
     };
+    return buildSummary(failedProfile, "(not written — no index)");
   }
 
   const projectRoot = index.root;
@@ -773,7 +785,78 @@ export async function analyzeProject(
     },
   };
 
-  return profile;
+  // Write full profile to disk — MCP returns only summary
+  const profilePath = await writeProfileToDisk(projectRoot, profile);
+
+  return buildSummary(profile, profilePath);
+}
+
+// ---------------------------------------------------------------------------
+// Disk persistence — write profile to .zuvo/project-profile.json
+// ---------------------------------------------------------------------------
+
+async function writeProfileToDisk(projectRoot: string, profile: ProjectProfile): Promise<string> {
+  const zuvoDir = join(projectRoot, ".zuvo");
+  await mkdir(zuvoDir, { recursive: true });
+  const profilePath = join(zuvoDir, "project-profile.json");
+  await writeFile(profilePath, JSON.stringify(profile, null, 2), "utf-8");
+  return profilePath;
+}
+
+// ---------------------------------------------------------------------------
+// Summary — compact return value for MCP (full profile is on disk)
+// ---------------------------------------------------------------------------
+
+export interface ProfileSummary {
+  status: ProjectProfile["status"];
+  profile_path: string;
+  stack: {
+    framework: string | null;
+    language: string;
+    test_runner: string | null;
+    package_manager: string | null;
+    monorepo: boolean;
+  };
+  file_counts: {
+    critical: number;
+    important: number;
+    routine: number;
+    total_analyzed: number;
+  };
+  conventions_summary: {
+    middleware_chains: number;
+    rate_limits: number;
+    route_mounts: number;
+    auth_groups: number;
+  } | null;
+  duration_ms: number;
+}
+
+function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSummary {
+  return {
+    status: profile.status,
+    profile_path: profilePath,
+    stack: {
+      framework: profile.stack?.framework ?? null,
+      language: profile.stack?.language ?? "unknown",
+      test_runner: profile.stack?.test_runner ?? null,
+      package_manager: profile.stack?.package_manager ?? null,
+      monorepo: !!profile.stack?.monorepo,
+    },
+    file_counts: {
+      critical: profile.file_classifications?.critical.length ?? 0,
+      important: profile.file_classifications?.important.length ?? 0,
+      routine: profile.file_classifications?.routine.count ?? 0,
+      total_analyzed: profile.generation_metadata.files_analyzed,
+    },
+    conventions_summary: profile.conventions ? {
+      middleware_chains: profile.conventions.middleware_chains.length,
+      rate_limits: profile.conventions.rate_limits.length,
+      route_mounts: profile.conventions.route_mounts.length,
+      auth_groups: Object.keys(profile.conventions.auth_patterns.groups).length,
+    } : null,
+    duration_ms: profile.generation_metadata.duration_ms,
+  };
 }
 
 // ---------------------------------------------------------------------------
