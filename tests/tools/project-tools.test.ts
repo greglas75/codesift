@@ -135,6 +135,43 @@ describe("detectStack", () => {
     const stack = await detectStack(root);
     expect(stack.package_manager).toBe("yarn");
   });
+
+  it("scans workspace package.json in monorepo when root has no framework", async () => {
+    const root = await createFixture("monorepo-scan", {
+      "package.json": JSON.stringify({
+        name: "monorepo",
+        workspaces: ["apps/*", "packages/*"],
+      }),
+      "turbo.json": JSON.stringify({ tasks: {} }),
+      "pnpm-lock.yaml": "lockfileVersion: 9\n",
+      "apps/api/package.json": JSON.stringify({
+        name: "api",
+        dependencies: { hono: "^4.12.1" },
+        devDependencies: { vitest: "^3.0.0" },
+      }),
+      "apps/api/tsconfig.json": JSON.stringify({ compilerOptions: { target: "ES2022" } }),
+      "apps/web/package.json": JSON.stringify({
+        name: "web",
+        dependencies: { astro: "^4.0.0" },
+      }),
+    });
+    const stack = await detectStack(root);
+    expect(stack.framework).toBe("hono");
+    expect(stack.framework_version).toBe("4.12.1");
+    expect(stack.test_runner).toBe("vitest");
+    expect(stack.language).toBe("typescript");
+    expect(stack.detected_from).toContain("apps/api/package.json:dependencies.hono");
+  });
+
+  it("detects TypeScript from tsconfig.base.json", async () => {
+    const root = await createFixture("tsconfig-base", {
+      "package.json": JSON.stringify({ name: "test" }),
+      "tsconfig.base.json": JSON.stringify({ compilerOptions: { target: "ES2022" } }),
+    });
+    const stack = await detectStack(root);
+    expect(stack.language).toBe("typescript");
+    expect(stack.detected_from).toContain("tsconfig.base.json");
+  });
 });
 
 // ---------------------------------------------------------------------------

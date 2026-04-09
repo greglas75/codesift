@@ -6,8 +6,9 @@
  * the zuvo project-profile schema v1.0.
  */
 
-import { readFile, stat, access } from "node:fs/promises";
+import { readFile, stat, access, readdir } from "node:fs/promises";
 import { join, basename, dirname, relative, extname } from "node:path";
+import { globSync } from "node:fs";
 import { getCodeIndex, listAllRepos } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
 
@@ -235,6 +236,87 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
       monorepo = { tool: turboExists ? "turborepo" : "pnpm-workspaces", workspaces };
       detected_from.push("pnpm-workspace.yaml");
     } catch { /* ignore parse errors */ }
+  }
+
+  // Monorepo workspace scanning — if root has no framework/test_runner, scan workspaces
+  if (monorepo && (!framework || !test_runner || language === "javascript")) {
+    const workspacePatterns = monorepo.workspaces;
+    const workspaceDirs: string[] = [];
+
+    for (const pattern of workspacePatterns) {
+      // Expand simple glob patterns like "apps/*" or "packages/*"
+      const base = pattern.replace(/\/?\*$/, "");
+      const baseDir = join(projectRoot, base);
+      try {
+        const entries = await readdir(baseDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            workspaceDirs.push(join(baseDir, entry.name));
+          }
+        }
+      } catch { /* directory doesn't exist */ }
+    }
+
+    const frameworkMap: [string, string][] = [
+      ["hono", "hono"],
+      ["@nestjs/core", "nestjs"],
+      ["next", "nextjs"],
+      ["nuxt", "nuxt"],
+      ["@remix-run/node", "remix"],
+      ["astro", "astro"],
+      ["express", "express"],
+      ["fastify", "fastify"],
+    ];
+
+    for (const wsDir of workspaceDirs) {
+      const wsPkg = await readJson(join(wsDir, "package.json"));
+      if (!wsPkg) continue;
+      const wsDeps = { ...wsPkg.dependencies, ...wsPkg.devDependencies };
+      const wsName = relative(projectRoot, wsDir);
+
+      // Framework from workspace (prefer backend frameworks: hono, nestjs, express)
+      if (!framework) {
+        for (const [dep, name] of frameworkMap) {
+          if (wsDeps?.[dep]) {
+            framework = name;
+            framework_version = wsDeps[dep]?.replace(/^[\^~>=<]/, "") ?? null;
+            detected_from.push(`${wsName}/package.json:dependencies.${dep}`);
+            break;
+          }
+        }
+      }
+
+      // Test runner from workspace
+      if (!test_runner) {
+        if (wsDeps?.["vitest"]) {
+          test_runner = "vitest";
+          detected_from.push(`${wsName}/package.json:devDependencies.vitest`);
+        } else if (wsDeps?.["jest"]) {
+          test_runner = "jest";
+          detected_from.push(`${wsName}/package.json:devDependencies.jest`);
+        }
+      }
+
+      // TypeScript from workspace
+      if (language === "javascript") {
+        const wsTsconfig = await readJson(join(wsDir, "tsconfig.json"));
+        if (wsTsconfig) {
+          language = "typescript";
+          language_version = wsTsconfig?.compilerOptions?.target ?? null;
+          detected_from.push(`${wsName}/tsconfig.json`);
+        }
+      }
+    }
+  }
+
+  // Also check root tsconfig.base.json for monorepos that use base config
+  if (language === "javascript") {
+    const baseTsconfig = await readJson(join(projectRoot, "tsconfig.base.json"));
+    if (baseTsconfig) {
+      language = "typescript";
+      language_version = baseTsconfig?.compilerOptions?.target ?? null;
+      detected_from.push("tsconfig.base.json");
+    }
   }
 
   return {
