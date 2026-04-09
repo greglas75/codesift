@@ -6,11 +6,10 @@
  * the zuvo project-profile schema v1.0.
  */
 
-import { readFile, stat, access, readdir } from "node:fs/promises";
-import { join, basename, dirname, relative, extname } from "node:path";
-import { globSync } from "node:fs";
-import { getCodeIndex, listAllRepos } from "./index-tools.js";
-import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
+import { readFile, access, readdir } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { getCodeIndex } from "./index-tools.js";
+import type { CodeIndex } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Versioning — used by get_extractor_versions
@@ -366,8 +365,7 @@ function isTestFile(path: string): boolean {
   return /\.(test|spec)\.(ts|js|tsx|jsx)$/.test(path);
 }
 
-function classifyCodeType(path: string, symbol_count: number): string {
-  const base = basename(path);
+function classifyCodeType(path: string, _symbol_count: number): string {
   if (/\/(app|main|server)\.(ts|js)$/.test(path)) return "ORCHESTRATOR";
   if (/\/middleware\//.test(path)) return "GUARD";
   if (/\/auth\//.test(path)) return "GUARD";
@@ -474,17 +472,17 @@ function parseHonoCalls(source: string): HonoCall[] {
   const lines = source.split("\n");
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i]!;
     const lineNum = i + 1;
 
     // Match app.use("path", handler) or app.route("path", router)
     const useMatch = line.match(/app\.(use|route|get|post|put|delete|all)\s*\(\s*["']([^"']+)["']\s*,\s*(.+)/);
     if (useMatch) {
       // Clean trailing ); but preserve function call parens like rateLimit(3, 3600)
-      let args = useMatch[3].trim().replace(/\);?\s*$/, "").trim();
+      const args = useMatch[3]!.trim().replace(/\);?\s*$/, "").trim();
       calls.push({
-        type: useMatch[1] as HonoCall["type"],
-        path: useMatch[2],
+        type: useMatch[1]! as HonoCall["type"],
+        path: useMatch[2]!,
         args,
         line: lineNum,
       });
@@ -494,7 +492,7 @@ function parseHonoCalls(source: string): HonoCall[] {
     // Match app.use("*", handler) — global middleware
     const globalUseMatch = line.match(/app\.use\s*\(\s*["']\*["']\s*,\s*(.+)/);
     if (globalUseMatch) {
-      let args = globalUseMatch[1].trim().replace(/\);?\s*$/, "").trim();
+      const args = globalUseMatch[1]!.trim().replace(/\);?\s*$/, "").trim();
       calls.push({
         type: "use",
         path: "*",
@@ -508,8 +506,8 @@ function parseHonoCalls(source: string): HonoCall[] {
     const inlineMatch = line.match(/app\.(get|post|put|delete)\s*\(\s*["']([^"']+)["']\s*,/);
     if (inlineMatch) {
       calls.push({
-        type: inlineMatch[1] as HonoCall["type"],
-        path: inlineMatch[2],
+        type: inlineMatch[1]! as HonoCall["type"],
+        path: inlineMatch[2]!,
         args: "(inline handler)",
         line: lineNum,
       });
@@ -522,16 +520,16 @@ function parseHonoCalls(source: string): HonoCall[] {
 function extractMiddlewareName(args: string): string | null {
   // Handle rateLimit(3, 3600) → "rateLimit"
   const funcCall = args.match(/^(\w+)\s*\(/);
-  if (funcCall) return funcCall[1];
+  if (funcCall) return funcCall[1]!;
   // Handle simple identifier: clerkAuth
   const simple = args.match(/^(\w+)$/);
-  if (simple) return simple[1];
+  if (simple) return simple[1]!;
   return null;
 }
 
 function extractRateLimit(args: string): { max: number; window: number } | null {
   const match = args.match(/rateLimit\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/);
-  if (match) return { max: parseInt(match[1]), window: parseInt(match[2]) };
+  if (match) return { max: parseInt(match[1]!), window: parseInt(match[2]!) };
   return null;
 }
 
