@@ -4,11 +4,9 @@
 
 ## Setup
 
-Run once per session:
-
-1. `list_repos()` — get the repo identifier (e.g. `local/codesift-mcp`). **Never call again** — cache the result.
-2. If the repo is missing: `index_folder(path=<root>)` once to index it.
-3. Use `"local/<folder-name>"` as the `repo` parameter for all tool calls.
+The `repo` parameter auto-resolves from the current working directory — no need to call `list_repos`.
+If the repo is not yet indexed, run `index_folder(path=<root>)` once.
+For multi-repo sessions, call `list_repos()` to discover available repos.
 
 ## Tool Discovery
 
@@ -131,7 +129,7 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 |------|---------|--------|
 | `H1(n)` | n matches returned | Add `group_by_file=true` |
 | `H2(n,tool)` | n consecutive identical calls | Batch into one `tool` call |
-| `H3(n)` | `list_repos` called n times | Reuse cached value |
+| `H3(n)` | `list_repos` called n times | Repo auto-resolves from CWD, no need to call |
 | `H4` | `include_source` without `file_pattern` | Add `file_pattern` |
 | `H5(path)` | Duplicate `get_file_tree` | Use cached result |
 | `H6(n)` | n results without `detail_level` | Add `detail_level='compact'` |
@@ -153,8 +151,8 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 
 ## NEVER
 
-- Call `index_folder` if repo already in `list_repos` — file watcher auto-updates
-- Call `list_repos` more than once per session
+- Call `index_folder` if repo is already indexed — file watcher auto-updates
+- Call `list_repos` in single-repo sessions — repo auto-resolves from CWD
 - Use manual Edit on multiple files for rename — use `rename_symbol`
 - Read entire file just to get a return type — use `get_type_info`
 - Index worktrees — use the main repo index
