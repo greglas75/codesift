@@ -76,7 +76,7 @@ File: `src/instructions.ts` (new, ~60 lines)
 Exports a `CODESIFT_INSTRUCTIONS` string constant (~800 tokens). Content structure:
 
 ```
-CodeSift — 63 tools (13 visible, 50 hidden).
+CodeSift — 66 tools (14 visible, 52 hidden).
 
 DISCOVERY: discover_tools(query) → describe_tools(names) → call tool directly.
 

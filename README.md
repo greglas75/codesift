@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 64 search, retrieval, and analysis tools via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 66 search, retrieval, and analysis tools via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 **Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
@@ -185,9 +185,9 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (63 total — 13 core + 51 discoverable)
+## MCP tools (66 total — 14 core + 52 discoverable)
 
-When running as an MCP server, CodeSift exposes 13 core tools directly. The remaining 50 tools are discoverable via `discover_tools` and `describe_tools` to minimize system prompt token overhead.
+When running as an MCP server, CodeSift exposes 14 core tools directly. The remaining 52 tools are discoverable via `discover_tools` and `describe_tools` to minimize system prompt token overhead.
 
 | Category | Tools |
 |----------|-------|
@@ -291,7 +291,7 @@ scan_secrets(repo="local/my-project", file_pattern="src/config/**")
 | Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
 | Detect hardcoded secrets | `scan_secrets` | ~1,100 rules, AST-aware, masked output, auto-cached |
 | Ranked text search | `search_text(ranked=true)` | Classifies hits by function, saves follow-up get_symbol calls |
-| Find hidden tools | `discover_tools` + `describe_tools` | 51 tools hidden by default — search by keyword, get full schema |
+| Find hidden tools | `discover_tools` + `describe_tools` | 52 tools hidden by default — search by keyword, get full schema |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -315,7 +315,7 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 64 tools to AI agents (13 core visible + 50 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 66 tools to AI agents (14 core + 52 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -502,7 +502,7 @@ cd codesift-mcp
 npm install
 npm run download-wasm   # Download tree-sitter WASM grammars
 npm run build           # TypeScript compilation
-npm test                # Run tests (Vitest, 895+ tests)
+npm test                # Run tests (Vitest, 944+ tests)
 npm run test:coverage   # Coverage report
 npm run lint            # Type check (tsc --noEmit)
 ```
@@ -555,7 +555,7 @@ If using `npx -y codesift-mcp` (the default in MCP config), the latest version i
 ### Checklist before publishing
 
 - [ ] `npm run build` — 0 TypeScript errors
-- [ ] `npm test` — 895+ tests pass
+- [ ] `npm test` — 944+ tests pass
 - [ ] `rules/codesift.md` updated if hints or tools changed
 - [ ] `src/instructions.ts` updated if rules changed (compact version)
 - [ ] `README.md` updated if features added
@@ -570,7 +570,7 @@ BSL-1.1
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (64) | src/register-tools.ts (62 in TOOL_DEFINITIONS + discover_tools + describe_tools) |
+| Tool count (66) | src/register-tools.ts (64 in TOOL_DEFINITIONS + discover_tools + describe_tools) |
 | Quick install | package.json:bin (line 8-11) |
 | Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |

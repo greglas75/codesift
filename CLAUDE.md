@@ -18,7 +18,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 
 ## Tool Discovery (NEW — agents read this)
 
-Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only ~13 core tools are visible.
+Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 14 core tools are visible.
 To find hidden tools: `discover_tools(query="dead code")` → keyword search.
 To get full schema: `describe_tools(names=["find_dead_code"])` → returns params with types.
 To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
@@ -52,22 +52,22 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 3. **Quick grep to find all places with a number (e.g., tool count):**
    ```bash
-   grep -rn "64 tools\|64 MCP" src/ ../codesift-website/src/
+   grep -rn "66 tools\|66 MCP" src/ ../codesift-website/src/
    ```
 
 ## Architecture
 
 **66 MCP tools** (14 core + 52 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context
 
-**src/tools/** (21 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
+**src/tools/** (26 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
 **src/lsp/** (4 files) — LSP bridge (6 languages)
 **src/parser/extractors/** (10 files) — Language extractors (TS, JS, Python, Go, Rust, Prisma, MD, Astro, Conversation)
-**src/storage/** (9 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
+**src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
 **src/retrieval/** (5 files) — codebase_retrieval batch engine, semantic/hybrid search
-**src/search/** (4 files) — BM25F index with centrality bonus, semantic embeddings
+**src/search/** (5 files) — BM25F index with centrality bonus, semantic embeddings, chunker
 **src/utils/** (6 files) — Import graph, glob, walk, git validation
-**src/cli/** (4 files) — CLI commands + hooks.ts (PreToolUse/PostToolUse/PreCompact)
+**src/cli/** (5 files) — CLI commands + hooks.ts (PreToolUse/PostToolUse/PreCompact)
 **src/formatters-shortening.ts** — Compact/counts formatters for progressive cascade
 **src/instructions.ts** — CODESIFT_INSTRUCTIONS (~800 tok) sent via MCP instructions field
 **rules/** — Platform-specific rules (claude.md, cursor.mdc, codex.md, gemini.md)
-**tests/** — 895+ tests (Vitest)
+**tests/** — 944+ tests (Vitest)

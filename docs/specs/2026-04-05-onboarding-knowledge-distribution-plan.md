@@ -48,7 +48,7 @@ Key files: `src/server.ts` (instructions), `src/cli/setup.ts` (rules install), `
   - Test contains "ranked" (key param)
   - Test contains "describe_tools" (discovery flow)
 - [ ] GREEN: Create `src/instructions.ts` exporting `CODESIFT_INSTRUCTIONS` const string
-  - Compact ~800 token guidance covering: tool count (63 tools, 13 visible), discovery flow, H1-H9 legend, ALWAYS/NEVER rules, key params, cascade behavior
+  - Compact ~800 token guidance covering: tool count (66 tools, 14 visible), discovery flow, H1-H9 legend, ALWAYS/NEVER rules, key params, cascade behavior
   - Content derived from CLAUDE.md but condensed using abbreviations
 - [ ] Verify: `npx vitest run tests/instructions.test.ts`
   Expected: 7 tests passed

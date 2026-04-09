@@ -12,15 +12,15 @@ Run once per session:
 
 ## Tool Discovery
 
-**63 MCP tools total** (13 core visible + 50 deferred/hidden).
+**66 MCP tools total** (14 core + 52 discoverable).
 
-Only ~13 core tools appear in ListTools. Hidden tools are discovered on demand:
+Only 14 core tools appear in ListTools. Hidden tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 63 tools
+- `discover_tools(query="dead code")` — keyword search across all 66 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
-Core tools always visible: `search_text`, `search_symbols`, `get_file_outline`, `get_file_tree`, `get_symbol`, `get_symbols`, `find_references`, `find_and_show`, `codebase_retrieval`, `semantic_search`, `list_repos`, `index_file`, `discover_tools`, `describe_tools`.
+Core tools always visible: `search_text`, `codebase_retrieval`, `get_file_outline`, `search_symbols`, `list_repos`, `get_file_tree`, `index_file`, `get_symbol`, `index_conversations`, `search_patterns`, `index_folder`, `discover_tools`, `get_session_snapshot`, `describe_tools`.
 
 ## Tool Mapping
 
