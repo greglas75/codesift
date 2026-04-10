@@ -190,6 +190,8 @@ const CORE_TOOL_NAMES = new Set([
   "index_folder",          // essential: repo onboarding
   "discover_tools",        // meta: discovers deferred tools
   "get_session_snapshot",  // session: compaction survival (core — always visible)
+  "analyze_project",       // project profile: stack, conventions, file classifications
+  "get_extractor_versions", // cache invalidation for project profile
 ]);
 
 /** Get all tool definitions (exported for testing) */
