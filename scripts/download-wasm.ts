@@ -93,6 +93,10 @@ const GRAMMARS: GrammarDef[] = [
     pkg: "tree-sitter-json",
     wasmPaths: ["tree-sitter-json.wasm"],
   },
+  {
+    pkg: "@tree-sitter-grammars/tree-sitter-kotlin",
+    wasmPaths: ["tree-sitter-kotlin.wasm"],
+  },
 ];
 
 // ---------------------------------------------------------------------------

@@ -27,4 +27,12 @@ describe("getLanguageForExtension", () => {
   it("returns conversation for .jsonl", () => {
     expect(getLanguageForExtension(".jsonl")).toBe("conversation");
   });
+
+  it("returns kotlin for .kt", () => {
+    expect(getLanguageForExtension(".kt")).toBe("kotlin");
+  });
+
+  it("returns kotlin for .kts", () => {
+    expect(getLanguageForExtension(".kts")).toBe("kotlin");
+  });
 });

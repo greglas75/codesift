@@ -36,8 +36,8 @@ const EXTENSION_MAP: Record<string, string> = {
   // scan_secrets) but no symbol extraction happens — tree-sitter grammars
   // are not shipped yet. Add a real extractor in src/parser/extractors/
   // and a .wasm grammar in src/parser/languages/ to enable symbol support.
-  ".kt": "text_stub",    // Kotlin
-  ".kts": "text_stub",   // Kotlin script
+  ".kt": "kotlin",       // Kotlin
+  ".kts": "kotlin",      // Kotlin script
   ".swift": "text_stub", // Swift
   ".dart": "text_stub",  // Dart/Flutter
   ".scala": "text_stub", // Scala

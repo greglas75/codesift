@@ -38,6 +38,11 @@ export const LSP_SERVERS: Record<string, LspServerConfig> = {
     args: ["--stdio"],
     languages: ["php"],
   },
+  kotlin: {
+    command: "kotlin-language-server",
+    args: [],
+    languages: ["kotlin"],
+  },
 };
 
 export function getLspConfigForLanguage(language: string): { name: string; config: LspServerConfig } | null {

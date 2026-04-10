@@ -5,6 +5,7 @@ import { extractPythonSymbols } from "./extractors/python.js";
 import { extractGoSymbols } from "./extractors/go.js";
 import { extractRustSymbols } from "./extractors/rust.js";
 import { extractJavaScriptSymbols } from "./extractors/javascript.js";
+import { extractKotlinSymbols } from "./extractors/kotlin.js";
 
 // --- Public API ---
 
@@ -31,6 +32,8 @@ export function extractSymbols(
       return extractRustSymbols(tree, filePath, source, repo);
     case "javascript":
       return extractJavaScriptSymbols(tree, filePath, source, repo);
+    case "kotlin":
+      return extractKotlinSymbols(tree, filePath, source, repo);
     default:
       return extractGenericSymbols(tree, filePath, source, repo);
   }

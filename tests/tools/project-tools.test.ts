@@ -475,9 +475,14 @@ describe("getExtractorVersions", () => {
     expect(response.note).toContain("search_text");
   });
 
-  it("returns text_stub_languages including kotlin", () => {
+  it("returns kotlin in parser_languages (full parser support)", () => {
     const response = getExtractorVersions();
-    expect(response.text_stub_languages).toContain("kotlin");
+    expect(response.parser_languages).toContain("kotlin");
+  });
+
+  it("returns text_stub_languages including swift and dart", () => {
+    const response = getExtractorVersions();
+    expect(response.text_stub_languages).not.toContain("kotlin");
     expect(response.text_stub_languages).toContain("swift");
     expect(response.text_stub_languages).toContain("dart");
   });

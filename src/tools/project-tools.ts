@@ -1904,6 +1904,7 @@ export const PARSER_LANGUAGES = [
   "python",
   "go",
   "rust",
+  "kotlin",
   "prisma",
   "markdown",
   "astro",
@@ -1916,7 +1917,7 @@ export const PARSER_LANGUAGES = [
  * tree-sitter grammar .wasm and extractor to move a language to PARSER_LANGUAGES.
  */
 export const TEXT_STUB_LANGUAGES = [
-  "kotlin", "swift", "dart", "scala", "clojure",
+  "swift", "dart", "scala", "clojure",
   "elixir", "lua", "zig", "nim", "gradle", "sbt",
 ] as const;
 
