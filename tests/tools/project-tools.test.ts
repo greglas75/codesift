@@ -446,19 +446,39 @@ describe("extractHonoConventions", () => {
 // ---------------------------------------------------------------------------
 
 describe("getExtractorVersions", () => {
-  it("returns dict with hono, stack_detector, file_classifier keys", () => {
-    const versions = getExtractorVersions();
-    expect(versions).toHaveProperty("hono");
-    expect(versions).toHaveProperty("stack_detector");
-    expect(versions).toHaveProperty("file_classifier");
+  it("returns profile_frameworks with hono, stack_detector, file_classifier keys", () => {
+    const response = getExtractorVersions();
+    expect(response.profile_frameworks).toHaveProperty("hono");
+    expect(response.profile_frameworks).toHaveProperty("stack_detector");
+    expect(response.profile_frameworks).toHaveProperty("file_classifier");
   });
 
-  it("all values are semver strings", () => {
-    const versions = getExtractorVersions();
+  it("all profile_frameworks values are semver strings", () => {
+    const response = getExtractorVersions();
     const semverRegex = /^\d+\.\d+\.\d+$/;
-    for (const [key, value] of Object.entries(versions)) {
+    for (const value of Object.values(response.profile_frameworks)) {
       expect(value).toMatch(semverRegex);
     }
+  });
+
+  it("returns parser_languages with tree-sitter supported languages", () => {
+    const response = getExtractorVersions();
+    expect(response.parser_languages).toContain("typescript");
+    expect(response.parser_languages).toContain("python");
+    expect(response.parser_languages).toContain("go");
+    expect(response.parser_languages).toContain("rust");
+  });
+
+  it("includes a note clarifying text tools work on all files", () => {
+    const response = getExtractorVersions();
+    expect(response.note).toContain("ALL files");
+    expect(response.note).toContain("search_text");
+  });
+
+  it("keeps legacy versions field for backward compatibility", () => {
+    const response = getExtractorVersions();
+    expect(response.versions).toHaveProperty("hono");
+    expect(response.versions).toHaveProperty("nestjs");
   });
 });
 
@@ -491,8 +511,8 @@ describe("profile schema conformance", () => {
   });
 
   it("extractors include nestjs version", () => {
-    const versions = getExtractorVersions();
-    expect(versions).toHaveProperty("nestjs");
+    const response = getExtractorVersions();
+    expect(response.profile_frameworks).toHaveProperty("nestjs");
   });
 
   it("stack-level facts have detected_from (not line)", async () => {

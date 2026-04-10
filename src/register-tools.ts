@@ -1513,8 +1513,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "get_extractor_versions",
     category: "meta",
-    searchHint: "extractor version cache invalidation profile",
-    description: "Return current extractor versions without triggering analysis. Used for cache invalidation.",
+    searchHint: "extractor version cache invalidation profile parser languages",
+    description: "Return parser_languages (tree-sitter symbol extractors) and profile_frameworks (analyze_project detectors). Text tools (search_text, get_file_tree) work on ALL files regardless — use this only for cache invalidation or to check symbol support for a specific language.",
     schema: {},
     handler: async () => getExtractorVersions(),
   },
