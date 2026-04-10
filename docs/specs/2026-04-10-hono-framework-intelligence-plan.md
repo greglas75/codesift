@@ -3,7 +3,7 @@
 **Spec:** docs/specs/2026-04-10-hono-framework-intelligence-spec.md
 **spec_id:** 2026-04-10-hono-framework-intelligence-2013
 **planning_mode:** spec-driven
-**plan_revision:** 1
+**plan_revision:** 2
 **status:** Approved
 **Created:** 2026-04-10
 **Approved:** 2026-04-10T20:50:00Z
@@ -105,9 +105,9 @@ Single tree-sitter AST extractor (`src/parser/extractors/hono.ts`) produces a un
 
 - [ ] RED: Create `subapp-app` fixture — index.ts mounts `users` and `admin` sub-apps via `app.route("/api/users", usersRouter)` and `app.route("/api/admin", adminRouter)`. Each sub-app has 3-4 routes. Test asserts the extractor parses index.ts, follows imports for `usersRouter` and `adminRouter`, recursively parses those files, and returns flattened `routes` with fully-resolved paths (e.g., `/api/users/:id`, `/api/admin/settings`). Assert `files_used` contains all 3 route files as absolute paths. Assert cycle detection: if index.ts were to self-import (manually simulate), extractor does not loop.
 - [ ] GREEN: Extend `HonoExtractor` with:
-  - Import resolver (`resolveImport(fromFile, importSpec) → absolutePath`) — handles relative imports `./routes/users`, `.js` extension mapping, barrel files
-  - Recursive `parseFile(file, context)` with `visited: Set<string>` for cycle detection
-  - `app.route()` handler: extracts mount path and child variable, resolves child variable's import source, recursively parses that file, merges child `routes` into parent with prefix applied
+  - Import resolver (`resolveImport(fromFile, importSpec) → absolutePath`) — handles relative imports `./routes/users`, `.js` extension mapping, barrel files. Uses `fs.realpathSync.native` to canonicalize (per adversarial review finding — critical for cache invalidation).
+  - Recursive `parseFile(file, context)` with in-flight stack `Set<string>` pushed/popped around each recursive call (NOT a persistent visited set — that breaks legitimate re-mounting of the same router under multiple prefixes like `/v1/users` and `/v2/users`). Separate memoization map `parsedChildren: Map<canonicalPath, ChildModel>` caches parse results so re-mount reuses the parse but applies fresh prefix.
+  - `app.route()` handler: extracts mount path and child variable, resolves child variable's import source, recursively parses that file, merges child `routes` into parent with prefix applied. Multiple `app.route("/v1", X)` + `app.route("/v2", X)` MUST produce routes under both prefixes.
   - `HonoMount` entries emitted per `app.route()` call with `mount_type: "hono_route"`
 - [ ] Verify: `npx vitest run tests/parser/hono-extractor.test.ts`
   Expected: Tests pass, `model.routes.length >= 7` for subapp-app, all paths start with `/api/`.
@@ -159,7 +159,7 @@ Single tree-sitter AST extractor (`src/parser/extractors/hono.ts`) produces a un
   - Detect `<factory>.createApp()` calls → register the result variable in `app_variables` with `created_via: "factory.createApp"`
   - Walk call expressions on ANY variable tracked in `app_variables` (not just `app`)
   - Detect runtime: check for `wrangler.toml` in fixture root → `"cloudflare"`; `Deno.serve` in source → `"deno"`; `Bun.serve` → `"bun"`; `serve({ fetch })` from `@hono/node-server` → `"node"`; `handle(app)` from `hono/aws-lambda` → `"lambda"`; default `"unknown"`
-  - Scan handler sources for `c.env.<IDENTIFIER>` → populate `env_bindings` (dedupe)
+  - Populate `env_bindings` from multiple sources (per adversarial review finding — single-access walk is too narrow): (a) parse the `Bindings` type literal from `Hono<{ Bindings: Env }>()` / `createFactory<{ Bindings: Env }>()` generic — treat those as authoritative binding keys; (b) walk `c.env.<IDENTIFIER>` member accesses; (c) walk `ObjectPattern` destructuring where initializer is `c.env` (`const { DATABASE_URL } = c.env`); (d) walk aliased variable patterns (`const env = c.env; env.FOO`). Union all sources, dedupe.
 - [ ] Verify: `npx vitest run tests/parser/hono-extractor.test.ts`
   Expected: factory-app tests pass, `runtime === "cloudflare"`, `env_bindings` non-empty.
 - [ ] Acceptance: AC-R8, AC-A3, AC-C4 (partial — env bindings)
@@ -271,29 +271,42 @@ Single tree-sitter AST extractor (`src/parser/extractors/hono.ts`) produces a un
 **Dependencies:** Task 9
 **Execution routing:** deep implementation tier
 
-- [ ] RED: Tests in `hono-cache.test.ts`: (1) `get(repo, entryFile)` on empty cache calls the extractor and returns model (use a mock extractor); (2) second `get()` with same key returns cached model without calling extractor again; (3) `peek(repo)` returns null on miss, returns cached model on hit without calling extractor; (4) `invalidate(absolutePath)` removes any entry whose `files_used` contains that path; (5) two concurrent `get()` calls during cold start share a single in-flight promise (extractor called once); (6) LRU eviction when exceeding max entries (10) — oldest entry is evicted; (7) `clear(repo)` removes only that repo's entries.
+- [ ] RED: Tests in `hono-cache.test.ts`: (1) `get(repo, entryFile)` on empty cache calls the extractor and returns model (use a mock extractor); (2) second `get()` with same key returns cached model without calling extractor again; (3) `peek(repo)` returns null on miss, returns cached model on hit without calling extractor; (4) `invalidate(absolutePath)` removes any entry whose `files_used` contains that path; (5) two concurrent `get()` calls during cold start share a single in-flight promise (extractor called once); (6) **True LRU eviction** (NOT FIFO) — insert 10 entries, repeatedly hit entry A, then insert entry K; assert A survives and the oldest-accessed entry (not oldest-inserted) is evicted; (7) `clear(repo)` removes only that repo's entries; (8) **Immutability** — returned model is deeply frozen or structurally cloned; mutating `model.routes.push(...)` from tool A does NOT affect tool B's subsequent `get()` on the same key.
 - [ ] GREEN: Implement `HonoCache` class:
   ```typescript
   class HonoCache {
-    private entries = new Map<string, CacheEntry>();
+    private entries = new Map<string, CacheEntry>();  // Map preserves insertion order
     private building = new Map<string, Promise<HonoAppModel>>();
     async get(repo: string, entryFile: string, extractor: HonoExtractor): Promise<HonoAppModel> {
       const key = `${repo}:${entryFile}`;
-      const cached = this.entries.get(key); if (cached) return cached.model;
+      const cached = this.entries.get(key);
+      if (cached) {
+        // TRUE LRU: delete+set on hit to move entry to end of insertion order
+        this.entries.delete(key);
+        this.entries.set(key, cached);
+        return cached.model;
+      }
       const inflight = this.building.get(key); if (inflight) return inflight;
       const promise = extractor.parse(entryFile).finally(() => this.building.delete(key));
       this.building.set(key, promise);
       const model = await promise;
-      this.entries.set(key, { model, repo });
+      // Deep freeze on insert (adversarial review: prevent tool-cross-mutation)
+      const frozen = deepFreeze(model);
+      this.entries.set(key, { model: frozen, repo });
       this.enforceLRU();
-      return model;
+      return frozen;
     }
-    peek(repo: string): HonoAppModel | null { /* scan entries for matching repo */ }
-    invalidate(absolutePath: string): void { /* iterate entries, delete any whose files_used includes the path */ }
+    peek(repo: string): HonoAppModel | null { /* scan entries for matching repo — no reorder */ }
+    invalidate(absolutePath: string): void {
+      // Canonicalize via realpath before comparison (adversarial review fix)
+      const canonical = fs.existsSync(absolutePath) ? fs.realpathSync.native(absolutePath) : absolutePath;
+      // iterate entries, delete any whose files_used includes canonical or absolutePath
+    }
     clear(repo?: string): void { /* bulk delete */ }
   }
   export const honoCache = new HonoCache();
   ```
+  `deepFreeze` is a helper that recursively `Object.freeze`s objects and arrays.
 - [ ] Verify: `npx vitest run tests/cache/hono-cache.test.ts`
   Expected: All 7 tests pass.
 - [ ] Acceptance: Foundation for all tool integrations; ship criterion 17 (hit rate)
@@ -314,13 +327,15 @@ Single tree-sitter AST extractor (`src/parser/extractors/hono.ts`) produces a un
 **Dependencies:** Task 10
 **Execution routing:** deep implementation tier
 
-- [ ] RED: Snapshot test runs both legacy `legacyExtractHonoConventions(source, file)` and new adapter `extractHonoConventions(source, file)` on `basic-app/src/index.ts`, asserts the resulting `Conventions` object has the same top-level shape (keys: `middleware_chains`, `rate_limits`, `route_mounts`, `auth_patterns`). Record the legacy output to `conventions-golden.json` on first run. Known differences documented: middleware name `"(inline handler)"` → `"<inline>"`; assert all other fields match byte-for-byte. Re-run existing 31 Hono tests in `project-tools.test.ts` against the new adapter — all 31 must pass (with `<inline>` name update where applicable).
+- [ ] RED: Snapshot test runs both legacy `legacyExtractHonoConventions(source, file)` and new adapter `extractHonoConventions(source, file)` on `basic-app/src/index.ts`, asserts the resulting `Conventions` object has the same top-level shape (keys: `middleware_chains`, `rate_limits`, `route_mounts`, `auth_patterns`). Record the legacy output to `conventions-golden.json` on first run. Known differences documented: middleware name `"(inline handler)"` → `"<inline>"`; assert all other fields match byte-for-byte. Re-run existing 31 Hono tests in `project-tools.test.ts` against the new adapter — all 31 must pass (with `<inline>` name update where applicable). **Caller audit:** Before signature change, grep ALL callers of `extractHonoConventions` (not just tests) — `grep -rn "extractHonoConventions" src/ tests/`. Every non-test caller MUST be converted to `await` the Promise; add `return type: Promise<Conventions>` explicitly so TypeScript fails the build on any missed caller (compile-time guarantee, not manual audit).
 - [ ] GREEN:
   1. Copy current `parseHonoCalls`, `extractMiddlewareName`, `extractRateLimit`, `extractHonoConventions`, `inferScope` from `project-tools.ts` verbatim into `legacy-hono-conventions.ts`, exported as `legacyExtractHonoConventions`
   2. Create `hono-conventions-adapter.ts` with function that calls `HonoExtractor.parse()` and maps the `HonoAppModel` to a legacy `Conventions` shape (middleware_chains from `HonoAppModel.middleware_chains`, route_mounts from `HonoAppModel.mounts`, auth_patterns inferred from middleware names matching `/auth|clerk|jwt|session|passport/i`, rate_limits still regex-parsed from source for backward compat)
   3. Rewrite `extractHonoConventions` in `project-tools.ts`:
   ```typescript
-  export async function extractHonoConventions(source, filePath) {
+  let fallbackCounter = 0;
+  export function getHonoFallbackCount(): number { return fallbackCounter; }
+  export async function extractHonoConventions(source: string, filePath: string): Promise<Conventions> {
     if (process.env.CODESIFT_LEGACY_HONO === "1") {
       const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
       return legacyExtractHonoConventions(source, filePath);
@@ -328,12 +343,18 @@ Single tree-sitter AST extractor (`src/parser/extractors/hono.ts`) produces a un
     try {
       return await honoConventionsAdapter(source, filePath);
     } catch (err) {
-      logger.warn("Hono AST extractor failed, falling back to legacy", { err });
+      fallbackCounter++;
+      logger.warn("Hono AST extractor failed, falling back to legacy", { err, count: fallbackCounter });
+      // Loud failure in non-production so CI catches regressions instead of silent degradation
+      if (process.env.NODE_ENV !== "production" && process.env.CODESIFT_SILENT_FALLBACK !== "1") {
+        throw err;
+      }
       const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
       return legacyExtractHonoConventions(source, filePath);
     }
   }
   ```
+  `fallbackCounter` is exposed for integration tests and optional `usage_stats` surfacing. Tests can opt-in to silent fallback via `CODESIFT_SILENT_FALLBACK=1`.
   4. Update the 31 existing tests: any assertion on `"(inline handler)"` updated to `"<inline>"`
 - [ ] Verify: `npx vitest run tests/tools/project-tools.test.ts tests/tools/hono-conventions-snapshot.test.ts`
   Expected: 31 original tests + snapshot test + legacy comparison all pass.
@@ -370,7 +391,7 @@ Single tree-sitter AST extractor (`src/parser/extractors/hono.ts`) produces a un
 **Execution routing:** deep implementation tier
 
 - [ ] RED: Integration test in `hono-invalidation.test.ts`: (1) Index subapp-app fixture; (2) call `honoCache.get(repo, entryFile)` to warm cache; (3) modify `subapp-app/src/routes/users.ts` (write different content to a temp copy); (4) call the index-tools file change handler with the relative path; (5) call `honoCache.peek(repo)` — assert returns null (invalidated); (6) call `honoCache.get()` again — assert re-parse happened with new content.
-- [ ] GREEN: In `src/tools/index-tools.ts`, modify `handleFileChange(repoRoot, repoName, indexPath, relativeFile)` and `handleFileDelete` to dynamically import `honoCache` and call `honoCache.invalidate(join(repoRoot, relativeFile))` after the existing `scanOnChanged` call. Import is dynamic to avoid circular deps. Path join uses absolute path per spec D4.
+- [ ] GREEN: In `src/tools/index-tools.ts`, modify `handleFileChange(repoRoot, repoName, indexPath, relativeFile)` and `handleFileDelete` to dynamically import `honoCache` and call `honoCache.invalidate(join(repoRoot, relativeFile))` after the existing `scanOnChanged` call. Import is dynamic to avoid circular deps. **Path canonicalization:** `invalidate()` internally runs `fs.realpathSync.native(path)` (or falls back to the input if file doesn't exist) and compares against canonicalized entries in `files_used`. Add a symlink test fixture proving invalidation works when the edited file is reached through a symlink.
 - [ ] Verify: `npx vitest run tests/integration/hono-invalidation.test.ts`
   Expected: All 6 assertions pass, proving end-to-end invalidation.
 - [ ] Acceptance: Success criterion 3 (invalidation correctness)
