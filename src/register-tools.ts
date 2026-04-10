@@ -9,6 +9,7 @@ import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
+import { traceComponentTree, analyzeHooks } from "./tools/react-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
 import { detectCommunities } from "./tools/community-tools.js";
@@ -665,9 +666,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "trace_call_chain",
     category: "graph",
-    searchHint: "trace call chain callers callees dependency graph mermaid",
+    searchHint: "trace call chain callers callees dependency graph mermaid react hooks",
     outputSchema: OutputSchemas.callTree,
-    description: "Trace call chain: callers or callees. output_format='mermaid' for diagram.",
+    description: "Trace call chain: callers or callees. output_format='mermaid' for diagram. filter_react_hooks=true skips useState/useEffect etc. for cleaner React graphs.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Name of the symbol to trace"),
@@ -676,6 +677,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_source: zBool().describe("Include full source code of each symbol (default: false)"),
       include_tests: zBool().describe("Include test files in trace results (default: false)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (flowchart diagram)"),
+      filter_react_hooks: zBool().describe("Skip edges to React stdlib hooks (useState, useEffect, etc.) to reduce call graph noise in React codebases (default: false)"),
     },
     handler: async (args) => {
       const result = await traceCallChain(args.repo as string, args.symbol_name as string, args.direction as Direction, {
@@ -683,6 +685,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         include_source: args.include_source as boolean | undefined,
         include_tests: args.include_tests as boolean | undefined,
         output_format: args.output_format as "json" | "mermaid" | undefined,
+        filter_react_hooks: args.filter_react_hooks as boolean | undefined,
       });
       return formatCallTree(result as never);
     },
@@ -707,6 +710,53 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         include_source: args.include_source as boolean | undefined,
       });
       return formatImpactAnalysis(result as never);
+    },
+  },
+
+  {
+    name: "trace_component_tree",
+    category: "graph",
+    searchHint: "react component tree composition render jsx parent child hierarchy",
+    description: "Trace React component composition tree from a root component. Shows which components render which via JSX. React equivalent of trace_call_chain. output_format='mermaid' for diagram.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      component_name: z.string().describe("Root component name (must have kind 'component' in index)"),
+      depth: zNum().describe("Maximum depth of composition tree (default: 3)"),
+      include_source: zBool().describe("Include full source of each component (default: false)"),
+      include_tests: zBool().describe("Include test files (default: false)"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid'"),
+    },
+    handler: async (args) => {
+      const result = await traceComponentTree(args.repo as string, args.component_name as string, {
+        depth: args.depth as number | undefined,
+        include_source: args.include_source as boolean | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        output_format: args.output_format as "json" | "mermaid" | undefined,
+      });
+      return JSON.stringify(result, null, 2);
+    },
+  },
+
+  {
+    name: "analyze_hooks",
+    category: "analysis",
+    searchHint: "react hooks analyze inventory rule of hooks violations usestate useeffect custom",
+    description: "Analyze React hooks: inventory per component, Rule of Hooks violations (hook inside if/loop, hook after early return), custom hook composition, codebase-wide hook usage summary.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      component_name: z.string().optional().describe("Filter to single component/hook (default: all)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      include_tests: zBool().describe("Include test files (default: false)"),
+      max_entries: zNum().describe("Max entries to return (default: 100)"),
+    },
+    handler: async (args) => {
+      const result = await analyzeHooks(args.repo as string, {
+        component_name: args.component_name as string | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        max_entries: args.max_entries as number | undefined,
+      });
+      return JSON.stringify(result, null, 2);
     },
   },
 

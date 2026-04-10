@@ -1,5 +1,6 @@
 import { getCodeIndex } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
+import { REACT_STDLIB_HOOKS } from "./react-tools.js";
 import type { CodeSymbol, Direction, CallNode } from "../types.js";
 
 const DEFAULT_CALL_DEPTH = 1;
@@ -107,8 +108,14 @@ const KEYWORD_SET = new Set([
  *
  * @param allSymbols - All symbols in the index
  * @param skipTests - If true, exclude symbols from test files (default: true)
+ * @param filterReactHooks - If true, skip edges to React stdlib hooks (useState, useEffect, etc.)
+ *                           to reduce call graph noise in React codebases.
  */
-function buildAdjacencyIndex(allSymbols: CodeSymbol[], skipTests = true): AdjacencyIndex {
+function buildAdjacencyIndex(
+  allSymbols: CodeSymbol[],
+  skipTests = true,
+  filterReactHooks = false,
+): AdjacencyIndex {
   const callees = new Map<string, CodeSymbol[]>();
   const callers = new Map<string, CodeSymbol[]>();
 
@@ -136,6 +143,9 @@ function buildAdjacencyIndex(allSymbols: CodeSymbol[], skipTests = true): Adjace
     const symCallees: CodeSymbol[] = [];
 
     for (const calledName of callSites) {
+      // Filter out React stdlib hooks when requested (reduces graph noise)
+      if (filterReactHooks && REACT_STDLIB_HOOKS.has(calledName)) continue;
+
       const targets = nameToSymbols.get(calledName);
       if (!targets) continue;
 
@@ -224,6 +234,8 @@ export interface TraceOptions {
   include_source?: boolean | undefined;
   include_tests?: boolean | undefined;
   output_format?: OutputFormat | undefined;
+  /** Skip edges to React stdlib hooks (useState, useEffect, etc.) to reduce graph noise. */
+  filter_react_hooks?: boolean | undefined;
 }
 
 /**
@@ -248,16 +260,19 @@ export async function traceCallChain(
   let includeSource: boolean;
   let includeTests: boolean;
   let outputFormat: OutputFormat;
+  let filterReactHooks: boolean;
   if (typeof depthOrOptions === "object" && depthOrOptions !== null) {
     maxDepth = depthOrOptions.depth ?? DEFAULT_CALL_DEPTH;
     includeSource = depthOrOptions.include_source ?? false;
     includeTests = depthOrOptions.include_tests ?? false;
     outputFormat = depthOrOptions.output_format ?? "json";
+    filterReactHooks = depthOrOptions.filter_react_hooks ?? false;
   } else {
     maxDepth = depthOrOptions ?? DEFAULT_CALL_DEPTH;
     includeSource = false;
     includeTests = false;
     outputFormat = "json";
+    filterReactHooks = false;
   }
 
   // Find the target symbol — prefer non-test files when tests are excluded
@@ -274,7 +289,7 @@ export async function traceCallChain(
     );
   }
 
-  const adjacency = buildAdjacencyIndex(index.symbols, !includeTests);
+  const adjacency = buildAdjacencyIndex(index.symbols, !includeTests, filterReactHooks);
   const tree = buildCallTree(target, adjacency, direction, maxDepth);
 
   if (outputFormat === "mermaid") {
