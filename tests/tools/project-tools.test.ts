@@ -469,10 +469,17 @@ describe("getExtractorVersions", () => {
     expect(response.parser_languages).toContain("rust");
   });
 
-  it("includes a note clarifying text tools work on all files", () => {
+  it("includes a note clarifying text tools work on all indexed files", () => {
     const response = getExtractorVersions();
-    expect(response.note).toContain("ALL files");
+    expect(response.note).toContain("ALL indexed files");
     expect(response.note).toContain("search_text");
+  });
+
+  it("returns text_stub_languages including kotlin", () => {
+    const response = getExtractorVersions();
+    expect(response.text_stub_languages).toContain("kotlin");
+    expect(response.text_stub_languages).toContain("swift");
+    expect(response.text_stub_languages).toContain("dart");
   });
 
   it("keeps legacy versions field for backward compatibility", () => {

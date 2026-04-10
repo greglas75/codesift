@@ -60,7 +60,10 @@ async function parseOneFile(
       symbols = extractAstroSymbols(source, relPath, repoName);
     } else if (language === "conversation") {
       symbols = extractConversationSymbols(source, relPath, repoName);
-    } else if (language === "config") {
+    } else if (language === "config" || language === "text_stub") {
+      // text_stub: Kotlin/Swift/Dart/Scala/etc. — indexed as FileEntry but no
+      // symbol extraction until a tree-sitter grammar + extractor is added.
+      // search_text (ripgrep path) and scan_secrets still work on these files.
       symbols = [];
     } else {
       const tree = await parseFile(filePath, source);

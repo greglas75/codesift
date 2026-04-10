@@ -1897,10 +1897,6 @@ function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSumm
 /**
  * Languages with a tree-sitter parser extractor — these get symbol-level
  * indexing (search_symbols, get_file_outline, get_symbol, find_references, etc.).
- *
- * Files in other languages still work with text-based tools (search_text,
- * get_file_tree, search_conversations, scan_secrets) — they just don't get
- * symbol extraction.
  */
 export const PARSER_LANGUAGES = [
   "typescript",
@@ -1913,9 +1909,22 @@ export const PARSER_LANGUAGES = [
   "astro",
 ] as const;
 
+/**
+ * Languages indexed as FileEntry (so get_file_tree and search_text with
+ * file_pattern work) but WITHOUT symbol extraction. Ripgrep-backed search_text
+ * and scan_secrets work on these via filesystem. Upgrade path: add a
+ * tree-sitter grammar .wasm and extractor to move a language to PARSER_LANGUAGES.
+ */
+export const TEXT_STUB_LANGUAGES = [
+  "kotlin", "swift", "dart", "scala", "clojure",
+  "elixir", "lua", "zig", "nim", "gradle", "sbt",
+] as const;
+
 export interface ExtractorVersionsResponse {
   /** Tree-sitter language parsers — affect symbol-based tools only */
   parser_languages: readonly string[];
+  /** Indexed (file listing + text search) but no symbol extraction yet */
+  text_stub_languages: readonly string[];
   /** Framework detectors used by analyze_project (project profile) */
   profile_frameworks: Record<string, string>;
   /**
@@ -1931,13 +1940,14 @@ export interface ExtractorVersionsResponse {
 export function getExtractorVersions(): ExtractorVersionsResponse {
   return {
     parser_languages: PARSER_LANGUAGES,
+    text_stub_languages: TEXT_STUB_LANGUAGES,
     profile_frameworks: { ...EXTRACTOR_VERSIONS },
     note:
-      "search_text, get_file_tree, search_conversations, and scan_secrets work on ALL files " +
-      "regardless of parser_languages. Only symbol-based tools (search_symbols, get_file_outline, " +
-      "get_symbol, find_references, trace_call_chain) require a parser extractor for the language. " +
-      "profile_frameworks is the list of framework detectors used by analyze_project — not a list " +
-      "of supported languages.",
+      "search_text, get_file_tree, search_conversations, and scan_secrets work on ALL indexed files " +
+      "(both parser_languages AND text_stub_languages). Only symbol-based tools (search_symbols, " +
+      "get_file_outline, get_symbol, find_references, trace_call_chain) require a full parser " +
+      "extractor, so they return nothing for text_stub_languages. profile_frameworks is the list " +
+      "of framework detectors used by analyze_project — NOT a list of supported languages.",
     versions: { ...EXTRACTOR_VERSIONS },
   };
 }
