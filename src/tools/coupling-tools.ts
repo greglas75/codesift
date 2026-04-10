@@ -61,22 +61,17 @@ export async function fanInFanOut(
   const topN = options?.top_n ?? 20;
   const focusPath = options?.path;
 
-  // Build file filter set for focus path
-  let fileFilter: Set<string> | undefined;
-  if (focusPath) {
-    fileFilter = new Set(
-      index.files.filter((f) => f.path.startsWith(focusPath)).map((f) => f.path),
-    );
-  }
-
-  const edges = await collectImportEdges(index, fileFilter);
+  // Collect ALL edges — we cannot pre-filter via collectImportEdges because
+  // that only reads imports FROM files in the filter, which loses inbound
+  // edges from outside the focus area. Post-filter after collection instead.
+  const edges = await collectImportEdges(index);
 
   // Build directed fan-in and fan-out maps
   const fanInMap = new Map<string, Set<string>>();   // file → set of importers
   const fanOutMap = new Map<string, Set<string>>();  // file → set of imports
 
   for (const edge of edges) {
-    // Apply path filter to both sides of the edge
+    // Keep edges where at least one side is in the focus path
     if (focusPath && !edge.from.startsWith(focusPath) && !edge.to.startsWith(focusPath)) {
       continue;
     }
@@ -179,36 +174,48 @@ export function computeCoChangePairs(
       "--no-merges",
       "--diff-filter=AMRC",
       `--since=${sinceDays} days ago`,
-      "--pretty=format:%H",
+      "--pretty=format:COMMIT %H",
     ],
     { cwd: repoRoot, encoding: "utf-8", timeout: 15000 },
   );
 
-  // Parse commits: SHA\n\nfile1\nfile2\n\nSHA\n\nfile1\nfile2
-  const blocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
+  // Parse commits robustly using a COMMIT sentinel line. Commits with no
+  // qualifying files (e.g. D-only commits dropped by --diff-filter=AMRC)
+  // produce a COMMIT line with no following file list, which the old
+  // i += 2 block-pairing approach mis-parsed.
+  const lines = raw.split("\n");
   const fileCommitCounts = new Map<string, number>();
   const pairCounts = new Map<string, number>();
   let totalCommits = 0;
+  let currentFiles: string[] = [];
 
-  for (let i = 0; i < blocks.length - 1; i += 2) {
-    const fileBlock = blocks[i + 1]!;
-    const files = fileBlock.split("\n").filter((l) => l.trim().length > 0);
-
-    if (files.length > maxFilesPerCommit) continue;
+  const flushCommit = (): void => {
+    if (currentFiles.length === 0 || currentFiles.length > maxFilesPerCommit) {
+      currentFiles = [];
+      return;
+    }
     totalCommits++;
-
-    for (const file of files) {
+    for (const file of currentFiles) {
       fileCommitCounts.set(file, (fileCommitCounts.get(file) ?? 0) + 1);
     }
-
-    // Count pairs (canonical: sorted alphabetically)
-    for (let a = 0; a < files.length; a++) {
-      for (let b = a + 1; b < files.length; b++) {
-        const pair = [files[a]!, files[b]!].sort().join("\0");
+    for (let a = 0; a < currentFiles.length; a++) {
+      for (let b = a + 1; b < currentFiles.length; b++) {
+        const pair = [currentFiles[a]!, currentFiles[b]!].sort().join("\0");
         pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + 1);
       }
     }
+    currentFiles = [];
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("COMMIT ")) {
+      flushCommit();
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed.length > 0) currentFiles.push(trimmed);
   }
+  flushCommit(); // final commit
 
   // Build CoChangePair[] for all pairs above min_support
   const pairs: CoChangePair[] = [];

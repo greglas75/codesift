@@ -1004,12 +1004,12 @@ describe("checkCouplingGaps", () => {
     // A and B co-commit 5 times, A alone 1 more. Jaccard = 5/(6+5-5) = 0.833
     // Actual git log format: SHA\n\nfile1\nfile2\n\nSHA\n\nfile1\nfile2
     const gitLog =
-      "sha1\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha2\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha3\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha4\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha5\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha6\n\nsrc/a.ts";
+      "COMMIT sha1\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha2\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha3\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha4\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha5\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha6\nsrc/a.ts";
 
     mockedExecFileSync.mockReturnValue(gitLog);
 
@@ -1029,16 +1029,16 @@ describe("checkCouplingGaps", () => {
     // Format: SHA\n\nfiles for each commit
     const commits: string[] = [];
     for (let i = 0; i < 3; i++) {
-      commits.push(`sha${i}\n\nsrc/a.ts\nsrc/b.ts`);
+      commits.push(`COMMIT sha${i}\nsrc/a.ts\nsrc/b.ts`);
     }
     for (let i = 3; i < 10; i++) {
-      commits.push(`sha${i}\n\nsrc/a.ts`);
+      commits.push(`COMMIT sha${i}\nsrc/a.ts`);
     }
     for (let i = 10; i < 17; i++) {
-      commits.push(`sha${i}\n\nsrc/b.ts`);
+      commits.push(`COMMIT sha${i}\nsrc/b.ts`);
     }
 
-    mockedExecFileSync.mockReturnValue(commits.join("\n\n"));
+    mockedExecFileSync.mockReturnValue(commits.join("\n"));
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
 
@@ -1050,8 +1050,8 @@ describe("checkCouplingGaps", () => {
   it("no finding when co-commits below minSupport (3)", async () => {
     // A and B co-commit only 2 times, Jaccard = 2/(2+2-2) = 1.0 but support < 3
     const gitLog =
-      "sha1\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha2\n\nsrc/a.ts\nsrc/b.ts";
+      "COMMIT sha1\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha2\nsrc/a.ts\nsrc/b.ts";
 
     mockedExecFileSync.mockReturnValue(gitLog);
 
@@ -1064,9 +1064,8 @@ describe("checkCouplingGaps", () => {
 
   it("skips bulk commits with >50 files", async () => {
     // One commit with 51 files → skipped. No other commits → no pairs → no findings.
-    // Format: SHA\n\nfile1\nfile2\n...
     const bulkFiles = Array.from({ length: 51 }, (_, i) => `src/file${i}.ts`).join("\n");
-    const gitLog = `bulksha\n\n${bulkFiles}`;
+    const gitLog = `COMMIT bulksha\n${bulkFiles}`;
 
     mockedExecFileSync.mockReturnValue(gitLog);
 
@@ -1090,11 +1089,11 @@ describe("checkCouplingGaps", () => {
   it("no finding when both coupled files are in the diff", async () => {
     // A and B co-commit 5 times with high Jaccard, but BOTH are in changedFiles
     const gitLog =
-      "sha1\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha2\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha3\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha4\n\nsrc/a.ts\nsrc/b.ts\n\n" +
-      "sha5\n\nsrc/a.ts\nsrc/b.ts";
+      "COMMIT sha1\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha2\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha3\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha4\nsrc/a.ts\nsrc/b.ts\n" +
+      "COMMIT sha5\nsrc/a.ts\nsrc/b.ts";
 
     mockedExecFileSync.mockReturnValue(gitLog);
 

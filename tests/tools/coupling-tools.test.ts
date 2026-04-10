@@ -268,21 +268,19 @@ describe("coChangeAnalysis", () => {
   //   a↔c = 2 / (4+2-2) = 2/4 = 0.5
   //   b↔c = 1 / (3+2-1) = 1/4 = 0.25
   const gitLogOutput = [
-    "abc123",
-    "",
-    "src/a.ts\nsrc/b.ts",
-    "",
-    "def456",
-    "",
-    "src/a.ts\nsrc/b.ts",
-    "",
-    "ghi789",
-    "",
-    "src/a.ts\nsrc/b.ts\nsrc/c.ts",
-    "",
-    "jkl012",
-    "",
-    "src/a.ts\nsrc/c.ts",
+    "COMMIT abc123",
+    "src/a.ts",
+    "src/b.ts",
+    "COMMIT def456",
+    "src/a.ts",
+    "src/b.ts",
+    "COMMIT ghi789",
+    "src/a.ts",
+    "src/b.ts",
+    "src/c.ts",
+    "COMMIT jkl012",
+    "src/a.ts",
+    "src/c.ts",
   ].join("\n");
 
   function makeCoChangeIndex(): CodeIndex {
@@ -464,5 +462,79 @@ describe("coChangeAnalysis", () => {
     await expect(coChangeAnalysis("missing")).rejects.toThrow(
       /Repository "missing" not found/,
     );
+  });
+
+  // --- Regression: BEHAV-3 (D-only commit broke SHA/files pairing) ---
+
+  it("BEHAV-3 regression: handles commits with no qualifying files (D-only)", async () => {
+    // A D-only commit (all deletions) produces a COMMIT line with no files.
+    // The old block-pairing logic would treat the next SHA as a file name.
+    const gitLog = [
+      "COMMIT aaa111",
+      "src/a.ts",
+      "src/b.ts",
+      "COMMIT bbb222", // D-only commit — no files follow
+      "COMMIT ccc333",
+      "src/a.ts",
+      "src/b.ts",
+      "COMMIT ddd444",
+      "src/a.ts",
+      "src/b.ts",
+    ].join("\n");
+
+    mockGetCodeIndex.mockResolvedValue(makeCoChangeIndex());
+    mockExecFileSync.mockReturnValue(gitLog as unknown as Buffer);
+
+    const result = await coChangeAnalysis("test", { min_support: 1, min_jaccard: 0 });
+
+    // Should only count 3 real commits (not 4, because bbb222 has no files)
+    expect(result.total_commits_analyzed).toBe(3);
+    // a↔b pair should have co_commits = 3 (not 4, not corrupted)
+    const abPair = result.pairs.find(
+      (p) =>
+        (p.file_a === "src/a.ts" && p.file_b === "src/b.ts") ||
+        (p.file_a === "src/b.ts" && p.file_b === "src/a.ts"),
+    );
+    expect(abPair).toBeDefined();
+    expect(abPair!.co_commits).toBe(3);
+    // NO fake "file" named "bbb222" or "COMMIT bbb222"
+    expect(
+      result.pairs.some((p) => p.file_a.includes("bbb222") || p.file_b.includes("bbb222")),
+    ).toBe(false);
+  });
+
+  // --- Regression: BEHAV-2 (fanInFanOut focus lost inbound edges) ---
+
+  it("BEHAV-2 regression: fanInFanOut with path focus captures inbound edges from outside focus", async () => {
+    // Edge: external file imports a file INSIDE the focus directory.
+    // Old code pre-filtered edges via collectImportEdges, losing this inbound edge.
+    const mockIndex: CodeIndex = {
+      repo: "test",
+      root: "/test",
+      symbols: [],
+      files: [
+        { path: "src/tools/target.ts", language: "typescript", symbol_count: 5, last_modified: Date.now() },
+        { path: "src/routes/consumer.ts", language: "typescript", symbol_count: 3, last_modified: Date.now() },
+      ],
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      symbol_count: 8,
+      file_count: 2,
+    };
+
+    const allEdges: ImportEdge[] = [
+      { from: "src/routes/consumer.ts", to: "src/tools/target.ts" },
+    ];
+
+    mockGetCodeIndex.mockResolvedValue(mockIndex);
+    mockCollectImportEdges.mockResolvedValue(allEdges);
+
+    const result = await fanInFanOut("test", { path: "src/tools" });
+
+    // target.ts should show in fan_in_top even though importer is outside focus
+    const targetEntry = result.fan_in_top.find((m) => m.file === "src/tools/target.ts");
+    expect(targetEntry).toBeDefined();
+    expect(targetEntry!.count).toBe(1);
+    expect(targetEntry!.connections).toContain("src/routes/consumer.ts");
   });
 });

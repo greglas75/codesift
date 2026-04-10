@@ -279,4 +279,79 @@ describe("listPerfPatterns", () => {
       expect(["high", "medium", "low"]).toContain(info.severity);
     }
   });
+
+  // --- Regression: BEHAV-1 (n-plus-one regex crossed loop boundary) ---
+
+  it("BEHAV-1 regression: n-plus-one does NOT match DB call outside loop body", async () => {
+    // Function has a for loop (empty body), then a findMany OUTSIDE the loop.
+    // Previously the lazy regex [\s\S]*? would cross the loop's closing brace.
+    const src = `
+async function getUsers() {
+  for (let i = 0; i < 10; i++) {
+    console.log(i);
+  }
+  return prisma.user.findMany({ take: 100 });
+}`;
+    mockGetCodeIndex.mockResolvedValue(
+      makeIndex([makeSymbol("getUsers", "src/users.ts", src)]),
+    );
+
+    const result = await findPerfHotspots("test", { patterns: ["n-plus-one"] });
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("BEHAV-1 regression: n-plus-one DOES match DB call inside loop body", async () => {
+    const src = `
+async function getUserOrders(userIds) {
+  for (const id of userIds) {
+    const orders = await prisma.order.findMany({ where: { userId: id } });
+  }
+}`;
+    mockGetCodeIndex.mockResolvedValue(
+      makeIndex([makeSymbol("getUserOrders", "src/orders.ts", src)]),
+    );
+
+    const result = await findPerfHotspots("test", { patterns: ["n-plus-one"] });
+    expect(result.findings.length).toBeGreaterThanOrEqual(1);
+    expect(result.findings[0]!.pattern).toBe("n-plus-one");
+  });
+
+  it("BEHAV-4 regression: expensive-recompute does NOT match common keywords/methods", async () => {
+    // Old regex matched push(), if(), return() as "same call repeated"
+    const src = `
+function processItems(items) {
+  for (const item of items) {
+    if (item.active) {
+      results.push(item);
+      if (item.important) {
+        results.push(item.clone());
+      }
+    }
+  }
+}`;
+    mockGetCodeIndex.mockResolvedValue(
+      makeIndex([makeSymbol("processItems", "src/process.ts", src)]),
+    );
+
+    const result = await findPerfHotspots("test", { patterns: ["expensive-recompute"] });
+    // push is blacklisted, should not flag
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("BEHAV-4: expensive-recompute DOES flag repeated non-trivial calls", async () => {
+    const src = `
+function compute(items) {
+  for (const item of items) {
+    const a = helper.calculate(item);
+    const b = helper.calculate(item.parent);
+  }
+}`;
+    mockGetCodeIndex.mockResolvedValue(
+      makeIndex([makeSymbol("compute", "src/compute.ts", src)]),
+    );
+
+    const result = await findPerfHotspots("test", { patterns: ["expensive-recompute"] });
+    expect(result.findings.length).toBeGreaterThanOrEqual(1);
+    expect(result.findings[0]!.pattern).toBe("expensive-recompute");
+  });
 });
