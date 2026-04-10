@@ -56,6 +56,64 @@ const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> =
     regex: /\/\/\s*(TODO|FIXME|HACK|XXX|TEMP|TEMPORARY)\b|\/\/\s*(Phase|Step|Stage)\s*\d|\/\/\s*(placeholder|stub|dummy)\b|throw new Error\(['"]not implemented['"]\)|console\.(log|warn)\(['"]TODO\b/i,
     description: "Scaffolding markers: TODO/FIXME/HACK, Phase/Step markers, placeholder stubs, not-implemented throws (tech debt)",
   },
+  // Kotlin anti-patterns
+  "runblocking-in-coroutine": {
+    regex: /suspend\s+fun[\s\S]{0,500}runBlocking\s*[\({]/,
+    description: "runBlocking inside suspend function — deadlock risk (Kotlin coroutines)",
+  },
+  "globalscope-launch": {
+    regex: /GlobalScope\.(launch|async)\s*[\({]/,
+    description: "GlobalScope.launch/async — lifecycle leak, use structured concurrency (Kotlin)",
+  },
+  "data-class-mutable": {
+    regex: /data\s+class\s+\w+\([^)]*\bvar\s+/,
+    description: "data class with var property — breaks hashCode/equals contract (Kotlin)",
+  },
+  "lateinit-no-check": {
+    regex: /lateinit\s+var\s+(\w+)/,
+    description: "lateinit var without isInitialized check — UninitializedPropertyAccessException risk (Kotlin)",
+  },
+  "empty-when-branch": {
+    regex: /when\s*\([^)]*\)\s*\{[\s\S]*?->\s*\{\s*\}/,
+    description: "Empty when branch — swallowed case (Kotlin)",
+  },
+  "mutable-shared-state": {
+    regex: /(?:companion\s+object|object\s+\w+)\s*\{[\s\S]*?\bvar\s+/,
+    description: "Mutable var inside object/companion — thread-unsafe shared state (Kotlin)",
+  },
+  // PHP anti-patterns
+  "sql-injection-php": {
+    regex: /\$_(?:GET|POST|REQUEST)\[[^\]]+\][\s\S]{0,200}?(?:->query\(|->execute\(|createCommand\()/,
+    description: "User input from $_GET/$_POST flowing into SQL query without sanitization (PHP)",
+  },
+  "xss-php": {
+    regex: /echo\s+\$_(?:GET|POST|REQUEST)\[|print\s+\$_(?:GET|POST|REQUEST)\[/,
+    description: "Unescaped user input echoed to output — XSS risk (PHP). Use htmlspecialchars()",
+  },
+  "eval-php": {
+    regex: /\beval\s*\(/,
+    description: "eval() usage — code injection risk (PHP)",
+  },
+  "exec-php": {
+    regex: /\b(?:exec|system|passthru|shell_exec|popen|proc_open)\s*\(/,
+    description: "Shell command execution — command injection risk (PHP)",
+  },
+  "unserialize-php": {
+    regex: /\bunserialize\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/,
+    description: "unserialize() on user input — deserialization attack risk (PHP)",
+  },
+  "file-include-var": {
+    regex: /(?:require|include)(?:_once)?\s*\(?\s*\$(?!this)/,
+    description: "require/include with variable — file inclusion risk (PHP)",
+  },
+  "unescaped-yii-view": {
+    regex: /<\?=\s*\$(?!this->(?:render|beginBlock|endBlock))(?!.*?Html::encode)/,
+    description: "Yii2 view outputs variable without Html::encode() — XSS risk",
+  },
+  "raw-query-yii": {
+    regex: /createCommand\s*\(\s*["'][^"']*\$\{?\w+/,
+    description: "Yii2 createCommand with string interpolation — SQL injection risk",
+  },
 };
 
 /**

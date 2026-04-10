@@ -1,6 +1,7 @@
 /** Test file patterns — shared between BM25 scoring and call graph filtering */
 const TEST_FILE_PATTERNS = [
   ".test.", ".spec.", "__tests__/", "test/mocks", "test-utils", "test-helpers",
+  "Test.kt", "Tests.kt", "Spec.kt",
 ];
 
 /** Regex-based test file patterns for stricter matching (e.g., call graph filtering) */
@@ -11,6 +12,12 @@ const TEST_FILE_REGEX_PATTERNS = [
   /\/__tests__\//,
   /\/test\//,
   /\/tests\//,
+  // Kotlin test conventions
+  /Test\.kts?$/,           // UserTest.kt, LoginTest.kts
+  /Tests\.kts?$/,          // UserTests.kt
+  /Spec\.kts?$/,           // Kotest: UserSpec.kt
+  /\/androidTest\//,       // Android instrumented tests
+  /\/commonTest\//,        // Kotlin Multiplatform common tests
 ];
 
 /**

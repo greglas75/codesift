@@ -3,7 +3,7 @@ import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
 const ANALYZABLE_KINDS = new Set<SymbolKind>([
-  "function", "method", "class",
+  "function", "method", "class", "component", "hook",
 ]);
 
 // Patterns that increase cyclomatic complexity (decision points)
@@ -16,10 +16,15 @@ const BRANCH_PATTERNS = [
   /\&\&/g,
   /\|\|/g,
   /\?\?/g,            // nullish coalescing
+  // Kotlin branch patterns
+  /\bwhen\s*[\({]/g,  // when expression/statement
+  /\?\.let\s*\{/g,    // safe call + lambda
+  /\?\.run\s*\{/g,    // safe call + run
+  /\?:/g,             // Elvis operator
 ];
 
 // Patterns that increase nesting
-const NESTING_OPENERS = /\b(if|for|while|switch|try)\s*[\({]/g;
+const NESTING_OPENERS = /\b(if|for|while|switch|try|when)\s*[\({]/g;
 
 export interface ComplexityInfo {
   name: string;

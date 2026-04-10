@@ -16,6 +16,7 @@ const MIN_CALL_NAME_LENGTH = 3;
 /** Symbol kinds that represent callable entities */
 const CALLABLE_KINDS = new Set([
   "function", "method", "class", "default_export", "variable",
+  "component", "hook",
 ]);
 
 /**
@@ -32,7 +33,9 @@ export interface AdjacencyIndex {
 /**
  * Extract identifiers that look like function/method calls from source code.
  * Matches patterns like: `functionName(`, `obj.methodName(`, `this.method(`
- * Returns a Set of the called identifier names.
+ * Also matches JSX component usage: `<ComponentName`, which captures React
+ * component rendering as a call-graph edge (PascalCase filter skips HTML tags).
+ * Returns a Set of the called/used identifier names.
  */
 function extractCallSites(source: string): Set<string> {
   const calls = new Set<string>();
@@ -45,6 +48,17 @@ function extractCallSites(source: string): Set<string> {
     const name = match[1]!;
     // Skip language keywords that look like calls
     if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
+      calls.add(name);
+    }
+  }
+
+  // JSX component usage: <PascalCaseComponent ...> or <PascalCaseComponent/>
+  // PascalCase filter (<[A-Z]) skips HTML elements like <div>, <span>, <button>.
+  // This makes trace_call_chain, impact_analysis, find_dead_code etc. React-aware.
+  const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
+  while ((match = jsxPattern.exec(source)) !== null) {
+    const name = match[1]!;
+    if (name.length >= MIN_CALL_NAME_LENGTH) {
       calls.add(name);
     }
   }
@@ -62,6 +76,11 @@ const KEYWORD_SET = new Set([
   "else", "case", "default", "break", "continue", "do", "in", "of",
   "as", "is", "keyof", "readonly", "declare", "abstract", "override",
   "public", "private", "protected",
+  // Kotlin keywords that appear with ( but are not function calls
+  "when", "fun", "val", "var", "data", "sealed", "object", "companion",
+  "suspend", "inline", "reified", "lateinit", "init", "typealias", "by",
+  "internal", "open", "inner", "crossinline", "noinline", "tailrec",
+  "operator", "infix", "annotation", "actual", "expect",
 ]);
 
 /**

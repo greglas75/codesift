@@ -328,7 +328,7 @@ function findReferencesWithRipgrep(
     args.push("--glob", filePattern);
   } else {
     // Default to code files only (matches what agent would grep for)
-    args.push("--type-add", "code:*.{ts,tsx,js,jsx,py,go,rs,java,rb,php,vue,svelte}");
+    args.push("--type-add", "code:*.{ts,tsx,js,jsx,py,go,rs,java,kt,kts,rb,php,vue,svelte}");
     args.push("--type", "code");
   }
 
@@ -636,6 +636,7 @@ export interface DeadCodeResult {
 // Kinds that are typically exported and should have external references
 const EXPORTABLE_KINDS = new Set<SymbolKind>([
   "function", "class", "interface", "type", "variable", "constant", "enum",
+  "component", "hook",
 ]);
 
 /**
@@ -762,8 +763,8 @@ export async function findUnusedImports(
     if (!includeTests && isTestFile(file.path)) continue;
     if (options?.file_pattern && !file.path.includes(options.file_pattern)) continue;
 
-    // Only analyze JS/TS files
-    if (!/\.(ts|tsx|js|jsx|mjs)$/.test(file.path)) continue;
+    // Only analyze JS/TS/Kotlin files
+    if (!/\.(ts|tsx|js|jsx|mjs|kt|kts)$/.test(file.path)) continue;
 
     let source: string;
     try {

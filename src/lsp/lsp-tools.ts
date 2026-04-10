@@ -14,6 +14,7 @@ export function detectLanguage(filePath: string): string | null {
   const map: Record<string, string> = {
     ".ts": "typescript", ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript",
     ".py": "python", ".go": "go", ".rs": "rust", ".rb": "ruby", ".php": "php",
+    ".kt": "kotlin", ".kts": "kotlin",
   };
   return map[ext] ?? null;
 }
