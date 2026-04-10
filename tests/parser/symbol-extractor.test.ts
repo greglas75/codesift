@@ -37,7 +37,7 @@ describe("extractSymbols", () => {
     const parser = await getParser("typescript");
     const tree = parser!.parse(source);
 
-    for (const lang of ["python", "go", "rust", "javascript"]) {
+    for (const lang of ["python", "go", "rust", "javascript", "php", "kotlin"]) {
       const symbols = extractSymbols(tree, `file.${lang}`, source, "test-repo", lang);
       expect(Array.isArray(symbols)).toBe(true);
     }

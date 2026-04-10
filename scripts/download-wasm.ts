@@ -78,8 +78,10 @@ const GRAMMARS: GrammarDef[] = [
     wasmPaths: ["tree-sitter-ruby.wasm"],
   },
   {
-    pkg: "tree-sitter-php",
-    wasmPaths: ["tree-sitter-php.wasm"],
+    // Pinned to 0.23.12 — ABI 14 compat with web-tree-sitter 0.24.x.
+    // tree-sitter-php 0.24+ requires ABI 15 (web-tree-sitter 0.25+).
+    pkg: "tree-sitter-php@0.23.12",
+    wasmPaths: ["tree-sitter-php.wasm", "tree-sitter-php_only.wasm"],
   },
   {
     pkg: "tree-sitter-markdown",
