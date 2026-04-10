@@ -13,6 +13,7 @@ import { impactAnalysis } from "./impact-tools.js";
 import { scanSecrets } from "./secret-tools.js";
 import { findDeadCode } from "./symbol-tools.js";
 import { searchPatterns, listPatterns } from "./pattern-tools.js";
+import { computeCoChangePairs } from "./coupling-tools.js";
 import { analyzeHotspots } from "./hotspot-tools.js";
 import { analyzeComplexity } from "./complexity-tools.js";
 import { validateGitRef } from "../utils/git-validation.js";
@@ -520,90 +521,46 @@ export async function checkComplexityDelta(
 }
 
 /**
- * Coupling gaps check: parse git log for co-change pairs, compute Jaccard
- * similarity, and flag coupled files that are missing from the diff.
+ * Coupling gaps check: uses shared computeCoChangePairs from coupling-tools.ts,
+ * then flags coupled files that are missing from the diff.
  */
 export async function checkCouplingGaps(
   repoRoot: string,
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();
-  const MIN_SUPPORT = 3;
   const MIN_JACCARD = 0.5;
-  const MAX_FILES_PER_COMMIT = 50;
 
   try {
-    const raw = execFileSync(
-      "git",
-      [
-        "log",
-        "--name-only",
-        "--no-merges",
-        "--diff-filter=AMRC",
-        "--since=180 days ago",
-        "--pretty=format:%H",
-      ],
-      { cwd: repoRoot, encoding: "utf-8", timeout: 15000 },
-    );
+    const { pairs } = computeCoChangePairs(repoRoot, {
+      since_days: 180,
+      min_support: 3,
+    });
 
-    // Parse commits: git log --pretty=format:%H --name-only outputs:
-    //   SHA\n\nfile1\nfile2\n\nSHA\n\nfile1\nfile2
-    // Split by \n\n yields alternating blocks: [SHA, files, SHA, files, ...]
-    const blocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
-    const fileCommitCounts = new Map<string, number>();
-    const pairCounts = new Map<string, number>();
-
-    // Process pairs: blocks[i] = SHA, blocks[i+1] = file list
-    for (let i = 0; i < blocks.length - 1; i += 2) {
-      const fileBlock = blocks[i + 1]!;
-      const files = fileBlock.split("\n").filter((l) => l.trim().length > 0);
-
-      // Skip bulk commits
-      if (files.length > MAX_FILES_PER_COMMIT) continue;
-
-      // Count file appearances
-      for (const file of files) {
-        fileCommitCounts.set(file, (fileCommitCounts.get(file) ?? 0) + 1);
-      }
-
-      // Count pairs (canonical: sorted alphabetically)
-      for (let i = 0; i < files.length; i++) {
-        for (let j = i + 1; j < files.length; j++) {
-          const pair = [files[i]!, files[j]!].sort().join("\0");
-          pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + 1);
-        }
-      }
-    }
-
-    // For each changed file, find partners with high Jaccard that are NOT in the diff
     const changedSet = new Set(changedFiles);
     const findings: ReviewFinding[] = [];
 
-    for (const changedFile of changedFiles) {
-      for (const [pair, coCount] of pairCounts) {
-        if (coCount < MIN_SUPPORT) continue;
+    for (const pair of pairs) {
+      if (pair.jaccard < MIN_JACCARD) continue;
 
-        const [fileA, fileB] = pair.split("\0") as [string, string];
-        let partner: string | undefined;
-        if (fileA === changedFile) partner = fileB;
-        else if (fileB === changedFile) partner = fileA;
-        else continue;
+      // Check if one side is in the diff and the other is not
+      const aInDiff = changedSet.has(pair.file_a);
+      const bInDiff = changedSet.has(pair.file_b);
 
-        // Skip if partner is already in the diff
-        if (changedSet.has(partner)) continue;
-
-        const countA = fileCommitCounts.get(fileA) ?? 0;
-        const countB = fileCommitCounts.get(fileB) ?? 0;
-        const jaccard = coCount / (countA + countB - coCount);
-
-        if (jaccard >= MIN_JACCARD) {
-          findings.push({
-            check: "coupling",
-            severity: "warn",
-            message: `"${changedFile}" is frequently co-changed with "${partner}" (Jaccard ${jaccard.toFixed(2)}, ${coCount} co-commits) but "${partner}" is not in this diff`,
-            file: changedFile,
-          });
-        }
+      if (aInDiff && !bInDiff) {
+        findings.push({
+          check: "coupling",
+          severity: "warn",
+          message: `"${pair.file_a}" is frequently co-changed with "${pair.file_b}" (Jaccard ${pair.jaccard.toFixed(2)}, ${pair.co_commits} co-commits) but "${pair.file_b}" is not in this diff`,
+          file: pair.file_a,
+        });
+      } else if (bInDiff && !aInDiff) {
+        findings.push({
+          check: "coupling",
+          severity: "warn",
+          message: `"${pair.file_b}" is frequently co-changed with "${pair.file_a}" (Jaccard ${pair.jaccard.toFixed(2)}, ${pair.co_commits} co-commits) but "${pair.file_a}" is not in this diff`,
+          file: pair.file_b,
+        });
       }
     }
 

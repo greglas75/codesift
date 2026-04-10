@@ -26,6 +26,15 @@ import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
 import { goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy } from "./lsp/lsp-tools.js";
 import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
 import { scanSecrets } from "./tools/secret-tools.js";
+import {
+  resolvePhpNamespace,
+  analyzeActiveRecord,
+  tracePhpEvent,
+  findPhpViews,
+  resolvePhpService,
+  phpSecurityScan,
+  phpProjectAudit,
+} from "./tools/php-tools.js";
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
@@ -33,11 +42,16 @@ import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
+import { indexStatus } from "./tools/status-tools.js";
+import { findPerfHotspots } from "./tools/perf-tools.js";
+import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
+import { architectureSummary } from "./tools/architecture-tools.js";
+import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -286,6 +300,7 @@ const CORE_TOOL_NAMES = new Set([
   "get_session_snapshot",    // session: compaction survival
   "analyze_project",         // project profile
   "get_extractor_versions",  // cache invalidation
+  "index_status",            // meta: check if repo is indexed
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -1356,6 +1371,115 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
+  // --- PHP / Yii2 tools (all discoverable via discover_tools(query="php")) ---
+  {
+    name: "resolve_php_namespace",
+    category: "analysis",
+    searchHint: "php namespace resolve PSR-4 autoload composer class file path yii2 laravel symfony",
+    description: "Resolve a PHP FQCN to file path via composer.json PSR-4 autoload mapping.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      class_name: z.string().describe("Fully-qualified class name, e.g. 'App\\\\Models\\\\User'"),
+    },
+    handler: async (args) => {
+      return await resolvePhpNamespace(args.repo as string, args.class_name as string);
+    },
+  },
+  {
+    name: "analyze_activerecord",
+    category: "analysis",
+    searchHint: "php activerecord eloquent model schema relations rules behaviors table yii2 laravel orm",
+    description: "Extract PHP ActiveRecord/Eloquent model schema: table name, relations, validation rules, behaviors.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      model_name: z.string().optional().describe("Filter by specific model class name"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+    },
+    handler: async (args) => {
+      const opts: { model_name?: string; file_pattern?: string } = {};
+      if (typeof args.model_name === "string") opts.model_name = args.model_name;
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      return await analyzeActiveRecord(args.repo as string, opts);
+    },
+  },
+  {
+    name: "trace_php_event",
+    category: "analysis",
+    searchHint: "php event listener trigger handler chain yii2 laravel observer dispatch",
+    description: "Trace PHP event → listener chains: find trigger() calls and matching on() handlers.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      event_name: z.string().optional().describe("Filter by specific event name"),
+    },
+    handler: async (args) => {
+      const opts: { event_name?: string } = {};
+      if (typeof args.event_name === "string") opts.event_name = args.event_name;
+      return await tracePhpEvent(args.repo as string, opts);
+    },
+  },
+  {
+    name: "find_php_views",
+    category: "analysis",
+    searchHint: "php view render template controller widget yii2 laravel blade",
+    description: "Map PHP controller render() calls to view files. Yii2/Laravel convention-aware.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      controller: z.string().optional().describe("Filter by controller class name"),
+    },
+    handler: async (args) => {
+      const opts: { controller?: string } = {};
+      if (typeof args.controller === "string") opts.controller = args.controller;
+      return await findPhpViews(args.repo as string, opts);
+    },
+  },
+  {
+    name: "resolve_php_service",
+    category: "analysis",
+    searchHint: "php service locator DI container component resolve yii2 laravel facade provider",
+    description: "Resolve PHP service locator references (Yii::$app->X, Laravel facades) to concrete classes via config parsing.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      service_name: z.string().optional().describe("Filter by specific service name (e.g. 'db', 'user', 'cache')"),
+    },
+    handler: async (args) => {
+      const opts: { service_name?: string } = {};
+      if (typeof args.service_name === "string") opts.service_name = args.service_name;
+      return await resolvePhpService(args.repo as string, opts);
+    },
+  },
+  {
+    name: "php_security_scan",
+    category: "security",
+    searchHint: "php security scan audit vulnerability injection XSS CSRF SQL eval exec unserialize",
+    description: "Scan PHP code for security vulnerabilities: SQL injection, XSS, eval, exec, unserialize, file inclusion. Parallel pattern checks.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Glob pattern to filter scanned files (default: '*.php')"),
+      checks: z.array(z.string()).optional().describe("Subset of checks to run: sql-injection-php, xss-php, eval-php, exec-php, unserialize-php, file-include-var, unescaped-yii-view, raw-query-yii"),
+    },
+    handler: async (args) => {
+      const opts: { file_pattern?: string; checks?: string[] } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (Array.isArray(args.checks)) opts.checks = args.checks as string[];
+      return await phpSecurityScan(args.repo as string, opts);
+    },
+  },
+  {
+    name: "php_project_audit",
+    category: "analysis",
+    searchHint: "php project audit health quality technical debt code review comprehensive yii2 laravel",
+    description: "Compound PHP project audit: security scan + ActiveRecord analysis + health score. Runs checks in parallel.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Glob pattern to filter analyzed files"),
+    },
+    handler: async (args) => {
+      const opts: { file_pattern?: string } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      return await phpProjectAudit(args.repo as string, opts);
+    },
+  },
+
   // --- Memory consolidation ---
   {
     name: "consolidate_memories",
@@ -1621,6 +1745,152 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (checks) opts.checks = checks;
       const result = await auditScan(args.repo as string, opts);
       return formatAuditScan(result);
+    },
+  },
+
+  // --- New tools (agent-requested) ---
+  {
+    name: "index_status",
+    category: "meta",
+    searchHint: "index status indexed repo check files symbols languages",
+    description: "Check whether a repository is indexed and return index metadata: file count, symbol count, language breakdown, text_stub languages (no parser). Use this before calling symbol-based tools on unfamiliar repos.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const result = await indexStatus(args.repo as string);
+      if (!result.indexed) return "index_status: NOT INDEXED — run index_folder first";
+      const langs = Object.entries(result.language_breakdown ?? {})
+        .sort(([, a], [, b]) => b - a)
+        .map(([lang, count]) => `${lang}(${count})`)
+        .join(", ");
+      const parts = [
+        `index_status: indexed=true`,
+        `files: ${result.file_count} | symbols: ${result.symbol_count} | last_indexed: ${result.last_indexed}`,
+        `languages: ${langs}`,
+      ];
+      if (result.text_stub_languages) {
+        parts.push(`text_stub (no parser): ${result.text_stub_languages.join(", ")}`);
+      }
+      return parts.join("\n");
+    },
+  },
+  {
+    name: "find_perf_hotspots",
+    category: "analysis",
+    searchHint: "performance perf hotspot N+1 unbounded query sync handler pagination findMany pLimit",
+    description: "Scan for 6 performance anti-patterns: unbounded DB queries, sync I/O in handlers, N+1 loops, unbounded Promise.all, missing pagination, expensive recompute. Returns findings grouped by severity (high/medium/low) with fix hints.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      patterns: z.string().optional().describe("Comma-separated pattern names to check (default: all). Options: unbounded-query, sync-in-handler, n-plus-one, unbounded-parallel, missing-pagination, expensive-recompute"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      include_tests: zBool().describe("Include test files (default: false)"),
+      max_results: zNum().describe("Max findings to return (default: 50)"),
+    },
+    handler: async (args) => {
+      const patterns = args.patterns
+        ? (args.patterns as string).split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined;
+      const opts: Parameters<typeof findPerfHotspots>[1] = {};
+      if (patterns) opts!.patterns = patterns;
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.include_tests != null) opts!.include_tests = args.include_tests as boolean;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      const result = await findPerfHotspots(args.repo as string, opts);
+      return formatPerfHotspots(result);
+    },
+  },
+  {
+    name: "fan_in_fan_out",
+    category: "architecture",
+    searchHint: "fan-in fan-out coupling dependencies imports hub afferent efferent instability",
+    description: "Analyze import graph to find most-imported files (fan-in), most-dependent files (fan-out), and hub files (high both — instability risk). Returns coupling score 0-100.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      path: z.string().optional().describe("Focus on files in this directory"),
+      top_n: zNum().describe("How many entries per list (default: 20)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof fanInFanOut>[1] = {};
+      if (args.path != null) opts!.path = args.path as string;
+      if (args.top_n != null) opts!.top_n = args.top_n as number;
+      const result = await fanInFanOut(args.repo as string, opts);
+      return formatFanInFanOut(result);
+    },
+  },
+  {
+    name: "co_change_analysis",
+    category: "architecture",
+    searchHint: "co-change temporal coupling git history Jaccard co-commit correlation cluster",
+    description: "Analyze git history to find files that frequently change together (temporal coupling). Returns file pairs ranked by Jaccard similarity, plus clusters of always-co-changed files. Useful for detecting hidden dependencies.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      since_days: zNum().describe("Analyze last N days of history (default: 180)"),
+      min_support: zNum().describe("Minimum co-commits to include a pair (default: 3)"),
+      min_jaccard: zNum().describe("Minimum Jaccard similarity threshold (default: 0.3)"),
+      path: z.string().optional().describe("Focus on files in this directory"),
+      top_n: zNum().describe("Max pairs to return (default: 30)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof coChangeAnalysis>[1] = {};
+      if (args.since_days != null) opts!.since_days = args.since_days as number;
+      if (args.min_support != null) opts!.min_support = args.min_support as number;
+      if (args.min_jaccard != null) opts!.min_jaccard = args.min_jaccard as number;
+      if (args.path != null) opts!.path = args.path as string;
+      if (args.top_n != null) opts!.top_n = args.top_n as number;
+      const result = await coChangeAnalysis(args.repo as string, opts);
+      return formatCoChange(result);
+    },
+  },
+  {
+    name: "architecture_summary",
+    category: "architecture",
+    searchHint: "architecture summary overview structure stack framework communities coupling circular dependencies entry points",
+    description: "One-call architecture profile: stack detection, module communities, coupling hotspots, circular dependencies, LOC distribution, and entry points. Runs 5 analyses in parallel. Supports Mermaid diagram output.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      focus: z.string().optional().describe("Focus on this directory path"),
+      output_format: z.enum(["text", "mermaid"]).optional().describe("Output format (default: text)"),
+      token_budget: zNum().describe("Max tokens for output"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof architectureSummary>[1] = {};
+      if (args.focus != null) opts!.focus = args.focus as string;
+      if (args.output_format != null) opts!.output_format = args.output_format as "text" | "mermaid";
+      if (args.token_budget != null) opts!.token_budget = args.token_budget as number;
+      const result = await architectureSummary(args.repo as string, opts);
+      return formatArchitectureSummary(result);
+    },
+  },
+  {
+    name: "explain_query",
+    category: "analysis",
+    searchHint: "explain query SQL Prisma ORM database performance EXPLAIN ANALYZE findMany pagination index",
+    description: "Parse a Prisma call and generate approximate SQL with EXPLAIN ANALYZE. Detects: unbounded queries, N+1 risks from includes, missing indexes. MVP: Prisma only. Supports postgresql/mysql/sqlite dialects.",
+    schema: {
+      code: z.string().describe("Prisma code snippet (e.g. prisma.user.findMany({...}))"),
+      dialect: z.enum(["postgresql", "mysql", "sqlite"]).optional().describe("SQL dialect (default: postgresql)"),
+    },
+    handler: async (args) => {
+      const eqOpts: Parameters<typeof explainQuery>[1] = {};
+      if (args.dialect != null) eqOpts!.dialect = args.dialect as "postgresql" | "mysql" | "sqlite";
+      const result = explainQuery(args.code as string, eqOpts);
+      const parts = [
+        `explain_query: prisma.${result.parsed.model}.${result.parsed.method}`,
+        `─── Generated SQL (${args.dialect ?? "postgresql"}) ───`,
+        `  ${result.sql}`,
+        `─── EXPLAIN command ───`,
+        `  ${result.explain_command}`,
+      ];
+      if (result.warnings.length > 0) {
+        parts.push("─── Warnings ───");
+        for (const w of result.warnings) parts.push(`  ⚠ ${w}`);
+      }
+      if (result.optimization_hints.length > 0) {
+        parts.push("─── Optimization hints ───");
+        for (const h of result.optimization_hints) parts.push(`  → ${h}`);
+      }
+      return parts.join("\n");
     },
   },
 ];

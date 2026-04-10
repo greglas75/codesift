@@ -21,15 +21,15 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
-**66 MCP tools total** (35 core visible + 31 discoverable).
+**72 MCP tools total** (36 core visible + 36 discoverable).
 
-35 core tools appear in ListTools. Remaining 31 niche tools are discovered on demand:
+36 core tools appear in ListTools. Remaining 36 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 66 tools
+- `discover_tools(query="dead code")` — keyword search across all 72 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
-Core tools (35) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, etc.
+Core tools (36) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, `find_perf_hotspots`, `fan_in_fan_out`, `architecture_summary`, `explain_query`, etc.
 
 ## Tool Mapping
 
