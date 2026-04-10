@@ -920,9 +920,12 @@ export function extractNestConventions(
 // ---------------------------------------------------------------------------
 
 export interface NextConventions {
-  pages: { path: string; type: "page" | "api" | "layout" | "loading" | "error" }[];
+  pages: { path: string; type: "page" | "layout" | "loading" | "error" }[];
   middleware: { file: string; matchers: string[] } | null;
   api_routes: { path: string; methods: string[]; file: string }[];
+  services_count: number;
+  inngest_functions: string[];
+  webhooks: string[];
   config: {
     app_router: boolean;
     src_dir: boolean;
@@ -931,14 +934,17 @@ export interface NextConventions {
 }
 
 export function extractNextConventions(
-  projectRoot: string,
+  _projectRoot: string,
   files: { path: string }[],
 ): NextConventions {
   const pages: NextConventions["pages"] = [];
   const api_routes: NextConventions["api_routes"] = [];
+  const inngest_functions: string[] = [];
+  const webhooks: string[] = [];
+  let services_count = 0;
   let middleware: NextConventions["middleware"] = null;
 
-  const hasAppDir = files.some((f) => f.path.includes("/app/"));
+  const hasAppDir = files.some((f) => f.path.includes("app/"));
   const hasSrcDir = files.some((f) => f.path.startsWith("src/"));
   const hasI18n = files.some((f) => f.path.includes("[locale]") || f.path.includes("i18n"));
 
@@ -950,28 +956,43 @@ export function extractNextConventions(
       middleware = { file: p, matchers: [] };
     }
 
-    // App Router pages
-    if (/\/app\/.*\/page\.(tsx|jsx|ts|js)$/.test(p)) {
+    // App Router pages (paths from index have no leading /)
+    if (/app\/.*\/page\.(tsx|jsx|ts|js)$/.test(p)) {
       pages.push({ path: p, type: "page" });
     }
-    if (/\/app\/.*\/layout\.(tsx|jsx|ts|js)$/.test(p)) {
+    if (/app\/.*\/layout\.(tsx|jsx|ts|js)$/.test(p)) {
       pages.push({ path: p, type: "layout" });
     }
-    if (/\/app\/.*\/loading\.(tsx|jsx|ts|js)$/.test(p)) {
+    if (/app\/.*\/loading\.(tsx|jsx|ts|js)$/.test(p)) {
       pages.push({ path: p, type: "loading" });
     }
-    if (/\/app\/.*\/error\.(tsx|jsx|ts|js)$/.test(p)) {
+    if (/app\/.*\/error\.(tsx|jsx|ts|js)$/.test(p)) {
       pages.push({ path: p, type: "error" });
     }
 
-    // API routes (App Router)
-    if (/\/app\/api\/.*\/route\.(ts|js)$/.test(p)) {
+    // API routes (App Router — route.ts files under app/api/)
+    if (/app\/api\/.*route\.(ts|js)$/.test(p)) {
       api_routes.push({ path: p, methods: [], file: p });
     }
 
     // Pages Router API routes
-    if (/\/pages\/api\//.test(p)) {
+    if (/pages\/api\//.test(p)) {
       api_routes.push({ path: p, methods: [], file: p });
+    }
+
+    // Inngest functions
+    if (/inngest\/.*\.(ts|js)$/.test(p) && !/\.test\./.test(p) && !/\.spec\./.test(p) && !/index\./.test(p)) {
+      inngest_functions.push(p);
+    }
+
+    // Services
+    if (/services?\/[^/]+\.(ts|js)$/.test(p) && !/\.test\./.test(p) && !/\.spec\./.test(p) && !/\.d\.ts$/.test(p) && !/index\./.test(p)) {
+      services_count++;
+    }
+
+    // Webhooks
+    if (/webhook/.test(p) && /route\.(ts|js)$/.test(p)) {
+      webhooks.push(p);
     }
   }
 
@@ -979,6 +1000,9 @@ export function extractNextConventions(
     pages,
     middleware,
     api_routes,
+    services_count,
+    inngest_functions,
+    webhooks,
     config: { app_router: hasAppDir, src_dir: hasSrcDir, i18n: hasI18n },
   };
 }
@@ -1417,8 +1441,12 @@ function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conve
     type: "nextjs",
     pages: p.next_conventions.pages.length,
     api_routes: p.next_conventions.api_routes.length,
+    services: p.next_conventions.services_count,
+    inngest_functions: p.next_conventions.inngest_functions.length,
+    webhooks: p.next_conventions.webhooks.length,
     has_middleware: !!p.next_conventions.middleware,
     app_router: p.next_conventions.config.app_router,
+    i18n: p.next_conventions.config.i18n,
   };
   if (p.express_conventions) return {
     type: "express",
