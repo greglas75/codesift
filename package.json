@@ -1,6 +1,6 @@
 {
   "name": "codesift-mcp",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "MCP server for code intelligence — 66 tools for symbol search, call graph, semantic search, route tracing, community detection, LSP bridge, secret detection, and conversation search",
   "license": "BSL-1.1",
   "author": "Greg Laskowski",

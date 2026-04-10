@@ -8,6 +8,7 @@
 
 import { readFile, writeFile, access, readdir, mkdir } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex } from "../types.js";
 
@@ -132,6 +133,20 @@ export interface NestProviderEntry {
   file: string;
   line: number;
   imported_from: string | null;
+}
+
+export interface DependencyHealth {
+  total: number;
+  prod: number;
+  dev: number;
+  key_versions: Record<string, string>; // framework, runtime, etc.
+}
+
+export interface GitHealth {
+  total_commits: number;
+  recent_commits_30d: number;
+  last_commit_date: string | null;
+  contributors: number;
 }
 
 export interface GenerationMetadata {
@@ -1231,6 +1246,80 @@ export function extractPhpConventions(
   return { controllers, middleware, models, routes_files, migrations_count };
 }
 
+// ---------------------------------------------------------------------------
+// Dependency Health
+// ---------------------------------------------------------------------------
+
+async function extractDependencyHealth(projectRoot: string): Promise<DependencyHealth | null> {
+  const pkg = await readJson(join(projectRoot, "package.json"));
+  if (!pkg) {
+    // Try Python
+    const pyproject = await readJson(join(projectRoot, "pyproject.toml"));
+    if (!pyproject) return null;
+    return { total: 0, prod: 0, dev: 0, key_versions: {} };
+  }
+
+  const prod = Object.keys(pkg.dependencies ?? {});
+  const dev = Object.keys(pkg.devDependencies ?? {});
+  const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+  // Extract key versions — frameworks, runtimes, major tools
+  const keyPackages = [
+    "react", "next", "hono", "@nestjs/core", "express", "vue", "angular",
+    "typescript", "vitest", "jest", "prisma", "@prisma/client",
+    "tailwindcss", "@anthropic-ai/sdk", "openai",
+    "stripe", "inngest", "@clerk/nextjs", "@clerk/backend",
+    "@sentry/nextjs", "@sentry/nestjs", "drizzle-orm",
+  ];
+
+  const key_versions: Record<string, string> = {};
+  for (const k of keyPackages) {
+    if (allDeps[k]) key_versions[k] = allDeps[k];
+  }
+
+  return {
+    total: prod.length + dev.length,
+    prod: prod.length,
+    dev: dev.length,
+    key_versions,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Git Health
+// ---------------------------------------------------------------------------
+
+function extractGitHealth(projectRoot: string): GitHealth | null {
+  try {
+    const totalStr = execFileSync("git", ["rev-list", "--count", "HEAD"], {
+      cwd: projectRoot, timeout: 5000,
+    }).toString().trim();
+
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const recentStr = execFileSync("git", ["rev-list", "--count", `--since=${thirtyDaysAgo}`, "HEAD"], {
+      cwd: projectRoot, timeout: 5000,
+    }).toString().trim();
+
+    const lastCommitDate = execFileSync("git", ["log", "-1", "--format=%aI"], {
+      cwd: projectRoot, timeout: 5000,
+    }).toString().trim();
+
+    const contributorsStr = execFileSync("git", ["shortlog", "-sn", "--no-merges", "HEAD"], {
+      cwd: projectRoot, timeout: 10000,
+    }).toString().trim();
+    const contributors = contributorsStr.split("\n").filter(Boolean).length;
+
+    return {
+      total_commits: parseInt(totalStr) || 0,
+      recent_commits_30d: parseInt(recentStr) || 0,
+      last_commit_date: lastCommitDate || null,
+      contributors,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function inferScope(path: string): string {
   if (path === "*") return "global";
   if (path.includes("/admin")) return "admin";
@@ -1371,13 +1460,15 @@ export async function analyzeProject(
     ...(reactConventions ? { react_conventions: reactConventions } : {}),
     ...(pythonConventions ? { python_conventions: pythonConventions } : {}),
     ...(phpConventions ? { php_conventions: phpConventions } : {}),
+    dependency_health: await extractDependencyHealth(projectRoot) ?? undefined,
+    git_health: extractGitHealth(projectRoot) ?? undefined,
     generation_metadata: {
       files_analyzed,
       files_skipped,
       skip_reasons,
       duration_ms: Date.now() - startTime,
     },
-  };
+  } as ProjectProfile;
 
   // Write full profile to disk — MCP returns only summary
   const profilePath = await writeProfileToDisk(projectRoot, profile);
@@ -1418,6 +1509,8 @@ export interface ProfileSummary {
     total_analyzed: number;
   };
   conventions_summary: Record<string, unknown> | null;
+  dependency_health: { total: number; prod: number; dev: number; key_count: number } | null;
+  git_health: GitHealth | null;
   duration_ms: number;
 }
 
@@ -1494,6 +1587,13 @@ function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSumm
       total_analyzed: profile.generation_metadata.files_analyzed,
     },
     conventions_summary: buildConventionsSummary(profile),
+    dependency_health: (profile as any).dependency_health ? {
+      total: (profile as any).dependency_health.total,
+      prod: (profile as any).dependency_health.prod,
+      dev: (profile as any).dependency_health.dev,
+      key_count: Object.keys((profile as any).dependency_health.key_versions).length,
+    } : null,
+    git_health: (profile as any).git_health ?? null,
     duration_ms: profile.generation_metadata.duration_ms,
   };
 }
