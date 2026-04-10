@@ -18,7 +18,19 @@ const IMPORT_PATTERNS = [
   /import\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
   // CommonJS: require('...')
   /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  // PHP: require/include with relative path string: require __DIR__ . '/helpers.php';
+  /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__\s*\.\s*)?['"](\.\.?\/[^'"]+\.php)['"]/g,
 ];
+
+// Patterns for extracting PHP `use` statements (FQCN imports — PSR-4 based).
+// These are NOT file paths; they need PSR-4 resolution via composer.json.
+// Exposed separately so the resolver tool can opt-in.
+const PHP_USE_PATTERN = /^\s*use\s+([A-Z][\w\\]+)(?:\s+as\s+\w+)?\s*;/gm;
+
+// Patterns for extracting Kotlin `import` statements (fully-qualified names).
+// These are NOT file paths; they need heuristic resolution against source roots.
+// Matches: `import com.example.UserService`, `import com.example.*`, `import com.example.Foo as Bar`
+const KOTLIN_IMPORT_PATTERN = /^\s*import\s+([\w.]+(?:\.\*)?)(?:\s+as\s+\w+)?\s*$/gm;
 
 /**
  * Extract import paths from a source string.
@@ -62,9 +74,110 @@ export function resolveImportPath(importerFile: string, importPath: string): str
   }
 
   let resolved = parts.join("/");
-  resolved = resolved.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/, "");
+  resolved = resolved.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php)$/, "");
 
   return resolved;
+}
+
+/**
+ * Extract PHP `use` statements (FQCN imports).
+ * Returns fully-qualified class/namespace names without the leading backslash.
+ * These are NOT file paths — they require PSR-4 resolution against composer.json.
+ */
+export function extractPhpUseStatements(source: string): string[] {
+  const uses = new Set<string>();
+  PHP_USE_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = PHP_USE_PATTERN.exec(source)) !== null) {
+    const fqcn = match[1]?.replace(/^\\/, "");
+    if (fqcn) uses.add(fqcn);
+  }
+  return [...uses];
+}
+
+/**
+ * Extract Kotlin `import` statements (fully-qualified names).
+ * Returns dot-separated package + class names. Wildcards (`com.example.*`) are
+ * preserved as-is. These are NOT file paths — they require heuristic resolution
+ * against the source root (usually `src/main/kotlin`, `src/commonMain/kotlin`, etc.).
+ */
+export function extractKotlinImports(source: string): string[] {
+  const imports = new Set<string>();
+  KOTLIN_IMPORT_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = KOTLIN_IMPORT_PATTERN.exec(source)) !== null) {
+    const fqName = match[1];
+    if (fqName) imports.add(fqName);
+  }
+  return [...imports];
+}
+
+/**
+ * Heuristically resolve a Kotlin fully-qualified import to an indexed file.
+ * Strategy: match the last segment of the FQN (the simple class name) against
+ * file basenames. For `com.example.service.UserService`, tries to find a file
+ * whose basename (without .kt/.kts) is `UserService` AND whose path contains
+ * the package path `com/example/service`.
+ *
+ * Returns the matched file path or null if no match.
+ *
+ * Limitations: single-repo heuristic. Doesn't handle wildcard imports
+ * (`com.example.*`) or multi-module setups with complex source roots.
+ */
+export function resolveKotlinImport(
+  fqName: string,
+  kotlinFilesByBasename: Map<string, string[]>,
+): string | null {
+  // Skip wildcard imports — can't resolve to a single file
+  if (fqName.endsWith(".*")) return null;
+
+  // Skip standard library / third-party (no way to index jar files)
+  if (fqName.startsWith("kotlin.") || fqName.startsWith("java.") ||
+      fqName.startsWith("javax.") || fqName.startsWith("android.") ||
+      fqName.startsWith("androidx.") || fqName.startsWith("org.jetbrains.") ||
+      fqName.startsWith("org.junit.")) {
+    return null;
+  }
+
+  const parts = fqName.split(".");
+  if (parts.length < 2) return null;
+
+  const simpleName = parts[parts.length - 1]!;
+  const packagePath = parts.slice(0, -1).join("/");
+
+  const candidates = kotlinFilesByBasename.get(simpleName);
+  if (!candidates) return null;
+
+  // Prefer candidate whose path contains the package path
+  for (const candidate of candidates) {
+    if (candidate.includes(packagePath)) return candidate;
+  }
+
+  // Fallback: if only one candidate, return it (common in small projects)
+  if (candidates.length === 1) return candidates[0] ?? null;
+
+  return null;
+}
+
+/**
+ * Build a lookup map from Kotlin file basenames (without extension) to file paths.
+ * Used by resolveKotlinImport for heuristic FQN resolution.
+ */
+export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const file of index.files) {
+    if (!/\.kts?$/.test(file.path)) continue;
+    const basename = file.path
+      .slice(file.path.lastIndexOf("/") + 1)
+      .replace(/\.kts?$/, "");
+    const existing = map.get(basename);
+    if (existing) {
+      existing.push(file.path);
+    } else {
+      map.set(basename, [file.path]);
+    }
+  }
+  return map;
 }
 
 /**
@@ -73,7 +186,7 @@ export function resolveImportPath(importerFile: string, importPath: string): str
 export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
   const normalizedPaths = new Map<string, string>();
   for (const file of index.files) {
-    const normalized = file.path.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/, "");
+    const normalized = file.path.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php|kt|kts)$/, "");
     normalizedPaths.set(normalized, file.path);
     if (normalized.endsWith("/index")) {
       normalizedPaths.set(normalized.slice(0, -6), file.path);
@@ -85,18 +198,29 @@ export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
 /**
  * Collect all import edges between files in the index.
  * Reads file source from disk to extract import statements.
+ * Handles JS/TS/PHP relative imports AND Kotlin fully-qualified imports
+ * (via heuristic basename + package-path matching).
  */
 export async function collectImportEdges(
   index: CodeIndex,
   fileFilter?: Set<string>,
 ): Promise<ImportEdge[]> {
   const normalizedPaths = buildNormalizedPathMap(index);
+  const kotlinFilesByBasename = buildKotlinFilesByBasename(index);
   const edgeSet = new Set<string>();
   const edges: ImportEdge[] = [];
 
   const files = fileFilter
     ? index.files.filter((f) => fileFilter.has(f.path))
     : index.files;
+
+  const addEdge = (from: string, to: string): void => {
+    if (to === from) return;
+    const edgeKey = `${from}->${to}`;
+    if (edgeSet.has(edgeKey)) return;
+    edgeSet.add(edgeKey);
+    edges.push({ from, to });
+  };
 
   for (const file of files) {
     let source: string;
@@ -106,17 +230,21 @@ export async function collectImportEdges(
       continue;
     }
 
+    // Relative-path imports (JS/TS/PHP)
     const importPaths = extractImports(source);
     for (const importPath of importPaths) {
       const resolved = resolveImportPath(file.path, importPath);
       const targetFile = normalizedPaths.get(resolved);
-      if (!targetFile || targetFile === file.path) continue;
+      if (targetFile) addEdge(file.path, targetFile);
+    }
 
-      const edgeKey = `${file.path}->${targetFile}`;
-      if (edgeSet.has(edgeKey)) continue;
-      edgeSet.add(edgeKey);
-
-      edges.push({ from: file.path, to: targetFile });
+    // Kotlin fully-qualified imports (.kt/.kts files only)
+    if (/\.kts?$/.test(file.path)) {
+      const kotlinImports = extractKotlinImports(source);
+      for (const fqName of kotlinImports) {
+        const targetFile = resolveKotlinImport(fqName, kotlinFilesByBasename);
+        if (targetFile) addEdge(file.path, targetFile);
+      }
     }
   }
 

@@ -1,6 +1,6 @@
 /**
  * HTTP route tracing — given a URL path, find handler → service → DB calls.
- * Supports NestJS decorators, Next.js App Router, and Express patterns.
+ * Supports NestJS decorators, Next.js App Router, Express, Yii2 conventions, and Laravel routes.
  */
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
@@ -11,13 +11,21 @@ const DB_PATTERNS = [
   /\.\$(transaction|queryRaw|executeRaw)/,
   /getRepository|\.query\(|\.execute\(/,
   /knex\.|\.raw\(/,
+  // PHP / Yii2 ActiveRecord
+  /->find\(\)|->findOne\(|->findAll\(|->findBySql\(/,
+  /->createCommand\(|Yii::\$app->db/,
+  /::find\(\)->where\(|->andWhere\(|->orWhere\(/,
+  // Kotlin — Exposed ORM, Spring Data, Ktor
+  /transaction\s*\{[\s\S]*?\.(select|insert|update|delete)/,
+  /\.(findById|findAll|save|deleteById|findBy\w+)\s*\(/,
+  /\bSchemaUtils\.(create|drop)/,
 ];
 
 interface RouteHandler {
   symbol: ReturnType<typeof stripSource>;
   file: string;
   method?: string;
-  framework: "nestjs" | "nextjs" | "express" | "unknown";
+  framework: "nestjs" | "nextjs" | "express" | "yii2" | "laravel" | "ktor" | "spring-kotlin" | "unknown";
 }
 
 interface DbCall {
@@ -122,7 +130,8 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
     const routeMatch = file.path.match(/app\/(.*?)\/route\.\w+$/);
     if (!routeMatch) continue;
 
-    const filePath = routeMatch[1]!;
+    // Strip route groups: (auth)/login → login
+    const filePath = routeMatch[1]!.replace(/\([^)]+\)\/?/g, "");
     if (matchPath(filePath, normalized)) {
       // Find exported handler functions (GET, POST, etc.)
       const fileSymbols = index.symbols.filter((s) =>
@@ -293,6 +302,303 @@ function routeToMermaid(result: RouteTraceResult): string {
 }
 
 /**
+ * Find Yii2 route handlers via convention: controller-id/action-id → ControllerIdController::actionActionId().
+ * Supports modules: module-id/controller-id/action-id.
+ */
+function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  const normalized = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
+  const segments = normalized.split("/").filter(Boolean);
+
+  if (segments.length === 0) return handlers;
+
+  // Determine controller ID and action ID
+  // Patterns: "controller/action", "module/controller/action", "controller" (default action=index)
+  let controllerId: string;
+  let actionId: string;
+
+  if (segments.length === 1) {
+    controllerId = segments[0]!;
+    actionId = "index";
+  } else if (segments.length === 2) {
+    controllerId = segments[0]!;
+    actionId = segments[1]!;
+  } else {
+    // Module routing: take last two segments as controller/action
+    controllerId = segments[segments.length - 2]!;
+    actionId = segments[segments.length - 1]!;
+  }
+
+  // Convert kebab-case to PascalCase for class name: "site" → "Site", "user-comment" → "UserComment"
+  const toPascal = (s: string): string =>
+    s.split("-").map(p => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+
+  // Convert kebab-case to camelCase for action method: "hello-world" → "HelloWorld"
+  const toCamelAction = (s: string): string =>
+    s.split("-").map(p => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+
+  const controllerName = toPascal(controllerId) + "Controller";
+  const actionMethod = "action" + toCamelAction(actionId);
+
+  // Find controller class in index
+  const controllerSymbol = index.symbols.find(
+    (s) => s.name === controllerName && s.kind === "class",
+  );
+
+  if (!controllerSymbol) return handlers;
+
+  // Find action method within the controller
+  const actionSymbol = index.symbols.find(
+    (s) => s.name === actionMethod && s.parent === controllerSymbol.id,
+  );
+
+  if (actionSymbol) {
+    handlers.push({
+      symbol: stripSource(actionSymbol),
+      file: actionSymbol.file,
+      method: "GET",
+      framework: "yii2",
+    });
+  } else {
+    // Fallback: controller found but action method not indexed — report controller
+    handlers.push({
+      symbol: stripSource(controllerSymbol),
+      file: controllerSymbol.file,
+      framework: "yii2",
+    });
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Laravel route handlers by scanning route files for Route::method() patterns.
+ */
+async function findLaravelHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const routeFiles = index.files.filter((f) =>
+    /routes\/(web|api)\.php$/.test(f.path),
+  );
+
+  if (routeFiles.length === 0) return handlers;
+
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  const methods = ["get", "post", "put", "delete", "patch"];
+
+  for (const file of routeFiles) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch { continue; }
+
+    for (const method of methods) {
+      // Match: Route::get('/path', [Controller::class, 'method']) or Route::get('/path', 'Controller@method')
+      const re = new RegExp(
+        `Route::${method}\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]\\s*,\\s*(?:\\[([\\w\\\\]+)::class\\s*,\\s*['"\`](\\w+)['"\`]\\]|['"\`](\\w+)@(\\w+)['"\`])`,
+        "gi",
+      );
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(source)) !== null) {
+        const routePath = match[1] ?? "";
+        const controllerClass = match[2] ?? match[4] ?? "";
+        const methodName = match[3] ?? match[5] ?? "";
+
+        if (!matchPath(routePath, searchPath)) continue;
+
+        // Find the controller method in the index
+        const controllerName = controllerClass.split("\\").pop() ?? controllerClass;
+        const sym = index.symbols.find(
+          (s) => s.name === methodName && s.kind === "method" &&
+            index.symbols.some((c) => c.id === s.parent && c.name === controllerName),
+        );
+
+        handlers.push({
+          symbol: sym
+            ? stripSource(sym)
+            : { id: `${controllerName}::${methodName}`, name: methodName, kind: "method", file: file.path, start_line: 0, end_line: 0 } as ReturnType<typeof stripSource>,
+          file: sym?.file ?? file.path,
+          method: method.toUpperCase(),
+          framework: "laravel",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Ktor route handlers via `routing { get("/path") { ... } }` DSL.
+ * Supports nested `route("/prefix") { get("/sub") { } }` patterns.
+ */
+async function findKtorHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const methods = ["get", "post", "put", "delete", "patch", "head", "options"];
+
+  // Ktor handlers are in .kt files, typically in files containing "routing {" or with "Route" in name
+  const kotlinFiles = index.files.filter((f) => /\.kts?$/.test(f.path));
+  if (kotlinFiles.length === 0) return handlers;
+
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  for (const file of kotlinFiles) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch { continue; }
+
+    // Skip files without routing DSL
+    if (!/\b(routing|route)\s*[({]/.test(source)) continue;
+
+    // Extract route("/prefix") blocks to support nested prefixes
+    // Simple approach: find all method calls with path args, combine with enclosing route() prefix via line scan
+    const lines = source.split("\n");
+    const prefixStack: Array<{ prefix: string; braceDepth: number }> = [];
+    let braceDepth = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      // Track route("/prefix") { ... } blocks
+      const routeMatch = /\broute\s*\(\s*["']([^"']+)["']\s*\)\s*\{/.exec(line);
+      if (routeMatch) {
+        prefixStack.push({ prefix: routeMatch[1]!, braceDepth });
+      }
+
+      // Count braces to detect when route() scope closes
+      for (const ch of line) {
+        if (ch === "{") braceDepth++;
+        else if (ch === "}") {
+          braceDepth--;
+          // Pop route prefixes whose scope ended
+          while (
+            prefixStack.length > 0 &&
+            prefixStack[prefixStack.length - 1]!.braceDepth >= braceDepth
+          ) {
+            prefixStack.pop();
+          }
+        }
+      }
+
+      // Match method handlers: get("/path") { ... } or post("/path") { ... }
+      for (const method of methods) {
+        const re = new RegExp(`\\b${method}\\s*\\(\\s*["']([^"']+)["']\\s*\\)\\s*\\{`);
+        const match = re.exec(line);
+        if (!match) continue;
+
+        const methodPath = match[1]!;
+        const prefix = prefixStack.map((p) => p.prefix).join("");
+        const fullPath = `${prefix}/${methodPath}`.replace(/\/+/g, "/");
+
+        if (!matchPath(fullPath, searchPath)) continue;
+
+        // Find enclosing function symbol (if any) for this line
+        const lineNum = i + 1;
+        const sym = index.symbols.find(
+          (s) => s.file === file.path && s.start_line <= lineNum && s.end_line >= lineNum,
+        );
+
+        handlers.push({
+          symbol: sym
+            ? stripSource(sym)
+            : {
+                id: `${file.path}:${method}:${methodPath}`,
+                name: `${method} ${methodPath}`,
+                kind: "function",
+                file: file.path,
+                start_line: lineNum,
+                end_line: lineNum,
+              } as ReturnType<typeof stripSource>,
+          file: file.path,
+          method: method.toUpperCase(),
+          framework: "ktor",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Spring Boot Kotlin route handlers via @RestController/@Controller + @GetMapping/etc.
+ */
+async function findSpringBootKotlinHandlers(
+  index: CodeIndex,
+  searchPath: string,
+): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const mappingAnnotations: Array<{ ann: string; method: string }> = [
+    { ann: "GetMapping", method: "GET" },
+    { ann: "PostMapping", method: "POST" },
+    { ann: "PutMapping", method: "PUT" },
+    { ann: "DeleteMapping", method: "DELETE" },
+    { ann: "PatchMapping", method: "PATCH" },
+  ];
+
+  const kotlinFiles = index.files.filter((f) => /\.kts?$/.test(f.path));
+  if (kotlinFiles.length === 0) return handlers;
+
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  for (const file of kotlinFiles) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch { continue; }
+
+    // Must have @RestController or @Controller annotation
+    if (!/@(?:RestController|Controller)\b/.test(source)) continue;
+
+    // Extract class-level @RequestMapping prefix (optional)
+    const classRequestMatch = /@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']*)["']/.exec(source);
+    const classPrefix = classRequestMatch?.[1] ?? "";
+
+    for (const { ann, method } of mappingAnnotations) {
+      // Match: @GetMapping("/path") fun funcName(...)
+      // Or:    @GetMapping(value = "/path") fun funcName(...)
+      const re = new RegExp(
+        `@${ann}\\s*\\(\\s*(?:value\\s*=\\s*)?["']([^"']*)["'](?:[^)]*)?\\)\\s*(?:fun|\\n\\s*fun)\\s+(\\w+)`,
+        "g",
+      );
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(source)) !== null) {
+        const routePath = match[1] ?? "";
+        const funcName = match[2] ?? "";
+
+        const fullPath = `${classPrefix}/${routePath}`.replace(/\/+/g, "/");
+        if (!matchPath(fullPath, searchPath)) continue;
+
+        const sym = index.symbols.find(
+          (s) => s.file === file.path && s.name === funcName,
+        );
+
+        handlers.push({
+          symbol: sym
+            ? stripSource(sym)
+            : {
+                id: `${file.path}:${funcName}`,
+                name: funcName,
+                kind: "method",
+                file: file.path,
+                start_line: 1,
+                end_line: 1,
+              } as ReturnType<typeof stripSource>,
+          file: file.path,
+          method,
+          framework: "spring-kotlin",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
  * Trace an HTTP route: find handler, trace callees, identify DB calls.
  */
 export async function traceRoute(
@@ -308,6 +614,10 @@ export async function traceRoute(
     ...(await findNestJSHandlers(index, path)),
     ...findNextJSHandlers(index, path),
     ...findExpressHandlers(index, path),
+    ...findYii2Handlers(index, path),
+    ...(await findLaravelHandlers(index, path)),
+    ...(await findKtorHandlers(index, path)),
+    ...(await findSpringBootKotlinHandlers(index, path)),
   ];
 
   if (handlers.length === 0) {
