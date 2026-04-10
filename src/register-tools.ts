@@ -31,6 +31,8 @@ import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, up
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
+import { auditScan } from "./tools/audit-tools.js";
+import type { AuditScanOptions } from "./tools/audit-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
@@ -83,6 +85,38 @@ async function checkTextStubHint(repo: string | undefined, toolName: string, res
     `  → search_text(query) works on ALL files (uses ripgrep, not parser)\n` +
     `  → get_file_tree shows file listing\n` +
     `  → Only symbol-based tools (this one) need a parser to return results.\n`;
+}
+
+// ---------------------------------------------------------------------------
+// audit_scan formatter
+// ---------------------------------------------------------------------------
+
+import type { AuditScanResult } from "./tools/audit-tools.js";
+
+function formatAuditScan(result: AuditScanResult): string {
+  const lines: string[] = [];
+  lines.push(`AUDIT SCAN: ${result.repo}`);
+  lines.push(`Gates checked: ${result.summary.gates_checked} | Findings: ${result.summary.total_findings} (${result.summary.critical} critical, ${result.summary.warning} warning)`);
+  lines.push("");
+
+  for (const gate of result.gates) {
+    const count = gate.findings.length;
+    const status = count === 0 ? "✓ PASS" : `✗ ${count} finding${count > 1 ? "s" : ""}`;
+    lines.push(`${gate.gate} ${status} — ${gate.description}`);
+    lines.push(`  tool: ${gate.tool_used}`);
+
+    for (const f of gate.findings.slice(0, 10)) {
+      const loc = f.line ? `:${f.line}` : "";
+      const sev = f.severity === "critical" ? "🔴" : "🟡";
+      lines.push(`  ${sev} ${f.file}${loc} — ${f.detail}`);
+    }
+    if (gate.findings.length > 10) {
+      lines.push(`  ... +${gate.findings.length - 10} more`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +277,8 @@ const CORE_TOOL_NAMES = new Set([
   "get_type_info",           // 8 calls, 100% direct
   "impact_analysis",         // 4 calls, 100% direct
   "go_to_definition",        // 4 calls, 100% direct
+  // --- Composite tools ---
+  "audit_scan",              // one-call audit: CQ8+CQ11+CQ13+CQ14+CQ17
   // --- Essential infrastructure ---
   "index_folder",            // repo onboarding
   "discover_tools",          // meta: discovers remaining hidden tools
@@ -1564,6 +1600,28 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Return parser_languages (tree-sitter symbol extractors) and profile_frameworks (analyze_project detectors). Text tools (search_text, get_file_tree) work on ALL files regardless — use this only for cache invalidation or to check symbol support for a specific language.",
     schema: {},
     handler: async () => getExtractorVersions(),
+  },
+  // --- Composite tools ---
+  {
+    name: "audit_scan",
+    category: "analysis",
+    searchHint: "audit scan code quality CQ gates dead code clones complexity patterns",
+    description: "Run 5 analysis tools in parallel, return findings keyed by CQ gate. One call replaces sequential find_dead_code + search_patterns + find_clones + analyze_complexity + analyze_hotspots. Returns: CQ8 (empty catch), CQ11 (complexity), CQ13 (dead code), CQ14 (clones), CQ17 (perf anti-patterns).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
+      include_tests: zBool().describe("Include test files (default: false)"),
+      checks: z.string().optional().describe("Comma-separated CQ gates to check (default: all). E.g. 'CQ8,CQ11,CQ14'"),
+    },
+    handler: async (args) => {
+      const checks = args.checks ? (args.checks as string).split(",").map(s => s.trim()) : undefined;
+      const opts: AuditScanOptions = {};
+      if (args.file_pattern) opts.file_pattern = args.file_pattern as string;
+      if (args.include_tests) opts.include_tests = args.include_tests as boolean;
+      if (checks) opts.checks = checks;
+      const result = await auditScan(args.repo as string, opts);
+      return formatAuditScan(result);
+    },
   },
 ];
 
