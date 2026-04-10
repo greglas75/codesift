@@ -69,14 +69,14 @@ async function checkTextStubHint(repo: string | undefined, toolName: string, res
   const index = await getCodeIndex(repo);
   if (!index) return null;
 
-  const stubCount = index.files.filter(f => f.language === "text_stub").length;
+  const stubCount = index.files.filter(f => f.language === "text_stub" || f.language === "kotlin").length;
   if (stubCount === 0) return null;
 
   const stubPct = Math.round((stubCount / index.files.length) * 100);
   if (stubPct < 30) return null; // only warn if text_stub is significant portion
 
   const stubExts = [...new Set(index.files
-    .filter(f => f.language === "text_stub")
+    .filter(f => f.language === "text_stub" || f.language === "kotlin")
     .map(f => "." + f.path.split(".").pop()))].slice(0, 3).join(", ");
 
   return `⚡H11 No parser for ${stubExts} files (${stubPct}% of repo). Symbol tools return empty.\n` +
