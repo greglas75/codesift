@@ -278,6 +278,10 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
         framework = "laravel";
         framework_version = phpDeps["laravel/framework"]?.replace(/^[\^~>=<]/, "") ?? null;
         detected_from.push("composer.json:require.laravel/framework");
+      } else if (phpDeps?.["yiisoft/yii2"]) {
+        framework = "yii2";
+        framework_version = phpDeps["yiisoft/yii2"]?.replace(/^[\^~>=<]/, "") ?? null;
+        detected_from.push("composer.json:require.yiisoft/yii2");
       } else if (phpDeps?.["symfony/framework-bundle"]) {
         framework = "symfony";
         detected_from.push("composer.json:require.symfony/framework-bundle");
