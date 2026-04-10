@@ -203,7 +203,8 @@ describe("classifyFiles", () => {
       "apps/api/src/services/contest.service.ts",
     ]);
     const result = classifyFiles(index);
-    expect(result.important.some((f) => f.path.includes("contest.service.ts"))).toBe(true);
+    expect(result.important.count).toBeGreaterThan(0);
+    expect(result.important.top.some((f) => f.path.includes("contest.service.ts"))).toBe(true);
   });
 
   it("classifies utils as routine", () => {
@@ -263,7 +264,7 @@ describe("classifyFiles", () => {
     ]);
     const result = classifyFiles(index);
     expect(result.critical.length).toBe(0);
-    expect(result.important.length).toBe(0);
+    expect(result.important.count).toBe(0);
   });
 });
 

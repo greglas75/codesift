@@ -62,7 +62,7 @@ export interface StackInfo {
 
 export interface FileClassifications {
   critical: ClassifiedFile[];
-  important: ClassifiedFile[];
+  important: { count: number; by_type: Record<string, number>; top: ClassifiedFile[] };
   routine: { count: number; by_type: Record<string, number> };
 }
 
@@ -571,9 +571,18 @@ export function classifyFiles(index: CodeIndex): FileClassifications {
     }
   }
 
+  // Compact important tier: aggregate by type + keep only top 30 by dependents
+  const importantCounts: Record<string, number> = {};
+  for (const f of important) {
+    importantCounts[f.code_type] = (importantCounts[f.code_type] ?? 0) + 1;
+  }
+  const topImportant = important
+    .sort((a, b) => b.dependents_count - a.dependents_count)
+    .slice(0, 30);
+
   return {
     critical,
-    important,
+    important: { count: important.length, by_type: importantCounts, top: topImportant },
     routine: { count: routineCount, by_type: routineCounts },
   };
 }
@@ -1582,7 +1591,7 @@ function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSumm
     },
     file_counts: {
       critical: profile.file_classifications?.critical.length ?? 0,
-      important: profile.file_classifications?.important.length ?? 0,
+      important: profile.file_classifications?.important.count ?? 0,
       routine: profile.file_classifications?.routine.count ?? 0,
       total_analyzed: profile.generation_metadata.files_analyzed,
     },
