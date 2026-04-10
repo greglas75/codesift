@@ -63,6 +63,16 @@ function extractCallSites(source: string): Set<string> {
     }
   }
 
+  // PHP method and static calls: ->method(, ::method(
+  // e.g. $this->render(, Yii::$app->db->createCommand(, User::find(
+  const phpCallPattern = /(?:->|::)([a-zA-Z_][\w]*)\s*\(/g;
+  while ((match = phpCallPattern.exec(source)) !== null) {
+    const name = match[1]!;
+    if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
+      calls.add(name);
+    }
+  }
+
   return calls;
 }
 
@@ -81,6 +91,11 @@ const KEYWORD_SET = new Set([
   "suspend", "inline", "reified", "lateinit", "init", "typealias", "by",
   "internal", "open", "inner", "crossinline", "noinline", "tailrec",
   "operator", "infix", "annotation", "actual", "expect",
+  // PHP keywords that appear with ( but are not function calls
+  "foreach", "endforeach", "endif", "endwhile", "endfor", "endswitch",
+  "match", "fn", "list", "array", "empty", "isset", "unset", "print",
+  "echo", "include", "include_once", "require", "require_once",
+  "global", "clone", "instanceof", "trait", "namespace", "use",
 ]);
 
 /**

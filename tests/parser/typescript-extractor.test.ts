@@ -152,3 +152,237 @@ afterAll(() => {
     expect(testCase!.parent).toBe(suite!.id);
   });
 });
+
+describe("extractTypeScriptSymbols — React components", () => {
+  it("detects function declaration returning JSX as 'component'", async () => {
+    const source = `function MyComponent() {
+  return <div>hello</div>;
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects arrow function with implicit JSX return as 'component'", async () => {
+    const source = `const MyComponent = () => <div>hello</div>;
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects arrow function with block body returning JSX as 'component'", async () => {
+    const source = `const MyComponent = () => {
+  const x = 1;
+  return <div/>;
+};
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects React.memo wrapped component as 'component'", async () => {
+    const source = `const MyComponent = React.memo(() => <div/>);
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects forwardRef wrapped component as 'component'", async () => {
+    const source = `const MyComponent = forwardRef((props, ref) => <div ref={ref}/>);
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects React.lazy wrapped component as 'component'", async () => {
+    const source = `const MyComponent = React.lazy(() => import('./Other'));
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("keeps lowercase function returning value as 'function'", async () => {
+    const source = `function myHelper() { return 42; }
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "utils.ts", source, "test-repo");
+
+    const fn = symbols.find((s) => s.name === "myHelper");
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe("function");
+  });
+
+  it("keeps PascalCase function without JSX return as 'function'", async () => {
+    const source = `function CreateUser() { return { name: "test" }; }
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "factory.ts", source, "test-repo");
+
+    const fn = symbols.find((s) => s.name === "CreateUser");
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe("function");
+  });
+
+  it("detects exported default function component as 'component'", async () => {
+    const source = `export default function Page() {
+  return <div>page content</div>;
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "page.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "Page");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects component returning JSX fragment as 'component'", async () => {
+    const source = `function Layout() {
+  return <>
+    <header/>
+    <main/>
+  </>;
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "Layout.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "Layout");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects component returning parenthesized JSX as 'component'", async () => {
+    const source = `function Card() {
+  return (
+    <div className="card">
+      <h1>Title</h1>
+    </div>
+  );
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "Card.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "Card");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+});
+
+describe("extractTypeScriptSymbols — React hooks", () => {
+  it("detects function declaration with use[A-Z] name as 'hook'", async () => {
+    const source = `function useAuth() {
+  return { user: null };
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "useAuth.ts", source, "test-repo");
+
+    const hook = symbols.find((s) => s.name === "useAuth");
+    expect(hook).toBeDefined();
+    expect(hook!.kind).toBe("hook");
+  });
+
+  it("detects arrow function hook as 'hook'", async () => {
+    const source = `const useDebounce = (value: string) => {
+  return value;
+};
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "useDebounce.ts", source, "test-repo");
+
+    const hook = symbols.find((s) => s.name === "useDebounce");
+    expect(hook).toBeDefined();
+    expect(hook!.kind).toBe("hook");
+  });
+
+  it("detects exported hook as 'hook'", async () => {
+    const source = `export function useLocalStorage(key: string) {
+  return localStorage.getItem(key);
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "useLocalStorage.ts", source, "test-repo");
+
+    const hook = symbols.find((s) => s.name === "useLocalStorage");
+    expect(hook).toBeDefined();
+    expect(hook!.kind).toBe("hook");
+  });
+
+  it("classifies shadowed React hook (useState) as 'hook'", async () => {
+    const source = `function useState() {
+  return [null, () => {}];
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "custom.ts", source, "test-repo");
+
+    const hook = symbols.find((s) => s.name === "useState");
+    expect(hook).toBeDefined();
+    expect(hook!.kind).toBe("hook");
+  });
+
+  it("keeps 'useless' (no capital after use) as 'function'", async () => {
+    const source = `function useless() { return null; }
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "utils.ts", source, "test-repo");
+
+    const fn = symbols.find((s) => s.name === "useless");
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe("function");
+  });
+
+  it("classifies Use() with JSX as 'component', not 'hook'", async () => {
+    const source = `function Use() { return <div/>; }
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "Use.tsx", source, "test-repo");
+
+    const sym = symbols.find((s) => s.name === "Use");
+    expect(sym).toBeDefined();
+    expect(sym!.kind).toBe("component");
+  });
+});

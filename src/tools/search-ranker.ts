@@ -4,7 +4,9 @@ import type { TextMatch, CodeIndex, CodeSymbol } from "../types.js";
 // ── Label bonus for ranking ────────────────────────────────
 const LABEL_BONUS: Record<string, number> = {
   function: 1.0,
+  component: 1.0,  // React component — same priority as function
   method: 0.9,
+  hook: 0.9,       // React custom hook — same priority as method
   class: 0.8,
   type: 0.5,
 };

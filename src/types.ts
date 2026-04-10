@@ -17,6 +17,8 @@ export type SymbolKind =
   | "test_suite"    // describe()
   | "test_case"     // it() / test()
   | "test_hook"     // beforeEach() etc.
+  | "component"     // React component (returns JSX)
+  | "hook"          // React custom hook (useXxx)
   | "default_export"
   | "conversation_turn"   // user+assistant exchange pair
   | "conversation_summary" // compaction summary

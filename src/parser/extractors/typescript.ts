@@ -1,9 +1,118 @@
 import type Parser from "web-tree-sitter";
-import type { CodeSymbol } from "../../types.js";
+import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { getNodeName, makeSymbol, MAX_SOURCE_LENGTH } from "./_shared.js";
 
 /** Matches top-level SCREAMING_CASE identifiers like MAX_RETRIES, API_URL */
 const SCREAMING_CASE_RE = /^[A-Z][A-Z0-9_]+$/;
+
+// --- React detection ---
+
+/** React wrapper functions that indicate a component */
+const REACT_WRAPPER_NAMES = new Set(["memo", "forwardRef", "lazy"]);
+
+/** Custom hook naming convention: starts with use + uppercase letter */
+const CUSTOM_HOOK_RE = /^use[A-Z]/;
+
+/** Component naming convention: starts with uppercase letter */
+const COMPONENT_NAME_RE = /^[A-Z]/;
+
+/** JSX node types that indicate a React component return */
+const JSX_TYPES = new Set([
+  "jsx_element", "jsx_self_closing_element", "jsx_fragment",
+]);
+
+/**
+ * Check if a function/arrow body contains a JSX return.
+ * For arrow with expression body: check if body IS jsx.
+ * For block body: check return_statement descendants for jsx children.
+ */
+function returnsJSX(node: Parser.SyntaxNode): boolean {
+  const body = node.childForFieldName("body");
+  if (!body) return false;
+
+  // Arrow with expression body: () => <div/>
+  if (JSX_TYPES.has(body.type)) return true;
+
+  // Parenthesized expression body: () => (<div/>)
+  if (body.type === "parenthesized_expression") {
+    for (const child of body.namedChildren) {
+      if (JSX_TYPES.has(child.type)) return true;
+    }
+  }
+
+  // Block body: check return statements
+  const returns = body.descendantsOfType("return_statement");
+  for (const ret of returns) {
+    for (const child of ret.namedChildren) {
+      if (JSX_TYPES.has(child.type)) return true;
+      // Parenthesized: return (<div/>)
+      if (child.type === "parenthesized_expression") {
+        for (const inner of child.namedChildren) {
+          if (JSX_TYPES.has(inner.type)) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a call_expression is a React wrapper (memo, forwardRef, lazy).
+ * Handles: memo(...), React.memo(...), forwardRef(...), React.forwardRef(...)
+ */
+function isReactWrapper(callExpr: Parser.SyntaxNode): boolean {
+  const fn = callExpr.childForFieldName("function");
+  if (!fn) return false;
+
+  // Direct: memo(...), forwardRef(...), lazy(...)
+  if (fn.type === "identifier" && REACT_WRAPPER_NAMES.has(fn.text)) return true;
+
+  // Member: React.memo(...), React.forwardRef(...)
+  if (fn.type === "member_expression") {
+    const prop = fn.childForFieldName("property");
+    if (prop && REACT_WRAPPER_NAMES.has(prop.text)) return true;
+  }
+
+  return false;
+}
+
+/** Get the wrapper function name from a React wrapper call (memo, forwardRef, lazy) */
+function getWrapperName(callExpr: Parser.SyntaxNode): string | null {
+  const fn = callExpr.childForFieldName("function");
+  if (!fn) return null;
+  if (fn.type === "identifier") return fn.text;
+  if (fn.type === "member_expression") {
+    return fn.childForFieldName("property")?.text ?? null;
+  }
+  return null;
+}
+
+/** Extract the inner function from a React wrapper call's arguments */
+function getWrappedFunction(callExpr: Parser.SyntaxNode): Parser.SyntaxNode | null {
+  const args = callExpr.childForFieldName("arguments");
+  if (!args) return null;
+  const firstArg = args.namedChildren[0];
+  if (!firstArg) return null;
+  if (firstArg.type === "arrow_function" || firstArg.type === "function_expression") {
+    return firstArg;
+  }
+  return null;
+}
+
+/**
+ * Classify a function/arrow as component, hook, or function.
+ * - Hook: name matches use[A-Z]
+ * - Component: PascalCase name AND returns JSX
+ * - Function: everything else
+ */
+function classifyReactKind(
+  name: string,
+  fnNode: Parser.SyntaxNode | null,
+): SymbolKind {
+  if (CUSTOM_HOOK_RE.test(name)) return "hook";
+  if (COMPONENT_NAME_RE.test(name) && fnNode && returnsJSX(fnNode)) return "component";
+  return "function";
+}
 
 /** Test lifecycle hook names */
 const TEST_HOOK_NAMES = new Set([
@@ -171,7 +280,9 @@ export function extractTypeScriptSymbols(
       case "function_declaration": {
         const name = getNodeName(node);
         if (name) {
-          const sym = makeSymbol(node, name, "function", filePath, source, repo, {
+          // React detection: hook (useX) or component (PascalCase + JSX return)
+          const kind = classifyReactKind(name, node);
+          const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
@@ -195,10 +306,31 @@ export function extractTypeScriptSymbols(
 
           const value = declarator.childForFieldName("value");
           if (value && value.type === "arrow_function") {
-            const sym = makeSymbol(node, name, "function", filePath, source, repo, {
+            // React detection: hook or component
+            const kind = classifyReactKind(name, value);
+            const sym = makeSymbol(node, name, kind, filePath, source, repo, {
               parentId,
               docstring: getDocstring(node, source),
               signature: getSignature(value, source),
+            });
+            symbols.push(sym);
+          } else if (value && value.type === "call_expression" && isReactWrapper(value)) {
+            // React wrapper: const X = React.memo(() => <div/>), forwardRef(), lazy()
+            const wrapperName = getWrapperName(value);
+            const innerFn = getWrappedFunction(value);
+            let kind: SymbolKind = "function";
+            if (CUSTOM_HOOK_RE.test(name)) {
+              kind = "hook";
+            } else if (COMPONENT_NAME_RE.test(name)) {
+              // lazy() always returns a component; memo/forwardRef need inner JSX check
+              if (wrapperName === "lazy" || (innerFn && returnsJSX(innerFn))) {
+                kind = "component";
+              }
+            }
+            const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+              parentId,
+              docstring: getDocstring(node, source),
+              signature: innerFn ? getSignature(innerFn, source) : undefined,
             });
             symbols.push(sym);
           } else if (value) {

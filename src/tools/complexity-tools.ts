@@ -21,10 +21,14 @@ const BRANCH_PATTERNS = [
   /\?\.let\s*\{/g,    // safe call + lambda
   /\?\.run\s*\{/g,    // safe call + run
   /\?:/g,             // Elvis operator
+  // PHP branch patterns
+  /\bforeach\s*\(/g,  // foreach loop
+  /\belseif\s*\(/g,   // PHP elseif (one word)
+  /\bmatch\s*\(/g,    // PHP 8 match expression
 ];
 
 // Patterns that increase nesting
-const NESTING_OPENERS = /\b(if|for|while|switch|try|when)\s*[\({]/g;
+const NESTING_OPENERS = /\b(if|for|foreach|while|switch|try|when|match)\s*[\({]/g;
 
 export interface ComplexityInfo {
   name: string;

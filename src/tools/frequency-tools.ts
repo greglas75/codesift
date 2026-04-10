@@ -123,7 +123,7 @@ export function hashSubtree(root: any): HashResult {
 
 // --- Core analysis ---
 
-const ANALYZABLE_KINDS = new Set<SymbolKind>(["function", "method", "class"]);
+const ANALYZABLE_KINDS = new Set<SymbolKind>(["function", "method", "class", "component", "hook"]);
 
 interface FrequencyOptions {
   top_n?: number | undefined;

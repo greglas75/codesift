@@ -87,6 +87,7 @@ export interface StackInfo {
   language_version: string | null;
   test_runner: string | null;
   package_manager: string | null;
+  build_tool: string | null;  // vite, cra, webpack, parcel, esbuild, rspack, rsbuild, turbopack
   monorepo: { tool: string | null; workspaces: string[] } | null;
   detected_from: string[];
 }
@@ -464,6 +465,62 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
     }
   }
 
+  // Build tool detection (Vite, CRA, webpack, Parcel, esbuild, Rspack, Turbopack)
+  // Order matters: check more specific/modern tools first.
+  let build_tool: string | null = null;
+  if (pkg) {
+    const devDeps = pkg.devDependencies ?? {};
+    const deps = pkg.dependencies ?? {};
+    const allDeps: Record<string, string> = { ...deps, ...devDeps };
+
+    if (allDeps["vite"]) {
+      build_tool = "vite";
+      detected_from.push("package.json:vite");
+    } else if (allDeps["react-scripts"]) {
+      build_tool = "cra";
+      detected_from.push("package.json:react-scripts");
+    } else if (allDeps["@rsbuild/core"]) {
+      build_tool = "rsbuild";
+      detected_from.push("package.json:@rsbuild/core");
+    } else if (allDeps["@rspack/cli"] || allDeps["@rspack/core"]) {
+      build_tool = "rspack";
+      detected_from.push("package.json:@rspack/*");
+    } else if (allDeps["parcel"] || allDeps["parcel-bundler"]) {
+      build_tool = "parcel";
+      detected_from.push("package.json:parcel");
+    } else if (allDeps["webpack"] || allDeps["webpack-cli"]) {
+      build_tool = "webpack";
+      detected_from.push("package.json:webpack");
+    } else if (allDeps["esbuild"]) {
+      build_tool = "esbuild";
+      detected_from.push("package.json:esbuild");
+    } else if (allDeps["turbopack"]) {
+      build_tool = "turbopack";
+      detected_from.push("package.json:turbopack");
+    }
+  }
+
+  // Fallback: look for config files if no dep match
+  if (!build_tool) {
+    const configChecks: [string, string][] = [
+      ["vite.config.ts", "vite"],
+      ["vite.config.js", "vite"],
+      ["vite.config.mjs", "vite"],
+      ["webpack.config.js", "webpack"],
+      ["webpack.config.ts", "webpack"],
+      ["rspack.config.js", "rspack"],
+      ["rsbuild.config.ts", "rsbuild"],
+      [".parcelrc", "parcel"],
+    ];
+    for (const [file, tool] of configChecks) {
+      if (await fileExists(join(projectRoot, file))) {
+        build_tool = tool;
+        detected_from.push(file);
+        break;
+      }
+    }
+  }
+
   return {
     framework,
     framework_version,
@@ -471,6 +528,7 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
     language_version,
     test_runner,
     package_manager,
+    build_tool,
     monorepo,
     detected_from,
   };

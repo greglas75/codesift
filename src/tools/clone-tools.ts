@@ -32,7 +32,7 @@ interface CloneEntry {
 }
 
 const ANALYZABLE_KINDS = new Set<SymbolKind>([
-  "function", "method", "class",
+  "function", "method", "class", "component", "hook",
 ]);
 
 /**
