@@ -648,9 +648,16 @@ export interface RepoSummary {
   symbol_count: number;
 }
 
-export async function listAllRepos(options?: { compact?: boolean }): Promise<RepoMeta[] | RepoSummary[] | string[]> {
+export async function listAllRepos(options?: { compact?: boolean; name_contains?: string }): Promise<RepoMeta[] | RepoSummary[] | string[]> {
   const config = loadConfig();
-  const repos = await listRegistryRepos(config.registryPath);
+  let repos = await listRegistryRepos(config.registryPath);
+
+  // Filter by name substring (case-insensitive)
+  if (options?.name_contains) {
+    const filter = options.name_contains.toLowerCase();
+    repos = repos.filter((r) => r.name.toLowerCase().includes(filter));
+  }
+
   if (options?.compact === false) return repos;
   // Default: ultra-compact — just repo names (agents only need the identifier)
   return repos.map((r) => r.name);

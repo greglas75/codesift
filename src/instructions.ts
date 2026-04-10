@@ -21,6 +21,7 @@ HINT CODES (appear in tool responses — take the suggested action immediately)
   H8(n)       n× get_symbol calls → use assemble_context(level=L1) instead
   H9          question-word text query → use semantic_search or codebase_retrieval(type:semantic)
   H10         50+ tool calls this session → call get_session_snapshot to preserve context
+  H11         no parser for dominant file type → symbol tools empty, use search_text instead
 
 ALWAYS
   repo param auto-resolves from CWD — skip list_repos for single-repo sessions.

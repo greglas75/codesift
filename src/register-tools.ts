@@ -4,7 +4,7 @@ import { z } from "zod";
 /** Boolean that also accepts "true"/"false" strings (LLMs often send strings instead of booleans) */
 const zBool = () => z.union([z.boolean(), z.string().transform((s) => s === "true")]).optional();
 import { wrapTool, registerShortener } from "./server-helpers.js";
-import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "./tools/index-tools.js";
+import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, getCodeIndex } from "./tools/index-tools.js";
 import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
@@ -49,6 +49,41 @@ export const zNum = () =>
       .transform((value) => Number(value))
       .pipe(zFiniteNumber),
   ]).optional();
+
+// ---------------------------------------------------------------------------
+// H11 — warn when symbol tools return empty for repos with text_stub languages
+// ---------------------------------------------------------------------------
+
+const SYMBOL_TOOLS = new Set([
+  "search_symbols", "get_file_outline", "get_symbol", "get_symbols",
+  "find_references", "trace_call_chain", "find_dead_code", "analyze_complexity",
+]);
+
+/**
+ * Check if a repo has text_stub files as dominant language. Returns a hint
+ * string to prepend to empty results, or null if no hint needed.
+ */
+async function checkTextStubHint(repo: string | undefined, toolName: string, resultEmpty: boolean): Promise<string | null> {
+  if (!resultEmpty || !repo || !SYMBOL_TOOLS.has(toolName)) return null;
+
+  const index = await getCodeIndex(repo);
+  if (!index) return null;
+
+  const stubCount = index.files.filter(f => f.language === "text_stub").length;
+  if (stubCount === 0) return null;
+
+  const stubPct = Math.round((stubCount / index.files.length) * 100);
+  if (stubPct < 30) return null; // only warn if text_stub is significant portion
+
+  const stubExts = [...new Set(index.files
+    .filter(f => f.language === "text_stub")
+    .map(f => "." + f.path.split(".").pop()))].slice(0, 3).join(", ");
+
+  return `⚡H11 No parser for ${stubExts} files (${stubPct}% of repo). Symbol tools return empty.\n` +
+    `  → search_text(query) works on ALL files (uses ripgrep, not parser)\n` +
+    `  → get_file_tree shows file listing\n` +
+    `  → Only symbol-based tools (this one) need a parser to return results.\n`;
+}
 
 // ---------------------------------------------------------------------------
 // Registered tool handles — populated by registerTools(), used by describe_tools reveal
@@ -266,8 +301,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "List indexed repos. Only needed for multi-repo discovery — single-repo tools auto-resolve from CWD. Set compact=false for full metadata.",
     schema: {
       compact: zBool().describe("true=names only (default), false=full metadata"),
+      name_contains: z.string().optional().describe("Filter repos by name substring (case-insensitive). E.g. 'tgm' matches 'local/tgm-panel'"),
     },
-    handler: (args) => listAllRepos({ compact: (args.compact as boolean | undefined) ?? true }),
+    handler: (args) => {
+      const opts: { compact?: boolean; name_contains?: string } = {
+        compact: (args.compact as boolean | undefined) ?? true,
+      };
+      if (args.name_contains) opts.name_contains = args.name_contains as string;
+      return listAllRepos(opts);
+    },
   },
   {
     name: "invalidate_cache",
@@ -321,7 +363,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         token_budget: args.token_budget as number | undefined,
         rerank: args.rerank as boolean | undefined,
       });
-      return formatSearchSymbols(results);
+      const output = formatSearchSymbols(results);
+      const hint = await checkTextStubHint(args.repo as string, "search_symbols", results.length === 0);
+      return hint ? hint + output : output;
     },
   },
   {
@@ -432,7 +476,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args) => {
       const result = await getFileOutline(args.repo as string, args.file_path as string);
-      return formatFileOutline(result as never);
+      const output = formatFileOutline(result as never);
+      const isEmpty = !result || (Array.isArray(result) && result.length === 0);
+      const hint = await checkTextStubHint(args.repo as string, "get_file_outline", isEmpty);
+      return hint ? hint + output : output;
     },
   },
   {
