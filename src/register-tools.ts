@@ -175,23 +175,46 @@ export type ToolCategory =
   | "cross-repo"
   | "meta";
 
-/** Tools always registered with full schema — top 10 by usage (91% of calls) + essentials */
+/** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
 const CORE_TOOL_NAMES = new Set([
-  "search_text",           // #1: 1536 calls, 36%
-  "codebase_retrieval",    // #2: 510 calls, 12%
-  "get_file_outline",      // #3: 342 calls, 8%
-  "search_symbols",        // #4: 321 calls, 8%
-  "list_repos",            // #5: 223 calls, 5%
-  "get_file_tree",         // #6: 218 calls, 5%
-  "index_file",            // #7: 163 calls, 4% — lightweight schema
-  "get_symbol",            // #8: 135 calls, 3%
-  "index_conversations",   // #9: 125 calls, 3% — lightweight schema
-  "search_patterns",       // #10: 122 calls, 3%
-  "index_folder",          // essential: repo onboarding
-  "discover_tools",        // meta: discovers deferred tools
-  "get_session_snapshot",  // session: compaction survival (core — always visible)
-  "analyze_project",       // project profile: stack, conventions, file classifications
-  "get_extractor_versions", // cache invalidation for project profile
+  // --- Top 10 by usage (91% of calls) ---
+  "search_text",             // #1: 1841 calls
+  "codebase_retrieval",      // #2: 574 calls
+  "get_file_outline",        // #3: 351 calls
+  "search_symbols",          // #4: 332 calls
+  "list_repos",              // #5: 292 calls
+  "get_file_tree",           // #6: 268 calls
+  "index_file",              // #7: 209 calls
+  "get_symbol",              // #8: 138 calls
+  "search_patterns",         // #9: 135 calls
+  "index_conversations",     // #10: 127 calls
+  // --- Direct-use: agents call these without discovery ---
+  "assemble_context",        // 64 calls, 21 sessions, 100% direct
+  "get_symbols",             // 69 calls — batch symbol reads
+  "find_references",         // 39 calls — symbol usage
+  "find_and_show",           // 55 calls — symbol + refs
+  "search_conversations",    // 37 calls, 100% direct
+  "get_context_bundle",      // 36 calls, 19 sessions, 100% direct
+  "analyze_complexity",      // 33 calls, 28 sessions
+  "detect_communities",      // 32 calls, 24 sessions
+  "search_all_conversations",// 27 calls, 100% direct
+  "analyze_hotspots",        // 22 calls, 18 sessions
+  "trace_call_chain",        // 15 calls, 100% direct
+  "suggest_queries",         // 13 calls, 13 sessions
+  "usage_stats",             // 11 calls, 100% direct
+  "get_knowledge_map",       // 10 calls, 100% direct
+  "get_repo_outline",        // 9 calls, 100% direct
+  "trace_route",             // 9 calls, 100% direct
+  "get_type_info",           // 8 calls, 100% direct
+  "impact_analysis",         // 4 calls, 100% direct
+  "go_to_definition",        // 4 calls, 100% direct
+  // --- Essential infrastructure ---
+  "index_folder",            // repo onboarding
+  "discover_tools",          // meta: discovers remaining hidden tools
+  "describe_tools",          // meta: full schema for hidden tools
+  "get_session_snapshot",    // session: compaction survival
+  "analyze_project",         // project profile
+  "get_extractor_versions",  // cache invalidation
 ]);
 
 /** Get all tool definitions (exported for testing) */

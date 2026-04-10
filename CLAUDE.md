@@ -18,7 +18,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 
 ## Tool Discovery (NEW — agents read this)
 
-Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 14 core tools are visible.
+Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 35 core tools are visible.
 To find hidden tools: `discover_tools(query="dead code")` → keyword search.
 To get full schema: `describe_tools(names=["find_dead_code"])` → returns params with types.
 To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
@@ -57,7 +57,7 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 ## Architecture
 
-**66 MCP tools** (14 core + 52 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context
+**66 MCP tools** (35 core + 31 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context
 
 **src/tools/** (26 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
 **src/lsp/** (4 files) — LSP bridge (6 languages)

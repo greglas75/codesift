@@ -185,9 +185,9 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (66 total — 14 core + 52 discoverable)
+## MCP tools (66 total — 35 core + 31 discoverable)
 
-When running as an MCP server, CodeSift exposes 14 core tools directly. The remaining 52 tools are discoverable via `discover_tools` and `describe_tools` to minimize system prompt token overhead.
+When running as an MCP server, CodeSift exposes 35 core tools directly. The remaining 31 niche tools are discoverable via `discover_tools` and `describe_tools`.
 
 | Category | Tools |
 |----------|-------|
@@ -315,7 +315,7 @@ Custom regex is also supported: `codesift patterns local/project "Promise<.*any>
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 66 tools to AI agents (14 core + 52 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 66 tools to AI agents (35 core + 31 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
