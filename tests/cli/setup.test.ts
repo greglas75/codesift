@@ -743,13 +743,16 @@ describe("setup", () => {
   // -------------------------------------------------------------------------
 
   describe("setupCodexHooks", () => {
-    it("creates hooks.json with Stop hook when none exists", async () => {
+    it("creates hooks.json with PreToolUse and Stop hooks when none exists", async () => {
       await setupCodexHooks();
 
       const hooksPath = join(tempHome, ".codex", "hooks.json");
       expect(existsSync(hooksPath)).toBe(true);
 
       const content = JSON.parse(await readFile(hooksPath, "utf-8"));
+      expect(content.hooks.PreToolUse).toHaveLength(1);
+      expect(content.hooks.PreToolUse[0].matcher).toBe("Bash");
+      expect(content.hooks.PreToolUse[0].hooks[0].command).toContain("codesift precheck-bash --stdin");
       expect(content.hooks.Stop).toHaveLength(1);
       expect(content.hooks.Stop[0].hooks[0].command).toContain("codesift index-conversations");
     });
@@ -760,6 +763,7 @@ describe("setup", () => {
 
       const hooksPath = join(tempHome, ".codex", "hooks.json");
       const content = JSON.parse(await readFile(hooksPath, "utf-8"));
+      expect(content.hooks.PreToolUse).toHaveLength(1);
       expect(content.hooks.Stop).toHaveLength(1);
     });
 
@@ -775,8 +779,10 @@ describe("setup", () => {
       await setupCodexHooks();
 
       const content = JSON.parse(await readFile(join(configDir, "hooks.json"), "utf-8"));
-      expect(content.hooks.PreToolUse).toHaveLength(1);
+      // Existing user hook preserved + codesift PreToolUse added
+      expect(content.hooks.PreToolUse).toHaveLength(2);
       expect(content.hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
+      expect(content.hooks.PreToolUse[1].hooks[0].command).toContain("codesift precheck-bash");
       expect(content.hooks.Stop).toHaveLength(1);
     });
   });

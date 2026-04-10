@@ -386,8 +386,12 @@ export async function setupClaudeHooks(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Codex CLI hooks — ~/.codex/hooks.json
 // ---------------------------------------------------------------------------
-// Codex only has the Bash tool — Read-redirect and PostToolUse don't apply.
-// No PreCompact event. Install: Stop (conversation indexing) only.
+// Codex PreToolUse/PostToolUse only intercept the Bash tool (not Read/Write/MCP).
+// No PreCompact event. Codex passes hook input via stdin (like Gemini).
+//
+// Hooks installed:
+//   PreToolUse (Bash) → precheck-bash: redirect find/grep to CodeSift
+//   Stop              → index-conversations: index session on end
 // ---------------------------------------------------------------------------
 
 export async function setupCodexHooks(): Promise<void> {
@@ -397,6 +401,18 @@ export async function setupCodexHooks(): Promise<void> {
 
   const { root, hooks } = await loadHooksSection(hooksPath);
 
+  // PreToolUse: redirect find/grep bash commands to CodeSift tools
+  if (!Array.isArray(hooks["PreToolUse"])) {
+    hooks["PreToolUse"] = [];
+  }
+  if (!hasCodesiftHook(hooks["PreToolUse"])) {
+    hooks["PreToolUse"].push({
+      matcher: "Bash",
+      hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }],
+    });
+  }
+
+  // Stop: index conversations on session end
   if (!Array.isArray(hooks["Stop"])) {
     hooks["Stop"] = [];
   }
