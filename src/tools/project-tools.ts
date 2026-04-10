@@ -10,7 +10,7 @@ import { readFile, writeFile, access, readdir, mkdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
-import type { CodeIndex } from "../types.js";
+import type { CodeIndex, CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Versioning — used by get_extractor_versions
@@ -1195,12 +1195,22 @@ export interface ReactConventions {
   state_management: string | null; // redux, zustand, context, jotai, etc.
   routing: string | null; // react-router, tanstack-router, etc.
   ui_library: string | null; // mui, chakra, shadcn, etc.
+  /** File-path-based counts (coarse, matches /pages/, /components/, /hooks/ dirs) */
   component_count: { pages: number; components: number; hooks: number };
+  /** Actual count from symbol kinds (requires Wave 1 extractor) */
+  actual_component_count: number;
+  /** Actual count from symbol kinds */
+  actual_hook_count: number;
+  /** Top hooks called across all components, sorted by usage */
+  hook_usage: { name: string; count: number }[];
+  /** Count of components wrapped in React.memo/forwardRef/lazy */
+  component_patterns: { memo: number; forwardRef: number; lazy: number };
 }
 
 export function extractReactConventions(
   files: { path: string }[],
   deps: Record<string, string>,
+  symbols?: CodeSymbol[],
 ): ReactConventions {
   // State management
   let state_management: string | null = null;
@@ -1224,7 +1234,7 @@ export function extractReactConventions(
   else if (deps["@radix-ui/react-dialog"] || deps["@radix-ui/themes"]) ui_library = "radix";
   else if (deps["tailwindcss"]) ui_library = "tailwind";
 
-  // Component counts
+  // File-path-based component counts (legacy, coarse)
   let pages = 0, components = 0, hooks = 0;
   for (const f of files) {
     if (/\/pages?\//.test(f.path) && /\.(tsx|jsx)$/.test(f.path)) pages++;
@@ -1232,11 +1242,48 @@ export function extractReactConventions(
     if (/\/hooks?\//.test(f.path) || /\.hook\.(ts|js)$/.test(f.path)) hooks++;
   }
 
+  // Symbol-based semantic counts (requires Wave 1 extractor)
+  let actual_component_count = 0;
+  let actual_hook_count = 0;
+  const hookUsageMap = new Map<string, number>();
+  const component_patterns = { memo: 0, forwardRef: 0, lazy: 0 };
+
+  if (symbols) {
+    for (const sym of symbols) {
+      if (sym.kind === "component") {
+        actual_component_count++;
+        if (sym.source) {
+          // Detect wrapper patterns in component source
+          if (/\b(?:React\.)?memo\s*\(/.test(sym.source)) component_patterns.memo++;
+          if (/\b(?:React\.)?forwardRef\s*\(/.test(sym.source)) component_patterns.forwardRef++;
+          if (/\b(?:React\.)?lazy\s*\(/.test(sym.source)) component_patterns.lazy++;
+          // Count hook calls inside this component
+          const hookCalls = sym.source.matchAll(/\b(use[A-Z]\w*)\s*\(/g);
+          for (const m of hookCalls) {
+            const hookName = m[1]!;
+            hookUsageMap.set(hookName, (hookUsageMap.get(hookName) ?? 0) + 1);
+          }
+        }
+      } else if (sym.kind === "hook") {
+        actual_hook_count++;
+      }
+    }
+  }
+
+  const hook_usage = [...hookUsageMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([name, count]) => ({ name, count }));
+
   return {
     state_management,
     routing,
     ui_library,
     component_count: { pages, components, hooks },
+    actual_component_count,
+    actual_hook_count,
+    hook_usage,
+    component_patterns,
   };
 }
 
@@ -1845,7 +1892,7 @@ export async function analyzeProject(
     } else if (fw === "react") {
       const pkg = await readJson(join(projectRoot, "package.json"));
       const allDeps = { ...pkg?.dependencies, ...pkg?.devDependencies };
-      reactConventions = extractReactConventions(index.files, allDeps);
+      reactConventions = extractReactConventions(index.files, allDeps, index.symbols);
     } else if (fw === "fastapi" || fw === "django" || fw === "flask") {
       pythonConventions = extractPythonConventions(index.files);
     } else if (fw === "yii2") {

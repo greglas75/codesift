@@ -19,10 +19,40 @@ export interface PatternResult {
 }
 
 // Built-in patterns inspired by CQ checklist + common React/TS anti-patterns
-const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> = {
+// Exported for direct regex testing in unit tests.
+export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> = {
   "useEffect-no-cleanup": {
     regex: /useEffect\s*\(\s*(?:async\s*)?\(\)\s*=>\s*\{(?:(?!return\s*\(\s*\)\s*=>|return\s+\(\)\s*=>|return\s*\(\s*\)\s*\{|return\s+function)[\s\S])*\}\s*,/,
     description: "useEffect without cleanup return — potential memory leak (CQ22)",
+  },
+  // --- React anti-patterns (Wave 2) ---
+  "hook-in-condition": {
+    regex: /\b(?:if|for|while|switch)\s*\([^)]*\)\s*\{[^}]*\buse[A-Z]\w*\s*\(/,
+    description: "React hook called inside if/for/while/switch — violates Rule of Hooks",
+  },
+  "useEffect-async": {
+    regex: /useEffect\s*\(\s*async\s/,
+    description: "async function directly in useEffect — use inner async wrapper (CQ22)",
+  },
+  "useEffect-object-dep": {
+    regex: /useEffect\s*\([\s\S]*?,\s*\[[^\]]*[{[]/,
+    description: "Object/array literal in useEffect dependency array — causes infinite re-renders",
+  },
+  "missing-display-name": {
+    regex: /(?:React\.)?(?:memo|forwardRef)\s*\((?:(?!displayName)[\s\S]){0,500}$/,
+    description: "React.memo/forwardRef without displayName nearby — harder to debug in DevTools",
+  },
+  "index-as-key": {
+    regex: /\.map\s*\(\s*\(\s*\w+\s*,\s*(index|idx|i)\b[^)]*\)\s*=>[\s\S]{0,400}?key\s*=\s*\{?\s*\1\b/,
+    description: "Array index used as React key — causes incorrect reconciliation on reorder",
+  },
+  "inline-handler": {
+    regex: /\bon[A-Z]\w*\s*=\s*\{\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>/,
+    description: "Inline arrow function in JSX event handler — creates new reference every render (memoization killer)",
+  },
+  "conditional-render-hook": {
+    regex: /\breturn\s+[^;{]*;\s*\n[\s\S]*?\buse[A-Z]\w*\s*\(/,
+    description: "React hook called after early return — violates Rule of Hooks",
   },
   "empty-catch": {
     regex: /catch\s*\([^)]*\)\s*\{\s*\}/,

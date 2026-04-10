@@ -40,6 +40,11 @@ export interface ComplexityInfo {
   cyclomatic_complexity: number;
   max_nesting_depth: number;
   branches: number;
+  // React-specific metrics (only populated for kind === "component" or "hook")
+  hook_count?: number;       // total use*() calls
+  state_count?: number;      // useState() calls
+  effect_count?: number;     // useEffect() calls
+  jsx_depth?: number;        // max nesting of <Component>
 }
 
 export interface ComplexityResult {
@@ -68,6 +73,50 @@ function countBranches(source: string): number {
     }
   }
   return branches;
+}
+
+/**
+ * Count React hook calls in source text.
+ * Returns { total, state, effect } for useState, useEffect, and generic use*() calls.
+ */
+function countReactHooks(source: string): { total: number; state: number; effect: number } {
+  let total = 0;
+  let state = 0;
+  let effect = 0;
+  const pattern = /\b(use[A-Z]\w*)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(source)) !== null) {
+    const name = m[1]!;
+    total++;
+    if (name === "useState") state++;
+    else if (name === "useEffect") effect++;
+  }
+  return { total, state, effect };
+}
+
+/**
+ * Estimate max JSX nesting depth by tracking < and </.
+ * Counts opening tags (<PascalCase or <lowercase) minus self-closing.
+ * Heuristic: scan linearly and track stack depth.
+ */
+function estimateJsxDepth(source: string): number {
+  let maxDepth = 0;
+  let depth = 0;
+  // Match: <TagName ...>  or  </TagName>  or  <TagName .../>
+  const tagPattern = /<(\/?)([A-Za-z][\w.]*)[^>]*?(\/?)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagPattern.exec(source)) !== null) {
+    const closing = m[1] === "/";
+    const selfClosing = m[3] === "/";
+    if (closing) {
+      if (depth > 0) depth--;
+    } else if (!selfClosing) {
+      depth++;
+      if (depth > maxDepth) maxDepth = depth;
+    }
+    // self-closing: no change to depth
+  }
+  return maxDepth;
 }
 
 /**
@@ -143,7 +192,7 @@ export async function analyzeComplexity(
     const nesting = estimateMaxNesting(source);
 
     if (complexity >= minComplexity) {
-      results.push({
+      const info: ComplexityInfo = {
         name: sym.name,
         kind: sym.kind,
         file: sym.file,
@@ -153,7 +202,20 @@ export async function analyzeComplexity(
         cyclomatic_complexity: complexity,
         max_nesting_depth: nesting,
         branches,
-      });
+      };
+
+      // React-specific metrics for components and hooks
+      if (sym.kind === "component" || sym.kind === "hook") {
+        const hooks = countReactHooks(source);
+        info.hook_count = hooks.total;
+        info.state_count = hooks.state;
+        info.effect_count = hooks.effect;
+        if (sym.kind === "component") {
+          info.jsx_depth = estimateJsxDepth(source);
+        }
+      }
+
+      results.push(info);
     }
   }
 
