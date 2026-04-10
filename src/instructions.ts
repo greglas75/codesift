@@ -20,6 +20,7 @@ HINT CODES (appear in tool responses — take the suggested action immediately)
   H7          get_symbol after search_symbols → use get_context_bundle instead
   H8(n)       n× get_symbol calls → use assemble_context(level=L1) instead
   H9          question-word text query → use semantic_search or codebase_retrieval(type:semantic)
+  H10         50+ tool calls this session → call get_session_snapshot to preserve context
 
 ALWAYS
   repo param auto-resolves from CWD — skip list_repos for single-repo sessions.

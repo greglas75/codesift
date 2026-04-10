@@ -136,6 +136,7 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 | `H7` | `get_symbol` after `search_symbols` | Use `get_context_bundle` |
 | `H8(n)` | n× `get_symbol` calls | Use `assemble_context(level='L1')` |
 | `H9` | Question-word text query | Use semantic search |
+| `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context before compaction |
 
 ## ALWAYS
 
