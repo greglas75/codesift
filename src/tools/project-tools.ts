@@ -43,10 +43,41 @@ export interface ProjectProfile {
   compatible_with: string;
   status: "complete" | "partial" | "failed";
 
+  identity?: ProjectIdentity;
   stack?: StackInfo;
   file_classifications?: FileClassifications;
   conventions?: Conventions;
+  dependency_graph?: DependencyGraph;
+  test_conventions?: TestConventions;
+  known_gotchas?: KnownGotchas;
   generation_metadata: GenerationMetadata;
+}
+
+export interface ProjectIdentity {
+  project_name: string;
+  project_type: "monorepo" | "single";
+  workspace_root: string;
+  git_remote: string | null;
+}
+
+export interface DependencyGraph {
+  entry_points: string[];
+  hub_modules: { path: string; imported_by_count: number }[];
+  leaf_modules: string[];
+  orphan_files: string[];
+}
+
+export interface TestConventions {
+  mock_style: string | null;
+  setup_files: string[];
+  mock_patterns: { name: string; import_from: string; usage: string }[];
+  assertion_library: string;
+  file_patterns: string[];
+  common_mocks: string[];
+}
+
+export interface KnownGotchas {
+  auto_detected: { gotcha: string; evidence: string[]; severity: "high" | "medium" | "low" }[];
 }
 
 export interface StackInfo {
@@ -1256,6 +1287,238 @@ export function extractPhpConventions(
 }
 
 // ---------------------------------------------------------------------------
+// Identity Extractor
+// ---------------------------------------------------------------------------
+
+async function extractIdentity(projectRoot: string): Promise<ProjectIdentity> {
+  const pkg = await readJson(join(projectRoot, "package.json"));
+  const projectName = pkg?.name ?? projectRoot.split("/").pop() ?? "unknown";
+
+  // Detect monorepo
+  const isMonorepo = !!(pkg?.workspaces || await fileExists(join(projectRoot, "pnpm-workspace.yaml")));
+
+  // Git remote
+  let gitRemote: string | null = null;
+  try {
+    gitRemote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+      cwd: projectRoot, timeout: 3000,
+    }).toString().trim().replace(/\.git$/, "").replace(/^git@github\.com:/, "github.com/") || null;
+  } catch { /* not a git repo or no remote */ }
+
+  return {
+    project_name: projectName,
+    project_type: isMonorepo ? "monorepo" : "single",
+    workspace_root: projectRoot,
+    git_remote: gitRemote,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Dependency Graph Extractor
+// ---------------------------------------------------------------------------
+
+function extractDependencyGraph(index: CodeIndex): DependencyGraph {
+  // Entry points: files matching app/main/server/index at shallow depth
+  const entry_points: string[] = [];
+  const importCount = new Map<string, number>();
+
+  // Count imports per file from symbols
+  for (const sym of index.symbols) {
+    if (sym.source) {
+      const importMatches = sym.source.match(/from\s+['"]([^'"]+)['"]/g);
+      if (importMatches) {
+        for (const m of importMatches) {
+          const path = m.replace(/from\s+['"]/, "").replace(/['"]$/, "");
+          // Resolve relative imports to file paths
+          if (path.startsWith(".")) {
+            const resolved = join(sym.file.replace(/\/[^/]+$/, ""), path).replace(/\.(js|ts|tsx|jsx)$/, "");
+            importCount.set(resolved, (importCount.get(resolved) ?? 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
+  // Find entry points
+  for (const f of index.files) {
+    if (/\/(app|main|server)\.(ts|js|tsx)$/.test(f.path)) entry_points.push(f.path);
+    if (/^(src\/)?index\.(ts|js)$/.test(f.path)) entry_points.push(f.path);
+  }
+
+  // Hub modules: files imported by many others
+  const hub_modules = [...importCount.entries()]
+    .filter(([, count]) => count >= 5)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([path, count]) => ({ path, imported_by_count: count }));
+
+  // Leaf modules: files that import others but are not imported themselves
+  const importedFiles = new Set(importCount.keys());
+  const leaf_modules = index.files
+    .filter((f) => !importedFiles.has(f.path.replace(/\.(ts|js|tsx|jsx)$/, "")) && !/(test|spec)\.(ts|js)$/.test(f.path))
+    .slice(0, 30)
+    .map((f) => f.path);
+
+  // Orphan files: files with no imports AND not imported
+  const orphan_files = index.files
+    .filter((f) => {
+      const base = f.path.replace(/\.(ts|js|tsx|jsx)$/, "");
+      return !importedFiles.has(base) && f.symbol_count === 0 && !/(test|spec)\.(ts|js)$/.test(f.path);
+    })
+    .slice(0, 20)
+    .map((f) => f.path);
+
+  return { entry_points, hub_modules, leaf_modules, orphan_files };
+}
+
+// ---------------------------------------------------------------------------
+// Test Conventions Extractor
+// ---------------------------------------------------------------------------
+
+async function extractTestConventions(
+  projectRoot: string,
+  index: CodeIndex,
+): Promise<TestConventions> {
+  const testFiles = index.files.filter((f) => /(test|spec)\.(ts|js|tsx|jsx)$/.test(f.path));
+  const file_patterns = [...new Set(testFiles.map((f) => {
+    if (f.path.includes(".test.")) return "*.test.*";
+    if (f.path.includes(".spec.")) return "*.spec.*";
+    return "*.test.*";
+  }))];
+
+  // Find setup files
+  const setup_files: string[] = [];
+  for (const f of index.files) {
+    if (/setup\.(ts|js)$/.test(f.path) && !/(node_modules|dist|\.next)/.test(f.path)) {
+      setup_files.push(f.path);
+    }
+    if (/vitest\.setup\.(ts|js)$/.test(f.path)) setup_files.push(f.path);
+    if (/jest\.setup\.(ts|js)$/.test(f.path)) setup_files.push(f.path);
+  }
+
+  // Detect mock style and common patterns by reading a few test files
+  let mock_style: string | null = null;
+  const mock_patterns: TestConventions["mock_patterns"] = [];
+  const common_mocks_set = new Set<string>();
+
+  // Read up to 5 test files to detect patterns
+  const sampleTests = testFiles
+    .filter((f) => f.path.includes("service") || f.path.includes("controller") || f.path.includes("guard"))
+    .slice(0, 5);
+
+  for (const tf of sampleTests) {
+    try {
+      const content = await readFile(join(projectRoot, tf.path), "utf-8");
+
+      // Mock style
+      if (!mock_style) {
+        if (content.includes("vi.mock")) mock_style = "vi.mock";
+        else if (content.includes("jest.mock")) mock_style = "jest.mock";
+        else if (content.includes("sinon")) mock_style = "sinon";
+      }
+
+      // Common mock patterns — extract vi.mock/jest.mock calls
+      const mockCalls = content.match(/(?:vi|jest)\.mock\s*\(\s*['"]([^'"]+)['"]/g);
+      if (mockCalls) {
+        for (const mc of mockCalls) {
+          const path = mc.match(/['"]([^'"]+)['"]/)?.[1];
+          if (path) common_mocks_set.add(path);
+        }
+      }
+
+      // Detect specific patterns
+      if (content.includes("mockPrismaClient") || content.includes("prismaMock")) {
+        if (!mock_patterns.some((p) => p.name === "prisma")) {
+          mock_patterns.push({ name: "prisma", import_from: "setup or inline", usage: "mockPrismaClient / prismaMock" });
+        }
+      }
+      if (content.includes("mockDeep") || content.includes("DeepMockProxy")) {
+        if (!mock_patterns.some((p) => p.name === "deep-mock")) {
+          mock_patterns.push({ name: "deep-mock", import_from: "vitest-mock-extended or jest-mock-extended", usage: "mockDeep<Type>()" });
+        }
+      }
+      if (content.includes("$transaction") && content.includes("mock")) {
+        if (!mock_patterns.some((p) => p.name === "transaction")) {
+          mock_patterns.push({ name: "transaction", import_from: "prisma mock", usage: "$transaction mock for DB operations" });
+        }
+      }
+    } catch { /* skip unreadable files */ }
+  }
+
+  // Also check setup files for shared patterns
+  for (const sf of setup_files) {
+    try {
+      const content = await readFile(join(projectRoot, sf), "utf-8");
+      const exports = content.match(/export\s+(?:const|function|class)\s+(\w+)/g);
+      if (exports) {
+        for (const exp of exports) {
+          const name = exp.match(/(\w+)$/)?.[1];
+          if (name && /mock|stub|fake|fixture|factory/i.test(name)) {
+            mock_patterns.push({ name, import_from: sf, usage: "shared test helper" });
+          }
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  // Determine assertion library from stack
+  const pkg = await readJson(join(projectRoot, "package.json"));
+  const devDeps = pkg?.devDependencies ?? {};
+  let assertion_library = "expect"; // default
+  if (devDeps["vitest"]) assertion_library = "vitest/expect";
+  else if (devDeps["jest"]) assertion_library = "jest/expect";
+  else if (devDeps["chai"]) assertion_library = "chai";
+
+  return {
+    mock_style,
+    setup_files,
+    mock_patterns: mock_patterns.slice(0, 10),
+    assertion_library,
+    file_patterns,
+    common_mocks: [...common_mocks_set].slice(0, 20),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Known Gotchas Extractor
+// ---------------------------------------------------------------------------
+
+function extractKnownGotchas(index: CodeIndex): KnownGotchas {
+  const gotchas: KnownGotchas["auto_detected"] = [];
+
+  // Check for common gotcha patterns in symbols
+  for (const sym of index.symbols) {
+    if (!sym.source) continue;
+
+    // as any casts in production code (not tests)
+    if (/(test|spec)\.(ts|js)$/.test(sym.file)) continue;
+
+    // Detect patterns that are known gotchas
+    if (/process\.env\.\w+/.test(sym.source) && !/config|env\.schema|validate/.test(sym.file)) {
+      if (!gotchas.some((g) => g.gotcha.includes("scattered process.env"))) {
+        gotchas.push({
+          gotcha: "scattered process.env access outside config module",
+          evidence: [sym.file],
+          severity: "medium",
+        });
+      }
+    }
+  }
+
+  // Check for common project-level gotchas
+  const hasEslintIgnore = index.files.some((f) => f.path.includes(".eslintignore"));
+  if (hasEslintIgnore) {
+    gotchas.push({
+      gotcha: ".eslintignore present — some files bypass linting",
+      evidence: [".eslintignore"],
+      severity: "low",
+    });
+  }
+
+  return { auto_detected: gotchas.slice(0, 10) };
+}
+
+// ---------------------------------------------------------------------------
 // Dependency Health
 // ---------------------------------------------------------------------------
 
@@ -1385,11 +1648,23 @@ export async function analyzeProject(
   }
   files_analyzed = index.file_count;
 
+  // Step 0: Identity
+  const identity = await extractIdentity(projectRoot);
+
   // Step 1: Stack detection
   const stack = await detectStack(projectRoot);
 
   // Step 2: File classification
   const file_classifications = classifyFiles(index);
+
+  // Step 2b: Dependency graph
+  const dependency_graph = extractDependencyGraph(index);
+
+  // Step 2c: Test conventions
+  const test_conventions = await extractTestConventions(projectRoot, index);
+
+  // Step 2d: Known gotchas
+  const known_gotchas = extractKnownGotchas(index);
 
   // Step 3: Framework-specific convention extraction
   let conventions: Conventions | undefined;
@@ -1460,8 +1735,12 @@ export async function analyzeProject(
     },
     compatible_with: ">=1.0, <2.0",
     status,
+    identity,
     stack,
     file_classifications,
+    dependency_graph,
+    test_conventions,
+    known_gotchas,
     ...(conventions ? { conventions } : {}),
     ...(nestConventions ? { nest_conventions: nestConventions } : {}),
     ...(nextConventions ? { next_conventions: nextConventions } : {}),
