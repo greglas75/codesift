@@ -9,7 +9,7 @@ import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
-import { traceComponentTree, analyzeHooks } from "./tools/react-tools.js";
+import { traceComponentTree, analyzeHooks, analyzeRenders } from "./tools/react-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
 import { detectCommunities } from "./tools/community-tools.js";
@@ -761,6 +761,29 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args) => {
       const result = await analyzeHooks(args.repo as string, {
+        component_name: args.component_name as string | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+        max_entries: args.max_entries as number | undefined,
+      });
+      return JSON.stringify(result, null, 2);
+    },
+  },
+
+  {
+    name: "analyze_renders",
+    category: "analysis",
+    searchHint: "react render performance inline props memo useCallback useMemo re-render risk optimization",
+    description: "Static re-render risk analysis for React components. Detects inline object/array/function props in JSX (new reference every render), unstable default values (= [] or = {}), and components missing React.memo that render children. Returns per-component risk level (low/medium/high) with actionable suggestions.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      component_name: z.string().optional().describe("Filter to single component (default: all)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      include_tests: zBool().describe("Include test files (default: false)"),
+      max_entries: zNum().describe("Max entries to return (default: 100)"),
+    },
+    handler: async (args) => {
+      const result = await analyzeRenders(args.repo as string, {
         component_name: args.component_name as string | undefined,
         file_pattern: args.file_pattern as string | undefined,
         include_tests: args.include_tests as boolean | undefined,

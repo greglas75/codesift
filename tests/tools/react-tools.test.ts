@@ -5,6 +5,7 @@ import {
   buildComponentTree,
   extractHookCalls,
   findRuleOfHooksViolations,
+  findRenderRisks,
   REACT_STDLIB_HOOKS,
 } from "../../src/tools/react-tools.js";
 import { isFrameworkEntryPoint } from "../../src/utils/framework-detect.js";
@@ -272,5 +273,56 @@ describe("isFrameworkEntryPoint — React", () => {
 
   it("does not mark component files outside routes as entry points", () => {
     expect(isFrameworkEntryPoint({ name: "Button", file: "src/components/Button.tsx" }, reactFrameworks)).toBe(false);
+  });
+});
+
+describe("findRenderRisks", () => {
+  it("detects inline object prop", () => {
+    const source = `function Foo() {
+  return <Bar style={{ color: "red" }}/>;
+}`;
+    const risks = findRenderRisks(source);
+    expect(risks.some((r) => r.type === "inline-object")).toBe(true);
+  });
+
+  it("detects inline array prop", () => {
+    const source = `function Foo() {
+  return <Bar items={[1, 2, 3]}/>;
+}`;
+    const risks = findRenderRisks(source);
+    expect(risks.some((r) => r.type === "inline-array")).toBe(true);
+  });
+
+  it("detects inline function in event handler", () => {
+    const source = `function Foo() {
+  return <button onClick={() => doThing()}>click</button>;
+}`;
+    const risks = findRenderRisks(source);
+    expect(risks.some((r) => r.type === "inline-function")).toBe(true);
+  });
+
+  it("detects unstable default value = []", () => {
+    const source = `function Foo({ items = [], config = {} }) {
+  return <div>{items.length}</div>;
+}`;
+    const risks = findRenderRisks(source);
+    expect(risks.filter((r) => r.type === "unstable-default").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns empty for clean component", () => {
+    const source = `function Foo({ name }) {
+  const handleClick = useCallback(() => {}, []);
+  return <div onClick={handleClick}>{name}</div>;
+}`;
+    const risks = findRenderRisks(source);
+    expect(risks).toEqual([]);
+  });
+
+  it("includes suggestion text", () => {
+    const source = `function Foo() {
+  return <Bar data={{ x: 1 }}/>;
+}`;
+    const risks = findRenderRisks(source);
+    expect(risks[0]?.suggestion).toMatch(/useMemo|const/);
   });
 });

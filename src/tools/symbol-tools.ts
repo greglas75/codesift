@@ -542,6 +542,8 @@ function extractImportLines(source: string): string[] {
 }
 
 export interface ReactContext {
+  /** Props type name extracted from the component's parameter type annotation */
+  props_type: string | null;
   /** React hooks called inside this component (use*() patterns) */
   hooks_used: Array<{ name: string; is_stdlib: boolean }>;
   /** Child components rendered via JSX (<PascalCase>) */
@@ -670,7 +672,16 @@ function buildReactContext(
   else if (/\b(?:React\.)?forwardRef\s*\(/.test(source)) wrapper = "forwardRef";
   else if (/\b(?:React\.)?lazy\s*\(/.test(source)) wrapper = "lazy";
 
-  return { hooks_used, child_components, parent_components, wrapper };
+  // Extract props type from signature: (props: MyProps) or ({ a, b }: Props)
+  let props_type: string | null = null;
+  const sig = component.signature ?? "";
+  // Pattern: (props: TypeName) or (arg: TypeName) or ({ ... }: TypeName)
+  const propsMatch = sig.match(/\(\s*(?:\{[^}]*\}|\w+)\s*:\s*([A-Z]\w*)/);
+  if (propsMatch) {
+    props_type = propsMatch[1]!;
+  }
+
+  return { props_type, hooks_used, child_components, parent_components, wrapper };
 }
 
 /**

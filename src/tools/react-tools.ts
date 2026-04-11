@@ -4,12 +4,13 @@
  * - traceComponentTree: BFS component composition tree (which components
  *   render which, via JSX usage)
  * - analyzeHooks: hook inventory + Rule of Hooks violation detection
+ * - analyzeRenders: static re-render risk analysis (inline props, missing memo)
  */
 import { getCodeIndex } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, CallNode } from "../types.js";
 
-export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, findRuleOfHooksViolations };
+export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, findRuleOfHooksViolations, findRenderRisks };
 
 // ── Limits (mirror graph-tools.ts) ──────────────────────────
 const MAX_TREE_NODES = 500;
@@ -395,5 +396,223 @@ export async function analyzeHooks(
     total_custom_hooks: totalHooks,
     hook_usage,
     violations_count: violationsCount,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// analyze_renders — static re-render risk analysis
+// ─────────────────────────────────────────────────────────────
+
+export interface RenderRisk {
+  type: "inline-object" | "inline-array" | "inline-function" | "unstable-default" | "missing-memo";
+  line: number;        // 1-based within the component source
+  context: string;     // trimmed matching line
+  suggestion: string;
+}
+
+export interface RenderAnalysisEntry {
+  name: string;
+  file: string;
+  start_line: number;
+  is_memoized: boolean;       // wrapped in React.memo
+  risk_count: number;
+  risk_level: "low" | "medium" | "high";
+  risks: RenderRisk[];        // up to 20 per component
+  /** Components rendered as children (from JSX), useful to see impact */
+  children_count: number;
+}
+
+export interface AnalyzeRendersResult {
+  entries: RenderAnalysisEntry[];
+  total_components: number;
+  high_risk_count: number;
+  summary: {
+    inline_objects: number;
+    inline_arrays: number;
+    inline_functions: number;
+    unstable_defaults: number;
+    missing_memo: number;
+  };
+}
+
+/** Patterns for inline prop creation in JSX — each creates a new reference every render */
+const INLINE_OBJECT_RE = /\b\w+\s*=\s*\{\s*\{/g;       // prop={{ ... }}
+const INLINE_ARRAY_RE = /\b\w+\s*=\s*\{\s*\[/g;         // prop={[ ... ]}
+const INLINE_FN_RE = /\bon[A-Z]\w*\s*=\s*\{\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>/g; // onX={() => ...}
+
+/** Default prop values that create new references: = [] or = {} in params */
+const UNSTABLE_DEFAULT_RE = /(?:[:,]\s*)(\w+)\s*=\s*(\[\s*\]|\{\s*\})/g;
+
+/**
+ * Analyze a single component source for re-render risks.
+ */
+function findRenderRisks(source: string): RenderRisk[] {
+  const risks: RenderRisk[] = [];
+  const lines = source.split("\n");
+
+  for (let i = 0; i < lines.length && risks.length < 20; i++) {
+    const line = lines[i]!;
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+
+    // Skip comments
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+
+    // Inline object prop: prop={{ key: val }}
+    if (INLINE_OBJECT_RE.test(line)) {
+      INLINE_OBJECT_RE.lastIndex = 0;
+      risks.push({
+        type: "inline-object",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: "Extract to a const or useMemo — object literal creates new reference every render",
+      });
+    }
+
+    // Inline array prop: prop={[1, 2, 3]}
+    if (INLINE_ARRAY_RE.test(line)) {
+      INLINE_ARRAY_RE.lastIndex = 0;
+      risks.push({
+        type: "inline-array",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: "Extract to a const or useMemo — array literal creates new reference every render",
+      });
+    }
+
+    // Inline function in event handler: onClick={() => ...}
+    if (INLINE_FN_RE.test(line)) {
+      INLINE_FN_RE.lastIndex = 0;
+      risks.push({
+        type: "inline-function",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: "Extract to useCallback or a named handler — arrow function creates new reference every render",
+      });
+    }
+
+    // Unstable default value: { items = [], config = {} }
+    UNSTABLE_DEFAULT_RE.lastIndex = 0;
+    let dm: RegExpExecArray | null;
+    while ((dm = UNSTABLE_DEFAULT_RE.exec(line)) !== null && risks.length < 20) {
+      risks.push({
+        type: "unstable-default",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: `Default value \`${dm[1]} = ${dm[2]}\` creates new reference every render — hoist to module const`,
+      });
+    }
+  }
+
+  return risks;
+}
+
+/**
+ * Analyze re-render risk across React components in a repo.
+ *
+ * Detects:
+ * - Inline object/array/function props in JSX (new reference every render)
+ * - Unstable default parameter values ([] or {} in component params)
+ * - Components not wrapped in React.memo that render children (missing-memo)
+ *
+ * Returns per-component risk assessment with actionable suggestions.
+ */
+export async function analyzeRenders(
+  repo: string,
+  options?: {
+    component_name?: string | undefined;
+    file_pattern?: string | undefined;
+    include_tests?: boolean | undefined;
+    max_entries?: number | undefined;
+  },
+): Promise<AnalyzeRendersResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository not found: ${repo}`);
+  }
+
+  const componentName = options?.component_name;
+  const filePattern = options?.file_pattern;
+  const includeTests = options?.include_tests ?? false;
+  const maxEntries = options?.max_entries ?? 100;
+
+  let components = index.symbols.filter((s) => s.kind === "component");
+  if (!includeTests) components = components.filter((s) => !isTestFile(s.file));
+  if (componentName) components = components.filter((s) => s.name === componentName);
+  if (filePattern) components = components.filter((s) => s.file.includes(filePattern));
+
+  const entries: RenderAnalysisEntry[] = [];
+  const summary = { inline_objects: 0, inline_arrays: 0, inline_functions: 0, unstable_defaults: 0, missing_memo: 0 };
+  let highRiskCount = 0;
+
+  for (const sym of components) {
+    if (entries.length >= maxEntries) break;
+    if (!sym.source) continue;
+
+    const isMemoized = /\b(?:React\.)?memo\s*\(/.test(sym.source);
+    const risks = findRenderRisks(sym.source);
+
+    // Count children rendered (PascalCase JSX elements)
+    const childrenSet = new Set<string>();
+    const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
+    let jm: RegExpExecArray | null;
+    while ((jm = jsxPattern.exec(sym.source)) !== null) {
+      if (jm[1] !== sym.name) childrenSet.add(jm[1]!);
+    }
+
+    // Check missing-memo: component renders children and is not memoized
+    if (!isMemoized && childrenSet.size > 0 && risks.length > 0) {
+      risks.push({
+        type: "missing-memo",
+        line: 1,
+        context: `${sym.name} renders ${childrenSet.size} child component(s) and has ${risks.length} inline props`,
+        suggestion: "Wrap in React.memo() — parent re-renders will propagate to children via new prop references",
+      });
+      summary.missing_memo++;
+    }
+
+    // Aggregate summary counts
+    for (const r of risks) {
+      if (r.type === "inline-object") summary.inline_objects++;
+      else if (r.type === "inline-array") summary.inline_arrays++;
+      else if (r.type === "inline-function") summary.inline_functions++;
+      else if (r.type === "unstable-default") summary.unstable_defaults++;
+    }
+
+    // Risk level classification
+    const riskLevel: "low" | "medium" | "high" =
+      risks.length >= 5 ? "high" :
+      risks.length >= 2 ? "medium" : "low";
+
+    if (riskLevel === "high") highRiskCount++;
+
+    // Only include components with risks or if specifically queried
+    if (risks.length > 0 || componentName) {
+      entries.push({
+        name: sym.name,
+        file: sym.file,
+        start_line: sym.start_line,
+        is_memoized: isMemoized,
+        risk_count: risks.length,
+        risk_level: riskLevel,
+        risks,
+        children_count: childrenSet.size,
+      });
+    }
+  }
+
+  // Sort: high risk first, then by risk_count descending
+  entries.sort((a, b) => {
+    const levelOrder = { high: 3, medium: 2, low: 1 };
+    const ld = levelOrder[b.risk_level] - levelOrder[a.risk_level];
+    if (ld !== 0) return ld;
+    return b.risk_count - a.risk_count;
+  });
+
+  return {
+    entries,
+    total_components: components.length,
+    high_risk_count: highRiskCount,
+    summary,
   };
 }
