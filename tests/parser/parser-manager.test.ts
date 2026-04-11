@@ -35,4 +35,8 @@ describe("getLanguageForExtension", () => {
   it("returns kotlin for .kts", () => {
     expect(getLanguageForExtension(".kts")).toBe("kotlin");
   });
+
+  it("returns sql for .sql", () => {
+    expect(getLanguageForExtension(".sql")).toBe("sql");
+  });
 });

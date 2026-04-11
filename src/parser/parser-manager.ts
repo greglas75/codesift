@@ -50,6 +50,8 @@ const EXTENSION_MAP: Record<string, string> = {
   ".nim": "text_stub",   // Nim
   ".gradle": "text_stub", // Gradle build scripts
   ".sbt": "text_stub",   // SBT build scripts
+  // --- SQL (regex extractor, no tree-sitter) ---
+  ".sql": "sql",          // SQL DDL/DML
 };
 
 export async function initParser(): Promise<void> {
