@@ -1,9 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseFile } from "../../src/parser/parser-manager.js";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: vi.fn(),
 }));
+
+import { getCodeIndex } from "../../src/tools/index-tools.js";
 
 import { nextjsAuditServerActions } from "../../src/tools/nextjs-security-tools.js";
 import {
@@ -306,5 +311,116 @@ describe("scoreServerAction", () => {
     // Grade: 40-69 needs_work
     expect(result.score).toBe(60);
     expect(result.grade).toBe("needs_work");
+  });
+});
+
+describe("nextjsAuditServerActions orchestrator", () => {
+  let tmpRoot: string;
+
+  async function makeRepo(files: Record<string, string>): Promise<string> {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nextjs-security-orchestrator-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = join(tmpRoot, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(abs, content);
+    }
+    return tmpRoot;
+  }
+
+  function mockIndex(root: string) {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+  }
+
+  it("audits 3 server actions with mixed scores", async () => {
+    const root = await makeRepo({
+      "next.config.js": "module.exports = {};\n",
+      "app/actions/secure.ts": `"use server";
+import { z } from 'zod';
+const schema = z.object({ name: z.string() });
+export async function secure(input) {
+  const session = await auth();
+  if (!session) throw new Error("unauth");
+  const data = schema.parse(input);
+  await ratelimit.limit(session.userId);
+  try {
+    return data;
+  } catch (e) {
+    throw e;
+  }
+}
+`,
+      "app/actions/no-auth.ts": `"use server";
+import { z } from 'zod';
+const schema = z.object({ name: z.string() });
+export async function noAuth(input) {
+  return schema.parse(input);
+}
+`,
+      "app/actions/no-validation.ts": `"use server";
+export async function noValidation(input) {
+  const session = await auth();
+  if (!session) throw new Error("unauth");
+  return input;
+}
+`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsAuditServerActions("test");
+      expect(result.total).toBeGreaterThanOrEqual(3);
+      const names = result.actions.map((a) => a.name).sort();
+      expect(names).toContain("secure");
+      expect(names).toContain("noAuth");
+      expect(names).toContain("noValidation");
+      // secure has highest score
+      const secure = result.actions.find((a) => a.name === "secure")!;
+      const noAuth = result.actions.find((a) => a.name === "noAuth")!;
+      expect(secure.score).toBeGreaterThan(noAuth.score);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns total=0 when no 'use server' files exist", async () => {
+    const root = await makeRepo({
+      "next.config.js": "module.exports = {};\n",
+      "app/page.tsx": `export default function Page() { return <div/>; }\n`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsAuditServerActions("test");
+      expect(result.total).toBe(0);
+      expect(result.actions).toEqual([]);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("captures parse failure on a malformed file gracefully", async () => {
+    const root = await makeRepo({
+      "next.config.js": "module.exports = {};\n",
+      "app/actions/good.ts": `"use server";
+export async function good() { return 1; }
+`,
+      // Tree-sitter is permissive, but we can still verify the orchestrator
+      // doesn't crash on a file that contains weird content.
+      "app/actions/weird.ts": `"use server";\nthis is not valid typescript at all !!!`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsAuditServerActions("test");
+      // Even with weird content, the orchestrator should return a result.
+      expect(result).toBeDefined();
+      expect(result.actions.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
