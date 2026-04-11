@@ -42,7 +42,7 @@ vi.mock("../../src/cli/setup.js", () => ({
   setupAll: mockSetupAll,
   formatSetupResult: vi.fn().mockReturnValue("setup result"),
   formatSetupLines: mockFormatSetupLines,
-  SUPPORTED_PLATFORMS: ["claude", "cursor", "codex", "gemini"],
+  SUPPORTED_PLATFORMS: ["claude", "cursor", "codex", "gemini", "antigravity"],
 }));
 
 import { COMMAND_MAP } from "../../src/cli/commands.js";

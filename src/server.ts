@@ -7,7 +7,7 @@ import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
-import { detectPlatform } from "./cli/platform.js";
+import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
@@ -57,6 +57,23 @@ async function autoEnableFrameworkToolsFromPackageJson(cwd: string): Promise<voi
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
+  const envPlatform = detectPlatform();
+  let hooksInstalledFor: HookPlatform | null = null;
+  const installHooks = (platform: HookPlatform, reason: string): void => {
+    if (platform === "unknown" || hooksInstalledFor !== null) return;
+    hooksInstalledFor = platform;
+    setupHooksForPlatform(platform).catch((err: unknown) => {
+      console.error(`[codesift] hook auto-install failed (${reason}:${platform}):`, err);
+    });
+  };
+
+  server.server.oninitialized = () => {
+    if (hooksInstalledFor !== null || envPlatform !== "unknown") return;
+    const clientName = server.server.getClientVersion()?.name ?? "";
+    const clientPlatform = detectPlatformFromClientInfo(clientName);
+    installHooks(clientPlatform === "unknown" ? "claude" : clientPlatform, clientName || "fallback");
+  };
+
   await server.connect(transport);
   console.error("CodeSift MCP server started");
 
@@ -74,18 +91,8 @@ async function main(): Promise<void> {
   });
 
   // Auto-install hooks for the detected platform (idempotent)
-  const envPlatform = detectPlatform();
   if (envPlatform !== "unknown") {
-    setupHooksForPlatform(envPlatform).catch((err: unknown) => {
-      console.error(`[codesift] hook auto-install failed (${envPlatform}):`, err);
-    });
-  } else {
-    // Env detection failed — try clientInfo after MCP initialize.
-    // The transport emits an internal event, but we can also just try
-    // all safe platforms (Claude is the most common, always install).
-    setupHooksForPlatform("claude").catch((err: unknown) => {
-      console.error("[codesift] hook auto-install failed (claude fallback):", err);
-    });
+    installHooks(envPlatform, "env");
   }
 }
 

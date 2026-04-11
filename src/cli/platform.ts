@@ -20,18 +20,11 @@ export function detectPlatform(): HookPlatform {
  * More reliable than env vars but only available after connection.
  */
 export function detectPlatformFromClientInfo(clientName: string): HookPlatform {
-  switch (clientName) {
-    case "claude-code":
-      return "claude";
-    case "codex-mcp-client":
-      return "codex";
-    case "gemini-cli-mcp-client":
-      return "gemini";
-    case "Cline":
-      return "cline";
-    case "continue-client":
-      return "continue";
-    default:
-      return "unknown";
-  }
+  const normalized = clientName.trim().toLowerCase();
+  if (normalized === "claude-code" || normalized.includes("claude")) return "claude";
+  if (normalized === "codex-mcp-client" || normalized.includes("codex")) return "codex";
+  if (normalized === "gemini-cli-mcp-client" || normalized.includes("gemini")) return "gemini";
+  if (normalized === "cline") return "cline";
+  if (normalized === "continue-client" || normalized.includes("continue")) return "continue";
+  return "unknown";
 }

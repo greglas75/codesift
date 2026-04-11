@@ -17,6 +17,7 @@ codesift setup claude    # Claude Code — config + rules + hooks
 codesift setup codex     # Codex CLI — config + AGENTS.md rules
 codesift setup cursor    # Cursor IDE — config + .cursor/rules
 codesift setup gemini    # Gemini CLI — config + GEMINI.md rules
+codesift setup antigravity # Google Antigravity — config only
 codesift setup all       # All platforms at once
 ```
 
@@ -26,7 +27,7 @@ codesift setup all       # All platforms at once
 |-----------|-------------|---------|
 | **MCP config** | Registers codesift-mcp server | (required) |
 | **Rules file** | Tool mapping, hints, ALWAYS/NEVER rules for your AI agent | `--no-rules` |
-| **Hooks** (Claude only) | Auto-index after Edit/Write, redirect large Read to CodeSift | `--no-hooks` |
+| **Hooks** (where supported) | Auto-index after Edit/Write, redirect large Read/Bash flows to CodeSift | `--no-hooks` |
 
 Additionally, every MCP client receives ~800 tokens of compact guidance automatically via the MCP `instructions` field — zero setup needed.
 
@@ -527,13 +528,28 @@ You can also use the Gemini CLI:
 gemini mcp add codesift -s user npx -- -y codesift-mcp
 ```
 
+### Google Antigravity
+
+Add this to `~/.gemini/antigravity/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "codesift": {
+      "command": "npx",
+      "args": ["-y", "codesift-mcp"]
+    }
+  }
+}
+```
+
 ### All platforms at once
 
 ```bash
 codesift setup all
 ```
 
-This configures Codex, Claude Code, Cursor, and Gemini CLI in one command. Safe to run multiple times — skips platforms that are already configured.
+This configures Codex, Claude Code, Cursor, Gemini CLI, and Antigravity in one command. Safe to run multiple times — skips platforms that are already configured.
 
 ## Semantic search
 

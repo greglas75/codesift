@@ -53,6 +53,7 @@ describe("setup", () => {
     expect(SUPPORTED_PLATFORMS).toContain("claude");
     expect(SUPPORTED_PLATFORMS).toContain("cursor");
     expect(SUPPORTED_PLATFORMS).toContain("gemini");
+    expect(SUPPORTED_PLATFORMS).toContain("antigravity");
   });
 
   // -------------------------------------------------------------------------
@@ -187,6 +188,18 @@ describe("setup", () => {
 
       await expect(setup("claude")).rejects.toThrow(/Failed to parse/);
     });
+
+    it("treats empty settings.json as empty object", async () => {
+      const configDir = join(tempHome, ".claude");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(join(configDir, "settings.json"), "", "utf-8");
+
+      const result = await setup("claude");
+      expect(result.status).toBe("updated");
+
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.command).toBe("npx");
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -276,6 +289,75 @@ describe("setup", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Antigravity
+  // -------------------------------------------------------------------------
+
+  describe("antigravity", () => {
+    it("creates mcp_config.json when none exists", async () => {
+      const result = await setup("antigravity");
+
+      expect(result.status).toBe("created");
+      expect(result.platform).toBe("antigravity");
+      expect(result.config_path).toBe(join(tempHome, ".gemini", "antigravity", "mcp_config.json"));
+
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift).toEqual({
+        command: "npx",
+        args: ["-y", "codesift-mcp"],
+      });
+    });
+
+    it("adds to existing mcp_config.json preserving other keys", async () => {
+      const configDir = join(tempHome, ".gemini", "antigravity");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "mcp_config.json"),
+        JSON.stringify({ theme: "dark", mcpServers: { other: { command: "foo" } } }),
+        "utf-8",
+      );
+
+      const result = await setup("antigravity");
+      expect(result.status).toBe("updated");
+
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.theme).toBe("dark");
+      expect(content.mcpServers.other.command).toBe("foo");
+      expect(content.mcpServers.codesift).toEqual({
+        command: "npx",
+        args: ["-y", "codesift-mcp"],
+      });
+    });
+
+    it("skips when already configured", async () => {
+      const configDir = join(tempHome, ".gemini", "antigravity");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "mcp_config.json"),
+        JSON.stringify({ mcpServers: { codesift: { command: "npx" } } }),
+        "utf-8",
+      );
+
+      const result = await setup("antigravity");
+      expect(result.status).toBe("already_configured");
+    });
+
+    it("treats empty mcp_config.json as empty object", async () => {
+      const configDir = join(tempHome, ".gemini", "antigravity");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(join(configDir, "mcp_config.json"), "", "utf-8");
+
+      const result = await setup("antigravity");
+      expect(result.status).toBe("updated");
+
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift).toEqual({
+        command: "npx",
+        args: ["-y", "codesift-mcp"],
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // setupAll
   // -------------------------------------------------------------------------
 
@@ -292,6 +374,7 @@ describe("setup", () => {
       expect(platforms).toContain("claude");
       expect(platforms).toContain("cursor");
       expect(platforms).toContain("gemini");
+      expect(platforms).toContain("antigravity");
     });
 
     it("is idempotent — second run returns already_configured for all", async () => {
@@ -625,7 +708,7 @@ describe("setup", () => {
 
       it("re-run codex: block replaced in-place, not duplicated", async () => {
         await installRules("codex", tempHome, { rules: true });
-        await installRules("codex", tempHome, { rules: true });
+        const second = await installRules("codex", tempHome, { rules: true });
 
         const agentsPath = join(tempCwd, "AGENTS.md");
         const content = await readFile(agentsPath, "utf-8");
@@ -634,6 +717,7 @@ describe("setup", () => {
         const endCount = (content.match(/<!-- codesift-rules-end -->/g) ?? []).length;
         expect(startCount).toBe(1);
         expect(endCount).toBe(1);
+        expect(second.action).toBe("skipped");
       });
 
       it("appends block to AGENTS.md that already has user content", async () => {
@@ -704,7 +788,7 @@ describe("setup", () => {
 
       it("re-run gemini: block replaced in-place, not duplicated", async () => {
         await installRules("gemini", tempHome, { rules: true });
-        await installRules("gemini", tempHome, { rules: true });
+        const second = await installRules("gemini", tempHome, { rules: true });
 
         const geminiPath = join(tempCwd, "GEMINI.md");
         const content = await readFile(geminiPath, "utf-8");
@@ -713,6 +797,7 @@ describe("setup", () => {
         const endCount = (content.match(/<!-- codesift-rules-end -->/g) ?? []).length;
         expect(startCount).toBe(1);
         expect(endCount).toBe(1);
+        expect(second.action).toBe("skipped");
       });
 
       it("setup('gemini', { rules: true }) uses installRules gemini path", async () => {

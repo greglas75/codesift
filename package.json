@@ -27,7 +27,7 @@
     "lint": "tsc --noEmit",
     "download-wasm": "tsx scripts/download-wasm.ts",
     "prepublishOnly": "npm run build && npm test",
-    "postinstall": "echo '\n  ✨ CodeSift MCP installed. Run setup for your platform:\n\n     codesift setup claude    # Claude Code\n     codesift setup cursor    # Cursor\n     codesift setup codex     # Codex CLI\n     codesift setup gemini    # Gemini CLI\n     codesift setup all       # All platforms\n'"
+    "postinstall": "echo '\n  ✨ CodeSift MCP installed. Run setup for your platform:\n\n     codesift setup claude       # Claude Code\n     codesift setup cursor       # Cursor\n     codesift setup codex        # Codex CLI\n     codesift setup gemini       # Gemini CLI\n     codesift setup antigravity  # Google Antigravity\n     codesift setup all          # All platforms\n'"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

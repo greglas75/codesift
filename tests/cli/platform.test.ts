@@ -43,8 +43,16 @@ describe("detectPlatformFromClientInfo", () => {
     expect(detectPlatformFromClientInfo("codex-mcp-client")).toBe("codex");
   });
 
+  it("detects Codex Desktop via substring match", () => {
+    expect(detectPlatformFromClientInfo("Codex Desktop")).toBe("codex");
+  });
+
   it("detects gemini-cli-mcp-client", () => {
     expect(detectPlatformFromClientInfo("gemini-cli-mcp-client")).toBe("gemini");
+  });
+
+  it("detects Gemini CLI via substring match", () => {
+    expect(detectPlatformFromClientInfo("Gemini CLI")).toBe("gemini");
   });
 
   it("detects Cline", () => {

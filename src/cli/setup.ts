@@ -15,7 +15,7 @@ import { setupClineHooks } from "./shell-templates.js";
 // Types
 // ---------------------------------------------------------------------------
 
-export const SUPPORTED_PLATFORMS = ["codex", "claude", "cursor", "gemini"] as const;
+export const SUPPORTED_PLATFORMS = ["codex", "claude", "cursor", "gemini", "antigravity"] as const;
 export type Platform = (typeof SUPPORTED_PLATFORMS)[number];
 
 export interface SetupResult {
@@ -56,6 +56,7 @@ const JSON_PLATFORM_CONFIGS: Record<string, JsonPlatformConfig> = {
   claude: { configDirName: ".claude", configFileName: "settings.json" },
   cursor: { configDirName: ".cursor", configFileName: "mcp.json" },
   gemini: { configDirName: ".gemini", configFileName: "settings.json" },
+  antigravity: { configDirName: ".gemini/antigravity", configFileName: "mcp_config.json" },
 };
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,9 @@ async function ensureDir(dir: string): Promise<void> {
 
 async function readJsonFile(path: string): Promise<Record<string, unknown>> {
   const raw = await readFile(path, "utf-8");
+  if (raw.trim() === "") {
+    return {};
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -146,6 +150,14 @@ async function installRulesAppendMode(
       const existing = await readFile(targetPath, "utf-8");
 
       if (existing.includes(DELIMITER_START) && existing.includes(DELIMITER_END)) {
+        const match = existing.match(
+          new RegExp(
+            `${escapeRegex(DELIMITER_START)}[\\s\\S]*?${escapeRegex(DELIMITER_END)}`,
+          ),
+        );
+        if (match?.[0] === block) {
+          return { path: targetPath, action: "skipped" };
+        }
         // Replace the delimited block in-place
         const replaced = existing.replace(
           new RegExp(
@@ -509,6 +521,7 @@ const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
   claude: () => setupJsonPlatform("claude"),
   cursor: () => setupJsonPlatform("cursor"),
   gemini: () => setupJsonPlatform("gemini"),
+  antigravity: () => setupJsonPlatform("antigravity"),
 };
 
 export async function setup(platform: string, options?: SetupOptions): Promise<SetupResult> {
