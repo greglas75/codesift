@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -621,5 +621,99 @@ export class TestController {
     // Empty @UseGuards() should add no guards (not crash)
     const ctrlGuards = result.routes[0]!.chain.filter((c) => c.layer === "controller" && c.type === "guard");
     expect(ctrlGuards).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nest_route_inventory tests (Task 9)
+// ---------------------------------------------------------------------------
+
+describe("nest_route_inventory", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-route-inv-"));
+    await mkdir(join(tmpRoot, "src"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
+    return {
+      root,
+      files: filePaths.map((p) => ({ path: p, size: 100 })),
+      symbols: [],
+    } as unknown as CodeIndex;
+  }
+
+  it("builds full route map with guards and params", async () => {
+    await writeFile(join(tmpRoot, "src/users.controller.ts"), `
+import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
+
+@UseGuards(AuthGuard)
+@Controller('api/users')
+export class UsersController {
+  @Get()
+  findAll() { return []; }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) { return {}; }
+
+  @Post()
+  create(@Body() dto: CreateUserDto) { return {}; }
+}
+`);
+    await writeFile(join(tmpRoot, "src/health.controller.ts"), `
+@Controller('health')
+export class HealthController {
+  @Get()
+  check() { return 'ok'; }
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/users.controller.ts",
+      "src/health.controller.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestRouteInventory("test-repo");
+
+    // 4 routes total
+    expect(result.stats.total_routes).toBe(4);
+
+    // Users routes have guards
+    const usersRoutes = result.routes.filter((r) => r.controller === "UsersController");
+    expect(usersRoutes.length).toBe(3);
+    for (const r of usersRoutes) {
+      expect(r.guards).toContain("AuthGuard");
+    }
+
+    // Health route has no guards
+    const healthRoute = result.routes.find((r) => r.controller === "HealthController");
+    expect(healthRoute).toBeDefined();
+    expect(healthRoute!.guards).toEqual([]);
+
+    // Stats
+    expect(result.stats.protected).toBe(3);
+    expect(result.stats.unprotected).toBe(1);
+
+    // Param decorators
+    const findOne = result.routes.find((r) => r.handler === "findOne");
+    expect(findOne!.params).toContainEqual({ decorator: "Param", name: "id" });
+
+    const create = result.routes.find((r) => r.handler === "create");
+    expect(create!.params).toContainEqual({ decorator: "Body", name: "" });
+  });
+
+  it("handles empty route inventory gracefully", async () => {
+    const index = mockIndexWithRoot(tmpRoot, []);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestRouteInventory("test-repo");
+    expect(result.routes).toEqual([]);
+    expect(result.stats.total_routes).toBe(0);
   });
 });

@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { extractNestConventions } from "./project-tools.js";
+import { findNestJSHandlers } from "./route-tools.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -586,6 +587,127 @@ export interface NestRouteInventoryResult {
   };
   errors?: NestToolError[];
   truncated?: boolean;
+}
+
+export async function nestRouteInventory(
+  repo: string,
+  options?: { max_routes?: number },
+): Promise<NestRouteInventoryResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+
+  const maxRoutes = options?.max_routes ?? 500;
+  const errors: NestToolError[] = [];
+  let truncated = false;
+
+  // Use findNestJSHandlers with wildcard path to get ALL routes
+  // We pass "/**" as a wildcard — but findNestJSHandlers uses matchPath which
+  // doesn't support wildcards. Instead, we scan controllers ourselves.
+  const controllerFiles = index.files.filter(
+    (f) => f.path.endsWith(".controller.ts") || f.path.endsWith(".controller.js"),
+  );
+
+  const routes: NestRouteEntry[] = [];
+  const methods = ["Get", "Post", "Put", "Delete", "Patch"];
+
+  for (const file of controllerFiles) {
+    if (routes.length >= maxRoutes) { truncated = true; break; }
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch (err) {
+      errors.push({ file: file.path, reason: `readFile failed: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+
+    const ctrlMatchStr = /@Controller\s*\(\s*['"`]([^'"`]*)['"`]/.exec(source);
+    const ctrlMatchEmpty = !ctrlMatchStr ? /@Controller\s*\(\s*\)/.exec(source) : null;
+    const ctrlPrefix = ctrlMatchStr?.[1] ?? (ctrlMatchEmpty ? "" : "");
+    const ctrlClassMatch = /class\s+(\w+)/.exec(source);
+    const ctrlClass = ctrlClassMatch?.[1] ?? "UnknownController";
+
+    // Guards at controller level
+    const classIdx = source.indexOf(`class ${ctrlClass}`);
+    const ctrlHeader = classIdx >= 0 ? source.slice(0, classIdx) : "";
+    const ctrlGuards = parseUseGuards(ctrlHeader);
+
+    for (const method of methods) {
+      // String-literal paths
+      const reStr = new RegExp(`@${method}\\s*\\(\\s*['"\`]([^'"\`]*)['"\`]\\s*\\)\\s*\\n\\s*(?:async\\s+)?(\\w+)`, "g");
+      let m: RegExpExecArray | null;
+      while ((m = reStr.exec(source)) !== null) {
+        if (routes.length >= maxRoutes) { truncated = true; break; }
+        const routePath = m[1] ?? "";
+        const handler = m[2] ?? "";
+        const fullPath = `/${ctrlPrefix}/${routePath}`.replace(/\/+/g, "/");
+
+        // Method-level guards
+        const methodCtx = source.slice(Math.max(0, m.index - 200), m.index);
+        const methodGuards = parseUseGuards(methodCtx);
+        const allGuards = [...ctrlGuards, ...methodGuards];
+
+        // Parse @Param/@Body/@Query decorators from method context + next ~200 chars
+        const paramCtx = source.slice(m.index, Math.min(source.length, m.index + 300));
+        const params = parseParamDecorators(paramCtx);
+
+        routes.push({
+          method: method.toUpperCase(),
+          path: fullPath,
+          handler,
+          controller: ctrlClass,
+          file: file.path,
+          guards: allGuards,
+          params,
+        });
+      }
+
+      // Empty decorator paths
+      const reEmpty = new RegExp(`@${method}\\s*\\(\\s*\\)\\s*\\n\\s*(?:async\\s+)?(\\w+)`, "g");
+      while ((m = reEmpty.exec(source)) !== null) {
+        if (routes.length >= maxRoutes) { truncated = true; break; }
+        const handler = m[1] ?? "";
+        const fullPath = `/${ctrlPrefix}`.replace(/\/+/g, "/") || "/";
+        if (routes.some((r) => r.file === file.path && r.handler === handler)) continue;
+
+        const methodCtx = source.slice(Math.max(0, m.index - 200), m.index);
+        const methodGuards = parseUseGuards(methodCtx);
+        const paramCtx = source.slice(m.index, Math.min(source.length, m.index + 300));
+
+        routes.push({
+          method: method.toUpperCase(),
+          path: fullPath,
+          handler,
+          controller: ctrlClass,
+          file: file.path,
+          guards: [...ctrlGuards, ...methodGuards],
+          params: parseParamDecorators(paramCtx),
+        });
+      }
+    }
+  }
+
+  const protectedCount = routes.filter((r) => r.guards.length > 0).length;
+  return {
+    routes,
+    stats: {
+      total_routes: routes.length,
+      protected: protectedCount,
+      unprotected: routes.length - protectedCount,
+    },
+    ...(errors.length > 0 ? { errors } : {}),
+    ...(truncated ? { truncated } : {}),
+  };
+}
+
+/** Parse @Param/@Body/@Query decorators from source context */
+function parseParamDecorators(source: string): NestRouteEntry["params"] {
+  const params: NestRouteEntry["params"] = [];
+  const re = /@(Param|Body|Query|Headers)\s*\(\s*(?:['"`](\w+)['"`])?\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    params.push({ decorator: m[1]!, name: m[2] ?? "" });
+  }
+  return params;
 }
 
 // ---------------------------------------------------------------------------
