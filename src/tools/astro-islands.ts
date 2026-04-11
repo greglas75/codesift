@@ -34,12 +34,51 @@ function walkAstroFiles(index: CodeIndex, pathPrefix?: string) {
   return index.files.filter((f) => f.language === "astro" && (!pathPrefix || f.path.startsWith(pathPrefix)));
 }
 
+// -- Bundle size heuristics ---------------------------------------------------
+
+/** Known framework runtime sizes (gzipped KB, approximate for common versions) */
+const FRAMEWORK_RUNTIME_KB: Record<string, number> = {
+  react: 44,    // react + react-dom ~44KB gzipped
+  vue: 34,      // vue 3 runtime ~34KB gzipped
+  svelte: 2,    // svelte 5 runtime ~2KB gzipped (compiled away)
+  solid: 7,     // solid-js ~7KB gzipped
+  preact: 4,    // preact ~4KB gzipped
+  lit: 16,      // lit ~16KB gzipped
+};
+
+/** Estimate component bundle cost based on import path */
+function estimateComponentKb(importPath: string | undefined): number {
+  if (!importPath) return 3; // unknown component ~3KB default
+  // Heavy packages have larger components
+  if (HEAVY_PKGS.has(importPath) || HEAVY_SCOPES.some((s) => importPath.startsWith(s))) return 45;
+  // Local components are typically small
+  if (importPath.startsWith(".") || importPath.startsWith("/")) return 3;
+  // npm packages ~8KB average
+  return 8;
+}
+
+export interface BundleEstimate {
+  estimated_bundle_kb: number;    // framework runtime + component
+  framework_cost_kb: number;      // framework runtime (shared across islands of same framework)
+  marginal_cost_kb: number;       // just this component
+}
+
+function estimateBundle(island: Island, imports: Map<string, string>): BundleEstimate {
+  const fw = island.framework_hint ?? "unknown";
+  const fwCost = FRAMEWORK_RUNTIME_KB[fw] ?? 10;
+  const impPath = island.resolves_to_file ?? imports.get(island.component_name);
+  const compCost = estimateComponentKb(impPath);
+  return { estimated_bundle_kb: fwCost + compCost, framework_cost_kb: fwCost, marginal_cost_kb: compCost };
+}
+
 // -- 10. astro_analyze_islands -----------------------------------------------
 
 export interface ServerIsland { file: string; line: number; component: string; has_fallback: boolean; }
+export interface IslandWithBundle extends Island { bundle?: BundleEstimate | undefined; file: string; }
+export interface BudgetSummary { total_js_budget_kb: number; framework_overhead: Record<string, number>; unique_component_cost_kb: number; }
 export interface AnalyzeIslandsResult {
-  islands: Island[];
-  summary: { total_islands: number; by_directive: Record<string, number>; by_framework: Record<string, number>; warnings: string[] };
+  islands: IslandWithBundle[];
+  summary: { total_islands: number; by_directive: Record<string, number>; by_framework: Record<string, number>; warnings: string[]; budget?: BudgetSummary | undefined };
   server_islands: ServerIsland[];
 }
 
@@ -50,16 +89,17 @@ export async function astroAnalyzeIslands(args: { repo?: string; path_prefix?: s
 }
 
 export function analyzeIslandsFromIndex(index: CodeIndex, pathPrefix?: string): AnalyzeIslandsResult {
-  const allIslands: Island[] = [], serverIslands: ServerIsland[] = [];
+  const allIslands: IslandWithBundle[] = [], serverIslands: ServerIsland[] = [];
   for (const file of walkAstroFiles(index, pathPrefix)) {
     let source: string;
     try { source = readFileSync(join(index.root, file.path), "utf-8"); } catch { continue; }
-    const result = parseAstroTemplate(source, buildImportMap(source));
+    const imports = buildImportMap(source);
+    const result = parseAstroTemplate(source, imports);
     for (const island of result.islands) {
       if (island.directive === "server:defer") {
         serverIslands.push({ file: file.path, line: island.line, component: island.component_name, has_fallback: checkServerFallback(source, island) });
       } else {
-        allIslands.push({ ...island, file: file.path } as Island);
+        allIslands.push({ ...island, file: file.path, bundle: estimateBundle(island, imports) });
       }
     }
   }
@@ -70,7 +110,19 @@ export function analyzeIslandsFromIndex(index: CodeIndex, pathPrefix?: string): 
   if (loadCount >= 5) warnings.push(`${loadCount} components use client:load — consider client:idle or client:visible for below-fold content`);
   const noFb = serverIslands.filter((s) => !s.has_fallback).length;
   if (noFb > 0) warnings.push(`${noFb} server:defer component(s) lack fallback content`);
-  return { islands: allIslands, summary: { total_islands: allIslands.length, by_directive: byDirective, by_framework: byFramework, warnings }, server_islands: serverIslands };
+  // Compute bundle budget summary
+  const fwOverhead: Record<string, number> = {};
+  let totalComp = 0;
+  for (const i of allIslands) {
+    if (i.bundle) {
+      const fw = i.framework_hint ?? "unknown";
+      fwOverhead[fw] = i.bundle.framework_cost_kb; // deduplicate: shared per framework
+      totalComp += i.bundle.marginal_cost_kb;
+    }
+  }
+  const totalFw = Object.values(fwOverhead).reduce((a, b) => a + b, 0);
+  const budget: BudgetSummary = { total_js_budget_kb: totalFw + totalComp, framework_overhead: fwOverhead, unique_component_cost_kb: totalComp };
+  return { islands: allIslands, summary: { total_islands: allIslands.length, by_directive: byDirective, by_framework: byFramework, warnings, budget }, server_islands: serverIslands };
 }
 
 // -- 11. astro_hydration_audit -----------------------------------------------

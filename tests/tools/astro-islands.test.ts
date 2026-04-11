@@ -199,6 +199,12 @@ import Comments from '../components/Comments.tsx';
 // Hydration Audit Tests (15 tests: 12 per-code + 3 scoring)
 // ---------------------------------------------------------------------------
 
+function islandFixture(files: Record<string, string>) {
+  const root = createFixtureDir(files);
+  const index = makeIndex(root, Object.keys(files));
+  return analyzeIslandsFromIndex(index);
+}
+
 describe("astroHydrationAudit", () => {
   function auditFixture(files: Record<string, string>, severity?: "all" | "warnings" | "errors") {
     const root = createFixtureDir(files);
@@ -331,5 +337,48 @@ describe("astroHydrationAudit", () => {
     expect(ah07).toBeDefined();
     expect(ah07!.fix_snippet).toBeDefined();
     expect(ah07!.fix_snippet).toContain("client:idle");
+  });
+});
+
+describe("bundle size estimation", () => {
+  it("includes bundle estimate per island", () => {
+    const result = islandFixture({ "src/pages/index.astro": `---\nimport Counter from './Counter.tsx';\n---\n<Counter client:load />\n` });
+    expect(result.islands[0]!.bundle).toBeDefined();
+    expect(result.islands[0]!.bundle!.estimated_bundle_kb).toBeGreaterThan(0);
+    expect(result.islands[0]!.bundle!.framework_cost_kb).toBeGreaterThan(0);
+    expect(result.islands[0]!.bundle!.marginal_cost_kb).toBeGreaterThan(0);
+  });
+
+  it("React island has ~44KB framework overhead", () => {
+    const result = islandFixture({ "src/pages/index.astro": `---\nimport Counter from './Counter.tsx';\n---\n<Counter client:load />\n` });
+    // React runtime is ~44KB gzipped
+    expect(result.islands[0]!.bundle!.framework_cost_kb).toBe(44);
+  });
+
+  it("Svelte island has ~2KB framework overhead", () => {
+    const result = islandFixture({ "src/pages/index.astro": `---\nimport Toggle from './Toggle.svelte';\n---\n<Toggle client:load />\n` });
+    expect(result.islands[0]!.bundle!.framework_cost_kb).toBe(2);
+  });
+
+  it("summary includes budget with framework deduplication", () => {
+    const result = islandFixture({
+      "src/pages/index.astro": `---\nimport A from './A.tsx';\nimport B from './B.tsx';\n---\n<A client:load />\n<B client:idle />\n`,
+    });
+    expect(result.summary.budget).toBeDefined();
+    // Two React islands share framework overhead — counted once
+    expect(result.summary.budget!.framework_overhead["react"]).toBe(44);
+    // Both components add to unique cost
+    expect(result.summary.budget!.unique_component_cost_kb).toBe(6); // 3 + 3 for local components
+    // Total = 44 framework + 6 components = 50
+    expect(result.summary.budget!.total_js_budget_kb).toBe(50);
+  });
+
+  it("mixed frameworks count each runtime once", () => {
+    const result = islandFixture({
+      "src/pages/index.astro": `---\nimport A from './A.tsx';\nimport B from './B.svelte';\n---\n<A client:load />\n<B client:idle />\n`,
+    });
+    expect(result.summary.budget!.framework_overhead["react"]).toBe(44);
+    expect(result.summary.budget!.framework_overhead["svelte"]).toBe(2);
+    expect(result.summary.budget!.total_js_budget_kb).toBe(44 + 2 + 6); // 52
   });
 });
