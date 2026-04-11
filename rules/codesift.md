@@ -93,6 +93,19 @@ Use this table to pick the right tool for each task:
 | data fetch waterfalls | `nextjs_data_flow` |
 | middleware coverage gaps | `nextjs_middleware_coverage` |
 | server vs client classify | `analyze_nextjs_components` |
+| Hono full overview | `analyze_hono_app` |
+| Hono middleware chain | `trace_middleware_chain` |
+| Hono conditional middleware | `trace_conditional_middleware` |
+| Hono inline handler analysis | `analyze_inline_handler` |
+| Hono context variables | `trace_context_flow` |
+| Hono API contract / OpenAPI | `extract_api_contract` |
+| Hono response types (Issue #4270) | `extract_response_types` |
+| Hono RPC types / Issue #3869 | `trace_rpc_types` |
+| Hono security audit | `audit_hono_security` |
+| Hono middleware env regression / #3587 | `detect_middleware_env_regression` |
+| Hono architecture modules / #4121 | `detect_hono_modules` |
+| Hono dead routes | `find_dead_hono_routes` |
+| Hono route visualization | `visualize_hono_routes` |
 
 ## When to Use (Situational Triggers)
 
@@ -131,6 +144,12 @@ Use this table to pick the right tool for each task:
 | security review (Next.js) | `nextjs_audit_server_actions` |
 | rendering strategy check | `nextjs_route_map` |
 | bundle size concerns | `nextjs_boundary_analyzer` |
+| new Hono project (first look) | `analyze_hono_app` |
+| Hono middleware order bug | `trace_middleware_chain` |
+| Hono auth false positive (blog pattern) | `trace_conditional_middleware` |
+| Hono handler introspection | `analyze_inline_handler` |
+| Hono RPC compile time slow | `trace_rpc_types` (flags Issue #3869 slow pattern) |
+| Hono enterprise architecture | `detect_hono_modules` (Issue #4121) |
 
 ## Key Parameters
 

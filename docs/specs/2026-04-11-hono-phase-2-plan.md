@@ -4,10 +4,11 @@
 **spec_id:** none
 **planning_mode:** inline
 **plan_revision:** 1
-**status:** Approved
+**status:** Completed
 **Created:** 2026-04-11
 **Approved:** 2026-04-11T08:53:00Z
-**Tasks:** 14
+**Completed:** 2026-04-11T19:20:00Z
+**Tasks:** 14 — all shipped + 3 post-release polish commits on feat/hono-polish
 **Estimated complexity:** 5 standard, 9 complex
 
 ## Background
