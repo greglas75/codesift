@@ -115,11 +115,11 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
   const normalized = searchPath.replace(/^\/|\/$/g, "");
 
   for (const file of index.files) {
-    // Match app/api/...route.ts or app/...route.ts
-    if (!file.path.endsWith("/route.ts") && !file.path.endsWith("/route.js")) continue;
+    // Match app/api/...route.{ts,tsx,js,jsx} or app/...route.{ts,tsx,js,jsx}
+    if (!/\/route\.[jt]sx?$/.test(file.path)) continue;
 
     // Extract route path from file path: app/api/users/[id]/route.ts → /api/users/[id]
-    const routeMatch = file.path.match(/app\/(.*?)\/route\.\w+$/);
+    const routeMatch = file.path.match(/app\/(.*?)\/route\.[jt]sx?$/);
     if (!routeMatch) continue;
 
     const filePath = routeMatch[1]!;
