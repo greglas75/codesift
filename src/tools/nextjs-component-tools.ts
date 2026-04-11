@@ -224,7 +224,7 @@ export function detectSignals(
       const argChildren = args.namedChildren;
       if (argChildren.length < 2) continue;
       const opts = argChildren[1];
-      if (opts.type !== "object") continue;
+      if (!opts || opts.type !== "object") continue;
 
       // Iterate pairs that are direct named children of the options object.
       for (const pair of opts.namedChildren) {

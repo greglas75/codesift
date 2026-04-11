@@ -717,3 +717,68 @@ export function formatArchitectureSummary(data: ArchitectureSummaryResult): stri
 
   return parts.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Next.js component classifier formatter
+// ---------------------------------------------------------------------------
+
+import type { NextjsComponentsResult } from "./tools/nextjs-component-tools.js";
+
+export function formatNextjsComponents(result: NextjsComponentsResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS COMPONENT ANALYSIS");
+  lines.push("");
+  lines.push(`Total: ${result.counts.total} components`);
+  lines.push(`  Server: ${result.counts.server}`);
+  lines.push(`  Client (explicit): ${result.counts.client_explicit}`);
+  lines.push(`  Client (inferred): ${result.counts.client_inferred}`);
+  lines.push(`  Ambiguous: ${result.counts.ambiguous}`);
+  lines.push(`  Unnecessary "use client": ${result.counts.unnecessary_use_client}`);
+
+  if (result.truncated) {
+    const at = result.truncated_at != null ? ` (at ${result.truncated_at})` : "";
+    lines.push(`  [truncated${at}]`);
+  }
+  lines.push("");
+
+  // Top violations (cap at 15 for compactness)
+  const withViolations = result.files.filter((f) => f.violations.length > 0);
+  if (withViolations.length > 0) {
+    lines.push(`─── Violations (${withViolations.length}) ───`);
+    for (const f of withViolations.slice(0, 15)) {
+      lines.push(`  ${f.path} — ${f.violations.join(", ")}`);
+    }
+    if (withViolations.length > 15) {
+      lines.push(`  ... +${withViolations.length - 15} more`);
+    }
+    lines.push("");
+  }
+
+  if (result.parse_failures.length > 0) {
+    lines.push(`─── Parse Failures (${result.parse_failures.length}) ───`);
+    for (const pf of result.parse_failures.slice(0, 5)) {
+      lines.push(`  ${pf}`);
+    }
+    if (result.parse_failures.length > 5) {
+      lines.push(`  ... +${result.parse_failures.length - 5} more`);
+    }
+    lines.push("");
+  }
+
+  if (result.scan_errors.length > 0) {
+    lines.push(`─── Scan Errors (${result.scan_errors.length}) ───`);
+    for (const err of result.scan_errors.slice(0, 5)) {
+      lines.push(`  ${err}`);
+    }
+    lines.push("");
+  }
+
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+
+  return lines.join("\n");
+}

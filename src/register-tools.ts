@@ -42,6 +42,7 @@ import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { findExtensionFunctions, analyzeSealedHierarchy } from "./tools/kotlin-tools.js";
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
+import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -58,7 +59,7 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents } from "./formatters.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -2162,6 +2163,26 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const index = await getCodeIndex(args.repo as string ?? "");
       if (!index) throw new Error("Repository not found — run index_folder first");
       return await astroConfigAnalyze({ project_root: index.root });
+    },
+  },
+  {
+    name: "analyze_nextjs_components",
+    category: "analysis",
+    searchHint: "nextjs next.js component server client classifier use client use server hooks",
+    description: "Classify Next.js files as Server or Client components via AST analysis. Detects 'use client'/'use server' directives (with 512-byte window + comment stripping), hooks, JSX event handlers, browser globals, and next/dynamic({ ssr:false }). Flags unnecessary 'use client' and async client components. Supports monorepo workspace auto-detection.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      file_pattern: z.string().optional().describe("Glob to scope the scan, e.g. 'app/products/**'"),
+      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof analyzeNextjsComponents>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.max_files != null) opts.max_files = args.max_files as number;
+      const result = await analyzeNextjsComponents(args.repo as string ?? "", opts);
+      return formatNextjsComponents(result);
     },
   },
 ];
