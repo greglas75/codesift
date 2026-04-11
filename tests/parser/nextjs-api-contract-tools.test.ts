@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseFile } from "../../src/parser/parser-manager.js";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
@@ -277,6 +277,32 @@ export async function DELETE() { return new Response(null, { status: 204 }); }
       expect(result.handlers.length).toBeGreaterThanOrEqual(1);
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("matches pre-authored expected.json (fixture)", async () => {
+    const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-api-contracts");
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-api-contracts",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+
+    const expectedRaw = await readFile(resolve(fixtureRoot, "expected.json"), "utf8");
+    const expected = JSON.parse(expectedRaw) as {
+      handlers: Array<{ method: string; path: string }>;
+      total: number;
+    };
+    const result = await nextjsApiContract("nextjs-api-contracts");
+    expect(result.total).toBe(expected.total);
+    for (const exp of expected.handlers) {
+      const found = result.handlers.find(
+        (h) => h.method === exp.method && h.path === exp.path,
+      );
+      expect(found, `expected handler ${exp.method} ${exp.path}`).toBeDefined();
     }
   });
 

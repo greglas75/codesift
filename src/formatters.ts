@@ -790,6 +790,7 @@ export function formatNextjsComponents(result: NextjsComponentsResult): string {
 import type { NextjsRouteMapResult } from "./tools/nextjs-route-tools.js";
 import type { NextjsMetadataAuditResult } from "./tools/nextjs-metadata-tools.js";
 import type { ServerActionsAuditResult } from "./tools/nextjs-security-tools.js";
+import type { ApiContractResult } from "./tools/nextjs-api-contract-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -937,5 +938,43 @@ export function formatNextjsAuditServerActions(result: ServerActionsAuditResult)
     lines.push(`Limitations: ${result.limitations.join("; ")}`);
   }
 
+  return lines.join("\n");
+}
+
+export function formatNextjsApiContract(result: ApiContractResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS API CONTRACT");
+  lines.push("");
+  lines.push(`Handlers: ${result.total} | Completeness: ${result.completeness_score}%`);
+  lines.push("");
+  lines.push("| Method | Path | Body | Response | Status |");
+  lines.push("| ------ | ---- | ---- | -------- | ------ |");
+  for (const h of result.handlers.slice(0, 100)) {
+    const body = h.request_schema
+      ? h.request_schema.resolved
+        ? "zod"
+        : h.request_schema.type ?? "ref"
+      : "—";
+    const response = h.response_shapes.length > 0
+      ? h.response_shapes.map((r) => r.type).join(",")
+      : "—";
+    const status = h.inferred_status_codes.length > 0
+      ? h.inferred_status_codes.join(",")
+      : "—";
+    lines.push(`| ${h.method} | ${h.path} | ${body} | ${response} | ${status} |`);
+  }
+  if (result.handlers.length > 100) {
+    lines.push(`... +${result.handlers.length - 100} more`);
+  }
+  lines.push("");
+  if (result.parse_failures.length > 0) {
+    lines.push(`Parse failures: ${result.parse_failures.length}`);
+  }
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
   return lines.join("\n");
 }
