@@ -81,6 +81,7 @@ import { findPythonCircularImports } from "./tools/python-circular-imports.js";
 import { pythonAudit } from "./tools/python-audit.js";
 import { traceFastAPIDepends } from "./tools/fastapi-depends.js";
 import { analyzeAsyncCorrectness } from "./tools/async-correctness.js";
+import { getPydanticModels } from "./tools/pydantic-models.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
@@ -94,8 +95,8 @@ import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "./tools/nest-tools.js";
-import { nestGraphQLMap, nestWebSocketMap, nestScheduleMap, nestTypeOrmMap, nestMicroserviceMap } from "./tools/nest-ext-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, nestRequestPipeline } from "./tools/nest-tools.js";
+import { nestGraphQLMap, nestWebSocketMap, nestScheduleMap, nestTypeOrmMap, nestMicroserviceMap, nestQueueMap, nestScopeAudit, nestOpenAPIExtract } from "./tools/nest-ext-tools.js";
 import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
@@ -229,6 +230,11 @@ const FRAMEWORK_TOOL_BUNDLES: Record<string, string[]> = {
     "nest_schedule_map",
     "nest_typeorm_map",
     "nest_microservice_map",
+    // Wave 3
+    "nest_request_pipeline",
+    "nest_queue_map",
+    "nest_scope_audit",
+    "nest_openapi_extract",
     // nest_audit is already core — always visible
   ],
 };
@@ -2329,6 +2335,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "get_pydantic_models",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python pydantic basemodel fastapi schema request response contract validator field constraint type classdiagram",
+    description: "Extract Pydantic models: fields with types, validators, Field() constraints, model_config, cross-model references (list[X], Optional[Y]), inheritance. JSON or mermaid classDiagram.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output as structured JSON or mermaid classDiagram"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof getPydanticModels>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.output_format != null) opts!.output_format = args.output_format as "json" | "mermaid";
+      return await getPydanticModels(args.repo as string, opts);
+    },
+  },
+  {
     name: "python_audit",
     category: "analysis",
     requiresLanguage: "python",
@@ -3269,12 +3293,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       severity: z.enum(["all", "warnings", "errors"]).default("all").describe("Filter issues by severity (default: all)"),
       path_prefix: z.string().optional().describe("Only scan files under this path prefix"),
+      fail_on: z.enum(["error", "warning", "info"]).optional().describe("Set exit_code gate: 'error' exits 1 on any errors; 'warning' exits 2 on warnings; 'info' exits 2 on info or warnings"),
     },
     handler: async (args) => {
       const opts: Parameters<typeof astroHydrationAudit>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
       if (args.severity != null) opts.severity = args.severity as "all" | "warnings" | "errors";
       if (args.path_prefix != null) opts.path_prefix = args.path_prefix as string;
+      if (args.fail_on != null) opts.fail_on = args.fail_on as "error" | "warning" | "info";
       return await astroHydrationAudit(opts);
     },
   },
