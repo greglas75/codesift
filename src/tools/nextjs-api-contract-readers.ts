@@ -7,6 +7,7 @@
  */
 
 import type Parser from "web-tree-sitter";
+import { extractZodSchema } from "../utils/nextjs.js";
 import type {
   HttpMethod,
   HttpMethodInfo,
@@ -73,10 +74,51 @@ export function extractQueryParams(
 }
 
 export function extractRequestBodySchema(
-  _tree: Parser.Tree,
-  _source: string,
+  tree: Parser.Tree,
+  source: string,
 ): RequestBodySchema | null {
-  throw new Error("not implemented");
+  const root = tree.rootNode;
+
+  // 1) Form data
+  if (/req\.formData\s*\(/.test(source)) {
+    return { type: "form" };
+  }
+
+  // 2) Look for schema.parse(...) or schema.safeParse(...) calls
+  for (const call of root.descendantsOfType("call_expression")) {
+    const callee = call.childForFieldName("function") ?? call.namedChild(0);
+    if (callee?.type !== "member_expression") continue;
+    const obj = callee.childForFieldName("object") ?? callee.namedChild(0);
+    const prop = callee.childForFieldName("property") ?? callee.namedChild(1);
+    if (prop?.type !== "property_identifier") continue;
+    if (prop.text !== "parse" && prop.text !== "safeParse") continue;
+    if (obj?.type !== "identifier") continue;
+    const schemaName = obj.text;
+
+    // Try to resolve schemaName as a local variable_declarator
+    let resolvedShape: Record<string, unknown> | null = null;
+    for (const decl of root.descendantsOfType("variable_declarator")) {
+      const name = decl.childForFieldName("name")?.text;
+      if (name !== schemaName) continue;
+      const value = decl.childForFieldName("value");
+      if (!value) continue;
+      // Use the global Zod schema extractor on the whole tree if any decl matches.
+      const zod = extractZodSchema(tree, source);
+      if (zod) {
+        resolvedShape = zod.fields as unknown as Record<string, unknown>;
+      }
+      break;
+    }
+
+    if (resolvedShape) {
+      return { fields: resolvedShape, resolved: true, type: "json" };
+    }
+
+    // Imported / unresolved
+    return { ref: schemaName, resolved: false, type: "json" };
+  }
+
+  return null;
 }
 
 export function extractResponseShapes(

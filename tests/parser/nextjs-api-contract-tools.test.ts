@@ -90,3 +90,60 @@ export async function GET() {
     expect(params).toEqual([]);
   });
 });
+
+describe("extractRequestBodySchema", () => {
+  it("extracts local Zod schema referenced via .parse(await req.json())", async () => {
+    const src = `
+import { z } from "zod";
+const schema = z.object({ name: z.string() });
+export async function POST(req) {
+  const body = schema.parse(await req.json());
+  return new Response();
+}
+`;
+    const tree = await parseTs(src);
+    const result = extractRequestBodySchema(tree, src);
+    expect(result).not.toBeNull();
+    expect(result!.fields).toBeDefined();
+  });
+
+  it("returns ref + resolved=false for imported schema", async () => {
+    const src = `
+import { CreateUserSchema } from "./schemas";
+export async function POST(req) {
+  const body = CreateUserSchema.parse(await req.json());
+  return new Response();
+}
+`;
+    const tree = await parseTs(src);
+    const result = extractRequestBodySchema(tree, src);
+    expect(result).not.toBeNull();
+    expect(result!.ref).toBe("CreateUserSchema");
+    expect(result!.resolved).toBe(false);
+  });
+
+  it("returns null when no validation present", async () => {
+    const src = `
+export async function POST(req) {
+  const body = await req.json();
+  return new Response();
+}
+`;
+    const tree = await parseTs(src);
+    const result = extractRequestBodySchema(tree, src);
+    expect(result).toBeNull();
+  });
+
+  it("returns type=form for req.formData()", async () => {
+    const src = `
+export async function POST(req) {
+  const form = await req.formData();
+  return new Response();
+}
+`;
+    const tree = await parseTs(src);
+    const result = extractRequestBodySchema(tree, src);
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("form");
+  });
+});
