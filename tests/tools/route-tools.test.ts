@@ -150,3 +150,55 @@ export async function GET() { return NextResponse.json({}); }`,
     expect(result.middleware!.applies).toBe(false);
   });
 });
+
+describe("server_actions in traceRoute", () => {
+  it("detects server actions called from route handler", async () => {
+    const repo = await createIndexedFixture({
+      "app/actions/updateUser.ts": `"use server";
+export async function updateUser(data: any) {
+  return { ok: true };
+}`,
+      "app/users/page.tsx": `import { updateUser } from "../actions/updateUser";
+export default function UsersPage() {
+  return <form action={updateUser}><button>Save</button></form>;
+}`,
+      "app/users/route.ts": `import { NextResponse } from "next/server";
+import { updateUser } from "../actions/updateUser";
+export async function POST() {
+  await updateUser({});
+  return NextResponse.json({});
+}`,
+    });
+    const result = await traceRoute(repo, "/users");
+    expect(result.server_actions).toBeDefined();
+    expect(result.server_actions!.length).toBeGreaterThanOrEqual(1);
+    expect(result.server_actions!.some((a) => a.name === "updateUser")).toBe(true);
+  });
+
+  it("returns empty server_actions when no use server files", async () => {
+    const repo = await createIndexedFixture({
+      "app/api/test/route.ts": `import { NextResponse } from "next/server";
+export async function GET() { return NextResponse.json({}); }`,
+    });
+    const result = await traceRoute(repo, "/api/test");
+    expect(result.server_actions).toEqual([]);
+  });
+
+  it("does not detect function-body use server (file-level only)", async () => {
+    const repo = await createIndexedFixture({
+      "app/lib/actions.ts": `export async function save() {
+  "use server";
+  return { ok: true };
+}`,
+      "app/api/test/route.ts": `import { NextResponse } from "next/server";
+import { save } from "../../lib/actions";
+export async function POST() {
+  await save();
+  return NextResponse.json({});
+}`,
+    });
+    const result = await traceRoute(repo, "/api/test");
+    // Function-body "use server" should NOT be detected
+    expect(result.server_actions).toEqual([]);
+  });
+});

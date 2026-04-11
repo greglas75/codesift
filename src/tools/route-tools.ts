@@ -5,8 +5,9 @@
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
 import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
-import { deriveUrlPath, computeLayoutChain, traceMiddleware } from "../utils/nextjs.js";
+import { deriveUrlPath, computeLayoutChain, traceMiddleware, scanDirective } from "../utils/nextjs.js";
 import type { MiddlewareTraceResult } from "../utils/nextjs.js";
+import { join } from "node:path";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -256,6 +257,48 @@ function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler
 /**
  * Detect DB operations in a symbol's call chain.
  */
+/**
+ * Detect server actions in the call chain by checking for "use server" directive
+ * at the file level (not function-body level).
+ */
+async function findServerActions(
+  repoRoot: string,
+  calleeSymbols: CodeSymbol[],
+  callChain: Array<{ name: string; file: string; kind: string; depth: number }>,
+): Promise<Array<{ name: string; file: string; called_from?: string }>> {
+  const actions: Array<{ name: string; file: string; called_from?: string }> = [];
+  const checkedFiles = new Map<string, boolean>();
+
+  for (const sym of calleeSymbols) {
+    const absPath = join(repoRoot, sym.file);
+
+    let hasDirective: boolean;
+    if (checkedFiles.has(sym.file)) {
+      hasDirective = checkedFiles.get(sym.file)!;
+    } else {
+      const directive = await scanDirective(absPath);
+      hasDirective = directive === "use server";
+      checkedFiles.set(sym.file, hasDirective);
+    }
+
+    if (hasDirective) {
+      // Find who called this symbol
+      const callerIdx = callChain.findIndex(
+        (c) => c.file === sym.file && c.name === sym.name,
+      );
+      const calledFrom = callerIdx > 0 ? callChain[callerIdx - 1]?.name : undefined;
+
+      actions.push({
+        name: sym.name,
+        file: sym.file,
+        called_from: calledFrom,
+      });
+    }
+  }
+
+  return actions;
+}
+
 function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
   const calls: DbCall[] = [];
   for (const sym of symbols) {
@@ -419,7 +462,7 @@ export async function traceRoute(
 
   const result: RouteTraceResult = { path, handlers, call_chain: callChain, db_calls: dbCalls };
 
-  // Next.js-specific: layout chain and middleware tracing
+  // Next.js-specific: layout chain, middleware, and server actions tracing
   const hasNextjsHandler = handlers.some((h) => h.framework === "nextjs");
   if (hasNextjsHandler) {
     const repoRoot = index.root;
@@ -445,6 +488,9 @@ export async function traceRoute(
     } catch {
       // Middleware tracing failed — skip
     }
+
+    // Server actions detection
+    result.server_actions = await findServerActions(repoRoot, allCalleeSymbols, callChain);
   }
 
   if (outputFormat === "mermaid") {
