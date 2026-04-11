@@ -167,9 +167,9 @@ function readConfigValue(
     const frag = value.namedChild(0);
     const text = frag?.type === "string_fragment" ? frag.text : value.text.slice(1, -1);
     if (name === "dynamic" && DYNAMIC_VALUES.has(text)) {
-      config.dynamic = text as RouteSegmentConfig["dynamic"];
+      config.dynamic = text as "auto" | "force-dynamic" | "force-static" | "error";
     } else if (name === "runtime" && RUNTIME_VALUES.has(text)) {
-      config.runtime = text as RouteSegmentConfig["runtime"];
+      config.runtime = text as "nodejs" | "edge";
     }
     return;
   }
