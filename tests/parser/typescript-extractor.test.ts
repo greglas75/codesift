@@ -303,6 +303,48 @@ describe("extractTypeScriptSymbols — React components", () => {
     expect(comp).toBeDefined();
     expect(comp!.kind).toBe("component");
   });
+
+  it("detects class extending React.Component as 'component'", async () => {
+    const source = `class MyComponent extends React.Component {
+  render() { return <div/>; }
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "MyComponent.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "MyComponent");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("detects class extending PureComponent as 'component'", async () => {
+    const source = `class Button extends PureComponent {
+  render() { return <button/>; }
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "Button.tsx", source, "test-repo");
+
+    const comp = symbols.find((s) => s.name === "Button");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+  });
+
+  it("keeps regular class as 'class'", async () => {
+    const source = `class UserService {
+  getUser() { return null; }
+}
+`;
+    const parser = await getParser("tsx");
+    const tree = parser!.parse(source);
+    const symbols = extractTypeScriptSymbols(tree, "UserService.ts", source, "test-repo");
+
+    const cls = symbols.find((s) => s.name === "UserService");
+    expect(cls).toBeDefined();
+    expect(cls!.kind).toBe("class");
+  });
 });
 
 describe("extractTypeScriptSymbols — React hooks", () => {

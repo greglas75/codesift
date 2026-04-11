@@ -62,6 +62,10 @@ Use this table to pick the right tool for each task:
 | index conversations | `index_conversations` |
 | structural diff | `diff_outline(since=)` |
 | what changed | `changed_symbols(since=)` |
+| React component tree | `trace_component_tree` |
+| React hook analysis | `analyze_hooks` |
+| find components | `search_symbols(kind="component")` |
+| find hooks | `search_symbols(kind="hook")` |
 
 ## When to Use (Situational Triggers)
 
@@ -92,6 +96,9 @@ Use this table to pick the right tool for each task:
 | security audit | `scan_secrets(min_confidence="high")` |
 | code audit | `search_patterns("empty-catch")` |
 | past decisions | `find_conversations_for_symbol` |
+| React codebase | `trace_component_tree("App")` + `analyze_hooks` |
+| React anti-patterns | `search_patterns("hook-in-condition")` |
+| React call graph (clean) | `trace_call_chain(filter_react_hooks=true)` |
 
 ## Key Parameters
 
@@ -99,7 +106,7 @@ Use this table to pick the right tool for each task:
 - `detail_level="compact"` — locations only (~15 tok/result vs ~150 default)
 - `token_budget=N` — cap output instead of guessing `top_k`
 - `file_pattern=` — always pass when scope is known (e.g. `"*.ts"`, `"src/tools/"`)
-- `kind=` — filter by type: `function`, `class`, `type`, `interface`
+- `kind=` — filter by type: `function`, `class`, `type`, `interface`, `component`, `hook`
 - `include_source=true` — include source code in results
 
 ### search_text

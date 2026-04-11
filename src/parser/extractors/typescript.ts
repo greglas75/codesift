@@ -99,6 +99,37 @@ function getWrappedFunction(callExpr: Parser.SyntaxNode): Parser.SyntaxNode | nu
   return null;
 }
 
+/** React base class names that indicate a class component */
+const REACT_COMPONENT_BASES = new Set([
+  "Component", "PureComponent",
+]);
+
+/**
+ * Check if a class extends React.Component or React.PureComponent.
+ * Handles: `extends Component`, `extends React.Component`, `extends PureComponent`.
+ */
+function isReactClassComponent(node: Parser.SyntaxNode): boolean {
+  // Look for extends clause: class_heritage → extends_clause → type_identifier or member_expression
+  for (const child of node.namedChildren) {
+    if (child.type === "class_heritage") {
+      for (const clause of child.namedChildren) {
+        if (clause.type === "extends_clause") {
+          const superclass = clause.namedChildren[0];
+          if (!superclass) continue;
+          // extends Component / extends PureComponent
+          if (superclass.type === "identifier" && REACT_COMPONENT_BASES.has(superclass.text)) return true;
+          // extends React.Component / extends React.PureComponent
+          if (superclass.type === "member_expression") {
+            const prop = superclass.childForFieldName("property");
+            if (prop && REACT_COMPONENT_BASES.has(prop.text)) return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Classify a function/arrow as component, hook, or function.
  * - Hook: name matches use[A-Z]
@@ -350,7 +381,9 @@ export function extractTypeScriptSymbols(
       case "class_declaration":
       case "abstract_class_declaration": {
         const name = getNodeName(node) ?? "<anonymous>";
-        const sym = makeSymbol(node, name, "class", filePath, source, repo, {
+        // React class component: class Foo extends Component / React.Component / PureComponent
+        const kind = isReactClassComponent(node) ? "component" as SymbolKind : "class" as SymbolKind;
+        const sym = makeSymbol(node, name, kind, filePath, source, repo, {
           parentId,
           docstring: getDocstring(node, source),
         });
