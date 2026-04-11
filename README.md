@@ -284,6 +284,7 @@ Full PHP code intelligence with first-on-market Yii2 framework awareness. No oth
 - Convention routing: `trace_route("site/index")` resolves to `SiteController::actionIndex()` (incl. module nesting)
 - `analyze_project` detects Yii2 via `composer.json` and extracts: controllers, models, modules, widgets, behaviors, components, assets, config files
 - 7 PHP-specific tools: namespace resolution (PSR-4), ActiveRecord schema extraction (relations, rules, behaviors), event/listener tracing, view mapping, service locator resolution, security scanning, project audit
+- **Auto-load**: PHP tools are automatically enabled when `composer.json` is detected at CWD — no need to call `discover_tools`/`describe_tools` first
 
 **Laravel support:**
 - Route tracing via `Route::get('/path', [Controller::class, 'method'])` pattern matching

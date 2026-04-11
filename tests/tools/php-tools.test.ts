@@ -206,3 +206,34 @@ use Yii;
     // "Yii" alone doesn't match — needs uppercase + backslash namespace
   });
 });
+
+describe("PHP tools auto-load on composer.json detection", () => {
+  it("includes all 7 PHP tools in the composer.json framework group", async () => {
+    // Read the register-tools source to verify the group config
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/register-tools.ts", "utf-8");
+
+    expect(source).toContain("FRAMEWORK_TOOL_GROUPS");
+    expect(source).toContain('"composer.json"');
+
+    // Verify all 7 PHP tools are in the auto-load list
+    const composerSection = source.slice(
+      source.indexOf('"composer.json"'),
+      source.indexOf('"composer.json"') + 600,
+    );
+    expect(composerSection).toContain("resolve_php_namespace");
+    expect(composerSection).toContain("analyze_activerecord");
+    expect(composerSection).toContain("trace_php_event");
+    expect(composerSection).toContain("find_php_views");
+    expect(composerSection).toContain("resolve_php_service");
+    expect(composerSection).toContain("php_security_scan");
+    expect(composerSection).toContain("php_project_audit");
+  });
+
+  it("has detectAutoLoadTools function that checks file existence", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/register-tools.ts", "utf-8");
+    expect(source).toContain("async function detectAutoLoadTools");
+    expect(source).toContain("existsSync");
+  });
+});

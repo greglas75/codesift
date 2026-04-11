@@ -152,6 +152,58 @@ export function getToolHandle(name: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Framework-specific tool auto-loading
+// ---------------------------------------------------------------------------
+
+/**
+ * Tool groups that should be auto-enabled when a matching project type is detected at CWD.
+ * Keys are detection signals (files at CWD root), values are tool names to enable.
+ */
+const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
+  // PHP / Yii2 / Laravel — detected by composer.json
+  "composer.json": [
+    "resolve_php_namespace",
+    "analyze_activerecord",
+    "trace_php_event",
+    "find_php_views",
+    "resolve_php_service",
+    "php_security_scan",
+    "php_project_audit",
+  ],
+  // Kotlin / Android / Gradle — detected by build.gradle.kts or settings.gradle.kts
+  "build.gradle.kts": [
+    "find_extension_functions",
+    "analyze_sealed_hierarchy",
+  ],
+  "settings.gradle.kts": [
+    "find_extension_functions",
+    "analyze_sealed_hierarchy",
+  ],
+  // Fallback — Android projects with Groovy gradle but Kotlin source
+  "build.gradle": [
+    "find_extension_functions",
+    "analyze_sealed_hierarchy",
+  ],
+};
+
+/**
+ * Detect project type at CWD and return list of tools that should be auto-enabled.
+ * Returns empty array if no framework-specific tools apply.
+ */
+async function detectAutoLoadTools(cwd: string): Promise<string[]> {
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+
+  const toEnable: string[] = [];
+  for (const [signalFile, tools] of Object.entries(FRAMEWORK_TOOL_GROUPS)) {
+    if (existsSync(join(cwd, signalFile))) {
+      toEnable.push(...tools);
+    }
+  }
+  return toEnable;
+}
+
+// ---------------------------------------------------------------------------
 // Tool definition type
 // ---------------------------------------------------------------------------
 
@@ -2365,6 +2417,22 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
         handle.disable();
       }
     }
+
+    // Auto-enable framework-specific tools when project type is detected at CWD.
+    // E.g. composer.json → enable PHP/Yii2 tools automatically.
+    detectAutoLoadTools(process.cwd())
+      .then((toEnable) => {
+        for (const name of toEnable) {
+          const h = toolHandles.get(name);
+          if (h) h.enable();
+        }
+        if (toEnable.length > 0) {
+          console.error(`[codesift] Auto-loaded ${toEnable.length} framework tools for detected project type: ${toEnable.join(", ")}`);
+        }
+      })
+      .catch(() => {
+        // Silently ignore — auto-detection is best-effort
+      });
   }
 
   // Register progressive shorteners for analysis tools with large outputs

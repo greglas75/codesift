@@ -23,6 +23,14 @@ To find hidden tools: `discover_tools(query="dead code")` → keyword search.
 To get full schema: `describe_tools(names=["find_dead_code"])` → returns params with types.
 To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
 
+### Framework tool auto-loading (NEW)
+Framework-specific tools are auto-enabled at startup when a signal file is detected at CWD:
+- `composer.json` → enables 7 PHP/Yii2 tools (resolve_php_namespace, analyze_activerecord,
+  trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit)
+
+Agents working in PHP projects see these tools in ListTools from the first call — no need to
+run `discover_tools`/`describe_tools` first. Config in `FRAMEWORK_TOOL_GROUPS` at `src/register-tools.ts`.
+
 ### search_text ranked mode (NEW)
 `search_text(repo, query, ranked=true)` classifies each hit by its containing function, deduplicates (max 2 per function), and ranks by symbol centrality. Returns `TextMatch` with `containing_symbol` field. Saves 1-3 follow-up get_symbol calls. Takes precedence over `auto_group`.
 

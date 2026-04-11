@@ -514,9 +514,11 @@ export class HonoExtractor {
         if (existing) {
           existing.entries.push(...entries);
         } else {
+          // scope_pattern is the raw scope (e.g., "*" or "/api/*") — downstream
+          // tools compile to regex via compileScopePattern()
           model.middleware_chains.push({
             scope,
-            scope_pattern: scope === "*" ? ".*" : scope.replace(/\*/g, ".*"),
+            scope_pattern: scope,
             owner_var: ownerVar,
             entries,
           });
