@@ -367,7 +367,7 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   "astro-glob-usage": {
     regex: /Astro\.glob\s*\(/,
-    description: "deprecated Astro.glob() — use getCollection() or import.meta.glob()",
+    description: "Astro.glob() REMOVED in Astro 6 — use getCollection() or import.meta.glob() (BREAKING)",
   },
   "astro-set-html-xss": {
     regex: /set:html=\{[^"'][^}]*\}/,
@@ -383,7 +383,7 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   "astro-legacy-content-collections": {
     regex: /src\/content\/config\.ts/,
-    description: "legacy content collection config — migrate to src/content.config.ts",
+    description: "Legacy content collections REMOVED in Astro 6 — migrate to src/content.config.ts + Content Layer API (BREAKING)",
   },
   "astro-no-image-dimensions": {
     regex: /<Image\s+(?![^>]*(?:width|height)\s*=)[^>]*\/?>/,
@@ -408,6 +408,10 @@ export const BUILTIN_PATTERNS: Record<string, {
   "astro-form-without-action": {
     regex: /<form(?!\s[^>]*\baction\s*=)[^>]*>/,
     description: "<form> without action attribute — consider Astro Actions for type-safe form handling",
+  },
+  "astro-view-transitions-deprecated": {
+    regex: /<ViewTransitions\s*\/?>/,
+    description: "<ViewTransitions /> renamed to <ClientRouter /> in Astro 6 (BREAKING) — update import from astro:transitions",
   },
   // Next.js anti-patterns
   "nextjs-wrong-router": {

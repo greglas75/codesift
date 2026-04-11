@@ -560,6 +560,22 @@ describe("pattern-tools — Astro anti-patterns", () => {
       expect(regex.test(`<form action="/api/submit">`)).toBe(false);
     });
   });
+
+  describe("astro-view-transitions-deprecated", () => {
+    const regex = BUILTIN_PATTERNS["astro-view-transitions-deprecated"]!.regex;
+
+    it("matches <ViewTransitions />", () => {
+      expect(regex.test(`<ViewTransitions />`)).toBe(true);
+    });
+
+    it("matches <ViewTransitions/>", () => {
+      expect(regex.test(`<ViewTransitions/>`)).toBe(true);
+    });
+
+    it("does not match <ClientRouter />", () => {
+      expect(regex.test(`<ClientRouter />`)).toBe(false);
+    });
+  });
 });
 
 describe("nextjs-wrong-router", () => {
