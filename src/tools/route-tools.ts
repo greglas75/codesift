@@ -23,6 +23,11 @@ const DB_PATTERNS = [
   /transaction\s*\{[\s\S]*?\.(select|insert|update|delete)/,
   /\.(findById|findAll|save|deleteById|findBy\w+)\s*\(/,
   /\bSchemaUtils\.(create|drop)/,
+  // Python — Django ORM, SQLAlchemy
+  /\.objects\.(get|filter|all|exclude|create|update|delete|aggregate|annotate|values|values_list|count|exists|first|last|bulk_create|bulk_update|get_or_create|update_or_create)\s*\(/,
+  /\.query\.(filter|filter_by|get|all|first|one|one_or_none|join|outerjoin|subquery)\s*\(/,
+  /session\.(add|delete|commit|rollback|flush|execute|query)\s*\(/,
+  /\.select_related\(|\.prefetch_related\(/,
 ];
 
 interface RouteHandler {
@@ -54,7 +59,8 @@ type RouteCallNode = RouteTraceResult["call_chain"][number];
 
 /**
  * Match a URL path pattern against a route definition.
- * Handles :param, [param], [...param], [[...param]] as wildcards.
+ * Handles :param, [param], [...param], [[...param]], <type:name> (Flask/Django),
+ * {name} (FastAPI) as wildcards.
  */
 export function matchPath(routePath: string, searchPath: string): boolean {
   const normalize = (p: string) => p.replace(/^\/|\/$/g, "").toLowerCase();
@@ -66,8 +72,8 @@ export function matchPath(routePath: string, searchPath: string): boolean {
   for (let i = 0; i < routeParts.length; i++) {
     const rp = routeParts[i]!;
     const sp = searchParts[i]!;
-    // Dynamic segments: :id, [id], [...slug], [[...slug]]
-    if (rp.startsWith(":") || rp.startsWith("[")) continue;
+    // Dynamic segments: :id, [id], [...slug], [[...slug]], <type:name>, {name}
+    if (rp.startsWith(":") || rp.startsWith("[") || rp.startsWith("<") || rp.startsWith("{")) continue;
     if (rp !== sp) return false;
   }
   return true;
@@ -244,6 +250,8 @@ function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHan
 
 /**
  * Find Express-style route handlers via router.get/app.post patterns.
+ * Restricted to JS/TS files to avoid false positives from Python test
+ * code like `client.get('/')` or Ruby/PHP method calls.
  */
 /**
  * Find Hono route handlers by consulting the HonoExtractor-produced model.
@@ -334,6 +342,10 @@ function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler
 
   for (const sym of index.symbols) {
     if (!sym.source) continue;
+    // Only scan JS/TS files — .get()/.post() is ambiguous across languages
+    if (!/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(sym.file)) continue;
+    // Skip test files to avoid matching test harness client calls
+    if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(sym.file)) continue;
 
     for (const method of methods) {
       const re = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`);
@@ -894,6 +906,167 @@ async function findSpringBootKotlinHandlers(
   return handlers;
 }
 
+// --- Python frameworks ---
+
+/**
+ * Detect Python test files by pytest naming conventions.
+ * Matches: test_*.py, *_test.py, conftest.py, and tests/ subdirectories.
+ */
+function isPythonTestFile(path: string): boolean {
+  const basename = path.split("/").pop() ?? path;
+  if (basename === "conftest.py") return true;
+  if (/^test_.*\.py$/.test(basename)) return true;
+  if (/_test\.py$/.test(basename)) return true;
+  if (/\/tests?\//.test(path)) return true;
+  return false;
+}
+
+/**
+ * Find Flask route handlers via @app.route() and @bp.route() decorators.
+ * Also handles @app.get/post/put/delete() (Flask 2.0+ shorthand).
+ */
+function findFlaskHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  // Exclude test files and conftest — users tracing a production route rarely
+  // want test fixture routes like `@app.route('/')` inside test_*.py
+  const pyFiles = index.files.filter(
+    (f) => f.path.endsWith(".py")
+      && !isPythonTestFile(f.path),
+  );
+
+  for (const file of pyFiles) {
+    const fileSymbols = index.symbols.filter((s) => s.file === file.path);
+    for (const sym of fileSymbols) {
+      if (!sym.decorators || sym.decorators.length === 0) continue;
+
+      for (const dec of sym.decorators) {
+        // Match @app.route('/path') or @bp.route('/path') — Flask-specific.
+        // For HTTP verb shortcuts (@app.get, @app.post), prefer FastAPI handler
+        // since the syntax is ambiguous between Flask 2.0+ and FastAPI.
+        const routeMatch = dec.match(
+          /@\w+\.route\s*\(\s*['"]([^'"]*)['"]/,
+        );
+        if (!routeMatch) continue;
+
+        const routePath = routeMatch[1] ?? "";
+        if (!matchPath(routePath, searchPath)) continue;
+
+        // @app.route can handle any method — omit method field
+        handlers.push({
+          symbol: stripSource(sym),
+          file: file.path,
+          framework: "flask",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find FastAPI route handlers via @app.get/post/put/delete() and @router.get() decorators.
+ * Handles APIRouter prefix extraction.
+ */
+function findFastAPIHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  const pyFiles = index.files.filter(
+    (f) => f.path.endsWith(".py")
+      && !isPythonTestFile(f.path),
+  );
+
+  for (const file of pyFiles) {
+    const fileSymbols = index.symbols.filter((s) => s.file === file.path);
+    for (const sym of fileSymbols) {
+      if (!sym.decorators || sym.decorators.length === 0) continue;
+
+      for (const dec of sym.decorators) {
+        // Match @app.get('/path') or @router.get('/path') etc.
+        const routeMatch = dec.match(
+          /@\w+\.(get|post|put|delete|patch|options|head)\s*\(\s*['"]([^'"]*)['"]/,
+        );
+        if (!routeMatch) continue;
+
+        const method = routeMatch[1]!.toUpperCase();
+        const routePath = routeMatch[2] ?? "";
+
+        if (!matchPath(routePath, searchPath)) continue;
+
+        handlers.push({
+          symbol: stripSource(sym),
+          file: file.path,
+          method,
+          framework: "fastapi",
+        });
+      }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Django route handlers by parsing urlpatterns in urls.py files.
+ * Handles path(), re_path(), and include() chains.
+ */
+async function findDjangoHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  // Find urls.py files
+  const urlFiles = index.files.filter((f) =>
+    f.path.endsWith("urls.py"),
+  );
+
+  for (const file of urlFiles) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch { continue; }
+
+    // Extract path() patterns: path('users/', views.user_list, name='...')
+    // and path('users/<int:pk>/', views.user_detail)
+    const pathRe = /path\s*\(\s*['"]([^'"]*)['"]\s*,\s*([\w.]+)/g;
+    let match: RegExpExecArray | null;
+
+    // Get the URL prefix from the file's directory context
+    // e.g., if this urls.py is included from a parent with prefix 'api/'
+    while ((match = pathRe.exec(source)) !== null) {
+      const routePath = match[1] ?? "";
+      const viewRef = match[2] ?? "";
+
+      // Skip include() references
+      if (viewRef === "include") continue;
+
+      // Convert Django <type:name> to :name for matchPath
+      const normalizedPath = `/${routePath}`.replace(/<\w+:(\w+)>/g, ":$1").replace(/\/+/g, "/");
+      if (!matchPath(normalizedPath, searchPath)) continue;
+
+      // Resolve view reference to a symbol
+      const viewName = viewRef.split(".").pop() ?? viewRef;
+      const sym = index.symbols.find((s) => s.name === viewName && s.file.endsWith(".py"));
+
+      handlers.push({
+        symbol: sym
+          ? stripSource(sym)
+          : {
+              id: `${file.path}:${viewName}`,
+              name: viewName,
+              kind: "function",
+              file: file.path,
+              start_line: 1,
+              end_line: 1,
+            } as ReturnType<typeof stripSource>,
+        file: sym?.file ?? file.path,
+        framework: "django",
+      });
+    }
+  }
+
+  return handlers;
+}
+
 /**
  * Trace an HTTP route: find handler, trace callees, identify DB calls.
  */
@@ -918,6 +1091,9 @@ export async function traceRoute(
     ...(await findKtorHandlers(index, path)),
     ...(await findSpringBootKotlinHandlers(index, path)),
     ...astroHandlers,
+    ...findFastAPIHandlers(index, path),
+    ...findFlaskHandlers(index, path),
+    ...(await findDjangoHandlers(index, path)),
   ];
 
   if (handlers.length === 0) {

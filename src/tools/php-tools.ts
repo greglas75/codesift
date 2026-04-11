@@ -1,10 +1,11 @@
 /**
  * PHP/Yii2-specific code intelligence tools.
  *
- * Provides 7 hidden/discoverable tools that augment generic code intelligence
+ * Provides 9 hidden/discoverable tools that augment generic code intelligence
  * with PHP framework awareness: PSR-4 namespace resolution, ActiveRecord schema
  * extraction, event/listener tracing, view mapping, service locator resolution,
- * security scanning, and a compound project audit.
+ * security scanning, compound project audit (9-gate), N+1 query detection,
+ * and god-model detection.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";

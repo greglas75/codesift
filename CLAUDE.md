@@ -25,8 +25,9 @@ To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
 
 ### Framework tool auto-loading (NEW)
 Framework-specific tools are auto-enabled at startup when a signal file is detected at CWD:
-- `composer.json` → enables 7 PHP/Yii2 tools (resolve_php_namespace, analyze_activerecord,
-  trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit)
+- `composer.json` → enables 9 PHP/Yii2 tools (resolve_php_namespace, analyze_activerecord,
+  trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit,
+  find_php_n_plus_one, find_php_god_model)
 - `build.gradle.kts` / `settings.gradle.kts` / `build.gradle` → enables 5 Kotlin tools
   (find_extension_functions, analyze_sealed_hierarchy, trace_hilt_graph,
   trace_suspend_chain, analyze_kmp_declarations)

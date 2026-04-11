@@ -4,6 +4,7 @@ import { z } from "zod";
 /** Boolean that also accepts "true"/"false" strings (LLMs often send strings instead of booleans) */
 const zBool = () => z.union([z.boolean(), z.string().transform((s) => s === "true")]).optional();
 import { wrapTool, registerShortener } from "./server-helpers.js";
+import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/language-detect.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, getCodeIndex } from "./tools/index-tools.js";
 import { STUB_LANGUAGES } from "./parser/parser-manager.js";
 import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
@@ -372,6 +373,12 @@ interface ToolDefinition {
   searchHint?: string;
   /** Output schema for structured validation and documentation (optional) */
   outputSchema?: z.ZodTypeAny;
+  /**
+   * Language gate: this tool is only enabled when the project contains
+   * files of the given language. E.g. "python" disables the tool when
+   * no .py files exist. Checked at server startup against process.cwd().
+   */
+  requiresLanguage?: "python" | "php" | "kotlin";
 }
 
 // ---------------------------------------------------------------------------
@@ -1704,6 +1711,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "find_extension_functions",
     category: "analysis",
+    requiresLanguage: "kotlin",
     searchHint: "kotlin extension function receiver type method discovery",
     description: "Find all Kotlin extension functions for a given receiver type. Scans indexed symbols for signatures matching 'ReceiverType.' prefix.",
     schema: {
@@ -1720,6 +1728,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "analyze_sealed_hierarchy",
     category: "analysis",
+    requiresLanguage: "kotlin",
     searchHint: "kotlin sealed class interface subtype when exhaustive branch missing hierarchy",
     description: "Analyze a Kotlin sealed class/interface: find all subtypes and check when() blocks for exhaustiveness (missing branches).",
     schema: {
@@ -1779,6 +1788,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "resolve_php_namespace",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php namespace resolve PSR-4 autoload composer class file path yii2 laravel symfony",
     description: "Resolve a PHP FQCN to file path via composer.json PSR-4 autoload mapping.",
     schema: {
@@ -1792,6 +1802,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "analyze_activerecord",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php activerecord eloquent model schema relations rules behaviors table yii2 laravel orm",
     description: "Extract PHP ActiveRecord/Eloquent model schema: table name, relations, validation rules, behaviors.",
     schema: {
@@ -1809,6 +1820,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "trace_php_event",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php event listener trigger handler chain yii2 laravel observer dispatch",
     description: "Trace PHP event → listener chains: find trigger() calls and matching on() handlers.",
     schema: {
@@ -1824,6 +1836,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "find_php_views",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php view render template controller widget yii2 laravel blade",
     description: "Map PHP controller render() calls to view files. Yii2/Laravel convention-aware.",
     schema: {
@@ -1839,6 +1852,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "resolve_php_service",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php service locator DI container component resolve yii2 laravel facade provider",
     description: "Resolve PHP service locator references (Yii::$app->X, Laravel facades) to concrete classes via config parsing.",
     schema: {
@@ -1854,6 +1868,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "php_security_scan",
     category: "security",
+    requiresLanguage: "php",
     searchHint: "php security scan audit vulnerability injection XSS CSRF SQL eval exec unserialize",
     description: "Scan PHP code for security vulnerabilities: SQL injection, XSS, eval, exec, unserialize, file inclusion. Parallel pattern checks.",
     schema: {
@@ -1871,6 +1886,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "php_project_audit",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php project audit health quality technical debt code review comprehensive yii2 laravel",
     description: "Compound PHP project audit: security scan + ActiveRecord analysis + health score. Runs checks in parallel.",
     schema: {
@@ -3205,8 +3221,26 @@ export function discoverTools(query: string, category?: string): {
 // Registration loop
 // ---------------------------------------------------------------------------
 
-export function registerTools(server: McpServer, options?: { deferNonCore?: boolean }): void {
+export function registerTools(
+  server: McpServer,
+  options?: { deferNonCore?: boolean; projectRoot?: string },
+): void {
   const deferNonCore = options?.deferNonCore ?? false;
+  const projectRoot = options?.projectRoot ?? process.cwd();
+
+  // Detect which languages the project actually uses — drives language-gated
+  // tool registration. Tools with requiresLanguage="python" are only surfaced
+  // when .py files exist, same for PHP and Kotlin.
+  let languages: ProjectLanguages;
+  try {
+    languages = detectProjectLanguagesSync(projectRoot);
+  } catch {
+    // On failure, enable everything — conservative fallback
+    languages = {
+      python: true, php: true, typescript: true, javascript: true,
+      kotlin: true, go: true, rust: true, ruby: true,
+    };
+  }
 
   // Clear handles from any previous registration (e.g. tests calling registerTools multiple times)
   toolHandles.clear();
@@ -3220,6 +3254,16 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
       async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
     );
     toolHandles.set(tool.name, handle);
+  }
+
+  // Language-gated disabling — tools requiring a language absent from the
+  // project are disabled (still registered but hidden from ListTools).
+  // Users can re-enable via describe_tools(reveal=true) if needed.
+  for (const tool of TOOL_DEFINITIONS) {
+    if (!tool.requiresLanguage) continue;
+    if (languages[tool.requiresLanguage]) continue;
+    const handle = toolHandles.get(tool.name);
+    if (handle) handle.disable();
   }
 
   // Always register discover_tools meta-tool

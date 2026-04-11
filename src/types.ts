@@ -142,6 +142,9 @@ export type RouteFramework =
   | "ktor"
   | "spring-kotlin"
   | "astro"
+  | "flask"
+  | "fastapi"
+  | "django"
   | "unknown";
 
 export interface CallNode {
