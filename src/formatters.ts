@@ -793,6 +793,7 @@ import type { ServerActionsAuditResult } from "./tools/nextjs-security-tools.js"
 import type { ApiContractResult } from "./tools/nextjs-api-contract-tools.js";
 import type { NextjsBoundaryResult } from "./tools/nextjs-boundary-tools.js";
 import type { LinkIntegrityResult } from "./tools/nextjs-link-tools.js";
+import type { NextjsDataFlowResult } from "./tools/nextjs-data-flow-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -996,6 +997,34 @@ export function formatNextjsBoundaryAnalyzer(result: NextjsBoundaryResult): stri
     const imports = String(e.signals.import_count).padStart(7);
     const score = String(e.score).padStart(5);
     lines.push(`${rank} ${path} ${loc} ${imports} ${score}`);
+  }
+  lines.push("");
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsDataFlow(result: NextjsDataFlowResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS DATA FLOW");
+  lines.push("");
+  lines.push(`Pages: ${result.total_pages} | Waterfalls: ${result.total_waterfalls}`);
+  if (Object.keys(result.cache_summary).length > 0) {
+    const cacheParts = Object.entries(result.cache_summary).map(([k, v]) => `${k}=${v}`);
+    lines.push(`Cache: ${cacheParts.join(" ")}`);
+  }
+  lines.push("");
+  lines.push("URL Path                            Fetches Waterfall");
+  lines.push("─────────────────────────────────── ─────── ─────────");
+  for (const e of result.entries.slice(0, 100)) {
+    const url = e.url_path.padEnd(35).slice(0, 35);
+    const fetches = String(e.fetches.length).padStart(7);
+    const wf = String(e.waterfall_count).padStart(9);
+    lines.push(`${url} ${fetches} ${wf}`);
   }
   lines.push("");
   if (result.workspaces_scanned.length > 0) {

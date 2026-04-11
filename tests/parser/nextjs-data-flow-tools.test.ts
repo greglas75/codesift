@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
@@ -131,6 +131,32 @@ describe("nextjsDataFlow orchestrator", () => {
       expect(result.total_waterfalls).toBe(0);
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("matches pre-authored expected.json (fixture)", async () => {
+    const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-data-flow");
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-data-flow",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+    const expectedRaw = await readFile(resolve(fixtureRoot, "expected.json"), "utf8");
+    const expected = JSON.parse(expectedRaw) as {
+      total_pages: number;
+      total_waterfalls: number;
+      waterfall_url_paths: string[];
+    };
+    const result = await nextjsDataFlow("nextjs-data-flow");
+    expect(result.total_pages).toBe(expected.total_pages);
+    expect(result.total_waterfalls).toBe(expected.total_waterfalls);
+    for (const url_path of expected.waterfall_url_paths) {
+      const entry = result.entries.find((e) => e.url_path === url_path);
+      expect(entry).toBeDefined();
+      expect(entry!.waterfall_count).toBeGreaterThanOrEqual(1);
     }
   });
 

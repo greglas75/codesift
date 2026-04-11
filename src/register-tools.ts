@@ -53,6 +53,7 @@ import { nextjsAuditServerActions } from "./tools/nextjs-security-tools.js";
 import { nextjsApiContract } from "./tools/nextjs-api-contract-tools.js";
 import { nextjsBoundaryAnalyzer } from "./tools/nextjs-boundary-tools.js";
 import { nextjsLinkIntegrity } from "./tools/nextjs-link-tools.js";
+import { nextjsDataFlow } from "./tools/nextjs-data-flow-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -69,7 +70,7 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow } from "./formatters.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
@@ -2699,6 +2700,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.max_files != null) opts.max_files = args.max_files as number;
       const result = await nextjsLinkIntegrity(args.repo as string ?? "", opts);
       return formatNextjsLinkIntegrity(result);
+    },
+  },
+  {
+    name: "nextjs_data_flow",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs data flow fetch waterfall cache cookies headers ssr revalidate",
+    description: "Analyze data fetching patterns in Next.js pages: detect fetch waterfalls (sequential awaits in same scope), classify cache strategies (no-cache, cached, ISR), and aggregate per-page data flow with totals.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      url_path: z.string().optional().describe("Filter to a single URL path"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsDataFlow>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.url_path != null) opts.url_path = args.url_path as string;
+      const result = await nextjsDataFlow(args.repo as string ?? "", opts);
+      return formatNextjsDataFlow(result);
     },
   },
 
