@@ -1045,3 +1045,127 @@ export function extractZodSchema(tree: Parser.Tree, _source: string): ZodShape |
 
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Link/href extraction (T5 helper)
+// ---------------------------------------------------------------------------
+
+export type LinkRefKind = "link" | "router_push" | "router_replace";
+
+export interface LinkRef {
+  /** Literal href value when isDynamic=false; raw expression text otherwise. */
+  href: string;
+  /** True if the href is a template literal with substitutions or a non-literal expression. */
+  isDynamic: boolean;
+  /** 1-indexed line number of the attribute / call site. */
+  line: number;
+  /** The kind of navigation source. */
+  kind: LinkRefKind;
+}
+
+/**
+ * Extract navigation target references from a parsed tree:
+ *   - `<Link href="/path">` JSX components
+ *   - `router.push("/path")` / `router.replace("/path")` call sites
+ *
+ * Literal string values populate `href` with the unquoted content and
+ * `isDynamic: false`. Template literals with substitutions and identifier
+ * references populate `href` with the raw expression text and `isDynamic: true`.
+ */
+export function extractLinkHrefs(tree: Parser.Tree, _source: string): LinkRef[] {
+  const refs: LinkRef[] = [];
+  const root = tree.rootNode;
+
+  // <Link href="...">
+  for (const opening of root.descendantsOfType("jsx_opening_element")) {
+    const name = opening.childForFieldName("name") ?? opening.namedChild(0);
+    if (name?.type !== "identifier" || name.text !== "Link") continue;
+    for (const attr of opening.namedChildren) {
+      if (attr.type !== "jsx_attribute") continue;
+      const attrName = attr.namedChild(0);
+      if (!attrName) continue;
+      const attrNameText =
+        attrName.type === "property_identifier" || attrName.type === "identifier"
+          ? attrName.text
+          : null;
+      if (attrNameText !== "href") continue;
+      const value = attr.namedChild(1);
+      if (!value) continue;
+      const line = attr.startPosition.row + 1;
+
+      if (value.type === "string") {
+        const s = readStringLiteral(value);
+        refs.push({
+          href: s ?? value.text,
+          isDynamic: false,
+          line,
+          kind: "link",
+        });
+      } else if (value.type === "jsx_expression") {
+        const inner = value.namedChildren[0];
+        if (!inner) continue;
+        if (inner.type === "string") {
+          const s = readStringLiteral(inner);
+          refs.push({ href: s ?? inner.text, isDynamic: false, line, kind: "link" });
+        } else if (inner.type === "template_string") {
+          // template literal — dynamic unless fully literal
+          const hasSubs = inner.namedChildren.some((c) => c.type === "template_substitution");
+          if (!hasSubs) {
+            const literal = readStringLiteral(inner);
+            refs.push({
+              href: literal ?? inner.text,
+              isDynamic: false,
+              line,
+              kind: "link",
+            });
+          } else {
+            refs.push({ href: inner.text, isDynamic: true, line, kind: "link" });
+          }
+        } else {
+          // identifier, call, etc. — dynamic
+          refs.push({ href: inner.text, isDynamic: true, line, kind: "link" });
+        }
+      }
+    }
+  }
+
+  // router.push(...) / router.replace(...)
+  for (const call of root.descendantsOfType("call_expression")) {
+    const fn = call.childForFieldName("function") ?? call.namedChild(0);
+    if (!fn || fn.type !== "member_expression") continue;
+    const obj = fn.childForFieldName("object") ?? fn.namedChild(0);
+    const prop = fn.childForFieldName("property") ?? fn.namedChild(1);
+    if (obj?.type !== "identifier" || obj.text !== "router") continue;
+    if (prop?.type !== "property_identifier") continue;
+    const method = prop.text;
+    if (method !== "push" && method !== "replace") continue;
+
+    const args = call.childForFieldName("arguments") ?? call.namedChild(1);
+    const firstArg = args?.namedChildren[0];
+    if (!firstArg) continue;
+    const line = call.startPosition.row + 1;
+    const kind: LinkRefKind = method === "push" ? "router_push" : "router_replace";
+
+    if (firstArg.type === "string") {
+      const s = readStringLiteral(firstArg);
+      refs.push({
+        href: s ?? firstArg.text,
+        isDynamic: false,
+        line,
+        kind,
+      });
+    } else if (firstArg.type === "template_string") {
+      const hasSubs = firstArg.namedChildren.some((c) => c.type === "template_substitution");
+      if (!hasSubs) {
+        const literal = readStringLiteral(firstArg);
+        refs.push({ href: literal ?? firstArg.text, isDynamic: false, line, kind });
+      } else {
+        refs.push({ href: firstArg.text, isDynamic: true, line, kind });
+      }
+    } else {
+      refs.push({ href: firstArg.text, isDynamic: true, line, kind });
+    }
+  }
+
+  return refs;
+}

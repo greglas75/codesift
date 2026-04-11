@@ -4,6 +4,7 @@ import {
   parseMetadataExport,
   extractFetchCalls,
   extractZodSchema,
+  extractLinkHrefs,
 } from "../../src/utils/nextjs.js";
 
 async function parse(source: string) {
@@ -273,5 +274,75 @@ const schema = yup.object({ name: yup.string() });
     const tree = await parse(src);
     const shape = extractZodSchema(tree, src);
     expect(shape).toBeNull();
+  });
+});
+
+describe("extractLinkHrefs", () => {
+  it("captures literal Link href with isDynamic=false", async () => {
+    const src = `
+import Link from 'next/link';
+export default function Nav() {
+  return <Link href="/about">About</Link>;
+}
+`;
+    const tree = await parse(src);
+    const refs = extractLinkHrefs(tree, src);
+    const linkRefs = refs.filter((r) => r.kind === "link");
+    expect(linkRefs.length).toBe(1);
+    expect(linkRefs[0]!.href).toBe("/about");
+    expect(linkRefs[0]!.isDynamic).toBe(false);
+  });
+
+  it("flags template-literal Link href as dynamic", async () => {
+    const src = `
+import Link from 'next/link';
+export default function Nav({ id }: { id: string }) {
+  return <Link href={\`/users/\${id}\`}>User</Link>;
+}
+`;
+    const tree = await parse(src);
+    const refs = extractLinkHrefs(tree, src);
+    const linkRefs = refs.filter((r) => r.kind === "link");
+    expect(linkRefs.length).toBe(1);
+    expect(linkRefs[0]!.isDynamic).toBe(true);
+  });
+
+  it("captures router.push with string literal", async () => {
+    const src = `
+export default function Logout() {
+  const onClick = () => router.push("/dashboard");
+  return <button onClick={onClick}/>;
+}
+`;
+    const tree = await parse(src);
+    const refs = extractLinkHrefs(tree, src);
+    const pushRefs = refs.filter((r) => r.kind === "router_push");
+    expect(pushRefs.length).toBe(1);
+    expect(pushRefs[0]!.href).toBe("/dashboard");
+  });
+
+  it("captures router.replace with string literal", async () => {
+    const src = `
+export default function AuthGate() {
+  const redirect = () => router.replace("/login");
+  return <div onClick={redirect}/>;
+}
+`;
+    const tree = await parse(src);
+    const refs = extractLinkHrefs(tree, src);
+    const replaceRefs = refs.filter((r) => r.kind === "router_replace");
+    expect(replaceRefs.length).toBe(1);
+    expect(replaceRefs[0]!.href).toBe("/login");
+  });
+
+  it("ignores <a href> — only Link JSX components match", async () => {
+    const src = `
+export default function Nav() {
+  return <a href="/external">External</a>;
+}
+`;
+    const tree = await parse(src);
+    const refs = extractLinkHrefs(tree, src);
+    expect(refs.length).toBe(0);
   });
 });
