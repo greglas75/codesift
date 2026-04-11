@@ -53,3 +53,38 @@ export async function scanDirective(
     return null;
   }
 }
+
+/** App Router convention file names (without extension). */
+const APP_CONVENTION_FILES = /^(page|layout|route|loading|error|not-found|global-error|default|template)$/;
+
+/**
+ * Derive a URL path from a file path relative to the repo root.
+ * Handles App Router route groups, dynamic segments, and Pages Router conventions.
+ */
+export function deriveUrlPath(filePath: string, router: "app" | "pages"): string {
+  let p = filePath;
+
+  // Strip leading src/ if present
+  if (p.startsWith("src/")) p = p.slice(4);
+
+  if (router === "app") {
+    // Strip app/ prefix
+    p = p.replace(/^app\//, "");
+    // Strip convention file at end (page.tsx, layout.tsx, route.ts, etc.)
+    p = p.replace(/\/?(page|layout|route|loading|error|not-found|global-error|default|template)\.[jt]sx?$/, "");
+    // Strip route groups like (auth)
+    p = p.replace(/\([^)]+\)\/?/g, "");
+    // Clean up trailing slash
+    p = p.replace(/\/+$/, "");
+  } else {
+    // Pages Router: strip pages/ prefix and file extension
+    p = p.replace(/^pages\//, "");
+    p = p.replace(/\.[jt]sx?$/, "");
+    // Strip index at end
+    if (p === "index" || p.endsWith("/index")) {
+      p = p.replace(/\/?index$/, "");
+    }
+  }
+
+  return p ? `/${p}` : "/";
+}

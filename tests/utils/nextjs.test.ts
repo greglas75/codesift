@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scanDirective } from "../../src/utils/nextjs.js";
+import { scanDirective, deriveUrlPath } from "../../src/utils/nextjs.js";
 
 let tmpDir: string;
 
@@ -78,5 +78,31 @@ describe("scanDirective", () => {
       "FarDirective.tsx": padding + `"use client";\n`,
     });
     expect(await scanDirective(join(root, "FarDirective.tsx"))).toBe(null);
+  });
+});
+
+describe("deriveUrlPath", () => {
+  it("derives root path for app/page.tsx", () => {
+    expect(deriveUrlPath("app/page.tsx", "app")).toBe("/");
+  });
+
+  it("strips route groups", () => {
+    expect(deriveUrlPath("app/(auth)/login/page.tsx", "app")).toBe("/login");
+  });
+
+  it("preserves dynamic segments", () => {
+    expect(deriveUrlPath("app/products/[id]/page.tsx", "app")).toBe("/products/[id]");
+  });
+
+  it("preserves catch-all segments", () => {
+    expect(deriveUrlPath("app/blog/[...slug]/page.tsx", "app")).toBe("/blog/[...slug]");
+  });
+
+  it("derives pages router paths", () => {
+    expect(deriveUrlPath("pages/api/users.ts", "pages")).toBe("/api/users");
+  });
+
+  it("strips src/ prefix for app router", () => {
+    expect(deriveUrlPath("src/app/page.tsx", "app")).toBe("/");
   });
 });
