@@ -412,10 +412,14 @@ export interface NestGuardChainEntry {
   controller: string;
   file: string;
   chain: Array<{
-    layer: "global" | "controller" | "method";
-    type: "guard" | "interceptor" | "pipe" | "filter";
+    /** G1: "middleware" layer for NestModule.configure(consumer) entries */
+    layer: "global" | "controller" | "method" | "middleware";
+    /** G4: "metadata" type for custom decorators like @Roles('admin') */
+    type: "guard" | "interceptor" | "pipe" | "filter" | "metadata";
     name: string;
     file?: string;
+    /** G4: raw decorator argument text (e.g., "admin" from @Roles('admin')) */
+    args?: string;
   }>;
 }
 
@@ -483,6 +487,30 @@ function parseUseFilters(source: string): string[] {
 
 type ChainItem = NestGuardChainEntry["chain"][number];
 
+/** G1: glob-like matching for NestJS middleware forRoutes against resolved route paths */
+function matchMiddlewareRoute(
+  mwRoute: { path: string; method?: string },
+  routePath: string,
+  routeMethod: string,
+): boolean {
+  // Method filter
+  if (mwRoute.method && mwRoute.method !== "ALL" && mwRoute.method !== routeMethod) return false;
+
+  // Normalise both sides to leading-slash form for comparison
+  const norm = (p: string) => "/" + p.replace(/^\/+|\/+$/g, "");
+  const mwNorm = norm(mwRoute.path);
+  const routeNorm = norm(routePath);
+
+  // '*' matches everything
+  if (mwNorm === "/*" || mwRoute.path === "*") return true;
+
+  // Convert NestJS glob (users/*) into anchored regex
+  // escape regex metachars except '*', then replace '*' with '.*'
+  const escaped = mwNorm.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const re = new RegExp(`^${escaped}($|/)`);
+  return re.test(routeNorm);
+}
+
 export async function nestGuardChain(
   repo: string,
   options?: { path?: string; max_routes?: number },
@@ -495,8 +523,9 @@ export async function nestGuardChain(
   const errors: NestToolError[] = [];
   let truncated = false;
 
-  // 1. Collect global guards/interceptors/pipes from module files
+  // 1. Collect global guards/interceptors/pipes from module files + G1 middleware chains
   const globalChain: ChainItem[] = [];
+  const middlewareEntries: Array<{ middleware: string; routes: Array<{ path: string; method?: string }>; file: string }> = [];
   for (const file of index.files) {
     if (!file.path.endsWith(".module.ts") && !file.path.endsWith(".module.js")) continue;
     let source: string;
@@ -506,6 +535,10 @@ export async function nestGuardChain(
     for (const f of conv.global_filters) globalChain.push({ layer: "global", type: "filter", name: f.name, file: f.file });
     for (const p of conv.global_pipes) globalChain.push({ layer: "global", type: "pipe", name: p.name, file: p.file });
     for (const i of conv.global_interceptors) globalChain.push({ layer: "global", type: "interceptor", name: i.name, file: i.file });
+    // G1: defensive default since middleware_chains is optional on older profiles
+    for (const mw of conv.middleware_chains ?? []) {
+      middlewareEntries.push({ middleware: mw.middleware, routes: mw.routes, file: mw.file });
+    }
   }
 
   // 2. Scan controller files
@@ -551,7 +584,9 @@ export async function nestGuardChain(
     for (let idx = 0; idx < allMethodPositions.length; idx++) {
       if (routes.length >= maxRoutes) { truncated = true; break; }
       const mm = allMethodPositions[idx]!;
-      const fullPath = `/${ctrlPrefix}/${mm.path}`.replace(/\/+/g, "/") || "/";
+      // Normalise: collapse slashes, trim trailing slash (except for root "/")
+      const rawPath = `/${ctrlPrefix}/${mm.path}`.replace(/\/+/g, "/");
+      const fullPath = rawPath.length > 1 ? rawPath.replace(/\/$/, "") : rawPath;
 
       if (options?.path && fullPath !== options.path) continue;
 
@@ -563,12 +598,23 @@ export async function nestGuardChain(
       const methodPipes: ChainItem[] = parseUsePipes(methodCtx).map((n) => ({ layer: "method" as const, type: "pipe" as const, name: n }));
       const methodFilters: ChainItem[] = parseUseFilters(methodCtx).map((n) => ({ layer: "method" as const, type: "filter" as const, name: n }));
 
+      // G1: match middleware entries against this route
+      const middlewareChain: ChainItem[] = [];
+      for (const mw of middlewareEntries) {
+        for (const mwRoute of mw.routes) {
+          if (matchMiddlewareRoute(mwRoute, fullPath, mm.method.toUpperCase())) {
+            middlewareChain.push({ layer: "middleware", type: "guard", name: mw.middleware, file: mw.file });
+            break;
+          }
+        }
+      }
+
       routes.push({
         route: fullPath,
         method: mm.method.toUpperCase(),
         controller: ctrlClass,
         file: file.path,
-        chain: [...globalChain, ...ctrlLevelChain, ...methodGuards, ...methodInterceptors, ...methodPipes, ...methodFilters],
+        chain: [...globalChain, ...middlewareChain, ...ctrlLevelChain, ...methodGuards, ...methodInterceptors, ...methodPipes, ...methodFilters],
       });
     }
   }

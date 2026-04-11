@@ -673,6 +673,66 @@ export class TestController {
     const ctrlGuards = result.routes[0]!.chain.filter((c) => c.layer === "controller" && c.type === "guard");
     expect(ctrlGuards).toEqual([]);
   });
+
+  it("G1: middleware-based auth appears in guard chain", async () => {
+    // Module with middleware.configure(consumer) applying AuthMiddleware to users/*
+    await writeFile(join(tmpRoot, "src/app.module.ts"), `
+import { Module, NestModule, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
+import { AuthMiddleware } from './auth.middleware';
+
+@Module({
+  imports: [],
+  controllers: [],
+  providers: [],
+})
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(AuthMiddleware)
+      .forRoutes({ path: 'users/*', method: RequestMethod.ALL });
+  }
+}
+`);
+    // Users controller with protected routes — no @UseGuards, only middleware
+    await writeFile(join(tmpRoot, "src/users.controller.ts"), `
+import { Controller, Get } from '@nestjs/common';
+
+@Controller('users')
+export class UsersController {
+  @Get(':id')
+  findOne() { return {}; }
+}
+`);
+    // Health controller — should NOT receive middleware
+    await writeFile(join(tmpRoot, "src/health.controller.ts"), `
+@Controller('health')
+export class HealthController {
+  @Get()
+  check() { return 'ok'; }
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/app.module.ts",
+      "src/users.controller.ts",
+      "src/health.controller.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestGuardChain("test-repo");
+
+    const usersRoute = result.routes.find((r) => r.route === "/users/:id");
+    expect(usersRoute).toBeDefined();
+    const middlewareEntries = usersRoute!.chain.filter((c) => c.layer === "middleware");
+    expect(middlewareEntries.length).toBe(1);
+    expect(middlewareEntries[0]!.name).toBe("AuthMiddleware");
+
+    // Regression: health route has no middleware (not a "users/*" match)
+    const healthRoute = result.routes.find((r) => r.route === "/health");
+    expect(healthRoute).toBeDefined();
+    const healthMiddleware = healthRoute!.chain.filter((c) => c.layer === "middleware");
+    expect(healthMiddleware).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
