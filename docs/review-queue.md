@@ -193,3 +193,7 @@ Commits pending review. Auto-managed:
 - 33e14e8 (2026-04-11) add HonoAppModel types for hono extractor
 - a03414d (2026-04-11) amend hono plan with adversarial review fixes (revision 2)
 - 6e30a8e (2026-04-11) feat: Python foundation + Astro/Next.js/NestJS/SQL specs and plans
+- 99e245d (2026-04-11) chore: track Python foundation commit in review queue
+- 525d91f (2026-04-11) add HonoExtractor with tree-sitter scaffold and route detection
+- e7c4f4d (2026-04-11) feat(react): Wave 4 — context bundle, suggest_queries, entry points, AST docs
+- a88de11 (2026-04-11) fix adversarial review findings on HonoExtractor

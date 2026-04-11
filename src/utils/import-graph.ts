@@ -239,7 +239,14 @@ export async function collectImportEdges(
   ): void => {
     if (to === from) return;
     const edgeKey = `${from}->${to}`;
-    if (edgeSet.has(edgeKey)) return;
+    if (edgeSet.has(edgeKey)) {
+      // Upgrade: runtime import overrides a prior type_only edge
+      if (!extras?.type_only) {
+        const existing = edges.find((e) => e.from === from && e.to === to);
+        if (existing?.type_only) existing.type_only = false;
+      }
+      return;
+    }
     edgeSet.add(edgeKey);
     const edge: ImportEdge = { from, to };
     if (extras?.type_only) edge.type_only = true;

@@ -133,9 +133,9 @@ function parseAllAssignment(rhs: Parser.SyntaxNode): {
     let computed = false;
     for (const element of rhs.namedChildren) {
       if (element.type === "string") {
-        // Strip quotes from string literal text
+        // Strip optional prefix (b/r/f/u/br/rb) and quotes (single, double, triple)
         const text = element.text;
-        const stripped = text.replace(/^['"]|['"]$/g, "");
+        const stripped = text.replace(/^[bruf]*('{3}|"{3}|['"])|'{3}|"{3}|['"]$/gi, "");
         members.push(stripped);
       } else {
         computed = true;
@@ -221,7 +221,12 @@ export function extractPythonSymbols(
 
   function walk(node: Parser.SyntaxNode, parentId?: string, depth = 0): void {
     // Safety: bound recursion depth on pathologically deep files
-    if (depth > MAX_WALK_DEPTH) return;
+    if (depth > MAX_WALK_DEPTH) {
+      console.warn(
+        `[python-extractor] MAX_WALK_DEPTH (${MAX_WALK_DEPTH}) hit at ${filePath}:${node.startPosition.row + 1} — deeper symbols dropped`,
+      );
+      return;
+    }
     switch (node.type) {
       case "expression_statement": {
         const inner = node.namedChildren[0];
@@ -293,7 +298,7 @@ export function extractPythonSymbols(
           const body = node.childForFieldName("body");
           if (body) {
             for (const child of body.namedChildren) {
-              walk(child, parentId, depth + 1);
+              walk(child, sym.id, depth + 1);
             }
           }
         }
@@ -407,15 +412,24 @@ export function extractPythonSymbols(
     }
   }
 
+  let partial = false;
   try {
     walk(tree.rootNode);
   } catch (err: unknown) {
     // Never throw from the extractor — on unexpected failure, return whatever
-    // symbols were collected so far.
+    // symbols were collected so far, flagged as partial.
+    partial = true;
     const message = err instanceof Error ? err.message : String(err);
     console.warn(
-      `[python-extractor] walk failed for ${filePath}: ${message}`,
+      `[python-extractor] walk failed for ${filePath} (${symbols.length} symbols collected, partial): ${message}`,
     );
+  }
+
+  // Tag partial results so callers can detect incomplete extraction
+  if (partial && symbols.length > 0) {
+    const first = symbols[0]!;
+    if (!first.meta) (first as Record<string, unknown>).meta = {};
+    (first.meta as Record<string, unknown>).partial_extraction = true;
   }
   return symbols;
 }
