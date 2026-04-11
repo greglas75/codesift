@@ -4,7 +4,15 @@
  * conflicts where the same URL is served by both routers.
  */
 
+import { readFile } from "node:fs/promises";
+import { relative, basename } from "node:path";
 import type Parser from "web-tree-sitter";
+import { parseFile } from "../parser/parser-manager.js";
+import {
+  computeLayoutChain,
+  deriveUrlPath,
+  scanDirective,
+} from "../utils/nextjs.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -233,6 +241,161 @@ export function classifyRendering(
 
   // Next.js 15 default: static
   return "static";
+}
+
+// ---------------------------------------------------------------------------
+// parseRouteFile — process a single route file into a NextjsRouteEntry
+// ---------------------------------------------------------------------------
+
+const HTTP_METHODS = new Set([
+  "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
+]);
+
+const APP_CONVENTION_TYPES: Record<string, RouteEntryType> = {
+  page: "page",
+  route: "route",
+  layout: "layout",
+  loading: "loading",
+  error: "error",
+  "not-found": "not-found",
+  "global-error": "global-error",
+  default: "default",
+  template: "template",
+};
+
+/** Derive a route file's `type` field from its path. */
+function deriveRouteType(filePath: string, router: "app" | "pages"): RouteEntryType {
+  const name = basename(filePath).replace(/\.[jt]sx?$/, "");
+
+  if (router === "pages") {
+    if (name === "_app") return "app";
+    if (name === "_document") return "document";
+    if (name === "_error") return "error_page";
+    // default for pages/ files: treat api/* as route, otherwise page
+    return filePath.includes("/api/") ? "route" : "page";
+  }
+
+  // App Router
+  if (filePath.includes("/@")) return "parallel";
+  if (/\/\(\.{1,3}\)/.test(filePath)) return "intercepting";
+  return APP_CONVENTION_TYPES[name] ?? "page";
+}
+
+/** Detect Pages Router data-fetching signals via exported function/const names. */
+function detectPagesRouterSignals(tree: Parser.Tree): PagesRouterSignals {
+  const signals: PagesRouterSignals = {};
+  for (const exportNode of tree.rootNode.descendantsOfType("export_statement")) {
+    for (const fn of exportNode.descendantsOfType("function_declaration")) {
+      const name = (fn.childForFieldName("name") ?? fn.namedChild(0))?.text;
+      if (name === "getServerSideProps") signals.hasGetServerSideProps = true;
+      if (name === "getStaticProps") signals.hasGetStaticProps = true;
+    }
+    for (const decl of exportNode.descendantsOfType("variable_declarator")) {
+      const name = (decl.childForFieldName("name") ?? decl.namedChild(0))?.text;
+      if (name === "getServerSideProps") signals.hasGetServerSideProps = true;
+      if (name === "getStaticProps") signals.hasGetStaticProps = true;
+    }
+  }
+  return signals;
+}
+
+/** Detect `export const metadata = {...}` or `export function generateMetadata`. */
+function detectMetadataExport(tree: Parser.Tree): boolean {
+  for (const exportNode of tree.rootNode.descendantsOfType("export_statement")) {
+    for (const decl of exportNode.descendantsOfType("variable_declarator")) {
+      const name = (decl.childForFieldName("name") ?? decl.namedChild(0))?.text;
+      if (name === "metadata") return true;
+    }
+    for (const fn of exportNode.descendantsOfType("function_declaration")) {
+      const name = (fn.childForFieldName("name") ?? fn.namedChild(0))?.text;
+      if (name === "generateMetadata") return true;
+    }
+  }
+  return false;
+}
+
+/** Collect HTTP method names from top-level exports of a route.ts file. */
+function extractHttpMethods(tree: Parser.Tree): string[] {
+  const methods = new Set<string>();
+  for (const exportNode of tree.rootNode.descendantsOfType("export_statement")) {
+    for (const fn of exportNode.descendantsOfType("function_declaration")) {
+      const name = (fn.childForFieldName("name") ?? fn.namedChild(0))?.text;
+      if (name && HTTP_METHODS.has(name)) methods.add(name);
+    }
+    for (const decl of exportNode.descendantsOfType("variable_declarator")) {
+      const name = (decl.childForFieldName("name") ?? decl.namedChild(0))?.text;
+      if (name && HTTP_METHODS.has(name)) methods.add(name);
+    }
+  }
+  return [...methods];
+}
+
+/**
+ * Process a single route file into a `NextjsRouteEntry`.
+ *
+ * @internal exported for unit testing
+ */
+export async function parseRouteFile(
+  filePath: string,
+  repoRoot: string,
+  router: "app" | "pages",
+): Promise<NextjsRouteEntry> {
+  const relPath = relative(repoRoot, filePath);
+  const type = deriveRouteType(relPath, router);
+  const url_path = deriveUrlPath(relPath, router);
+
+  const source = await readFile(filePath, "utf8");
+  const tree = await parseFile(filePath, source);
+
+  if (!tree) {
+    return {
+      url_path,
+      file_path: relPath,
+      router,
+      type,
+      rendering: "unknown",
+      config: { has_generate_static_params: false },
+      has_metadata: false,
+      layout_chain: [],
+      middleware_applies: false,
+      is_client_component: false,
+    };
+  }
+
+  const config = readRouteSegmentConfig(tree, source);
+  const has_metadata = detectMetadataExport(tree);
+
+  let methods: string[] | undefined;
+  if (type === "route") {
+    methods = extractHttpMethods(tree);
+  }
+
+  const pagesSignals = router === "pages" ? detectPagesRouterSignals(tree) : undefined;
+  const rendering = classifyRendering(config, router, pagesSignals);
+
+  const directive = await scanDirective(filePath);
+  const is_client_component = directive === "use client";
+
+  const layout_chain = router === "app"
+    ? await computeLayoutChain(relPath, repoRoot)
+    : [];
+
+  const entry: NextjsRouteEntry = {
+    url_path,
+    file_path: relPath,
+    router,
+    type,
+    rendering,
+    config,
+    has_metadata,
+    layout_chain,
+    middleware_applies: false, // filled in by orchestrator (Task 30)
+    is_client_component,
+  };
+  if (methods !== undefined) {
+    entry.methods = methods;
+  }
+  return entry;
 }
 
 // ---------------------------------------------------------------------------

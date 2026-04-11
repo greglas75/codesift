@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { writeFile, mkdtemp } from "node:fs/promises";
+import { writeFile, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   nextjsRouteMap,
   readRouteSegmentConfig,
   classifyRendering,
+  parseRouteFile,
 } from "../../src/tools/nextjs-route-tools.js";
 import type { RouteSegmentConfig } from "../../src/tools/nextjs-route-tools.js";
 import { parseFile } from "../../src/parser/parser-manager.js";
@@ -128,5 +129,90 @@ describe("classifyRendering", () => {
         hasRevalidateInReturn: false,
       }),
     ).toBe("static");
+  });
+});
+
+describe("parseRouteFile", () => {
+  async function write(tmpRoot: string, rel: string, content: string): Promise<string> {
+    const abs = join(tmpRoot, rel);
+    await mkdir(join(abs, ".."), { recursive: true });
+    await writeFile(abs, content);
+    return abs;
+  }
+
+  it("classifies app/page.tsx as static with no metadata", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "parse-route-"));
+    try {
+      const abs = await write(tmpRoot,
+        "app/page.tsx",
+        `export default function Home() { return <div/>; }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.rendering).toBe("static");
+      expect(entry.has_metadata).toBe(false);
+      expect(entry.url_path).toBe("/");
+      expect(entry.type).toBe("page");
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("detects metadata export and dynamic segment", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "parse-route-"));
+    try {
+      const abs = await write(tmpRoot,
+        "app/products/[id]/page.tsx",
+        `export const metadata = { title: "Product" };\nexport default function P() { return <div/>; }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.has_metadata).toBe(true);
+      expect(entry.url_path).toBe("/products/[id]");
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts HTTP methods from route.ts", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "parse-route-"));
+    try {
+      const abs = await write(tmpRoot,
+        "app/api/users/route.ts",
+        `export async function GET() { return new Response(); }\nexport async function POST() { return new Response(); }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.type).toBe("route");
+      expect(entry.methods).toEqual(expect.arrayContaining(["GET", "POST"]));
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("derives Pages Router URL path", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "parse-route-"));
+    try {
+      const abs = await write(tmpRoot,
+        "pages/api/users.ts",
+        `export default function handler(req: unknown, res: any) { res.json({}); }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "pages");
+      expect(entry.router).toBe("pages");
+      expect(entry.url_path).toBe("/api/users");
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("strips route group from url_path", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "parse-route-"));
+    try {
+      const abs = await write(tmpRoot,
+        "app/(auth)/login/page.tsx",
+        `export default function Login() { return <div/>; }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.url_path).toBe("/login");
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
