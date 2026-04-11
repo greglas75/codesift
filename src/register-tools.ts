@@ -70,7 +70,7 @@ import { getTestFixtures } from "./tools/pytest-tools.js";
 import { findFrameworkWiring } from "./tools/wiring-tools.js";
 import { runRuff } from "./tools/ruff-tools.js";
 import { parsePyproject } from "./tools/pyproject-tools.js";
-import { resolveConstantValue } from "./tools/python-constants-tools.js";
+import { resolveConstantValue } from "./tools/constant-resolution-tools.js";
 import { effectiveDjangoViewSecurity } from "./tools/django-view-security-tools.js";
 import { findPythonCallers } from "./tools/python-callers.js";
 import { taintTrace } from "./tools/taint-tools.js";
@@ -2101,18 +2101,19 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "resolve_constant_value",
     category: "analysis",
-    requiresLanguage: "python",
-    searchHint: "python resolve constant value literal alias import default parameter propagation",
-    description: "Resolve Python constants and function default values through simple aliases and import-from chains. Returns literals or explicit unresolved reasons.",
+    searchHint: "python typescript nestjs resolve constant value literal alias import default parameter propagation",
+    description: "Resolve Python or TypeScript constants and function default values through simple aliases and import chains. Returns literals or explicit unresolved reasons.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Constant, function, or method name to resolve"),
       file_pattern: z.string().optional().describe("Filter candidate symbols by file path substring"),
+      language: z.enum(["python", "typescript"]).optional().describe("Force resolver language instead of auto-inference"),
       max_depth: zFiniteNumber.optional().describe("Maximum alias/import resolution depth (default: 8)"),
     },
     handler: async (args) => {
       const opts: Parameters<typeof resolveConstantValue>[2] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.language != null) opts!.language = args.language as "python" | "typescript";
       if (args.max_depth != null) opts!.max_depth = args.max_depth as number;
       return await resolveConstantValue(args.repo as string, args.symbol_name as string, opts);
     },
@@ -3407,10 +3408,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       skip: z.array(z.string()).optional().describe("Sections to skip: config, hydration, routes, actions, content, migration, patterns"),
     },
     handler: async (args) => {
-      return await astroAudit({
-        repo: args.repo as string | undefined,
-        skip: args.skip as string[] | undefined,
-      });
+      const opts: Parameters<typeof astroAudit>[0] = {};
+      if (args.repo != null) opts.repo = args.repo as string;
+      if (args.skip != null) opts.skip = args.skip as string[];
+      return await astroAudit(opts);
     },
   },
 

@@ -128,7 +128,7 @@ export function analyzeIslandsFromIndex(index: CodeIndex, pathPrefix?: string): 
 // -- 11. astro_hydration_audit -----------------------------------------------
 
 export interface AuditIssue { code: string; severity: "error" | "warning" | "info"; message: string; file: string; line: number; component?: string | undefined; fix: string; fix_snippet?: string | undefined; }
-export interface HydrationAuditResult { issues: AuditIssue[]; anti_patterns_checked: string[]; score: "A" | "B" | "C" | "D"; }
+export interface HydrationAuditResult { issues: AuditIssue[]; anti_patterns_checked: string[]; score: "A" | "B" | "C" | "D"; exit_code: 0 | 1 | 2; }
 
 const ALL_CODES = ["AH01","AH02","AH03","AH04","AH05","AH06","AH07","AH08","AH09","AH10","AH11","AH12"];
 const HEAVY_PKGS = new Set(["react-chartjs-2","chart.js","recharts","mapbox-gl","leaflet","monaco-editor","codemirror","three"]);
@@ -222,13 +222,24 @@ function computeScore(issues: AuditIssue[]): "A" | "B" | "C" | "D" {
   if (e >= 3 || w >= 11) return "D"; if (e >= 1 || w >= 6) return "C"; if (w >= 3) return "B"; return "A";
 }
 
-export async function astroHydrationAudit(args: { repo?: string; severity?: "all" | "warnings" | "errors"; path_prefix?: string }): Promise<HydrationAuditResult> {
+export async function astroHydrationAudit(args: { repo?: string; severity?: "all" | "warnings" | "errors"; path_prefix?: string; fail_on?: "error" | "warning" | "info" }): Promise<HydrationAuditResult> {
   const index = await getCodeIndex(args.repo ?? "");
-  if (!index) return { issues: [], anti_patterns_checked: ALL_CODES, score: "A" };
-  return hydrationAuditFromIndex(index, args.severity, args.path_prefix);
+  if (!index) return { issues: [], anti_patterns_checked: ALL_CODES, score: "A", exit_code: 0 };
+  return hydrationAuditFromIndex(index, args.severity, args.path_prefix, args.fail_on);
 }
 
-export function hydrationAuditFromIndex(index: CodeIndex, severity?: "all" | "warnings" | "errors", pathPrefix?: string): HydrationAuditResult {
+function computeExitCode(issues: AuditIssue[], failOn: "error" | "warning" | "info" | undefined): 0 | 1 | 2 {
+  if (!failOn) return 0;
+  const hasErrors = issues.some((i) => i.severity === "error");
+  const hasWarnings = issues.some((i) => i.severity === "warning");
+  const hasInfo = issues.some((i) => i.severity === "info");
+  if (hasErrors) return 1;
+  if (failOn === "warning" && hasWarnings) return 2;
+  if (failOn === "info" && (hasWarnings || hasInfo)) return 2;
+  return 0;
+}
+
+export function hydrationAuditFromIndex(index: CodeIndex, severity?: "all" | "warnings" | "errors", pathPrefix?: string, failOn?: "error" | "warning" | "info"): HydrationAuditResult {
   let issues: AuditIssue[] = [];
   for (const file of walkAstroFiles(index, pathPrefix)) {
     let source: string;
@@ -238,5 +249,6 @@ export function hydrationAuditFromIndex(index: CodeIndex, severity?: "all" | "wa
   }
   if (severity === "errors") issues = issues.filter((i) => i.severity === "error");
   else if (severity === "warnings") issues = issues.filter((i) => i.severity !== "info");
-  return { issues, anti_patterns_checked: ALL_CODES, score: computeScore(issues) };
+  const exit_code = computeExitCode(issues, failOn);
+  return { issues, anti_patterns_checked: ALL_CODES, score: computeScore(issues), exit_code };
 }

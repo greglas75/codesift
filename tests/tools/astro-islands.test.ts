@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
-import { analyzeIslandsFromIndex, hydrationAuditFromIndex } from "../../src/tools/astro-islands.js";
+import { analyzeIslandsFromIndex, hydrationAuditFromIndex, type HydrationAuditResult } from "../../src/tools/astro-islands.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -337,6 +337,50 @@ describe("astroHydrationAudit", () => {
     expect(ah07).toBeDefined();
     expect(ah07!.fix_snippet).toBeDefined();
     expect(ah07!.fix_snippet).toContain("client:idle");
+  });
+});
+
+describe("astroHydrationAudit fail_on gate", () => {
+  function auditFixture(files: Record<string, string>, severity?: "all" | "warnings" | "errors", failOn?: "error" | "warning" | "info"): HydrationAuditResult {
+    const root = createFixtureDir(files);
+    const index = makeIndex(root, Object.keys(files));
+    return hydrationAuditFromIndex(index, severity, undefined, failOn);
+  }
+
+  it("fail_on=error with errors present → exit_code 1", () => {
+    // AH01: client:* on .astro component is an error
+    const result = auditFixture(
+      { "src/pages/index.astro": `---\nimport Nav from '../components/Nav.astro';\n---\n<Nav client:load />\n` },
+      undefined,
+      "error",
+    );
+    expect(result.issues.some((i) => i.severity === "error")).toBe(true);
+    expect(result.exit_code).toBe(1);
+  });
+
+  it("fail_on=warning with warnings only (no errors) → exit_code 2", () => {
+    // AH02: island in loop → warning only
+    const result = auditFixture(
+      { "src/pages/index.astro": `---\nimport Card from './Card.tsx';\n---\n<div>\n{items.map((x) => <Card client:load />)}\n</div>\n` },
+      undefined,
+      "warning",
+    );
+    const hasErrors = result.issues.some((i) => i.severity === "error");
+    const hasWarnings = result.issues.some((i) => i.severity === "warning");
+    expect(hasErrors).toBe(false);
+    expect(hasWarnings).toBe(true);
+    expect(result.exit_code).toBe(2);
+  });
+
+  it("no fail_on set → exit_code 0 regardless of issues", () => {
+    // AH01 fires here (error), but no fail_on → always 0
+    const result = auditFixture(
+      { "src/pages/index.astro": `---\nimport Nav from '../components/Nav.astro';\n---\n<Nav client:load />\n` },
+      undefined,
+      undefined,
+    );
+    expect(result.issues.some((i) => i.severity === "error")).toBe(true);
+    expect(result.exit_code).toBe(0);
   });
 });
 
