@@ -428,7 +428,7 @@ export function extractPythonSymbols(
   // Tag partial results so callers can detect incomplete extraction
   if (partial && symbols.length > 0) {
     const first = symbols[0]!;
-    if (!first.meta) (first as Record<string, unknown>).meta = {};
+    if (!first.meta) (first as unknown as Record<string, unknown>).meta = {};
     (first.meta as Record<string, unknown>).partial_extraction = true;
   }
   return symbols;

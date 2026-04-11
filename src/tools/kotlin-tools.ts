@@ -5,7 +5,6 @@
  * analyze_sealed_hierarchy — find subtypes and missing when() branches
  */
 import { getCodeIndex } from "./index-tools.js";
-import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // find_extension_functions
@@ -55,8 +54,8 @@ export async function findExtensionFunctions(
         name: sym.name,
         file: sym.file,
         start_line: sym.start_line,
-        signature: sym.signature,
-        docstring: sym.docstring,
+        ...(sym.signature ? { signature: sym.signature } : {}),
+        ...(sym.docstring ? { docstring: sym.docstring } : {}),
       });
     }
   }

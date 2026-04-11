@@ -1,7 +1,9 @@
 import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
 import { join, relative, extname, resolve, basename, dirname } from "node:path";
+import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EXTRACTOR_VERSIONS } from "./project-tools.js";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
@@ -973,4 +975,148 @@ export async function getEmbeddingCache(
 
   embeddingCaches.set(repoName, embeddings);
   return embeddings;
+}
+
+// ---------------------------------------------------------------------------
+// Astro extractor version check + lockfile re-index
+// ---------------------------------------------------------------------------
+
+export const ASTRO_LOCK_FILENAME = "astro-reindex.lock";
+export const EXTRACTOR_VERSIONS_FILENAME = "extractor-versions.json";
+
+const LOCK_STALE_MS = 60_000; // 60 seconds
+
+export interface AstroReindexResult {
+  reindexed: boolean;
+  files_reindexed?: number;
+  reason: string;
+}
+
+/**
+ * Check if the stored astro extractor version matches the current one.
+ * If not, re-extract all .astro files with lockfile protection.
+ *
+ * @param dataDir   The data directory (e.g., ~/.codesift or a test tmpdir)
+ * @param repoRoot  The repo root path (for locating .astro files)
+ * @param astroFiles  Relative paths to .astro files in the repo
+ */
+export async function checkAstroExtractorVersion(
+  dataDir: string,
+  repoRoot: string,
+  astroFiles: string[],
+): Promise<AstroReindexResult> {
+  // Read stored version snapshot
+  const versionsPath = join(dataDir, EXTRACTOR_VERSIONS_FILENAME);
+  let storedVersions: Record<string, string> = {};
+  try {
+    const raw = await readFile(versionsPath, "utf-8");
+    storedVersions = JSON.parse(raw);
+  } catch {
+    // File doesn't exist or is invalid — treat as version mismatch
+  }
+
+  // Check if astro version matches
+  if (storedVersions.astro === EXTRACTOR_VERSIONS.astro) {
+    return { reindexed: false, reason: "astro extractor up to date" };
+  }
+
+  if (astroFiles.length === 0) {
+    // No astro files to re-extract — just update the version snapshot
+    await writeVersionSnapshot(dataDir, storedVersions);
+    return { reindexed: false, reason: "no astro files to re-extract" };
+  }
+
+  // Acquire lockfile
+  const lockPath = join(dataDir, ASTRO_LOCK_FILENAME);
+  if (!acquireLock(lockPath)) {
+    return { reindexed: false, reason: "astro re-index in progress (locked by another process)" };
+  }
+
+  try {
+    // Re-extract all .astro files
+    let count = 0;
+    for (const relPath of astroFiles) {
+      const absPath = join(repoRoot, relPath);
+      try {
+        const result = await parseOneFile(absPath, repoRoot, "");
+        if (result) {
+          count++;
+          if (count % 100 === 0) {
+            console.error(`[codesift] Astro re-index progress: ${count}/${astroFiles.length} files`);
+          }
+        }
+      } catch {
+        // File may have been deleted or is unparseable
+      }
+    }
+
+    // Write version snapshot atomically
+    await writeVersionSnapshot(dataDir, storedVersions);
+
+    return {
+      reindexed: true,
+      files_reindexed: count,
+      reason: `re-extracted ${count} astro files (version ${storedVersions.astro ?? "none"} → ${EXTRACTOR_VERSIONS.astro})`,
+    };
+  } finally {
+    // Release lockfile
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // Lock may have been cleaned up already
+    }
+  }
+}
+
+/**
+ * Acquire an exclusive lockfile. Returns true if lock was acquired.
+ * If lockfile exists but is stale (mtime > 60s), deletes it and retries once.
+ */
+function acquireLock(lockPath: string): boolean {
+  try {
+    const fd = openSync(lockPath, "wx");
+    closeSync(fd);
+    return true;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      return false;
+    }
+
+    // Lock exists — check if stale
+    try {
+      const lockStat = statSync(lockPath);
+      const age = Date.now() - lockStat.mtimeMs;
+      if (age > LOCK_STALE_MS) {
+        // Stale lock — delete and retry once
+        unlinkSync(lockPath);
+        try {
+          const fd = openSync(lockPath, "wx");
+          closeSync(fd);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    } catch {
+      // stat failed — lock was just removed by another process
+      return false;
+    }
+
+    return false;
+  }
+}
+
+/**
+ * Atomically write the extractor versions snapshot.
+ * Uses write-to-tmp + rename for crash safety.
+ */
+async function writeVersionSnapshot(
+  dataDir: string,
+  existingVersions: Record<string, string>,
+): Promise<void> {
+  const versionsPath = join(dataDir, EXTRACTOR_VERSIONS_FILENAME);
+  const tmpPath = `${versionsPath}.tmp.${Date.now()}`;
+  const snapshot = { ...existingVersions, astro: EXTRACTOR_VERSIONS.astro };
+  writeFileSync(tmpPath, JSON.stringify(snapshot), "utf-8");
+  renameSync(tmpPath, versionsPath);
 }
