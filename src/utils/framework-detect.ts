@@ -43,8 +43,9 @@ const NEXT_APP_METADATA_FUNCTIONS = /^(generateMetadata|generateStaticParams)$/;
 const NEXT_CONFIG_EXPORTS = /^(metadata|viewport|dynamic|revalidate|runtime|preferredRegion|maxDuration|fetchCache|dynamicParams)$/;
 
 /** NestJS lifecycle hooks + decorator-based entry points */
-const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown)$/;
-const NESTJS_CONTROLLER_FILE = /\.(controller|resolver|gateway)\.[jt]sx?$/;
+const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown|handleCron|handleInterval|handleTimeout|handleEvent)$/;
+const NESTJS_ENTRY_FILE = /\.(controller|resolver|gateway|guard|interceptor|pipe|filter)\.[jt]sx?$/;
+const NESTJS_MAIN_FILE = /(^|\/)main\.[jt]sx?$/;
 
 /** Astro file-based routing — pages/ directory with .astro, .ts, or .js files */
 const ASTRO_PAGES_FILE = /(^|\/)src\/pages\/.+\.(astro|[jt]sx?)$/;
@@ -159,7 +160,8 @@ export function isFrameworkEntryPoint(
 
   if (frameworks.has("nestjs")) {
     if (NESTJS_LIFECYCLE.test(symbol.name)) return true;
-    if (NESTJS_CONTROLLER_FILE.test(symbol.file)) return true;
+    if (NESTJS_ENTRY_FILE.test(symbol.file)) return true;
+    if (NESTJS_MAIN_FILE.test(symbol.file) && symbol.name === "bootstrap") return true;
   }
 
   if (frameworks.has("astro")) {

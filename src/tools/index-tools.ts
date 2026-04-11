@@ -491,6 +491,23 @@ export async function indexFolder(
     await setupWatcher(rootPath, repoName, indexPath);
   }
 
+  // Auto-enable framework-specific tool bundles (NestJS, etc.)
+  // Lazy import to avoid circular dep: index-tools → register-tools → tool handlers → index-tools
+  try {
+    const { detectFrameworks } = await import("../utils/framework-detect.js");
+    const { enableFrameworkToolBundle } = await import("../register-tools.js");
+    const tempIndex = { root: rootPath, files: fileEntries, symbols } as CodeIndex;
+    const frameworks = detectFrameworks(tempIndex);
+    for (const fw of frameworks) {
+      const enabled = enableFrameworkToolBundle(fw);
+      if (enabled.length > 0) {
+        console.error(`[codesift] auto-enabled ${enabled.length} ${fw} tools for ${repoName}: ${enabled.join(", ")}`);
+      }
+    }
+  } catch {
+    // Non-fatal — framework auto-enable is a convenience feature
+  }
+
   return {
     repo: repoName,
     root: rootPath,

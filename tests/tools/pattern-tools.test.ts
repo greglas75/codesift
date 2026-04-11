@@ -1021,3 +1021,130 @@ describe("pattern-tools — oxlint React rules", () => {
     });
   });
 });
+
+describe("pattern-tools — NestJS anti-patterns", () => {
+  describe("nest-circular-inject", () => {
+    const re = BUILTIN_PATTERNS["nest-circular-inject"]!.regex;
+    it("matches @Inject(forwardRef(() => UserService))", () => {
+      expect(re.test(`@Inject(forwardRef(() => UserService))`)).toBe(true);
+    });
+    it("does not match regular @Inject('TOKEN')", () => {
+      expect(re.test(`@Inject('USER_REPO')`)).toBe(false);
+    });
+  });
+
+  describe("nest-catch-all-filter", () => {
+    const re = BUILTIN_PATTERNS["nest-catch-all-filter"]!.regex;
+    it("matches @Catch() with no argument", () => {
+      expect(re.test(`@Catch()\nexport class AllExceptionsFilter {`)).toBe(true);
+    });
+    it("does not match @Catch(HttpException)", () => {
+      expect(re.test(`@Catch(HttpException)\nexport class HttpFilter {`)).toBe(false);
+    });
+  });
+
+  describe("nest-request-scope", () => {
+    const re = BUILTIN_PATTERNS["nest-request-scope"]!.regex;
+    it("matches scope: Scope.REQUEST", () => {
+      expect(re.test(`@Injectable({ scope: Scope.REQUEST })`)).toBe(true);
+    });
+    it("does not match scope: Scope.DEFAULT", () => {
+      expect(re.test(`@Injectable({ scope: Scope.DEFAULT })`)).toBe(false);
+    });
+  });
+
+  describe("nest-raw-exception", () => {
+    const re = BUILTIN_PATTERNS["nest-raw-exception"]!.regex;
+    it("matches throw new Error('message')", () => {
+      expect(re.test(`throw new Error('Something went wrong');`)).toBe(true);
+    });
+    it("does not match throw new HttpException", () => {
+      expect(re.test(`throw new HttpException('Not found', 404);`)).toBe(false);
+    });
+    it("does not match throw new BadRequestException", () => {
+      expect(re.test(`throw new BadRequestException('Invalid');`)).toBe(false);
+    });
+  });
+
+  describe("nest-any-guard-return", () => {
+    const re = BUILTIN_PATTERNS["nest-any-guard-return"]!.regex;
+    it("matches canActivate() { return true; }", () => {
+      expect(re.test(`canActivate() {\n    return true;\n  }`)).toBe(true);
+    });
+    it("does not match canActivate with conditional return", () => {
+      expect(re.test(`canActivate() {\n    return user.isAdmin;\n  }`)).toBe(false);
+    });
+    it("does not match canActivate returning false", () => {
+      expect(re.test(`canActivate() {\n    return false;\n  }`)).toBe(false);
+    });
+  });
+
+  describe("nest-service-locator", () => {
+    const re = BUILTIN_PATTERNS["nest-service-locator"]!.regex;
+    it("matches this.moduleRef.get(SomeService)", () => {
+      expect(re.test(`this.moduleRef.get(SomeService)`)).toBe(true);
+    });
+    it("matches moduleRef.resolve(SomeService)", () => {
+      expect(re.test(`this.moduleRef.resolve(SomeService)`)).toBe(true);
+    });
+    it("does not match regular service.getById()", () => {
+      expect(re.test(`this.userService.getById(id)`)).toBe(false);
+    });
+  });
+
+  describe("nest-direct-env", () => {
+    const re = BUILTIN_PATTERNS["nest-direct-env"]!.regex;
+    it("matches process.env.DATABASE_URL", () => {
+      expect(re.test(`const url = process.env.DATABASE_URL;`)).toBe(true);
+    });
+    it("does not match configService.get('DATABASE_URL')", () => {
+      expect(re.test(`const url = this.configService.get('DATABASE_URL');`)).toBe(false);
+    });
+  });
+
+  describe("nest-graphql-no-auth (Wave 2)", () => {
+    const re = BUILTIN_PATTERNS["nest-graphql-no-auth"]!.regex;
+    it("matches resolver with @Query but no @UseGuards in file", () => {
+      const src = `@Resolver() class ArticleResolver {
+  @Query() articles() { return []; }
+}`;
+      expect(re.test(src)).toBe(true);
+    });
+    it("does not match resolver with @UseGuards present", () => {
+      const src = `@UseGuards(AuthGuard)
+@Resolver() class ArticleResolver {
+  @Query() articles() { return []; }
+}`;
+      expect(re.test(src)).toBe(false);
+    });
+  });
+
+  describe("nest-eager-relation (Wave 2)", () => {
+    const re = BUILTIN_PATTERNS["nest-eager-relation"]!.regex;
+    it("matches @OneToMany with eager: true", () => {
+      expect(re.test(`@OneToMany(() => Comment, c => c.article, { eager: true })`)).toBe(true);
+    });
+    it("matches @ManyToOne with eager: true", () => {
+      expect(re.test(`@ManyToOne(() => User, u => u.articles, { eager: true })`)).toBe(true);
+    });
+    it("does not match relation without eager flag", () => {
+      expect(re.test(`@OneToMany(() => Comment, c => c.article)`)).toBe(false);
+    });
+  });
+
+  describe("listPatterns includes NestJS patterns", () => {
+    it("contains all 9 NestJS patterns (7 Wave 1 + 2 Wave 2)", () => {
+      const patterns = listPatterns();
+      const nestPatterns = patterns.filter((p) => p.name.startsWith("nest-"));
+      expect(nestPatterns.length).toBe(9);
+    });
+
+    it("each NestJS pattern has a description ending with (NestJS)", () => {
+      const patterns = listPatterns();
+      const nestPatterns = patterns.filter((p) => p.name.startsWith("nest-"));
+      for (const p of nestPatterns) {
+        expect(p.description).toContain("(NestJS)");
+      }
+    });
+  });
+});

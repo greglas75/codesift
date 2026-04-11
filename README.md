@@ -185,9 +185,15 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
+<<<<<<< HEAD
 ## MCP tools (148 total — 46 core + 102 discoverable)
 
 When running as an MCP server, CodeSift exposes 46 core tools directly. The remaining 102 niche tools are discoverable via `discover_tools` and `describe_tools`.
+=======
+## MCP tools (127 total — 47 core + 80 discoverable)
+
+When running as an MCP server, CodeSift exposes 47 core tools directly. The remaining 80 niche tools are discoverable via `discover_tools` and `describe_tools`.
+>>>>>>> feat/nestjs-support
 
 | Category | Tools |
 |----------|-------|
@@ -429,7 +435,11 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
+<<<<<<< HEAD
 CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 148 tools to AI agents (46 core + 102 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+=======
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 127 tools to AI agents (47 core + 80 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+>>>>>>> feat/nestjs-support
 
 ### OpenAI Codex
 

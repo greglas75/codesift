@@ -21,11 +21,19 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
+<<<<<<< HEAD
 **148 MCP tools total** (46 core visible + 102 discoverable).
 
 46 core tools appear in ListTools. Remaining 102 niche tools are discovered on demand:
 
 - `discover_tools(query="dead code")` — keyword search across all 148 tools
+=======
+**127 MCP tools total** (47 core visible + 80 discoverable).
+
+47 core tools appear in ListTools. Remaining 80 niche tools are discovered on demand:
+
+- `discover_tools(query="dead code")` — keyword search across all 127 tools
+>>>>>>> feat/nestjs-support
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 

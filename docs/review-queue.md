@@ -193,6 +193,14 @@ Commits pending review. Auto-managed:
 - 33e14e8 (2026-04-11) add HonoAppModel types for hono extractor
 - a03414d (2026-04-11) amend hono plan with adversarial review fixes (revision 2)
 - 6e30a8e (2026-04-11) feat: Python foundation + Astro/Next.js/NestJS/SQL specs and plans
+- 9dfb76d (2026-04-11) feat: extract APP_INTERCEPTOR from NestJS modules in project analysis
+- 46be64d (2026-04-11) feat: extend NestJS dead-code whitelist to guard/interceptor/pipe/filter and main.ts bootstrap
+- f2c4d88 (2026-04-11) feat: add 7 NestJS anti-pattern detectors to search_patterns
+- e11c0ec (2026-04-11) feat: handle empty NestJS decorators and export findNestJSHandlers
+- 353e7ba (2026-04-11) spike: validate regex-over-source parsing for NestJS decorator extraction
+- 2c82f0d (2026-04-11) feat: add NestJS tool types and nest_lifecycle_map tool
+- 8ce8de3 (2026-04-11) feat: add nest_module_graph tool for NestJS module dependency analysis
+- 8e9a375 (2026-04-11) feat: add nest_di_graph tool for NestJS dependency injection analysis
 - 99e245d (2026-04-11) chore: track Python foundation commit in review queue
 - 525d91f (2026-04-11) add HonoExtractor with tree-sitter scaffold and route detection
 - e7c4f4d (2026-04-11) feat(react): Wave 4 — context bundle, suggest_queries, entry points, AST docs

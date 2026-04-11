@@ -86,6 +86,8 @@ import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "./tools/nest-tools.js";
+import { nestGraphQLMap, nestWebSocketMap, nestScheduleMap, nestTypeOrmMap, nestMicroserviceMap } from "./tools/nest-ext-tools.js";
 import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
@@ -202,6 +204,49 @@ const toolHandles = new Map<string, any>();
 /** Get a registered tool handle by name (for testing and describe_tools reveal) */
 export function getToolHandle(name: string) {
   return toolHandles.get(name);
+}
+
+/** Framework-specific tool bundles — auto-enabled when the framework is detected in an indexed repo */
+const FRAMEWORK_TOOL_BUNDLES: Record<string, string[]> = {
+  nestjs: [
+    // Wave 1
+    "nest_lifecycle_map",
+    "nest_module_graph",
+    "nest_di_graph",
+    "nest_guard_chain",
+    "nest_route_inventory",
+    // Wave 2
+    "nest_graphql_map",
+    "nest_websocket_map",
+    "nest_schedule_map",
+    "nest_typeorm_map",
+    "nest_microservice_map",
+    // nest_audit is already core — always visible
+  ],
+};
+
+/** Track which framework bundles have been auto-enabled this session (avoid repeat work) */
+const enabledFrameworkBundles = new Set<string>();
+
+/**
+ * Enable framework-specific tool bundle — called after indexing when framework is detected.
+ * Idempotent: safe to call multiple times. Only enables tools that exist and are currently disabled.
+ */
+export function enableFrameworkToolBundle(framework: string): string[] {
+  if (enabledFrameworkBundles.has(framework)) return [];
+  const bundle = FRAMEWORK_TOOL_BUNDLES[framework];
+  if (!bundle) return [];
+
+  const enabled: string[] = [];
+  for (const name of bundle) {
+    const handle = toolHandles.get(name);
+    if (handle && typeof handle.enable === "function") {
+      handle.enable();
+      enabled.push(name);
+    }
+  }
+  if (enabled.length > 0) enabledFrameworkBundles.add(framework);
+  return enabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +579,7 @@ export type ToolCategory =
   | "security"
   | "reporting"
   | "cross-repo"
+  | "nestjs"
   | "navigation"
   | "meta";
 
@@ -572,6 +618,7 @@ export const CORE_TOOL_NAMES = new Set([
   "go_to_definition",        // 4 calls, 100% direct
   // --- Composite tools ---
   "audit_scan",              // one-call audit: CQ8+CQ11+CQ13+CQ14+CQ17
+  "nest_audit",              // one-call NestJS analysis: modules+DI+guards+routes+lifecycle
   // --- Essential infrastructure ---
   "index_folder",            // repo onboarding
   "discover_tools",          // meta: discovers remaining hidden tools
@@ -2693,6 +2740,133 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       }
       return parts.join("\n");
     },
+  },
+  // --- NestJS analysis tools ---
+  {
+    name: "nest_lifecycle_map",
+    category: "nestjs",
+    searchHint: "nestjs lifecycle hook onModuleInit onApplicationBootstrap shutdown",
+    description: "Map NestJS lifecycle hooks across the codebase — onModuleInit, onModuleDestroy, etc.",
+    schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
+    handler: async (args: { repo?: string }) => nestLifecycleMap(args.repo ?? ""),
+  },
+  {
+    name: "nest_module_graph",
+    category: "nestjs",
+    searchHint: "nestjs module dependency graph circular import boundary",
+    description: "Build NestJS module dependency graph with circular dependency detection and boundary analysis.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_modules: z.number().optional().describe("Max modules to process (default: 200)"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: json (default) or mermaid"),
+    },
+    handler: async (args: { repo?: string; max_modules?: number; output_format?: "json" | "mermaid" }) => nestModuleGraph(args.repo ?? "", args),
+  },
+  {
+    name: "nest_di_graph",
+    category: "nestjs",
+    searchHint: "nestjs dependency injection provider constructor inject graph cycle",
+    description: "Build NestJS provider DI graph with constructor injection tracking and cycle detection.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_nodes: z.number().optional().describe("Max provider nodes (default: 200)"),
+      focus: z.string().optional().describe("Path substring to filter files"),
+    },
+    handler: async (args: { repo?: string; max_nodes?: number; focus?: string }) => nestDIGraph(args.repo ?? "", args),
+  },
+  {
+    name: "nest_guard_chain",
+    category: "nestjs",
+    searchHint: "nestjs guard interceptor pipe filter middleware chain route security",
+    description: "Show guard/interceptor/pipe/filter execution chain per NestJS route (global → controller → method).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      path: z.string().optional().describe("Filter to specific route path"),
+      max_routes: z.number().optional().describe("Max routes (default: 300)"),
+    },
+    handler: async (args: { repo?: string; path?: string; max_routes?: number }) => nestGuardChain(args.repo ?? "", args),
+  },
+  {
+    name: "nest_route_inventory",
+    category: "nestjs",
+    searchHint: "nestjs route endpoint api map inventory list all guards params",
+    description: "Full NestJS route map with guards, params, and protected/unprotected stats.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_routes: z.number().optional().describe("Max routes (default: 500)"),
+    },
+    handler: async (args: { repo?: string; max_routes?: number }) => nestRouteInventory(args.repo ?? "", args),
+  },
+  {
+    name: "nest_audit",
+    category: "nestjs",
+    searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice",
+    description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, patterns, GraphQL, WebSocket, schedule, TypeORM, microservices.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      checks: z.string().optional().describe("Comma-separated checks (default: all). Options: modules,routes,di,guards,lifecycle,patterns,graphql,websocket,schedule,typeorm,microservice"),
+    },
+    handler: async (args: { repo?: string; checks?: string }) => {
+      const checks = args.checks?.split(",").map((s) => s.trim()).filter(Boolean);
+      return nestAudit(args.repo ?? "", checks ? { checks } : undefined);
+    },
+  },
+  // --- Wave 2 NestJS tools (nest-ext-tools.ts) ---
+  {
+    name: "nest_graphql_map",
+    category: "nestjs",
+    searchHint: "nestjs graphql resolver query mutation subscription apollo",
+    description: "Map NestJS GraphQL resolvers — Query, Mutation, Subscription handlers with return types.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_entries: z.number().optional().describe("Max resolver entries (default: 300)"),
+    },
+    handler: async (args: { repo?: string; max_entries?: number }) => nestGraphQLMap(args.repo ?? "", args),
+  },
+  {
+    name: "nest_websocket_map",
+    category: "nestjs",
+    searchHint: "nestjs websocket gateway subscribemessage socketio realtime event",
+    description: "Map NestJS WebSocket gateways with port, namespace, and subscribed events.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_gateways: z.number().optional().describe("Max gateways (default: 100)"),
+    },
+    handler: async (args: { repo?: string; max_gateways?: number }) => nestWebSocketMap(args.repo ?? "", args),
+  },
+  {
+    name: "nest_schedule_map",
+    category: "nestjs",
+    searchHint: "nestjs cron interval timeout scheduled job task onevent event listener",
+    description: "Map NestJS scheduled tasks (@Cron/@Interval/@Timeout) and event listeners (@OnEvent).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_schedules: z.number().optional().describe("Max schedule entries (default: 300)"),
+      max_files_scanned: z.number().optional().describe("Max files to scan (default: 2000)"),
+    },
+    handler: async (args: { repo?: string; max_schedules?: number; max_files_scanned?: number }) => nestScheduleMap(args.repo ?? "", args),
+  },
+  {
+    name: "nest_typeorm_map",
+    category: "nestjs",
+    searchHint: "nestjs typeorm entity relation onetomany manytoone database schema",
+    description: "Build TypeORM entity relation graph with OneToMany/ManyToOne edges and cycle detection.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_entities: z.number().optional().describe("Max entities (default: 200)"),
+    },
+    handler: async (args: { repo?: string; max_entities?: number }) => nestTypeOrmMap(args.repo ?? "", args),
+  },
+  {
+    name: "nest_microservice_map",
+    category: "nestjs",
+    searchHint: "nestjs microservice messagepattern eventpattern kafka rabbitmq nats transport",
+    description: "Map NestJS microservice @MessagePattern and @EventPattern handlers.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_patterns: z.number().optional().describe("Max patterns (default: 300)"),
+    },
+    handler: async (args: { repo?: string; max_patterns?: number }) => nestMicroserviceMap(args.repo ?? "", args),
   },
 
   // --- Agent config audit ---

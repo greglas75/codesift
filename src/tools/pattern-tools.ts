@@ -118,6 +118,42 @@ export const BUILTIN_PATTERNS: Record<string, {
     description: "Class component could be a function component — class components lack hook support, are harder to tree-shake, and React Compiler cannot optimize them. (oxlint react/prefer-function-component)",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
+  // --- React Compiler bailout patterns (GA v1.0, Oct 2025 — Next.js 16 stable) ---
+  "compiler-side-effect-in-render": {
+    regex: /(?:^|\n)\s*(?:console\.(?:log|warn|error|info)\s*\(|Math\.random\s*\(|Date\.now\s*\(|document\.(?:getElementById|querySelector|createElement)\s*\()/,
+    description: "Side effect in render body — React Compiler silently skips memoization. Move to useEffect or event handler.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "compiler-ref-read-in-render": {
+    regex: /(?:^|\n)\s*(?:const|let|var)\s+\w+\s*=\s*\w+Ref\.current\b/,
+    description: "Reading ref.current during render — React Compiler cannot track ref mutations. Read refs in useEffect or event handlers only.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "compiler-prop-mutation": {
+    regex: /\bprops\.\w+\.(?:push|pop|shift|unshift|splice|sort|reverse|fill)\s*\(/,
+    description: "Mutating props object — breaks React Compiler immutability assumption. Clone before mutating: [...props.items, newItem].",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "compiler-state-mutation": {
+    regex: /(?:^|\n)\s*\w+\.(?:push|pop|shift|unshift|splice|sort|reverse|fill)\s*\([\s\S]{0,200}?set[A-Z]\w*\s*\(\s*\w+\s*\)/,
+    description: "Direct state mutation then setState with same reference — React Compiler assumes immutable updates. Use spread: setItems([...items, newItem]).",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "compiler-try-catch-bailout": {
+    regex: /(?:function\s+[A-Z]\w*|const\s+[A-Z]\w*\s*=)[\s\S]{0,300}?\btry\s*\{[\s\S]{0,500}?\bcatch\s*\(/,
+    description: "try/catch in component body — React Compiler may silently bail out (known issue #35644). Move error handling to useEffect or extract to a hook.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "compiler-redundant-memo": {
+    regex: /\b(?:React\.)?memo\s*\(\s*(?:function\s+[A-Z]|(?:\([^)]*\)|[A-Z]\w*)\s*=>)/,
+    description: "React.memo wrapping — React Compiler auto-memoizes, making manual memo redundant. Safe to remove after compiler adoption.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "compiler-redundant-usecallback": {
+    regex: /\buseCallback\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>/,
+    description: "useCallback wrapping — React Compiler auto-memoizes callbacks, making manual useCallback redundant. Safe to remove after compiler adoption.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
   // --- RSC boundary serializability (Tier 4 — Item 18) ---
   "rsc-non-serializable-prop": {
     // Detects patterns like onClick={fn} or callback={handler} on JSX elements
@@ -131,6 +167,34 @@ export const BUILTIN_PATTERNS: Record<string, {
     regex: /\b\w+\s*=\s*\{\s*new\s+Date\s*\(/,
     description: "Date object passed as prop — Date is serializable in JSON but loses prototype across RSC boundary. Use ISO string + parse on client side.",
     fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  // --- useEffect pain points (37% of devs struggle — State of React 2025) ---
+  "useEffect-missing-cleanup": {
+    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>[\s\S]{0,800}?(?:addEventListener|setInterval|setTimeout|subscribe|on\s*\()(?:(?!return\s*(?:\(\s*\)\s*=>|function))[\s\S]){0,800}\}\s*,/,
+    description: "useEffect with addEventListener/setInterval/subscribe but no cleanup return — memory leak. Return a cleanup function that removes the listener/clears the interval.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "useEffect-setstate-loop": {
+    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>[\s\S]{0,500}?set([A-Z]\w*)\s*\([\s\S]{0,300}?\[\s*[\s\S]*?\b\1\b/i,
+    description: "setState inside useEffect with same state variable in dependency array — causes infinite render loop. Either remove from deps or use functional updater: setState(prev => ...).",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  // --- Next.js 16 cache patterns ---
+  "nextjs-use-cache-without-tag": {
+    regex: /['"]use cache['"](?:(?!cacheTag\s*\()[\s\S]){0,1000}$/,
+    description: "Next.js 16 'use cache' directive without cacheTag() call — cache entry is hard to invalidate. Add cacheTag('name') for targeted revalidation.",
+    fileIncludePattern: /\.(tsx|jsx|ts)$/,
+  },
+  "nextjs-revalidatetag-deprecated": {
+    regex: /\brevalidateTag\s*\(\s*['"][^'"]+['"]\s*\)/,
+    description: "Next.js 16: revalidateTag() without cacheLife profile (second argument). Single-arg form deprecated — add cacheLife profile.",
+    fileIncludePattern: /\.(tsx|jsx|ts)$/,
+  },
+  // --- TanStack Query patterns ---
+  "tanstack-missing-invalidation": {
+    regex: /\buseMutation\s*\((?:(?!invalidateQueries|invalidateQuery)[\s\S]){0,800}\}\s*\)/,
+    description: "useMutation without invalidateQueries in onSuccess/onSettled — stale data remains in cache after mutation. Add queryClient.invalidateQueries() on success.",
+    fileIncludePattern: /\.(tsx|jsx|ts)$/,
   },
   "empty-catch": {
     regex: /catch\s*\([^)]*\)\s*\{\s*\}/,
@@ -243,6 +307,49 @@ export const BUILTIN_PATTERNS: Record<string, {
   "raw-query-yii": {
     regex: /createCommand\s*\(\s*["'][^"']*\$\{?\w+/,
     description: "Yii2 createCommand with string interpolation — SQL injection risk",
+  },
+  // NestJS anti-patterns
+  "nest-circular-inject": {
+    regex: /@Inject\s*\(\s*forwardRef\s*\(/,
+    description: "Circular dependency via forwardRef — restructure module boundaries (NestJS)",
+  },
+  "nest-catch-all-filter": {
+    regex: /@Catch\s*\(\s*\)/,
+    description: "@Catch() with no argument — catches all exceptions indiscriminately (NestJS)",
+  },
+  "nest-request-scope": {
+    regex: /scope:\s*Scope\.REQUEST/,
+    description: "Request-scoped provider — performance overhead, breaks singleton assumptions (NestJS)",
+  },
+  "nest-raw-exception": {
+    regex: /throw\s+new\s+Error\s*\(/,
+    description: "Raw Error thrown instead of NestJS HttpException/BadRequestException (NestJS)",
+  },
+  "nest-any-guard-return": {
+    regex: /canActivate[\s\S]{0,100}return\s+true\s*;/,
+    description: "Guard always returns true — security no-op (NestJS)",
+  },
+  "nest-service-locator": {
+    regex: /moduleRef\s*\.\s*(?:get|resolve)\s*\(/,
+    description: "Service locator via ModuleRef.get/resolve — use constructor injection instead (NestJS)",
+  },
+  "nest-direct-env": {
+    regex: /process\.env\.\w+/,
+    description: "Direct process.env access — use ConfigService for type-safe config (NestJS)",
+  },
+  // Wave 2 anti-patterns
+  "nest-graphql-no-auth": {
+    // R-7 fix: restrict to .resolver.ts files (via fileIncludePattern) to avoid
+    // false positives on REST @Query() params. Regex checks for @Resolver + @Query/@Mutation
+    // present AND no @UseGuards anywhere in the matched span (capped at 2000 chars to avoid
+    // catastrophic backtracking — O(n) since the negation only runs once per symbol source).
+    regex: /^(?![\s\S]*@UseGuards)[\s\S]*@Resolver\s*\([\s\S]{0,500}?@(?:Query|Mutation)\s*\(/,
+    description: "GraphQL resolver with @Query/@Mutation but no @UseGuards in file — likely unprotected (NestJS)",
+    fileIncludePattern: /\.resolver\.[jt]sx?$/,
+  },
+  "nest-eager-relation": {
+    regex: /@(?:OneToMany|ManyToOne|OneToOne|ManyToMany)\s*\(\s*\(\)\s*=>\s*\w+[\s\S]{0,200}\beager:\s*true/,
+    description: "TypeORM relation with { eager: true } — auto-loads joins on every query (NestJS)",
   },
   // Astro anti-patterns
   "astro-client-on-astro": {
