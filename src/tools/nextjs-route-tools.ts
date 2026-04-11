@@ -4,6 +4,8 @@
  * conflicts where the same URL is served by both routers.
  */
 
+import type Parser from "web-tree-sitter";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -77,6 +79,114 @@ export interface NextjsRouteMapOptions {
   router?: "app" | "pages" | "both" | undefined;
   include_metadata?: boolean | undefined;
   max_routes?: number | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Route segment config reader (AST initializer extraction)
+// ---------------------------------------------------------------------------
+
+const KNOWN_CONFIG_NAMES = new Set([
+  "dynamic",
+  "revalidate",
+  "runtime",
+  "fetchCache",
+  "preferredRegion",
+  "maxDuration",
+  "dynamicParams",
+]);
+
+const DYNAMIC_VALUES = new Set(["auto", "force-dynamic", "force-static", "error"]);
+const RUNTIME_VALUES = new Set(["nodejs", "edge"]);
+
+/**
+ * Read Next.js route segment config exports from an AST.
+ *
+ * Recognizes:
+ *   export const dynamic = "force-dynamic"
+ *   export const revalidate = 60 | false
+ *   export const runtime = "edge"
+ *   export async function generateStaticParams() {...}
+ *
+ * Non-literal initializers (Identifier, BinaryExpression, etc.) set a
+ * `_non_literal` flag and leave the corresponding value `undefined`.
+ *
+ * @internal exported for unit testing
+ */
+export function readRouteSegmentConfig(
+  tree: Parser.Tree,
+  _source: string,
+): RouteSegmentConfig {
+  const config: RouteSegmentConfig = { has_generate_static_params: false };
+  const root = tree.rootNode;
+
+  for (const exportNode of root.descendantsOfType("export_statement")) {
+    // `export const X = Y` → lexical_declaration > variable_declarator
+    for (const decl of exportNode.descendantsOfType("variable_declarator")) {
+      const nameNode = decl.childForFieldName("name") ?? decl.namedChild(0);
+      if (nameNode?.type !== "identifier") continue;
+      const name = nameNode.text;
+      if (!KNOWN_CONFIG_NAMES.has(name)) continue;
+
+      const value = decl.childForFieldName("value") ?? decl.namedChild(1);
+      if (!value) continue;
+
+      readConfigValue(config, name, value);
+    }
+
+    // `export async function generateStaticParams() {...}` / `export function ...`
+    for (const fn of exportNode.descendantsOfType("function_declaration")) {
+      const nameNode = fn.childForFieldName("name") ?? fn.namedChild(0);
+      if (nameNode?.type === "identifier" && nameNode.text === "generateStaticParams") {
+        config.has_generate_static_params = true;
+      }
+    }
+  }
+
+  return config;
+}
+
+function readConfigValue(
+  config: RouteSegmentConfig,
+  name: string,
+  value: Parser.SyntaxNode,
+): void {
+  // String literal
+  if (value.type === "string") {
+    const frag = value.namedChild(0);
+    const text = frag?.type === "string_fragment" ? frag.text : value.text.slice(1, -1);
+    if (name === "dynamic" && DYNAMIC_VALUES.has(text)) {
+      config.dynamic = text as RouteSegmentConfig["dynamic"];
+    } else if (name === "runtime" && RUNTIME_VALUES.has(text)) {
+      config.runtime = text as RouteSegmentConfig["runtime"];
+    }
+    return;
+  }
+
+  // Number literal
+  if (value.type === "number") {
+    const num = parseFloat(value.text);
+    if (!Number.isNaN(num) && name === "revalidate") {
+      config.revalidate = num;
+    }
+    return;
+  }
+
+  // Boolean false literal
+  if (value.type === "false") {
+    if (name === "revalidate") config.revalidate = false;
+    return;
+  }
+  if (value.type === "true") {
+    // `revalidate = true` is not a valid Next.js value — ignore
+    return;
+  }
+
+  // Any other initializer (Identifier, BinaryExpression, CallExpression, ...)
+  // is "non-literal". Flag it so callers know the value is unknowable at
+  // static-analysis time.
+  if (name === "dynamic") config.dynamic_non_literal = true;
+  else if (name === "revalidate") config.revalidate_non_literal = true;
+  else if (name === "runtime") config.runtime_non_literal = true;
 }
 
 // ---------------------------------------------------------------------------
