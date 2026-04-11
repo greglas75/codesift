@@ -26,7 +26,7 @@ export const EXTRACTOR_VERSIONS = {
   nestjs: "1.0.0",
   nextjs: "1.0.0",
   express: "1.0.0",
-  react: "1.0.0",
+  react: "2.0.0",  // Wave 1-4 + Tier 1-4: component/hook kinds, classifyReactKind, isReactClassComponent — forces cache invalidation
   python: "1.0.0",
   php: "1.0.0",
   astro: "1.0.0",
