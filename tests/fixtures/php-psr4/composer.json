@@ -1,0 +1,8 @@
+{
+  "name": "test/psr4-fixture",
+  "autoload": {
+    "psr-4": {
+      "App\\": "src/"
+    }
+  }
+}

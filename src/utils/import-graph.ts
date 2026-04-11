@@ -7,6 +7,7 @@ import type { CodeIndex } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { extractPythonImports } from "./python-imports.js";
 import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
+import { resolvePhpNamespace } from "../tools/php-tools.js";
 
 export interface ImportEdge {
   from: string; // importer file path
@@ -280,6 +281,30 @@ export async function collectImportEdges(
       for (const fqName of kotlinImports) {
         const targetFile = resolveKotlinImport(fqName, kotlinFilesByBasename);
         if (targetFile) addEdge(file.path, targetFile);
+      }
+    }
+
+    // PHP cross-file edges via PSR-4 `use` statement resolution.
+    // Creates edges like: PostController.php → User.php when we see
+    // `use App\Models\User;` and composer.json maps `App\` to `src/`.
+    if (file.path.endsWith(".php")) {
+      const uses = extractPhpUseStatements(source);
+      for (const fqcn of uses) {
+        try {
+          const resolved = await resolvePhpNamespace(index.repo, fqcn);
+          if (resolved.exists && resolved.file_path) {
+            const candidate = resolved.file_path.replace(/^\.\//, "");
+            // Prefer the exact indexed path (handles prefixes like "./src/")
+            const targetFile = index.files.some((f) => f.path === candidate)
+              ? candidate
+              : normalizedPaths.get(candidate.replace(/\.php$/, "")) ?? null;
+            if (targetFile && targetFile !== file.path) {
+              addEdge(file.path, targetFile);
+            }
+          }
+        } catch {
+          // Missing composer.json, malformed PSR-4, etc. — skip edge, don't crash.
+        }
       }
     }
 

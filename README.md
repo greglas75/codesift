@@ -329,7 +329,7 @@ resolve_php_namespace(repo, class_name="App\\Models\\User")
 | Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
 | Detect hardcoded secrets | `scan_secrets` | ~1,100 rules, AST-aware, masked output, auto-cached |
 | Ranked text search | `search_text(ranked=true)` | Classifies hits by function, saves follow-up get_symbol calls |
-| Find hidden tools | `discover_tools` + `describe_tools` | 45 tools hidden by default — search by keyword, get full schema |
+| Find hidden tools | `discover_tools` + `describe_tools` | 47 tools hidden by default — search by keyword, get full schema |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -404,7 +404,7 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 108 tools to AI agents (44 core + 64 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 110 tools to AI agents (44 core + 66 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -586,7 +586,7 @@ TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, **Kotlin**, Java, Ruby, PHP,
 **React/JSX/TSX** has first-class support: `component` and `hook` SymbolKind values, JSX-aware call graph (all graph tools see `<Component>` usage as call edges), 14 React anti-patterns, `trace_component_tree` (BFS JSX composition tree), `analyze_hooks` (hook inventory + Rule of Hooks violation detection), React complexity metrics (hook_count, state_count, effect_count, jsx_depth), enriched `get_context_bundle` (hooks_used, child_components, parent_components, wrapper pattern), `filter_react_hooks` option on `trace_call_chain`, React/Next.js/Remix route entry point detection (prevents dead code false positives), and build tool detection (Vite, CRA, webpack, Parcel, esbuild, Rspack, Rsbuild, Turbopack).
 
 Kotlin support includes full tree-sitter parsing with a dedicated extractor for functions, classes (data/sealed/enum/abstract/annotation), interfaces, objects (singleton + companion), properties (val/var/const), type aliases, extension functions, suspend functions, generics, KDoc comments, and JUnit test detection (@Test, @BeforeEach, @AfterEach, @BeforeAll, @AfterAll). Route tracing supports Ktor DSL and Spring Boot Kotlin. Six Kotlin anti-patterns are built-in.
-| PHP/Yii2 support | src/parser/extractors/php.ts, src/tools/php-tools.ts (7 tools), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
+| PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (9 tools: resolve_php_namespace, analyze_activerecord, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit, find_php_n_plus_one, find_php_god_model), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
 
 ## Development
 
@@ -681,7 +681,7 @@ BSL-1.1
 | Secret scanning | src/tools/secret-tools.ts, @sanity-labs/secret-scan (package.json) |
 | Languages | src/parser/parser-manager.ts, src/parser/extractors/ (incl. kotlin.ts) |
 | Kotlin support | kotlin.ts, graph-tools KEYWORD_SET, complexity when/?.let, test-file Test.kt, lsp-tools .kt, import-graph FQN, route-tools Ktor/Spring, pattern-tools 6 anti-patterns |
-| PHP/Yii2 support | src/parser/extractors/php.ts, src/tools/php-tools.ts (7 tools), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
+| PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (9 tools: resolve_php_namespace, analyze_activerecord, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit, find_php_n_plus_one, find_php_god_model), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
 | Development | package.json:scripts (line 19-28) |
 | Git URL | package.json:repository (line 62-64) |
 -->

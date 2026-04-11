@@ -24,6 +24,25 @@ export function toIgnorePatterns(): string[] {
 
 const DEFAULT_MAX_FILE_SIZE = 1_000_000; // 1MB
 
+/**
+ * Backup and editor-generated files to exclude by default.
+ * These patterns commonly appear in working directories and cause:
+ * - Index duplication (e.g. Mobi2 had Survey.php + Survey copy.php)
+ * - False references pointing at backup files
+ * - Wasted parser time on abandoned code
+ *
+ * Disabled with env var CODESIFT_INCLUDE_BACKUPS=1.
+ */
+export const BACKUP_FILE_PATTERNS: RegExp[] = [
+  /copy\.php$/i,       // macOS Finder "Duplicate" output
+  /\.bak$/i,           // generic backup
+  /\.orig$/i,          // merge conflict leftover
+  /~$/,                // emacs/joe backup
+  /\.swp$/i,           // vim swap
+  /\.swo$/i,           // vim swap
+  /\.DS_Store$/,       // macOS finder metadata
+];
+
 export interface WalkOptions {
   /**
    * When provided, only files whose relative path starts with one of these
@@ -147,6 +166,11 @@ export async function walkDirectory(
         await walk(fullPath);
       } else if (isFile) {
         const ext = extname(entry.name);
+
+        // Exclude backup / editor-generated files unless env var opts out.
+        // Checked before file filter so the noise never reaches the caller.
+        if (process.env.CODESIFT_INCLUDE_BACKUPS !== "1" &&
+            BACKUP_FILE_PATTERNS.some((re) => re.test(entry.name))) continue;
 
         // Apply caller's file filter (e.g. language check, binary exclusion)
         if (fileFilter && !fileFilter(ext, entry.name)) continue;

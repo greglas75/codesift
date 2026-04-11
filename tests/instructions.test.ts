@@ -38,6 +38,6 @@ describe("CODESIFT_INSTRUCTIONS", () => {
   });
 
   it("reports the merged MCP tool count", () => {
-    expect(CODESIFT_INSTRUCTIONS).toContain("108 MCP tools");
+    expect(CODESIFT_INSTRUCTIONS).toContain("110 MCP tools");
   });
 });

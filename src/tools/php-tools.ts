@@ -454,6 +454,159 @@ export async function phpSecurityScan(
 }
 
 // ---------------------------------------------------------------------------
+// 7h. find_php_n_plus_one — detect foreach + relation access without ->with()
+// ---------------------------------------------------------------------------
+
+/**
+ * Common ActiveRecord scalar field names. Property access like $user->id or
+ * $user->created_at inside a foreach is NOT a relation (no N+1 risk), so we
+ * allow-list these to cut false positives.
+ */
+const SCALAR_FIELD_NAMES = new Set([
+  "id", "name", "title", "created_at", "updated_at", "deleted_at", "status",
+  "email", "slug", "code", "type", "value", "label", "description", "enabled",
+  "active", "position", "sort", "order", "count", "total", "amount", "price",
+  "uuid", "hash", "token", "key", "url", "path", "image", "avatar",
+]);
+
+export interface NPlusOneFinding {
+  file: string;
+  method: string;
+  line: number;
+  relation: string;
+  pattern: string;
+}
+
+/**
+ * Detect N+1 query patterns in Yii2/Eloquent controllers.
+ *
+ * Pattern: `foreach ($items as $item) { $item->relation->... }` without a
+ * prior `->with('relation')` call in the same method scope. This is the
+ * most common N+1 anti-pattern in Yii2 ActiveRecord code.
+ *
+ * Known limitations (acceptable for a "discovery" tool, not a gate):
+ * - Regex-based — can miss multi-line foreach bodies split across nested blocks
+ * - Doesn't cross function boundaries — eager loading in caller is invisible
+ * - False positives on nested loops if the outer collection is already eager-loaded
+ */
+export async function findPhpNPlusOne(
+  repo: string,
+  options?: { limit?: number; file_pattern?: string },
+): Promise<{ findings: NPlusOneFinding[]; total: number }> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  const findings: NPlusOneFinding[] = [];
+  const limit = options?.limit ?? 100;
+  const filePattern = options?.file_pattern;
+
+  for (const sym of index.symbols) {
+    if (sym.kind !== "method" || !sym.file.endsWith(".php") || !sym.source) continue;
+    if (filePattern && !sym.file.includes(filePattern)) continue;
+
+    const src = sym.source;
+    const foreachRe = /foreach\s*\(\s*\$(\w+)\s+as\s+(?:\$\w+\s*=>\s*)?\$(\w+)\s*\)/g;
+    let fm: RegExpExecArray | null;
+    while ((fm = foreachRe.exec(src)) !== null) {
+      const itemVar = fm[2]!;
+      // Scan everything after the foreach opening for $itemVar->relation
+      // (property access, not method call — methods are too ambiguous).
+      const after = src.slice(fm.index);
+      const relRe = new RegExp(`\\$${itemVar}->(\\w+)(?!\\()`, "g");
+      const relMatch = relRe.exec(after);
+      if (!relMatch) continue;
+      const relation = relMatch[1]!;
+
+      // Skip well-known scalar fields
+      if (SCALAR_FIELD_NAMES.has(relation.toLowerCase())) continue;
+
+      // Check if an earlier ->with('relation') eager-loads this relation
+      const beforeForeach = src.slice(0, fm.index);
+      const withRe = new RegExp(`\\bwith\\s*\\(\\s*['"]${relation}['"]`);
+      if (withRe.test(beforeForeach)) continue;
+
+      const lineOffset = beforeForeach.split("\n").length - 1;
+      findings.push({
+        file: sym.file,
+        method: sym.name,
+        line: sym.start_line + lineOffset,
+        relation,
+        pattern: "foreach-access-without-with",
+      });
+      if (findings.length >= limit) return { findings, total: findings.length };
+    }
+  }
+
+  return { findings, total: findings.length };
+}
+
+// ---------------------------------------------------------------------------
+// 7i. find_php_god_model — oversized ActiveRecord models
+// ---------------------------------------------------------------------------
+
+export interface GodModelFinding {
+  name: string;
+  file: string;
+  method_count: number;
+  relation_count: number;
+  line_count: number;
+  reasons: string[];
+}
+
+/**
+ * Flag ActiveRecord models with too many methods, relations, or lines.
+ * Thresholds are configurable (default 50/15/500). Uses analyzeActiveRecord
+ * for model detection, then cross-references the class symbol for line span.
+ *
+ * Classic anti-pattern in large Yii2 apps — Survey.php in Mobi2 has 175
+ * methods, 30 relations, split across a single 3000-line file.
+ */
+export async function findPhpGodModel(
+  repo: string,
+  options?: { min_methods?: number; min_relations?: number; min_lines?: number },
+): Promise<{ models: GodModelFinding[]; total: number }> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  const ar = await analyzeActiveRecord(repo);
+  const minM = options?.min_methods ?? 50;
+  const minR = options?.min_relations ?? 15;
+  const minL = options?.min_lines ?? 500;
+
+  const models: GodModelFinding[] = [];
+  for (const m of ar.models) {
+    // Look up the class symbol by (name, kind, file) — file match keeps
+    // duplicate class names in different paths (e.g. Survey.php + Survey copy.php)
+    // reported independently.
+    const classSym = index.symbols.find(
+      (s) => s.name === m.name && s.kind === "class" && s.file === m.file,
+    );
+    const lineCount = classSym ? classSym.end_line - classSym.start_line : 0;
+
+    const reasons: string[] = [];
+    if (m.methods.length > minM) reasons.push(`methods: ${m.methods.length} > ${minM}`);
+    if (m.relations.length > minR) reasons.push(`relations: ${m.relations.length} > ${minR}`);
+    if (lineCount > minL) reasons.push(`lines: ${lineCount} > ${minL}`);
+
+    if (reasons.length > 0) {
+      models.push({
+        name: m.name,
+        file: m.file,
+        method_count: m.methods.length,
+        relation_count: m.relations.length,
+        line_count: lineCount,
+        reasons,
+      });
+    }
+  }
+
+  // Sort by severity (number of reasons desc, then methods desc)
+  models.sort((a, b) => b.reasons.length - a.reasons.length || b.method_count - a.method_count);
+
+  return { models, total: models.length };
+}
+
+// ---------------------------------------------------------------------------
 // 7g. php_project_audit — Compound meta-tool
 // ---------------------------------------------------------------------------
 
@@ -491,7 +644,7 @@ export async function phpProjectAudit(
 ): Promise<PhpProjectAudit> {
   const startTime = Date.now();
   const gates: AuditGate[] = [];
-  const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots"];
+  const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots", "n_plus_one", "god_model"];
   const enabled = new Set(options?.checks ?? allChecks);
   const fp = options?.file_pattern ?? ".php";
   const secOpts: { file_pattern?: string } = {};
@@ -507,6 +660,8 @@ export async function phpProjectAudit(
   if (enabled.has("patterns")) tasks.push({ name: "patterns", run: () => searchPatterns(repo, "empty-catch", { file_pattern: fp }) });
   if (enabled.has("clones")) tasks.push({ name: "clones", run: async () => { const { findClones } = await import("./clone-tools.js"); return findClones(repo, { file_pattern: fp }); } });
   if (enabled.has("hotspots")) tasks.push({ name: "hotspots", run: async () => { const { analyzeHotspots } = await import("./hotspot-tools.js"); return analyzeHotspots(repo, {}); } });
+  if (enabled.has("n_plus_one")) tasks.push({ name: "n_plus_one", run: () => findPhpNPlusOne(repo, options?.file_pattern ? { file_pattern: options.file_pattern } : undefined) });
+  if (enabled.has("god_model")) tasks.push({ name: "god_model", run: () => findPhpGodModel(repo) });
 
   const settled = await Promise.allSettled(
     tasks.map(async (t) => {
@@ -534,6 +689,8 @@ export async function phpProjectAudit(
     else if (name === "patterns") count = (result as { matches?: unknown[] })?.matches?.length ?? 0;
     else if (name === "clones") count = (result as { clones?: unknown[] })?.clones?.length ?? 0;
     else if (name === "hotspots") count = (result as { hotspots?: unknown[] })?.hotspots?.length ?? 0;
+    else if (name === "n_plus_one") count = (result as { findings?: unknown[] })?.findings?.length ?? 0;
+    else if (name === "god_model") count = (result as { models?: unknown[] })?.models?.length ?? 0;
 
     if (name !== "activerecord") totalFindings += count;
     gates.push({ name, status: "ok", findings_count: count, duration_ms: ms });

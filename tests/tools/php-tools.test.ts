@@ -11,7 +11,7 @@ import { extractYii2Conventions, extractPhpConventions } from "../../src/tools/p
 // validate the module structure/exports.
 
 describe("PHP tool module exports", () => {
-  it("exports all 7 PHP tool functions", async () => {
+  it("exports all 9 PHP tool functions", async () => {
     const mod = await import("../../src/tools/php-tools.js");
     expect(typeof mod.resolvePhpNamespace).toBe("function");
     expect(typeof mod.analyzeActiveRecord).toBe("function");
@@ -20,6 +20,8 @@ describe("PHP tool module exports", () => {
     expect(typeof mod.resolvePhpService).toBe("function");
     expect(typeof mod.phpSecurityScan).toBe("function");
     expect(typeof mod.phpProjectAudit).toBe("function");
+    expect(typeof mod.findPhpNPlusOne).toBe("function");
+    expect(typeof mod.findPhpGodModel).toBe("function");
   });
 });
 
@@ -208,7 +210,7 @@ use Yii;
 });
 
 describe("PHP tools auto-load on composer.json detection", () => {
-  it("includes all 7 PHP tools in the composer.json framework group", async () => {
+  it("includes all 9 PHP tools in the composer.json framework group", async () => {
     // Read the register-tools source to verify the group config
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/register-tools.ts", "utf-8");
@@ -216,10 +218,10 @@ describe("PHP tools auto-load on composer.json detection", () => {
     expect(source).toContain("FRAMEWORK_TOOL_GROUPS");
     expect(source).toContain('"composer.json"');
 
-    // Verify all 7 PHP tools are in the auto-load list
+    // Verify all 9 PHP tools are in the auto-load list
     const composerSection = source.slice(
       source.indexOf('"composer.json"'),
-      source.indexOf('"composer.json"') + 600,
+      source.indexOf('"composer.json"') + 800,
     );
     expect(composerSection).toContain("resolve_php_namespace");
     expect(composerSection).toContain("analyze_activerecord");
@@ -228,6 +230,8 @@ describe("PHP tools auto-load on composer.json detection", () => {
     expect(composerSection).toContain("resolve_php_service");
     expect(composerSection).toContain("php_security_scan");
     expect(composerSection).toContain("php_project_audit");
+    expect(composerSection).toContain("find_php_n_plus_one");
+    expect(composerSection).toContain("find_php_god_model");
   });
 
   it("has detectAutoLoadTools function that checks file existence", async () => {
@@ -235,5 +239,28 @@ describe("PHP tools auto-load on composer.json detection", () => {
     const source = readFileSync("src/register-tools.ts", "utf-8");
     expect(source).toContain("async function detectAutoLoadTools");
     expect(source).toContain("existsSync");
+  });
+
+  it("registers find_php_n_plus_one and find_php_god_model as TOOL_DEFINITIONS entries", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/register-tools.ts", "utf-8");
+    expect(source).toContain('name: "find_php_n_plus_one"');
+    expect(source).toContain('name: "find_php_god_model"');
+    expect(source).toContain("findPhpNPlusOne");
+    expect(source).toContain("findPhpGodModel");
+  });
+
+  it("CLAUDE.md references the new PHP tools", async () => {
+    const { readFileSync } = await import("node:fs");
+    const claudeMd = readFileSync("CLAUDE.md", "utf-8");
+    expect(claudeMd).toContain("find_php_n_plus_one");
+    expect(claudeMd).toContain("find_php_god_model");
+  });
+
+  it("README.md references the new PHP tools", async () => {
+    const { readFileSync } = await import("node:fs");
+    const readme = readFileSync("README.md", "utf-8");
+    expect(readme).toContain("find_php_n_plus_one");
+    expect(readme).toContain("find_php_god_model");
   });
 });

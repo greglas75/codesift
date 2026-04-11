@@ -2,6 +2,54 @@ import type Parser from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { getNodeName, makeSymbol } from "./_shared.js";
 
+// --- PHPDoc tag parser ---
+
+/**
+ * Parse `@property` and `@method` tags from a PHPDoc block.
+ * Used to synthesize Yii2 ActiveRecord magic properties (which live only in
+ * the docblock, not as real PHP fields).
+ *
+ * Supports forms:
+ *   @property int $id                  → { tag: "property", name: "id", type: "int" }
+ *   @property string $name             → { tag: "property", name: "name", type: "string" }
+ *   @method getPosts()                 → { tag: "method", name: "getPosts" }
+ *   @method ActiveQuery getPosts()     → { tag: "method", name: "getPosts", type: "ActiveQuery" }
+ *
+ * Returns [] for empty / undefined input. Tag order is preserved.
+ */
+export function parsePhpDocTags(
+  docstring?: string,
+): Array<{ tag: "property" | "method"; name: string; type?: string }> {
+  if (!docstring) return [];
+  const results: Array<{ tag: "property" | "method"; name: string; type?: string }> = [];
+
+  const propRe = /@property(?:-read|-write)?\s+(\S+)\s+\$(\w+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = propRe.exec(docstring)) !== null) {
+    const entry: { tag: "property"; name: string; type?: string } = {
+      tag: "property",
+      name: m[2]!,
+    };
+    if (m[1]) entry.type = m[1];
+    results.push(entry);
+  }
+
+  // @method [returnType] name(args)
+  // - With return type:  @method ActiveQuery getPosts(int $limit)
+  // - Without type:      @method getPosts()
+  const methodRe = /@method\s+(?:(\S+)\s+)?(\w+)\s*\(/g;
+  while ((m = methodRe.exec(docstring)) !== null) {
+    const entry: { tag: "method"; name: string; type?: string } = {
+      tag: "method",
+      name: m[2]!,
+    };
+    if (m[1]) entry.type = m[1];
+    results.push(entry);
+  }
+
+  return results;
+}
+
 // --- Helpers ---
 
 /**
@@ -147,17 +195,58 @@ export function extractPhpSymbols(
         const name = getNodeName(node) ?? "<anonymous>";
         const isTest = isTestCaseClass(node);
         const kind: SymbolKind = isTest ? "test_suite" : "class";
+        const docstring = getDocstring(node, source);
         const sym = makeSymbol(node, name, kind, filePath, source, repo, {
           parentId,
-          docstring: getDocstring(node, source),
+          docstring,
         });
         symbols.push(sym);
 
-        // Walk class body
+        // 1. Walk class body FIRST so real methods/fields are in `symbols`
+        //    before dedup runs for synthetic @property/@method tags.
         const body = node.childForFieldName("body");
         if (body) {
           for (const child of body.namedChildren) {
             walk(child, sym.id, isTest);
+          }
+        }
+
+        // 2. Synthesize @property / @method from the class docblock.
+        //    Yii2 ActiveRecord uses these heavily ("magic properties") —
+        //    they don't exist as real PHP fields but they're very much
+        //    part of the public API. Dedup against real members (same
+        //    name+kind+parent): real wins, synthetic skipped.
+        if (docstring) {
+          const tags = parsePhpDocTags(docstring);
+          for (const tag of tags) {
+            const targetKind: SymbolKind = tag.tag === "property" ? "field" : "method";
+            const realExists = symbols.some(
+              (s) =>
+                s.parent === sym.id &&
+                s.name === tag.name &&
+                s.kind === targetKind &&
+                !s.meta?.synthetic,
+            );
+            if (realExists) continue;
+            const synOpts: {
+              parentId: string;
+              signature?: string;
+              meta: Record<string, unknown>;
+            } = {
+              parentId: sym.id,
+              meta: { synthetic: true },
+            };
+            if (tag.type) synOpts.signature = tag.type;
+            const synthetic = makeSymbol(
+              node,
+              tag.name,
+              targetKind,
+              filePath,
+              source,
+              repo,
+              synOpts,
+            );
+            symbols.push(synthetic);
           }
         }
         return;
