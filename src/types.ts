@@ -128,6 +128,7 @@ export type RouteFramework =
   | "nestjs"
   | "nextjs"
   | "express"
+  | "hono"
   | "yii2"
   | "laravel"
   | "ktor"

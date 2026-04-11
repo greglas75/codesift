@@ -43,7 +43,18 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
   if (sources.includes("@nestjs/") || sources.includes("NestFactory")) frameworks.add("nestjs");
   if (sources.includes("from 'react'") || sources.includes('from "react"') || sources.includes("useState")) frameworks.add("react");
   if (sources.includes("express()") || sources.includes("Router()")) frameworks.add("express");
-  if (sources.includes("from 'hono'") || sources.includes('from "hono"') || sources.includes("from '@hono/zod-openapi'") || sources.includes('from "@hono/zod-openapi"')) frameworks.add("hono");
+  // Hono detection: check symbol sources for new Hono() / new OpenAPIHono() instantiation,
+  // or import statements (captured in some extractor flows), or hono/factory createApp
+  if (
+    /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(sources) ||
+    sources.includes("from 'hono'") ||
+    sources.includes('from "hono"') ||
+    sources.includes("from '@hono/zod-openapi'") ||
+    sources.includes('from "@hono/zod-openapi"') ||
+    sources.includes("factory.createApp")
+  ) {
+    frameworks.add("hono");
+  }
   if (sources.includes("from 'astro'") || sources.includes('from "astro"') || sources.includes("from 'astro:") || sources.includes('from "astro:') || index.files.some((f) => f.path.endsWith(".astro"))) frameworks.add("astro");
 
   // Next.js detection: broadened to cover config file, pages/ dir, and App Router conventions

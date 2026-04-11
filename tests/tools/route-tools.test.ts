@@ -320,6 +320,33 @@ export async function GET() { return NextResponse.json({}); }`,
     expect(result.server_actions).toEqual([]);
   });
 
+  it("traces Hono route to handler with framework=hono (AC-R1)", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+const app = new Hono();
+app.get("/health", (c) => c.json({ status: "ok" }));
+app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
+export default app;`,
+    });
+    const result = await traceRoute(repo, "/health");
+    expect(result.handlers.length).toBeGreaterThan(0);
+    const honoHandler = result.handlers.find((h) => h.framework === "hono");
+    expect(honoHandler).toBeDefined();
+    expect(honoHandler?.method).toBe("GET");
+  });
+
+  it("traces Hono parameterized path (AC-R1 with param)", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+const app = new Hono();
+app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
+export default app;`,
+    });
+    const result = await traceRoute(repo, "/users/:id");
+    const honoHandler = result.handlers.find((h) => h.framework === "hono");
+    expect(honoHandler).toBeDefined();
+  });
+
   it("does not detect function-body use server (file-level only)", async () => {
     const repo = await createIndexedFixture({
       "app/lib/actions.ts": `export async function save() {
