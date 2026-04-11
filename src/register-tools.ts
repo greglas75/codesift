@@ -62,6 +62,7 @@ import { nextjsMiddlewareCoverage } from "./tools/nextjs-middleware-coverage-too
 import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
 import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
+import { astroContentCollections } from "./tools/astro-content-collections.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { getModelGraph } from "./tools/model-tools.js";
 import { getTestFixtures } from "./tools/pytest-tools.js";
@@ -71,12 +72,15 @@ import { parsePyproject } from "./tools/pyproject-tools.js";
 import { resolveConstantValue } from "./tools/python-constants-tools.js";
 import { effectiveDjangoViewSecurity } from "./tools/django-view-security-tools.js";
 import { findPythonCallers } from "./tools/python-callers.js";
+import { taintTrace } from "./tools/taint-tools.js";
 import { analyzeDjangoSettings } from "./tools/django-settings.js";
 import { traceCeleryChain } from "./tools/celery-tools.js";
 import { runMypy, runPyright } from "./tools/typecheck-tools.js";
 import { analyzePythonDeps } from "./tools/python-deps-analyzer.js";
 import { findPythonCircularImports } from "./tools/python-circular-imports.js";
 import { pythonAudit } from "./tools/python-audit.js";
+import { traceFastAPIDepends } from "./tools/fastapi-depends.js";
+import { analyzeAsyncCorrectness } from "./tools/async-correctness.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
@@ -85,6 +89,7 @@ import { auditAgentConfig } from "./tools/agent-config-tools.js";
 import { testImpactAnalysis } from "./tools/test-impact-tools.js";
 import { dependencyAudit } from "./tools/dependency-audit-tools.js";
 import { migrationLint } from "./tools/migration-lint-tools.js";
+import { astroMigrationCheck } from "./tools/astro-migration.js";
 import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
@@ -2127,6 +2132,32 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "taint_trace",
+    category: "security",
+    requiresLanguage: "python",
+    searchHint: "python django taint data flow source sink request get post redirect mark_safe cursor execute subprocess session trace",
+    description: "Trace Python/Django user-controlled data from request sources to security sinks like redirect, mark_safe, cursor.execute, subprocess, requests/httpx, open, or session writes.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      framework: z.enum(["python-django"]).optional().describe("Currently only python-django is implemented"),
+      file_pattern: z.string().optional().describe("Restrict analysis to matching Python files"),
+      source_patterns: z.array(z.string()).optional().describe("Optional source pattern allowlist (defaults to request.* presets)"),
+      sink_patterns: z.array(z.string()).optional().describe("Optional sink pattern allowlist (defaults to built-in security sinks)"),
+      max_depth: zFiniteNumber.optional().describe("Maximum interprocedural helper depth (default: 4)"),
+      max_traces: zFiniteNumber.optional().describe("Maximum traces to return before truncation (default: 50)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof taintTrace>[1] = {};
+      if (args.framework != null) opts.framework = args.framework as "python-django";
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.source_patterns != null) opts.source_patterns = args.source_patterns as string[];
+      if (args.sink_patterns != null) opts.sink_patterns = args.sink_patterns as string[];
+      if (args.max_depth != null) opts.max_depth = args.max_depth as number;
+      if (args.max_traces != null) opts.max_traces = args.max_traces as number;
+      return await taintTrace(args.repo as string, opts);
+    },
+  },
+  {
     name: "find_python_callers",
     category: "analysis",
     requiresLanguage: "python",
@@ -2275,6 +2306,26 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.endpoint != null) opts!.endpoint = args.endpoint as string;
       if (args.max_depth != null) opts!.max_depth = args.max_depth as number;
       return await traceFastAPIDepends(args.repo as string, opts);
+    },
+  },
+  {
+    name: "analyze_async_correctness",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python async await asyncio blocking sync requests sleep subprocess django sqlalchemy ORM coroutine fastapi",
+    description: "Detect 8 asyncio pitfalls in async def: blocking requests/sleep/IO/subprocess, sync SQLAlchemy/Django ORM in async views, async without await, asyncio.create_task without ref storage.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      rules: z.array(z.string()).optional().describe("Subset of rules to run"),
+      max_results: zFiniteNumber.optional().describe("Max findings (default: 200)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof analyzeAsyncCorrectness>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.rules != null) opts!.rules = args.rules as string[];
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      return await analyzeAsyncCorrectness(args.repo as string, opts);
     },
   },
   {
