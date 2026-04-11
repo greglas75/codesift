@@ -81,11 +81,12 @@ export function extractServerActionFunctions(
           fnNode: fn,
         });
       }
-      // const x = async () => { ... }
+      // const x = async () => { ... }   OR   const x = wrap(async () => { ... })
       for (const decl of exp.descendantsOfType("variable_declarator")) {
         const name = decl.childForFieldName("name")?.text;
         const value = decl.childForFieldName("value");
         if (!name || !value) continue;
+        // Direct arrow / function_expression
         if (value.type === "arrow_function" || value.type === "function_expression") {
           const isAsync = /^\s*async\b/.test(value.text);
           const body = value.childForFieldName("body");
@@ -97,6 +98,25 @@ export function extractServerActionFunctions(
             bodyNode: body ?? null,
             fnNode: value,
           });
+        } else if (value.type === "call_expression") {
+          // HOC wrapper: find the inner arrow/function expression argument.
+          const args = value.childForFieldName("arguments") ?? value.namedChild(1);
+          if (!args) continue;
+          for (const arg of args.namedChildren) {
+            if (arg.type === "arrow_function" || arg.type === "function_expression") {
+              const isAsync = /^\s*async\b/.test(arg.text);
+              const body = arg.childForFieldName("body");
+              out.push({
+                name,
+                file,
+                line: decl.startPosition.row + 1,
+                isAsync,
+                bodyNode: body && body.type === "statement_block" ? body : null,
+                fnNode: arg,
+              });
+              break;
+            }
+          }
         }
       }
     }
@@ -146,8 +166,116 @@ export function extractServerActionFunctions(
 // Auth guard detection (Task 15)
 // ---------------------------------------------------------------------------
 
-export function detectAuthGuard(_fn: ServerActionFn): AuthGuardInfo {
-  throw new Error("not implemented");
+/** Default identifier set for auth detection. */
+const AUTH_CALL_NAMES = new Set([
+  "auth",
+  "getSession",
+  "getServerSession",
+  "currentUser",
+  "validateRequest",
+  "getAuth",
+  "getUser",
+]);
+
+const AUTH_HOC_NAMES = new Set(["withAuth", "requireAuth", "withSession"]);
+
+export function detectAuthGuard(fn: ServerActionFn): AuthGuardInfo {
+  const body = fn.bodyNode;
+
+  // 0) HOC wrapper detection — if the function node is the argument of a known HOC wrapper.
+  let p: Parser.SyntaxNode | null = fn.fnNode.parent;
+  while (p) {
+    if (p.type === "call_expression") {
+      const callee = p.childForFieldName("function") ?? p.namedChild(0);
+      if (callee?.type === "identifier" && AUTH_HOC_NAMES.has(callee.text)) {
+        return { confidence: "medium", pattern: "hoc" };
+      }
+    }
+    p = p.parent;
+  }
+
+  if (!body) {
+    return { confidence: "none", pattern: "none" };
+  }
+
+  // 1) Look for direct auth call expressions inside body.
+  let firstAuthCall: { name: string; line: number; node: Parser.SyntaxNode } | null = null;
+  for (const call of body.descendantsOfType("call_expression")) {
+    const callee = call.childForFieldName("function") ?? call.namedChild(0);
+    if (callee?.type === "identifier" && AUTH_CALL_NAMES.has(callee.text)) {
+      firstAuthCall = { name: callee.text, line: call.startPosition.row + 1, node: call };
+      break;
+    }
+    // Member access like auth.protect()
+    if (callee?.type === "member_expression") {
+      const obj = callee.childForFieldName("object") ?? callee.namedChild(0);
+      const prop = callee.childForFieldName("property") ?? callee.namedChild(1);
+      if (obj?.type === "identifier" && AUTH_CALL_NAMES.has(obj.text)) {
+        firstAuthCall = {
+          name: `${obj.text}.${prop?.text ?? ""}`,
+          line: call.startPosition.row + 1,
+          node: call,
+        };
+        break;
+      }
+    }
+  }
+
+  if (firstAuthCall) {
+    // Walk forward in body looking for if(!result)/throw/return within the next 5 statements.
+    const callLine = firstAuthCall.line;
+    const callIndex = firstAuthCall.node.endIndex;
+    let resultChecked = false;
+    for (const ifStmt of body.descendantsOfType("if_statement")) {
+      if (ifStmt.startIndex >= callIndex && ifStmt.startPosition.row <= callLine + 5) {
+        // Heuristic: any if-throw/return after the auth call counts as "checked"
+        const inner = ifStmt.text;
+        if (/throw|return\s|redirect/.test(inner)) {
+          resultChecked = true;
+          break;
+        }
+      }
+    }
+    // Also handle assignment + checked condition: if (!session) { ... }
+    if (!resultChecked) {
+      // Look for any assignment storing the call result, then a usage in if-condition
+      for (const decl of body.descendantsOfType("variable_declarator")) {
+        const value = decl.childForFieldName("value");
+        if (!value) continue;
+        // Skip assignments before the auth call
+        if (decl.startIndex < firstAuthCall.node.startIndex) continue;
+        const varName = decl.childForFieldName("name")?.text;
+        if (!varName) continue;
+        // Check for usage in subsequent if condition
+        for (const ifStmt of body.descendantsOfType("if_statement")) {
+          if (ifStmt.startIndex < decl.endIndex) continue;
+          const cond = ifStmt.childForFieldName("condition") ?? ifStmt.namedChild(0);
+          if (cond && new RegExp(`\\b${varName}\\b`).test(cond.text)) {
+            const inner = ifStmt.text;
+            if (/throw|return\s|redirect/.test(inner)) {
+              resultChecked = true;
+              break;
+            }
+          }
+        }
+        if (resultChecked) break;
+      }
+    }
+
+    return {
+      confidence: resultChecked ? "high" : "medium",
+      pattern: "direct",
+      callsite: { name: firstAuthCall.name, line: firstAuthCall.line },
+    };
+  }
+
+  // 2) Comment-only mention as fallback (low).
+  const bodyText = body.text;
+  if (/(?:\/\/|\/\*)\s*[^*]*\b(auth|session|user|permission)/i.test(bodyText)) {
+    return { confidence: "low", pattern: "none" };
+  }
+
+  return { confidence: "none", pattern: "none" };
 }
 
 // ---------------------------------------------------------------------------
