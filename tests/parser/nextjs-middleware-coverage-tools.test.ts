@@ -101,6 +101,28 @@ describe("nextjsMiddlewareCoverage orchestrator", () => {
     }
   });
 
+  it("matches pre-authored expected.json (fixture)", async () => {
+    const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-middleware-coverage");
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-middleware-coverage",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+    const expectedRaw = await readFile(resolve(fixtureRoot, "expected.json"), "utf8");
+    const expected = JSON.parse(expectedRaw) as {
+      protected: string[];
+      unprotected: string[];
+      warnings: unknown[];
+    };
+    const result = await nextjsMiddlewareCoverage("nextjs-middleware-coverage");
+    expect(result.coverage.protected.sort()).toEqual(expected.protected.sort());
+    expect(result.coverage.unprotected.sort()).toEqual(expected.unprotected.sort());
+    expect(result.warnings.length).toBe(expected.warnings.length);
+  });
+
   it("flags admin routes with high-severity warnings when no middleware", async () => {
     const root = await makeRepo({
       "next.config.js": "module.exports = {};\n",

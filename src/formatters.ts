@@ -794,6 +794,7 @@ import type { ApiContractResult } from "./tools/nextjs-api-contract-tools.js";
 import type { NextjsBoundaryResult } from "./tools/nextjs-boundary-tools.js";
 import type { LinkIntegrityResult } from "./tools/nextjs-link-tools.js";
 import type { NextjsDataFlowResult } from "./tools/nextjs-data-flow-tools.js";
+import type { NextjsMiddlewareCoverageResult } from "./tools/nextjs-middleware-coverage-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -1027,6 +1028,42 @@ export function formatNextjsDataFlow(result: NextjsDataFlowResult): string {
     lines.push(`${url} ${fetches} ${wf}`);
   }
   lines.push("");
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsMiddlewareCoverage(result: NextjsMiddlewareCoverageResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS MIDDLEWARE COVERAGE");
+  lines.push("");
+  lines.push(
+    `Routes: ${result.total} | protected=${result.coverage.protected.length} unprotected=${result.coverage.unprotected.length} | warnings=${result.warnings.length}`,
+  );
+  lines.push("");
+  lines.push("URL                              Protected Severity");
+  lines.push("──────────────────────────────── ───────── ────────");
+  for (const url of result.coverage.protected.slice(0, 50)) {
+    const u = url.padEnd(32).slice(0, 32);
+    lines.push(`${u} yes       —`);
+  }
+  for (const url of result.coverage.unprotected.slice(0, 50)) {
+    const u = url.padEnd(32).slice(0, 32);
+    const warning = result.warnings.find((w) => w.route === url);
+    const sev = warning ? warning.severity : "—";
+    lines.push(`${u} no        ${sev}`);
+  }
+  lines.push("");
+  if (result.warnings.length > 0) {
+    lines.push(`Warnings:`);
+    for (const w of result.warnings.slice(0, 20)) {
+      lines.push(`  [${w.severity}] ${w.route} — ${w.reason}`);
+    }
+  }
   if (result.workspaces_scanned.length > 0) {
     lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
   }

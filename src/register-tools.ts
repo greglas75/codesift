@@ -54,6 +54,7 @@ import { nextjsApiContract } from "./tools/nextjs-api-contract-tools.js";
 import { nextjsBoundaryAnalyzer } from "./tools/nextjs-boundary-tools.js";
 import { nextjsLinkIntegrity } from "./tools/nextjs-link-tools.js";
 import { nextjsDataFlow } from "./tools/nextjs-data-flow-tools.js";
+import { nextjsMiddlewareCoverage } from "./tools/nextjs-middleware-coverage-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -70,7 +71,7 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow, formatNextjsMiddlewareCoverage } from "./formatters.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
@@ -2718,6 +2719,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.url_path != null) opts.url_path = args.url_path as string;
       const result = await nextjsDataFlow(args.repo as string ?? "", opts);
       return formatNextjsDataFlow(result);
+    },
+  },
+  {
+    name: "nextjs_middleware_coverage",
+    category: "security" as ToolCategory,
+    searchHint: "nextjs middleware coverage protected admin auth route matcher security",
+    description: "Cross-reference Next.js routes with middleware matcher config to compute coverage. Flags admin/dashboard routes without middleware protection as high-severity warnings.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      flag_admin_prefix: z.union([z.string(), z.array(z.string())]).optional().describe("Admin path prefix(es) to flag (default: ['/admin', '/dashboard'])"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsMiddlewareCoverage>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.flag_admin_prefix != null) opts.flag_admin_prefix = args.flag_admin_prefix as string | string[];
+      const result = await nextjsMiddlewareCoverage(args.repo as string ?? "", opts);
+      return formatNextjsMiddlewareCoverage(result);
     },
   },
 
