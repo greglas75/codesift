@@ -1,7 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+
+// Mock getCodeIndex so the orchestrator tests can point at filesystem fixtures
+vi.mock("../../src/tools/index-tools.js", () => ({
+  getCodeIndex: vi.fn(),
+}));
+import { getCodeIndex } from "../../src/tools/index-tools.js";
+
 import {
   analyzeNextjsComponents,
   classifyFile,
@@ -196,6 +203,41 @@ describe("applyClassificationTable", () => {
         dynamic_ssr_false: true,
       }),
     ).toEqual({ classification: "client_inferred", violations: [] });
+  });
+});
+
+describe("analyzeNextjsComponents — App Router fixture", () => {
+  const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-app-router");
+
+  beforeAll(() => {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-app-router",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+  });
+
+  it("scans at least 20 component files", async () => {
+    const result = await analyzeNextjsComponents("nextjs-app-router");
+    expect(result.counts.total).toBeGreaterThanOrEqual(20);
+  });
+
+  it("parse_failures is empty (fixture invariant)", async () => {
+    const result = await analyzeNextjsComponents("nextjs-app-router");
+    expect(result.parse_failures).toEqual([]);
+  });
+
+  it("detects at least one unnecessary_use_client violation", async () => {
+    const result = await analyzeNextjsComponents("nextjs-app-router");
+    expect(result.counts.unnecessary_use_client).toBeGreaterThanOrEqual(1);
+  });
+
+  it("detects at least three client_explicit components", async () => {
+    const result = await analyzeNextjsComponents("nextjs-app-router");
+    expect(result.counts.client_explicit).toBeGreaterThanOrEqual(3);
   });
 });
 
