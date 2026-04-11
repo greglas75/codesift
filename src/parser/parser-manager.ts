@@ -88,6 +88,36 @@ export function getLanguageForExtension(ext: string): string | null {
   return EXTENSION_MAP[ext] ?? null;
 }
 
+/**
+ * Languages that do NOT produce structured symbols through the normal parser
+ * pipeline. A `FileEntry.language` falling in this set means the file is only
+ * indexed via its file entry + ripgrep + secret scanning — symbol tools
+ * (search_symbols, get_file_outline, etc.) will return empty results for it.
+ *
+ * Used by the H11 hint to warn agents when symbol queries come back empty
+ * because of missing parsers, rather than because of a legitimately empty
+ * search space.
+ *
+ * Note: this set must NOT contain any language that has a real tree-sitter
+ * extractor. When a new parser is added (e.g. kotlin → full extractor), its
+ * language string must be removed from here so H11 stops firing for those
+ * files.
+ */
+export const STUB_LANGUAGES: ReadonlySet<string> = new Set([
+  "text_stub",
+  "config",
+]);
+
+/**
+ * Returns true when the given `FileEntry.language` value is known to produce
+ * structured symbols (i.e. not in `STUB_LANGUAGES`). This is the dynamic
+ * lookup used by H11 — adding a new parser to EXTENSION_MAP with any string
+ * outside STUB_LANGUAGES automatically opts it out of the H11 warning.
+ */
+export function languageHasParser(language: string): boolean {
+  return !STUB_LANGUAGES.has(language);
+}
+
 export async function parseFile(
   filePath: string,
   source: string,

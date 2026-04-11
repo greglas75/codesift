@@ -5,6 +5,7 @@ import { z } from "zod";
 const zBool = () => z.union([z.boolean(), z.string().transform((s) => s === "true")]).optional();
 import { wrapTool, registerShortener } from "./server-helpers.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, getCodeIndex } from "./tools/index-tools.js";
+import { STUB_LANGUAGES } from "./parser/parser-manager.js";
 import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
@@ -80,14 +81,46 @@ export const zNum = () =>
 // H11 — warn when symbol tools return empty for repos with text_stub languages
 // ---------------------------------------------------------------------------
 
-const SYMBOL_TOOLS = new Set([
+export const SYMBOL_TOOLS = new Set([
   "search_symbols", "get_file_outline", "get_symbol", "get_symbols",
   "find_references", "trace_call_chain", "find_dead_code", "analyze_complexity",
 ]);
 
 /**
- * Check if a repo has text_stub files as dominant language. Returns a hint
- * string to prepend to empty results, or null if no hint needed.
+ * Build an H11 hint string from a list of FileEntry-like records. Returns
+ * null when no hint is needed. Separated from `checkTextStubHint` so the
+ * purely-deterministic core can be unit-tested without spinning up a real
+ * index.
+ *
+ * A file is counted as a "stub" when its language appears in STUB_LANGUAGES
+ * (queried dynamically). Languages like `kotlin` that have a real extractor
+ * are automatically excluded because they live outside STUB_LANGUAGES, so
+ * H11 no longer fires for Kotlin-heavy repos.
+ */
+export function buildH11Hint(
+  files: ReadonlyArray<{ path: string; language: string }>,
+): string | null {
+  if (files.length === 0) return null;
+
+  const stubFiles = files.filter((f) => STUB_LANGUAGES.has(f.language));
+  if (stubFiles.length === 0) return null;
+
+  const stubPct = Math.round((stubFiles.length / files.length) * 100);
+  if (stubPct < 30) return null;
+
+  const stubExts = [...new Set(
+    stubFiles.map((f) => "." + f.path.split(".").pop())
+  )].slice(0, 3).join(", ");
+
+  return `⚡H11 No parser for ${stubExts} files (${stubPct}% of repo). Symbol tools return empty.\n` +
+    `  → search_text(query) works on ALL files (uses ripgrep, not parser)\n` +
+    `  → get_file_tree shows file listing\n` +
+    `  → Only symbol-based tools (this one) need a parser to return results.\n`;
+}
+
+/**
+ * Check if a repo has stub-language files as a dominant portion. Returns a
+ * hint string to prepend to empty results, or null if no hint needed.
  */
 async function checkTextStubHint(repo: string | undefined, toolName: string, resultEmpty: boolean): Promise<string | null> {
   if (!resultEmpty || !repo || !SYMBOL_TOOLS.has(toolName)) return null;
@@ -95,20 +128,7 @@ async function checkTextStubHint(repo: string | undefined, toolName: string, res
   const index = await getCodeIndex(repo);
   if (!index) return null;
 
-  const stubCount = index.files.filter(f => f.language === "text_stub" || f.language === "kotlin").length;
-  if (stubCount === 0) return null;
-
-  const stubPct = Math.round((stubCount / index.files.length) * 100);
-  if (stubPct < 30) return null; // only warn if text_stub is significant portion
-
-  const stubExts = [...new Set(index.files
-    .filter(f => f.language === "text_stub" || f.language === "kotlin")
-    .map(f => "." + f.path.split(".").pop()))].slice(0, 3).join(", ");
-
-  return `⚡H11 No parser for ${stubExts} files (${stubPct}% of repo). Symbol tools return empty.\n` +
-    `  → search_text(query) works on ALL files (uses ripgrep, not parser)\n` +
-    `  → get_file_tree shows file listing\n` +
-    `  → Only symbol-based tools (this one) need a parser to return results.\n`;
+  return buildH11Hint(index.files);
 }
 
 // ---------------------------------------------------------------------------
