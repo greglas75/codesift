@@ -425,6 +425,32 @@ describe("HonoExtractor — T4 conditional middleware (conditional-mw-app)", () 
   });
 });
 
+describe("HonoExtractor — T6 local sub-app fallback", () => {
+  let extractor: HonoExtractor;
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("populates child_file with the parent file for a LOCAL sub-app", async () => {
+    const entry = path.join(FIXTURES, "local-subapp", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.mounts).toHaveLength(1);
+    const mount = model.mounts[0];
+    expect(mount?.child_var).toBe("middleware");
+    // BEFORE T6 this would be "" (unresolved import). Now it should be the
+    // same file the parent app is declared in.
+    expect(mount?.child_file).toBe(entry);
+  });
+
+  it("does NOT increment skip_reasons.unresolved_import for a LOCAL sub-app", async () => {
+    const entry = path.join(FIXTURES, "local-subapp", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    // The "middleware" local sub-app should resolve via fallback, so
+    // unresolved_import should not be bumped for it.
+    expect(model.skip_reasons.unresolved_import ?? 0).toBe(0);
+  });
+});
+
 describe("HonoExtractor — T5 advanced runtime detection", () => {
   let extractor: HonoExtractor;
   beforeAll(() => {

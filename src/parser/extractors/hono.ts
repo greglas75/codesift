@@ -1085,7 +1085,17 @@ export class HonoExtractor {
 
     // Process mounts — async because recursive parse needs file I/O
     for (const { mountPath, childVar } of mounts) {
-      const childFile = importMap.get(childVar);
+      // T6: Fallback for LOCAL sub-apps (declared in the same file, not
+      // imported). If the import map doesn't know this var but appVars does,
+      // the child lives in the parent file — use that path instead of "".
+      // Routes on the local sub-app were already captured by walkHttpRoutes
+      // on the same root, so we record the mount without re-parsing.
+      let childFile = importMap.get(childVar);
+      let resolvedViaLocal = false;
+      if (!childFile && appVars[childVar]) {
+        childFile = appVars[childVar].file;
+        resolvedViaLocal = true;
+      }
       const fullMountPath = joinPaths(parentPrefix, mountPath);
 
       const mount: HonoMount = {
@@ -1098,6 +1108,10 @@ export class HonoExtractor {
       model.mounts.push(mount);
       localMounts.push(mount);
 
+      if (resolvedViaLocal) {
+        // Local sub-app — routes already live in the parent file, no recursion.
+        continue;
+      }
       if (childFile && existsSync(childFile)) {
         await this.parseFile(childFile, fullMountPath, inFlight, parsedCache, model);
       } else {
