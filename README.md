@@ -604,6 +604,64 @@ File pattern parameters (`file_pattern`) support full glob syntax via [picomatch
 - `[!.]*.ts` — character classes
 - `service` — plain substring match (no glob chars)
 
+## React workflow with CodeSift
+
+CodeSift auto-loads 6 React tools when a React project is detected (package.json with `react` + .tsx/.jsx files). Zero config.
+
+### Day 1 — new React codebase (1 command, ~5s)
+
+```
+react_quickstart
+```
+
+One call returns: component/hook counts, stack (state mgmt, routing, UI lib, form lib, build tool), critical pattern violations, top hooks used, and suggested next queries. Replaces 5+ manual exploration calls.
+
+### Daily development
+
+```
+analyze_renders("MyComponent")          # re-render risk for a specific component
+trace_component_tree("App")             # JSX composition hierarchy
+analyze_hooks(component_name="Foo")     # hook inventory + Rule of Hooks check
+trace_call_chain("useAuth", filter_react_hooks=true)  # hook dependency graph, stdlib filtered
+find_references("UserContext")          # where this context is consumed
+analyze_context_graph                   # all createContext → Provider → useContext flows
+```
+
+### PR review
+
+```
+review_diff                             # 10-check composite (React patterns auto-skipped on non-.tsx diffs)
+changed_symbols(since="HEAD~3")         # what changed structurally
+search_patterns("hook-in-condition")    # Rule of Hooks violations in changed files
+impact_analysis(since="HEAD~3")         # blast radius of your changes
+```
+
+### CI gates (via `audit_scan` REACT gate + `audit_compiler_readiness`)
+
+```
+audit_scan                              # includes REACT gate: hook-in-condition, useEffect-async,
+                                        # dangerously-set-html, index-as-key, nested-component-def
+audit_compiler_readiness                # React Compiler (v1.0) adoption score — flags bailout
+                                        # patterns before migration, counts redundant memo to remove
+```
+
+Set CI to fail on: any `dangerously-set-html`, any Rule of Hooks violation, any `useEffect-missing-cleanup` in new code.
+
+### Common queries — "how do I..."
+
+| Question | Command |
+|----------|---------|
+| Find all components | `search_symbols(kind="component")` |
+| Find all custom hooks | `search_symbols(kind="hook")` |
+| Why is my app re-rendering? | `analyze_renders` — ranks components by risk |
+| Is my code React Compiler ready? | `audit_compiler_readiness` — scans 7 bailout patterns |
+| Who uses AuthContext? | `analyze_context_graph` — lists all consumers |
+| Rule of Hooks violations? | `search_patterns("hook-in-condition")` |
+| Memory leaks in useEffect? | `search_patterns("useEffect-missing-cleanup")` |
+| Missing TanStack invalidation? | `search_patterns("tanstack-missing-invalidation")` |
+| Should this class be a function component? | `search_patterns("prefer-function-component")` |
+| XSS risks from dangerouslySetInnerHTML? | `search_patterns("dangerously-set-html")` |
+
 ## Supported languages
 
 TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, **Kotlin**, Java, Ruby, PHP, Markdown, CSS, Prisma, **Astro**.

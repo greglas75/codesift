@@ -11,7 +11,7 @@ import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
-import { traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph, auditCompilerReadiness } from "./tools/react-tools.js";
+import { traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph, auditCompilerReadiness, reactQuickstart } from "./tools/react-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
 import { detectCommunities } from "./tools/community-tools.js";
@@ -322,6 +322,7 @@ const REACT_TOOLS = [
   "analyze_renders",
   "analyze_context_graph",
   "audit_compiler_readiness",
+  "react_quickstart",
 ];
 
 /**
@@ -1162,6 +1163,20 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         file_pattern: args.file_pattern as string | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
+      return JSON.stringify(result, null, 2);
+    },
+  },
+
+  {
+    name: "react_quickstart",
+    category: "analysis",
+    searchHint: "react onboarding day-1 overview stack inventory components hooks critical issues",
+    description: "Day-1 onboarding composite for React projects. Single call returns: component/hook inventory, stack detection (state mgmt, routing, UI lib, form lib, build tool), critical pattern scan (XSS, Rule of Hooks, memory leaks), top hook usage, and suggested next queries. Replaces 5-6 manual tool calls. First tool to run on an unfamiliar React codebase.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const result = await reactQuickstart(args.repo as string);
       return JSON.stringify(result, null, 2);
     },
   },

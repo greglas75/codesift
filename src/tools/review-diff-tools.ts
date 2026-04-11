@@ -374,6 +374,7 @@ export async function checkDeadCode(
  */
 /** Pattern names that only apply to React/JSX code — filtered out when no .tsx/.jsx changes (Item 12). */
 const REACT_ONLY_PATTERNS = new Set([
+  // Wave 2 + 4b core
   "hook-in-condition",
   "useEffect-async",
   "useEffect-no-cleanup",
@@ -388,6 +389,29 @@ const REACT_ONLY_PATTERNS = new Set([
   "jsx-falsy-and",
   "nested-component-def",
   "usecallback-no-deps",
+  // Tier 4 — React 19 + RSC + oxlint
+  "hook-usestate-destructure",
+  "prefer-function-component",
+  "react19-use-without-suspense",
+  "react19-server-action-not-async",
+  "react19-form-action-non-function",
+  "react19-useoptimistic-no-transition",
+  "rsc-non-serializable-prop",
+  "rsc-date-prop",
+  // useEffect pain points + deps validation
+  "useEffect-missing-cleanup",
+  "useEffect-setstate-loop",
+  "useEffect-missing-deps-identifier",
+  // React Compiler bailout patterns
+  "compiler-side-effect-in-render",
+  "compiler-ref-read-in-render",
+  "compiler-prop-mutation",
+  "compiler-state-mutation",
+  "compiler-try-catch-bailout",
+  "compiler-redundant-memo",
+  "compiler-redundant-usecallback",
+  // TanStack Query
+  "tanstack-missing-invalidation",
 ]);
 
 export async function checkBugPatterns(

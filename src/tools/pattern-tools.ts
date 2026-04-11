@@ -179,6 +179,15 @@ export const BUILTIN_PATTERNS: Record<string, {
     description: "setState inside useEffect with same state variable in dependency array — causes infinite render loop. Either remove from deps or use functional updater: setState(prev => ...).",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
+  "useEffect-missing-deps-identifier": {
+    // Heuristic: useEffect with empty dep array [] but body references an
+    // identifier that looks like a prop/state (lowerCamelCase, 2+ chars).
+    // Subset of eslint-react-hooks/exhaustive-deps — catches the common
+    // "empty deps but reads mutable value" bug without full scope analysis.
+    regex: /useEffect\s*\(\s*\([^)]*\)\s*=>\s*\{[\s\S]{0,400}?\b(?:props\.\w+|[a-z][a-zA-Z]*(?:\.\w+)?)[\s\S]{0,400}?\}\s*,\s*\[\s*\]\s*\)/,
+    description: "useEffect with empty deps array [] reads props/state identifiers in body — likely missing dependencies. If intentional, add // eslint-disable-next-line react-hooks/exhaustive-deps with reason.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
   // --- Next.js 16 cache patterns ---
   "nextjs-use-cache-without-tag": {
     regex: /['"]use cache['"](?:(?!cacheTag\s*\()[\s\S]){0,1000}$/,

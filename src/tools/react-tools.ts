@@ -921,3 +921,152 @@ export async function auditCompilerReadiness(
     top_bailout_components,
   };
 }
+
+// ─────────────────────────────────────────────────────────────
+// react_quickstart — Day-1 onboarding composite
+// ─────────────────────────────────────────────────────────────
+
+export interface ReactQuickstartResult {
+  /** Repository overview */
+  overview: {
+    total_components: number;
+    total_custom_hooks: number;
+    likely_root_component: string | null;
+    stack: {
+      state_management: string | null;
+      routing: string | null;
+      ui_library: string | null;
+      form_library: string | null;
+      build_tool: string | null;
+    };
+  };
+  /** Critical pattern violations (XSS, Rule of Hooks, memory leaks) */
+  critical_issues: Array<{
+    pattern: string;
+    count: number;
+    severity: "critical" | "warning";
+  }>;
+  /** Top 5 most-used hooks across components */
+  top_hooks: Array<{ name: string; count: number }>;
+  /** Suggested next queries for the agent to run */
+  suggested_queries: string[];
+}
+
+/**
+ * Day-1 onboarding composite for React projects. Single call that runs:
+ * - Component/hook inventory
+ * - Stack detection (state mgmt, routing, UI lib, form lib, build tool)
+ * - Critical pattern scan (XSS, Rule of Hooks, memory leaks)
+ * - Top hook usage summary
+ * - Suggested follow-up queries
+ *
+ * Meant to be the first tool a React developer runs on an unfamiliar codebase.
+ * Replaces 5-6 manual tool calls with one structured report.
+ */
+export async function reactQuickstart(
+  repo: string,
+): Promise<ReactQuickstartResult> {
+  const { searchPatterns } = await import("./pattern-tools.js");
+  const { analyzeProject } = await import("./project-tools.js");
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository not found: ${repo}`);
+
+  // Inventory
+  const components = index.symbols.filter((s) => s.kind === "component" && !isTestFile(s.file));
+  const hooks = index.symbols.filter((s) => s.kind === "hook" && !isTestFile(s.file));
+
+  // Find likely root component: prefer App > Root > Main > Layout > Page
+  const rootNames = ["App", "Root", "Main", "Layout", "Page"];
+  const likelyRoot = components.find((c) => rootNames.includes(c.name))?.name
+    ?? components[0]?.name
+    ?? null;
+
+  // Stack detection via analyze_project
+  let stack: ReactQuickstartResult["overview"]["stack"] = {
+    state_management: null,
+    routing: null,
+    ui_library: null,
+    form_library: null,
+    build_tool: null,
+  };
+  try {
+    const proj = await analyzeProject(repo, { force: false });
+    const rc = (proj as any)?.conventions?.react_conventions;
+    const si = (proj as any)?.stack;
+    if (rc) {
+      stack = {
+        state_management: rc.state_management ?? null,
+        routing: rc.routing ?? null,
+        ui_library: rc.ui_library ?? null,
+        form_library: rc.form_library ?? null,
+        build_tool: si?.build_tool ?? null,
+      };
+    } else if (si) {
+      stack.build_tool = si.build_tool ?? null;
+    }
+  } catch {
+    // analyze_project may fail on non-React repos — fall through
+  }
+
+  // Critical pattern scans — run in parallel
+  const criticalPatterns = [
+    { name: "dangerously-set-html", severity: "critical" as const },
+    { name: "hook-in-condition", severity: "critical" as const },
+    { name: "conditional-render-hook", severity: "critical" as const },
+    { name: "useEffect-missing-cleanup", severity: "warning" as const },
+    { name: "useEffect-setstate-loop", severity: "critical" as const },
+    { name: "rsc-non-serializable-prop", severity: "warning" as const },
+  ];
+  const scanResults = await Promise.all(
+    criticalPatterns.map(async ({ name, severity }) => {
+      try {
+        const result = await searchPatterns(repo, name, { max_results: 20 });
+        return { pattern: name, count: result.matches.length, severity };
+      } catch {
+        return { pattern: name, count: 0, severity };
+      }
+    }),
+  );
+  const critical_issues = scanResults.filter((r) => r.count > 0);
+
+  // Top hooks used across components
+  const hookCounts = new Map<string, number>();
+  for (const c of components) {
+    if (!c.source) continue;
+    const matches = c.source.matchAll(/\b(use[A-Z]\w*)\s*\(/g);
+    for (const m of matches) {
+      const name = m[1]!;
+      hookCounts.set(name, (hookCounts.get(name) ?? 0) + 1);
+    }
+  }
+  const top_hooks = [...hookCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count }));
+
+  // Suggested next queries
+  const suggested_queries: string[] = [];
+  if (likelyRoot) {
+    suggested_queries.push(`trace_component_tree("${likelyRoot}")  // explore render hierarchy`);
+  }
+  suggested_queries.push(`analyze_renders()  // find re-render risks`);
+  suggested_queries.push(`analyze_hooks()  // Rule of Hooks + hook inventory`);
+  if (components.length >= 10) {
+    suggested_queries.push(`audit_compiler_readiness()  // React Compiler adoption check`);
+  }
+  if (critical_issues.some((i) => i.severity === "critical")) {
+    suggested_queries.push(`search_patterns("dangerously-set-html")  // investigate XSS risks`);
+  }
+
+  return {
+    overview: {
+      total_components: components.length,
+      total_custom_hooks: hooks.length,
+      likely_root_component: likelyRoot,
+      stack,
+    },
+    critical_issues,
+    top_hooks,
+    suggested_queries,
+  };
+}

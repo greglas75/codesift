@@ -1330,3 +1330,28 @@ describe("pattern-tools — TanStack Query", () => {
     });
   });
 });
+
+describe("pattern-tools — useEffect-missing-deps heuristic", () => {
+  const regex = BUILTIN_PATTERNS["useEffect-missing-deps-identifier"]!.regex;
+
+  it("matches useEffect with empty deps but reads props.userId", () => {
+    const source = `useEffect(() => {
+  fetchUser(props.userId);
+}, []);`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("matches useEffect reading state identifier with empty deps", () => {
+    const source = `useEffect(() => {
+  console.log(count);
+}, []);`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("does NOT match useEffect with non-empty deps", () => {
+    const source = `useEffect(() => {
+  fetchUser(userId);
+}, [userId]);`;
+    expect(regex.test(source)).toBe(false);
+  });
+});
