@@ -236,6 +236,67 @@ describe("traceSuspendChain", () => {
     expect(result.dispatcher_transitions[0]!.function).toBe("fetchUser");
   });
 
+  it("detects injected DispatcherProvider field (dispatchers.io lowercase)", async () => {
+    // Real-world Android pattern — CoroutineDispatchers provider is injected
+    // and the suspend function uses `dispatchers.io` (lowercase). This is the
+    // Google-recommended testable pattern and appears in tgmdev-tgm-panel-mobilapp.
+    const index = makeIndex([
+      makeSymbol({
+        name: "saveToken",
+        kind: "method",
+        signature: "suspend (token: String): Unit",
+        source: `suspend fun saveToken(token: String) {
+    withContext(dispatchers.io) {
+        prefs.edit { putString("token", token) }
+    }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "saveToken");
+    expect(result.dispatcher_transitions).toHaveLength(1);
+    expect(result.dispatcher_transitions[0]!.dispatcher).toBe("IO");
+  });
+
+  it("detects ioDispatcher parameter convention", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "loadList",
+        kind: "method",
+        signature: "suspend (): List<Item>",
+        source: `suspend fun loadList(): List<Item> = withContext(ioDispatcher) {
+    api.fetchAll()
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "loadList");
+    expect(result.dispatcher_transitions).toHaveLength(1);
+    expect(result.dispatcher_transitions[0]!.dispatcher).toBe("IO");
+  });
+
+  it("detects mainDispatcher / defaultDispatcher conventions", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "postResult",
+        kind: "method",
+        signature: "suspend (r: Result): Unit",
+        source: `suspend fun postResult(r: Result) {
+    withContext(mainDispatcher) { view.render(r) }
+    withContext(defaultDispatcher) { compute(r) }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "postResult");
+    expect(result.dispatcher_transitions).toHaveLength(2);
+    const kinds = result.dispatcher_transitions.map((t) => t.dispatcher).sort();
+    expect(kinds).toEqual(["Default", "Main"]);
+  });
+
   it("warns about runBlocking inside a suspend function", async () => {
     const index = makeIndex([
       makeSymbol({

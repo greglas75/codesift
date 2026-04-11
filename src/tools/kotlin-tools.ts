@@ -260,6 +260,52 @@ export interface SuspendChainResult {
 }
 
 /**
+ * Normalize a dispatcher expression captured from `withContext(<arg>)` into
+ * one of the canonical bucket names: "IO", "Main", "Default", "Unconfined",
+ * or a raw string for unrecognized custom dispatchers.
+ *
+ * Handles three real-world forms, matching the most common Android Kotlin
+ * patterns:
+ *
+ *   Dispatchers.IO        →  "IO"       (static, kotlinx.coroutines canonical)
+ *   dispatchers.io        →  "IO"       (DI-injected provider, Google-recommended)
+ *   ioDispatcher          →  "IO"       (injected by parameter convention)
+ *   mainDispatcher        →  "Main"
+ *   defaultDispatcher     →  "Default"
+ *
+ * Returns null for expressions that don't look like a dispatcher at all
+ * (e.g. `coroutineContext` or a plain variable that isn't dispatcher-named),
+ * so they don't clutter the transitions report with false positives.
+ */
+function classifyDispatcherExpression(expr: string): string | null {
+  // 1. Static Dispatchers.X (any case on the suffix — canonical is PascalCase)
+  const staticMatch = /^Dispatchers\.(\w+)$/.exec(expr);
+  if (staticMatch) return canonicalizeDispatcherName(staticMatch[1]!);
+
+  // 2. Injected provider field — `<identifier>.<bucket>` where identifier is
+  //    lowercase (e.g. dispatchers.io, coroutineDispatchers.main). We only
+  //    accept recognized bucket suffixes so plain `foo.bar` isn't misreported.
+  const fieldMatch = /^[a-z]\w*\.(io|main|default|unconfined)$/i.exec(expr);
+  if (fieldMatch) return canonicalizeDispatcherName(fieldMatch[1]!);
+
+  // 3. Naming convention — `<bucket>Dispatcher` as a bare parameter.
+  const conventionMatch = /^(io|main|default|unconfined)Dispatcher$/i.exec(expr);
+  if (conventionMatch) return canonicalizeDispatcherName(conventionMatch[1]!);
+
+  return null;
+}
+
+function canonicalizeDispatcherName(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower === "io") return "IO";
+  if (lower === "main" || lower === "mainimmediate") return "Main";
+  if (lower === "default") return "Default";
+  if (lower === "unconfined") return "Unconfined";
+  // Preserve the original capitalization for anything we don't recognize.
+  return raw;
+}
+
+/**
  * Determines whether a symbol is a suspend function. Checks the signature
  * prefix first (populated by the Kotlin extractor for extension funcs) then
  * falls back to scanning the source head for the `suspend` modifier keyword.
@@ -286,14 +332,27 @@ function analyzeSuspendBody(
   const source = sym.source ?? "";
   const fnName = sym.name;
 
-  // Dispatcher transitions: `withContext(Dispatchers.X)`
-  const dispatcherRe = /withContext\s*\(\s*Dispatchers\.(\w+)\s*\)/g;
+  // Dispatcher transitions. We match any `withContext(<arg>)` and then
+  // classify the argument into one of Kotlin's canonical dispatcher buckets.
+  // This covers three real-world patterns:
+  //
+  //   1. Static:       withContext(Dispatchers.IO)
+  //   2. DI provider:  withContext(dispatchers.io) — injected CoroutineDispatchers
+  //   3. Convention:   withContext(ioDispatcher) / withContext(mainDispatcher)
+  //
+  // Pattern 2/3 are the Google-recommended testable forms and appear in most
+  // production Android Kotlin code. Restricting to `Dispatchers.X` would miss
+  // the majority of real-world usage.
+  const dispatcherRe = /withContext\s*\(\s*([A-Za-z_][\w.]*)\s*[,)]/g;
   let m: RegExpExecArray | null;
   while ((m = dispatcherRe.exec(source)) !== null) {
+    const arg = m[1]!;
+    const kind = classifyDispatcherExpression(arg);
+    if (!kind) continue; // Not a recognizable dispatcher expression.
     const lineOffset = source.slice(0, m.index).split("\n").length - 1;
     transitions.push({
       function: fnName,
-      dispatcher: m[1]!,
+      dispatcher: kind,
       line: sym.start_line + lineOffset,
     });
   }
