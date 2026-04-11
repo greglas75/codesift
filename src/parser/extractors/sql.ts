@@ -32,7 +32,6 @@ interface DdlMatcher {
   endStrategy: "paren" | "semicolon" | "begin-end" | "single-line";
 }
 
-const NAME_RE = String.raw`(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))`;
 function extractName(m: RegExpExecArray, offset: number): string | null {
   return m[offset + 2] ?? m[offset + 3] ?? m[offset] ?? m[offset + 1] ?? null;
 }
@@ -258,33 +257,57 @@ function findEnd(lines: string[], startIdx: number, strategy: string): number {
   }
 }
 
+/**
+ * Scan a line character-by-character, skipping chars inside single-quoted
+ * strings and after -- comments. Calls `onChar(ch)` for each non-skipped
+ * character. Returns true if the callback returned true (early exit).
+ */
+function scanSqlLine(line: string, onChar: (ch: string) => boolean): boolean {
+  let inString = false;
+  for (let k = 0; k < line.length; k++) {
+    const ch = line[k]!;
+    if (inString) {
+      if (ch === "'" && line[k + 1] === "'") { k++; continue; } // escaped ''
+      if (ch === "'") inString = false;
+      continue;
+    }
+    if (ch === "'") { inString = true; continue; }
+    if (ch === "-" && line[k + 1] === "-") break; // rest is comment
+    if (onChar(ch)) return true;
+  }
+  return false;
+}
+
 function findClosingParen(lines: string[], startIdx: number): number {
   let depth = 0;
   for (let j = startIdx; j < lines.length; j++) {
-    for (const ch of lines[j]!) {
+    const found = scanSqlLine(lines[j]!, (ch) => {
       if (ch === "(") depth++;
-      if (ch === ")") {
-        depth--;
-        if (depth === 0) return j;
-      }
-    }
+      if (ch === ")") { depth--; if (depth === 0) return true; }
+      return false;
+    });
+    if (found) return j;
   }
   return lines.length - 1;
 }
 
 function findSemicolon(lines: string[], startIdx: number): number {
   for (let j = startIdx; j < lines.length; j++) {
-    if (lines[j]!.includes(";")) return j;
+    const found = scanSqlLine(lines[j]!, (ch) => ch === ";");
+    if (found) return j;
   }
   return lines.length - 1;
 }
 
 function findBeginEnd(lines: string[], startIdx: number): number {
-  // Look for BEGIN...END or fall back to semicolon after RETURN/AS
   let foundBegin = false;
   let depth = 0;
   for (let j = startIdx; j < lines.length; j++) {
-    const upper = lines[j]!.toUpperCase().trim();
+    // Strip strings/comments before keyword matching
+    let cleaned = "";
+    scanSqlLine(lines[j]!, (ch) => { cleaned += ch; return false; });
+    const upper = cleaned.toUpperCase().trim();
+
     if (/\bBEGIN\b/.test(upper)) {
       foundBegin = true;
       depth++;
@@ -293,10 +316,8 @@ function findBeginEnd(lines: string[], startIdx: number): number {
       depth--;
       if (depth === 0) return j;
     }
-    // Fallback: if no BEGIN found and we hit a standalone semicolon
     if (!foundBegin && j > startIdx && upper === ";") return j;
   }
-  // No BEGIN/END found — find semicolon
   return findSemicolon(lines, startIdx);
 }
 
@@ -320,12 +341,40 @@ function buildTableSignature(
 }
 
 /**
- * Extract SQL comments (-- single-line) immediately above a line as docstring.
+ * Extract SQL comments (-- single-line or /* block * /) immediately above a DDL line as docstring.
  */
 function extractSqlDocstring(lines: string[], blockLineIdx: number): string | undefined {
   const commentLines: string[] = [];
+  let inBlock = false;
+
   for (let j = blockLineIdx - 1; j >= 0; j--) {
     const trimmed = lines[j]!.trim();
+
+    // Detect end of block comment (scanning upward, so */ comes first)
+    if (!inBlock && trimmed.endsWith("*/")) {
+      inBlock = true;
+      // Handle single-line block comment: /* text */
+      if (trimmed.startsWith("/*")) {
+        commentLines.unshift(trimmed.slice(2, -2).trim());
+        inBlock = false;
+        continue;
+      }
+      const content = trimmed.replace(/\*\/\s*$/, "").replace(/^\s*\*\s?/, "").trim();
+      if (content) commentLines.unshift(content);
+      continue;
+    }
+    if (inBlock) {
+      if (trimmed.startsWith("/*")) {
+        const content = trimmed.replace(/^\/\*\s*/, "").trim();
+        if (content) commentLines.unshift(content);
+        inBlock = false;
+        continue;
+      }
+      // Middle of block comment — strip leading *
+      commentLines.unshift(trimmed.replace(/^\s*\*\s?/, ""));
+      continue;
+    }
+
     if (trimmed.startsWith("--")) {
       commentLines.unshift(trimmed.replace(/^--\s*/, ""));
     } else if (trimmed === "") {

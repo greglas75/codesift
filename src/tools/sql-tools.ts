@@ -3,7 +3,7 @@
  * Hidden/discoverable: not in CORE_TOOL_NAMES.
  */
 
-import type { CodeSymbol, CodeIndex } from "../types.js";
+import type { CodeSymbol } from "../types.js";
 import { getCodeIndex } from "./index-tools.js";
 
 // ── analyze_schema ────────────────────────────────────────
@@ -99,11 +99,11 @@ export async function analyzeSchema(
     });
   }
 
-  // Extract FK relationships from column signatures
+  // Extract FK relationships from column signatures + table-level constraints
   const relationships: Relationship[] = [];
-  const tableNames = new Set(tables.map((t) => t.name));
 
   for (const table of tables) {
+    // Column-level REFERENCES
     for (const col of table.columns) {
       FK_RE.lastIndex = 0;
       const m = FK_RE.exec(col.type);
@@ -122,6 +122,31 @@ export async function analyzeSchema(
           to_table: toTable,
           to_column: toCol,
           type: relType,
+        });
+      }
+    }
+
+    // Table-level FOREIGN KEY constraints: scan full table source
+    const tableSym = index.symbols.find((s) => s.kind === "table" && s.name === table.name);
+    if (tableSym?.source) {
+      const tableFkRe = /FOREIGN\s+KEY\s*\(\s*(?:"([^"]+)"|(\w+))\s*\)\s*REFERENCES\s+(?:(?:"[^"]+"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))\s*\(\s*(?:"([^"]+)"|(\w+))\s*\)/gi;
+      let fkm: RegExpExecArray | null;
+      while ((fkm = tableFkRe.exec(tableSym.source)) !== null) {
+        const fromCol = fkm[1] ?? fkm[2] ?? "";
+        const toTable = fkm[4] ?? fkm[5] ?? fkm[3] ?? "";
+        const toCol = fkm[6] ?? fkm[7] ?? "id";
+
+        // Avoid duplicates (column-level already caught this FK)
+        if (relationships.some((r) =>
+          r.from_table === table.name && r.from_column === fromCol && r.to_table === toTable
+        )) continue;
+
+        relationships.push({
+          from_table: table.name,
+          from_column: fromCol,
+          to_table: toTable,
+          to_column: toCol,
+          type: toTable === table.name ? "self_reference" : "fk",
         });
       }
     }
@@ -171,6 +196,11 @@ function detectCircularRefs(relationships: Relationship[], warnings: string[]): 
   }
 }
 
+/** Sanitize a name for Mermaid erDiagram — replace non-alphanumeric with _ */
+function mermaidSafe(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
 function generateMermaid(
   tables: TableInfo[],
   relationships: Relationship[],
@@ -178,17 +208,18 @@ function generateMermaid(
   const lines: string[] = ["erDiagram"];
 
   for (const table of tables) {
-    lines.push(`  ${table.name} {`);
+    const safeName = mermaidSafe(table.name);
+    lines.push(`  ${safeName} {`);
     for (const col of table.columns) {
-      const typeName = col.type.split(/\s/)[0] ?? "unknown";
-      lines.push(`    ${typeName} ${col.name}`);
+      const typeName = (col.type.split(/\s/)[0] ?? "unknown").replace(/[^a-zA-Z0-9_]/g, "_");
+      lines.push(`    ${typeName} ${mermaidSafe(col.name)}`);
     }
     lines.push("  }");
   }
 
   for (const rel of relationships) {
     const arrow = rel.type === "self_reference" ? "||--o|" : "||--o{";
-    lines.push(`  ${rel.from_table} ${arrow} ${rel.to_table} : "${rel.from_column}"`);
+    lines.push(`  ${mermaidSafe(rel.from_table)} ${arrow} ${mermaidSafe(rel.to_table)} : "${mermaidSafe(rel.from_column)}"`);
   }
 
   return lines.join("\n");
@@ -255,11 +286,19 @@ export async function traceQuery(
   const tableRegex = new RegExp(`\\b${escapeRegex(tableName)}\\b`, "gi");
   let truncated = false;
 
+  // Pre-build file→symbols map (O(n) instead of O(files*symbols))
+  const symbolsByFile = new Map<string, CodeSymbol[]>();
+  for (const sym of index.symbols) {
+    if (!sym.source) continue;
+    const arr = symbolsByFile.get(sym.file);
+    if (arr) arr.push(sym);
+    else symbolsByFile.set(sym.file, [sym]);
+  }
+
   for (const fileEntry of index.files) {
     if (options.file_pattern && !fileEntry.path.includes(options.file_pattern)) continue;
 
-    // Find symbols in this file that reference the table
-    const fileSymbols = index.symbols.filter((s) => s.file === fileEntry.path && s.source);
+    const fileSymbols = symbolsByFile.get(fileEntry.path) ?? [];
     for (const sym of fileSymbols) {
       if (!sym.source) continue;
       const sourceLines = sym.source.split("\n");

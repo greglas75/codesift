@@ -51,6 +51,20 @@ describe("SQL extractor edge cases", () => {
     expect(tables.map((t) => t.name)).toEqual(["departments", "employees"]);
   });
 
+  it("semicolon inside string literal does not terminate view early", () => {
+    const symbols = extractSqlSymbols(load("semicolon-in-string.sql"), "test.sql", "repo");
+    const view = symbols.find((s) => s.kind === "view");
+    expect(view).toBeDefined();
+    expect(view!.name).toBe("greeting");
+    // The view source should include the full SELECT with the semicolon in the string
+    expect(view!.source).toContain("hello;world");
+
+    // The table after the view should also be extracted
+    const table = symbols.find((s) => s.kind === "table");
+    expect(table).toBeDefined();
+    expect(table!.name).toBe("after_view");
+  });
+
   it("syntax errors → extracts valid DDL around errors, does not throw", () => {
     const symbols = extractSqlSymbols(load("syntax-error.sql"), "error.sql", "repo");
     // Should find the two valid tables, skip the broken one
