@@ -2212,17 +2212,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "fan_in_fan_out",
     category: "architecture",
-    searchHint: "fan-in fan-out coupling dependencies imports hub afferent efferent instability",
-    description: "Analyze import graph to find most-imported files (fan-in), most-dependent files (fan-out), and hub files (high both — instability risk). Returns coupling score 0-100.",
+    searchHint: "fan-in fan-out coupling dependencies imports hub afferent efferent instability threshold",
+    description: "Analyze import graph to find most-imported files (fan-in), most-dependent files (fan-out), and hub files (high both — instability risk). Returns coupling score 0-100. Use min_fan_in/min_fan_out for threshold-based audits ('all files with fan_in > 50') instead of top_n cap.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path: z.string().optional().describe("Focus on files in this directory"),
       top_n: zNum().describe("How many entries per list (default: 20)"),
+      min_fan_in: zNum().describe("Only return files with fan_in >= this value (default: 0). Use for audits."),
+      min_fan_out: zNum().describe("Only return files with fan_out >= this value (default: 0). Use for audits."),
     },
     handler: async (args) => {
       const opts: Parameters<typeof fanInFanOut>[1] = {};
       if (args.path != null) opts!.path = args.path as string;
       if (args.top_n != null) opts!.top_n = args.top_n as number;
+      if (args.min_fan_in != null) opts!.min_fan_in = args.min_fan_in as number;
+      if (args.min_fan_out != null) opts!.min_fan_out = args.min_fan_out as number;
       const result = await fanInFanOut(args.repo as string, opts);
       return formatFanInFanOut(result);
     },

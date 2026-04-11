@@ -51,6 +51,8 @@ export async function fanInFanOut(
     path?: string;
     top_n?: number;
     level?: "file";
+    min_fan_in?: number;
+    min_fan_out?: number;
   },
 ): Promise<FanInFanOutResult> {
   const index = await getCodeIndex(repo);
@@ -60,6 +62,8 @@ export async function fanInFanOut(
 
   const topN = options?.top_n ?? 20;
   const focusPath = options?.path;
+  const minFanIn = options?.min_fan_in ?? 0;
+  const minFanOut = options?.min_fan_out ?? 0;
 
   // Collect ALL edges — we cannot pre-filter via collectImportEdges because
   // that only reads imports FROM files in the filter, which loses inbound
@@ -90,13 +94,15 @@ export async function fanInFanOut(
   for (const f of fanInMap.keys()) allFiles.add(f);
   for (const f of fanOutMap.keys()) allFiles.add(f);
 
-  // Build sorted lists
+  // Build sorted lists. min_fan_in/min_fan_out filter BEFORE top_n cap so users
+  // can request "all files with fan_in > 50" by setting min_fan_in=50, top_n=Infinity.
   const fanInEntries: FanMetric[] = [...fanInMap.entries()]
     .map(([file, importers]) => ({
       file,
       count: importers.size,
       connections: [...importers].sort(),
     }))
+    .filter((m) => m.count >= minFanIn)
     .sort((a, b) => b.count - a.count)
     .slice(0, topN);
 
@@ -106,6 +112,7 @@ export async function fanInFanOut(
       count: imports.size,
       connections: [...imports].sort(),
     }))
+    .filter((m) => m.count >= minFanOut)
     .sort((a, b) => b.count - a.count)
     .slice(0, topN);
 
@@ -166,18 +173,43 @@ export function computeCoChangePairs(
   const minSupport = options?.min_support ?? DEFAULT_MIN_SUPPORT;
   const maxFilesPerCommit = options?.max_files_per_commit ?? DEFAULT_MAX_FILES_PER_COMMIT;
 
-  const raw = execFileSync(
-    "git",
-    [
-      "log",
-      "--name-only",
-      "--no-merges",
-      "--diff-filter=AMRC",
-      `--since=${sinceDays} days ago`,
-      "--pretty=format:COMMIT %H",
-    ],
-    { cwd: repoRoot, encoding: "utf-8", timeout: 15000 },
-  );
+  // maxBuffer: Node default is 1MB which overflows on large repos (>6 mo, 2000+ commits).
+  // Increase to 256MB to cover any reasonable single-repo git log output.
+  // timeout: 30s (was 15s) — large repos need more time to walk history.
+  let raw: string;
+  try {
+    raw = execFileSync(
+      "git",
+      [
+        "log",
+        "--name-only",
+        "--no-merges",
+        "--diff-filter=AMRC",
+        `--since=${sinceDays} days ago`,
+        "--pretty=format:COMMIT %H",
+      ],
+      {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        timeout: 30000,
+        maxBuffer: 256 * 1024 * 1024, // 256MB
+      },
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("ENOBUFS") || msg.includes("maxBuffer")) {
+      throw new Error(
+        `git log output too large for co_change_analysis (>256MB). ` +
+        `Try reducing since_days (current: ${sinceDays}) to limit history scope.`,
+      );
+    }
+    if (msg.includes("ETIMEDOUT") || msg.includes("timeout")) {
+      throw new Error(
+        `git log timed out after 30s. Try reducing since_days (current: ${sinceDays}).`,
+      );
+    }
+    throw new Error(`co_change_analysis: git log failed — ${msg}`);
+  }
 
   // Parse commits robustly using a COMMIT sentinel line. Commits with no
   // qualifying files (e.g. D-only commits dropped by --diff-filter=AMRC)
