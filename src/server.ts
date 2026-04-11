@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
-import { registerTools } from "./register-tools.js";
+import { registerTools, enableFrameworkToolBundle } from "./register-tools.js";
 import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
@@ -31,10 +31,37 @@ const server = new McpServer(
 
 registerTools(server, { deferNonCore: true });
 
+/**
+ * Quick framework detection from package.json — runs before first indexing.
+ * Lets framework-specific tools (nest_*, etc.) appear in ListTools immediately
+ * for projects detectable from dependencies, without waiting for a full index.
+ */
+function autoEnableFrameworkToolsFromPackageJson(cwd: string): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs");
+    const pkgPath = require("node:path").join(cwd, "package.json");
+    if (!fs.existsSync(pkgPath)) return;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    if ("@nestjs/core" in deps || "@nestjs/common" in deps) {
+      const enabled = enableFrameworkToolBundle("nestjs");
+      if (enabled.length > 0) {
+        console.error(`[codesift] detected NestJS in ${cwd} — auto-enabled ${enabled.length} tools: ${enabled.join(", ")}`);
+      }
+    }
+  } catch {
+    // Non-fatal — this is a startup optimization
+  }
+}
+
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("CodeSift MCP server started");
+
+  // Synchronous framework detection from package.json (runs before transport messages flow)
+  autoEnableFrameworkToolsFromPackageJson(process.cwd());
 
   // Auto-index current repo on first use (background, non-blocking)
   autoIndexCurrentRepo(process.cwd()).catch((err: unknown) => {

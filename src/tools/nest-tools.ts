@@ -7,8 +7,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { extractNestConventions } from "./project-tools.js";
-import { findNestJSHandlers } from "./route-tools.js";
-import type { CodeIndex, CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Shared error type for per-file skip warnings (CQ8)
@@ -63,8 +61,9 @@ export async function nestLifecycleMap(
     const source = sym.source ?? "";
 
     // Try to find the enclosing class via parent_id (if available)
-    if ((sym as Record<string, unknown>).parent_id) {
-      const parentSym = index.symbols.find((s) => s.id === (sym as Record<string, unknown>).parent_id);
+    const symAny = sym as unknown as { parent_id?: string };
+    if (symAny.parent_id) {
+      const parentSym = index.symbols.find((s) => s.id === symAny.parent_id);
       if (parentSym) className = parentSym.name;
     }
 
@@ -356,7 +355,12 @@ export async function nestDIGraph(
     const injectables = parseInjectableClasses(source);
     for (const inj of injectables) {
       if (nodes.length >= maxNodes) { truncated = true; break; }
-      nodes.push({ name: inj.name, file: file.path, kind: "provider", scope: inj.scope });
+      nodes.push({
+        name: inj.name,
+        file: file.path,
+        kind: "provider",
+        ...(inj.scope ? { scope: inj.scope } : {}),
+      });
 
       // Extract constructor injection
       // Find the class body for this specific injectable

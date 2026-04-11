@@ -48,7 +48,6 @@ import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
 import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "./tools/nest-tools.js";
-import type { NestLifecycleMapResult, NestModuleGraphResult, NestDIGraphResult, NestGuardChainResult, NestRouteInventoryResult, NestAuditResult } from "./tools/nest-tools.js";
 import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
@@ -145,6 +144,42 @@ const toolHandles = new Map<string, any>();
 /** Get a registered tool handle by name (for testing and describe_tools reveal) */
 export function getToolHandle(name: string) {
   return toolHandles.get(name);
+}
+
+/** Framework-specific tool bundles — auto-enabled when the framework is detected in an indexed repo */
+const FRAMEWORK_TOOL_BUNDLES: Record<string, string[]> = {
+  nestjs: [
+    "nest_lifecycle_map",
+    "nest_module_graph",
+    "nest_di_graph",
+    "nest_guard_chain",
+    "nest_route_inventory",
+    // nest_audit is already core — always visible
+  ],
+};
+
+/** Track which framework bundles have been auto-enabled this session (avoid repeat work) */
+const enabledFrameworkBundles = new Set<string>();
+
+/**
+ * Enable framework-specific tool bundle — called after indexing when framework is detected.
+ * Idempotent: safe to call multiple times. Only enables tools that exist and are currently disabled.
+ */
+export function enableFrameworkToolBundle(framework: string): string[] {
+  if (enabledFrameworkBundles.has(framework)) return [];
+  const bundle = FRAMEWORK_TOOL_BUNDLES[framework];
+  if (!bundle) return [];
+
+  const enabled: string[] = [];
+  for (const name of bundle) {
+    const handle = toolHandles.get(name);
+    if (handle && typeof handle.enable === "function") {
+      handle.enable();
+      enabled.push(name);
+    }
+  }
+  if (enabled.length > 0) enabledFrameworkBundles.add(framework);
+  return enabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -1955,10 +1990,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Map NestJS lifecycle hooks across the codebase — onModuleInit, onModuleDestroy, etc.",
     schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
     handler: async (args: { repo?: string }) => nestLifecycleMap(args.repo ?? ""),
-    format: (r: NestLifecycleMapResult) => {
-      if (r.hooks.length === 0) return "No lifecycle hooks found.";
-      return r.hooks.map((h) => `${h.class_name}.${h.hook} (${h.file})${h.is_async ? " [async]" : ""}`).join("\n");
-    },
   },
   {
     name: "nest_module_graph",
@@ -1971,12 +2002,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: json (default) or mermaid"),
     },
     handler: async (args: { repo?: string; max_modules?: number; output_format?: "json" | "mermaid" }) => nestModuleGraph(args.repo ?? "", args),
-    format: (r: NestModuleGraphResult) => {
-      const lines = [`Modules: ${r.modules.length}`, `Edges: ${r.edges.length}`, `Circular deps: ${r.circular_deps.length}`];
-      if (r.truncated) lines.push("[truncated]");
-      for (const m of r.modules) lines.push(`  ${m.name} (${m.file})${m.is_global ? " [global]" : ""} → imports: [${m.imports.join(", ")}]`);
-      return lines.join("\n");
-    },
   },
   {
     name: "nest_di_graph",
@@ -1989,13 +2014,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       focus: z.string().optional().describe("Path substring to filter files"),
     },
     handler: async (args: { repo?: string; max_nodes?: number; focus?: string }) => nestDIGraph(args.repo ?? "", args),
-    format: (r: NestDIGraphResult) => {
-      const lines = [`Providers: ${r.nodes.length}`, `Edges: ${r.edges.length}`, `Cycles: ${r.cycles.length}`];
-      if (r.truncated) lines.push("[truncated]");
-      for (const n of r.nodes) lines.push(`  ${n.name} (${n.file})${n.scope ? ` [${n.scope}]` : ""}`);
-      for (const e of r.edges) lines.push(`  ${e.from} → ${e.to} (${e.via})`);
-      return lines.join("\n");
-    },
   },
   {
     name: "nest_guard_chain",
@@ -2008,16 +2026,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_routes: z.number().optional().describe("Max routes (default: 300)"),
     },
     handler: async (args: { repo?: string; path?: string; max_routes?: number }) => nestGuardChain(args.repo ?? "", args),
-    format: (r: NestGuardChainResult) => {
-      if (r.routes.length === 0) return "No routes found.";
-      const lines: string[] = [];
-      for (const route of r.routes) {
-        lines.push(`${route.method} ${route.route} (${route.controller})`);
-        if (route.chain.length === 0) { lines.push("  (no guards/interceptors)"); continue; }
-        for (const c of route.chain) lines.push(`  [${c.layer}] ${c.type}: ${c.name}`);
-      }
-      return lines.join("\n");
-    },
   },
   {
     name: "nest_route_inventory",
@@ -2029,14 +2037,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_routes: z.number().optional().describe("Max routes (default: 500)"),
     },
     handler: async (args: { repo?: string; max_routes?: number }) => nestRouteInventory(args.repo ?? "", args),
-    format: (r: NestRouteInventoryResult) => {
-      const lines = [`Routes: ${r.stats.total_routes} (${r.stats.protected} protected, ${r.stats.unprotected} unprotected)`];
-      for (const route of r.routes) {
-        const guards = route.guards.length > 0 ? ` [${route.guards.join(", ")}]` : "";
-        lines.push(`  ${route.method} ${route.path} → ${route.controller}.${route.handler}${guards}`);
-      }
-      return lines.join("\n");
-    },
   },
   {
     name: "nest_audit",
@@ -2050,22 +2050,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args: { repo?: string; checks?: string }) => {
       const checks = args.checks?.split(",").map((s) => s.trim()).filter(Boolean);
       return nestAudit(args.repo ?? "", checks ? { checks } : undefined);
-    },
-    format: (r: NestAuditResult) => {
-      if (!r.framework_detected) return "Not a NestJS repository.";
-      const lines = [
-        `NestJS Audit Summary`,
-        `  Routes: ${r.summary.total_routes}`,
-        `  Cycles: ${r.summary.cycles}`,
-        `  Anti-pattern hits: ${r.summary.anti_pattern_hits}`,
-        `  Failed checks: ${r.summary.failed_checks}`,
-      ];
-      if (r.summary.truncated_checks.length > 0) lines.push(`  Truncated: ${r.summary.truncated_checks.join(", ")}`);
-      if (r.errors && r.errors.length > 0) {
-        lines.push("  Errors:");
-        for (const e of r.errors) lines.push(`    ${e.check}: ${e.reason}`);
-      }
-      return lines.join("\n");
     },
   },
 ];
