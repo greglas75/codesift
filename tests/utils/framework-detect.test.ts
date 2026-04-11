@@ -79,6 +79,20 @@ describe("isFrameworkEntryPoint — NestJS", () => {
   it("returns false for regular service file", () => {
     expect(isFrameworkEntryPoint(sym("findAll", "src/users/users.service.ts"), nestFrameworks())).toBe(false);
   });
+
+  // Task 5: G7/G8 — scheduled jobs and event handlers as entry points
+  it.each([
+    "handleCron",
+    "handleInterval",
+    "handleTimeout",
+    "handleEvent",
+  ])("returns true for scheduled/event hook %s", (name) => {
+    expect(isFrameworkEntryPoint(sym(name, "src/jobs/billing.service.ts"), nestFrameworks())).toBe(true);
+  });
+
+  it("returns false for partial match handleCronJob (not in regex)", () => {
+    expect(isFrameworkEntryPoint(sym("handleCronJob", "src/jobs/billing.service.ts"), nestFrameworks())).toBe(false);
+  });
 });
 
 describe("detectFrameworks", () => {

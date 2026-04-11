@@ -14,7 +14,7 @@ const NEXT_APP_METADATA_FUNCTIONS = /^(generateMetadata|generateStaticParams)$/;
 const NEXT_CONFIG_EXPORTS = /^(metadata|viewport|dynamic|revalidate|runtime|preferredRegion|maxDuration|fetchCache|dynamicParams)$/;
 
 /** NestJS lifecycle hooks + decorator-based entry points */
-const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown)$/;
+const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown|handleCron|handleInterval|handleTimeout|handleEvent)$/;
 const NESTJS_ENTRY_FILE = /\.(controller|resolver|gateway|guard|interceptor|pipe|filter)\.[jt]sx?$/;
 const NESTJS_MAIN_FILE = /(^|\/)main\.[jt]sx?$/;
 
