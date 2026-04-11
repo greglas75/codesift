@@ -43,8 +43,11 @@ import {
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
-import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations } from "./tools/kotlin-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations, traceFlowChain } from "./tools/kotlin-tools.js";
 import { traceHiltGraph } from "./tools/hilt-tools.js";
+import { traceComposeTree, analyzeComposeRecomposition } from "./tools/compose-tools.js";
+import { traceRoomSchema } from "./tools/room-tools.js";
+import { extractKotlinSerializationContract } from "./tools/serialization-tools.js";
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
@@ -229,6 +232,11 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "trace_hilt_graph",
     "trace_suspend_chain",
     "analyze_kmp_declarations",
+    "trace_compose_tree",
+    "analyze_compose_recomposition",
+    "trace_room_schema",
+    "extract_kotlin_serialization_contract",
+    "trace_flow_chain",
   ],
   "settings.gradle.kts": [
     "find_extension_functions",
@@ -236,6 +244,11 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "trace_hilt_graph",
     "trace_suspend_chain",
     "analyze_kmp_declarations",
+    "trace_compose_tree",
+    "analyze_compose_recomposition",
+    "trace_room_schema",
+    "extract_kotlin_serialization_contract",
+    "trace_flow_chain",
   ],
   // Fallback — Android projects with Groovy gradle but Kotlin source
   "build.gradle": [
@@ -244,6 +257,11 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "trace_hilt_graph",
     "trace_suspend_chain",
     "analyze_kmp_declarations",
+    "trace_compose_tree",
+    "analyze_compose_recomposition",
+    "trace_room_schema",
+    "extract_kotlin_serialization_contract",
+    "trace_flow_chain",
   ],
 };
 
@@ -1824,6 +1842,287 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
+  // --- Kotlin Wave 3 tools ---
+  {
+    name: "trace_compose_tree",
+    category: "analysis",
+    searchHint: "kotlin compose composable component tree hierarchy ui call graph jetpack preview",
+    description: "Build a Jetpack Compose component hierarchy rooted at a @Composable function. Traces PascalCase calls matching indexed composables, excludes @Preview. Reports tree depth, leaf components, and total component count.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      root_name: z.string().describe("Name of the root @Composable function (e.g. 'HomeScreen')"),
+      depth: z.number().optional().describe("Max tree depth (default: 10)"),
+    },
+    handler: async (args) => {
+      const opts: { depth?: number } = {};
+      if (typeof args.depth === "number") opts.depth = args.depth;
+      return await traceComposeTree(args.repo as string, args.root_name as string, opts);
+    },
+  },
+  {
+    name: "analyze_compose_recomposition",
+    category: "analysis",
+    searchHint: "kotlin compose recomposition unstable remember mutableStateOf performance skip lambda collection",
+    description: "Detect recomposition hazards in @Composable functions: mutableStateOf without remember (critical), unstable collection parameters (List/Map/Set), excessive function-type params. Scans all indexed composables, skipping @Preview.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+    },
+    handler: async (args) => {
+      const opts: { file_pattern?: string } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      return await analyzeComposeRecomposition(args.repo as string, opts);
+    },
+  },
+  {
+    name: "trace_room_schema",
+    category: "analysis",
+    searchHint: "kotlin room database entity dao query insert update delete schema sqlite persistence android",
+    description: "Build a Room persistence schema graph: @Entity classes (with table names, primary keys), @Dao interfaces (with @Query SQL extraction), @Database declarations (with entity refs and version). Index-only.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      return await traceRoomSchema(args.repo as string);
+    },
+  },
+  {
+    name: "extract_kotlin_serialization_contract",
+    category: "analysis",
+    searchHint: "kotlin serialization serializable json schema serialname field type api contract data class",
+    description: "Derive JSON field schema from @Serializable data classes. Extracts field names, types, @SerialName remapping, nullable flags, and defaults.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      class_name: z.string().optional().describe("Filter to a single class by name"),
+    },
+    handler: async (args) => {
+      const opts: { file_pattern?: string; class_name?: string } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.class_name === "string") opts.class_name = args.class_name;
+      return await extractKotlinSerializationContract(args.repo as string, opts);
+    },
+  },
+  {
+    name: "trace_flow_chain",
+    category: "analysis",
+    searchHint: "kotlin flow coroutine operator map filter collect stateIn shareIn catch chain pipeline reactive",
+    description: "Analyze a Kotlin Flow<T> operator chain: detects 50+ operators, reports ordered list, warns about .collect without .catch and .stateIn without lifecycle scope.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      symbol_name: z.string().describe("Name of the function or property containing the Flow chain"),
+    },
+    handler: async (args) => {
+      return await traceFlowChain(args.repo as string, args.symbol_name as string);
+    },
+  },
+
+  // --- Python tools (all discoverable via discover_tools(query="python")) ---
+  {
+    name: "get_model_graph",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python django sqlalchemy orm model relationship foreignkey manytomany entity graph mermaid",
+    description: "Extract ORM model relationships (Django ForeignKey/M2M/O2O, SQLAlchemy relationship). JSON or mermaid erDiagram.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output as structured JSON or mermaid erDiagram"),
+    },
+    handler: async (args) => {
+      return await getModelGraph(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        output_format: args.output_format as "json" | "mermaid" | undefined,
+      });
+    },
+  },
+  {
+    name: "get_test_fixtures",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python pytest fixture conftest scope autouse dependency graph session function",
+    description: "Extract pytest fixture dependency graph: conftest hierarchy, scope, autouse, fixture-to-fixture deps.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+    },
+    handler: async (args) => {
+      return await getTestFixtures(args.repo as string, { file_pattern: args.file_pattern as string | undefined });
+    },
+  },
+  {
+    name: "find_framework_wiring",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python django signal receiver celery task middleware management command flask fastapi event wiring",
+    description: "Discover implicit control flow: Django signals, Celery tasks/.delay() calls, middleware, management commands, Flask init_app, FastAPI events.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+    },
+    handler: async (args) => {
+      return await findFrameworkWiring(args.repo as string, { file_pattern: args.file_pattern as string | undefined });
+    },
+  },
+  {
+    name: "run_ruff",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python ruff lint check bugbear performance simplify security async unused argument",
+    description: "Run ruff linter with symbol graph correlation. Configurable rule categories (B, PERF, SIM, UP, S, ASYNC, RET, ARG).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      categories: z.array(z.string()).optional().describe("Rule categories to enable (default: B,PERF,SIM,UP,S,ASYNC,RET,ARG)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      max_results: zFiniteNumber.optional().describe("Max findings to return (default: 100)"),
+    },
+    handler: async (args) => {
+      return await runRuff(args.repo as string, {
+        categories: args.categories as string[] | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+    },
+  },
+  {
+    name: "parse_pyproject",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python pyproject toml dependencies version build system entry points scripts tools ruff pytest mypy",
+    description: "Parse pyproject.toml: name, version, Python version, build system, dependencies, optional groups, entry points, configured tools.",
+    schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
+    handler: async (args) => { return await parsePyproject(args.repo as string); },
+  },
+  {
+    name: "find_python_callers",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python callers call site usage trace cross module import delay apply_async constructor",
+    description: "Find all call sites of a Python symbol: direct calls, method calls, Celery .delay()/.apply_async(), constructor, references.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      target_name: z.string().describe("Name of the target function/class/method"),
+      target_file: z.string().optional().describe("Disambiguate target by file path substring"),
+      file_pattern: z.string().optional().describe("Restrict caller search scope"),
+      max_results: zFiniteNumber.optional().describe("Max callers to return (default: 100)"),
+    },
+    handler: async (args) => {
+      return await findPythonCallers(args.repo as string, args.target_name as string, {
+        target_file: args.target_file as string | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+    },
+  },
+  {
+    name: "analyze_django_settings",
+    category: "security",
+    requiresLanguage: "python",
+    searchHint: "python django settings security debug secret key allowed hosts csrf middleware cookie hsts cors",
+    description: "Audit Django settings.py: 15 security/config checks (DEBUG, SECRET_KEY, CSRF, CORS, HSTS, cookies, sqlite, middleware).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      settings_file: z.string().optional().describe("Explicit settings file path (auto-detects if omitted)"),
+    },
+    handler: async (args) => {
+      return await analyzeDjangoSettings(args.repo as string, { settings_file: args.settings_file as string | undefined });
+    },
+  },
+  {
+    name: "trace_celery_chain",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python celery task shared_task delay apply_async chain group chord canvas retry orphan queue",
+    description: "Celery task tracing: tasks with policies (bind, retries, queue), .delay() call sites, canvas operators (chain/group/chord), orphan tasks.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      task_name: z.string().optional().describe("Focus on a specific task by name"),
+    },
+    handler: async (args) => {
+      return await traceCeleryChain(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        task_name: args.task_name as string | undefined,
+      });
+    },
+  },
+  {
+    name: "run_mypy",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python mypy type check error strict return incompatible argument missing",
+    description: "Run mypy type checker with symbol correlation. Parses error codes, maps to containing symbols.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      strict: zBool().describe("Enable mypy --strict mode"),
+      max_results: zFiniteNumber.optional().describe("Max findings (default: 100)"),
+    },
+    handler: async (args) => {
+      return await runMypy(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        strict: args.strict as boolean | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+    },
+  },
+  {
+    name: "run_pyright",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python pyright type check reportMissingImports reportGeneralTypeIssues",
+    description: "Run pyright type checker with symbol correlation. Parses JSON diagnostics, maps to containing symbols.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      strict: zBool().describe("Enable strict level"),
+      max_results: zFiniteNumber.optional().describe("Max findings (default: 100)"),
+    },
+    handler: async (args) => {
+      return await runPyright(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        strict: args.strict as boolean | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+    },
+  },
+  {
+    name: "analyze_python_deps",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python dependency version outdated vulnerable CVE pypi osv requirements pyproject",
+    description: "Python dependency analysis: parse pyproject.toml/requirements.txt, detect unpinned deps, optional PyPI freshness, optional OSV.dev CVE scan.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      check_pypi: zBool().describe("Check PyPI for latest versions (network, opt-in)"),
+      check_vulns: zBool().describe("Check OSV.dev for CVEs (network, opt-in)"),
+    },
+    handler: async (args) => {
+      return await analyzePythonDeps(args.repo as string, {
+        check_pypi: args.check_pypi as boolean | undefined,
+        check_vulns: args.check_vulns as boolean | undefined,
+      });
+    },
+  },
+  {
+    name: "find_python_circular_imports",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python circular import cycle ImportError TYPE_CHECKING DFS dependency",
+    description: "Detect Python circular imports via DFS on the import graph. Skips TYPE_CHECKING-only imports. Reports cycle paths with severity.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      max_cycles: zFiniteNumber.optional().describe("Max cycles to report (default: 50)"),
+    },
+    handler: async (args) => {
+      return await findPythonCircularImports(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        max_cycles: args.max_cycles as number | undefined,
+      });
+    },
+  },
+
   // --- PHP / Yii2 tools (all discoverable via discover_tools(query="php")) ---
   {
     name: "resolve_php_namespace",
@@ -1942,6 +2241,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "find_php_n_plus_one",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php n+1 query foreach activerecord with eager loading yii2 eloquent relation",
     description: "Detect N+1 query patterns in PHP: foreach loops accessing ActiveRecord relations without eager loading via ->with(). Yii2/Laravel aware.",
     schema: {
@@ -1959,6 +2259,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "find_php_god_model",
     category: "analysis",
+    requiresLanguage: "php",
     searchHint: "php god model god class anti-pattern too many methods relations oversized yii2 activerecord",
     description: "Find oversized ActiveRecord models (god classes) with configurable thresholds for method, relation, and line counts. Reports reasons per model.",
     schema: {

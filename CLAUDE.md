@@ -18,7 +18,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 
 ## Tool Discovery (NEW — agents read this)
 
-Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 46 core tools are visible.
+Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 46 core tools are visible (out of 141 total).
 To find hidden tools: `discover_tools(query="dead code")` → keyword search.
 To get full schema: `describe_tools(names=["find_dead_code"])` → returns params with types.
 To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
@@ -33,9 +33,16 @@ Framework-specific tools are auto-enabled at startup when a signal file is detec
   trace_suspend_chain, analyze_kmp_declarations)
 - `package.json` with `react`/`next`/`@remix-run/react` dep + `.tsx` files present →
   enables React tools (trace_component_tree, analyze_hooks, analyze_renders)
+- `package.json` with `next` dep → enables 7 hidden Next.js tools
+  (analyze_nextjs_components, nextjs_audit_server_actions, nextjs_api_contract,
+  nextjs_boundary_analyzer, nextjs_link_integrity, nextjs_data_flow,
+  nextjs_middleware_coverage). The 3 core Next.js tools (nextjs_route_map,
+  nextjs_metadata_audit, framework_audit) are always visible.
 - `package.json` with `hono` / `@hono/zod-openapi` / `@hono/node-server` / `hono-openapi` /
-  `chanfana` dep → enables 5 hidden Hono tools (trace_context_flow, extract_api_contract,
-  trace_rpc_types, audit_hono_security, visualize_hono_routes). The 2 core Hono tools
+  `chanfana` dep → enables 11 hidden Hono tools (trace_context_flow, extract_api_contract,
+  trace_rpc_types, audit_hono_security, visualize_hono_routes, trace_conditional_middleware,
+  analyze_inline_handler, extract_response_types, detect_middleware_env_regression,
+  detect_hono_modules, find_dead_hono_routes). The 2 core Hono tools
   (trace_middleware_chain, analyze_hono_app) are always visible.
 
 Agents working in framework-specific projects see relevant tools in ListTools from the
@@ -72,14 +79,14 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 3. **Quick grep to find all places with a number (e.g., tool count):**
    ```bash
-   grep -rn "110 tools\|110 MCP" src/ ../codesift-website/src/
+   grep -rn "130 tools\|130 MCP" src/ ../codesift-website/src/
    ```
 
 ## Architecture
 
-**120 MCP tools** (46 core + 74 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + **Astro deep intelligence** (island hydration audit with AH01-AH12 scoring, route map from file-based routing, config analysis via tree-sitter AST walker, template parsing for islands/slots/directives) + **Next.js Tier-1 intelligence** (server/client classifier with `suggested_fix`, route map with `rendering_reason`, metadata audit, server actions security audit, API contract extraction, client boundary analyzer, link integrity, data flow / waterfall detection, middleware coverage, plus `framework_audit` meta-tool) + Hono framework intelligence + **PHP/Yii2 intelligence** (PSR-4 cross-file edges, PHPDoc @property/@method synthesis, N+1 query detector, god-model detector, parser error recovery, backup file exclusion) + **Kotlin Wave 2** (Kotest DSL detection, Gradle KTS structured config, Hilt DI graph `trace_hilt_graph`, coroutine chain `trace_suspend_chain`, KMP expect/actual `analyze_kmp_declarations`, per-language cache version invalidation)
+**141 MCP tools** (46 core + 95 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + **Astro deep intelligence** (island hydration audit with AH01-AH12 scoring, route map from file-based routing, config analysis via tree-sitter AST walker, template parsing for islands/slots/directives) + **Next.js Tier-1 intelligence** (server/client classifier with `suggested_fix`, route map with `rendering_reason`, metadata audit, server actions security audit, API contract extraction, client boundary analyzer, link integrity, data flow / waterfall detection, middleware coverage, plus `framework_audit` meta-tool) + Hono framework intelligence + **PHP/Yii2 intelligence** (PSR-4 cross-file edges, PHPDoc @property/@method synthesis, N+1 query detector, god-model detector, parser error recovery, backup file exclusion) + **Kotlin Wave 2** (Kotest DSL detection, Gradle KTS structured config, Hilt DI graph `trace_hilt_graph`, coroutine chain `trace_suspend_chain`, KMP expect/actual `analyze_kmp_declarations`, per-language cache version invalidation)
 
-**src/tools/** (37 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline). Includes: astro-islands.ts (island analysis + hydration audit), astro-routes.ts (route map + findAstroHandlers), astro-config.ts (config analysis + conventions), coupling-tools.ts (fan_in_fan_out, co_change_analysis, shared computeCoChangePairs), perf-tools.ts (6 perf anti-pattern scanners with balanced-brace loop body extraction), architecture-tools.ts (composite: communities + coupling + circular deps + LOC + entry points), query-tools.ts (Prisma→SQL explain), status-tools.ts (index status check), audit-tools.ts (5-gate composite), review-diff-tools.ts (10-check composite), php-tools.ts (9 PHP/Yii2 tools including find_php_n_plus_one, find_php_god_model), react-tools.ts (React component/hook conventions).
+**src/tools/** (38 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline). Includes: astro-islands.ts (island analysis + hydration audit), astro-routes.ts (route map + findAstroHandlers), astro-config.ts (config analysis + conventions), nextjs-tools.ts (10 Next.js tools: analyze_nextjs_components, nextjs_route_map, nextjs_metadata_audit, nextjs_audit_server_actions, nextjs_api_contract, nextjs_boundary_analyzer, nextjs_link_integrity, nextjs_data_flow, nextjs_middleware_coverage, framework_audit), coupling-tools.ts (fan_in_fan_out, co_change_analysis, shared computeCoChangePairs), perf-tools.ts (6 perf anti-pattern scanners with balanced-brace loop body extraction), architecture-tools.ts (composite: communities + coupling + circular deps + LOC + entry points), query-tools.ts (Prisma→SQL explain), status-tools.ts (index status check), audit-tools.ts (5-gate composite), review-diff-tools.ts (10-check composite), php-tools.ts (9 PHP/Yii2 tools including find_php_n_plus_one, find_php_god_model), react-tools.ts (React component/hook conventions).
 **src/lsp/** (4 files) — LSP bridge (6 languages)
 **src/parser/extractors/** (15 files) — Language extractors (TS, JS, **Python (full)**, Go, Rust, Prisma, MD, Astro, Conversation, **Kotlin** (with Kotest DSL + KMP expect/actual + @Annotation surfacing), **gradle-kts** (structured plugins/dependencies/config extraction for `*.gradle.kts`), **PHP**, **Hono**, _shared). Python extractor handles async def, @dataclass/@property/@classmethod/@staticmethod/@abstractmethod, dunder methods (tagged via meta), module constants, __all__ exports, superclasses (via extends field), dataclass fields, nested class walk, iterative walk with depth cap 200.
 **src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival), **per-language `extractor_version` cache invalidation** (mismatch vs current EXTRACTOR_VERSIONS forces reindex so schema bumps don't leave stale symbols behind)

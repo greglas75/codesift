@@ -10,15 +10,15 @@ For multi-repo sessions, call `list_repos()` to discover available repos.
 
 ## Tool Discovery
 
-**120 MCP tools total** (46 core visible + 74 discoverable).
+**130 MCP tools total** (46 core visible + 84 discoverable).
 
-46 core tools appear in ListTools. Remaining 74 niche tools are discovered on demand:
+46 core tools appear in ListTools. Remaining 84 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 120 tools
+- `discover_tools(query="dead code")` — keyword search across all 130 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
-Core tools (41) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, etc.
+Core tools (46) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, etc.
 
 ## Tool Mapping
 
@@ -72,6 +72,16 @@ Use this table to pick the right tool for each task:
 | Astro hydration audit | `astro_hydration_audit` |
 | Astro route map | `astro_route_map` |
 | Astro config analysis | `astro_config_analyze` |
+| Next.js full audit | `framework_audit` |
+| route map + rendering | `nextjs_route_map` |
+| SEO / metadata gaps | `nextjs_metadata_audit` |
+| server actions security | `nextjs_audit_server_actions` |
+| API contract extraction | `nextjs_api_contract` |
+| client boundary / bundle | `nextjs_boundary_analyzer` |
+| broken internal links | `nextjs_link_integrity` |
+| data fetch waterfalls | `nextjs_data_flow` |
+| middleware coverage gaps | `nextjs_middleware_coverage` |
+| server vs client classify | `analyze_nextjs_components` |
 
 ## When to Use (Situational Triggers)
 
@@ -105,6 +115,11 @@ Use this table to pick the right tool for each task:
 | React codebase | `trace_component_tree("App")` + `analyze_hooks` |
 | React anti-patterns | `search_patterns("hook-in-condition")` |
 | React call graph (clean) | `trace_call_chain(filter_react_hooks=true)` |
+| new Next.js project (first look) | `framework_audit` |
+| SEO audit / metadata review | `nextjs_metadata_audit` |
+| security review (Next.js) | `nextjs_audit_server_actions` |
+| rendering strategy check | `nextjs_route_map` |
+| bundle size concerns | `nextjs_boundary_analyzer` |
 
 ## Key Parameters
 

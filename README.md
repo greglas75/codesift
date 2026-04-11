@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 120 MCP tools (46 core + 74 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 141 MCP tools (46 core + 95 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 **Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
@@ -185,9 +185,9 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (120 total — 46 core + 74 discoverable)
+## MCP tools (141 total — 46 core + 95 discoverable)
 
-When running as an MCP server, CodeSift exposes 46 core tools directly. The remaining 74 niche tools are discoverable via `discover_tools` and `describe_tools`.
+When running as an MCP server, CodeSift exposes 46 core tools directly. The remaining 95 niche tools are discoverable via `discover_tools` and `describe_tools`.
 
 | Category | Tools |
 |----------|-------|
@@ -306,6 +306,23 @@ resolve_php_namespace(repo, class_name="App\\Models\\User")
 
 **LSP bridge:** Intelephense configured for go-to-definition, find-references, type-info, and rename across PHP files.
 
+### Next.js intelligence
+
+Deep Next.js static analysis — 10 dedicated tools covering routing, rendering, security, SEO, and architecture:
+
+- `framework_audit` — one-call meta-audit: runs route map + metadata + server actions + boundary + data flow checks, returns composite score with prioritized findings
+- `nextjs_route_map` — maps all App Router and Pages Router routes with rendering strategy (SSG/SSR/ISR/PPR), dynamic params, route groups, parallel routes, and intercepting routes
+- `nextjs_metadata_audit` — detects missing/incomplete metadata exports, OpenGraph gaps, missing robots/sitemap, and SEO anti-patterns across all routes
+- `nextjs_audit_server_actions` — security review of `"use server"` functions: input validation, auth checks, rate limiting, error exposure, and CSRF protection
+- `nextjs_api_contract` — extracts API route contracts: HTTP methods, request/response shapes, middleware chain, and error responses
+- `nextjs_boundary_analyzer` — analyzes `"use client"` boundaries: identifies unnecessary client components, bundle impact, and suggests server component opportunities
+- `nextjs_link_integrity` — finds broken internal `<Link href>` references, orphan pages, and redirect chain issues
+- `nextjs_data_flow` — detects data fetching waterfalls, redundant fetches, missing caching, and suggests parallel/streaming patterns
+- `nextjs_middleware_coverage` — maps middleware.ts matcher patterns against routes to find unprotected endpoints
+- `analyze_nextjs_components` — classifies components as server/client with confidence scoring and `suggested_fix` when boundary is suboptimal
+
+**Auto-load**: Next.js tools are automatically enabled when `next` is detected in package.json — no manual discovery needed.
+
 ## When to use CodeSift vs grep
 
 | Task | Best tool | Why |
@@ -329,7 +346,7 @@ resolve_php_namespace(repo, class_name="App\\Models\\User")
 | Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
 | Detect hardcoded secrets | `scan_secrets` | ~1,100 rules, AST-aware, masked output, auto-cached |
 | Ranked text search | `search_text(ranked=true)` | Classifies hits by function, saves follow-up get_symbol calls |
-| Find hidden tools | `discover_tools` + `describe_tools` | 47 tools hidden by default — search by keyword, get full schema |
+| Find hidden tools | `discover_tools` + `describe_tools` | 84 tools hidden by default — search by keyword, get full schema |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -412,7 +429,7 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 120 tools to AI agents (46 core + 74 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 141 tools to AI agents (46 core + 84 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
