@@ -28,11 +28,24 @@ export type ComponentClassification =
   | "client_inferred" // no directive but uses hooks/events/browser APIs
   | "ambiguous";
 
+export interface SignalLocation {
+  name: string;
+  line: number;
+  column: number;
+}
+
 export interface ComponentSignals {
   hooks: string[];
   event_handlers: string[];
   browser_globals: string[];
   dynamic_ssr_false: boolean;
+  /**
+   * Precise source locations for each detected signal. Agents use this to
+   * jump directly to the fix site without re-parsing the file. Populated
+   * for hooks, event_handlers, and browser_globals. dynamic_ssr_false is
+   * file-level so no location is tracked.
+   */
+  signal_locations: SignalLocation[];
 }
 
 export interface NextjsComponentEntry {
@@ -167,6 +180,7 @@ export function detectSignals(
   const hooks = new Set<string>();
   const event_handlers = new Set<string>();
   const browser_globals = new Set<string>();
+  const signal_locations: SignalLocation[] = [];
   let dynamic_ssr_false = false;
 
   const root = tree.rootNode;
@@ -178,6 +192,11 @@ export function detectSignals(
       const name = fn.text;
       if (HOOK_NAME_RE.test(name) && !CLIENT_HOOKS_EXCLUDE.has(name)) {
         hooks.add(name);
+        signal_locations.push({
+          name,
+          line: fn.startPosition.row + 1,
+          column: fn.startPosition.column + 1,
+        });
       }
     }
   }
@@ -189,6 +208,11 @@ export function detectSignals(
       const name = nameNode.text;
       if (EVENT_HANDLER_ATTRS.has(name)) {
         event_handlers.add(name);
+        signal_locations.push({
+          name,
+          line: nameNode.startPosition.row + 1,
+          column: nameNode.startPosition.column + 1,
+        });
       }
     }
   }
@@ -198,6 +222,11 @@ export function detectSignals(
     const obj = mem.childForFieldName("object") ?? mem.namedChild(0);
     if (obj?.type === "identifier" && BROWSER_GLOBALS.has(obj.text)) {
       browser_globals.add(obj.text);
+      signal_locations.push({
+        name: obj.text,
+        line: obj.startPosition.row + 1,
+        column: obj.startPosition.column + 1,
+      });
     }
   }
 
@@ -258,6 +287,7 @@ export function detectSignals(
     event_handlers: [...event_handlers],
     browser_globals: [...browser_globals],
     dynamic_ssr_false,
+    signal_locations,
   };
 }
 
