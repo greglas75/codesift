@@ -13,7 +13,6 @@
  *   - Respects Python aliasing: `from X import Y as Z`
  */
 import { getCodeIndex } from "./index-tools.js";
-import type { CodeSymbol } from "../types.js";
 
 export interface PythonCallerInfo {
   caller_symbol: string;

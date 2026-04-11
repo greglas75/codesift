@@ -167,7 +167,7 @@ const CHECKS: SettingsCheck[] = [
     severity: "medium",
     message: "DATABASES uses SQLite — not suitable for production with multiple workers",
     fix: "Use PostgreSQL or MySQL for production. sqlite3 is fine for dev/testing only.",
-    detect: (source, lines) => {
+    detect: (_source, lines) => {
       const hits: Array<{ line: number; match: string }> = [];
       lines.forEach((l, i) => {
         if (/ENGINE.*django\.db\.backends\.sqlite3/.test(l)) {

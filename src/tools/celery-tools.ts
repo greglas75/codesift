@@ -115,10 +115,10 @@ export async function traceCeleryChain(
     }
 
     const rateLimit = taskDec.match(RATE_LIMIT_RE);
-    if (rateLimit) task.rate_limit = rateLimit[1];
+    if (rateLimit && rateLimit[1]) task.rate_limit = rateLimit[1];
 
     const queue = taskDec.match(QUEUE_RE);
-    if (queue) task.queue = queue[1];
+    if (queue && queue[1]) task.queue = queue[1];
 
     tasks.push(task);
     taskByName.set(sym.name, task);
