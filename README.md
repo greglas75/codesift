@@ -332,7 +332,7 @@ resolve_php_namespace(repo, class_name="App\\Models\\User")
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
-## Built-in anti-patterns
+## Built-in anti-patterns (33 total)
 
 The `patterns` command searches for common code quality issues across your codebase:
 
@@ -342,7 +342,6 @@ The `patterns` command searches for common code quality issues across your codeb
 | `any-type` | `: any` or `as any` — lost type safety |
 | `console-log` | `console.log/debug/info` in production code |
 | `await-in-loop` | Sequential `await` inside `for` loops |
-| `useEffect-no-cleanup` | React useEffect without cleanup return |
 | `no-error-type` | Catch without `instanceof Error` narrowing |
 | `toctou` | Read-then-write without atomic operation |
 | `unbounded-findmany` | Prisma `findMany` without `take` limit |
@@ -353,12 +352,58 @@ The `patterns` command searches for common code quality issues across your codeb
 | `lateinit-no-check` | Kotlin: `lateinit var` without `isInitialized` check |
 | `empty-when-branch` | Kotlin: empty `when` branch — swallowed case |
 | `mutable-shared-state` | Kotlin: mutable `var` inside `object`/`companion` — thread-unsafe |
+| **React (14)** | |
+| `useEffect-no-cleanup` | useEffect without cleanup return — memory leak |
+| `hook-in-condition` | Hook inside if/for/while/switch — Rule of Hooks violation |
+| `useEffect-async` | async function directly in useEffect |
+| `useEffect-object-dep` | Object/array literal in dep array — infinite re-render |
+| `missing-display-name` | React.memo/forwardRef without displayName |
+| `index-as-key` | Array index used as React key — incorrect reconciliation |
+| `inline-handler` | Arrow function in JSX event handler — memoization killer |
+| `conditional-render-hook` | Hook called after early return — Rule of Hooks violation |
+| `dangerously-set-html` | dangerouslySetInnerHTML — XSS risk |
+| `direct-dom-access` | document.getElementById/querySelector — use useRef |
+| `unstable-default-value` | `= []`/`= {}` default in params — new ref every render |
+| `jsx-falsy-and` | `{count && <Comp/>}` renders "0" when count is 0 |
+| `nested-component-def` | Component inside component — remounts every render |
+| `usecallback-no-deps` | useCallback/useMemo without dep array — useless memoization |
+| **PHP (7)** | |
+| `sql-injection-php` | User input flowing into SQL query |
+| `xss-php` | Unescaped user input echoed to output |
+| `eval-php` / `exec-php` | eval/shell execution — injection risk |
+| `unserialize-php` | `unserialize()` on user input |
+| `unescaped-yii-view` | Yii2 view without `Html::encode()` |
+| `raw-query-yii` | Yii2 createCommand with string interpolation |
 
 Custom regex is also supported: `codesift patterns local/project "Promise<.*any>"`.
 
+### Performance anti-patterns (`find_perf_hotspots`)
+
+A separate tool scans for performance-specific issues with balanced-brace loop body extraction (not just regex):
+
+| Pattern | What it finds | Severity |
+|---------|---------------|----------|
+| `unbounded-query` | `findMany`/`find` without `take`/`limit` | high |
+| `sync-in-handler` | `readFileSync`/`execSync` in route/handler/controller files | high |
+| `n-plus-one` | DB/fetch call inside `for`/`while` loop body | high |
+| `unbounded-parallel` | `Promise.all(arr.map(...))` without concurrency control | medium |
+| `missing-pagination` | API response from unbounded list query | medium |
+| `expensive-recompute` | Same method called 2+ times in loop body (excludes common methods) | low |
+
+```bash
+# Scan all patterns
+find_perf_hotspots(repo)
+
+# Only N+1 and unbounded queries
+find_perf_hotspots(repo, patterns="n-plus-one,unbounded-query")
+
+# Scope to API directory
+find_perf_hotspots(repo, file_pattern="src/api")
+```
+
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 72 tools to AI agents (36 core + 36 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 82 tools to AI agents (37 core + 45 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -538,6 +583,7 @@ File pattern parameters (`file_pattern`) support full glob syntax via [picomatch
 TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, **Kotlin**, Java, Ruby, PHP, Markdown, CSS, Prisma, Astro.
 
 Kotlin support includes full tree-sitter parsing with a dedicated extractor for functions, classes (data/sealed/enum/abstract/annotation), interfaces, objects (singleton + companion), properties (val/var/const), type aliases, extension functions, suspend functions, generics, KDoc comments, and JUnit test detection (@Test, @BeforeEach, @AfterEach, @BeforeAll, @AfterAll). Route tracing supports Ktor DSL and Spring Boot Kotlin. Six Kotlin anti-patterns are built-in.
+| PHP/Yii2 support | src/parser/extractors/php.ts, src/tools/php-tools.ts (7 tools), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
 
 ## Development
 
@@ -632,6 +678,7 @@ BSL-1.1
 | Secret scanning | src/tools/secret-tools.ts, @sanity-labs/secret-scan (package.json) |
 | Languages | src/parser/parser-manager.ts, src/parser/extractors/ (incl. kotlin.ts) |
 | Kotlin support | kotlin.ts, graph-tools KEYWORD_SET, complexity when/?.let, test-file Test.kt, lsp-tools .kt, import-graph FQN, route-tools Ktor/Spring, pattern-tools 6 anti-patterns |
+| PHP/Yii2 support | src/parser/extractors/php.ts, src/tools/php-tools.ts (7 tools), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
 | Development | package.json:scripts (line 19-28) |
 | Git URL | package.json:repository (line 62-64) |
 -->

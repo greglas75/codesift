@@ -10,11 +10,11 @@ For multi-repo sessions, call `list_repos()` to discover available repos.
 
 ## Tool Discovery
 
-**72 MCP tools total** (36 core visible + 36 discoverable).
+**82 MCP tools total** (37 core visible + 45 discoverable).
 
-36 core tools appear in ListTools. Remaining 36 niche tools are discovered on demand:
+37 core tools appear in ListTools. Remaining 45 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 72 tools
+- `discover_tools(query="dead code")` — keyword search across all 82 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
