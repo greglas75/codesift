@@ -147,3 +147,66 @@ export async function POST(req) {
     expect(result!.type).toBe("form");
   });
 });
+
+describe("extractResponseShapes", () => {
+  it("captures NextResponse.json with status 200", async () => {
+    const src = `
+export async function GET() {
+  return NextResponse.json({ users: [] });
+}
+`;
+    const tree = await parseTs(src);
+    const shapes = extractResponseShapes(tree, src);
+    expect(shapes.length).toBeGreaterThanOrEqual(1);
+    expect(shapes[0]!.type).toBe("json");
+    expect(shapes[0]!.status).toBe(200);
+  });
+
+  it("captures explicit status code from second arg", async () => {
+    const src = `
+export async function GET() {
+  return NextResponse.json({ error: "..." }, { status: 400 });
+}
+`;
+    const tree = await parseTs(src);
+    const shapes = extractResponseShapes(tree, src);
+    expect(shapes.find((s) => s.status === 400)).toBeDefined();
+  });
+
+  it("captures empty Response with status 204", async () => {
+    const src = `
+export async function DELETE() {
+  return new Response(null, { status: 204 });
+}
+`;
+    const tree = await parseTs(src);
+    const shapes = extractResponseShapes(tree, src);
+    expect(shapes.find((s) => s.status === 204)).toBeDefined();
+  });
+
+  it("captures multiple returns (success + error)", async () => {
+    const src = `
+export async function GET() {
+  if (cond) return NextResponse.json({ ok: true });
+  return NextResponse.json({ error: "..." }, { status: 400 });
+}
+`;
+    const tree = await parseTs(src);
+    const shapes = extractResponseShapes(tree, src);
+    expect(shapes.length).toBeGreaterThanOrEqual(2);
+    const statuses = shapes.map((s) => s.status).sort();
+    expect(statuses).toContain(200);
+    expect(statuses).toContain(400);
+  });
+
+  it("captures stream response", async () => {
+    const src = `
+export async function GET() {
+  return new Response(stream);
+}
+`;
+    const tree = await parseTs(src);
+    const shapes = extractResponseShapes(tree, src);
+    expect(shapes.length).toBeGreaterThanOrEqual(1);
+  });
+});

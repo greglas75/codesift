@@ -121,9 +121,108 @@ export function extractRequestBodySchema(
   return null;
 }
 
+/** Extract `{ status: NUMBER }` from an options object literal node, or null. */
+function readStatusOption(opts: Parser.SyntaxNode): number | null {
+  if (opts.type !== "object") return null;
+  for (const pair of opts.namedChildren) {
+    if (pair.type !== "pair") continue;
+    const key = pair.childForFieldName("key") ?? pair.namedChild(0);
+    const value = pair.childForFieldName("value") ?? pair.namedChild(1);
+    if (!key || !value) continue;
+    const keyText =
+      key.type === "property_identifier" || key.type === "identifier"
+        ? key.text
+        : key.type === "string"
+          ? key.text.slice(1, -1)
+          : null;
+    if (keyText !== "status") continue;
+    if (value.type === "number") {
+      const n = Number(value.text);
+      if (!Number.isNaN(n)) return n;
+    }
+  }
+  return null;
+}
+
 export function extractResponseShapes(
-  _tree: Parser.Tree,
+  tree: Parser.Tree,
   _source: string,
 ): ResponseShape[] {
-  throw new Error("not implemented");
+  const out: ResponseShape[] = [];
+  const root = tree.rootNode;
+
+  for (const ret of root.descendantsOfType("return_statement")) {
+    const value = ret.namedChildren[0];
+    if (!value) continue;
+
+    // Unwrap parenthesized expression
+    const expr =
+      value.type === "parenthesized_expression"
+        ? value.namedChildren[0] ?? value
+        : value;
+    if (!expr || expr.type !== "call_expression" && expr.type !== "new_expression") {
+      continue;
+    }
+
+    const callee = expr.childForFieldName("function") ?? expr.namedChild(0);
+    const args = expr.childForFieldName("arguments") ?? expr.namedChild(1);
+
+    let type: ResponseShape["type"] = "unknown";
+    let status = 200;
+
+    if (callee?.type === "member_expression") {
+      const obj = callee.childForFieldName("object") ?? callee.namedChild(0);
+      const prop = callee.childForFieldName("property") ?? callee.namedChild(1);
+      const objText = obj?.text ?? "";
+      const propText = prop?.text ?? "";
+      if (objText === "NextResponse") {
+        if (propText === "json") {
+          type = "json";
+        } else if (propText === "redirect") {
+          type = "redirect";
+          status = 307;
+        }
+      } else if (objText === "Response") {
+        if (propText === "redirect") {
+          type = "redirect";
+          status = 307;
+        }
+      }
+    } else if (callee?.type === "identifier") {
+      if (callee.text === "Response") {
+        type = "unknown";
+      }
+    }
+
+    if (expr.type === "new_expression") {
+      // new Response(...)
+      const newCallee = expr.childForFieldName("constructor") ?? expr.namedChild(0);
+      if (newCallee?.type === "identifier" && newCallee.text === "Response") {
+        const firstArg = args?.namedChildren[0];
+        if (!firstArg || firstArg.type === "null") {
+          type = "empty";
+        } else if (firstArg.type === "identifier") {
+          // Likely a stream identifier
+          type = "stream";
+        } else {
+          type = "unknown";
+        }
+      }
+    }
+
+    // Read status from second argument's `{ status: N }`
+    if (args) {
+      const secondArg = args.namedChildren[1];
+      if (secondArg && secondArg.type === "object") {
+        const s = readStatusOption(secondArg);
+        if (s !== null) status = s;
+      }
+    }
+
+    if (type !== "unknown") {
+      out.push({ status, type });
+    }
+  }
+
+  return out;
 }
