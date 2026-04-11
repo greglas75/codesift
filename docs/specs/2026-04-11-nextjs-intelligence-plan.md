@@ -4,7 +4,7 @@
 **spec_id:** 2026-04-11-nextjs-intelligence-2017
 **planning_mode:** spec-driven
 **plan_revision:** 1
-**status:** Draft
+**status:** Approved
 **Created:** 2026-04-11
 **Tasks:** 34
 **Estimated complexity:** 8 complex / 26 standard across 5 PRs
@@ -118,7 +118,7 @@ Dependency graph: PR #1 blocks all; PR #2/3/4 are independent; PR #5 depends on 
 
 **Files:** `src/utils/nextjs.ts`, `tests/utils/nextjs.test.ts`
 **Complexity:** standard
-**Dependencies:** Task 1
+**Dependencies:** Task 2 (sequential — shares `src/utils/nextjs.ts`)
 **Execution routing:** default
 
 - [ ] RED: Add 4 test cases for `discoverWorkspaces(repoRoot)`:
@@ -225,7 +225,7 @@ Dependency graph: PR #1 blocks all; PR #2/3/4 are independent; PR #5 depends on 
 
 **Files:** `src/utils/nextjs.ts`, `tests/utils/nextjs.test.ts`
 **Complexity:** standard
-**Dependencies:** Task 1
+**Dependencies:** Task 3 (sequential — shares `src/utils/nextjs.ts`)
 **Execution routing:** default
 
 - [ ] RED: Add 4 test cases:
@@ -251,7 +251,7 @@ Dependency graph: PR #1 blocks all; PR #2/3/4 are independent; PR #5 depends on 
 
 **Files:** `src/utils/nextjs.ts`, `tests/utils/nextjs.test.ts`
 **Complexity:** complex
-**Dependencies:** Task 1
+**Dependencies:** Task 7 (sequential — shares `src/utils/nextjs.ts`)
 **Execution routing:** deep
 
 - [ ] RED: Add 5 test cases covering ALL 4 branches of `middleware.applies` plus the not-found case:
@@ -1014,7 +1014,7 @@ Complex tasks (16) will use the deep implementation tier in `zuvo:execute`. Stan
 
 ## Dependency Summary
 
-- PR #1 Tasks 1-9 are mostly independent; Task 7 and 8 depend on Task 1 (scanDirective). Task 6 depends on Task 1 + Task 5.
+- PR #1 Tasks 1-9: serialized chain for `nextjs.ts` edits: 1 → 2 → 3 → 7 → 8. Tasks 4, 5 are independent (different files). Task 6 depends on Task 1 + Task 5. Task 9 is independent.
 - PR #2 Tasks 10-12 depend on PR #1 merged (for the shared util imports).
 - PR #3 Tasks 13-18 depend on PR #1 merged, with sequential dependencies 13 → 14 → 15 → 16 → 17 → 18.
 - PR #4 Tasks 19-25 depend on PR #1 + PR #3 merged (share `scanDirective`, fixture), sequential 19 → 20 → 21 → 22 → 23 → 24 → 25.
