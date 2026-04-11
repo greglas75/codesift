@@ -30,15 +30,30 @@ CREATE TABLE log_entries (
   occurred_at TIMESTAMP
 );
 
--- Wide table: too many columns
+-- Wide table: too many columns (one per line for extractor)
 CREATE TABLE god_table (
   id INT PRIMARY KEY,
-  a1 TEXT, a2 TEXT, a3 TEXT, a4 TEXT, a5 TEXT,
-  b1 TEXT, b2 TEXT, b3 TEXT, b4 TEXT, b5 TEXT,
-  c1 TEXT, c2 TEXT, c3 TEXT, c4 TEXT, c5 TEXT,
-  d1 TEXT, d2 TEXT, d3 TEXT, d4 TEXT, d5 TEXT,
-  e1 TEXT, e2 TEXT, e3 TEXT, e4 TEXT, e5 TEXT,
-  f1 TEXT, f2 TEXT, f3 TEXT, f4 TEXT, f5 TEXT
+  a1 TEXT,
+  a2 TEXT,
+  a3 TEXT,
+  a4 TEXT,
+  a5 TEXT,
+  b1 TEXT,
+  b2 TEXT,
+  b3 TEXT,
+  b4 TEXT,
+  b5 TEXT,
+  c1 TEXT,
+  c2 TEXT,
+  c3 TEXT,
+  c4 TEXT,
+  c5 TEXT,
+  d1 TEXT,
+  d2 TEXT,
+  d3 TEXT,
+  d4 TEXT,
+  d5 TEXT,
+  e1 TEXT
 );
 
 -- Nullable column without default

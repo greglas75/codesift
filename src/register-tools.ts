@@ -11,7 +11,7 @@ import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
-import { traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph } from "./tools/react-tools.js";
+import { traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph, auditCompilerReadiness } from "./tools/react-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
 import { detectCommunities } from "./tools/community-tools.js";
@@ -321,6 +321,7 @@ const REACT_TOOLS = [
   "analyze_hooks",
   "analyze_renders",
   "analyze_context_graph",
+  "audit_compiler_readiness",
 ];
 
 /**
@@ -1141,6 +1142,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const index = await getCodeIndex(args.repo as string);
       if (!index) throw new Error(`Repository not found: ${args.repo}`);
       const result = buildContextGraph(index.symbols);
+      return JSON.stringify(result, null, 2);
+    },
+  },
+
+  {
+    name: "audit_compiler_readiness",
+    category: "analysis",
+    searchHint: "react compiler forget memoization bailout readiness migration adoption auto-memo",
+    description: "Audit React Compiler (v1.0) adoption readiness. Scans all components for patterns that cause silent bailout (side effects in render, ref reads, prop/state mutation, try/catch). Returns readiness score (0-100), prioritized fix list, and count of redundant manual memoization safe to remove post-adoption. No competitor offers codebase-wide compiler readiness analysis.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      include_tests: zBool().describe("Include test files (default: false)"),
+    },
+    handler: async (args) => {
+      const result = await auditCompilerReadiness(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        include_tests: args.include_tests as boolean | undefined,
+      });
       return JSON.stringify(result, null, 2);
     },
   },
@@ -3612,6 +3632,37 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       }
       if (result.warnings.length > 0) {
         parts.push(`Warnings: ${result.warnings.join("; ")}`);
+      }
+      return parts.join("\n");
+    },
+  },
+  {
+    name: "lint_schema",
+    category: "analysis" as ToolCategory,
+    searchHint: "lint SQL schema anti-pattern primary key wide table duplicate index design",
+    description: "Lint SQL schema for anti-patterns: missing primary key, wide tables (>20 cols), duplicate index names. Conservative ruleset with near-zero false positives.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Scope to files matching pattern"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { lintSchema } = await import("./tools/sql-tools.js");
+      const result = await lintSchema(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Schema lint: ${result.summary.total} finding${result.summary.total === 1 ? "" : "s"}`);
+      for (const [rule, count] of Object.entries(result.summary.by_rule)) {
+        parts.push(`  ${rule}: ${count}`);
+      }
+      if (result.warnings.length > 0) {
+        for (const w of result.warnings) parts.push(`⚠ ${w}`);
+      }
+      if (result.findings.length > 0) {
+        parts.push("");
+        for (const f of result.findings.slice(0, 30)) {
+          parts.push(`  [${f.severity.toUpperCase()}] ${f.rule}: ${f.detail}  (${f.file}:${f.line})`);
+        }
       }
       return parts.join("\n");
     },
