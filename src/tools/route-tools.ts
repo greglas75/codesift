@@ -169,6 +169,8 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
 
 /**
  * Find Express-style route handlers via router.get/app.post patterns.
+ * Restricted to JS/TS files to avoid false positives from Python test
+ * code like `client.get('/')` or Ruby/PHP method calls.
  */
 function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
   const handlers: RouteHandler[] = [];
@@ -176,6 +178,10 @@ function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler
 
   for (const sym of index.symbols) {
     if (!sym.source) continue;
+    // Only scan JS/TS files — .get()/.post() is ambiguous across languages
+    if (!/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(sym.file)) continue;
+    // Skip test files to avoid matching test harness client calls
+    if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(sym.file)) continue;
 
     for (const method of methods) {
       const re = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`);
@@ -607,12 +613,30 @@ async function findSpringBootKotlinHandlers(
 // --- Python frameworks ---
 
 /**
+ * Detect Python test files by pytest naming conventions.
+ * Matches: test_*.py, *_test.py, conftest.py, and tests/ subdirectories.
+ */
+function isPythonTestFile(path: string): boolean {
+  const basename = path.split("/").pop() ?? path;
+  if (basename === "conftest.py") return true;
+  if (/^test_.*\.py$/.test(basename)) return true;
+  if (/_test\.py$/.test(basename)) return true;
+  if (/\/tests?\//.test(path)) return true;
+  return false;
+}
+
+/**
  * Find Flask route handlers via @app.route() and @bp.route() decorators.
  * Also handles @app.get/post/put/delete() (Flask 2.0+ shorthand).
  */
 function findFlaskHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
   const handlers: RouteHandler[] = [];
-  const pyFiles = index.files.filter((f) => f.path.endsWith(".py"));
+  // Exclude test files and conftest — users tracing a production route rarely
+  // want test fixture routes like `@app.route('/')` inside test_*.py
+  const pyFiles = index.files.filter(
+    (f) => f.path.endsWith(".py")
+      && !isPythonTestFile(f.path),
+  );
 
   for (const file of pyFiles) {
     const fileSymbols = index.symbols.filter((s) => s.file === file.path);
@@ -631,12 +655,10 @@ function findFlaskHandlers(index: CodeIndex, searchPath: string): RouteHandler[]
         const routePath = routeMatch[1] ?? "";
         if (!matchPath(routePath, searchPath)) continue;
 
-        const method = undefined; // @app.route can handle any method
-
+        // @app.route can handle any method — omit method field
         handlers.push({
           symbol: stripSource(sym),
           file: file.path,
-          method,
           framework: "flask",
         });
       }
@@ -652,7 +674,10 @@ function findFlaskHandlers(index: CodeIndex, searchPath: string): RouteHandler[]
  */
 function findFastAPIHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
   const handlers: RouteHandler[] = [];
-  const pyFiles = index.files.filter((f) => f.path.endsWith(".py"));
+  const pyFiles = index.files.filter(
+    (f) => f.path.endsWith(".py")
+      && !isPythonTestFile(f.path),
+  );
 
   for (const file of pyFiles) {
     const fileSymbols = index.symbols.filter((s) => s.file === file.path);

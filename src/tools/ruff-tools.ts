@@ -132,17 +132,22 @@ export async function runRuff(
       (s) => s.start_line <= raw.location.row && s.end_line >= raw.location.row,
     );
 
-    findings.push({
+    const finding: RuffFinding = {
       rule: raw.code,
       message: raw.message,
       file: relPath,
       line: raw.location.row,
       col: raw.location.column,
       severity: raw.code.startsWith("S") ? "error" : "warning",
-      containing_symbol: containing
-        ? { name: containing.name, kind: containing.kind, start_line: containing.start_line }
-        : undefined,
-    });
+    };
+    if (containing) {
+      finding.containing_symbol = {
+        name: containing.name,
+        kind: containing.kind,
+        start_line: containing.start_line,
+      };
+    }
+    findings.push(finding);
 
     by_rule[raw.code] = (by_rule[raw.code] ?? 0) + 1;
   }

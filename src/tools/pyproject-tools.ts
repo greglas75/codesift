@@ -57,9 +57,12 @@ export function parsePyprojectContent(
   };
 
   // [project] section
-  info.name = extractValue(content, "name");
-  info.version = extractValue(content, "version");
-  info.requires_python = extractValue(content, "requires-python");
+  const name = extractValue(content, "name");
+  if (name) info.name = name;
+  const version = extractValue(content, "version");
+  if (version) info.version = version;
+  const requiresPython = extractValue(content, "requires-python");
+  if (requiresPython) info.requires_python = requiresPython;
 
   // [build-system]
   const buildReq = extractValue(content, "build-backend");

@@ -127,7 +127,6 @@ function extractAutouse(decorators: string[], source: string): boolean {
 }
 
 function extractDependencies(sym: CodeSymbol, knownFixtures: Set<string>): string[] {
-  const source = sym.source ?? "";
   const sig = sym.signature ?? "";
 
   // Extract parameter names from the function signature

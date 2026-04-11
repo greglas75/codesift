@@ -55,21 +55,22 @@ export async function getModelGraph(
 
   const filePattern = options?.file_pattern;
 
-  // Find model classes — Python classes that look like ORM models
+  // Find model classes — Python classes that look like ORM models.
+  // Strict detection: must have ORM-specific field patterns in source,
+  // not just a generic base class name like "Base" (which Flask uses).
   const modelSymbols = index.symbols.filter((s) => {
     if (s.kind !== "class") return false;
     if (!s.file.endsWith(".py")) return false;
     if (filePattern && !s.file.includes(filePattern)) return false;
-    // Check extends for ORM base classes
-    const bases = s.extends ?? [];
-    const modelBases = [
-      "Model", "models.Model", "Base", "DeclarativeBase",
-      "db.Model", "SQLModel", "BaseModel",
-    ];
-    return bases.some((b) => modelBases.some((mb) => b.includes(mb)))
-      || (s.source ?? "").includes("models.Model")
-      || (s.source ?? "").includes("= Column(")
-      || (s.source ?? "").includes("= relationship(");
+    const source = s.source ?? "";
+    // Strong Django signals: explicit models.Model import + Field types
+    const isDjangoModel = source.includes("models.Model")
+      || /models\.(CharField|IntegerField|ForeignKey|ManyToManyField|OneToOneField|DateTimeField|BooleanField|TextField)/.test(source);
+    // Strong SQLAlchemy signals: Column(Type) declaration or relationship()
+    const isSQLAlchemy = /=\s*Column\s*\(/.test(source)
+      || /=\s*relationship\s*\(/.test(source)
+      || /__tablename__\s*=/.test(source);
+    return isDjangoModel || isSQLAlchemy;
   });
 
   const models: ModelNode[] = [];
