@@ -5,6 +5,7 @@
 
 import type { CodeSymbol } from "../types.js";
 import { getCodeIndex } from "./index-tools.js";
+import { searchText } from "./search-tools.js";
 
 // ── analyze_schema ────────────────────────────────────────
 
@@ -296,73 +297,47 @@ export async function traceQuery(
     ? { file: tableSym.file, line: tableSym.start_line, kind: tableSym.kind as "table" | "view" }
     : null;
 
-  // Search for references across all indexed files
-  const sql_references: SqlReference[] = [];
-
-  // Build a "boundary" regex that handles names with special chars (#, $, @, _).
-  // \b only works at word↔non-word transitions; for names starting/ending with
-  // non-word chars (like #__joomla_table) we need explicit anchors.
-  // Strategy: name must NOT be preceded/followed by an identifier char (a-z, 0-9, _, #, $).
+  // Delegate to ripgrep-backed searchText for the fast literal scan, then
+  // post-filter in JS with an identifier-char boundary regex. Ripgrep doesn't
+  // support JS-style lookbehind, and \b fails on names starting with # or $.
   const IDENT_CHAR = "[a-zA-Z0-9_#$@]";
   const escaped = escapeRegex(tableName);
-  // Use lookbehind/lookahead negation. This handles `users`, `#__users`, `wp_users`, `tbl@users`.
-  const tableRegex = new RegExp(
+  const boundaryRegex = new RegExp(
     `(?<!${IDENT_CHAR})${escaped}(?!${IDENT_CHAR})`,
-    "gi",
+    "i",
   );
 
-  // Fast literal-substring prefilter (much faster than regex test on every line)
-  const literalNeedle = tableName.toLowerCase();
+  // Fetch a wider window so post-filter losses don't silently cap results.
+  const rgMatches = await searchText(repo, tableName, {
+    regex: false,
+    max_results: Math.max(maxRefs * 3, 500),
+    file_pattern: options.file_pattern,
+    context_lines: 0,
+  });
 
+  const sql_references: SqlReference[] = [];
+  let kept = 0;
   let truncated = false;
 
-  // Pre-build file→symbols map (O(n) instead of O(files*symbols))
-  const symbolsByFile = new Map<string, CodeSymbol[]>();
-  for (const sym of index.symbols) {
-    if (!sym.source) continue;
-    const arr = symbolsByFile.get(sym.file);
-    if (arr) arr.push(sym);
-    else symbolsByFile.set(sym.file, [sym]);
-  }
+  for (const m of rgMatches) {
+    const text = m.content ?? "";
+    if (!boundaryRegex.test(text)) continue;
 
-  for (const fileEntry of index.files) {
-    if (options.file_pattern && !fileEntry.path.includes(options.file_pattern)) continue;
+    // Skip the definition line itself
+    if (tableSym && m.file === tableSym.file && m.line === tableSym.start_line) continue;
 
-    const fileSymbols = symbolsByFile.get(fileEntry.path) ?? [];
-    for (const sym of fileSymbols) {
-      if (!sym.source) continue;
+    sql_references.push({
+      file: m.file,
+      line: m.line,
+      context: text.trim().slice(0, 120),
+      type: classifyReference(text),
+    });
+    kept++;
 
-      // Fast prefilter: skip whole symbol if name not present at all
-      if (!sym.source.toLowerCase().includes(literalNeedle)) continue;
-
-      const sourceLines = sym.source.split("\n");
-      for (let lineIdx = 0; lineIdx < sourceLines.length; lineIdx++) {
-        const line = sourceLines[lineIdx]!;
-        // Per-line literal check first (faster than regex)
-        if (!line.toLowerCase().includes(literalNeedle)) continue;
-        if (tableRegex.test(line)) {
-          tableRegex.lastIndex = 0;
-          // Don't include the definition itself as a reference
-          const absLine = sym.start_line + lineIdx;
-          if (sym === tableSym && lineIdx === 0) continue;
-
-          const refType = classifyReference(line);
-          sql_references.push({
-            file: sym.file,
-            line: absLine,
-            context: line.trim().slice(0, 120),
-            type: refType,
-          });
-
-          if (sql_references.length >= maxRefs) {
-            truncated = true;
-            break;
-          }
-        }
-      }
-      if (truncated) break;
+    if (kept >= maxRefs) {
+      truncated = true;
+      break;
     }
-    if (truncated) break;
   }
 
   const warnings: string[] = [];
