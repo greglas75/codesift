@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
@@ -32,11 +34,11 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   // --- React anti-patterns (Wave 2) ---
   "hook-in-condition": {
-    regex: /\b(?:if|for|while|switch)\s*\([^)]*\)\s*\{[^}]*\buse[A-Z]\w*\s*\(/,
+    regex: /\b(?:if|for|while|switch)\s*\([^)]*\)\s*\{[\s\S]{0,500}?\buse[A-Z]\w*\s*\(/,
     description: "React hook called inside if/for/while/switch — violates Rule of Hooks",
   },
   "useEffect-async": {
-    regex: /useEffect\s*\(\s*async\s/,
+    regex: /useEffect\s*\(\s*async\s+(?:function\b|\(|[a-z_$])/,
     description: "async function directly in useEffect — use inner async wrapper (CQ22)",
   },
   "useEffect-object-dep": {
@@ -77,7 +79,7 @@ export const BUILTIN_PATTERNS: Record<string, {
     description: "Numeric variable used with && in JSX — renders '0' on screen when falsy. Use ternary or Boolean() (React gotcha)",
   },
   "nested-component-def": {
-    regex: /(?:function|const)\s+[A-Z]\w*\s*(?:=\s*(?:\([^)]*\)\s*=>|\(\)\s*=>)|(?:\([^)]*\)\s*\{))[\s\S]{0,2000}?(?:function|const)\s+[A-Z]\w*\s*(?:=\s*\(|[\s\S]{0,50}?return\s*(?:<|\())/,
+    regex: /(?:function\s+[A-Z]\w*\s*\([^)]*\)\s*\{|const\s+[A-Z]\w*\s*=\s*(?:\([^)]*\)|[\w$]*)\s*=>\s*\{)[\s\S]{0,1500}?\n\s{2,}(?:function\s+[A-Z]\w*\s*\(|const\s+[A-Z]\w*\s*=\s*\()/,
     description: "Component defined inside another component — remounts on every parent render, loses all state. Hoist to module level.",
   },
   "usecallback-no-deps": {
@@ -272,6 +274,36 @@ export const BUILTIN_PATTERNS: Record<string, {
     regex: /export\s+type\s+\w+\s*=\s*typeof\s+app\b/,
     description: "export type X = typeof app — slow RPC pattern (Issue #3869, 8-min CI builds). Use typeof routeGroup instead",
   },
+
+  // --- Database / ORM anti-patterns (db-audit feedback) ---
+  "unsafe-raw-sql": {
+    regex: /(?:\$queryRawUnsafe|\$executeRawUnsafe|knex\.raw|sequelize\.query|db\.raw)\s*\(\s*[`"'][^`"']*\$\{/,
+    description: "Raw SQL with template-string interpolation — SQL injection risk. Use parameterized $queryRaw`...` or query builder. Covers Prisma/Knex/Sequelize/Drizzle.",
+  },
+  "transaction-external-io": {
+    regex: /\$transaction\s*\(\s*async\s*\([^)]*\)\s*=>\s*\{[\s\S]{0,2000}?\b(?:fetch|axios|http|stripe|sendgrid|twilio|sendEmail|publishEvent|enqueue)\s*[.(]/,
+    description: "External I/O (fetch/HTTP/email/queue) inside Prisma $transaction callback — long-running transactions hold locks. Move I/O after commit.",
+  },
+  "migration-create-index-no-concurrently": {
+    regex: /CREATE\s+(?:UNIQUE\s+)?INDEX(?!\s+CONCURRENTLY)/i,
+    description: "CREATE INDEX without CONCURRENTLY — locks the table during build. Use CREATE INDEX CONCURRENTLY in PostgreSQL migrations.",
+    fileIncludePattern: /\/migrations?\/.*\.sql$/,
+  },
+  "migration-drop-column": {
+    regex: /\bALTER\s+TABLE[\s\S]{0,200}\bDROP\s+COLUMN\b/i,
+    description: "DROP COLUMN in migration — destructive, breaks rolling deploys. Use multi-step deprecation: stop writes → backfill → drop in next release.",
+    fileIncludePattern: /\/migrations?\/.*\.sql$/,
+  },
+  "migration-alter-column-type": {
+    regex: /\bALTER\s+TABLE[\s\S]{0,200}\bALTER\s+COLUMN[\s\S]{0,200}\bTYPE\b/i,
+    description: "ALTER COLUMN TYPE in migration — full table rewrite, locks table. Use ADD COLUMN + backfill + DROP COLUMN in separate releases.",
+    fileIncludePattern: /\/migrations?\/.*\.sql$/,
+  },
+  "migration-not-null-no-default": {
+    regex: /\bADD\s+COLUMN\b[\s\S]{0,200}\bNOT\s+NULL\b(?![\s\S]{0,100}\bDEFAULT\b)/i,
+    description: "ADD COLUMN NOT NULL without DEFAULT — fails on existing rows. Add as nullable first, backfill, then add NOT NULL constraint.",
+    fileIncludePattern: /\/migrations?\/.*\.sql$/,
+  },
 };
 
 /**
@@ -346,6 +378,45 @@ export async function searchPatterns(
         matched_pattern: patternName,
         context: matchedText.trim().slice(0, 200),
       });
+    }
+  }
+
+  // File-level scanning fallback for patterns targeting non-source files
+  // (e.g. SQL migrations, .env files). Triggered when fileIncludePattern is set.
+  // This iterates index.files and reads them directly — needed because such
+  // files have no parsed symbols.
+  if (fileIncludePattern) {
+    for (const fileEntry of index.files) {
+      if (matches.length >= maxResults) break;
+      if (!fileIncludePattern.test(fileEntry.path)) continue;
+      if (filePattern && !fileEntry.path.includes(filePattern)) continue;
+      if (fileExcludePattern && fileExcludePattern.test(fileEntry.path)) continue;
+
+      // Skip files that already had symbol matches above (avoid duplicates)
+      if (matches.some((m) => m.file === fileEntry.path)) continue;
+
+      let content: string;
+      try {
+        content = await readFile(join(index.root, fileEntry.path), "utf-8");
+      } catch {
+        continue;
+      }
+
+      scanned++;
+      const match = regex.exec(content);
+      if (match) {
+        const linesBefore = content.slice(0, match.index).split("\n").length;
+        const matchedText = match[0].split("\n")[0]!;
+        matches.push({
+          name: fileEntry.path.split("/").pop() ?? fileEntry.path,
+          kind: "function" as SymbolKind, // file-level match has no symbol kind
+          file: fileEntry.path,
+          start_line: linesBefore,
+          end_line: linesBefore,
+          matched_pattern: patternName,
+          context: matchedText.trim().slice(0, 200),
+        });
+      }
     }
   }
 

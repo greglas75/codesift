@@ -57,6 +57,29 @@ describe("pattern-tools — React anti-patterns", () => {
 }`;
       expect(regex.test(source)).toBe(false);
     });
+
+    it("matches useState inside multiline if block (Bug #2)", () => {
+      const source = `function Foo() {
+  if (condition) {
+    const [x, setX] = useState(0);
+    return null;
+  }
+}`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("ReDoS guard: completes within 50ms on adversarial input", () => {
+      // 500 if-prefixes with no matching hook — pathological case
+      const source = "function Foo() {\n" +
+        Array.from({ length: 500 }, () => "  if (x) {\n").join("") +
+        "  const z = 1;\n" +
+        Array.from({ length: 500 }, () => "  }\n").join("") +
+        "}\n";
+      const start = performance.now();
+      regex.test(source);
+      const elapsed = performance.now() - start;
+      expect(elapsed).toBeLessThan(50);
+    });
   });
 
   describe("useEffect-async", () => {
@@ -73,6 +96,21 @@ describe("pattern-tools — React anti-patterns", () => {
   load();
 }, []);`;
       expect(regex.test(source)).toBe(false);
+    });
+
+    it("matches async function expression in useEffect (Bug #3)", () => {
+      const source = `useEffect(async function loadData() { await fetch(); }, []);`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches multiline async useEffect (Bug #3)", () => {
+      const source = `useEffect(
+  async () => {
+    await fetch();
+  },
+  [],
+);`;
+      expect(regex.test(source)).toBe(true);
     });
   });
 
@@ -243,6 +281,24 @@ Button.displayName = 'Button';`;
   return <InnerComponent/>;
 }`;
       expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match top-level function component (Bug #1 false positive)", () => {
+      const source = `function VirtualizedTable({ items }) {
+  return <div>{items.length}</div>;
+}`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match two consecutive top-level components (Bug #1)", () => {
+      const source = `function FirstComponent() {
+  return <div>first</div>;
+}
+
+function SecondComponent() {
+  return <div>second</div>;
+}`;
+      expect(regex.test(source)).toBe(false);
     });
   });
 
@@ -655,6 +711,191 @@ class OtherSpec : FunSpec({ test("y") {} })`;
     it("does NOT match a non-Kotest Kotlin file", () => {
       const source = `class User(val name: String) { fun greet() = "Hi $name" }`;
       expect(regex.test(source)).toBe(false);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DB / ORM anti-patterns (db-audit feedback)
+// ---------------------------------------------------------------------------
+
+describe("pattern-tools — DB / ORM anti-patterns", () => {
+  describe("unsafe-raw-sql", () => {
+    const regex = BUILTIN_PATTERNS["unsafe-raw-sql"]!.regex;
+
+    it("matches Prisma $queryRawUnsafe with template interpolation", () => {
+      const source = "const users = await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE id = ${userId}`);";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches knex.raw with interpolation", () => {
+      const source = "knex.raw(`SELECT ${col} FROM users`);";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches sequelize.query with interpolation", () => {
+      const source = "sequelize.query(`SELECT * FROM ${table}`);";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match parameterized $queryRaw", () => {
+      const source = "await prisma.$queryRaw`SELECT * FROM users WHERE id = ${userId}`;";
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match $queryRawUnsafe with no interpolation", () => {
+      const source = "await prisma.$queryRawUnsafe('SELECT * FROM users');";
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("transaction-external-io", () => {
+    const regex = BUILTIN_PATTERNS["transaction-external-io"]!.regex;
+
+    it("matches fetch inside $transaction callback", () => {
+      const source = `await prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({ data });
+        await fetch("https://api.example.com/notify", { method: "POST" });
+        return user;
+      });`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches stripe call inside transaction", () => {
+      const source = `prisma.$transaction(async (tx) => {
+        await tx.order.create({ data });
+        await stripe.charges.create({ amount: 100 });
+      });`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches sendEmail inside transaction", () => {
+      const source = `await db.$transaction(async (trx) => {
+        await trx.user.update({ where: { id }, data });
+        await sendEmail({ to: user.email, subject: "Welcome" });
+      });`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match transaction with only DB calls", () => {
+      const source = `await prisma.$transaction(async (tx) => {
+        await tx.user.create({ data: a });
+        await tx.account.create({ data: b });
+      });`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match fetch outside transaction", () => {
+      const source = `await prisma.$transaction([
+        prisma.user.create({ data }),
+        prisma.account.create({ data: b }),
+      ]);
+      await fetch("https://api.example.com/notify");`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("migration-create-index-no-concurrently", () => {
+    const regex = BUILTIN_PATTERNS["migration-create-index-no-concurrently"]!.regex;
+
+    it("matches CREATE INDEX without CONCURRENTLY", () => {
+      const source = "CREATE INDEX idx_users_email ON users(email);";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches CREATE UNIQUE INDEX without CONCURRENTLY", () => {
+      const source = "CREATE UNIQUE INDEX idx_users_email ON users(email);";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match CREATE INDEX CONCURRENTLY", () => {
+      const source = "CREATE INDEX CONCURRENTLY idx_users_email ON users(email);";
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match CREATE UNIQUE INDEX CONCURRENTLY", () => {
+      const source = "CREATE UNIQUE INDEX CONCURRENTLY idx_users_email ON users(email);";
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("has fileIncludePattern restricting to migration .sql files", () => {
+      const meta = BUILTIN_PATTERNS["migration-create-index-no-concurrently"]!;
+      expect(meta.fileIncludePattern).toBeDefined();
+      expect(meta.fileIncludePattern!.test("prisma/migrations/20240101_init/migration.sql")).toBe(true);
+      expect(meta.fileIncludePattern!.test("src/users.ts")).toBe(false);
+    });
+  });
+
+  describe("migration-drop-column", () => {
+    const regex = BUILTIN_PATTERNS["migration-drop-column"]!.regex;
+
+    it("matches ALTER TABLE ... DROP COLUMN", () => {
+      const source = "ALTER TABLE users DROP COLUMN deprecated_field;";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match CREATE TABLE", () => {
+      const source = "CREATE TABLE users (id SERIAL PRIMARY KEY);";
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("migration-alter-column-type", () => {
+    const regex = BUILTIN_PATTERNS["migration-alter-column-type"]!.regex;
+
+    it("matches ALTER COLUMN ... TYPE", () => {
+      const source = "ALTER TABLE users ALTER COLUMN age TYPE bigint;";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match ALTER COLUMN SET DEFAULT", () => {
+      const source = "ALTER TABLE users ALTER COLUMN age SET DEFAULT 0;";
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("migration-not-null-no-default", () => {
+    const regex = BUILTIN_PATTERNS["migration-not-null-no-default"]!.regex;
+
+    it("matches ADD COLUMN NOT NULL without DEFAULT", () => {
+      const source = "ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL;";
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match ADD COLUMN NOT NULL DEFAULT ...", () => {
+      const source = "ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL DEFAULT 'unknown';";
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match nullable ADD COLUMN", () => {
+      const source = "ALTER TABLE users ADD COLUMN email VARCHAR(255);";
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  // --- Integration: file-level scanning for migration patterns ---
+
+  describe("searchPatterns file-level scan for migrations", () => {
+    it("scans .sql migration files even though they have no symbols", async () => {
+      const repo = await createIndexedFixture({
+        "prisma/migrations/20240101_init/migration.sql":
+          "CREATE INDEX idx_users_email ON users(email);",
+        "src/app.ts": "export const x = 1;",
+      });
+
+      const result = await searchPatterns(repo, "migration-create-index-no-concurrently");
+      expect(result.matches.length).toBeGreaterThanOrEqual(1);
+      expect(result.matches[0]!.file).toContain("migration.sql");
+    });
+
+    it("does NOT match CONCURRENTLY in migration files", async () => {
+      const repo = await createIndexedFixture({
+        "prisma/migrations/20240101_init/migration.sql":
+          "CREATE INDEX CONCURRENTLY idx_users_email ON users(email);",
+      });
+
+      const result = await searchPatterns(repo, "migration-create-index-no-concurrently");
+      expect(result.matches).toHaveLength(0);
     });
   });
 });
