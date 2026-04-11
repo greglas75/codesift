@@ -175,6 +175,8 @@ export interface InlineHandlerAnalysis {
   context_access: ContextAccess[];
   validators_inline: string[];
   has_try_catch: boolean;
+  /** True when the analyzer hit MAX_WALK_DEPTH and the analysis is incomplete. */
+  truncated: boolean;
 }
 
 export interface ResponseEmission {

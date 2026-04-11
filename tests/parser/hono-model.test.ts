@@ -179,6 +179,7 @@ describe("Phase 2 extensions — HonoRoute.inline_analysis", () => {
       context_access: contextAccess,
       validators_inline: ["zValidator"],
       has_try_catch: true,
+      truncated: false,
     };
     const route: HonoRoute = {
       method: "GET",
