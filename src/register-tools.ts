@@ -48,6 +48,7 @@ import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.
 import { astroRouteMap } from "./tools/astro-routes.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
 import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
+import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -64,8 +65,8 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap } from "./formatters.js";
-import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts } from "./formatters-shortening.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit } from "./formatters.js";
+import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -512,6 +513,7 @@ export const CORE_TOOL_NAMES = new Set([
   "analyze_hono_app",        // core: meta-tool, first call for any Hono project
   // --- Next.js tools ---
   "nextjs_route_map",
+  "nextjs_metadata_audit",
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -2605,6 +2607,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return formatNextjsRouteMap(result);
     },
   },
+  {
+    name: "nextjs_metadata_audit",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs seo metadata title description og image audit canonical twitter json-ld",
+    description: "Audit Next.js page metadata for SEO completeness with per-route scoring. Walks app/page.tsx files, extracts title/description/openGraph/canonical/twitter/JSON-LD via tree-sitter, scores each route 0-100 with a weighted formula, and aggregates a per-grade distribution + top issue list.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      max_routes: z.number().int().positive().optional().describe("Max routes to process (default 1000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsMetadataAudit>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.max_routes != null) opts.max_routes = args.max_routes as number;
+      const result = await nextjsMetadataAudit(args.repo as string ?? "", opts);
+      return formatNextjsMetadataAudit(result);
+    },
+  },
 
   // ── SQL analysis tools (hidden/discoverable) ─────────────
   {
@@ -2916,6 +2936,7 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
   registerShortener("analyze_hotspots", { compact: formatHotspotsCompact, counts: formatHotspotsCounts });
   registerShortener("trace_route", { compact: formatTraceRouteCompact, counts: formatTraceRouteCounts });
   registerShortener("nextjs_route_map", { compact: formatNextjsRouteMapCompact, counts: formatNextjsRouteMapCounts });
+  registerShortener("nextjs_metadata_audit", { compact: formatNextjsMetadataAuditCompact, counts: formatNextjsMetadataAuditCounts });
   registerShortener("get_session_context", {
     compact: (text: string) => {
       try {

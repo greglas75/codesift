@@ -788,6 +788,7 @@ export function formatNextjsComponents(result: NextjsComponentsResult): string {
 // ---------------------------------------------------------------------------
 
 import type { NextjsRouteMapResult } from "./tools/nextjs-route-tools.js";
+import type { NextjsMetadataAuditResult } from "./tools/nextjs-metadata-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -842,6 +843,54 @@ export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
 
   if (result.workspaces_scanned.length > 0) {
     lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatNextjsMetadataAudit(result: NextjsMetadataAuditResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS METADATA AUDIT");
+  lines.push("");
+  lines.push(
+    `Pages: ${result.total_pages} | excellent=${result.counts.excellent} good=${result.counts.good} needs_work=${result.counts.needs_work} poor=${result.counts.poor}`,
+  );
+  lines.push("");
+
+  // Header
+  lines.push("URL                              Score Grade        Missing Fields");
+  lines.push("──────────────────────────────── ───── ──────────── ────────────────");
+  for (const s of result.scores.slice(0, 100)) {
+    const url = s.url_path.padEnd(32).slice(0, 32);
+    const score = String(s.score).padStart(5);
+    const grade = s.grade.padEnd(12).slice(0, 12);
+    const missing = s.missing_fields.join(",").slice(0, 60);
+    lines.push(`${url} ${score} ${grade} ${missing}`);
+  }
+  if (result.scores.length > 100) {
+    lines.push(`... +${result.scores.length - 100} more`);
+  }
+  lines.push("");
+
+  if (result.top_issues.length > 0) {
+    lines.push(`─── Top Issues (${result.top_issues.length}) ───`);
+    for (const issue of result.top_issues) {
+      lines.push(`  ${issue}`);
+    }
+    lines.push("");
+  }
+
+  if (result.parse_failures.length > 0) {
+    lines.push(`Parse failures: ${result.parse_failures.length}`);
+  }
+  if (result.scan_errors.length > 0) {
+    lines.push(`Scan errors: ${result.scan_errors.length}`);
+  }
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
   }
 
   return lines.join("\n");
