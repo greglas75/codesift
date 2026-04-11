@@ -276,3 +276,144 @@ export function formatFrameworkAuditCounts(raw: unknown): string {
   const data = raw as FrameworkAuditRaw;
   return `Score ${data.summary.overall_score}/100 (${data.summary.grade}), ${Object.keys(data.summary.dimensions).length} dimensions, ${data.tool_errors.length} errors`;
 }
+
+// ---------------------------------------------------------------------------
+// Next.js server actions audit (T2)
+// ---------------------------------------------------------------------------
+
+interface ServerActionsAuditRaw {
+  total: number;
+  actions: Array<{
+    name: string;
+    file: string;
+    line: number;
+    score: number;
+    grade: "poor" | "needs_work" | "good" | "excellent";
+    top_missing: string[];
+  }>;
+  counts: { excellent: number; good: number; needs_work: number; poor: number };
+  violations: string[];
+  parse_failures: string[];
+  scan_errors: string[];
+}
+
+const MAX_VIOLATIONS_COMPACT = 5;
+
+export function formatServerActionsAuditCompact(raw: unknown): string {
+  const data = raw as ServerActionsAuditRaw;
+  const lines: string[] = [];
+  lines.push(
+    `${data.total} actions | excellent=${data.counts.excellent} good=${data.counts.good} needs_work=${data.counts.needs_work} poor=${data.counts.poor}`,
+  );
+
+  // Show top violations
+  if (data.violations.length > 0) {
+    lines.push(`Top violations: ${data.violations.slice(0, MAX_VIOLATIONS_COMPACT).join(" | ")}`);
+  }
+
+  // Show top 5 worst-scoring actions
+  const worst = [...data.actions].sort((a, b) => a.score - b.score).slice(0, 5);
+  for (const a of worst) {
+    lines.push(`  ${a.file}:${a.line} ${a.name} (${a.score}/${a.grade})`);
+  }
+
+  if (data.parse_failures.length > 0) {
+    lines.push(`parse failures: ${data.parse_failures.length}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatServerActionsAuditCounts(raw: unknown): string {
+  const data = raw as ServerActionsAuditRaw;
+  const highSeverity = data.counts.poor + data.counts.needs_work;
+  return `${data.total} actions audited, ${data.violations.length} violations (${highSeverity} high severity)`;
+}
+
+// ---------------------------------------------------------------------------
+// Next.js API contract (T3)
+// ---------------------------------------------------------------------------
+
+interface ApiContractRaw {
+  handlers: Array<{
+    method: string;
+    path: string;
+    completeness: number;
+    file: string;
+  }>;
+  total: number;
+  completeness_score: number;
+  parse_failures: string[];
+  scan_errors: string[];
+}
+
+export function formatApiContractCompact(raw: unknown): string {
+  const data = raw as ApiContractRaw;
+  const lines: string[] = [];
+  lines.push(`${data.total} endpoints | completeness ${data.completeness_score}%`);
+
+  // Count handlers with resolved Zod schemas (completeness >= 0.5 means request_schema resolved)
+  const withSchemas = data.handlers.filter((h) => h.completeness >= 0.5).length;
+  lines.push(`With Zod schemas: ${withSchemas}/${data.total}`);
+
+  // Show method/path/completeness per handler (no body schemas or response shapes)
+  for (const h of data.handlers) {
+    lines.push(`  ${h.method} ${h.path} (${Math.round(h.completeness * 100)}%) ${h.file}`);
+  }
+
+  if (data.parse_failures.length > 0) {
+    lines.push(`parse failures: ${data.parse_failures.length}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatApiContractCounts(raw: unknown): string {
+  const data = raw as ApiContractRaw;
+  const withSchemas = data.handlers.filter((h) => h.completeness >= 0.5).length;
+  return `${data.total} endpoints, ${withSchemas} with Zod schemas, completeness ${data.completeness_score}%`;
+}
+
+// ---------------------------------------------------------------------------
+// Next.js boundary analyzer (T4)
+// ---------------------------------------------------------------------------
+
+interface BoundaryAnalyzerRaw {
+  entries: Array<{
+    rank: number;
+    path: string;
+    signals: { loc: number; import_count: number; dynamic_import_count: number; third_party_imports: string[] };
+    score: number;
+  }>;
+  client_count: number;
+  total_client_loc: number;
+  largest_offender: { path: string; score: number; signals: { loc: number } } | null;
+  parse_failures: string[];
+  scan_errors: string[];
+}
+
+const MAX_BOUNDARY_COMPACT = 10;
+
+export function formatBoundaryAnalyzerCompact(raw: unknown): string {
+  const data = raw as BoundaryAnalyzerRaw;
+  const lines: string[] = [];
+  lines.push(`${data.client_count} client components | total LOC ${data.total_client_loc}`);
+
+  const top = data.entries.slice(0, MAX_BOUNDARY_COMPACT);
+  const rows = top.map((e) => [
+    String(e.rank),
+    String(e.score),
+    String(e.signals.loc),
+    e.path,
+  ]);
+  lines.push(formatTable(["RANK", "SCORE", "LOC", "PATH"], rows));
+
+  if (data.entries.length > MAX_BOUNDARY_COMPACT) {
+    lines.push(`... +${data.entries.length - MAX_BOUNDARY_COMPACT} more`);
+  }
+  return lines.join("\n");
+}
+
+export function formatBoundaryAnalyzerCounts(raw: unknown): string {
+  const data = raw as BoundaryAnalyzerRaw;
+  const topName = data.largest_offender?.path ?? "none";
+  return `${data.client_count} client components, total LOC ${data.total_client_loc}, top offender: ${topName}`;
+}

@@ -94,7 +94,7 @@ import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, f
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
 import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow, formatNextjsMiddlewareCoverage, formatFrameworkAudit } from "./formatters.js";
-import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
+import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts, formatServerActionsAuditCompact, formatServerActionsAuditCounts, formatApiContractCompact, formatApiContractCounts, formatBoundaryAnalyzerCompact, formatBoundaryAnalyzerCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -3637,6 +3637,31 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "analyze_schema_complexity",
+    category: "analysis" as ToolCategory,
+    searchHint: "schema complexity god table column count FK index score refactor",
+    description: "Per-table complexity score based on column count, FK relationships, and indexes. Identifies god tables needing refactoring. Sorted by score descending.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Scope to files matching pattern"),
+      top_n: zNum().describe("Return top N most complex tables (default: 50)"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { analyzeSchemaComplexity } = await import("./tools/sql-tools.js");
+      const result = await analyzeSchemaComplexity(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        top_n: args.top_n as number | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Schema complexity: ${result.tables.length} tables`);
+      parts.push(`${"Table".padEnd(30)} ${"Cols".padStart(5)} ${"FKs".padStart(4)} ${"Idx".padStart(4)} ${"Score".padStart(7)}`);
+      for (const t of result.tables) {
+        parts.push(`  ${t.name.padEnd(28)} ${String(t.column_count).padStart(5)} ${String(t.fk_count).padStart(4)} ${String(t.index_count).padStart(4)} ${t.score.toFixed(1).padStart(7)}`);
+      }
+      return parts.join("\n");
+    },
+  },
+  {
     name: "scan_dml_safety",
     category: "analysis" as ToolCategory,
     searchHint: "DML safety SQL DELETE UPDATE SELECT star WHERE clause unbounded dangerous query",
@@ -4083,6 +4108,9 @@ export function registerTools(
   registerShortener("nextjs_route_map", { compact: formatNextjsRouteMapCompact, counts: formatNextjsRouteMapCounts });
   registerShortener("nextjs_metadata_audit", { compact: formatNextjsMetadataAuditCompact, counts: formatNextjsMetadataAuditCounts });
   registerShortener("framework_audit", { compact: formatFrameworkAuditCompact, counts: formatFrameworkAuditCounts });
+  registerShortener("nextjs_audit_server_actions", { compact: formatServerActionsAuditCompact, counts: formatServerActionsAuditCounts });
+  registerShortener("nextjs_api_contract", { compact: formatApiContractCompact, counts: formatApiContractCounts });
+  registerShortener("nextjs_boundary_analyzer", { compact: formatBoundaryAnalyzerCompact, counts: formatBoundaryAnalyzerCounts });
   registerShortener("get_session_context", {
     compact: (text: string) => {
       try {
