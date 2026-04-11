@@ -21,7 +21,7 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
-**141 MCP tools total** (46 core visible + 95 discoverable).
+**130 MCP tools total** (46 core visible + 84 discoverable).
 
 46 core tools appear in ListTools. Remaining 84 niche tools are discovered on demand:
 
