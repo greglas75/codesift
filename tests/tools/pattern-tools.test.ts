@@ -567,3 +567,94 @@ describe("listPatterns", () => {
     expect(patterns.length).toBeGreaterThanOrEqual(16); // 9 original + 7 nextjs
   });
 });
+
+describe("pattern-tools — Kotest anti-patterns", () => {
+  describe("kotest-missing-assertion", () => {
+    const regex = BUILTIN_PATTERNS["kotest-missing-assertion"]!.regex;
+
+    it("matches an empty test block", () => {
+      const source = `class UserSpec : FunSpec({
+    test("validates email") { }
+})`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches a test block with only println (no assertion)", () => {
+      const source = `class UserSpec : FunSpec({
+    test("validates email") {
+        val x = 5
+        println(x)
+    }
+})`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match a test block containing shouldBe", () => {
+      const source = `class UserSpec : FunSpec({
+    test("validates email") {
+        val x = 5
+        x shouldBe 5
+    }
+})`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match a test block containing shouldThrow", () => {
+      const source = `class UserSpec : FunSpec({
+    test("rejects") {
+        shouldThrow<IllegalArgumentException> { doThing() }
+    }
+})`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match a test block containing assertSoftly", () => {
+      const source = `class UserSpec : FunSpec({
+    test("multi") {
+        assertSoftly {
+            x shouldBe 1
+            y shouldBe 2
+        }
+    }
+})`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("kotest-mixed-styles", () => {
+    const regex = BUILTIN_PATTERNS["kotest-mixed-styles"]!.regex;
+
+    it("matches a file containing both FunSpec and DescribeSpec", () => {
+      const source = `class AppSpec : FunSpec({
+    test("first") { shouldBe true }
+})
+
+class UserSpec : DescribeSpec({
+    describe("user") { }
+})`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches a file containing both FunSpec and BehaviorSpec", () => {
+      const source = `class AppSpec : FunSpec({ test("x") {} })
+class OrderSpec : BehaviorSpec({ given("y") {} })`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match a file with only FunSpec classes", () => {
+      const source = `class AppSpec : FunSpec({ test("x") {} })
+class OtherSpec : FunSpec({ test("y") {} })`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match a file with only DescribeSpec", () => {
+      const source = `class AppSpec : DescribeSpec({ describe("x") { it("y") {} } })`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match a non-Kotest Kotlin file", () => {
+      const source = `class User(val name: String) { fun greet() = "Hi $name" }`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+});

@@ -141,6 +141,15 @@ export const BUILTIN_PATTERNS: Record<string, {
     regex: /(?:companion\s+object|object\s+\w+)\s*\{[\s\S]*?\bvar\s+/,
     description: "Mutable var inside object/companion — thread-unsafe shared state (Kotlin)",
   },
+  // Kotest anti-patterns — require include_tests=true to surface
+  "kotest-missing-assertion": {
+    regex: /\btest\s*\(\s*"[^"]*"\s*\)\s*\{(?:(?!\bshould(?:Be|NotBe|Throw|Contain|Match|HaveSize)\b|\bshould\s*\{|\bshouldBe\b|\bassertSoftly\b|\bassertThat\b|\bassertTrue\b|\bassertFalse\b|\bassertEquals\b|\bexpect\s*\(|\bverify\s*\()[\s\S])*?\}/,
+    description: "Kotest test block without any shouldBe/shouldThrow/assertSoftly/assertEquals — missing assertion",
+  },
+  "kotest-mixed-styles": {
+    regex: /(?:\bFunSpec\s*\([\s\S]*?(?:\bDescribeSpec|\bStringSpec|\bBehaviorSpec|\bShouldSpec|\bWordSpec|\bFeatureSpec|\bExpectSpec)\s*\()|(?:(?:\bDescribeSpec|\bStringSpec|\bBehaviorSpec|\bShouldSpec|\bWordSpec|\bFeatureSpec|\bExpectSpec)\s*\([\s\S]*?\bFunSpec\s*\()/,
+    description: "Multiple Kotest spec styles (e.g. FunSpec + DescribeSpec) in same file — inconsistent test layout",
+  },
   // PHP anti-patterns
   "sql-injection-php": {
     regex: /\$_(?:GET|POST|REQUEST)\[[^\]]+\][\s\S]{0,200}?(?:->query\(|->execute\(|createCommand\()/,
