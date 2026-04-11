@@ -792,6 +792,7 @@ import type { NextjsMetadataAuditResult } from "./tools/nextjs-metadata-tools.js
 import type { ServerActionsAuditResult } from "./tools/nextjs-security-tools.js";
 import type { ApiContractResult } from "./tools/nextjs-api-contract-tools.js";
 import type { NextjsBoundaryResult } from "./tools/nextjs-boundary-tools.js";
+import type { LinkIntegrityResult } from "./tools/nextjs-link-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -995,6 +996,36 @@ export function formatNextjsBoundaryAnalyzer(result: NextjsBoundaryResult): stri
     const imports = String(e.signals.import_count).padStart(7);
     const score = String(e.score).padStart(5);
     lines.push(`${rank} ${path} ${loc} ${imports} ${score}`);
+  }
+  lines.push("");
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsLinkIntegrity(result: LinkIntegrityResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS LINK INTEGRITY");
+  lines.push("");
+  lines.push(
+    `Refs: ${result.total_refs} | resolved=${result.resolved_count} broken=${result.broken_count} unresolved=${result.unresolved_count}`,
+  );
+  lines.push("");
+  lines.push("Status     Href                                 Location");
+  lines.push("────────── ──────────────────────────────────── ───────────────────────");
+  for (const b of result.broken.slice(0, 50)) {
+    const href = b.href.padEnd(36).slice(0, 36);
+    const loc = `${b.file}:${b.line}`;
+    lines.push(`broken     ${href} ${loc}`);
+  }
+  for (const u of result.unresolved.slice(0, 50)) {
+    const raw = u.raw.padEnd(36).slice(0, 36);
+    const loc = `${u.file}:${u.line}`;
+    lines.push(`unresolved ${raw} ${loc}`);
   }
   lines.push("");
   if (result.workspaces_scanned.length > 0) {

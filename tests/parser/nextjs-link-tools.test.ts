@@ -108,6 +108,30 @@ describe("nextjsLinkIntegrity orchestrator", () => {
     }
   });
 
+  it("matches pre-authored expected.json (fixture)", async () => {
+    const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-links");
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-links",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+    const expectedRaw = await readFile(resolve(fixtureRoot, "expected.json"), "utf8");
+    const expected = JSON.parse(expectedRaw) as {
+      total_refs: number;
+      resolved_count: number;
+      broken_count: number;
+      unresolved_count: number;
+    };
+    const result = await nextjsLinkIntegrity("nextjs-links");
+    expect(result.total_refs).toBe(expected.total_refs);
+    expect(result.broken_count).toBe(expected.broken_count);
+    expect(result.unresolved_count).toBe(expected.unresolved_count);
+    expect(result.resolved_count).toBe(expected.resolved_count);
+  });
+
   it("classifies router.push to existing route as resolved", async () => {
     const root = await makeRepo({
       "next.config.js": "module.exports = {};\n",
