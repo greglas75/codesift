@@ -40,6 +40,9 @@ import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { findExtensionFunctions, analyzeSealedHierarchy } from "./tools/kotlin-tools.js";
+import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
+import { astroRouteMap } from "./tools/astro-routes.js";
+import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
@@ -258,10 +261,11 @@ export type ToolCategory =
   | "security"
   | "reporting"
   | "cross-repo"
+  | "navigation"
   | "meta";
 
 /** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
-const CORE_TOOL_NAMES = new Set([
+export const CORE_TOOL_NAMES = new Set([
   // --- Top 10 by usage (91% of calls) ---
   "search_text",             // #1: 1841 calls
   "codebase_retrieval",      // #2: 574 calls
@@ -303,6 +307,11 @@ const CORE_TOOL_NAMES = new Set([
   "analyze_project",         // project profile
   "get_extractor_versions",  // cache invalidation
   "index_status",            // meta: check if repo is indexed
+  // --- Astro tools ---
+  "astro_analyze_islands",
+  "astro_hydration_audit",
+  "astro_route_map",
+  "astro_config_analyze",
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -1973,6 +1982,76 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         for (const h of result.optimization_hints) parts.push(`  → ${h}`);
       }
       return parts.join("\n");
+    },
+  },
+
+  // --- Astro tools ---
+  {
+    name: "astro_analyze_islands",
+    category: "analysis",
+    searchHint: "astro islands client hydration directives framework",
+    description: "Analyze Astro islands (client:* directives) in a repo. Finds all interactive components with hydration directives, lists server islands with fallback status, and optionally generates optimization recommendations.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      path_prefix: z.string().optional().describe("Only scan files under this path prefix"),
+      include_recommendations: z.boolean().default(true).describe("Include optimization recommendations (default: true)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof astroAnalyzeIslands>[0] = {};
+      if (args.repo != null) opts.repo = args.repo as string;
+      if (args.path_prefix != null) opts.path_prefix = args.path_prefix as string;
+      if (args.include_recommendations != null) opts.include_recommendations = args.include_recommendations as boolean;
+      return await astroAnalyzeIslands(opts);
+    },
+  },
+  {
+    name: "astro_hydration_audit",
+    category: "analysis",
+    searchHint: "astro hydration audit anti-patterns client load",
+    description: "Audit Astro hydration usage for anti-patterns such as client:load on heavy components, missing client directives, or suboptimal hydration strategies. Returns issues grouped by severity with a letter grade.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      severity: z.enum(["all", "warnings", "errors"]).default("all").describe("Filter issues by severity (default: all)"),
+      path_prefix: z.string().optional().describe("Only scan files under this path prefix"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof astroHydrationAudit>[0] = {};
+      if (args.repo != null) opts.repo = args.repo as string;
+      if (args.severity != null) opts.severity = args.severity as "all" | "warnings" | "errors";
+      if (args.path_prefix != null) opts.path_prefix = args.path_prefix as string;
+      return await astroHydrationAudit(opts);
+    },
+  },
+  {
+    name: "astro_route_map",
+    category: "navigation",
+    searchHint: "astro routes pages endpoints file-based routing",
+    description: "Map all Astro routes (pages + API endpoints) discovered from the file-based routing structure. Returns routes with type, dynamic params, and handler symbols. Supports json/tree/table output formats.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      include_endpoints: z.boolean().default(true).describe("Include API endpoint routes (default: true)"),
+      output_format: z.enum(["json", "tree", "table"]).default("json").describe("Output format: json | tree | table (default: json)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof astroRouteMap>[0] = {};
+      if (args.repo != null) opts.repo = args.repo as string;
+      if (args.include_endpoints != null) opts.include_endpoints = args.include_endpoints as boolean;
+      if (args.output_format != null) opts.output_format = args.output_format as "json" | "tree" | "table";
+      return await astroRouteMap(opts);
+    },
+  },
+  {
+    name: "astro_config_analyze",
+    category: "analysis",
+    searchHint: "astro config integrations adapter output mode",
+    description: "Analyze an Astro project's configuration file (astro.config.mjs/ts/js). Extracts output mode (static/server/hybrid), adapter, integrations, site URL, and base path. Identifies dynamic/unresolved config.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const index = await getCodeIndex(args.repo as string ?? "");
+      if (!index) throw new Error("Repository not found — run index_folder first");
+      return await astroConfigAnalyze({ project_root: index.root });
     },
   },
 ];
