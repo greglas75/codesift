@@ -7,6 +7,7 @@ import { loadConfig } from "../config.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { detectFrameworks, isFrameworkEntryPoint } from "../utils/framework-detect.js";
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
+import { REACT_STDLIB_HOOKS } from "./react-tools.js";
 import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
 const MAX_REFERENCES = 100;
@@ -616,17 +617,12 @@ export async function getContextBundle(
   return bundle;
 }
 
-const REACT_STDLIB_HOOKS_SET = new Set([
-  "useState", "useEffect", "useCallback", "useMemo", "useRef",
-  "useContext", "useReducer", "useLayoutEffect", "useImperativeHandle",
-  "useDebugValue", "useDeferredValue", "useTransition", "useId",
-  "useSyncExternalStore", "useInsertionEffect", "useOptimistic",
-  "useFormState", "useFormStatus", "use",
-]);
-
 /**
  * Build React-specific context for a component symbol:
  * hooks used, child/parent components via JSX, wrapper pattern.
+ *
+ * Uses REACT_STDLIB_HOOKS imported from react-tools.js as the single source
+ * of truth for stdlib hook detection (CQ14 — no duplication).
  */
 function buildReactContext(
   component: CodeSymbol,
@@ -640,7 +636,7 @@ function buildReactContext(
   let m: RegExpExecArray | null;
   while ((m = hookPattern.exec(source)) !== null) {
     const name = m[1]!;
-    hooksMap.set(name, REACT_STDLIB_HOOKS_SET.has(name));
+    hooksMap.set(name, REACT_STDLIB_HOOKS.has(name));
   }
   const hooks_used = [...hooksMap.entries()].map(([name, is_stdlib]) => ({ name, is_stdlib }));
 
@@ -666,11 +662,12 @@ function buildReactContext(
     )
     .map((s) => s.name);
 
-  // Detect wrapper pattern from source
+  // Detect wrapper pattern from source — supports TypeScript generics:
+  // forwardRef<HTMLDivElement, Props>(...), memo<Props>(...) (Item 9)
   let wrapper: "memo" | "forwardRef" | "lazy" | null = null;
-  if (/\b(?:React\.)?memo\s*\(/.test(source)) wrapper = "memo";
-  else if (/\b(?:React\.)?forwardRef\s*\(/.test(source)) wrapper = "forwardRef";
-  else if (/\b(?:React\.)?lazy\s*\(/.test(source)) wrapper = "lazy";
+  if (/\b(?:React\.)?memo\s*(?:<[^>]+>)?\s*\(/.test(source)) wrapper = "memo";
+  else if (/\b(?:React\.)?forwardRef\s*(?:<[^>]+>)?\s*\(/.test(source)) wrapper = "forwardRef";
+  else if (/\b(?:React\.)?lazy\s*(?:<[^>]+>)?\s*\(/.test(source)) wrapper = "lazy";
 
   // Extract props type from signature: (props: MyProps) or ({ a, b }: Props)
   let props_type: string | null = null;

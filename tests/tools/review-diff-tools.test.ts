@@ -787,14 +787,37 @@ describe("check adapters — bug-patterns, hotspots, complexity", () => {
     expect(result.status).toBe("warn");
   });
 
-  it("checkBugPatterns: calls searchPatterns once per BUILTIN_PATTERN", async () => {
+  it("checkBugPatterns: calls searchPatterns once per BUILTIN_PATTERN (excluding React-only when no .tsx changes)", async () => {
     mockedSearchPatterns.mockResolvedValue({ matches: [], pattern: "x", scanned_symbols: 0 });
 
-    const changedFiles = ["src/a.ts"];
+    const changedFiles = ["src/a.ts"];  // no .tsx → React patterns filtered
     await checkBugPatterns(makeFakeIndex(), changedFiles);
 
-    // There are 9 built-in patterns in pattern-tools.ts
+    // 9 mocked patterns minus 1 React-only (useEffect-no-cleanup) = 8
+    expect(mockedSearchPatterns).toHaveBeenCalledTimes(8);
+  });
+
+  it("checkBugPatterns: includes React patterns when .tsx file in diff (Item 12)", async () => {
+    mockedSearchPatterns.mockResolvedValue({ matches: [], pattern: "x", scanned_symbols: 0 });
+
+    const changedFiles = ["src/Foo.tsx"];  // React file → all patterns run
+    await checkBugPatterns(makeFakeIndex(), changedFiles);
+
+    // All 9 mocked patterns run when React files present
     expect(mockedSearchPatterns).toHaveBeenCalledTimes(9);
+  });
+
+  it("checkBugPatterns: skips React patterns for Python-only diff (Item 12 negative)", async () => {
+    mockedSearchPatterns.mockResolvedValue({ matches: [], pattern: "x", scanned_symbols: 0 });
+
+    const changedFiles = ["src/main.py", "src/utils.py"];  // Python only
+    await checkBugPatterns(makeFakeIndex(), changedFiles);
+
+    // useEffect-no-cleanup (the only React pattern in mocked list) skipped
+    expect(mockedSearchPatterns).toHaveBeenCalledTimes(8);
+    // Verify useEffect-no-cleanup specifically not called
+    const calls = mockedSearchPatterns.mock.calls.map((c) => c[1]);
+    expect(calls).not.toContain("useEffect-no-cleanup");
   });
 
   it("checkBugPatterns: deduplicates findings by file+line+matched_pattern", async () => {

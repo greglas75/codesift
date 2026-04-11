@@ -372,6 +372,24 @@ export async function checkDeadCode(
  * Bug-patterns check: run all BUILTIN_PATTERNS via searchPatterns, merge and
  * deduplicate findings across patterns.
  */
+/** Pattern names that only apply to React/JSX code — filtered out when no .tsx/.jsx changes (Item 12). */
+const REACT_ONLY_PATTERNS = new Set([
+  "hook-in-condition",
+  "useEffect-async",
+  "useEffect-no-cleanup",
+  "useEffect-object-dep",
+  "missing-display-name",
+  "index-as-key",
+  "inline-handler",
+  "conditional-render-hook",
+  "dangerously-set-html",
+  "direct-dom-access",
+  "unstable-default-value",
+  "jsx-falsy-and",
+  "nested-component-def",
+  "usecallback-no-deps",
+]);
+
 export async function checkBugPatterns(
   index: CodeIndex,
   changedFiles: string[],
@@ -384,8 +402,12 @@ export async function checkBugPatterns(
         ? changedFiles[0]!
         : `{${changedFiles.join(",")}}`;
 
-    // Get all built-in pattern names
-    const patterns = listPatterns().map((p) => p.name);
+    // React-aware filtering: only run React patterns when .tsx/.jsx files in diff (Item 12)
+    const hasReactChanges = changedFiles.some((f) => /\.(tsx|jsx)$/.test(f));
+    const allPatterns = listPatterns().map((p) => p.name);
+    const patterns = hasReactChanges
+      ? allPatterns
+      : allPatterns.filter((p) => !REACT_ONLY_PATTERNS.has(p));
 
     // Run all patterns in parallel
     const results = await Promise.all(

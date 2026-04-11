@@ -45,7 +45,16 @@ export interface AuditScanResult {
   };
 }
 
-const ALL_CHECKS = ["CQ8", "CQ11", "CQ13", "CQ14", "CQ17"];
+const ALL_CHECKS = ["CQ8", "CQ11", "CQ13", "CQ14", "CQ17", "REACT"];
+
+/** React patterns surfaced by the React audit gate (Item 11). */
+const REACT_AUDIT_PATTERNS = [
+  "hook-in-condition",
+  "useEffect-async",
+  "dangerously-set-html",
+  "index-as-key",
+  "nested-component-def",
+] as const;
 
 export async function auditScan(
   repo: string,
@@ -73,6 +82,9 @@ export async function auditScan(
   }
   if (checks.has("CQ17")) {
     tasks.push(runCQ17(repo, filePattern, includeTests));
+  }
+  if (checks.has("REACT")) {
+    tasks.push(runReactGate(repo, filePattern, includeTests));
   }
 
   const gates = await Promise.all(tasks);
@@ -258,4 +270,43 @@ async function runCQ17(repo: string, filePattern?: string, includeTests?: boolea
   } catch {
     return { gate: "CQ17", description: "Performance", tool_used: "search_patterns", findings: [] };
   }
+}
+
+// ---------------------------------------------------------------------------
+// REACT: React anti-patterns gate (Item 11)
+// ---------------------------------------------------------------------------
+
+async function runReactGate(
+  repo: string,
+  filePattern?: string,
+  includeTests?: boolean,
+): Promise<AuditGateResult> {
+  const findings: AuditFinding[] = [];
+  for (const pattern of REACT_AUDIT_PATTERNS) {
+    try {
+      const result = await searchPatterns(repo, pattern, {
+        file_pattern: filePattern,
+        include_tests: includeTests,
+        max_results: 20,
+      });
+      for (const m of result.matches) {
+        findings.push({
+          file: m.file,
+          line: m.start_line,
+          end_line: m.end_line,
+          name: m.name,
+          detail: `${pattern} in ${m.name}: ${m.context.slice(0, 100)}`,
+          severity: pattern === "dangerously-set-html" ? "critical" : "warning",
+        });
+      }
+    } catch {
+      // Pattern may not exist if Wave 2 wasn't applied — skip silently
+    }
+  }
+  return {
+    gate: "REACT",
+    description: "React anti-patterns: Rule of Hooks, XSS, performance, memoization (Wave 2 + Tier 3)",
+    tool_used: "search_patterns(REACT_AUDIT_PATTERNS)",
+    findings,
+  };
 }
