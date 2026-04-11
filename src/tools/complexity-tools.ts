@@ -173,9 +173,18 @@ export async function analyzeComplexity(
   const includeTests = options?.include_tests ?? false;
   const filePattern = options?.file_pattern;
 
+  // Build a language lookup for SQL file exclusion
+  const sqlFiles = new Set(
+    index.files
+      .filter((f) => f.language === "sql" || f.language === "sql-jinja")
+      .map((f) => f.path),
+  );
+
   // Filter to analyzable symbols
   const symbols = index.symbols.filter((s) => {
     if (!ANALYZABLE_KINDS.has(s.kind)) return false;
+    // Skip SQL files — cyclomatic complexity is meaningless for DDL
+    if (sqlFiles.has(s.file)) return false;
     if (!s.source || s.source.length < 10) return false;
     if (!includeTests && isTestFile(s.file)) return false;
     if (filePattern && !s.file.includes(filePattern)) return false;
