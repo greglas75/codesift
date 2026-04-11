@@ -20,8 +20,8 @@ interface AstroRouteEntry {
   rendering: "static" | "server";
   dynamic_params: string[];
   has_getStaticPaths: boolean;
-  methods?: string[];
-  layout?: string;
+  methods?: string[] | undefined;
+  layout?: string | undefined;
 }
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] as const;

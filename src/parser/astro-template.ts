@@ -16,23 +16,23 @@ export interface AstroTemplateParse {
 export interface Island {
   component_name: string;
   directive: "client:load" | "client:idle" | "client:visible" | "client:media" | "client:only" | "server:defer";
-  directive_value?: string;
+  directive_value?: string | undefined;
   line: number;
   column: number;
   conditional: boolean;
   in_loop: boolean;
   uses_spread: boolean;
-  resolves_to_file?: string;
+  resolves_to_file?: string | undefined;
   target_kind: "astro" | "framework" | "unknown";
-  framework_hint?: "react" | "vue" | "svelte" | "solid" | "preact" | "lit";
+  framework_hint?: "react" | "vue" | "svelte" | "solid" | "preact" | "lit" | undefined;
   document_order: number;
-  parent_tag?: string;
-  is_inside_section?: "header" | "footer" | "aside" | "nav" | "main" | null;
+  parent_tag?: string | undefined;
+  is_inside_section?: "header" | "footer" | "aside" | "nav" | "main" | null | undefined;
 }
 
 export interface Slot { name: string; line: number; has_fallback: boolean; }
-export interface ComponentUsage { name: string; line: number; imported_from?: string; }
-export interface Directive { name: string; value?: string; line: number; target_tag: string; }
+export interface ComponentUsage { name: string; line: number; imported_from?: string | undefined; }
+export interface Directive { name: string; value?: string | undefined; line: number; target_tag: string; }
 
 const MAX_TEMPLATE_SIZE = 512_000;
 const MAX_BRACE_DEPTH = 100;
@@ -127,10 +127,12 @@ export function parseAstroTemplate(
   let m: RegExpExecArray | null;
 
   while ((m = tagRe.exec(tpl)) !== null) {
-    const [full, tagName, attrs] = m;
+    const [full, rawTag, rawAttrs] = m;
+    const tagName = rawTag ?? "";
+    const attrs = rawAttrs ?? "";
     const selfClose = m[3] === "/" || full.endsWith("/>");
     const closing = full.startsWith("</");
-    const offset = m.index;
+    const offset = m.index!;
     const { line: relLine, column } = lineColAt(tpl, offset);
     const line = relLine + startLine - 1;
     const lower = tagName.toLowerCase();
@@ -164,7 +166,7 @@ export function parseAstroTemplate(
     // Slot detection
     if (lower === "slot") {
       const nm = attrs.match(/name\s*=\s*(?:"([^"]*)"|'([^']*)')/);
-      slots.push({ name: nm ? (nm[1] ?? nm[2]) : "default", line, has_fallback: !selfClose && hasSlotContent(tpl, tagRe.lastIndex, lower) });
+      slots.push({ name: nm ? (nm[1] ?? nm[2] ?? "default") : "default", line, has_fallback: !selfClose && hasSlotContent(tpl, tagRe.lastIndex, lower) });
       continue;
     }
 
@@ -177,9 +179,9 @@ export function parseAstroTemplate(
     let dirVal: string | undefined;
 
     while ((dm = dRe.exec(attrs)) !== null) {
-      foundDir = dm[1] as Island["directive"];
-      dirVal = dm[2] ?? dm[3];
-      dirs.push({ name: foundDir, value: dirVal, line, target_tag: tagName });
+      foundDir = (dm[1] ?? "") as Island["directive"];
+      dirVal = dm[2] ?? dm[3] ?? undefined;
+      dirs.push({ name: foundDir ?? "", value: dirVal, line, target_tag: tagName });
     }
 
     const spread = /\{\s*\.\.\./.test(attrs);
