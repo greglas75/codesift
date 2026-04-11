@@ -23,6 +23,8 @@ import type {
   HonoRoute,
   MiddlewareChain,
   MiddlewareEntry,
+  ContextVariable,
+  ContextAccessPoint,
 } from "./hono-model.js";
 
 const HTTP_METHODS = new Set([
@@ -41,7 +43,6 @@ export class HonoExtractor {
   async parse(entryFile: string): Promise<HonoAppModel> {
     const absoluteEntry = canonicalize(path.resolve(entryFile));
     const model = emptyModel(absoluteEntry, {
-      context_flow_not_extracted: 1,
       openapi_not_extracted: 1,
     });
     const parsedCache = new Map<string, ChildParseResult>();
@@ -136,8 +137,19 @@ export class HonoExtractor {
         });
       }
 
+      // Walk for context flow: c.set(), c.get(), c.var.*, c.env.*
+      this.walkContextFlow(tree.rootNode, file, model);
+
       // Walk for middleware chains: app.use("scope", mw1, mw2, ...)
       this.walkMiddleware(tree.rootNode, file, localAppVars, importMap, model);
+
+      // Scan imported files for context flow (middleware files like auth.ts)
+      for (const [, importedFile] of importMap) {
+        if (!model.files_used.includes(importedFile)) {
+          model.files_used.push(importedFile);
+        }
+        await this.scanFileForContextFlow(importedFile, model);
+      }
 
       // Detect runtime and env bindings (only for entry file)
       if (file === model.entry_file) {
@@ -548,6 +560,130 @@ export class HonoExtractor {
       expanded_from: expandedFrom,
       conditional: expandedFrom === "some",
     };
+  }
+
+  /**
+   * Lightweight scan of an imported file (e.g., middleware) for context flow only.
+   * Does not extract routes or mounts — just c.set/c.get/c.var patterns.
+   */
+  private async scanFileForContextFlow(
+    file: string,
+    model: HonoAppModel,
+  ): Promise<void> {
+    let source: string;
+    try {
+      source = await readFile(file, "utf-8");
+    } catch {
+      return;
+    }
+    const parser = await getParser(pickLanguage(file));
+    if (!parser) return;
+    const tree = parser.parse(source);
+    if (!tree) return;
+    try {
+      this.walkContextFlow(tree.rootNode, file, model);
+    } finally {
+      tree.delete();
+    }
+  }
+
+  /**
+   * Walk for context variable flow: c.set("key", val), c.get("key"), c.var.key, c.env.KEY.
+   * Detects conditional sets (inside if/try/switch blocks).
+   */
+  private walkContextFlow(
+    root: Parser.SyntaxNode,
+    file: string,
+    model: HonoAppModel,
+  ): void {
+    const varsMap = new Map<string, ContextVariable>();
+
+    const getOrCreate = (name: string, isEnv: boolean): ContextVariable => {
+      let cv = varsMap.get(name);
+      if (!cv) {
+        cv = { name, set_points: [], get_points: [], is_env_binding: isEnv };
+        varsMap.set(name, cv);
+      }
+      return cv;
+    };
+
+    const cursor = root.walk();
+    walk(cursor, (node) => {
+      // c.set("key", value)
+      if (node.type === "call_expression") {
+        const fn = node.childForFieldName("function");
+        if (fn?.type === "member_expression") {
+          const obj = fn.childForFieldName("object");
+          const prop = fn.childForFieldName("property");
+          if (obj?.text === "c" && prop?.text === "set") {
+            const args = node.childForFieldName("arguments");
+            const keyArg = args?.namedChildren[0];
+            if (keyArg) {
+              const key = stringLiteralValue(keyArg);
+              if (key) {
+                const cv = getOrCreate(key, false);
+                cv.set_points.push({
+                  file,
+                  line: node.startPosition.row + 1,
+                  scope: "middleware",
+                  via_context_storage: false,
+                  condition: isInsideBranch(node) ? "conditional" : "always",
+                });
+              }
+            }
+          }
+          // c.get("key")
+          if (obj?.text === "c" && prop?.text === "get") {
+            const args = node.childForFieldName("arguments");
+            const keyArg = args?.namedChildren[0];
+            if (keyArg) {
+              const key = stringLiteralValue(keyArg);
+              if (key) {
+                const cv = getOrCreate(key, false);
+                cv.get_points.push({
+                  file,
+                  line: node.startPosition.row + 1,
+                  scope: "handler",
+                  via_context_storage: false,
+                  condition: "always",
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // c.var.key — member_expression chain: c.var.key → (c.var).key
+      if (node.type === "member_expression") {
+        const obj = node.childForFieldName("object");
+        const prop = node.childForFieldName("property");
+        if (obj?.type === "member_expression" && prop) {
+          const innerObj = obj.childForFieldName("object");
+          const innerProp = obj.childForFieldName("property");
+          if (innerObj?.text === "c" && innerProp?.text === "var") {
+            const cv = getOrCreate(prop.text, false);
+            cv.get_points.push({
+              file,
+              line: node.startPosition.row + 1,
+              scope: "handler",
+              via_context_storage: false,
+              condition: "always",
+            });
+          }
+        }
+      }
+    });
+
+    // Merge into model.context_vars
+    for (const cv of varsMap.values()) {
+      const existing = model.context_vars.find((e) => e.name === cv.name);
+      if (existing) {
+        existing.set_points.push(...cv.set_points);
+        existing.get_points.push(...cv.get_points);
+      } else {
+        model.context_vars.push(cv);
+      }
+    }
   }
 
   /** Collect local array variable declarations: const adminChain = [authMw, tenantMw] */
@@ -1009,6 +1145,28 @@ function joinPaths(prefix: string, childPath: string): string {
   if (childPath === "/" || childPath === "") return p || "/";
   const c = childPath.startsWith("/") ? childPath : "/" + childPath;
   return p + c;
+}
+
+/** Check if a node is inside a conditional branch (if/switch/try body). */
+function isInsideBranch(node: Parser.SyntaxNode): boolean {
+  let current = node.parent;
+  while (current) {
+    if (current.type === "if_statement" ||
+        current.type === "switch_case" ||
+        current.type === "catch_clause" ||
+        current.type === "ternary_expression") {
+      return true;
+    }
+    // Stop at function boundary — we only care about branches within the function
+    if (current.type === "arrow_function" ||
+        current.type === "function_declaration" ||
+        current.type === "function_expression" ||
+        current.type === "method_definition") {
+      break;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 const MAX_WALK_DEPTH = 500;

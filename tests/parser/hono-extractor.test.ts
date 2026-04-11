@@ -51,6 +51,25 @@ describe("HonoExtractor — subapp-app", () => {
     }
   });
 
+  it("tracks c.set() and c.var access as context flow (AC-C1)", async () => {
+    const model = await extractor.parse(subappEntry);
+    const userId = model.context_vars.find((cv) => cv.name === "userId");
+    expect(userId).toBeDefined();
+    expect(userId?.set_points.length).toBeGreaterThanOrEqual(1);
+    expect(userId?.get_points.length).toBeGreaterThanOrEqual(1);
+    expect(userId?.is_env_binding).toBe(false);
+  });
+
+  it("marks conditional c.set() inside if-branch (AC-C2)", async () => {
+    const model = await extractor.parse(subappEntry);
+    const role = model.context_vars.find((cv) => cv.name === "role");
+    expect(role).toBeDefined();
+    const condSetPoint = role?.set_points.find(
+      (sp) => sp.condition === "conditional",
+    );
+    expect(condSetPoint).toBeDefined();
+  });
+
   it("sub-router routes reference the sub-router file, not the entry", async () => {
     const model = await extractor.parse(subappEntry);
     const usersRoutes = model.routes.filter((r) =>

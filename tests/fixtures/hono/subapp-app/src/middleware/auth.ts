@@ -4,6 +4,10 @@ export const authMiddleware: MiddlewareHandler = async (c, next) => {
   const token = c.req.header("authorization");
   if (!token) return c.json({ error: "unauthorized" }, 401);
   c.set("userId", token.replace("Bearer ", ""));
+  const isAdmin = c.req.header("x-admin") === "true";
+  if (isAdmin) {
+    c.set("role", "admin");
+  }
   await next();
 };
 
