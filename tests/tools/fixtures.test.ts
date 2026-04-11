@@ -40,3 +40,32 @@ describe("App Router fixture", () => {
     }
   });
 });
+
+describe("Pages Router + hybrid fixtures", () => {
+  const PAGES_DIR = join(__dirname, "../fixtures/nextjs-pages-router");
+  const HYBRID_DIR = join(__dirname, "../fixtures/nextjs-hybrid");
+
+  it("nextjs-pages-router has >=13 files and an expected.json", async () => {
+    const files = await walkFixture(PAGES_DIR);
+    expect(files.length).toBeGreaterThanOrEqual(13);
+    const expectedPath = join(PAGES_DIR, "expected.json");
+    const expectedContent = await readFile(expectedPath, "utf8");
+    const expected = JSON.parse(expectedContent);
+    expect(expected.routes).toBeDefined();
+    expect(Object.keys(expected.routes).length).toBeGreaterThan(0);
+  });
+
+  it("nextjs-hybrid has apps/web-app and apps/web-pages workspaces with expected.json", async () => {
+    const files = await walkFixture(HYBRID_DIR);
+    const paths = files.map((f) => f.replace(HYBRID_DIR + "/", ""));
+    expect(paths.some((p) => p.startsWith("apps/web-app/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("apps/web-pages/"))).toBe(true);
+
+    const expectedPath = join(HYBRID_DIR, "expected.json");
+    const expectedContent = await readFile(expectedPath, "utf8");
+    const expected = JSON.parse(expectedContent);
+    expect(Array.isArray(expected.conflicts)).toBe(true);
+    expect(expected.conflicts.length).toBeGreaterThanOrEqual(1);
+    expect(typeof expected.routes_count).toBe("number");
+  });
+});
