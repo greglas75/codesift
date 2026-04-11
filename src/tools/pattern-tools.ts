@@ -173,6 +173,17 @@ export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: stri
     regex: /process\.env\.\w+/,
     description: "Direct process.env access — use ConfigService for type-safe config (NestJS)",
   },
+  // Wave 2 anti-patterns
+  "nest-graphql-no-auth": {
+    // Same-file check: resolver has @Query/@Mutation but no @UseGuards anywhere in the file.
+    // Uses negative lookahead across the whole source.
+    regex: /^(?:(?!@UseGuards)[\s\S])*@(?:Query|Mutation)\s*\((?:(?!@UseGuards)[\s\S])*$/,
+    description: "GraphQL resolver with @Query/@Mutation but no @UseGuards in file — likely unprotected (NestJS)",
+  },
+  "nest-eager-relation": {
+    regex: /@(?:OneToMany|ManyToOne|OneToOne|ManyToMany)\s*\(\s*\(\)\s*=>\s*\w+[\s\S]{0,200}\beager:\s*true/,
+    description: "TypeORM relation with { eager: true } — auto-loads joins on every query (NestJS)",
+  },
 };
 
 /**

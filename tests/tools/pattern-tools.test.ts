@@ -242,11 +242,41 @@ describe("pattern-tools — NestJS anti-patterns", () => {
     });
   });
 
+  describe("nest-graphql-no-auth (Wave 2)", () => {
+    const re = BUILTIN_PATTERNS["nest-graphql-no-auth"]!.regex;
+    it("matches resolver with @Query but no @UseGuards in file", () => {
+      const src = `@Resolver() class ArticleResolver {
+  @Query() articles() { return []; }
+}`;
+      expect(re.test(src)).toBe(true);
+    });
+    it("does not match resolver with @UseGuards present", () => {
+      const src = `@UseGuards(AuthGuard)
+@Resolver() class ArticleResolver {
+  @Query() articles() { return []; }
+}`;
+      expect(re.test(src)).toBe(false);
+    });
+  });
+
+  describe("nest-eager-relation (Wave 2)", () => {
+    const re = BUILTIN_PATTERNS["nest-eager-relation"]!.regex;
+    it("matches @OneToMany with eager: true", () => {
+      expect(re.test(`@OneToMany(() => Comment, c => c.article, { eager: true })`)).toBe(true);
+    });
+    it("matches @ManyToOne with eager: true", () => {
+      expect(re.test(`@ManyToOne(() => User, u => u.articles, { eager: true })`)).toBe(true);
+    });
+    it("does not match relation without eager flag", () => {
+      expect(re.test(`@OneToMany(() => Comment, c => c.article)`)).toBe(false);
+    });
+  });
+
   describe("listPatterns includes NestJS patterns", () => {
-    it("contains all 7 NestJS patterns", () => {
+    it("contains all 9 NestJS patterns (7 Wave 1 + 2 Wave 2)", () => {
       const patterns = listPatterns();
       const nestPatterns = patterns.filter((p) => p.name.startsWith("nest-"));
-      expect(nestPatterns.length).toBe(7);
+      expect(nestPatterns.length).toBe(9);
     });
 
     it("each NestJS pattern has a description ending with (NestJS)", () => {
