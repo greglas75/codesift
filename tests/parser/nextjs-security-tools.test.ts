@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseFile } from "../../src/parser/parser-manager.js";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
@@ -401,6 +401,32 @@ export async function noValidation(input) {
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
     }
+  });
+
+  it("matches pre-authored expected.json (fixture)", async () => {
+    const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-security");
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-security",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+
+    const expectedRaw = await readFile(resolve(fixtureRoot, "expected.json"), "utf8");
+    const expected = JSON.parse(expectedRaw) as {
+      actions: Record<string, { score: number; grade: string }>;
+      counts: Record<string, number>;
+    };
+    const result = await nextjsAuditServerActions("nextjs-security");
+    for (const [name, exp] of Object.entries(expected.actions)) {
+      const action = result.actions.find((a) => a.name === name);
+      expect(action, `expected action ${name}`).toBeDefined();
+      expect(action!.score, `score for ${name}`).toBe(exp.score);
+      expect(action!.grade, `grade for ${name}`).toBe(exp.grade);
+    }
+    expect(result.counts).toEqual(expected.counts);
   });
 
   it("captures parse failure on a malformed file gracefully", async () => {

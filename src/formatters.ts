@@ -789,6 +789,7 @@ export function formatNextjsComponents(result: NextjsComponentsResult): string {
 
 import type { NextjsRouteMapResult } from "./tools/nextjs-route-tools.js";
 import type { NextjsMetadataAuditResult } from "./tools/nextjs-metadata-tools.js";
+import type { ServerActionsAuditResult } from "./tools/nextjs-security-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -885,6 +886,49 @@ export function formatNextjsMetadataAudit(result: NextjsMetadataAuditResult): st
   }
   if (result.scan_errors.length > 0) {
     lines.push(`Scan errors: ${result.scan_errors.length}`);
+  }
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatNextjsAuditServerActions(result: ServerActionsAuditResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS SERVER ACTIONS SECURITY AUDIT");
+  lines.push("");
+  lines.push(
+    `Actions: ${result.total} | excellent=${result.counts.excellent} good=${result.counts.good} needs_work=${result.counts.needs_work} poor=${result.counts.poor}`,
+  );
+  lines.push("");
+
+  // Header
+  lines.push("Action                          Score Grade        Auth     Validation Rate     Errors");
+  lines.push("─────────────────────────────── ───── ──────────── ──────── ────────── ──────── ───────");
+  for (const a of result.actions.slice(0, 100)) {
+    const name = `${a.name}@${a.file.split("/").pop() ?? a.file}`.padEnd(31).slice(0, 31);
+    const score = String(a.score).padStart(5);
+    const grade = a.grade.padEnd(12).slice(0, 12);
+    const auth = a.auth.confidence.padEnd(8).slice(0, 8);
+    const validation = a.input_validation.lib.padEnd(10).slice(0, 10);
+    const rate = a.rate_limiting.lib.padEnd(8).slice(0, 8);
+    const errors = a.error_handling.has_try_catch ? "yes" : "no";
+    lines.push(`${name} ${score} ${grade} ${auth} ${validation} ${rate} ${errors}`);
+  }
+  if (result.actions.length > 100) {
+    lines.push(`... +${result.actions.length - 100} more`);
+  }
+  lines.push("");
+
+  if (result.violations.length > 0) {
+    lines.push(`Violations: ${result.violations.join(", ")}`);
+  }
+  if (result.parse_failures.length > 0) {
+    lines.push(`Parse failures: ${result.parse_failures.length}`);
   }
   if (result.workspaces_scanned.length > 0) {
     lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);

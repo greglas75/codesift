@@ -49,6 +49,7 @@ import { astroRouteMap } from "./tools/astro-routes.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
 import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
 import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
+import { nextjsAuditServerActions } from "./tools/nextjs-security-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -65,7 +66,7 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions } from "./formatters.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
@@ -2623,6 +2624,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.max_routes != null) opts.max_routes = args.max_routes as number;
       const result = await nextjsMetadataAudit(args.repo as string ?? "", opts);
       return formatNextjsMetadataAudit(result);
+    },
+  },
+  {
+    name: "nextjs_audit_server_actions",
+    category: "security" as ToolCategory,
+    searchHint: "nextjs server actions security audit auth validation rate limit zod use server",
+    description: "Audit Next.js Server Actions for security weaknesses across four checks: authorization guards, input validation (Zod-aware), rate limiting, and structured error handling. Per-action weighted scoring (auth 40, validation 30, rate 20, errors 10) with grade buckets.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsAuditServerActions>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.max_files != null) opts.max_files = args.max_files as number;
+      const result = await nextjsAuditServerActions(args.repo as string ?? "", opts);
+      return formatNextjsAuditServerActions(result);
     },
   },
 
