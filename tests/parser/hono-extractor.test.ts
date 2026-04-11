@@ -42,9 +42,10 @@ describe("HonoExtractor — basic-app", () => {
     expect(model.entry_file).toBe(basicEntry);
   });
 
-  it("marks extraction_status as complete for a well-formed Hono app", async () => {
+  it("marks extraction_status as partial (middleware/context/openapi not yet extracted)", async () => {
     const model = await extractor.parse(basicEntry);
-    expect(model.extraction_status).toBe("complete");
+    expect(model.extraction_status).toBe("partial");
+    expect(model.skip_reasons.middleware_not_extracted).toBe(1);
   });
 
   it("every route references the same owner_var", async () => {

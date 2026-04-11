@@ -47,13 +47,23 @@ export class HonoExtractor {
       return emptyModel(absoluteEntry, { parse_failed: 1 });
     }
 
-    const model = emptyModel(absoluteEntry, {});
-    model.files_used = [absoluteEntry];
+    try {
+      const model = emptyModel(absoluteEntry, {
+        middleware_not_extracted: 1,
+        context_flow_not_extracted: 1,
+        openapi_not_extracted: 1,
+      });
+      model.files_used = [absoluteEntry];
 
-    this.walkAppVariables(tree.rootNode, absoluteEntry, model);
-    this.walkRoutes(tree.rootNode, absoluteEntry, model);
+      this.walkAppVariables(tree.rootNode, absoluteEntry, model);
+      this.walkRoutes(tree.rootNode, absoluteEntry, model);
 
-    return model;
+      return model;
+    } finally {
+      // web-tree-sitter allocates tree memory in the WASM heap — must be freed
+      // explicitly or bulk indexing leaks into OOM.
+      tree.delete();
+    }
   }
 
   private walkAppVariables(
@@ -169,21 +179,55 @@ function classifyAppCreation(
 ): HonoApp["created_via"] | null {
   if (valueNode.type === "new_expression") {
     const ctor = valueNode.childForFieldName("constructor");
-    const name = ctor?.text;
-    if (name === "Hono") return "new Hono";
-    if (name === "OpenAPIHono") return "OpenAPIHono";
+    if (!ctor) return null;
+    // Direct: new Hono(), new OpenAPIHono()
+    if (ctor.type === "identifier") {
+      if (ctor.text === "Hono") return "new Hono";
+      if (ctor.text === "OpenAPIHono") return "OpenAPIHono";
+    }
+    // Namespace: new hono.Hono(), new openapi.OpenAPIHono()
+    if (ctor.type === "member_expression") {
+      const prop = ctor.childForFieldName("property");
+      if (prop?.text === "Hono") return "new Hono";
+      if (prop?.text === "OpenAPIHono") return "OpenAPIHono";
+    }
     return null;
   }
   return null;
 }
 
 function stringLiteralValue(node: Parser.SyntaxNode): string | null {
-  if (node.type !== "string" && node.type !== "template_string") return null;
-  const text = node.text;
-  if (text.length < 2) return null;
-  const quote = text[0];
-  if (quote !== '"' && quote !== "'" && quote !== "`") return null;
-  return text.slice(1, -1);
+  if (node.type === "string") {
+    // Plain single- or double-quoted string. Use JSON.parse to resolve escapes.
+    // tree-sitter gives us the raw source text with surrounding quotes.
+    const text = node.text;
+    if (text.length < 2) return null;
+    const quote = text[0];
+    if (quote !== '"' && quote !== "'") return null;
+    try {
+      // JSON.parse only accepts double quotes — convert single-quoted literals.
+      const normalized =
+        quote === "'"
+          ? `"${text.slice(1, -1).replace(/\\'/g, "'").replace(/"/g, '\\"')}"`
+          : text;
+      const parsed: unknown = JSON.parse(normalized);
+      return typeof parsed === "string" ? parsed : null;
+    } catch {
+      return text.slice(1, -1);
+    }
+  }
+  if (node.type === "template_string") {
+    // Reject interpolated templates — `/users/${prefix}/:id` is not a static path.
+    // Accept only templates with zero substitutions (plain backtick-quoted literal).
+    const hasInterpolation = node.namedChildren.some(
+      (c) => c.type === "template_substitution",
+    );
+    if (hasInterpolation) return null;
+    const text = node.text;
+    if (text.length < 2) return null;
+    return text.slice(1, -1);
+  }
+  return null;
 }
 
 function buildHandler(
@@ -204,12 +248,18 @@ function buildHandler(
   return { name: "<inline>", inline: true, file, line };
 }
 
+const MAX_WALK_DEPTH = 500;
 type CursorVisitor = (node: Parser.SyntaxNode) => void;
-function walk(cursor: Parser.TreeCursor, visit: CursorVisitor): void {
+function walk(
+  cursor: Parser.TreeCursor,
+  visit: CursorVisitor,
+  depth = 0,
+): void {
+  if (depth > MAX_WALK_DEPTH) return;
   visit(cursor.currentNode);
   if (cursor.gotoFirstChild()) {
     do {
-      walk(cursor, visit);
+      walk(cursor, visit, depth + 1);
     } while (cursor.gotoNextSibling());
     cursor.gotoParent();
   }
