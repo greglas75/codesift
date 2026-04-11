@@ -258,6 +258,22 @@ const REACT_TOOLS = [
  * Detection: package.json with "hono" OR "@hono/zod-openapi" dep.
  * Content-based (not filename), so lives outside FRAMEWORK_TOOL_GROUPS.
  */
+
+/**
+ * Next.js Tier-1 tools — auto-enabled when 'next' is in package.json deps.
+ * These are the 7 hidden tools; the 3 core tools (nextjs_route_map,
+ * nextjs_metadata_audit, framework_audit) are always visible.
+ */
+const NEXTJS_TOOLS = [
+  "analyze_nextjs_components",
+  "nextjs_audit_server_actions",
+  "nextjs_api_contract",
+  "nextjs_boundary_analyzer",
+  "nextjs_link_integrity",
+  "nextjs_data_flow",
+  "nextjs_middleware_coverage",
+];
+
 const HONO_TOOLS = [
   "trace_context_flow",
   "extract_api_contract",
@@ -314,6 +330,12 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
       );
       if (hasHono) {
         toEnable.push(...HONO_TOOLS);
+      }
+
+      // Next.js: auto-enable hidden tools when next dep is present
+      const hasNext = !!allDeps["next"];
+      if (hasNext) {
+        toEnable.push(...NEXTJS_TOOLS);
       }
     } catch { /* malformed package.json */ }
   }
