@@ -283,21 +283,69 @@ export function detectAuthGuard(fn: ServerActionFn): AuthGuardInfo {
 // ---------------------------------------------------------------------------
 
 export function detectInputValidation(
-  _fn: ServerActionFn,
-  _tree: Parser.Tree,
-  _source: string,
+  fn: ServerActionFn,
+  tree: Parser.Tree,
+  source: string,
 ): InputValidationInfo {
-  throw new Error("not implemented");
+  const body = fn.bodyNode;
+  if (!body) return { lib: "none", confidence: "high" };
+
+  // 1) Look for `.parse()` or `.safeParse()` call expressions on a Zod schema.
+  for (const call of body.descendantsOfType("call_expression")) {
+    const callee = call.childForFieldName("function") ?? call.namedChild(0);
+    if (callee?.type !== "member_expression") continue;
+    const prop = callee.childForFieldName("property") ?? callee.namedChild(1);
+    if (prop?.type !== "property_identifier") continue;
+    if (prop.text !== "parse" && prop.text !== "safeParse") continue;
+
+    // Disambiguate Zod from other libs by inspecting the file for a Zod schema.
+    const zodShape = extractZodSchema(tree, source);
+    if (zodShape) {
+      return { lib: "zod", confidence: "high" };
+    }
+    // Fallback: at least the .parse() call indicates structured validation.
+    return { lib: "manual", confidence: "medium" };
+  }
+
+  // 2) Manual validation: count if-throw statements in the first 5 statements.
+  let manualCount = 0;
+  const stmts = body.namedChildren.slice(0, 5);
+  for (const s of stmts) {
+    if (s.type !== "if_statement") continue;
+    if (/throw\b/.test(s.text)) manualCount++;
+  }
+  if (manualCount >= 1) {
+    return { lib: "manual", confidence: "medium" };
+  }
+
+  return { lib: "none", confidence: "high" };
 }
 
 // ---------------------------------------------------------------------------
 // Rate limiting detection (Task 16)
 // ---------------------------------------------------------------------------
 
+const RATE_LIMIT_PATTERNS: Array<{ regex: RegExp; lib: RateLimitingInfo["lib"] }> = [
+  { regex: /\bratelimit\.limit\s*\(/, lib: "upstash" },
+  { regex: /\@upstash\/ratelimit/, lib: "upstash" },
+  { regex: /\bcreateRateLimiter\s*\(/, lib: "manual" },
+  { regex: /\brateLimit\s*\(/, lib: "manual" },
+  { regex: /\bnext\/rate-limit/, lib: "vercel" },
+];
+
 export function detectRateLimiting(
-  _fn: ServerActionFn,
+  fn: ServerActionFn,
   _tree: Parser.Tree,
   _source: string,
 ): RateLimitingInfo {
-  throw new Error("not implemented");
+  const body = fn.bodyNode;
+  if (!body) return { lib: "none", confidence: "high" };
+  const text = body.text;
+
+  for (const { regex, lib } of RATE_LIMIT_PATTERNS) {
+    if (regex.test(text)) {
+      return { lib, confidence: "high" };
+    }
+  }
+  return { lib: "none", confidence: "high" };
 }

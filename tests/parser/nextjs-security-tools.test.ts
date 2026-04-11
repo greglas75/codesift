@@ -169,3 +169,85 @@ export async function action() {
     expect(info.pattern).toBe("none");
   });
 });
+
+describe("detectInputValidation and detectRateLimiting", () => {
+  async function getFn(src: string) {
+    const tree = await parseTs(src);
+    const fns = extractServerActionFunctions(tree, src, "x.ts");
+    return { tree, src, fn: fns[0]! };
+  }
+
+  it("detects zod parse() as zod high confidence", async () => {
+    const { tree, src, fn } = await getFn(`"use server";
+import { z } from 'zod';
+const schema = z.object({ name: z.string() });
+export async function action(input) {
+  const data = schema.parse(input);
+  return data;
+}
+`);
+    const info = detectInputValidation(fn, tree, src);
+    expect(info.lib).toBe("zod");
+    expect(info.confidence).toBe("high");
+  });
+
+  it("detects safeParse() as zod high confidence", async () => {
+    const { tree, src, fn } = await getFn(`"use server";
+import { z } from 'zod';
+const schema = z.object({ name: z.string() });
+export async function action(input) {
+  const data = schema.safeParse(input);
+  return data;
+}
+`);
+    const info = detectInputValidation(fn, tree, src);
+    expect(info.lib).toBe("zod");
+    expect(info.confidence).toBe("high");
+  });
+
+  it("returns none lib when no validation present", async () => {
+    const { tree, src, fn } = await getFn(`"use server";
+export async function action(input) {
+  return input;
+}
+`);
+    const info = detectInputValidation(fn, tree, src);
+    expect(info.lib).toBe("none");
+  });
+
+  it("detects manual validation via if-throw checks", async () => {
+    const { tree, src, fn } = await getFn(`"use server";
+export async function action({ name }) {
+  if (!name) throw new Error("name required");
+  if (name.length < 3) throw new Error("too short");
+  return name;
+}
+`);
+    const info = detectInputValidation(fn, tree, src);
+    expect(info.lib).toBe("manual");
+    expect(info.confidence).toBe("medium");
+  });
+
+  it("detects upstash ratelimit.limit() as upstash high confidence", async () => {
+    const { tree, src, fn } = await getFn(`"use server";
+export async function action(input) {
+  const result = await ratelimit.limit(ip);
+  if (!result.success) throw new Error("rate limit");
+  return 1;
+}
+`);
+    const info = detectRateLimiting(fn, tree, src);
+    expect(info.lib).toBe("upstash");
+    expect(info.confidence).toBe("high");
+  });
+
+  it("returns none rate-limiting lib when not present", async () => {
+    const { tree, src, fn } = await getFn(`"use server";
+export async function action() {
+  return 1;
+}
+`);
+    const info = detectRateLimiting(fn, tree, src);
+    expect(info.lib).toBe("none");
+  });
+});
