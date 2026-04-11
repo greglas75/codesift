@@ -941,6 +941,12 @@ export interface NestAuditResult {
   di_graph?: NestDIGraphResult;
   guard_chain?: NestGuardChainResult;
   route_inventory?: NestRouteInventoryResult;
+  // Wave 2 sub-results
+  graphql_map?: import("./nest-ext-tools.js").NestGraphQLMapResult;
+  websocket_map?: import("./nest-ext-tools.js").NestWebSocketMapResult;
+  schedule_map?: import("./nest-ext-tools.js").NestScheduleMapResult;
+  typeorm_map?: import("./nest-ext-tools.js").NestTypeOrmMapResult;
+  microservice_map?: import("./nest-ext-tools.js").NestMicroserviceMapResult;
   anti_patterns?: Array<{ pattern: string; count: number }>;
   summary: {
     total_routes: number;
@@ -954,7 +960,10 @@ export interface NestAuditResult {
   errors?: Array<{ check: string; reason: string }>;
 }
 
-const ALL_NEST_CHECKS = ["modules", "routes", "di", "guards", "lifecycle", "patterns"] as const;
+const ALL_NEST_CHECKS = [
+  "modules", "routes", "di", "guards", "lifecycle", "patterns",
+  "graphql", "websocket", "schedule", "typeorm", "microservice",
+] as const;
 type NestCheck = (typeof ALL_NEST_CHECKS)[number];
 
 export async function nestAudit(
@@ -1032,6 +1041,48 @@ export async function nestAudit(
     );
   }
 
+  // Wave 2 checks — lazy import to avoid eager loading if nest-ext-tools isn't needed
+  if (enabledChecks.has("graphql")) {
+    tasks.push(
+      (async () => {
+        const { nestGraphQLMap } = await import("./nest-ext-tools.js");
+        return { name: "graphql" as NestCheck, result: await nestGraphQLMap(repo) };
+      })().catch((e: unknown) => ({ name: "graphql" as NestCheck, error: e instanceof Error ? e.message : String(e) })),
+    );
+  }
+  if (enabledChecks.has("websocket")) {
+    tasks.push(
+      (async () => {
+        const { nestWebSocketMap } = await import("./nest-ext-tools.js");
+        return { name: "websocket" as NestCheck, result: await nestWebSocketMap(repo) };
+      })().catch((e: unknown) => ({ name: "websocket" as NestCheck, error: e instanceof Error ? e.message : String(e) })),
+    );
+  }
+  if (enabledChecks.has("schedule")) {
+    tasks.push(
+      (async () => {
+        const { nestScheduleMap } = await import("./nest-ext-tools.js");
+        return { name: "schedule" as NestCheck, result: await nestScheduleMap(repo) };
+      })().catch((e: unknown) => ({ name: "schedule" as NestCheck, error: e instanceof Error ? e.message : String(e) })),
+    );
+  }
+  if (enabledChecks.has("typeorm")) {
+    tasks.push(
+      (async () => {
+        const { nestTypeOrmMap } = await import("./nest-ext-tools.js");
+        return { name: "typeorm" as NestCheck, result: await nestTypeOrmMap(repo) };
+      })().catch((e: unknown) => ({ name: "typeorm" as NestCheck, error: e instanceof Error ? e.message : String(e) })),
+    );
+  }
+  if (enabledChecks.has("microservice")) {
+    tasks.push(
+      (async () => {
+        const { nestMicroserviceMap } = await import("./nest-ext-tools.js");
+        return { name: "microservice" as NestCheck, result: await nestMicroserviceMap(repo) };
+      })().catch((e: unknown) => ({ name: "microservice" as NestCheck, error: e instanceof Error ? e.message : String(e) })),
+    );
+  }
+
   const settled = await Promise.all(tasks);
 
   // Aggregate
@@ -1045,6 +1096,11 @@ export async function nestAudit(
   let guardResult: NestGuardChainResult | undefined;
   let routeResult: NestRouteInventoryResult | undefined;
   let patternResults: Array<{ pattern: string; count: number }> | undefined;
+  let graphqlResult: import("./nest-ext-tools.js").NestGraphQLMapResult | undefined;
+  let websocketResult: import("./nest-ext-tools.js").NestWebSocketMapResult | undefined;
+  let scheduleResult: import("./nest-ext-tools.js").NestScheduleMapResult | undefined;
+  let typeormResult: import("./nest-ext-tools.js").NestTypeOrmMapResult | undefined;
+  let microserviceResult: import("./nest-ext-tools.js").NestMicroserviceMapResult | undefined;
 
   for (const item of settled) {
     if (item.error) {
@@ -1082,11 +1138,46 @@ export async function nestAudit(
         break;
       }
       case "patterns": patternResults = item.result as Array<{ pattern: string; count: number }>; break;
+      case "graphql": {
+        const r = item.result as import("./nest-ext-tools.js").NestGraphQLMapResult;
+        graphqlResult = r;
+        if (r.truncated) truncatedChecks.push("graphql");
+        if (r.errors) warnings.push(...r.errors);
+        break;
+      }
+      case "websocket": {
+        const r = item.result as import("./nest-ext-tools.js").NestWebSocketMapResult;
+        websocketResult = r;
+        if (r.truncated) truncatedChecks.push("websocket");
+        if (r.errors) warnings.push(...r.errors);
+        break;
+      }
+      case "schedule": {
+        const r = item.result as import("./nest-ext-tools.js").NestScheduleMapResult;
+        scheduleResult = r;
+        if (r.truncated) truncatedChecks.push("schedule");
+        if (r.errors) warnings.push(...r.errors);
+        break;
+      }
+      case "typeorm": {
+        const r = item.result as import("./nest-ext-tools.js").NestTypeOrmMapResult;
+        typeormResult = r;
+        if (r.truncated) truncatedChecks.push("typeorm");
+        if (r.errors) warnings.push(...r.errors);
+        break;
+      }
+      case "microservice": {
+        const r = item.result as import("./nest-ext-tools.js").NestMicroserviceMapResult;
+        microserviceResult = r;
+        if (r.truncated) truncatedChecks.push("microservice");
+        if (r.errors) warnings.push(...r.errors);
+        break;
+      }
     }
   }
 
   const totalRoutes = routeResult?.stats.total_routes ?? 0;
-  const cycles = (moduleResult?.circular_deps.length ?? 0) + (diResult?.cycles.length ?? 0);
+  const cycles = (moduleResult?.circular_deps.length ?? 0) + (diResult?.cycles.length ?? 0) + (typeormResult?.cycles.length ?? 0);
   const antiPatternHits = patternResults?.reduce((sum, p) => sum + p.count, 0) ?? 0;
 
   return {
@@ -1096,6 +1187,11 @@ export async function nestAudit(
     ...(diResult ? { di_graph: diResult } : {}),
     ...(guardResult ? { guard_chain: guardResult } : {}),
     ...(routeResult ? { route_inventory: routeResult } : {}),
+    ...(graphqlResult ? { graphql_map: graphqlResult } : {}),
+    ...(websocketResult ? { websocket_map: websocketResult } : {}),
+    ...(scheduleResult ? { schedule_map: scheduleResult } : {}),
+    ...(typeormResult ? { typeorm_map: typeormResult } : {}),
+    ...(microserviceResult ? { microservice_map: microserviceResult } : {}),
     ...(patternResults ? { anti_patterns: patternResults } : {}),
     summary: {
       total_routes: totalRoutes,

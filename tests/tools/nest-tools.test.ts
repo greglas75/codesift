@@ -980,4 +980,54 @@ describe("nest_audit", () => {
     expect(result.guard_chain).toBeUndefined();
     expect(result.route_inventory).toBeUndefined();
   });
+
+  it("Wave 2: runs all 11 sub-tools on full audit", async () => {
+    const index = {
+      root: "/tmp/test",
+      files: [],
+      symbols: [
+        makeSymbol({ name: "app", file: "src/main.ts", kind: "function", source: "import '@nestjs/common';" }),
+      ],
+    } as unknown as CodeIndex;
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestAudit("test-repo");
+    expect(result.framework_detected).toBe(true);
+    // Wave 1 fields
+    expect(result.lifecycle_map).toBeDefined();
+    expect(result.module_graph).toBeDefined();
+    expect(result.di_graph).toBeDefined();
+    expect(result.guard_chain).toBeDefined();
+    expect(result.route_inventory).toBeDefined();
+    // Wave 2 fields
+    expect(result.graphql_map).toBeDefined();
+    expect(result.websocket_map).toBeDefined();
+    expect(result.schedule_map).toBeDefined();
+    expect(result.typeorm_map).toBeDefined();
+    expect(result.microservice_map).toBeDefined();
+    // No failures
+    expect(result.summary.failed_checks).toBe(0);
+  });
+
+  it("Wave 2: filters Wave 2 checks via options.checks", async () => {
+    const index = {
+      root: "/tmp/test",
+      files: [],
+      symbols: [
+        makeSymbol({ name: "app", file: "src/main.ts", kind: "function", source: "import '@nestjs/common';" }),
+      ],
+    } as unknown as CodeIndex;
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestAudit("test-repo", { checks: ["graphql"] });
+    expect(result.framework_detected).toBe(true);
+    expect(result.graphql_map).toBeDefined();
+    // Other Wave 2 fields undefined
+    expect(result.websocket_map).toBeUndefined();
+    expect(result.schedule_map).toBeUndefined();
+    expect(result.typeorm_map).toBeUndefined();
+    expect(result.microservice_map).toBeUndefined();
+    // Wave 1 fields also undefined
+    expect(result.lifecycle_map).toBeUndefined();
+  });
 });
