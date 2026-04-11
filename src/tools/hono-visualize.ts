@@ -7,8 +7,8 @@
 import { getCodeIndex } from "./index-tools.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
+import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
 import { detectFrameworks } from "../utils/framework-detect.js";
-import { join } from "node:path";
 
 export type VisualizeFormat = "mermaid" | "tree";
 
@@ -75,16 +75,4 @@ export async function visualizeHonoRoutes(
   lines.push(`└── middleware chains (${model.middleware_chains.length})`);
 
   return { format, output: lines.join("\n") };
-}
-
-function resolveHonoEntryFile(index: {
-  symbols: Array<{ source?: string | undefined; file: string }>;
-  root: string;
-}): string | null {
-  for (const sym of index.symbols) {
-    if (sym.source && /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(sym.source)) {
-      return join(index.root, sym.file);
-    }
-  }
-  return null;
 }

@@ -11,9 +11,9 @@
 import { getCodeIndex } from "./index-tools.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
+import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
 import { matchPath } from "./route-tools.js";
 import { detectFrameworks } from "../utils/framework-detect.js";
-import { join } from "node:path";
 import type { MiddlewareEntry, HonoRoute } from "../parser/extractors/hono-model.js";
 
 export interface MiddlewareChainResult {
@@ -90,21 +90,7 @@ export async function traceMiddlewareChain(
     },
     chain,
   };
-}
-
-function resolveHonoEntryFile(index: {
-  symbols: Array<{ source?: string | undefined; file: string }>;
-  root: string;
-}): string | null {
-  for (const sym of index.symbols) {
-    if (sym.source && /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(sym.source)) {
-      return join(index.root, sym.file);
-    }
-  }
-  return null;
-}
-
-function compileScopePattern(pattern: string): RegExp {
+}function compileScopePattern(pattern: string): RegExp {
   // Simple glob→regex: * matches anything (non-greedy-ish for path segments)
   // Handle bare "*" as "match anything"
   if (pattern === "*") return /^.*$/;

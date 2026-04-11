@@ -13,8 +13,8 @@
 import { getCodeIndex } from "./index-tools.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
+import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
 import { detectFrameworks } from "../utils/framework-detect.js";
-import { join } from "node:path";
 import type { ConditionalApplication } from "../parser/extractors/hono-model.js";
 
 export interface ConditionalMiddlewareEntry {
@@ -70,16 +70,4 @@ export async function traceConditionalMiddleware(
   }
 
   return { entries, total: entries.length };
-}
-
-function resolveHonoEntryFile(index: {
-  symbols: Array<{ source?: string | undefined; file: string }>;
-  root: string;
-}): string | null {
-  for (const sym of index.symbols) {
-    if (sym.source && /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(sym.source)) {
-      return join(index.root, sym.file);
-    }
-  }
-  return null;
 }
