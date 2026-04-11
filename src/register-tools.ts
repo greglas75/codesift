@@ -2257,6 +2257,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return await findPythonCircularImports(args.repo as string, opts);
     },
   },
+  {
+    name: "python_audit",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python audit health score compound project review django security circular patterns celery dependencies dead code",
+    description: "Compound Python project health audit: circular imports + Django settings + anti-patterns (17) + framework wiring + Celery orphans + pytest fixtures + deps + dead code. Runs in parallel, returns unified health score (0-100) + severity counts + prioritized top_risks list.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      checks: z.array(z.string()).optional().describe("Subset of checks: circular_imports, django_settings, anti_patterns, framework_wiring, celery, pytest_fixtures, dependencies, dead_code"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof pythonAudit>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.checks != null) opts!.checks = args.checks as string[];
+      return await pythonAudit(args.repo as string, opts);
+    },
+  },
 
   // --- PHP / Yii2 tools (all discoverable via discover_tools(query="php")) ---
   {
