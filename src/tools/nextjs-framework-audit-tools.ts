@@ -7,7 +7,7 @@
  * overall score, and returns a unified `FrameworkAuditResult`.
  */
 
-import { NextjsAuditCache } from "../utils/nextjs-audit-cache.js";
+import { activateGlobalCache, deactivateGlobalCache } from "../utils/nextjs-audit-cache.js";
 import { analyzeNextjsComponents } from "./nextjs-component-tools.js";
 import { nextjsRouteMap } from "./nextjs-route-tools.js";
 import { nextjsMetadataAudit } from "./nextjs-metadata-tools.js";
@@ -233,24 +233,28 @@ export async function frameworkAudit(
   }
 
   const start = Date.now();
-  const cache = new NextjsAuditCache();
+  const cache = activateGlobalCache();
   const sub_results: Partial<Record<AuditDimension, unknown>> = {};
   const tool_errors: Array<{ tool: string; error: string }> = [];
 
   const tools = options?.tools ?? ALL_DIMENSIONS;
 
-  // Sequential invocation — sub-tools share the cache implicitly via repo+workspace.
-  for (const dim of tools) {
-    const dispatcher = TOOL_DISPATCHERS[dim];
-    if (!dispatcher) continue;
-    try {
-      sub_results[dim] = await dispatcher(repo, options?.workspace);
-    } catch (err) {
-      tool_errors.push({
-        tool: dim,
-        error: err instanceof Error ? err.message : String(err),
-      });
+  try {
+    // Sequential invocation — sub-tools share the global cache for parseFile + walkDirectory.
+    for (const dim of tools) {
+      const dispatcher = TOOL_DISPATCHERS[dim];
+      if (!dispatcher) continue;
+      try {
+        sub_results[dim] = await dispatcher(repo, options?.workspace);
+      } catch (err) {
+        tool_errors.push({
+          tool: dim,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
+  } finally {
+    deactivateGlobalCache();
   }
 
   const summary = aggregateScores(sub_results);

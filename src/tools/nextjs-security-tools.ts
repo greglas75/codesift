@@ -14,8 +14,8 @@
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { discoverWorkspaces } from "../utils/nextjs.js";
-import { parseFile } from "../parser/parser-manager.js";
-import { walkDirectory } from "../utils/walk.js";
+import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
+import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
 import { getCodeIndex } from "./index-tools.js";
 import {
   extractServerActionFunctions,

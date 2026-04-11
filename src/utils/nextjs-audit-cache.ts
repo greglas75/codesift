@@ -22,6 +22,46 @@ interface CacheEntry<T> {
   expires: number;
 }
 
+// ---------------------------------------------------------------------------
+// Module-level singleton for framework_audit to share across sub-tools
+// ---------------------------------------------------------------------------
+let _globalCache: NextjsAuditCache | null = null;
+
+/** Activate the shared cache (called by frameworkAudit at start). */
+export function activateGlobalCache(): NextjsAuditCache {
+  _globalCache = new NextjsAuditCache();
+  return _globalCache;
+}
+
+/** Deactivate and clear (called by frameworkAudit at end). */
+export function deactivateGlobalCache(): void {
+  _globalCache?.clear();
+  _globalCache = null;
+}
+
+/** Get the active cache, or null if not in a framework_audit context. */
+export function getGlobalCache(): NextjsAuditCache | null {
+  return _globalCache;
+}
+
+/**
+ * Proxy for walkDirectory that uses global cache when active.
+ * Drop-in replacement — same signature as walkDirectory.
+ */
+export async function cachedWalkDirectory(root: string, options?: WalkOptions): Promise<string[]> {
+  if (_globalCache) return _globalCache.getWalk(root, options);
+  return walkDirectory(root, options);
+}
+
+/**
+ * Proxy for parseFile that uses global cache when active.
+ * Drop-in replacement — same signature as parseFile.
+ */
+export async function cachedParseFile(path: string, source: string): Promise<Parser.Tree | null> {
+  if (_globalCache) return _globalCache.getParsedFile(path, source);
+  return parseFile(path, source);
+}
+
 export class NextjsAuditCache {
   private parseFileCache: Map<string, CacheEntry<Parser.Tree | null>> = new Map();
   private walkCache: Map<string, CacheEntry<string[]>> = new Map();

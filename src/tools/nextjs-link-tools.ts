@@ -14,8 +14,8 @@ import {
   extractLinkHrefs,
   type LinkRef,
 } from "../utils/nextjs.js";
-import { parseFile } from "../parser/parser-manager.js";
-import { walkDirectory } from "../utils/walk.js";
+import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
+import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
 import { getCodeIndex } from "./index-tools.js";
 import { nextjsRouteMap } from "./nextjs-route-tools.js";
 

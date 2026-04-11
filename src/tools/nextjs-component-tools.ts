@@ -13,9 +13,9 @@
 import { readFile } from "node:fs/promises";
 import { relative, join } from "node:path";
 import type Parser from "web-tree-sitter";
-import { parseFile } from "../parser/parser-manager.js";
+import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
 import { scanDirective, discoverWorkspaces } from "../utils/nextjs.js";
-import { walkDirectory } from "../utils/walk.js";
+import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
 import { getCodeIndex } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
