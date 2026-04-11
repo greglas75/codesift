@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -715,5 +715,66 @@ export class HealthController {
     const result = await nestRouteInventory("test-repo");
     expect(result.routes).toEqual([]);
     expect(result.stats.total_routes).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nest_audit tests (Task 10)
+// ---------------------------------------------------------------------------
+
+describe("nest_audit", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns framework_detected: false for non-NestJS repo", async () => {
+    const index = mockIndex([
+      makeSymbol({ name: "app", file: "src/app.ts", kind: "function", source: "const x = 1;" }),
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestAudit("test-repo");
+    expect(result.framework_detected).toBe(false);
+    expect(result.summary.failed_checks).toBe(0);
+  });
+
+  it("runs all checks on NestJS repo and returns combined result", async () => {
+    // Create a minimal NestJS index that detectFrameworks recognizes
+    const index = {
+      root: "/tmp/test",
+      files: [],
+      symbols: [
+        makeSymbol({ name: "app", file: "src/main.ts", kind: "function", source: "import { Module } from '@nestjs/common';" }),
+      ],
+    } as unknown as CodeIndex;
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestAudit("test-repo");
+    expect(result.framework_detected).toBe(true);
+    expect(result.summary).toBeDefined();
+    expect(typeof result.summary.total_routes).toBe("number");
+    expect(typeof result.summary.cycles).toBe("number");
+    expect(typeof result.summary.failed_checks).toBe("number");
+    expect(Array.isArray(result.summary.truncated_checks)).toBe(true);
+  });
+
+  it("filters checks via options.checks", async () => {
+    const index = {
+      root: "/tmp/test",
+      files: [],
+      symbols: [
+        makeSymbol({ name: "app", file: "src/main.ts", kind: "function", source: "import '@nestjs/common';" }),
+      ],
+    } as unknown as CodeIndex;
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestAudit("test-repo", { checks: ["lifecycle"] });
+    expect(result.framework_detected).toBe(true);
+    // Only lifecycle was requested — others should be undefined
+    expect(result.lifecycle_map).toBeDefined();
+    expect(result.module_graph).toBeUndefined();
+    expect(result.di_graph).toBeUndefined();
+    expect(result.guard_chain).toBeUndefined();
+    expect(result.route_inventory).toBeUndefined();
   });
 });
