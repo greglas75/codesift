@@ -62,10 +62,10 @@ async function parseOneFile(
       symbols = extractAstroSymbols(source, relPath, repoName);
     } else if (language === "conversation") {
       symbols = extractConversationSymbols(source, relPath, repoName);
-    } else if (language === "config" || language === "text_stub" || language === "kotlin") {
-      // text_stub/kotlin: indexed as FileEntry but no symbol extraction until
-      // a tree-sitter grammar + extractor is added. search_text (ripgrep path)
-      // and scan_secrets still work on these files.
+    } else if (language === "config" || language === "text_stub") {
+      // text_stub: Swift/Dart/Scala/etc. — indexed as FileEntry but no symbol
+      // extraction until a tree-sitter grammar + extractor is added.
+      // search_text (ripgrep path) and scan_secrets still work on these files.
       symbols = [];
     } else {
       const tree = await parseFile(filePath, source);
@@ -439,6 +439,7 @@ export async function indexFolder(
     updated_at: Date.now(),
     symbol_count: symbols.length,
     file_count: fileEntries.length,
+    extractor_version: { ...EXTRACTOR_VERSIONS },
   };
   await saveIndex(indexPath, codeIndex);
 
@@ -944,7 +945,9 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return null;
 
-  const index = await loadIndex(meta.index_path);
+  // Pass EXTRACTOR_VERSIONS so a schema bump forces a cache miss instead of
+  // serving a stale index. Callers that hit the miss path should reindex.
+  const index = await loadIndex(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (!index) return null;
 
   codeIndexes.set(repoName, index);

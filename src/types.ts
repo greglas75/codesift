@@ -68,6 +68,9 @@ export interface CodeIndex {
   updated_at: number;
   symbol_count: number;
   file_count: number;
+  /** Snapshot of EXTRACTOR_VERSIONS at index creation time — used to detect
+   *  schema changes and trigger full reindex when any language version bumps. */
+  extractor_version?: Record<string, string>;
 }
 
 export interface RepoMeta {
