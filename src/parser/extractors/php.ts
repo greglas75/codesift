@@ -166,6 +166,51 @@ export function extractPhpSymbols(
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
+  // Synthesize @property / @method tags from a declaration's docblock into
+  // real CodeSymbols with meta.synthetic=true. Used by class/interface/trait
+  // cases — any PHP declaration that can carry a PHPDoc block.
+  // Dedup rule: if a real (non-synthetic) member with the same name+kind
+  // already exists under the same parent, skip synthesis. Body walk must run
+  // BEFORE this function so the real members are in the symbols array.
+  function synthesizeDocstringTags(
+    node: Parser.SyntaxNode,
+    parent: CodeSymbol,
+    docstring: string | undefined,
+  ): void {
+    if (!docstring) return;
+    const tags = parsePhpDocTags(docstring);
+    for (const tag of tags) {
+      const targetKind: SymbolKind = tag.tag === "property" ? "field" : "method";
+      const realExists = symbols.some(
+        (s) =>
+          s.parent === parent.id &&
+          s.name === tag.name &&
+          s.kind === targetKind &&
+          !s.meta?.synthetic,
+      );
+      if (realExists) continue;
+      const synOpts: {
+        parentId: string;
+        signature?: string;
+        meta: Record<string, unknown>;
+      } = {
+        parentId: parent.id,
+        meta: { synthetic: true },
+      };
+      if (tag.type) synOpts.signature = tag.type;
+      const synthetic = makeSymbol(
+        node,
+        tag.name,
+        targetKind,
+        filePath,
+        source,
+        repo,
+        synOpts,
+      );
+      symbols.push(synthetic);
+    }
+  }
+
   function walk(node: Parser.SyntaxNode, parentId?: string, parentIsTest = false): void {
     switch (node.type) {
       case "namespace_definition": {
@@ -202,8 +247,8 @@ export function extractPhpSymbols(
         });
         symbols.push(sym);
 
-        // 1. Walk class body FIRST so real methods/fields are in `symbols`
-        //    before dedup runs for synthetic @property/@method tags.
+        // Walk class body FIRST so real methods/fields are in `symbols`
+        // before dedup runs for synthetic @property/@method tags.
         const body = node.childForFieldName("body");
         if (body) {
           for (const child of body.namedChildren) {
@@ -211,52 +256,16 @@ export function extractPhpSymbols(
           }
         }
 
-        // 2. Synthesize @property / @method from the class docblock.
-        //    Yii2 ActiveRecord uses these heavily ("magic properties") —
-        //    they don't exist as real PHP fields but they're very much
-        //    part of the public API. Dedup against real members (same
-        //    name+kind+parent): real wins, synthetic skipped.
-        if (docstring) {
-          const tags = parsePhpDocTags(docstring);
-          for (const tag of tags) {
-            const targetKind: SymbolKind = tag.tag === "property" ? "field" : "method";
-            const realExists = symbols.some(
-              (s) =>
-                s.parent === sym.id &&
-                s.name === tag.name &&
-                s.kind === targetKind &&
-                !s.meta?.synthetic,
-            );
-            if (realExists) continue;
-            const synOpts: {
-              parentId: string;
-              signature?: string;
-              meta: Record<string, unknown>;
-            } = {
-              parentId: sym.id,
-              meta: { synthetic: true },
-            };
-            if (tag.type) synOpts.signature = tag.type;
-            const synthetic = makeSymbol(
-              node,
-              tag.name,
-              targetKind,
-              filePath,
-              source,
-              repo,
-              synOpts,
-            );
-            symbols.push(synthetic);
-          }
-        }
+        synthesizeDocstringTags(node, sym, docstring);
         return;
       }
 
       case "interface_declaration": {
         const name = getNodeName(node) ?? "<anonymous>";
+        const docstring = getDocstring(node, source);
         const sym = makeSymbol(node, name, "interface", filePath, source, repo, {
           parentId,
-          docstring: getDocstring(node, source),
+          docstring,
         });
         symbols.push(sym);
 
@@ -266,14 +275,17 @@ export function extractPhpSymbols(
             walk(child, sym.id, false);
           }
         }
+
+        synthesizeDocstringTags(node, sym, docstring);
         return;
       }
 
       case "trait_declaration": {
         const name = getNodeName(node) ?? "<anonymous>";
+        const docstring = getDocstring(node, source);
         const sym = makeSymbol(node, name, "type", filePath, source, repo, {
           parentId,
-          docstring: getDocstring(node, source),
+          docstring,
         });
         symbols.push(sym);
 
@@ -283,6 +295,8 @@ export function extractPhpSymbols(
             walk(child, sym.id, false);
           }
         }
+
+        synthesizeDocstringTags(node, sym, docstring);
         return;
       }
 
