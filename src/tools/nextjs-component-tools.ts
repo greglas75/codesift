@@ -10,6 +10,12 @@
  * per the 8-row decision table.
  */
 
+import { readFile } from "node:fs/promises";
+import { relative } from "node:path";
+import type Parser from "web-tree-sitter";
+import { parseFile } from "../parser/parser-manager.js";
+import { scanDirective } from "../utils/nextjs.js";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -90,6 +96,104 @@ export const BROWSER_GLOBALS = new Set<string>([
   "window", "document", "localStorage", "sessionStorage",
   "navigator", "location", "history",
 ]);
+
+// ---------------------------------------------------------------------------
+// Two-stage directive detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Confirm a file-level directive by inspecting `Program.body[0]`.
+ *
+ * Tree-sitter's tsx/typescript grammars expose top-level directive strings as
+ * an `expression_statement` whose first named child is a `string` literal
+ * (a `"use client"` or `"use server"` token). Any other shape — including a
+ * nested block, inline comment, or non-first statement — must return `null`.
+ */
+export function confirmDirectiveFromTree(
+  tree: Parser.Tree,
+): "use client" | "use server" | null {
+  const root = tree.rootNode;
+  const first = root.namedChildren[0];
+  if (!first) return null;
+  if (first.type !== "expression_statement") return null;
+
+  const exprChild = first.namedChildren[0];
+  if (!exprChild) return null;
+  if (exprChild.type !== "string") return null;
+
+  // tree-sitter `string` nodes have fragment children containing the text
+  // between the quotes. Strip the surrounding quotes via .text and compare.
+  const raw = exprChild.text;
+  if (raw.length < 3) return null;
+  const inner = raw.slice(1, -1);
+  if (inner === "use client") return "use client";
+  if (inner === "use server") return "use server";
+  return null;
+}
+
+/**
+ * Classify a single file. Returns a partial entry with the directive field
+ * populated. Signal detection + final classification are added by the
+ * orchestrator (Task 23) via `detectSignals` (Task 21) and
+ * `applyClassificationTable` (Task 22).
+ */
+export async function classifyFile(
+  filePath: string,
+  repoRoot: string,
+): Promise<NextjsComponentEntry> {
+  const relPath = relative(repoRoot, filePath);
+  const emptySignals: ComponentSignals = {
+    hooks: [],
+    event_handlers: [],
+    browser_globals: [],
+    dynamic_ssr_false: false,
+  };
+
+  // Stage 1: fast-reject via 512-byte window
+  const stage1 = await scanDirective(filePath);
+
+  // Stage 2: parse file via tree-sitter
+  let source: string;
+  try {
+    source = await readFile(filePath, "utf8");
+  } catch {
+    return {
+      path: relPath,
+      classification: "ambiguous",
+      directive: null,
+      signals: emptySignals,
+      violations: [],
+    };
+  }
+
+  const tree = await parseFile(filePath, source);
+  if (!tree) {
+    return {
+      path: relPath,
+      classification: "ambiguous",
+      directive: null,
+      signals: emptySignals,
+      violations: [],
+    };
+  }
+
+  // Stage 3: confirm directive via AST (only if stage 1 matched)
+  let directive: "use client" | "use server" | null = null;
+  if (stage1 !== null) {
+    directive = confirmDirectiveFromTree(tree);
+  }
+
+  // Note: signal detection and final classification are layered in by
+  // Tasks 21-23. For now we return a stub classification — the orchestrator
+  // rebuilds this via detectSignals + applyClassificationTable.
+  return {
+    path: relPath,
+    classification: directive === "use client" ? "client_explicit" : "server",
+    directive,
+    signals: emptySignals,
+    violations: [],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Orchestrator (stub for Task 19)
