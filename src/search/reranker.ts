@@ -17,8 +17,8 @@ async function loadPipeline(model?: string): Promise<RerankerFn | null> {
   if (failedModels.has(modelName)) return null;
 
   try {
-    // @ts-expect-error — optional dependency, may not be installed
-    const transformers = await import("@huggingface/transformers");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const transformers = await import("@huggingface/transformers") as any;
     const pipelineFn = transformers.pipeline ?? transformers.default?.pipeline;
     if (!pipelineFn) { failedModels.add(modelName); return null; }
 
@@ -29,13 +29,13 @@ async function loadPipeline(model?: string): Promise<RerankerFn | null> {
     const rerankerFn: RerankerFn = async (pairs: string[][]) => {
       // Batch: send all inputs at once for better throughput
       const inputs = pairs.map(([q, t]) => `${q} [SEP] ${t}`);
-      const outputs = await classifier(inputs, { topk: 1 });
+      const outputs = await (classifier as any)(inputs, { topk: 1 });
 
       // Normalize: pipeline returns single object for 1 input, array for N
       const results: Array<{ score: number }> = [];
       for (let i = 0; i < pairs.length; i++) {
         const out = Array.isArray(outputs[i]) ? outputs[i][0] : outputs[i] ?? outputs;
-        const score = out?.score ?? 0;
+        const score = (out as any)?.score ?? 0;
         results.push({ score: typeof score === "number" ? score : 0 });
       }
       return results;

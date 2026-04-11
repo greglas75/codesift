@@ -146,13 +146,15 @@ export async function traceRoomSchema(
     }
 
     if (hasAnnotation(sym, "Database")) {
-      databases.push({
+      const db: RoomDatabase = {
         name: sym.name,
         file: sym.file,
         start_line: sym.start_line,
         entity_refs: extractDatabaseEntityRefs(sym),
-        version: extractDatabaseVersion(sym),
-      });
+      };
+      const ver = extractDatabaseVersion(sym);
+      if (ver != null) db.version = ver;
+      databases.push(db);
     }
   }
 

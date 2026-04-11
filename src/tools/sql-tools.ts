@@ -3,7 +3,7 @@
  * Hidden/discoverable: not in CORE_TOOL_NAMES.
  */
 
-import type { CodeSymbol } from "../types.js";
+import type { CodeSymbol, TextMatch } from "../types.js";
 import { getCodeIndex } from "./index-tools.js";
 import { searchText } from "./search-tools.js";
 
@@ -914,7 +914,7 @@ export async function diffMigrations(
   // Find .sql files, sorted by name (migration order heuristic)
   const sqlFiles = index.files
     .filter((f) => (f.language === "sql" || f.language === "sql-jinja"))
-    .filter((f) => !filePattern || f.file?.includes(filePattern) || f.path.includes(filePattern ?? ""))
+    .filter((f) => !filePattern || f.path.includes(filePattern))
     .sort((a, b) => a.path.localeCompare(b.path));
 
   const additive: MigrationOp[] = [];
@@ -1041,7 +1041,7 @@ export async function findOrphanTables(
 
   for (const table of tables) {
     // Search for references to this table name via ripgrep
-    let rgMatches;
+    let rgMatches: TextMatch[] = [];
     try {
       rgMatches = await searchText(repo, table.name, {
         regex: false,

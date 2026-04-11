@@ -57,9 +57,6 @@ export async function scanDirective(
   }
 }
 
-/** App Router convention file names (without extension). */
-const APP_CONVENTION_FILES = /^(page|layout|route|loading|error|not-found|global-error|default|template)$/;
-
 /**
  * Derive a URL path from a file path relative to the repo root.
  * Handles App Router route groups, dynamic segments, and Pages Router conventions.
@@ -128,7 +125,7 @@ export async function discoverWorkspaces(
   await scan(repoRoot, 0);
 
   // Single config at root = not a monorepo
-  if (results.length === 1 && results[0].root === repoRoot) {
+  if (results.length === 1 && results[0]!.root === repoRoot) {
     return [];
   }
 

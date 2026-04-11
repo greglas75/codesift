@@ -249,14 +249,15 @@ export function recordToolCall(
   const isError = resultData !== null && typeof resultData === "object" && "error" in (resultData as Record<string, unknown>);
   if (SEARCH_TOOL_SET.has(tool) && resultChunks === 0 && !isError) {
     const filePattern = args["file_pattern"] as string | undefined;
-    state.negativeEvidence.push({
+    const entry: NegativeEntry = {
       tool,
       query: (query ?? "") as string,
       repo,
       ts: now,
       stale: false,
-      filePattern,
-    });
+    };
+    if (filePattern != null) entry.filePattern = filePattern;
+    state.negativeEvidence.push(entry);
     enforceNegativeEvidenceCap();
   }
 
@@ -272,7 +273,7 @@ export function recordToolCall(
  * (no result data available to inspect).
  */
 export function recordCacheHit(
-  tool: string,
+  _tool: string,
   _args: Record<string, unknown>,
 ): void {
   state.callCount++;

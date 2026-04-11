@@ -582,6 +582,7 @@ export type ToolCategory =
   | "cross-repo"
   | "nestjs"
   | "navigation"
+  | "session"
   | "meta";
 
 /** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
@@ -1997,10 +1998,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output as structured JSON or mermaid erDiagram"),
     },
     handler: async (args) => {
-      return await getModelGraph(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        output_format: args.output_format as "json" | "mermaid" | undefined,
-      });
+      const opts: Parameters<typeof getModelGraph>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.output_format != null) opts!.output_format = args.output_format as "json" | "mermaid";
+      return await getModelGraph(args.repo as string, opts);
     },
   },
   {
@@ -2014,7 +2015,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       file_pattern: z.string().optional().describe("Filter by file path substring"),
     },
     handler: async (args) => {
-      return await getTestFixtures(args.repo as string, { file_pattern: args.file_pattern as string | undefined });
+      const opts: Parameters<typeof getTestFixtures>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      return await getTestFixtures(args.repo as string, opts);
     },
   },
   {
@@ -2028,7 +2031,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       file_pattern: z.string().optional().describe("Filter by file path substring"),
     },
     handler: async (args) => {
-      return await findFrameworkWiring(args.repo as string, { file_pattern: args.file_pattern as string | undefined });
+      const opts: Parameters<typeof findFrameworkWiring>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      return await findFrameworkWiring(args.repo as string, opts);
     },
   },
   {
@@ -2044,11 +2049,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_results: zFiniteNumber.optional().describe("Max findings to return (default: 100)"),
     },
     handler: async (args) => {
-      return await runRuff(args.repo as string, {
-        categories: args.categories as string[] | undefined,
-        file_pattern: args.file_pattern as string | undefined,
-        max_results: args.max_results as number | undefined,
-      });
+      const opts: Parameters<typeof runRuff>[1] = {};
+      if (args.categories != null) opts!.categories = args.categories as string[];
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      return await runRuff(args.repo as string, opts);
     },
   },
   {
@@ -2074,11 +2079,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_results: zFiniteNumber.optional().describe("Max callers to return (default: 100)"),
     },
     handler: async (args) => {
-      return await findPythonCallers(args.repo as string, args.target_name as string, {
-        target_file: args.target_file as string | undefined,
-        file_pattern: args.file_pattern as string | undefined,
-        max_results: args.max_results as number | undefined,
-      });
+      const opts: Parameters<typeof findPythonCallers>[2] = {};
+      if (args.target_file != null) opts!.target_file = args.target_file as string;
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      return await findPythonCallers(args.repo as string, args.target_name as string, opts);
     },
   },
   {
@@ -2092,7 +2097,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       settings_file: z.string().optional().describe("Explicit settings file path (auto-detects if omitted)"),
     },
     handler: async (args) => {
-      return await analyzeDjangoSettings(args.repo as string, { settings_file: args.settings_file as string | undefined });
+      const opts: Parameters<typeof analyzeDjangoSettings>[1] = {};
+      if (args.settings_file != null) opts!.settings_file = args.settings_file as string;
+      return await analyzeDjangoSettings(args.repo as string, opts);
     },
   },
   {
@@ -2107,10 +2114,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       task_name: z.string().optional().describe("Focus on a specific task by name"),
     },
     handler: async (args) => {
-      return await traceCeleryChain(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        task_name: args.task_name as string | undefined,
-      });
+      const opts: Parameters<typeof traceCeleryChain>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.task_name != null) opts!.task_name = args.task_name as string;
+      return await traceCeleryChain(args.repo as string, opts);
     },
   },
   {
@@ -2126,11 +2133,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_results: zFiniteNumber.optional().describe("Max findings (default: 100)"),
     },
     handler: async (args) => {
-      return await runMypy(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        strict: args.strict as boolean | undefined,
-        max_results: args.max_results as number | undefined,
-      });
+      const opts: Parameters<typeof runMypy>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.strict != null) opts!.strict = args.strict as boolean;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      return await runMypy(args.repo as string, opts);
     },
   },
   {
@@ -2146,11 +2153,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_results: zFiniteNumber.optional().describe("Max findings (default: 100)"),
     },
     handler: async (args) => {
-      return await runPyright(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        strict: args.strict as boolean | undefined,
-        max_results: args.max_results as number | undefined,
-      });
+      const opts: Parameters<typeof runPyright>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.strict != null) opts!.strict = args.strict as boolean;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      return await runPyright(args.repo as string, opts);
     },
   },
   {
@@ -2165,10 +2172,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       check_vulns: zBool().describe("Check OSV.dev for CVEs (network, opt-in)"),
     },
     handler: async (args) => {
-      return await analyzePythonDeps(args.repo as string, {
-        check_pypi: args.check_pypi as boolean | undefined,
-        check_vulns: args.check_vulns as boolean | undefined,
-      });
+      const opts: Parameters<typeof analyzePythonDeps>[1] = {};
+      if (args.check_pypi != null) opts!.check_pypi = args.check_pypi as boolean;
+      if (args.check_vulns != null) opts!.check_vulns = args.check_vulns as boolean;
+      return await analyzePythonDeps(args.repo as string, opts);
     },
   },
   {
@@ -2183,10 +2190,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_cycles: zFiniteNumber.optional().describe("Max cycles to report (default: 50)"),
     },
     handler: async (args) => {
-      return await findPythonCircularImports(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        max_cycles: args.max_cycles as number | undefined,
-      });
+      const opts: Parameters<typeof findPythonCircularImports>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_cycles != null) opts!.max_cycles = args.max_cycles as number;
+      return await findPythonCircularImports(args.repo as string, opts);
     },
   },
 
@@ -3565,11 +3572,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { analyzeSchema } = await import("./tools/sql-tools.js");
-      const result = await analyzeSchema(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        output_format: args.output_format as "json" | "mermaid" | undefined,
-        include_columns: args.include_columns as boolean | undefined,
-      });
+      const opts: Parameters<typeof analyzeSchema>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.output_format != null) opts!.output_format = args.output_format as "json" | "mermaid";
+      if (args.include_columns != null) opts!.include_columns = args.include_columns as boolean;
+      const result = await analyzeSchema(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Tables: ${result.tables.length} | Views: ${result.views.length} | Relationships: ${result.relationships.length}`);
       if (result.warnings.length > 0) parts.push(`Warnings: ${result.warnings.join("; ")}`);
@@ -3608,12 +3615,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { traceQuery } = await import("./tools/sql-tools.js");
-      const result = await traceQuery(args.repo as string, {
+      const opts: Parameters<typeof traceQuery>[1] = {
         table: args.table as string,
-        include_orm: args.include_orm as boolean | undefined,
-        file_pattern: args.file_pattern as string | undefined,
-        max_references: args.max_references as number | undefined,
-      });
+      };
+      if (args.include_orm != null) opts!.include_orm = args.include_orm as boolean;
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_references != null) opts!.max_references = args.max_references as number;
+      const result = await traceQuery(args.repo as string, opts);
       const parts: string[] = [];
       if (result.table_definition) {
         parts.push(`Definition: ${result.table_definition.file}:${result.table_definition.line} [${result.table_definition.kind}]`);
@@ -3648,10 +3656,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { analyzeSchemaComplexity } = await import("./tools/sql-tools.js");
-      const result = await analyzeSchemaComplexity(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        top_n: args.top_n as number | undefined,
-      });
+      const opts: Parameters<typeof analyzeSchemaComplexity>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.top_n != null) opts!.top_n = args.top_n as number;
+      const result = await analyzeSchemaComplexity(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Schema complexity: ${result.tables.length} tables`);
       parts.push(`${"Table".padEnd(30)} ${"Cols".padStart(5)} ${"FKs".padStart(4)} ${"Idx".padStart(4)} ${"Score".padStart(7)}`);
@@ -3673,10 +3681,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { scanDmlSafety } = await import("./tools/sql-tools.js");
-      const result = await scanDmlSafety(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        max_results: args.max_results as number | undefined,
-      });
+      const opts: Parameters<typeof scanDmlSafety>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      const result = await scanDmlSafety(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`DML safety: ${result.summary.total} findings across ${result.summary.files_scanned} files`);
       for (const [rule, count] of Object.entries(result.summary.by_rule)) {
@@ -3703,9 +3711,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { lintSchema } = await import("./tools/sql-tools.js");
-      const result = await lintSchema(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-      });
+      const opts: Parameters<typeof lintSchema>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      const result = await lintSchema(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Schema lint: ${result.summary.total} finding${result.summary.total === 1 ? "" : "s"}`);
       for (const [rule, count] of Object.entries(result.summary.by_rule)) {
@@ -3734,9 +3742,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { diffMigrations } = await import("./tools/sql-tools.js");
-      const result = await diffMigrations(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-      });
+      const opts: Parameters<typeof diffMigrations>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      const result = await diffMigrations(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Migration ops: ${result.summary.additive + result.summary.modifying + result.summary.destructive} across ${result.summary.total_files} files`);
       parts.push(`  additive:    ${result.summary.additive}`);
@@ -3768,9 +3776,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { findOrphanTables } = await import("./tools/sql-tools.js");
-      const result = await findOrphanTables(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-      });
+      const opts: Parameters<typeof findOrphanTables>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      const result = await findOrphanTables(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Tables: ${result.total_tables} | Orphans: ${result.orphan_count}`);
       if (result.orphans.length > 0) {
@@ -3799,13 +3807,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { searchColumns } = await import("./tools/sql-tools.js");
-      const result = await searchColumns(args.repo as string, {
+      const opts: Parameters<typeof searchColumns>[1] = {
         query: (args.query as string) ?? "",
-        type: args.type as string | undefined,
-        table: args.table as string | undefined,
-        file_pattern: args.file_pattern as string | undefined,
-        max_results: args.max_results as number | undefined,
-      });
+      };
+      if (args.type != null) opts!.type = args.type as string;
+      if (args.table != null) opts!.table = args.table as string;
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_results != null) opts!.max_results = args.max_results as number;
+      const result = await searchColumns(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Columns: ${result.columns.length}${result.truncated ? `/${result.total} (truncated)` : ""}`);
       for (const c of result.columns) {
@@ -3825,9 +3834,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: Record<string, unknown>) => {
       const { analyzeSchemaDrift } = await import("./tools/sql-tools.js");
-      const result = await analyzeSchemaDrift(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-      });
+      const opts: Parameters<typeof analyzeSchemaDrift>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      const result = await analyzeSchemaDrift(args.repo as string, opts);
       const parts: string[] = [];
       parts.push(`Schema drift: ${result.summary.total} issue${result.summary.total === 1 ? "" : "s"}`);
       parts.push(`  extra in ORM:     ${result.summary.extra_in_orm}`);
@@ -4112,13 +4121,15 @@ export function registerTools(
   registerShortener("nextjs_api_contract", { compact: formatApiContractCompact, counts: formatApiContractCounts });
   registerShortener("nextjs_boundary_analyzer", { compact: formatBoundaryAnalyzerCompact, counts: formatBoundaryAnalyzerCounts });
   registerShortener("get_session_context", {
-    compact: (text: string) => {
+    compact: (raw: unknown) => {
+      const text = typeof raw === "string" ? raw : JSON.stringify(raw);
       try {
         const data = JSON.parse(text);
         return `session:${data.session_id?.slice(0, 8)} calls:${data.call_count} files:${data.explored_files?.count} symbols:${data.explored_symbols?.count} queries:${data.queries?.count} neg:${data.negative_evidence?.count}`;
       } catch { return text.slice(0, 500); }
     },
-    counts: (text: string) => {
+    counts: (raw: unknown) => {
+      const text = typeof raw === "string" ? raw : JSON.stringify(raw);
       try {
         const data = JSON.parse(text);
         return `files:${data.explored_files?.count} symbols:${data.explored_symbols?.count} queries:${data.queries?.count} neg:${data.negative_evidence?.count}`;

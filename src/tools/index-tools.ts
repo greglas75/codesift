@@ -1,5 +1,5 @@
 import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
-import { join, relative, extname, resolve, basename, dirname } from "node:path";
+import { join, relative, resolve, basename, dirname } from "node:path";
 import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";

@@ -223,14 +223,15 @@ export async function analyzeComposeRecomposition(
     const sig = sym.signature ?? "";
     const collectionParamRe = /(\w+)\s*:\s*((?:Mutable)?(?:List|Map|Set|ArrayList|HashMap|HashSet))\s*[<,)]/g;
     while ((m = collectionParamRe.exec(sig)) !== null) {
-      issues.push({
+      const issueEntry: RecompositionIssue = {
         component: sym.name,
         file: sym.file,
         start_line: sym.start_line,
         issue: `Parameter "${m[1]}" is ${m[2]}<...> — unstable collection type; Compose can't skip recomposition. Use kotlinx.collections.immutable or wrap in @Stable/@Immutable.`,
         severity: "warning",
-        param: m[1],
-      });
+      };
+      if (m[1] != null) issueEntry.param = m[1];
+      issues.push(issueEntry);
       withIssues.add(sym.name);
     }
 

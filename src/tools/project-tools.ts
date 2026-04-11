@@ -703,79 +703,6 @@ export function classifyFiles(index: CodeIndex): FileClassifications {
 // Hono Extractor
 // ---------------------------------------------------------------------------
 
-interface HonoCall {
-  type: "use" | "route" | "get" | "post" | "put" | "delete" | "all";
-  path: string | null;
-  args: string;
-  line: number;
-}
-
-function parseHonoCalls(source: string): HonoCall[] {
-  const calls: HonoCall[] = [];
-  const lines = source.split("\n");
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const lineNum = i + 1;
-
-    // Match app.use("path", handler) or app.route("path", router)
-    const useMatch = line.match(/app\.(use|route|get|post|put|delete|all)\s*\(\s*["']([^"']+)["']\s*,\s*(.+)/);
-    if (useMatch) {
-      // Clean trailing ); but preserve function call parens like rateLimit(3, 3600)
-      const args = useMatch[3]!.trim().replace(/\);?\s*$/, "").trim();
-      calls.push({
-        type: useMatch[1]! as HonoCall["type"],
-        path: useMatch[2]!,
-        args,
-        line: lineNum,
-      });
-      continue;
-    }
-
-    // Match app.use("*", handler) — global middleware
-    const globalUseMatch = line.match(/app\.use\s*\(\s*["']\*["']\s*,\s*(.+)/);
-    if (globalUseMatch) {
-      const args = globalUseMatch[1]!.trim().replace(/\);?\s*$/, "").trim();
-      calls.push({
-        type: "use",
-        path: "*",
-        args,
-        line: lineNum,
-      });
-      continue;
-    }
-
-    // Match app.get("/path", (c) => ...) — inline handler
-    const inlineMatch = line.match(/app\.(get|post|put|delete)\s*\(\s*["']([^"']+)["']\s*,/);
-    if (inlineMatch) {
-      calls.push({
-        type: inlineMatch[1]! as HonoCall["type"],
-        path: inlineMatch[2]!,
-        args: "(inline handler)",
-        line: lineNum,
-      });
-    }
-  }
-
-  return calls;
-}
-
-function extractMiddlewareName(args: string): string | null {
-  // Handle rateLimit(3, 3600) → "rateLimit"
-  const funcCall = args.match(/^(\w+)\s*\(/);
-  if (funcCall) return funcCall[1]!;
-  // Handle simple identifier: clerkAuth
-  const simple = args.match(/^(\w+)$/);
-  if (simple) return simple[1]!;
-  return null;
-}
-
-function extractRateLimit(args: string): { max: number; window: number } | null {
-  const match = args.match(/rateLimit\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/);
-  if (match) return { max: parseInt(match[1]!), window: parseInt(match[2]!) };
-  return null;
-}
-
 let _honoFallbackCount = 0;
 export function getHonoFallbackCount(): number { return _honoFallbackCount; }
 
@@ -2004,18 +1931,6 @@ function extractGitHealth(projectRoot: string): GitHealth | null {
   } catch {
     return null;
   }
-}
-
-function inferScope(path: string): string {
-  if (path === "*") return "global";
-  if (path.includes("/admin")) return "admin";
-  if (path.includes("/webhook")) return "webhook";
-  if (path.includes("/health")) return "health";
-  if (path.includes("/public") || path.includes("/contests") || path.includes("/translations") || path.includes("/r/")) return "public";
-  // Default: extract first meaningful segment
-  const segments = path.split("/").filter(Boolean);
-  if (segments.length >= 2) return segments[1]!;
-  return "root";
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
-import { detectPlatform, detectPlatformFromClientInfo } from "./cli/platform.js";
+import { detectPlatform } from "./cli/platform.js";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
