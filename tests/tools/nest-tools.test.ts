@@ -432,9 +432,42 @@ export class RepoService {
 
     expect(result.nodes.length).toBe(1);
     expect(result.nodes[0]!.name).toBe("RepoService");
-    // Should extract Repository and LoggerService via paren-counting
-    expect(result.edges).toContainEqual({ from: "RepoService", to: "Repository", via: "inject" });
+    // G3: Repository<User> should resolve to inner type "User" (container generic)
+    expect(result.edges).toContainEqual({ from: "RepoService", to: "User", via: "inject" });
+    // LoggerService is not a container generic — resolves to outer type
     expect(result.edges).toContainEqual({ from: "RepoService", to: "LoggerService", via: "inject" });
+  });
+
+  it("G3: extracts inner type from container generic (Repository<Article>, Model<Comment>)", async () => {
+    await writeFile(join(tmpRoot, "src/article.service.ts"), `
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class ArticleService {
+  constructor(
+    @InjectRepository(Article) private readonly articleRepo: Repository<Article>,
+    @InjectRepository(Comment) private readonly commentRepo: Repository<Comment>,
+    @InjectModel(User.name) private readonly userModel: Model<User>,
+    private readonly plainService: PlainService,
+  ) {}
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, ["src/article.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo");
+
+    expect(result.nodes.length).toBe(1);
+    // Container generics resolve to inner type — distinguishes different repositories
+    expect(result.edges).toContainEqual({ from: "ArticleService", to: "Article", via: "inject" });
+    expect(result.edges).toContainEqual({ from: "ArticleService", to: "Comment", via: "inject" });
+    expect(result.edges).toContainEqual({ from: "ArticleService", to: "User", via: "inject" });
+    // Non-container type — resolves to outer name
+    expect(result.edges).toContainEqual({ from: "ArticleService", to: "PlainService", via: "inject" });
+    // Regression: no edge for raw "Repository" or "Model" (now that G3 unwraps them)
+    expect(result.edges).not.toContainEqual({ from: "ArticleService", to: "Repository", via: "inject" });
+    expect(result.edges).not.toContainEqual({ from: "ArticleService", to: "Model", via: "inject" });
   });
 
   it("detects circular DI dependencies", async () => {

@@ -301,7 +301,19 @@ function extractInjectedTypes(ctorBody: string): string[] {
     const colonIdx = param.lastIndexOf(":");
     if (colonIdx === -1) continue;
     const typeStr = param.slice(colonIdx + 1).trim();
-    // Get first word (class name, before generics)
+    // G3: Detect container generics like Repository<User>, Model<Comment>, Repo<X>.
+    // For container types, unwrap and return the inner type parameter so consumers
+    // can distinguish Repository<Article> from Repository<Comment>.
+    const genericMatch = typeStr.match(/^(\w+)<\s*(\w+)\s*(?:,[^>]*)?>/);
+    if (genericMatch) {
+      const outer = genericMatch[1]!;
+      const inner = genericMatch[2]!;
+      if (/^(Repository|Repo|Model|Collection|Array|Set|Map|List|Observable|Promise|Ref|Token|Provider|Class)$/.test(outer)) {
+        types.push(inner);
+        continue;
+      }
+    }
+    // Non-container type — return the outer name as before
     const typeMatch = typeStr.match(/^(\w+)/);
     if (typeMatch) types.push(typeMatch[1]!);
   }
