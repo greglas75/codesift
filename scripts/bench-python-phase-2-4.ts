@@ -24,6 +24,11 @@ import { getModelGraph } from "../src/tools/model-tools.js";
 import { getTestFixtures } from "../src/tools/pytest-tools.js";
 import { findFrameworkWiring } from "../src/tools/wiring-tools.js";
 import { parsePyproject } from "../src/tools/pyproject-tools.js";
+import { findPythonCallers } from "../src/tools/python-callers.js";
+import { analyzeDjangoSettings } from "../src/tools/django-settings.js";
+import { traceCeleryChain } from "../src/tools/celery-tools.js";
+import { analyzePythonDeps } from "../src/tools/python-deps-analyzer.js";
+import { findPythonCircularImports } from "../src/tools/python-circular-imports.js";
 
 const DEFAULT_PROJECT = "/tmp/review-projects/flask";
 
@@ -184,6 +189,72 @@ async function main(): Promise<void> {
       console.log(`  Configured tools: ${info.configured_tools.join(", ")}`);
     } else {
       console.log(`  No pyproject.toml found`);
+    }
+  } catch (err) {
+    console.log(`  ERROR — ${(err as Error).message}`);
+  }
+
+  // ---------------------------------------------------------------
+  section("8. find_python_callers — trace @shared_task callers");
+  try {
+    // Find callers of a known task
+    const result = await findPythonCallers(repoName, "send_async_email");
+    console.log(`  Target: ${result.target.name} in ${result.target.file}`);
+    console.log(`  Callers: ${result.caller_count}`);
+    console.log(`  From files: ${result.called_from_files.length}`);
+    for (const c of result.callers.slice(0, 3)) {
+      console.log(`    ${c.call_kind.padEnd(8)} ${c.caller_symbol.padEnd(20)} ${c.caller_file}:${c.caller_line}`);
+    }
+  } catch (err) {
+    console.log(`  (target not found — expected for Flask: ${(err as Error).message})`);
+  }
+
+  // ---------------------------------------------------------------
+  section("9. analyze_django_settings");
+  try {
+    const result = await analyzeDjangoSettings(repoName);
+    console.log(`  Settings files: ${result.files_scanned.length}`);
+    console.log(`  Total findings: ${result.total}`);
+    console.log(`  By severity: ${fmt(result.by_severity)}`);
+  } catch (err) {
+    console.log(`  ERROR — ${(err as Error).message}`);
+  }
+
+  // ---------------------------------------------------------------
+  section("10. trace_celery_chain");
+  try {
+    const result = await traceCeleryChain(repoName);
+    console.log(`  Tasks: ${result.total_tasks}`);
+    console.log(`  Total call sites: ${result.total_call_sites}`);
+    console.log(`  Orphan tasks: ${result.orphan_tasks.length}`);
+    console.log(`  Canvas usages: ${result.canvas_usages.length}`);
+    for (const t of result.tasks.slice(0, 3)) {
+      console.log(`    ${t.name.padEnd(20)} ${t.callers.length} callers  [${t.file}]`);
+    }
+  } catch (err) {
+    console.log(`  ERROR — ${(err as Error).message}`);
+  }
+
+  // ---------------------------------------------------------------
+  section("11. analyze_python_deps (offline mode)");
+  try {
+    const result = await analyzePythonDeps(repoName);
+    console.log(`  Source: ${result.source}`);
+    console.log(`  Total deps: ${result.total}`);
+    console.log(`  Unpinned: ${result.unpinned_count}`);
+    console.log(`  (PyPI/OSV checks skipped — opt-in)`);
+  } catch (err) {
+    console.log(`  ERROR — ${(err as Error).message}`);
+  }
+
+  // ---------------------------------------------------------------
+  section("12. find_python_circular_imports");
+  try {
+    const result = await findPythonCircularImports(repoName);
+    console.log(`  Files scanned: ${result.files_scanned}`);
+    console.log(`  Cycles found: ${result.total}`);
+    for (const c of result.cycles.slice(0, 3)) {
+      console.log(`    [${c.severity}] ${c.length}-cycle: ${c.cycle.slice(0, 3).join(" → ")}${c.length > 3 ? " → ..." : ""}`);
     }
   } catch (err) {
     console.log(`  ERROR — ${(err as Error).message}`);
