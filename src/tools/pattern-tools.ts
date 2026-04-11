@@ -376,6 +376,30 @@ export const BUILTIN_PATTERNS: Record<string, {
     regex: /src\/content\/config\.ts/,
     description: "legacy content collection config — migrate to src/content.config.ts",
   },
+  "astro-no-image-dimensions": {
+    regex: /<Image\s+(?![^>]*(?:width|height)\s*=)[^>]*\/?>/,
+    description: "<Image> without width/height — causes CLS (Cumulative Layout Shift)",
+  },
+  "astro-inline-script-no-is-inline": {
+    regex: /<script(?!\s+is:inline)(?:\s[^>]*)?>[\s\S]*?<\/script>/,
+    description: "<script> without is:inline — Astro will process/bundle it; add is:inline for raw passthrough",
+  },
+  "astro-env-secret-in-client": {
+    regex: /import\.meta\.env\.SECRET_/,
+    description: "import.meta.env.SECRET_* accessed — secret env vars are server-only, undefined in client components",
+  },
+  "astro-hardcoded-site-url": {
+    regex: /(?:href|src|url)\s*=\s*["']https?:\/\/(?!\/\/)[^"']*["']/,
+    description: "hardcoded absolute URL — use Astro.site or relative paths for portability",
+  },
+  "astro-missing-lang-attr": {
+    regex: /<html(?!\s[^>]*\blang\s*=)[^>]*>/,
+    description: "<html> without lang attribute — required for accessibility (WCAG 3.1.1)",
+  },
+  "astro-form-without-action": {
+    regex: /<form(?!\s[^>]*\baction\s*=)[^>]*>/,
+    description: "<form> without action attribute — consider Astro Actions for type-safe form handling",
+  },
   // Next.js anti-patterns
   "nextjs-wrong-router": {
     regex: /from\s+['"]next\/router['"]|require\s*\(\s*['"]next\/router['"]\s*\)/,

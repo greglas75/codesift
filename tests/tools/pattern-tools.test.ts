@@ -488,6 +488,78 @@ describe("pattern-tools — Astro anti-patterns", () => {
       expect(regex.test(source)).toBe(false);
     });
   });
+
+  describe("astro-no-image-dimensions", () => {
+    const regex = BUILTIN_PATTERNS["astro-no-image-dimensions"]!.regex;
+
+    it("matches <Image> without width/height", () => {
+      expect(regex.test(`<Image src={hero} alt="hero" />`)).toBe(true);
+    });
+
+    it("does not match <Image> with width and height", () => {
+      expect(regex.test(`<Image src={hero} width={800} height={600} alt="hero" />`)).toBe(false);
+    });
+  });
+
+  describe("astro-inline-script-no-is-inline", () => {
+    const regex = BUILTIN_PATTERNS["astro-inline-script-no-is-inline"]!.regex;
+
+    it("matches <script> without is:inline", () => {
+      expect(regex.test(`<script>console.log("hi")</script>`)).toBe(true);
+    });
+
+    it("does not match <script is:inline>", () => {
+      expect(regex.test(`<script is:inline>console.log("hi")</script>`)).toBe(false);
+    });
+  });
+
+  describe("astro-env-secret-in-client", () => {
+    const regex = BUILTIN_PATTERNS["astro-env-secret-in-client"]!.regex;
+
+    it("matches import.meta.env.SECRET_ access", () => {
+      expect(regex.test(`const key = import.meta.env.SECRET_API_KEY;`)).toBe(true);
+    });
+
+    it("does not match PUBLIC_ env vars", () => {
+      expect(regex.test(`const key = import.meta.env.PUBLIC_API_URL;`)).toBe(false);
+    });
+  });
+
+  describe("astro-hardcoded-site-url", () => {
+    const regex = BUILTIN_PATTERNS["astro-hardcoded-site-url"]!.regex;
+
+    it("matches hardcoded https URL in href", () => {
+      expect(regex.test(`href="https://example.com/about"`)).toBe(true);
+    });
+
+    it("does not match relative path", () => {
+      expect(regex.test(`href="/about"`)).toBe(false);
+    });
+  });
+
+  describe("astro-missing-lang-attr", () => {
+    const regex = BUILTIN_PATTERNS["astro-missing-lang-attr"]!.regex;
+
+    it("matches <html> without lang", () => {
+      expect(regex.test(`<html>`)).toBe(true);
+    });
+
+    it("does not match <html lang='en'>", () => {
+      expect(regex.test(`<html lang="en">`)).toBe(false);
+    });
+  });
+
+  describe("astro-form-without-action", () => {
+    const regex = BUILTIN_PATTERNS["astro-form-without-action"]!.regex;
+
+    it("matches <form> without action", () => {
+      expect(regex.test(`<form method="post">`)).toBe(true);
+    });
+
+    it("does not match <form action={...}>", () => {
+      expect(regex.test(`<form action="/api/submit">`)).toBe(false);
+    });
+  });
 });
 
 describe("nextjs-wrong-router", () => {
@@ -709,12 +781,12 @@ describe("listPatterns", () => {
     expect(pattern.regex.test("const app = new Hono<Env>();")).toBe(false);
   });
 
-  it("includes all 8 nextjs patterns plus existing patterns", () => {
+  it("includes all nextjs patterns plus existing patterns", () => {
     const patterns = listPatterns();
     const nextjsPatterns = patterns.filter((p) => p.name.startsWith("nextjs-"));
-    expect(nextjsPatterns).toHaveLength(8);
-    // Total should include all existing + 8 new nextjs patterns
-    expect(patterns.length).toBeGreaterThanOrEqual(17); // 9 original + 8 nextjs
+    expect(nextjsPatterns).toHaveLength(10);
+    // Total should include all frameworks
+    expect(patterns.length).toBeGreaterThanOrEqual(30);
   });
 });
 
@@ -1145,6 +1217,116 @@ describe("pattern-tools — NestJS anti-patterns", () => {
       for (const p of nestPatterns) {
         expect(p.description).toContain("(NestJS)");
       }
+    });
+  });
+});
+
+// --- React Compiler bailout patterns ---
+
+describe("pattern-tools — React Compiler bailout patterns", () => {
+  describe("compiler-side-effect-in-render", () => {
+    const regex = BUILTIN_PATTERNS["compiler-side-effect-in-render"]!.regex;
+
+    it("matches console.log in render body", () => {
+      expect(regex.test("\n  console.log('debug');")).toBe(true);
+    });
+
+    it("matches Math.random() in render", () => {
+      expect(regex.test("\n  const id = Math.random();")).toBe(true);
+    });
+
+    it("matches Date.now() in render", () => {
+      expect(regex.test("\n  const ts = Date.now();")).toBe(true);
+    });
+  });
+
+  describe("compiler-ref-read-in-render", () => {
+    const regex = BUILTIN_PATTERNS["compiler-ref-read-in-render"]!.regex;
+
+    it("matches ref.current read assigned to variable", () => {
+      expect(regex.test("\n  const el = inputRef.current;")).toBe(true);
+    });
+
+    it("does NOT match ref.current in callback", () => {
+      expect(regex.test("onClick={() => inputRef.current.focus()}")).toBe(false);
+    });
+  });
+
+  describe("compiler-prop-mutation", () => {
+    const regex = BUILTIN_PATTERNS["compiler-prop-mutation"]!.regex;
+
+    it("matches props.items.push()", () => {
+      expect(regex.test("props.items.push(newItem);")).toBe(true);
+    });
+
+    it("does NOT match spread copy", () => {
+      expect(regex.test("const items = [...props.items, newItem];")).toBe(false);
+    });
+  });
+
+  describe("compiler-redundant-memo", () => {
+    const regex = BUILTIN_PATTERNS["compiler-redundant-memo"]!.regex;
+
+    it("matches React.memo wrapping function component", () => {
+      expect(regex.test("const Btn = React.memo(function Button() {")).toBe(true);
+    });
+
+    it("matches memo with arrow function", () => {
+      expect(regex.test("const Btn = memo((props) => <div/>)")).toBe(true);
+    });
+  });
+
+  describe("compiler-redundant-usecallback", () => {
+    const regex = BUILTIN_PATTERNS["compiler-redundant-usecallback"]!.regex;
+
+    it("matches useCallback wrapping", () => {
+      expect(regex.test("const fn = useCallback((e) => {}")).toBe(true);
+    });
+  });
+});
+
+// --- useEffect pain point patterns ---
+
+describe("pattern-tools — useEffect pain points", () => {
+  describe("useEffect-missing-cleanup", () => {
+    const regex = BUILTIN_PATTERNS["useEffect-missing-cleanup"]!.regex;
+
+    it("matches useEffect with addEventListener and no cleanup", () => {
+      const source = `useEffect(() => {
+  window.addEventListener("resize", handler);
+}, []);`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches useEffect with setInterval and no cleanup", () => {
+      const source = `useEffect(() => {
+  setInterval(() => tick(), 1000);
+}, []);`;
+      expect(regex.test(source)).toBe(true);
+    });
+  });
+});
+
+// --- TanStack Query ---
+
+describe("pattern-tools — TanStack Query", () => {
+  describe("tanstack-missing-invalidation", () => {
+    const regex = BUILTIN_PATTERNS["tanstack-missing-invalidation"]!.regex;
+
+    it("matches useMutation without invalidateQueries", () => {
+      const source = `useMutation({
+  mutationFn: (data) => api.create(data),
+  onSuccess: () => { toast.success("Created"); },
+})`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match useMutation with invalidateQueries", () => {
+      const source = `useMutation({
+  mutationFn: (data) => api.create(data),
+  onSuccess: () => { queryClient.invalidateQueries(["items"]); },
+})`;
+      expect(regex.test(source)).toBe(false);
     });
   });
 });
