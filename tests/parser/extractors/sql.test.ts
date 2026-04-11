@@ -64,4 +64,27 @@ describe("extractSqlSymbols", () => {
       expect(table!.docstring).toContain("Basic table for testing");
     });
   });
+
+  describe("all DDL constructs", () => {
+    it("extracts exactly 11 symbols with correct kinds", () => {
+      const source = loadFixture("all-ddl.sql");
+      const symbols = extractSqlSymbols(source, "all.sql", "repo");
+
+      const expected = [
+        { name: "users", kind: "table" },
+        { name: "active_users", kind: "view" },
+        { name: "user_stats", kind: "view" },
+        { name: "idx_users_name", kind: "index" },
+        { name: "idx_users_email", kind: "index" },
+        { name: "get_user_count", kind: "function" },
+        { name: "update_user_status", kind: "procedure" },
+        { name: "trg_users_updated", kind: "trigger" },
+        { name: "inventory", kind: "namespace" },
+        { name: "mood", kind: "type" },
+        { name: "order_seq", kind: "variable" },
+      ];
+
+      expect(symbols.map((s) => ({ name: s.name, kind: s.kind }))).toEqual(expected);
+    });
+  });
 });

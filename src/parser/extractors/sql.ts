@@ -21,22 +21,103 @@ import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
 
 const MAX_SOURCE_LENGTH = 5000;
 
-// ── DDL patterns ──────────────────────────────────────────
-// Each pattern captures the object name. Schema-qualified names (schema.name)
-// are handled by optional non-capturing group. OR REPLACE, IF NOT EXISTS, etc. tolerated.
+// ── Line-level DDL matchers ──────────────────────────────
+// Each returns { name } if the line starts a DDL of that type, else null.
+// Schema-qualified names: prefer the part after the dot.
 
-interface DdlPattern {
-  regex: RegExp;
+interface DdlMatcher {
+  test: (line: string) => { name: string } | null;
   kind: SymbolKind;
-  /** True if the body is delimited by parens (tables, functions) */
-  hasBracketBody: boolean;
+  /** How to find the end of this construct */
+  endStrategy: "paren" | "semicolon" | "begin-end" | "single-line";
 }
 
-const DDL_PATTERNS: DdlPattern[] = [
+const NAME_RE = String.raw`(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))`;
+function extractName(m: RegExpExecArray, offset: number): string | null {
+  return m[offset + 2] ?? m[offset + 3] ?? m[offset] ?? m[offset + 1] ?? null;
+}
+
+const DDL_MATCHERS: DdlMatcher[] = [
+  // CREATE TABLE name (
   {
-    regex: /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]+"\s*\.\s*)?(?:"([^"]+)"|(\w+)(?:\s*\.\s*(?:"([^"]+)"|(\w+)))?)?\s*\(/im,
+    test: (line) => {
+      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))\s*\(/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
     kind: "table",
-    hasBracketBody: true,
+    endStrategy: "paren",
+  },
+  // CREATE [OR REPLACE] [MATERIALIZED] VIEW name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "view",
+    endStrategy: "semicolon",
+  },
+  // CREATE [UNIQUE] INDEX name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "index",
+    endStrategy: "semicolon",
+  },
+  // CREATE [OR REPLACE] FUNCTION name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "function",
+    endStrategy: "begin-end",
+  },
+  // CREATE [OR REPLACE] PROCEDURE name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "procedure",
+    endStrategy: "begin-end",
+  },
+  // CREATE [OR REPLACE] TRIGGER name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "trigger",
+    endStrategy: "begin-end",
+  },
+  // CREATE SCHEMA name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: m[1] ?? m[2] ?? null } : null;
+    },
+    kind: "namespace",
+    endStrategy: "semicolon",
+  },
+  // CREATE TYPE name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+TYPE\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "type",
+    endStrategy: "semicolon",
+  },
+  // CREATE SEQUENCE name
+  {
+    test: (line) => {
+      const m = /^\s*CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
+      return m ? { name: extractName(m, 1)! } : null;
+    },
+    kind: "variable",
+    endStrategy: "semicolon",
   },
 ];
 
@@ -61,30 +142,36 @@ export function extractSqlSymbols(
   while (i < lines.length) {
     const line = lines[i]!;
 
-    // Try CREATE TABLE with bracket body
-    const tableMatch = matchCreateTable(line);
-    if (tableMatch) {
-      const { name } = tableMatch;
+    let matched = false;
+    for (const matcher of DDL_MATCHERS) {
+      const result = matcher.test(line);
+      if (!result || !result.name) continue;
+
+      const { name } = result;
       const startLine = i + 1; // 1-based
 
-      // Find closing paren, tracking depth
-      const endLineIdx = findClosingParen(lines, i);
+      // Find end of construct
+      const endLineIdx = findEnd(lines, i, matcher.endStrategy);
       const endLine = endLineIdx + 1;
 
-      // Extract source from original (preserves Jinja tokens in display)
+      // Source from original (preserves Jinja tokens)
       const blockSource = origLines.slice(i, endLineIdx + 1).join("\n");
 
       const docstring = extractSqlDocstring(lines, i);
+
+      const signature = matcher.kind === "table"
+        ? buildTableSignature(name, lines, i, endLineIdx)
+        : `${matcher.kind.toUpperCase()} ${name}`;
 
       const sym: CodeSymbol = {
         id: makeSymbolId(repo, filePath, name, startLine),
         repo,
         name,
-        kind: "table",
+        kind: matcher.kind,
         file: filePath,
         start_line: startLine,
         end_line: endLine,
-        signature: buildTableSignature(name, lines, i, endLineIdx),
+        signature,
         source: blockSource.length > MAX_SOURCE_LENGTH
           ? blockSource.slice(0, MAX_SOURCE_LENGTH) + "..."
           : blockSource,
@@ -94,34 +181,37 @@ export function extractSqlSymbols(
       symbols.push(sym);
 
       i = endLineIdx + 1;
-      continue;
+      matched = true;
+      break;
     }
 
-    i++;
+    if (!matched) i++;
   }
 
   return symbols;
 }
 
-// ── Helpers ───────────────────────────────────────────────
+// ── End-finding strategies ────────────────────────────────
 
-const CREATE_TABLE_RE =
-  /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))\s*\(/i;
-
-function matchCreateTable(line: string): { name: string } | null {
-  const m = CREATE_TABLE_RE.exec(line);
-  if (!m) return null;
-  // Capture groups: 1=quoted schema, 2=unquoted schema, 3=quoted name, 4=unquoted name
-  const name = m[3] ?? m[4] ?? m[1] ?? m[2];
-  if (!name) return null;
-  return { name };
+function findEnd(lines: string[], startIdx: number, strategy: string): number {
+  switch (strategy) {
+    case "paren":
+      return findClosingParen(lines, startIdx);
+    case "semicolon":
+      return findSemicolon(lines, startIdx);
+    case "begin-end":
+      return findBeginEnd(lines, startIdx);
+    case "single-line":
+      return startIdx;
+    default:
+      return findSemicolon(lines, startIdx);
+  }
 }
 
 function findClosingParen(lines: string[], startIdx: number): number {
   let depth = 0;
   for (let j = startIdx; j < lines.length; j++) {
-    const line = lines[j]!;
-    for (const ch of line) {
+    for (const ch of lines[j]!) {
       if (ch === "(") depth++;
       if (ch === ")") {
         depth--;
@@ -129,9 +219,38 @@ function findClosingParen(lines: string[], startIdx: number): number {
       }
     }
   }
-  // Unbalanced — return last line
   return lines.length - 1;
 }
+
+function findSemicolon(lines: string[], startIdx: number): number {
+  for (let j = startIdx; j < lines.length; j++) {
+    if (lines[j]!.includes(";")) return j;
+  }
+  return lines.length - 1;
+}
+
+function findBeginEnd(lines: string[], startIdx: number): number {
+  // Look for BEGIN...END or fall back to semicolon after RETURN/AS
+  let foundBegin = false;
+  let depth = 0;
+  for (let j = startIdx; j < lines.length; j++) {
+    const upper = lines[j]!.toUpperCase().trim();
+    if (/\bBEGIN\b/.test(upper)) {
+      foundBegin = true;
+      depth++;
+    }
+    if (foundBegin && /\bEND\b/.test(upper)) {
+      depth--;
+      if (depth === 0) return j;
+    }
+    // Fallback: if no BEGIN found and we hit a standalone semicolon
+    if (!foundBegin && j > startIdx && upper === ";") return j;
+  }
+  // No BEGIN/END found — find semicolon
+  return findSemicolon(lines, startIdx);
+}
+
+// ── Helpers ───────────────────────────────────────────────
 
 function buildTableSignature(
   name: string,
@@ -139,14 +258,11 @@ function buildTableSignature(
   startIdx: number,
   endIdx: number,
 ): string {
-  // Collect column names from the body (between parens)
   const cols: string[] = [];
   for (let j = startIdx + 1; j <= endIdx; j++) {
     const trimmed = lines[j]!.trim();
-    // Skip constraint lines
-    if (/^\s*(?:PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|UNIQUE|CHECK|INDEX)\s*\(/i.test(trimmed)) continue;
+    if (/^\s*(?:PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|UNIQUE|CHECK|INDEX)\s*[\(]/i.test(trimmed)) continue;
     if (trimmed === "" || trimmed === ")" || trimmed === ");") continue;
-    // First word is column name
     const colMatch = /^"?(\w+)"?\s+\S/i.exec(trimmed);
     if (colMatch) cols.push(colMatch[1]!);
   }
@@ -154,7 +270,7 @@ function buildTableSignature(
 }
 
 /**
- * Extract SQL comments (-- or /* ... * /) immediately above a line as docstring.
+ * Extract SQL comments (-- single-line) immediately above a line as docstring.
  */
 function extractSqlDocstring(lines: string[], blockLineIdx: number): string | undefined {
   const commentLines: string[] = [];
