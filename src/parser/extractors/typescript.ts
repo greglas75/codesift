@@ -225,6 +225,42 @@ function getDocstring(
   return undefined;
 }
 
+function getDecoratorText(node: Parser.SyntaxNode): string {
+  return node.text.trim();
+}
+
+function collectOwnDecorators(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  return node.namedChildren.filter((child) => child.type === "decorator");
+}
+
+function collectLeadingSiblingDecorators(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  const decorators: Parser.SyntaxNode[] = [];
+  let sibling = node.previousNamedSibling;
+  while (sibling && sibling.type === "decorator") {
+    decorators.unshift(sibling);
+    sibling = sibling.previousNamedSibling;
+  }
+  return decorators;
+}
+
+function getDecorators(node: Parser.SyntaxNode): string[] {
+  const decoratorNodes = [
+    ...collectOwnDecorators(node),
+    ...collectLeadingSiblingDecorators(node),
+  ];
+  if (decoratorNodes.length === 0) return [];
+
+  const seen = new Set<string>();
+  const decorators: string[] = [];
+  for (const decorator of decoratorNodes) {
+    const text = getDecoratorText(decorator);
+    if (seen.has(text)) continue;
+    seen.add(text);
+    decorators.push(text);
+  }
+  return decorators;
+}
+
 /**
  * Build a trimmed "shell" of a class — keeps field declarations and method
  * signatures but replaces method bodies with `{ … }`.
@@ -313,10 +349,12 @@ export function extractTypeScriptSymbols(
         if (name) {
           // React detection: hook (useX) or component (PascalCase + JSX return)
           const kind = classifyReactKind(name, node);
+          const decorators = getDecorators(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
+            decorators: decorators.length > 0 ? decorators : undefined,
           });
           symbols.push(sym);
         }
@@ -383,9 +421,11 @@ export function extractTypeScriptSymbols(
         const name = getNodeName(node) ?? "<anonymous>";
         // React class component: class Foo extends Component / React.Component / PureComponent
         const kind = isReactClassComponent(node) ? "component" as SymbolKind : "class" as SymbolKind;
+        const decorators = getDecorators(node);
         const sym = makeSymbol(node, name, kind, filePath, source, repo, {
           parentId,
           docstring: getDocstring(node, source),
+          decorators: decorators.length > 0 ? decorators : undefined,
         });
 
         // Walk class body with this class as parent (before trimming so children get full source)
@@ -403,10 +443,12 @@ export function extractTypeScriptSymbols(
         // abstract doSomething(): void; inside abstract classes
         const name = getNodeName(node);
         if (name) {
+          const decorators = getDecorators(node);
           const sym = makeSymbol(node, name, "method", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
+            decorators: decorators.length > 0 ? decorators : undefined,
           });
           symbols.push(sym);
         }
@@ -416,10 +458,12 @@ export function extractTypeScriptSymbols(
       case "method_definition": {
         const name = getNodeName(node);
         if (name) {
+          const decorators = getDecorators(node);
           const sym = makeSymbol(node, name, "method", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
+            decorators: decorators.length > 0 ? decorators : undefined,
           });
           symbols.push(sym);
         }
@@ -429,9 +473,11 @@ export function extractTypeScriptSymbols(
       case "public_field_definition": {
         const name = getNodeName(node);
         if (name) {
+          const decorators = getDecorators(node);
           const sym = makeSymbol(node, name, "field", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            decorators: decorators.length > 0 ? decorators : undefined,
           });
           symbols.push(sym);
         }

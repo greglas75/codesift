@@ -39,7 +39,7 @@ export function getUsagePath(): string {
 
 /** Per-tool field extraction schema: [key, expectedType] pairs */
 const TOOL_ARG_FIELDS: Record<string, Array<[string, "string" | "number" | "boolean"]>> = {
-  search_symbols: [["kind", "string"], ["top_k", "number"], ["file_pattern", "string"], ["include_source", "boolean"]],
+  search_symbols: [["kind", "string"], ["top_k", "number"], ["file_pattern", "string"], ["decorator", "string"], ["include_source", "boolean"]],
   search_text: [["regex", "boolean"], ["context_lines", "number"], ["file_pattern", "string"], ["max_results", "number"], ["group_by_file", "boolean"], ["auto_group", "boolean"]],
   get_file_tree: [["path_prefix", "string"], ["name_pattern", "string"], ["depth", "number"]],
   get_file_outline: [["file_path", "string"]],
@@ -52,6 +52,9 @@ const TOOL_ARG_FIELDS: Record<string, Array<[string, "string" | "number" | "bool
   get_knowledge_map: [["focus", "string"], ["depth", "number"]],
   diff_outline: [["since", "string"], ["until", "string"]],
   changed_symbols: [["since", "string"], ["until", "string"]],
+  resolve_constant_value: [["symbol_name", "string"], ["file_pattern", "string"], ["max_depth", "number"]],
+  effective_django_view_security: [["path", "string"], ["symbol_name", "string"], ["file_pattern", "string"], ["settings_file", "string"]],
+  taint_trace: [["framework", "string"], ["file_pattern", "string"], ["max_depth", "number"], ["max_traces", "number"]],
   index_folder: [["path", "string"], ["incremental", "boolean"]],
   index_repo: [["url", "string"], ["branch", "string"]],
   generate_claude_md: [["output_path", "string"]],
