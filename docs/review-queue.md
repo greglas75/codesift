@@ -198,3 +198,4 @@ Commits pending review. Auto-managed:
 - e7c4f4d (2026-04-11) feat(react): Wave 4 — context bundle, suggest_queries, entry points, AST docs
 - a88de11 (2026-04-11) fix adversarial review findings on HonoExtractor
 - b0ae5ff (2026-04-11) chore: stage pending WIP — Hono subapp routing, Python fixes, review + docs
+- 1b5ccdc (2026-04-11) feat(hono): subapp route flattening + multi-file import resolution
