@@ -21,11 +21,11 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
-**86 MCP tools total** (41 core visible + 45 discoverable).
+**106 MCP tools total** (43 core visible + 63 discoverable).
 
-41 core tools appear in ListTools. Remaining 45 niche tools are discovered on demand:
+43 core tools appear in ListTools. Remaining 63 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 86 tools
+- `discover_tools(query="dead code")` — keyword search across all 106 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
