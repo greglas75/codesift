@@ -993,3 +993,31 @@ describe("pattern-tools — DB / ORM anti-patterns", () => {
     });
   });
 });
+
+// --- oxlint-inspired React rules (Tier 4 polish) ---
+
+describe("pattern-tools — oxlint React rules", () => {
+  describe("hook-usestate-destructure", () => {
+    const regex = BUILTIN_PATTERNS["hook-usestate-destructure"]!.regex;
+
+    it("matches useState() without destructuring (standalone statement)", () => {
+      expect(regex.test("\n  useState(0);")).toBe(true);
+    });
+
+    it("does NOT match destructured useState", () => {
+      expect(regex.test("const [count, setCount] = useState(0);")).toBe(false);
+    });
+  });
+
+  describe("prefer-function-component", () => {
+    const regex = BUILTIN_PATTERNS["prefer-function-component"]!.regex;
+
+    it("matches class extending React.Component", () => {
+      expect(regex.test("class MyWidget extends React.Component { render() {} }")).toBe(true);
+    });
+
+    it("does NOT match regular class", () => {
+      expect(regex.test("class UserService { getUser() {} }")).toBe(false);
+    });
+  });
+});
