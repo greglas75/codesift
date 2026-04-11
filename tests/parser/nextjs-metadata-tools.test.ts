@@ -156,3 +156,39 @@ describe("nextjsMetadataAudit orchestrator", () => {
     expect(positives.length).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("nextjsMetadataAudit fixture-expected", () => {
+  const fixtureRoot = resolve(__dirname, "../fixtures/nextjs-metadata");
+
+  it("matches pre-authored expected.json scores exactly", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "nextjs-metadata",
+      root: fixtureRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+
+    const fs = await import("node:fs/promises");
+    const expectedRaw = await fs.readFile(
+      resolve(fixtureRoot, "expected.json"),
+      "utf8",
+    );
+    const expected = JSON.parse(expectedRaw) as {
+      routes: Record<string, number>;
+      counts: { excellent: number; good: number; needs_work: number; poor: number };
+    };
+
+    const result = await nextjsMetadataAudit("nextjs-metadata");
+
+    // Each entry in expected.routes must be present with the exact score
+    for (const [path, score] of Object.entries(expected.routes)) {
+      const entry = result.scores.find((s) => s.file_path === path);
+      expect(entry, `expected entry for ${path}`).toBeDefined();
+      expect(entry!.score, `score for ${path}`).toBe(score);
+    }
+
+    expect(result.counts).toEqual(expected.counts);
+  });
+});

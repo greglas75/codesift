@@ -1,0 +1,14 @@
+{
+  "routes": {
+    "app/page.tsx": 100,
+    "app/about/page.tsx": 45,
+    "app/blog/page.tsx": 0,
+    "app/products/page.tsx": 80
+  },
+  "counts": {
+    "excellent": 1,
+    "good": 1,
+    "needs_work": 1,
+    "poor": 1
+  }
+}
