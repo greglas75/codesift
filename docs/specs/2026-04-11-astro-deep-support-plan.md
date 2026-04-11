@@ -4,7 +4,8 @@
 **spec_id:** 2026-04-11-astro-deep-support-2017
 **planning_mode:** spec-driven
 **plan_revision:** 1
-**status:** Draft
+**status:** Approved
+**Approved:** 2026-04-11T06:02:14Z
 **Created:** 2026-04-11
 **Tasks:** 22 (Tasks 8+9 merged into one; Task 19 split into 18+19; net same)
 **Estimated complexity:** 11 standard, 11 complex

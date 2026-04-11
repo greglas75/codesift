@@ -19,6 +19,7 @@ const EXTENSION_MAP: Record<string, string> = {
   ".rb": "ruby",
   ".php": "php",
   ".md": "markdown",
+  ".mdx": "markdown",
   ".markdown": "markdown",
   ".css": "css",
   ".json": "config",
@@ -50,6 +51,8 @@ const EXTENSION_MAP: Record<string, string> = {
   ".nim": "text_stub",   // Nim
   ".gradle": "text_stub", // Gradle build scripts
   ".sbt": "text_stub",   // SBT build scripts
+  // --- SQL (regex extractor, no tree-sitter) ---
+  ".sql": "sql",          // SQL DDL/DML
 };
 
 export async function initParser(): Promise<void> {
@@ -87,16 +90,75 @@ export function getLanguageForExtension(ext: string): string | null {
   return EXTENSION_MAP[ext] ?? null;
 }
 
+/**
+ * Full-path language resolver. Checks multi-dot suffixes first (e.g.
+ * `.gradle.kts` beats `.kts`) so build scripts can be routed to a dedicated
+ * extractor while regular `.kts` scripts still use the plain Kotlin pipeline.
+ *
+ * Returns the language string or null if the path has no recognized
+ * extension / suffix.
+ */
+export function getLanguageForPath(filePath: string): string | null {
+  // Multi-dot suffix table — longest match wins. Keep this list small; any
+  // entry here represents a file format that shares a primary extension with
+  // another format but needs a different extractor.
+  if (filePath.endsWith(".gradle.kts")) return "gradle-kts";
+
+  const ext = path.extname(filePath);
+  return EXTENSION_MAP[ext] ?? null;
+}
+
+/**
+ * Languages that do NOT produce structured symbols through the normal parser
+ * pipeline. A `FileEntry.language` falling in this set means the file is only
+ * indexed via its file entry + ripgrep + secret scanning — symbol tools
+ * (search_symbols, get_file_outline, etc.) will return empty results for it.
+ *
+ * Used by the H11 hint to warn agents when symbol queries come back empty
+ * because of missing parsers, rather than because of a legitimately empty
+ * search space.
+ *
+ * Note: this set must NOT contain any language that has a real tree-sitter
+ * extractor. When a new parser is added (e.g. kotlin → full extractor), its
+ * language string must be removed from here so H11 stops firing for those
+ * files.
+ */
+export const STUB_LANGUAGES: ReadonlySet<string> = new Set([
+  "text_stub",
+  "config",
+]);
+
+/**
+ * Returns true when the given `FileEntry.language` value is known to produce
+ * structured symbols (i.e. not in `STUB_LANGUAGES`). This is the dynamic
+ * lookup used by H11 — adding a new parser to EXTENSION_MAP with any string
+ * outside STUB_LANGUAGES automatically opts it out of the H11 warning.
+ */
+export function languageHasParser(language: string): boolean {
+  return !STUB_LANGUAGES.has(language);
+}
+
 export async function parseFile(
   filePath: string,
   source: string,
 ): Promise<Parser.Tree | null> {
-  const ext = path.extname(filePath);
-  const language = getLanguageForExtension(ext);
+  // Gradle KTS files share the Kotlin tree-sitter grammar but route through
+  // a dedicated symbol extractor. parseFile() only needs a parser, so fall
+  // back to the Kotlin parser here — the extractor split happens in
+  // symbol-extractor.ts via the `gradle-kts` language case.
+  const language = getLanguageForPath(filePath) === "gradle-kts"
+    ? "kotlin"
+    : getLanguageForExtension(path.extname(filePath));
   if (!language) return null;
 
   const parser = await getParser(language);
   if (!parser) return null;
 
-  return parser.parse(source);
+  try {
+    return parser.parse(source);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[parser] Parse error in ${filePath}: ${message}`);
+    return null;
+  }
 }

@@ -2,46 +2,34 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 93 MCP tools (38 core, 55 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 127 MCP tools (47 core, 80 hidden via disable()).
 
-DISCOVERY (for the 55 hidden/niche tools)
+DISCOVERY (for the 80 hidden/niche tools)
   discover_tools(query="dead code")    → keyword search → returns tool names
   describe_tools(names=["find_dead_code"])  → full schema with param types
   describe_tools(names=[...], reveal=true) → also adds tool to ListTools
   Then call the tool directly by name.
 
-HINT CODES (appear in tool responses — take the suggested action immediately)
-  H1(n)       n matches returned → add group_by_file=true
-  H2(n,tool)  n consecutive identical calls → batch into one tool call
-  H3(n)       list_repos called n times → repo auto-resolves from CWD, no need to call
-  H4          include_source without file_pattern → add file_pattern
-  H5(path)    duplicate get_file_tree → use cached result
-  H6(n)       n results without detail_level → add detail_level=compact
-  H7          get_symbol after search_symbols → use get_context_bundle instead
-  H8(n)       n× get_symbol calls → use assemble_context(level=L1) instead
-  H9          question-word text query → use semantic_search or codebase_retrieval(type:semantic)
-  H10         50+ tool calls this session → call get_session_snapshot to preserve context
-  H11         no parser for dominant file type → symbol tools empty, use search_text instead
+HINT CODES (act on immediately when they appear in responses)
+  H1(n)  → add group_by_file=true    H2(n,tool) → batch into one call
+  H3(n)  → repo auto-resolves, skip  H4 → add file_pattern
+  H5     → use cached tree result    H6(n) → add detail_level=compact
+  H7     → use get_context_bundle    H8(n) → use assemble_context(level=L1)
+  H9     → use semantic_search       H10 → call get_session_snapshot
+  H11    → use search_text instead
 
 ALWAYS
-  repo param auto-resolves from CWD — skip list_repos for single-repo sessions.
-  Use semantic_search or codebase_retrieval(type:semantic) for conceptual/question queries.
-  Pass file_pattern when scope is known (cuts noise and tokens).
-  Use get_symbols (batch) for 2+ symbols — never sequential get_symbol calls.
-  Batch 3+ searches into codebase_retrieval(queries=[...]).
-  Pass token_budget to cap large responses.
-  Call index_file(path) after editing a file (9ms vs 3-8s for index_folder).
-  Use trace_route first for any API endpoint trace.
+  repo auto-resolves from CWD — skip list_repos. Pass file_pattern when scope known.
+  Use get_symbols (batch) for 2+. Batch 3+ into codebase_retrieval(queries=[...]).
+  Pass token_budget. Call index_file(path) after edits. Use trace_route for endpoints.
+  Use semantic_search for conceptual queries.
 
 NEVER
-  Call index_folder if repo is already indexed (file watcher auto-updates).
-  Call list_repos in single-repo sessions — repo auto-resolves from CWD.
-  Use get_knowledge_map without detect_communities first (129K+ tokens).
-  Use sequential search_text + trace_call_chain for endpoint — use trace_route.
-  Read entire file for a return type — use get_type_info.
+  index_folder if already indexed. list_repos in single-repo sessions.
+  get_knowledge_map without detect_communities (129K+). Read file for return type → get_type_info.
 
 KEY PARAMS
-  search_symbols:  detail_level=compact (~15 tok/result) | token_budget=N | kind=function/class/type
+  search_symbols:  detail_level=compact (~15 tok/result) | token_budget=N | kind=function/class/type/component/hook
   search_text:     group_by_file=true (-80% output) | auto_group=true (>50 matches)
                    ranked=true → classify by function, dedup (max 2/fn), rank by centrality
   assemble_context: level=L0 (full source) | L1 (signatures, 3-5x denser) | L2 (summaries) | L3 (dirs)
@@ -70,4 +58,7 @@ TOOL MAPPING (quick ref)
   API endpoint      → trace_route (FIRST) | secrets → scan_secrets
   past sessions     → search_conversations | changed code → changed_symbols(since=)
   session snapshot  → get_session_snapshot | session → get_session_context
+  React components  → search_symbols(kind=component) | hooks → search_symbols(kind=hook)
+  component tree    → trace_component_tree | hook analysis → analyze_hooks
+  React anti-pats   → search_patterns("hook-in-condition") | clean graph → trace_call_chain(filter_react_hooks=true)
 `;

@@ -201,3 +201,10 @@ Commits pending review. Auto-managed:
 - 2c82f0d (2026-04-11) feat: add NestJS tool types and nest_lifecycle_map tool
 - 8ce8de3 (2026-04-11) feat: add nest_module_graph tool for NestJS module dependency analysis
 - 8e9a375 (2026-04-11) feat: add nest_di_graph tool for NestJS dependency injection analysis
+- 99e245d (2026-04-11) chore: track Python foundation commit in review queue
+- 525d91f (2026-04-11) add HonoExtractor with tree-sitter scaffold and route detection
+- e7c4f4d (2026-04-11) feat(react): Wave 4 — context bundle, suggest_queries, entry points, AST docs
+- a88de11 (2026-04-11) fix adversarial review findings on HonoExtractor
+- b0ae5ff (2026-04-11) chore: stage pending WIP — Hono subapp routing, Python fixes, review + docs
+- 1b5ccdc (2026-04-11) feat(hono): subapp route flattening + multi-file import resolution
+- 61d7d28 (2026-04-11) docs: update review queue with latest commits

@@ -148,3 +148,131 @@ export function formatHotspotsCounts(raw: unknown): string {
   const data = raw as { hotspots: HotspotEntry[]; period: string };
   return `${data.hotspots.length} hotspots, period: ${data.period}`;
 }
+
+// ── Next.js route map ──────────────────────────────
+
+interface NextjsRouteMapRaw {
+  routes: Array<{
+    url_path: string;
+    router: "app" | "pages";
+    type: string;
+    rendering: string;
+    has_metadata: boolean;
+  }>;
+  conflicts: Array<{ url_path: string }>;
+  middleware: { file: string; matchers: string[] } | null;
+  workspaces_scanned: string[];
+  scan_errors: string[];
+  truncated: boolean;
+}
+
+const MAX_ROUTES_COMPACT = 25;
+
+/** Grouped counts by router + rendering, then show top N URLs. */
+export function formatNextjsRouteMapCompact(raw: unknown): string {
+  const data = raw as NextjsRouteMapRaw;
+  const lines: string[] = [];
+  lines.push(`Routes: ${data.routes.length} | Conflicts: ${data.conflicts.length}`);
+
+  const byRouter: Record<string, number> = {};
+  const byRendering: Record<string, number> = {};
+  for (const r of data.routes) {
+    byRouter[r.router] = (byRouter[r.router] ?? 0) + 1;
+    byRendering[r.rendering] = (byRendering[r.rendering] ?? 0) + 1;
+  }
+  const routerParts = Object.entries(byRouter).map(([k, v]) => `${k}=${v}`);
+  const renderingParts = Object.entries(byRendering).map(([k, v]) => `${k}=${v}`);
+  lines.push(`By router: ${routerParts.join(" ")}`);
+  lines.push(`By rendering: ${renderingParts.join(" ")}`);
+
+  if (data.middleware) {
+    lines.push(`Middleware: ${data.middleware.file}`);
+  }
+
+  const top = data.routes.slice(0, MAX_ROUTES_COMPACT);
+  for (const r of top) {
+    lines.push(`  ${r.url_path} [${r.router}/${r.rendering}]`);
+  }
+  if (data.routes.length > MAX_ROUTES_COMPACT) {
+    lines.push(`  ... +${data.routes.length - MAX_ROUTES_COMPACT} more`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsRouteMapCounts(raw: unknown): string {
+  const data = raw as NextjsRouteMapRaw;
+  return `${data.routes.length} routes, ${data.conflicts.length} conflicts, ${data.workspaces_scanned.length} workspaces`;
+}
+
+// ---------------------------------------------------------------------------
+// Next.js metadata audit (T1)
+// ---------------------------------------------------------------------------
+
+interface NextjsMetadataAuditRaw {
+  total_pages: number;
+  scores: Array<{
+    url_path: string;
+    file_path: string;
+    score: number;
+    grade: string;
+    violations: string[];
+    missing_fields: string[];
+  }>;
+  counts: { excellent: number; good: number; needs_work: number; poor: number };
+  top_issues: string[];
+  workspaces_scanned: string[];
+  parse_failures: string[];
+  scan_errors: string[];
+}
+
+export function formatNextjsMetadataAuditCompact(raw: unknown): string {
+  const data = raw as NextjsMetadataAuditRaw;
+  const lines: string[] = [];
+  lines.push(
+    `${data.total_pages} pages | excellent=${data.counts.excellent} good=${data.counts.good} needs_work=${data.counts.needs_work} poor=${data.counts.poor}`,
+  );
+  if (data.top_issues.length > 0) {
+    lines.push(`Top: ${data.top_issues.slice(0, 5).join(" | ")}`);
+  }
+  // Show top 3 worst-scoring routes
+  const worst = [...data.scores].sort((a, b) => a.score - b.score).slice(0, 3);
+  for (const s of worst) {
+    lines.push(`  ${s.url_path} (${s.score}/${s.grade})`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsMetadataAuditCounts(raw: unknown): string {
+  const data = raw as NextjsMetadataAuditRaw;
+  return `${data.total_pages} pages: excellent=${data.counts.excellent}, good=${data.counts.good}, needs_work=${data.counts.needs_work}, poor=${data.counts.poor}`;
+}
+
+// ---------------------------------------------------------------------------
+// Framework audit (T11)
+// ---------------------------------------------------------------------------
+
+interface FrameworkAuditRaw {
+  summary: {
+    overall_score: number;
+    grade: string;
+    dimensions: Record<string, { score: number; weight: number; contribution: number }>;
+    top_issues: string[];
+  };
+  tool_errors: Array<{ tool: string; error: string }>;
+  duration_ms: number;
+}
+
+export function formatFrameworkAuditCompact(raw: unknown): string {
+  const data = raw as FrameworkAuditRaw;
+  const lines: string[] = [];
+  lines.push(`Score: ${data.summary.overall_score}/100 (${data.summary.grade}) | ${data.duration_ms}ms`);
+  if (data.summary.top_issues.length > 0) {
+    lines.push(`Top: ${data.summary.top_issues.slice(0, 5).join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatFrameworkAuditCounts(raw: unknown): string {
+  const data = raw as FrameworkAuditRaw;
+  return `Score ${data.summary.overall_score}/100 (${data.summary.grade}), ${Object.keys(data.summary.dimensions).length} dimensions, ${data.tool_errors.length} errors`;
+}

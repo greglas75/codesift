@@ -1,0 +1,3 @@
+-- This file contains no DDL
+-- Just comments for documentation purposes
+-- Version: 1.0

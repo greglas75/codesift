@@ -461,6 +461,186 @@ class ServiceTest {
   });
 });
 
+// --- KMP expect / actual ---
+
+describe("extractKotlinSymbols — KMP expect/actual modifiers", () => {
+  it("marks `expect class Platform` with kmp_modifier=expect", async () => {
+    const symbols = await parseKotlin(`
+expect class Platform {
+    val name: String
+}
+`);
+    const cls = symbols.find((s) => s.name === "Platform" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.meta?.["kmp_modifier"]).toBe("expect");
+  });
+
+  it("marks `actual class Platform` with kmp_modifier=actual", async () => {
+    const symbols = await parseKotlin(`
+actual class Platform {
+    actual val name: String = "Android"
+}
+`);
+    const cls = symbols.find((s) => s.name === "Platform" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.meta?.["kmp_modifier"]).toBe("actual");
+  });
+
+  it("marks `expect fun getPlatformName()` with kmp_modifier=expect", async () => {
+    const symbols = await parseKotlin(`expect fun getPlatformName(): String`);
+    const fn = symbols.find((s) => s.name === "getPlatformName");
+    expect(fn).toBeDefined();
+    expect(fn!.meta?.["kmp_modifier"]).toBe("expect");
+  });
+
+  it("marks `actual fun getPlatformName()` with kmp_modifier=actual", async () => {
+    const symbols = await parseKotlin(`actual fun getPlatformName(): String = "Android"`);
+    const fn = symbols.find((s) => s.name === "getPlatformName");
+    expect(fn).toBeDefined();
+    expect(fn!.meta?.["kmp_modifier"]).toBe("actual");
+  });
+
+  it("does NOT set kmp_modifier on a plain class", async () => {
+    const symbols = await parseKotlin(`class Platform { val name: String = "" }`);
+    const cls = symbols.find((s) => s.name === "Platform" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.meta?.["kmp_modifier"]).toBeUndefined();
+  });
+});
+
+// --- Kotest DSL ---
+
+describe("extractKotlinSymbols — Kotest DSL", () => {
+  it("classifies FunSpec subclass as test_suite", async () => {
+    const symbols = await parseKotlin(`
+class UserSpec : FunSpec({
+    test("validates email") {}
+})
+`);
+    const suite = symbols.find((s) => s.name === "UserSpec");
+    expect(suite).toBeDefined();
+    expect(suite!.kind).toBe("test_suite");
+  });
+
+  it("extracts FunSpec test cases with string names", async () => {
+    const symbols = await parseKotlin(`
+class UserSpec : FunSpec({
+    test("validates email") {
+        assertTrue(true)
+    }
+    test("rejects empty email") {}
+})
+`);
+    const cases = symbols.filter((s) => s.kind === "test_case");
+    const names = cases.map((c) => c.name);
+    expect(names).toContain("validates email");
+    expect(names).toContain("rejects empty email");
+  });
+
+  it("extracts DescribeSpec nested describe/it as test_case", async () => {
+    const symbols = await parseKotlin(`
+class UserSpec : DescribeSpec({
+    describe("User") {
+        it("has a name") {}
+        it("has an age") {}
+    }
+})
+`);
+    const cases = symbols.filter((s) => s.kind === "test_case");
+    const names = cases.map((c) => c.name);
+    expect(names).toContain("User");
+    expect(names).toContain("has a name");
+    expect(names).toContain("has an age");
+  });
+
+  it("extracts StringSpec inline-string style", async () => {
+    const symbols = await parseKotlin(`
+class UserSpec : StringSpec({
+    "validates email" {
+        assertTrue(true)
+    }
+    "rejects empty email" {}
+})
+`);
+    const suite = symbols.find((s) => s.name === "UserSpec");
+    expect(suite).toBeDefined();
+    expect(suite!.kind).toBe("test_suite");
+    const cases = symbols.filter((s) => s.kind === "test_case");
+    const names = cases.map((c) => c.name);
+    expect(names).toContain("validates email");
+    expect(names).toContain("rejects empty email");
+  });
+
+  it("extracts BehaviorSpec given/when/then nesting", async () => {
+    const symbols = await parseKotlin(`
+class PaymentSpec : BehaviorSpec({
+    given("a user") {
+        \`when\`("they login") {
+            then("they get a token") {}
+        }
+    }
+})
+`);
+    const cases = symbols.filter((s) => s.kind === "test_case");
+    const names = cases.map((c) => c.name);
+    expect(names).toContain("a user");
+    expect(names).toContain("they login");
+    expect(names).toContain("they get a token");
+  });
+
+  it("extracts ShouldSpec with context + should nesting", async () => {
+    const symbols = await parseKotlin(`
+class PaymentSpec : ShouldSpec({
+    should("charge card") {}
+    context("paid user") {
+        should("see pro features") {}
+    }
+})
+`);
+    const cases = symbols.filter((s) => s.kind === "test_case");
+    const names = cases.map((c) => c.name);
+    expect(names).toContain("charge card");
+    expect(names).toContain("paid user");
+    expect(names).toContain("see pro features");
+  });
+
+  it("classifies WordSpec / FeatureSpec / ExpectSpec / AnnotationSpec as test_suite", async () => {
+    const sources = [
+      `class S : WordSpec({ "x" should { "y" { } } })`,
+      `class S : FeatureSpec({ feature("f") { scenario("s") {} } })`,
+      `class S : ExpectSpec({ expect("e") {} })`,
+      `class S : AnnotationSpec({ })`,
+    ];
+    for (const src of sources) {
+      const symbols = await parseKotlin(src);
+      const suite = symbols.find((s) => s.name === "S");
+      expect(suite, `expected test_suite for: ${src}`).toBeDefined();
+      expect(suite!.kind, `kind for: ${src}`).toBe("test_suite");
+    }
+  });
+
+  it("does NOT classify a regular class extending a non-Kotest class as test_suite", async () => {
+    const symbols = await parseKotlin(`
+class UserRepository : BaseRepository({ })
+`);
+    const cls = symbols.find((s) => s.name === "UserRepository");
+    expect(cls).toBeDefined();
+    expect(cls!.kind).toBe("class");
+  });
+
+  it("assigns test cases as children of the spec class", async () => {
+    const symbols = await parseKotlin(`
+class UserSpec : FunSpec({
+    test("validates email") {}
+})
+`);
+    const suite = symbols.find((s) => s.name === "UserSpec");
+    const testCase = symbols.find((s) => s.name === "validates email");
+    expect(testCase).toBeDefined();
+    expect(testCase!.parent).toBe(suite!.id);
+  });
+});
+
 // --- Comprehensive integration ---
 
 describe("extractKotlinSymbols — integration", () => {

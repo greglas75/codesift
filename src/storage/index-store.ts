@@ -22,9 +22,16 @@ export async function saveIndex(
 /**
  * Load a code index from disk.
  * Returns null if file doesn't exist, is unreadable, or has invalid shape.
+ *
+ * When `currentVersions` is provided, the stored `extractor_version` snapshot
+ * is compared against it. A missing field or any mismatched language version
+ * is treated as cache miss (returns null) — forcing callers to rebuild the
+ * index. Omit the argument for read-modify-write flows (incremental updates)
+ * where version enforcement would cause spurious reindexes.
  */
 export async function loadIndex(
   indexPath: string,
+  currentVersions?: Record<string, string>,
 ): Promise<CodeIndex | null> {
   try {
     const raw = await readFile(indexPath, "utf-8");
@@ -34,10 +41,33 @@ export async function loadIndex(
       return null;
     }
 
+    if (currentVersions && !isExtractorVersionCurrent(parsed, currentVersions)) {
+      return null;
+    }
+
     return parsed;
   } catch {
     return null;
   }
+}
+
+/**
+ * Check whether the stored `extractor_version` snapshot matches the current
+ * set of extractor versions. Returns false if any language present in
+ * `currentVersions` is missing from the stored snapshot or has a different
+ * value. A missing `extractor_version` field on a legacy index is treated as
+ * a version miss.
+ */
+export function isExtractorVersionCurrent(
+  index: CodeIndex,
+  currentVersions: Record<string, string>,
+): boolean {
+  const stored = index.extractor_version;
+  if (!stored) return false;
+  for (const lang of Object.keys(currentVersions)) {
+    if (stored[lang] !== currentVersions[lang]) return false;
+  }
+  return true;
 }
 
 /**

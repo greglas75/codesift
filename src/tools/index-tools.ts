@@ -1,10 +1,13 @@
 import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
 import { join, relative, extname, resolve, basename, dirname } from "node:path";
+import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EXTRACTOR_VERSIONS } from "./project-tools.js";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
-import { getLanguageForExtension } from "../parser/parser-manager.js";
+import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js";
+import { getLanguageForExtension, getLanguageForPath } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
@@ -45,12 +48,14 @@ async function parseOneFile(
     const stat = await import("node:fs/promises").then((fs) => fs.stat(filePath));
     const source = await readFile(filePath, "utf-8");
     const relPath = relative(repoRoot, filePath);
-    const ext = extname(filePath);
     const baseName = filePath.split("/").pop() ?? "";
-    const language = getLanguageForExtension(ext)
+    // Use full-path resolver so multi-dot suffixes like `.gradle.kts` beat
+    // single-extension lookups (which would otherwise map to plain Kotlin).
+    const language = getLanguageForPath(filePath)
       ?? (baseName.startsWith(".env") ? "config" : "unknown");
 
     let symbols: CodeSymbol[];
+    let effectiveLanguage = language;
 
     if (language === "markdown") {
       symbols = extractMarkdownSymbols(source, relPath, repoName);
@@ -60,10 +65,20 @@ async function parseOneFile(
       symbols = extractAstroSymbols(source, relPath, repoName);
     } else if (language === "conversation") {
       symbols = extractConversationSymbols(source, relPath, repoName);
-    } else if (language === "config" || language === "text_stub" || language === "kotlin") {
-      // text_stub/kotlin: indexed as FileEntry but no symbol extraction until
-      // a tree-sitter grammar + extractor is added. search_text (ripgrep path)
-      // and scan_secrets still work on these files.
+    } else if (language === "sql") {
+      // SQL: regex extractor, no tree-sitter. Detect Jinja/dbt templates.
+      const hasJinja = /\{\{|\{%|\{#/.test(source);
+      if (hasJinja) {
+        const stripped = stripJinjaTokens(source);
+        symbols = extractSqlSymbols(stripped, relPath, repoName, source);
+        effectiveLanguage = "sql-jinja";
+      } else {
+        symbols = extractSqlSymbols(source, relPath, repoName);
+      }
+    } else if (language === "config" || language === "text_stub") {
+      // text_stub: Swift/Dart/Scala/etc. — indexed as FileEntry but no symbol
+      // extraction until a tree-sitter grammar + extractor is added.
+      // search_text (ripgrep path) and scan_secrets still work on these files.
       symbols = [];
     } else {
       const tree = await parseFile(filePath, source);
@@ -73,7 +88,7 @@ async function parseOneFile(
 
     const entry: FileEntry = {
       path: relPath,
-      language,
+      language: effectiveLanguage,
       symbol_count: symbols.length,
       last_modified: Date.now(),
       mtime_ms: Math.round(stat.mtimeMs),
@@ -327,9 +342,23 @@ export async function indexFolder(
   const repoName = getRepoName(rootPath);
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
+  // Read .codesiftignore for user-defined exclude patterns
+  let excludePatterns: string[] | undefined;
+  try {
+    const ignoreContent = await readFile(join(rootPath, ".codesiftignore"), "utf-8");
+    excludePatterns = ignoreContent
+      .split("\n")
+      .map((line) => line.replace(/#.*$/, "").trim())
+      .filter((line) => line.length > 0);
+    if (excludePatterns.length === 0) excludePatterns = undefined;
+  } catch {
+    // .codesiftignore not found — proceed without patterns
+  }
+
   // Walk directory and collect parseable files
   const files = await walkDirectory(rootPath, {
     includePaths: options?.include_paths,
+    excludePatterns,
     fileFilter: (ext, name) => !!getLanguageForExtension(ext) || (name?.startsWith(".env") ?? false),
   });
 
@@ -423,6 +452,7 @@ export async function indexFolder(
     updated_at: Date.now(),
     symbol_count: symbols.length,
     file_count: fileEntries.length,
+    extractor_version: { ...EXTRACTOR_VERSIONS },
   };
   await saveIndex(indexPath, codeIndex);
 
@@ -587,7 +617,7 @@ async function setupWatcher(
       );
     },
     (deletedFile) => {
-      handleFileDelete(repoName, indexPath, deletedFile).catch(
+      handleFileDelete(rootPath, repoName, indexPath, deletedFile).catch(
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[codesift] Watcher delete error for ${deletedFile}: ${message}`);
@@ -621,6 +651,14 @@ async function handleFileChange(
     // Best-effort — session-state may not be loaded
   }
 
+  // Invalidate Hono model cache for this file (canonicalized absolute path)
+  try {
+    const { honoCache } = await import("../cache/hono-cache.js");
+    honoCache.invalidate(fullPath);
+  } catch {
+    // Best-effort — hono-cache may not be loaded
+  }
+
   const result = await parseOneFile(fullPath, repoRoot, repoName);
   if (!result) return;
 
@@ -646,6 +684,7 @@ async function handleFileChange(
  * Removes all symbols for the deleted file from the index.
  */
 async function handleFileDelete(
+  repoRoot: string,
   repoName: string,
   indexPath: string,
   relativeFile: string,
@@ -657,6 +696,14 @@ async function handleFileDelete(
   codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
   scanOnDeleted(repoName, relativeFile);
+
+  // Invalidate Hono model cache
+  try {
+    const { honoCache } = await import("../cache/hono-cache.js");
+    honoCache.invalidate(join(repoRoot, relativeFile));
+  } catch {
+    // Best-effort
+  }
 }
 
 export interface RepoSummary {
@@ -928,7 +975,9 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return null;
 
-  const index = await loadIndex(meta.index_path);
+  // Pass EXTRACTOR_VERSIONS so a schema bump forces a cache miss instead of
+  // serving a stale index. Callers that hit the miss path should reindex.
+  const index = await loadIndex(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (!index) return null;
 
   codeIndexes.set(repoName, index);
@@ -990,4 +1039,148 @@ export async function getEmbeddingCache(
 
   embeddingCaches.set(repoName, embeddings);
   return embeddings;
+}
+
+// ---------------------------------------------------------------------------
+// Astro extractor version check + lockfile re-index
+// ---------------------------------------------------------------------------
+
+export const ASTRO_LOCK_FILENAME = "astro-reindex.lock";
+export const EXTRACTOR_VERSIONS_FILENAME = "extractor-versions.json";
+
+const LOCK_STALE_MS = 60_000; // 60 seconds
+
+export interface AstroReindexResult {
+  reindexed: boolean;
+  files_reindexed?: number;
+  reason: string;
+}
+
+/**
+ * Check if the stored astro extractor version matches the current one.
+ * If not, re-extract all .astro files with lockfile protection.
+ *
+ * @param dataDir   The data directory (e.g., ~/.codesift or a test tmpdir)
+ * @param repoRoot  The repo root path (for locating .astro files)
+ * @param astroFiles  Relative paths to .astro files in the repo
+ */
+export async function checkAstroExtractorVersion(
+  dataDir: string,
+  repoRoot: string,
+  astroFiles: string[],
+): Promise<AstroReindexResult> {
+  // Read stored version snapshot
+  const versionsPath = join(dataDir, EXTRACTOR_VERSIONS_FILENAME);
+  let storedVersions: Record<string, string> = {};
+  try {
+    const raw = await readFile(versionsPath, "utf-8");
+    storedVersions = JSON.parse(raw);
+  } catch {
+    // File doesn't exist or is invalid — treat as version mismatch
+  }
+
+  // Check if astro version matches
+  if (storedVersions.astro === EXTRACTOR_VERSIONS.astro) {
+    return { reindexed: false, reason: "astro extractor up to date" };
+  }
+
+  if (astroFiles.length === 0) {
+    // No astro files to re-extract — just update the version snapshot
+    await writeVersionSnapshot(dataDir, storedVersions);
+    return { reindexed: false, reason: "no astro files to re-extract" };
+  }
+
+  // Acquire lockfile
+  const lockPath = join(dataDir, ASTRO_LOCK_FILENAME);
+  if (!acquireLock(lockPath)) {
+    return { reindexed: false, reason: "astro re-index in progress (locked by another process)" };
+  }
+
+  try {
+    // Re-extract all .astro files
+    let count = 0;
+    for (const relPath of astroFiles) {
+      const absPath = join(repoRoot, relPath);
+      try {
+        const result = await parseOneFile(absPath, repoRoot, "");
+        if (result) {
+          count++;
+          if (count % 100 === 0) {
+            console.error(`[codesift] Astro re-index progress: ${count}/${astroFiles.length} files`);
+          }
+        }
+      } catch {
+        // File may have been deleted or is unparseable
+      }
+    }
+
+    // Write version snapshot atomically
+    await writeVersionSnapshot(dataDir, storedVersions);
+
+    return {
+      reindexed: true,
+      files_reindexed: count,
+      reason: `re-extracted ${count} astro files (version ${storedVersions.astro ?? "none"} → ${EXTRACTOR_VERSIONS.astro})`,
+    };
+  } finally {
+    // Release lockfile
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // Lock may have been cleaned up already
+    }
+  }
+}
+
+/**
+ * Acquire an exclusive lockfile. Returns true if lock was acquired.
+ * If lockfile exists but is stale (mtime > 60s), deletes it and retries once.
+ */
+function acquireLock(lockPath: string): boolean {
+  try {
+    const fd = openSync(lockPath, "wx");
+    closeSync(fd);
+    return true;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      return false;
+    }
+
+    // Lock exists — check if stale
+    try {
+      const lockStat = statSync(lockPath);
+      const age = Date.now() - lockStat.mtimeMs;
+      if (age > LOCK_STALE_MS) {
+        // Stale lock — delete and retry once
+        unlinkSync(lockPath);
+        try {
+          const fd = openSync(lockPath, "wx");
+          closeSync(fd);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    } catch {
+      // stat failed — lock was just removed by another process
+      return false;
+    }
+
+    return false;
+  }
+}
+
+/**
+ * Atomically write the extractor versions snapshot.
+ * Uses write-to-tmp + rename for crash safety.
+ */
+async function writeVersionSnapshot(
+  dataDir: string,
+  existingVersions: Record<string, string>,
+): Promise<void> {
+  const versionsPath = join(dataDir, EXTRACTOR_VERSIONS_FILENAME);
+  const tmpPath = `${versionsPath}.tmp.${Date.now()}`;
+  const snapshot = { ...existingVersions, astro: EXTRACTOR_VERSIONS.astro };
+  writeFileSync(tmpPath, JSON.stringify(snapshot), "utf-8");
+  renameSync(tmpPath, versionsPath);
 }

@@ -4,7 +4,11 @@
  */
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
-import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
+import type { CodeSymbol, CodeIndex, CallNode, RouteFramework } from "../types.js";
+import { findAstroHandlers } from "./astro-routes.js";
+import { deriveUrlPath, computeLayoutChain, traceMiddleware, scanDirective } from "../utils/nextjs.js";
+import type { MiddlewareTraceResult } from "../utils/nextjs.js";
+import { join } from "node:path";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -25,7 +29,8 @@ interface RouteHandler {
   symbol: ReturnType<typeof stripSource>;
   file: string;
   method?: string;
-  framework: "nestjs" | "nextjs" | "express" | "yii2" | "laravel" | "ktor" | "spring-kotlin" | "unknown";
+  framework: RouteFramework;
+  router?: "app" | "pages";
 }
 
 interface DbCall {
@@ -40,6 +45,9 @@ export interface RouteTraceResult {
   handlers: RouteHandler[];
   call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
   db_calls: DbCall[];
+  middleware?: MiddlewareTraceResult;
+  layout_chain?: string[];
+  server_actions?: Array<{ name: string; file: string; called_from?: string | undefined }>;
 }
 
 type RouteCallNode = RouteTraceResult["call_chain"][number];
@@ -48,7 +56,7 @@ type RouteCallNode = RouteTraceResult["call_chain"][number];
  * Match a URL path pattern against a route definition.
  * Handles :param, [param], [...param], [[...param]] as wildcards.
  */
-function matchPath(routePath: string, searchPath: string): boolean {
+export function matchPath(routePath: string, searchPath: string): boolean {
   const normalize = (p: string) => p.replace(/^\/|\/$/g, "").toLowerCase();
   const routeParts = normalize(routePath).split("/");
   const searchParts = normalize(searchPath).split("/");
@@ -79,12 +87,12 @@ export async function findNestJSHandlers(index: CodeIndex, searchPath: string): 
   );
 
   const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
+  const { join: joinPath } = await import("node:path");
 
   for (const file of controllerFiles) {
     let source: string;
     try {
-      source = await readFile(join(index.root, file.path), "utf-8");
+      source = await readFile(joinPath(index.root, file.path), "utf-8");
     } catch { continue; }
 
     // Extract controller prefix — supports both @Controller('prefix') and @Controller()
@@ -117,10 +125,8 @@ export async function findNestJSHandlers(index: CodeIndex, searchPath: string): 
       let emptyMatch: RegExpExecArray | null;
       while ((emptyMatch = reEmpty.exec(source)) !== null) {
         const funcName = emptyMatch[1] ?? "";
-        // Empty method path means root of the controller prefix
         const fullPath = `/${controllerPrefix}`.replace(/\/+/g, "/") || "/";
         if (matchPath(fullPath, searchPath)) {
-          // Avoid duplicates if already found by pass 1
           if (handlers.some((h) => h.file === file.path && h.symbol.name === funcName && h.method === method.toUpperCase())) continue;
           const sym = index.symbols.find((s) => s.file === file.path && s.name === funcName);
           handlers.push({
@@ -145,11 +151,11 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
   const normalized = searchPath.replace(/^\/|\/$/g, "");
 
   for (const file of index.files) {
-    // Match app/api/...route.ts or app/...route.ts
-    if (!file.path.endsWith("/route.ts") && !file.path.endsWith("/route.js")) continue;
+    // Match app/api/...route.{ts,tsx,js,jsx} or app/...route.{ts,tsx,js,jsx}
+    if (!/\/route\.[jt]sx?$/.test(file.path)) continue;
 
     // Extract route path from file path: app/api/users/[id]/route.ts → /api/users/[id]
-    const routeMatch = file.path.match(/app\/(.*?)\/route\.\w+$/);
+    const routeMatch = file.path.match(/app\/(.*?)\/route\.[jt]sx?$/);
     if (!routeMatch) continue;
 
     // Strip route groups: (auth)/login → login
@@ -166,6 +172,7 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
           file: sym.file,
           method: sym.name,
           framework: "nextjs",
+          router: "app",
         });
       }
 
@@ -175,6 +182,7 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
           symbol: { id: file.path, name: "route", kind: "function", file: file.path, start_line: 1, end_line: 1 } as ReturnType<typeof stripSource>,
           file: file.path,
           framework: "nextjs",
+          router: "app",
         });
       }
     }
@@ -184,8 +192,162 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
 }
 
 /**
+ * Find Pages Router API route handlers via default exports in pages/api/.
+ * @internal exported for unit testing
+ */
+function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+
+  // Require Next.js project signal to disambiguate from Astro's src/pages/api/*.
+  // Accept next.config.* at root/src OR an App Router convention file.
+  const hasNextSignal = index.files.some((f) =>
+    /^(src\/)?next\.config\.[mc]?[jt]sx?$/.test(f.path) ||
+    /(^|\/)app\/.*\/(page|layout|route)\.[jt]sx?$/.test(f.path),
+  );
+  if (!hasNextSignal) return handlers;
+
+  for (const file of index.files) {
+    // Only match files under pages/api/ (not src/pages/api/ which is Astro convention)
+    if (!/^(\.\/)?pages\/api\//.test(file.path)) continue;
+
+    // Derive URL path from file path
+    const urlPath = deriveUrlPath(file.path, "pages");
+    const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
+    const normalizedUrl = urlPath.replace(/^\/|\/$/g, "");
+
+    if (normalizedUrl !== normalizedSearch) continue;
+
+    // Find default export or named handler in the file
+    const fileSymbols = index.symbols.filter((s) => s.file === file.path);
+
+    // Look for default export
+    const defaultExport = fileSymbols.find((s) => s.name === "default" || s.name === "handler");
+
+    if (defaultExport) {
+      handlers.push({
+        symbol: stripSource(defaultExport),
+        file: file.path,
+        framework: "nextjs",
+        router: "pages",
+      });
+    } else if (fileSymbols.length > 0) {
+      // Try variable indirection: find any exported function
+      const exported = fileSymbols.find((s) =>
+        s.kind === "function" || s.kind === "variable",
+      );
+      if (exported) {
+        handlers.push({
+          symbol: stripSource(exported),
+          file: file.path,
+          framework: "nextjs",
+          router: "pages",
+        });
+      }
+    }
+
+    // Fallback: at least mark the file as having a handler
+    if (handlers.filter((h) => h.file === file.path).length === 0) {
+      handlers.push({
+        symbol: {
+          id: file.path, name: "handler", kind: "function",
+          file: file.path, start_line: 1, end_line: 1,
+        } as ReturnType<typeof stripSource>,
+        file: file.path,
+        framework: "nextjs",
+        router: "pages",
+      });
+    }
+  }
+
+  return handlers;
+}
+
+/**
  * Find Express-style route handlers via router.get/app.post patterns.
  */
+/**
+ * Find Hono route handlers by consulting the HonoExtractor-produced model.
+ * Uses HonoCache when available, falls back to on-demand parse.
+ *
+ * The model has pre-resolved paths (basePath + mount prefix + route path),
+ * so path matching is a direct matchPath() call against each route.
+ */
+async function findHonoHandlers(
+  repo: string,
+  index: CodeIndex,
+  searchPath: string,
+): Promise<RouteHandler[]> {
+  // Only run if Hono is detected
+  const { detectFrameworks } = await import("../utils/framework-detect.js");
+  const frameworks = detectFrameworks(index);
+  if (!frameworks.has("hono")) return [];
+
+  // Resolve entry file: prefer orchestrator, else first file containing `new Hono()`
+  const entryFile = resolveHonoEntryFile(index);
+  if (!entryFile) return [];
+
+  // Get model (via cache)
+  let model;
+  try {
+    const { honoCache } = await import("../cache/hono-cache.js");
+    const { HonoExtractor } = await import("../parser/extractors/hono.js");
+    const extractor = new HonoExtractor();
+    model = await honoCache.get(repo, entryFile, extractor);
+  } catch {
+    return [];
+  }
+
+  const handlers: RouteHandler[] = [];
+  for (const route of model.routes) {
+    if (!matchPath(route.path, searchPath)) continue;
+
+    // Find the handler symbol in the index by file + name + line
+    let handlerSym = index.symbols.find(
+      (s) =>
+        s.file === route.handler.file.replace(index.root + "/", "") &&
+        s.name === route.handler.name &&
+        Math.abs(s.start_line - route.handler.line) <= 2,
+    );
+
+    // Fallback: synthetic stub for inline handlers
+    if (!handlerSym) {
+      handlerSym = {
+        id: `hono:${route.file}:${route.line}`,
+        repo,
+        name: route.handler.name,
+        kind: "function",
+        file: route.handler.file.replace(index.root + "/", ""),
+        start_line: route.handler.line,
+        end_line: route.handler.line,
+        start_byte: 0,
+        end_byte: 0,
+        source: "",
+        tokens: [route.handler.name],
+      };
+    }
+
+    handlers.push({
+      symbol: stripSource(handlerSym),
+      file: handlerSym.file,
+      method: route.method,
+      framework: "hono",
+    });
+  }
+
+  return handlers;
+}
+
+/** Find the Hono entry file for a repo — ORCHESTRATOR or first new Hono() file. */
+function resolveHonoEntryFile(index: CodeIndex): string | null {
+  for (const sym of index.symbols) {
+    if (sym.source && /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(sym.source)) {
+      // Return absolute path
+      return join(index.root, sym.file);
+    }
+  }
+  return null;
+}
+
 function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
   const handlers: RouteHandler[] = [];
   const methods = ["get", "post", "put", "delete", "patch"];
@@ -216,6 +378,48 @@ function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler
 /**
  * Detect DB operations in a symbol's call chain.
  */
+/**
+ * Detect server actions in the call chain by checking for "use server" directive
+ * at the file level (not function-body level).
+ */
+async function findServerActions(
+  repoRoot: string,
+  calleeSymbols: CodeSymbol[],
+  callChain: Array<{ name: string; file: string; kind: string; depth: number }>,
+): Promise<Array<{ name: string; file: string; called_from?: string | undefined }>> {
+  const actions: Array<{ name: string; file: string; called_from?: string | undefined }> = [];
+  const checkedFiles = new Map<string, boolean>();
+
+  for (const sym of calleeSymbols) {
+    const absPath = join(repoRoot, sym.file);
+
+    let hasDirective: boolean;
+    if (checkedFiles.has(sym.file)) {
+      hasDirective = checkedFiles.get(sym.file)!;
+    } else {
+      const directive = await scanDirective(absPath);
+      hasDirective = directive === "use server";
+      checkedFiles.set(sym.file, hasDirective);
+    }
+
+    if (hasDirective) {
+      // Find who called this symbol
+      const callerIdx = callChain.findIndex(
+        (c) => c.file === sym.file && c.name === sym.name,
+      );
+      const calledFrom = callerIdx > 0 ? callChain[callerIdx - 1]?.name : undefined;
+
+      actions.push({
+        name: sym.name,
+        file: sym.file,
+        called_from: calledFrom,
+      });
+    }
+  }
+
+  return actions;
+}
+
 function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
   const calls: DbCall[] = [];
   for (const sym of symbols) {
@@ -272,8 +476,9 @@ function appendDbCalls(
 
 /**
  * Render a RouteTraceResult as a Mermaid sequence diagram.
+ * @internal exported for unit testing
  */
-function routeToMermaid(result: RouteTraceResult): string {
+export function routeToMermaid(result: RouteTraceResult): string {
   if (result.handlers.length === 0) {
     return "sequenceDiagram\n    Note over Client: No handler found for " + result.path;
   }
@@ -283,7 +488,26 @@ function routeToMermaid(result: RouteTraceResult): string {
   const method = handler.method ?? "REQUEST";
   const aliases = new Map<string, string>();
 
-  lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+  // Add Middleware participant if middleware applies
+  if (result.middleware?.applies) {
+    lines.push(`    participant Middleware`);
+    lines.push(`    Client->>+Middleware: ${method} ${result.path}`);
+    lines.push(`    Middleware->>+Controller: continue`);
+  } else {
+    lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+  }
+
+  // Add Layout chain rendering
+  if (result.layout_chain && result.layout_chain.length > 0) {
+    let prev = "Controller";
+    for (let i = 0; i < result.layout_chain.length; i++) {
+      const layoutName = `Layout${i + 1}`;
+      const layoutFile = result.layout_chain[i]!;
+      lines.push(`    participant ${layoutName}`);
+      lines.push(`    ${prev}->>+${layoutName}: render (${layoutFile})`);
+      prev = layoutName;
+    }
+  }
 
   const root = result.call_chain[0];
   if (root) {
@@ -319,7 +543,22 @@ function routeToMermaid(result: RouteTraceResult): string {
   }
 
   closeUntilDepth(0);
-  lines.push(`    Controller-->>-Client: response`);
+
+  // Close layout chain
+  if (result.layout_chain && result.layout_chain.length > 0) {
+    for (let i = result.layout_chain.length - 1; i >= 0; i--) {
+      const layoutName = `Layout${i + 1}`;
+      const returnTo = i > 0 ? `Layout${i}` : "Controller";
+      lines.push(`    ${layoutName}-->>-${returnTo}: rendered`);
+    }
+  }
+
+  if (result.middleware?.applies) {
+    lines.push(`    Controller-->>-Middleware: response`);
+    lines.push(`    Middleware-->>-Client: response`);
+  } else {
+    lines.push(`    Controller-->>-Client: response`);
+  }
   return lines.join("\n");
 }
 
@@ -327,7 +566,7 @@ function routeToMermaid(result: RouteTraceResult): string {
  * Find Yii2 route handlers via convention: controller-id/action-id → ControllerIdController::actionActionId().
  * Supports modules: module-id/controller-id/action-id.
  */
-function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+async function findYii2Handlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
   const handlers: RouteHandler[] = [];
   const normalized = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
   const segments = normalized.split("/").filter(Boolean);
@@ -367,7 +606,10 @@ function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] 
     (s) => s.name === controllerName && s.kind === "class",
   );
 
-  if (!controllerSymbol) return handlers;
+  if (!controllerSymbol) {
+    // Fallback: try urlManager rules from config/web.php
+    return findYii2HandlersFromConfig(index, searchPath);
+  }
 
   // Find action method within the controller
   const actionSymbol = index.symbols.find(
@@ -386,6 +628,58 @@ function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] 
     handlers.push({
       symbol: stripSource(controllerSymbol),
       file: controllerSymbol.file,
+      framework: "yii2",
+    });
+  }
+
+  return handlers;
+}
+
+/**
+ * Fallback: parse Yii2 urlManager rules from config/web.php.
+ * Matches patterns like: 'GET api/users/<id>' => 'user/view'
+ */
+async function findYii2HandlersFromConfig(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const configFile = index.files.find((f) => /config\/web\.php$/.test(f.path));
+  if (!configFile) return handlers;
+
+  const { readFile: rf } = await import("node:fs/promises");
+  const { join: j } = await import("node:path");
+  let source: string;
+  try {
+    source = await rf(j(index.root, configFile.path), "utf-8");
+  } catch { return handlers; }
+
+  const normalized = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
+
+  // Match: 'route/pattern' => 'controller/action' or ['GET method/pattern'] => 'controller/action'
+  const ruleRe = /['"](?:(?:GET|POST|PUT|DELETE|PATCH)\s+)?([^'"]+)['"]\s*=>\s*['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+  while ((match = ruleRe.exec(source)) !== null) {
+    const rulePattern = match[1]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
+    if (!matchPath(rulePattern, normalized)) continue;
+
+    const route = match[2]!; // e.g. "user/view"
+    const parts = route.split("/");
+    if (parts.length < 2) continue;
+
+    const controllerId = parts[parts.length - 2]!;
+    const actionId = parts[parts.length - 1]!;
+    const toPascal = (s: string): string =>
+      s.split("-").map(p => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+
+    const controllerName = toPascal(controllerId) + "Controller";
+    const actionMethod = "action" + toPascal(actionId);
+
+    const ctrlSym = index.symbols.find(s => s.name === controllerName && s.kind === "class");
+    if (!ctrlSym) continue;
+
+    const actionSym = index.symbols.find(s => s.name === actionMethod && s.parent === ctrlSym.id);
+    handlers.push({
+      symbol: stripSource(actionSym ?? ctrlSym),
+      file: (actionSym ?? ctrlSym).file,
+      method: "GET",
       framework: "yii2",
     });
   }
@@ -632,14 +926,18 @@ export async function traceRoute(
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   // Try all frameworks
+  const astroHandlers = findAstroHandlers(index, path);
   const handlers = [
     ...(await findNestJSHandlers(index, path)),
     ...findNextJSHandlers(index, path),
+    ...findPagesRouterHandlers(index, path),
     ...findExpressHandlers(index, path),
-    ...findYii2Handlers(index, path),
+    ...(await findHonoHandlers(repo, index, path)),
+    ...(await findYii2Handlers(index, path)),
     ...(await findLaravelHandlers(index, path)),
     ...(await findKtorHandlers(index, path)),
     ...(await findSpringBootKotlinHandlers(index, path)),
+    ...astroHandlers,
   ];
 
   if (handlers.length === 0) {
@@ -678,6 +976,37 @@ export async function traceRoute(
   const dbCalls = findDbCalls(allCalleeSymbols);
 
   const result: RouteTraceResult = { path, handlers, call_chain: callChain, db_calls: dbCalls };
+
+  // Next.js-specific: layout chain, middleware, and server actions tracing
+  const hasNextjsHandler = handlers.some((h) => h.framework === "nextjs");
+  if (hasNextjsHandler) {
+    const repoRoot = index.root;
+
+    // Layout chain from the first handler's file
+    const firstFile = handlers[0]?.file;
+    if (firstFile) {
+      try {
+        result.layout_chain = await computeLayoutChain(firstFile, repoRoot);
+      } catch {
+        result.layout_chain = [];
+      }
+    } else {
+      result.layout_chain = [];
+    }
+
+    // Middleware tracing
+    try {
+      const mw = await traceMiddleware(repoRoot, path);
+      if (mw) {
+        result.middleware = mw;
+      }
+    } catch {
+      // Middleware tracing failed — skip
+    }
+
+    // Server actions detection
+    result.server_actions = await findServerActions(repoRoot, allCalleeSymbols, callChain);
+  }
 
   if (outputFormat === "mermaid") {
     return { mermaid: routeToMermaid(result) };

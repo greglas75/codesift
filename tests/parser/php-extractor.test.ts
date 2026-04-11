@@ -369,3 +369,75 @@ function third(string $x): bool { return true; }
     expect(symbols.every(s => s.kind === "function")).toBe(true);
   });
 });
+
+describe("extractPhpSymbols — PHPDoc @property/@method synthesis", () => {
+  it("synthesizes fields for @property tags in class docblock", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @property int $id
+ * @property string $email
+ * @method ActiveQuery getPosts()
+ */
+class User {
+    public function realMethod() {}
+}
+`);
+    const cls = symbols.find(s => s.name === "User" && s.kind === "class");
+    expect(cls).toBeDefined();
+
+    const idField = symbols.find(s => s.name === "id" && s.kind === "field");
+    const emailField = symbols.find(s => s.name === "email" && s.kind === "field");
+    const getPostsMethod = symbols.find(s => s.name === "getPosts" && s.kind === "method");
+    const realMethod = symbols.find(s => s.name === "realMethod" && s.kind === "method");
+
+    expect(idField).toBeDefined();
+    expect(emailField).toBeDefined();
+    expect(getPostsMethod).toBeDefined();
+    expect(realMethod).toBeDefined();
+
+    // Synthetic flag present on docblock-derived symbols
+    expect(idField!.meta?.synthetic).toBe(true);
+    expect(emailField!.meta?.synthetic).toBe(true);
+    expect(getPostsMethod!.meta?.synthetic).toBe(true);
+
+    // Real method has no synthetic flag
+    expect(realMethod!.meta?.synthetic).toBeUndefined();
+
+    // All children attached to class as parent
+    expect(idField!.parent).toBe(cls!.id);
+    expect(emailField!.parent).toBe(cls!.id);
+    expect(getPostsMethod!.parent).toBe(cls!.id);
+
+    // Type hint preserved in signature field
+    expect(idField!.signature).toBe("int");
+    expect(emailField!.signature).toBe("string");
+    expect(getPostsMethod!.signature).toBe("ActiveQuery");
+  });
+
+  it("deduplicates synthetic symbols against real methods", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @method array getPosts()
+ */
+class User {
+    public function getPosts(): array {
+        return [];
+    }
+}
+`);
+    // Only ONE getPosts symbol — real wins, synthetic skipped
+    const getPosts = symbols.filter(s => s.name === "getPosts");
+    expect(getPosts).toHaveLength(1);
+    expect(getPosts[0].meta?.synthetic).toBeUndefined();
+  });
+
+  it("does not synthesize when class has no docblock", async () => {
+    const symbols = await parse(`<?php
+class Plain {
+    public function realMethod() {}
+}
+`);
+    const synthetic = symbols.filter(s => s.meta?.synthetic);
+    expect(synthetic).toHaveLength(0);
+  });
+});

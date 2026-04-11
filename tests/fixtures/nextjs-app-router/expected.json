@@ -1,0 +1,33 @@
+{
+  "comment": "Frozen ground truth for analyze_nextjs_components on this fixture. Authored BEFORE running the SC1 validator to prevent input-echo bias (per QA-1 in the spec).",
+  "counts": {
+    "total": 20,
+    "server": 12,
+    "client_explicit": 5,
+    "client_inferred": 3,
+    "ambiguous": 0,
+    "unnecessary_use_client": 2
+  },
+  "files": {
+    "app/(auth)/layout.tsx":           { "classification": "server", "directive": null, "violations": [] },
+    "app/(auth)/login/page.tsx":       { "classification": "server", "directive": null, "violations": [] },
+    "app/@modal/page.tsx":             { "classification": "server", "directive": null, "violations": [] },
+    "app/components/AsyncClient.tsx":  { "classification": "client_explicit", "directive": "use client", "violations": ["unnecessary_use_client"] },
+    "app/components/ClientButton.tsx": { "classification": "client_explicit", "directive": "use client", "violations": [] },
+    "app/components/DynamicImport.tsx": { "classification": "client_inferred", "directive": null, "violations": [] },
+    "app/components/ServerComponent.tsx": { "classification": "server", "directive": null, "violations": [] },
+    "app/components/UnnecessaryClient.tsx": { "classification": "client_explicit", "directive": "use client", "violations": ["unnecessary_use_client"] },
+    "app/components/WithDocblock.tsx": { "classification": "client_inferred", "directive": null, "violations": [] },
+    "app/components/WithHooks.tsx":    { "classification": "client_inferred", "directive": null, "violations": [] },
+    "app/default.tsx":                 { "classification": "server", "directive": null, "violations": [] },
+    "app/global-error.tsx":            { "classification": "client_explicit", "directive": "use client", "violations": [] },
+    "app/layout.tsx":                  { "classification": "server", "directive": null, "violations": [] },
+    "app/not-found.tsx":               { "classification": "server", "directive": null, "violations": [] },
+    "app/page.tsx":                    { "classification": "server", "directive": null, "violations": [] },
+    "app/products/[id]/layout.tsx":    { "classification": "server", "directive": null, "violations": [] },
+    "app/products/[id]/page.tsx":      { "classification": "server", "directive": null, "violations": [] },
+    "app/products/error.tsx":          { "classification": "client_explicit", "directive": "use client", "violations": [] },
+    "app/products/loading.tsx":        { "classification": "server", "directive": null, "violations": [] },
+    "app/template.tsx":                { "classification": "server", "directive": null, "violations": [] }
+  }
+}

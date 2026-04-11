@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, relative, extname } from "node:path";
+import picomatch from "picomatch";
 
 /**
  * Directories to skip during filesystem walks.
@@ -22,6 +23,25 @@ export function toIgnorePatterns(): string[] {
 }
 
 const DEFAULT_MAX_FILE_SIZE = 1_000_000; // 1MB
+
+/**
+ * Backup and editor-generated files to exclude by default.
+ * These patterns commonly appear in working directories and cause:
+ * - Index duplication (e.g. Mobi2 had Survey.php + Survey copy.php)
+ * - False references pointing at backup files
+ * - Wasted parser time on abandoned code
+ *
+ * Disabled with env var CODESIFT_INCLUDE_BACKUPS=1.
+ */
+export const BACKUP_FILE_PATTERNS: RegExp[] = [
+  /copy\.php$/i,       // macOS Finder "Duplicate" output
+  /\.bak$/i,           // generic backup
+  /\.orig$/i,          // merge conflict leftover
+  /~$/,                // emacs/joe backup
+  /\.swp$/i,           // vim swap
+  /\.swo$/i,           // vim swap
+  /\.DS_Store$/,       // macOS finder metadata
+];
 
 export interface WalkOptions {
   /**
@@ -55,6 +75,20 @@ export interface WalkOptions {
    * When `false` (default) the returned paths are absolute.
    */
   relative?: boolean | undefined;
+
+  /**
+   * When `true`, follow symlinks and walk their targets.
+   * Cycle detection via inode tracking prevents infinite loops.
+   * Defaults to `false`.
+   */
+  followSymlinks?: boolean | undefined;
+
+  /**
+   * Glob patterns to exclude (like .gitignore syntax).
+   * Matched against relative paths using picomatch.
+   * Example: ["dist/**", "*.generated.ts"]
+   */
+  excludePatterns?: string[] | undefined;
 }
 
 /**
@@ -71,7 +105,20 @@ export async function walkDirectory(
   const fileFilter = options?.fileFilter;
   const includePaths = options?.includePaths;
   const useRelative = options?.relative ?? false;
+  const followSymlinks = options?.followSymlinks ?? false;
+  const visitedInodes = new Set<number>();
   let limitReached = false;
+
+  // Compile exclude patterns once (picomatch)
+  let isExcluded: ((path: string) => boolean) | null = null;
+  if (options?.excludePatterns && options.excludePatterns.length > 0) {
+    try {
+      isExcluded = picomatch(options.excludePatterns, { dot: true });
+    } catch {
+      // Malformed patterns — warn and skip filtering
+      console.warn("[codesift] walkDirectory: invalid excludePatterns, ignoring");
+    }
+  }
 
   async function walk(dirPath: string): Promise<void> {
     if (limitReached) return;
@@ -87,13 +134,43 @@ export async function walkDirectory(
       if (limitReached) return;
       const fullPath = join(dirPath, entry.name);
 
-      if (entry.isDirectory()) {
+      const isSymlink = entry.isSymbolicLink();
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+
+      // Resolve symlinks when followSymlinks is enabled
+      if (isSymlink && followSymlinks) {
+        try {
+          const resolved = await stat(fullPath);
+          const ino = resolved.ino;
+          if (visitedInodes.has(ino)) {
+            // Cycle detected — skip
+            continue;
+          }
+          visitedInodes.add(ino);
+          isDir = resolved.isDirectory();
+          isFile = resolved.isFile();
+        } catch {
+          // Broken symlink — skip silently
+          continue;
+        }
+      } else if (isSymlink) {
+        // Not following symlinks — skip
+        continue;
+      }
+
+      if (isDir) {
         if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) {
           continue;
         }
         await walk(fullPath);
-      } else if (entry.isFile()) {
+      } else if (isFile) {
         const ext = extname(entry.name);
+
+        // Exclude backup / editor-generated files unless env var opts out.
+        // Checked before file filter so the noise never reaches the caller.
+        if (process.env.CODESIFT_INCLUDE_BACKUPS !== "1" &&
+            BACKUP_FILE_PATTERNS.some((re) => re.test(entry.name))) continue;
 
         // Apply caller's file filter (e.g. language check, binary exclusion)
         if (fileFilter && !fileFilter(ext, entry.name)) continue;
@@ -103,6 +180,12 @@ export async function walkDirectory(
           const relPath = relative(rootPath, fullPath);
           const matches = includePaths.some((p) => relPath.startsWith(p));
           if (!matches) continue;
+        }
+
+        // Apply exclude patterns
+        if (isExcluded) {
+          const relPath = relative(rootPath, fullPath);
+          if (isExcluded(relPath)) continue;
         }
 
         // Skip files that are too large

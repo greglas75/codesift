@@ -1,9 +1,29 @@
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+
+// Force @mrleebo/prisma-ast to resolve to its ESM build instead of the CJS
+// dispatcher; the CJS build does a runtime `require("chevrotain")` which
+// fails because chevrotain ships as pure ESM (type: module).
+const prismaAstEsm = fileURLToPath(
+  new URL("./node_modules/@mrleebo/prisma-ast/dist/prisma-ast.esm.js", import.meta.url),
+);
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@mrleebo/prisma-ast": prismaAstEsm,
+    },
+  },
   test: {
     globals: true,
     testTimeout: 15000,
+    server: {
+      deps: {
+        // Ensure chevrotain + prisma-ast ESM are transformed by Vite so the
+        // alias above takes effect inside vmForks/forks pools.
+        inline: [/chevrotain/, /@mrleebo\/prisma-ast/],
+      },
+    },
     coverage: {
       provider: "v8",
       thresholds: {
@@ -47,6 +67,14 @@ export default defineConfig({
           pool: "vmForks",
           poolOptions: {
             vmForks: { singleFork: true },
+          },
+          server: {
+            deps: {
+              // chevrotain ships ESM in a CJS wrapper; inline so Vite transforms
+              // it. The /.*/ regex for prisma-ast forces Vite to resolve via
+              // its `module` field (ESM build) instead of the CJS dispatcher.
+              inline: [/chevrotain/, /@mrleebo\/prisma-ast/],
+            },
           },
         },
       },

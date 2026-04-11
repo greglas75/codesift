@@ -52,13 +52,15 @@ function getGitChurn(
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
-      // End of a commit's stats — record commit counts
-      for (const file of commitFiles) {
-        const entry = churn.get(file);
-        if (entry) entry.commits++;
+      // Empty line after numstat lines → end of a commit's stats
+      // Empty line right after hash → skip (git format: hash\n\nnumstat)
+      if (commitFiles.size > 0) {
+        for (const file of commitFiles) {
+          const entry = churn.get(file);
+          if (entry) entry.commits++;
+        }
+        commitFiles.clear();
       }
-      commitFiles.clear();
-      inCommit = false;
       continue;
     }
 

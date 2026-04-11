@@ -1,0 +1,12 @@
+{
+  "total_refs": 5,
+  "resolved_count": 3,
+  "broken_count": 1,
+  "unresolved_count": 1,
+  "broken": [
+    { "href": "/nonexistent", "file": "app/nav.tsx" }
+  ],
+  "unresolved": [
+    { "reason": "template_literal", "file": "app/nav.tsx" }
+  ]
+}

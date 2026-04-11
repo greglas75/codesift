@@ -7,6 +7,7 @@ import { loadConfig } from "../config.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { detectFrameworks, isFrameworkEntryPoint } from "../utils/framework-detect.js";
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
+import { REACT_STDLIB_HOOKS } from "./react-tools.js";
 import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
 const MAX_REFERENCES = 100;
@@ -541,11 +542,28 @@ function extractImportLines(source: string): string[] {
   });
 }
 
+export interface ReactContext {
+  /** Props type name extracted from the component's parameter type annotation */
+  props_type: string | null;
+  /** Source of the props interface/type declaration when found in the index (Tier 4 — Item 16) */
+  props_interface_source: string | null;
+  /** React hooks called inside this component (use*() patterns) */
+  hooks_used: Array<{ name: string; is_stdlib: boolean }>;
+  /** Child components rendered via JSX (<PascalCase>) */
+  child_components: string[];
+  /** Parent components that render this one via JSX */
+  parent_components: string[];
+  /** Detected wrapper pattern (memo, forwardRef, lazy) or null */
+  wrapper: "memo" | "forwardRef" | "lazy" | null;
+}
+
 export interface ContextBundle {
   symbol: CodeSymbol;
   imports: string[];
   siblings: Array<{ name: string; kind: SymbolKind; start_line: number; end_line: number }>;
   types_used: string[];  // type/interface names referenced in the symbol's source
+  /** Only populated when symbol.kind === "component" */
+  react_context?: ReactContext;
 }
 
 /**
@@ -592,7 +610,92 @@ export async function getContextBundle(
   // Extract type names used in the symbol's source
   const typesUsed = extractTypesUsed(fullSymbol.source ?? "", index.symbols);
 
-  return { symbol: fullSymbol, imports, siblings, types_used: typesUsed };
+  // React-specific enrichment for components
+  const bundle: ContextBundle = { symbol: fullSymbol, imports, siblings, types_used: typesUsed };
+  if (fullSymbol.kind === "component") {
+    bundle.react_context = buildReactContext(fullSymbol, index.symbols);
+  }
+
+  return bundle;
+}
+
+/**
+ * Build React-specific context for a component symbol:
+ * hooks used, child/parent components via JSX, wrapper pattern.
+ *
+ * Uses REACT_STDLIB_HOOKS imported from react-tools.js as the single source
+ * of truth for stdlib hook detection (CQ14 — no duplication).
+ */
+function buildReactContext(
+  component: CodeSymbol,
+  allSymbols: CodeSymbol[],
+): ReactContext {
+  const source = component.source ?? "";
+
+  // Extract hooks used
+  const hooksMap = new Map<string, boolean>();
+  const hookPattern = /\b(use[A-Z]\w*)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = hookPattern.exec(source)) !== null) {
+    const name = m[1]!;
+    hooksMap.set(name, REACT_STDLIB_HOOKS.has(name));
+  }
+  const hooks_used = [...hooksMap.entries()].map(([name, is_stdlib]) => ({ name, is_stdlib }));
+
+  // Extract child components from JSX (<PascalCase>)
+  const childSet = new Set<string>();
+  const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
+  while ((m = jsxPattern.exec(source)) !== null) {
+    const name = m[1]!;
+    if (name !== component.name) childSet.add(name);
+  }
+  const child_components = [...childSet].sort();
+
+  // Extract parent components: find other components whose source uses <ThisComponent>
+  const ownPattern = new RegExp(`<${component.name}\\b`);
+  const parent_components = allSymbols
+    .filter(
+      (s) =>
+        s.kind === "component" &&
+        s.id !== component.id &&
+        s.name !== component.name &&
+        s.source &&
+        ownPattern.test(s.source),
+    )
+    .map((s) => s.name);
+
+  // Detect wrapper pattern from source — supports TypeScript generics:
+  // forwardRef<HTMLDivElement, Props>(...), memo<Props>(...) (Item 9)
+  let wrapper: "memo" | "forwardRef" | "lazy" | null = null;
+  if (/\b(?:React\.)?memo\s*(?:<[^>]+>)?\s*\(/.test(source)) wrapper = "memo";
+  else if (/\b(?:React\.)?forwardRef\s*(?:<[^>]+>)?\s*\(/.test(source)) wrapper = "forwardRef";
+  else if (/\b(?:React\.)?lazy\s*(?:<[^>]+>)?\s*\(/.test(source)) wrapper = "lazy";
+
+  // Extract props type from signature: (props: MyProps) or ({ a, b }: Props)
+  let props_type: string | null = null;
+  const sig = component.signature ?? "";
+  // Pattern: (props: TypeName) or (arg: TypeName) or ({ ... }: TypeName)
+  const propsMatch = sig.match(/\(\s*(?:\{[^}]*\}|\w+)\s*:\s*([A-Z]\w*)/);
+  if (propsMatch) {
+    props_type = propsMatch[1]!;
+  }
+
+  // Resolve props interface body when type name found in the index (Tier 4 — Item 16).
+  // Look for an interface or type alias with the same name as props_type.
+  let props_interface_source: string | null = null;
+  if (props_type) {
+    const decl = allSymbols.find(
+      (s) => (s.kind === "interface" || s.kind === "type") && s.name === props_type,
+    );
+    if (decl?.source) {
+      // Cap to 800 chars to keep bundle compact
+      props_interface_source = decl.source.length > 800
+        ? decl.source.slice(0, 800) + "..."
+        : decl.source;
+    }
+  }
+
+  return { props_type, props_interface_source, hooks_used, child_components, parent_components, wrapper };
 }
 
 /**

@@ -1,0 +1,18 @@
+{
+  "comment": "Frozen ground truth for nextjs_route_map on the Pages Router fixture. Authored BEFORE running the SC2 validator (QA-6 / P7-1).",
+  "routes_count": 12,
+  "routes": {
+    "pages/_app.tsx":         { "url_path": "/_app",         "router": "pages", "type": "app",        "rendering": "unknown" },
+    "pages/_document.tsx":    { "url_path": "/_document",    "router": "pages", "type": "document",   "rendering": "unknown" },
+    "pages/_error.tsx":       { "url_path": "/_error",       "router": "pages", "type": "error_page", "rendering": "unknown" },
+    "pages/about.tsx":        { "url_path": "/about",        "router": "pages", "type": "page",       "rendering": "unknown" },
+    "pages/api/posts.ts":     { "url_path": "/api/posts",    "router": "pages", "type": "route",      "rendering": "unknown" },
+    "pages/api/users.ts":     { "url_path": "/api/users",    "router": "pages", "type": "route",      "rendering": "unknown" },
+    "pages/blog/[...slug].tsx": { "url_path": "/blog/[...slug]", "router": "pages", "type": "page",   "rendering": "static" },
+    "pages/index.tsx":        { "url_path": "/",             "router": "pages", "type": "page",       "rendering": "unknown" },
+    "pages/isr-page.tsx":     { "url_path": "/isr-page",     "router": "pages", "type": "page",       "rendering": "static" },
+    "pages/products/[id].tsx": { "url_path": "/products/[id]", "router": "pages", "type": "page",    "rendering": "ssr" },
+    "pages/ssr-page.tsx":     { "url_path": "/ssr-page",     "router": "pages", "type": "page",       "rendering": "ssr" },
+    "pages/static-page.tsx":  { "url_path": "/static-page",  "router": "pages", "type": "page",       "rendering": "static" }
+  }
+}

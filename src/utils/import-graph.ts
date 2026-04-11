@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { CodeIndex } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { extractPythonImports } from "./python-imports.js";
-import { resolvePythonImport } from "./python-import-resolver.js";
+import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
+import { resolvePhpNamespace } from "../tools/php-tools.js";
 
 export interface ImportEdge {
   from: string; // importer file path
@@ -31,7 +32,11 @@ const IMPORT_PATTERNS = [
 // Patterns for extracting PHP `use` statements (FQCN imports — PSR-4 based).
 // These are NOT file paths; they need PSR-4 resolution via composer.json.
 // Exposed separately so the resolver tool can opt-in.
-const PHP_USE_PATTERN = /^\s*use\s+([A-Z][\w\\]+)(?:\s+as\s+\w+)?\s*;/gm;
+// Accepts both UpperCase (PSR-1/2 modern) and lowercase (common in older
+// Yii2 apps: `use app\models\Survey`) namespaces. The FQCN must contain at
+// least one backslash to exclude global/function `use` statements like
+// `use Closure;` which would be false positives for the import graph.
+const PHP_USE_PATTERN = /^\s*use\s+(\w+(?:\\\w+)+)(?:\s+as\s+\w+)?\s*;/gm;
 
 // Patterns for extracting Kotlin `import` statements (fully-qualified names).
 // These are NOT file paths; they need heuristic resolution against source roots.
@@ -80,7 +85,7 @@ export function resolveImportPath(importerFile: string, importPath: string): str
   }
 
   let resolved = parts.join("/");
-  resolved = resolved.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php)$/, "");
+  resolved = resolved.replace(/\.(astro|ts|tsx|js|jsx|mjs|cjs|php)$/, "");
 
   return resolved;
 }
@@ -192,7 +197,7 @@ export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string
 export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
   const normalizedPaths = new Map<string, string>();
   for (const file of index.files) {
-    const normalized = file.path.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php|kt|kts|py)$/, "");
+    const normalized = file.path.replace(/\.(astro|ts|tsx|js|jsx|mjs|cjs|php|kt|kts|py)$/, "");
     normalizedPaths.set(normalized, file.path);
     if (normalized.endsWith("/index")) {
       normalizedPaths.set(normalized.slice(0, -6), file.path);
@@ -223,10 +228,13 @@ export async function collectImportEdges(
   // Rollback kill switch — skip Python import extraction if env var set
   const pythonDisabled = process.env.CODESIFT_DISABLE_PYTHON_IMPORTS === "1";
 
-  // Python needs the full indexed file list for package resolution
-  const indexedPyFiles = index.files
-    .filter((f) => f.path.endsWith(".py"))
-    .map((f) => f.path);
+  // Python needs the full indexed file set for package resolution — built once
+  const indexedPyFileSet = new Set(
+    index.files.filter((f) => f.path.endsWith(".py")).map((f) => f.path),
+  );
+  const pySrcLayout = indexedPyFileSet.size > 0
+    ? detectSrcLayout([...indexedPyFileSet])
+    : null;
 
   const files = fileFilter
     ? index.files.filter((f) => fileFilter.has(f.path))
@@ -239,7 +247,14 @@ export async function collectImportEdges(
   ): void => {
     if (to === from) return;
     const edgeKey = `${from}->${to}`;
-    if (edgeSet.has(edgeKey)) return;
+    if (edgeSet.has(edgeKey)) {
+      // Upgrade: runtime import overrides a prior type_only edge
+      if (!extras?.type_only) {
+        const existing = edges.find((e) => e.from === from && e.to === to);
+        if (existing?.type_only) existing.type_only = false;
+      }
+      return;
+    }
     edgeSet.add(edgeKey);
     const edge: ImportEdge = { from, to };
     if (extras?.type_only) edge.type_only = true;
@@ -273,6 +288,30 @@ export async function collectImportEdges(
       }
     }
 
+    // PHP cross-file edges via PSR-4 `use` statement resolution.
+    // Creates edges like: PostController.php → User.php when we see
+    // `use App\Models\User;` and composer.json maps `App\` to `src/`.
+    if (file.path.endsWith(".php")) {
+      const uses = extractPhpUseStatements(source);
+      for (const fqcn of uses) {
+        try {
+          const resolved = await resolvePhpNamespace(index.repo, fqcn);
+          if (resolved.exists && resolved.file_path) {
+            const candidate = resolved.file_path.replace(/^\.\//, "");
+            // Prefer the exact indexed path (handles prefixes like "./src/")
+            const targetFile = index.files.some((f) => f.path === candidate)
+              ? candidate
+              : normalizedPaths.get(candidate.replace(/\.php$/, "")) ?? null;
+            if (targetFile && targetFile !== file.path) {
+              addEdge(file.path, targetFile);
+            }
+          }
+        } catch {
+          // Missing composer.json, malformed PSR-4, etc. — skip edge, don't crash.
+        }
+      }
+    }
+
     // Python imports via tree-sitter AST + package-aware resolution
     if (!pythonDisabled && file.path.endsWith(".py")) {
       try {
@@ -284,7 +323,8 @@ export async function collectImportEdges(
             const targetFile = resolvePythonImport(
               { module: imp.module, level: imp.level },
               file.path,
-              indexedPyFiles,
+              indexedPyFileSet,
+              pySrcLayout,
             );
             if (targetFile) {
               addEdge(file.path, targetFile, {

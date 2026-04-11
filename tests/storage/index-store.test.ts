@@ -4,6 +4,7 @@ import {
   saveIncremental,
   removeFileFromIndex,
   getIndexPath,
+  isExtractorVersionCurrent,
 } from "../../src/storage/index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -179,6 +180,96 @@ describe("index-store", () => {
       const missingPath = join(tmpDir, "missing-remove.index.json");
       // Should not throw
       await removeFileFromIndex(missingPath, "src/a.ts");
+    });
+  });
+
+  describe("extractor_version invalidation", () => {
+    const CURRENT = { kotlin: "2.0.0", python: "1.0.0" };
+
+    it("loadIndex returns the index when stored extractor_version matches current", async () => {
+      const indexPath = join(tmpDir, "versioned.index.json");
+      const index = makeIndex({
+        extractor_version: { kotlin: "2.0.0", python: "1.0.0" },
+      });
+      await saveIndex(indexPath, index);
+
+      const loaded = await loadIndex(indexPath, CURRENT);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.extractor_version).toEqual({ kotlin: "2.0.0", python: "1.0.0" });
+    });
+
+    it("loadIndex returns null when a stored language version is behind", async () => {
+      const indexPath = join(tmpDir, "stale.index.json");
+      const index = makeIndex({
+        extractor_version: { kotlin: "1.0.0", python: "1.0.0" },
+      });
+      await saveIndex(indexPath, index);
+
+      const loaded = await loadIndex(indexPath, CURRENT);
+      expect(loaded).toBeNull();
+    });
+
+    it("loadIndex returns null for a legacy index without extractor_version", async () => {
+      const indexPath = join(tmpDir, "legacy.index.json");
+      const index = makeIndex(); // no extractor_version field
+      await saveIndex(indexPath, index);
+
+      const loaded = await loadIndex(indexPath, CURRENT);
+      expect(loaded).toBeNull();
+    });
+
+    it("loadIndex skips the version check when currentVersions is omitted", async () => {
+      const indexPath = join(tmpDir, "incremental.index.json");
+      const index = makeIndex({
+        extractor_version: { kotlin: "0.1.0" },
+      });
+      await saveIndex(indexPath, index);
+
+      // Omitting currentVersions mirrors the saveIncremental read flow.
+      const loaded = await loadIndex(indexPath);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.extractor_version).toEqual({ kotlin: "0.1.0" });
+    });
+
+    it("isExtractorVersionCurrent returns true when every current language matches stored", () => {
+      const index = makeIndex({
+        extractor_version: { kotlin: "2.0.0", python: "1.0.0", extra: "9.9.9" },
+      });
+      expect(isExtractorVersionCurrent(index, CURRENT)).toBe(true);
+    });
+
+    it("isExtractorVersionCurrent returns false when a language version differs", () => {
+      const index = makeIndex({
+        extractor_version: { kotlin: "1.9.9", python: "1.0.0" },
+      });
+      expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
+    });
+
+    it("isExtractorVersionCurrent returns false when a current language is missing from stored", () => {
+      const index = makeIndex({
+        extractor_version: { python: "1.0.0" }, // kotlin missing
+      });
+      expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
+    });
+
+    it("isExtractorVersionCurrent returns false when the stored snapshot is absent", () => {
+      const index = makeIndex();
+      expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
+    });
+
+    it("saveIncremental via loadIndex-without-check preserves extractor_version round-trip", async () => {
+      const indexPath = join(tmpDir, "round-trip.index.json");
+      const initial = makeIndex({
+        symbols: [makeSymbol("src/a.ts", "f", 1)],
+        symbol_count: 1,
+        extractor_version: { kotlin: "2.0.0" },
+      });
+      await saveIndex(indexPath, initial);
+
+      await saveIncremental(indexPath, "src/a.ts", [makeSymbol("src/a.ts", "f2", 5)]);
+
+      const loaded = await loadIndex(indexPath);
+      expect(loaded!.extractor_version).toEqual({ kotlin: "2.0.0" });
     });
   });
 

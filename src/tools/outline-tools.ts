@@ -469,6 +469,29 @@ export async function suggestQueries(repo: string): Promise<{
     if (dir) examples.push(`get_file_tree(repo, path_prefix="${dir}")`);
   }
 
+  // React-aware suggestions: if the repo has component/hook symbols, surface
+  // React-specific tools that agents may not know about by default.
+  const hasComponents = (kinds["component"] ?? 0) > 0;
+  const hasHooks = (kinds["hook"] ?? 0) > 0;
+  if (hasComponents || hasHooks) {
+    if (hasComponents) {
+      examples.push(`search_symbols(repo, "", kind="component")  // list all React components`);
+      // Find a likely root component (App, Root, Main, Layout, Page)
+      const roots = ["App", "Root", "Main", "Layout", "Page"];
+      const rootName = index.symbols.find(
+        (s) => s.kind === "component" && roots.includes(s.name),
+      )?.name ?? index.symbols.find((s) => s.kind === "component")?.name;
+      if (rootName) {
+        examples.push(`trace_component_tree(repo, "${rootName}")  // JSX composition tree`);
+      }
+    }
+    if (hasHooks) {
+      examples.push(`search_symbols(repo, "", kind="hook")  // list all custom hooks`);
+    }
+    examples.push(`analyze_hooks(repo)  // Rule of Hooks violations + hook inventory`);
+    examples.push(`search_patterns(repo, "hook-in-condition")  // React anti-pattern scan`);
+  }
+
   return {
     top_files: topFiles,
     kind_distribution: kinds,

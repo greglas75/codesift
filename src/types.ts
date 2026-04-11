@@ -19,6 +19,11 @@ export type SymbolKind =
   | "test_hook"     // beforeEach() etc.
   | "component"     // React component (returns JSX)
   | "hook"          // React custom hook (useXxx)
+  | "table"         // SQL CREATE TABLE
+  | "view"          // SQL CREATE VIEW / MATERIALIZED VIEW
+  | "index"         // SQL CREATE INDEX
+  | "trigger"       // SQL CREATE TRIGGER
+  | "procedure"     // SQL CREATE PROCEDURE
   | "default_export"
   | "conversation_turn"   // user+assistant exchange pair
   | "conversation_summary" // compaction summary
@@ -68,6 +73,9 @@ export interface CodeIndex {
   updated_at: number;
   symbol_count: number;
   file_count: number;
+  /** Snapshot of EXTRACTOR_VERSIONS at index creation time — used to detect
+   *  schema changes and trigger full reindex when any language version bumps. */
+  extractor_version?: Record<string, string>;
 }
 
 export interface RepoMeta {
@@ -123,6 +131,18 @@ export interface TextMatchGroup {
 }
 
 export type Direction = "callers" | "callees";
+
+export type RouteFramework =
+  | "nestjs"
+  | "nextjs"
+  | "express"
+  | "hono"
+  | "yii2"
+  | "laravel"
+  | "ktor"
+  | "spring-kotlin"
+  | "astro"
+  | "unknown";
 
 export interface CallNode {
   symbol: CodeSymbol;

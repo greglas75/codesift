@@ -1,0 +1,5 @@
+{
+  "protected": ["/admin/dashboard", "/admin/users"],
+  "unprotected": ["/", "/about"],
+  "warnings": []
+}

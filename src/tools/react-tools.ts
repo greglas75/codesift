@@ -4,12 +4,15 @@
  * - traceComponentTree: BFS component composition tree (which components
  *   render which, via JSX usage)
  * - analyzeHooks: hook inventory + Rule of Hooks violation detection
+ * - analyzeRenders: static re-render risk analysis (inline props, missing memo)
  */
 import { getCodeIndex } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
+import { resolveAlias } from "../utils/react-alias.js";
 import type { CodeSymbol, CallNode } from "../types.js";
 
-export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, findRuleOfHooksViolations };
+export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, findRuleOfHooksViolations, findRenderRisks };
+// formatRendersMarkdown and buildContextGraph are exported inline at definition site below
 
 // ── Limits (mirror graph-tools.ts) ──────────────────────────
 const MAX_TREE_NODES = 500;
@@ -58,24 +61,70 @@ function buildJsxAdjacency(symbols: CodeSymbol[]): JsxAdjacency {
 
   // name → component symbols lookup (may have multiple definitions with same name)
   const nameToComponents = new Map<string, CodeSymbol[]>();
+  // file → component symbols lookup (used by alias-resolved imports)
+  const fileToComponents = new Map<string, CodeSymbol[]>();
   for (const sym of symbols) {
     if (sym.kind !== "component") continue;
     const existing = nameToComponents.get(sym.name);
     if (existing) existing.push(sym);
     else nameToComponents.set(sym.name, [sym]);
+    const fileExisting = fileToComponents.get(sym.file);
+    if (fileExisting) fileExisting.push(sym);
+    else fileToComponents.set(sym.file, [sym]);
   }
+
+  // Build a synthetic files list for resolveAlias() — needs only `path` field.
+  const filesList = [...fileToComponents.keys()].map((path) => ({ path }));
 
   for (const sym of symbols) {
     if (sym.kind !== "component" || !sym.source) continue;
 
     const rendered = extractJsxComponents(sym.source);
     const childList: CodeSymbol[] = [];
+
+    // Parse alias imports in this component's source for fallback resolution
+    // (Tier 4 — Item 8 wired into trace_component_tree).
+    // Pattern: import { X, Y as Z } from "@/components/Button"
+    // Pattern: import Default from "@/components/Foo"
+    const aliasImports = new Map<string, string>(); // localName → resolved file
+    const importRe = /import\s+(?:(\w+)|(?:\{([^}]+)\}))(?:\s*,\s*(?:(\w+)|(?:\{([^}]+)\})))?\s+from\s+["'](@\/[^"']+)["']/g;
+    let im: RegExpExecArray | null;
+    while ((im = importRe.exec(sym.source)) !== null) {
+      const aliasPath = im[5]!;
+      const resolved = resolveAlias(aliasPath, filesList);
+      if (!resolved) continue;
+      // default import
+      if (im[1]) aliasImports.set(im[1], resolved);
+      if (im[3]) aliasImports.set(im[3], resolved);
+      // named imports {A, B as C}
+      const namedGroup = im[2] ?? im[4];
+      if (namedGroup) {
+        for (const part of namedGroup.split(",")) {
+          const trimmed = part.trim();
+          // Handle "X as Y" → local name is Y
+          const asMatch = trimmed.match(/^(\w+)\s+as\s+(\w+)$/);
+          const localName = asMatch ? asMatch[2]! : trimmed.replace(/\s.*$/, "");
+          if (localName) aliasImports.set(localName, resolved);
+        }
+      }
+    }
+
     for (const name of rendered) {
       if (name === sym.name) continue; // skip self-reference
       const targets = nameToComponents.get(name);
-      if (!targets) continue;
-      for (const target of targets) {
-        if (target.id !== sym.id) childList.push(target);
+      if (targets) {
+        for (const target of targets) {
+          if (target.id !== sym.id) childList.push(target);
+        }
+        continue;
+      }
+      // Fallback: alias-resolved import lookup
+      const aliasTargetFile = aliasImports.get(name);
+      if (aliasTargetFile) {
+        const fileTargets = fileToComponents.get(aliasTargetFile) ?? [];
+        for (const target of fileTargets) {
+          if (target.id !== sym.id) childList.push(target);
+        }
       }
     }
     if (childList.length > 0) children.set(sym.id, childList);
@@ -396,4 +445,346 @@ export async function analyzeHooks(
     hook_usage,
     violations_count: violationsCount,
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// analyze_renders — static re-render risk analysis
+// ─────────────────────────────────────────────────────────────
+
+export interface RenderRisk {
+  type: "inline-object" | "inline-array" | "inline-function" | "unstable-default" | "missing-memo";
+  line: number;        // 1-based within the component source
+  context: string;     // trimmed matching line
+  suggestion: string;
+}
+
+export interface RenderAnalysisEntry {
+  name: string;
+  file: string;
+  start_line: number;
+  is_memoized: boolean;       // wrapped in React.memo
+  risk_count: number;
+  risk_level: "low" | "medium" | "high";
+  risks: RenderRisk[];        // up to 20 per component
+  /** Components rendered as children (from JSX), useful to see impact */
+  children_count: number;
+}
+
+export interface AnalyzeRendersResult {
+  entries: RenderAnalysisEntry[];
+  total_components: number;
+  high_risk_count: number;
+  summary: {
+    inline_objects: number;
+    inline_arrays: number;
+    inline_functions: number;
+    unstable_defaults: number;
+    missing_memo: number;
+  };
+}
+
+/** Patterns for inline prop creation in JSX — each creates a new reference every render */
+const INLINE_OBJECT_RE = /\b\w+\s*=\s*\{\s*\{/g;       // prop={{ ... }}
+const INLINE_ARRAY_RE = /\b\w+\s*=\s*\{\s*\[/g;         // prop={[ ... ]}
+const INLINE_FN_RE = /\bon[A-Z]\w*\s*=\s*\{\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>/g; // onX={() => ...}
+
+/** Default prop values that create new references: = [] or = {} in params */
+const UNSTABLE_DEFAULT_RE = /(?:[:,]\s*)(\w+)\s*=\s*(\[\s*\]|\{\s*\})/g;
+
+/**
+ * Analyze a single component source for re-render risks.
+ */
+function findRenderRisks(source: string): RenderRisk[] {
+  const risks: RenderRisk[] = [];
+  const lines = source.split("\n");
+
+  for (let i = 0; i < lines.length && risks.length < 20; i++) {
+    const line = lines[i]!;
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+
+    // Skip comments
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+
+    // Inline object prop: prop={{ key: val }}
+    if (INLINE_OBJECT_RE.test(line)) {
+      INLINE_OBJECT_RE.lastIndex = 0;
+      risks.push({
+        type: "inline-object",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: "Extract to a const or useMemo — object literal creates new reference every render",
+      });
+    }
+
+    // Inline array prop: prop={[1, 2, 3]}
+    if (INLINE_ARRAY_RE.test(line)) {
+      INLINE_ARRAY_RE.lastIndex = 0;
+      risks.push({
+        type: "inline-array",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: "Extract to a const or useMemo — array literal creates new reference every render",
+      });
+    }
+
+    // Inline function in event handler: onClick={() => ...}
+    if (INLINE_FN_RE.test(line)) {
+      INLINE_FN_RE.lastIndex = 0;
+      risks.push({
+        type: "inline-function",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: "Extract to useCallback or a named handler — arrow function creates new reference every render",
+      });
+    }
+
+    // Unstable default value: { items = [], config = {} }
+    UNSTABLE_DEFAULT_RE.lastIndex = 0;
+    let dm: RegExpExecArray | null;
+    while ((dm = UNSTABLE_DEFAULT_RE.exec(line)) !== null && risks.length < 20) {
+      risks.push({
+        type: "unstable-default",
+        line: lineNum,
+        context: trimmed.slice(0, 120),
+        suggestion: `Default value \`${dm[1]} = ${dm[2]}\` creates new reference every render — hoist to module const`,
+      });
+    }
+  }
+
+  return risks;
+}
+
+/**
+ * Analyze re-render risk across React components in a repo.
+ *
+ * Detects:
+ * - Inline object/array/function props in JSX (new reference every render)
+ * - Unstable default parameter values ([] or {} in component params)
+ * - Components not wrapped in React.memo that render children (missing-memo)
+ *
+ * Returns per-component risk assessment with actionable suggestions.
+ */
+/**
+ * Format an AnalyzeRendersResult as human-readable Markdown.
+ * Used by analyzeRenders when format="markdown" is requested.
+ */
+export function formatRendersMarkdown(result: AnalyzeRendersResult): string {
+  const lines: string[] = [];
+  lines.push("# Render Analysis");
+  lines.push("");
+  lines.push(`Total components: ${result.total_components} | High risk: ${result.high_risk_count}`);
+  lines.push("");
+  lines.push("## Summary");
+  lines.push(`- inline_objects: ${result.summary.inline_objects}`);
+  lines.push(`- inline_arrays: ${result.summary.inline_arrays}`);
+  lines.push(`- inline_functions: ${result.summary.inline_functions}`);
+  lines.push(`- unstable_defaults: ${result.summary.unstable_defaults}`);
+  lines.push(`- missing_memo: ${result.summary.missing_memo}`);
+  lines.push("");
+  lines.push("## Entries");
+  lines.push("");
+  lines.push("| Component | File | Risk | Issues | Children | Memo |");
+  lines.push("|-----------|------|------|--------|----------|------|");
+  for (const e of result.entries) {
+    const file = e.file.length > 40 ? "…" + e.file.slice(-39) : e.file;
+    lines.push(`| ${e.name} | ${file}:${e.start_line} | ${e.risk_level} | ${e.risk_count} | ${e.children_count} | ${e.is_memoized ? "✓" : "✗"} |`);
+  }
+  return lines.join("\n");
+}
+
+export async function analyzeRenders(
+  repo: string,
+  options?: {
+    component_name?: string | undefined;
+    file_pattern?: string | undefined;
+    include_tests?: boolean | undefined;
+    max_entries?: number | undefined;
+    format?: "json" | "markdown" | undefined;
+  },
+): Promise<AnalyzeRendersResult | string> {
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository not found: ${repo}`);
+  }
+
+  const componentName = options?.component_name;
+  const filePattern = options?.file_pattern;
+  const includeTests = options?.include_tests ?? false;
+  const maxEntries = options?.max_entries ?? 100;
+
+  let components = index.symbols.filter((s) => s.kind === "component");
+  if (!includeTests) components = components.filter((s) => !isTestFile(s.file));
+  if (componentName) components = components.filter((s) => s.name === componentName);
+  if (filePattern) components = components.filter((s) => s.file.includes(filePattern));
+
+  const entries: RenderAnalysisEntry[] = [];
+  const summary = { inline_objects: 0, inline_arrays: 0, inline_functions: 0, unstable_defaults: 0, missing_memo: 0 };
+  let highRiskCount = 0;
+
+  for (const sym of components) {
+    if (entries.length >= maxEntries) break;
+    if (!sym.source) continue;
+
+    const isMemoized = /\b(?:React\.)?memo\s*\(/.test(sym.source);
+    const risks = findRenderRisks(sym.source);
+
+    // Count children rendered (PascalCase JSX elements)
+    const childrenSet = new Set<string>();
+    const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
+    let jm: RegExpExecArray | null;
+    while ((jm = jsxPattern.exec(sym.source)) !== null) {
+      if (jm[1] !== sym.name) childrenSet.add(jm[1]!);
+    }
+
+    // Check missing-memo: component renders children and is not memoized
+    if (!isMemoized && childrenSet.size > 0 && risks.length > 0) {
+      risks.push({
+        type: "missing-memo",
+        line: 1,
+        context: `${sym.name} renders ${childrenSet.size} child component(s) and has ${risks.length} inline props`,
+        suggestion: "Wrap in React.memo() — parent re-renders will propagate to children via new prop references",
+      });
+      summary.missing_memo++;
+    }
+
+    // Aggregate summary counts
+    for (const r of risks) {
+      if (r.type === "inline-object") summary.inline_objects++;
+      else if (r.type === "inline-array") summary.inline_arrays++;
+      else if (r.type === "inline-function") summary.inline_functions++;
+      else if (r.type === "unstable-default") summary.unstable_defaults++;
+    }
+
+    // Risk level classification — factors children_count to amplify components
+    // that propagate prop instability to many children (Bug #4 fix).
+    const riskLevel: "low" | "medium" | "high" =
+      ((risks.length >= 3 && childrenSet.size >= 3) || risks.length >= 5) ? "high" :
+      (risks.length >= 2 || (risks.length >= 1 && childrenSet.size >= 1)) ? "medium" : "low";
+
+    if (riskLevel === "high") highRiskCount++;
+
+    // Only include components with risks or if specifically queried
+    if (risks.length > 0 || componentName) {
+      entries.push({
+        name: sym.name,
+        file: sym.file,
+        start_line: sym.start_line,
+        is_memoized: isMemoized,
+        risk_count: risks.length,
+        risk_level: riskLevel,
+        risks,
+        children_count: childrenSet.size,
+      });
+    }
+  }
+
+  // Sort: high risk first, then by risk_count descending
+  entries.sort((a, b) => {
+    const levelOrder = { high: 3, medium: 2, low: 1 };
+    const ld = levelOrder[b.risk_level] - levelOrder[a.risk_level];
+    if (ld !== 0) return ld;
+    return b.risk_count - a.risk_count;
+  });
+
+  const jsonResult: AnalyzeRendersResult = {
+    entries,
+    total_components: components.length,
+    high_risk_count: highRiskCount,
+    summary,
+  };
+
+  if (options?.format === "markdown") {
+    return formatRendersMarkdown(jsonResult);
+  }
+  return jsonResult;
+}
+
+// ─────────────────────────────────────────────────────────────
+// buildContextGraph — React context flow mapping (Item 10)
+// ─────────────────────────────────────────────────────────────
+
+export interface ReactContextInfo {
+  name: string;
+  created_in: { file: string; line: number };
+  providers: { file: string; line: number }[];
+  consumers: { file: string; component: string; line: number }[];
+}
+
+export interface ContextGraph {
+  contexts: ReactContextInfo[];
+}
+
+const MAX_CONTEXT_SYMBOLS = 500;
+
+/**
+ * Build a graph of React Context flows: createContext → Provider → useContext consumers.
+ *
+ * Single-pass scan over all symbols (capped at 500). No cycle detection — relies
+ * on visited set keyed by context name to prevent re-processing.
+ *
+ * Detection patterns:
+ * - createContext call: `const X = createContext(...)` or `const X = React.createContext(...)`
+ * - Provider usage: `<X.Provider value={...}>` (anywhere in any source)
+ * - Consumer usage: `useContext(X)` (anywhere in any source)
+ *
+ * Phase 2 features (not implemented here):
+ * - Cycle detection in provider chains
+ * - Re-render impact analysis ("which consumers re-render when X changes")
+ * - Context value type tracking
+ */
+export function buildContextGraph(symbols: CodeSymbol[]): ContextGraph {
+  const contexts = new Map<string, ReactContextInfo>();
+  const createPattern = /\bconst\s+(\w+)\s*(?::[^=]+)?\s*=\s*(?:React\.)?createContext\b/g;
+
+  // Pass 1: Find context definitions
+  let scanned = 0;
+  for (const sym of symbols) {
+    if (scanned >= MAX_CONTEXT_SYMBOLS) break;
+    if (!sym.source) continue;
+    scanned++;
+    let m: RegExpExecArray | null;
+    createPattern.lastIndex = 0;
+    while ((m = createPattern.exec(sym.source)) !== null) {
+      const name = m[1]!;
+      if (contexts.has(name)) continue;  // visited — skip duplicate definition
+      // Compute line offset within symbol source
+      const linesBefore = sym.source.slice(0, m.index).split("\n").length;
+      contexts.set(name, {
+        name,
+        created_in: { file: sym.file, line: sym.start_line + linesBefore - 1 },
+        providers: [],
+        consumers: [],
+      });
+    }
+  }
+
+  if (contexts.size === 0) return { contexts: [] };
+
+  // Pass 2: Find providers and consumers
+  scanned = 0;
+  for (const sym of symbols) {
+    if (scanned >= MAX_CONTEXT_SYMBOLS) break;
+    if (!sym.source) continue;
+    if (sym.kind !== "component" && sym.kind !== "hook") continue;
+    scanned++;
+    for (const [ctxName, info] of contexts) {
+      // Provider: <X.Provider
+      const providerRe = new RegExp(`<${ctxName}\\.Provider\\b`);
+      if (providerRe.test(sym.source)) {
+        info.providers.push({ file: sym.file, line: sym.start_line });
+      }
+      // Consumer: useContext(X)
+      const consumerRe = new RegExp(`useContext\\s*\\(\\s*${ctxName}\\b`);
+      if (consumerRe.test(sym.source)) {
+        info.consumers.push({
+          file: sym.file,
+          component: sym.name,
+          line: sym.start_line,
+        });
+      }
+    }
+  }
+
+  return { contexts: [...contexts.values()] };
 }

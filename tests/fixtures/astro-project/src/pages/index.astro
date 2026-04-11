@@ -1,0 +1,8 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Counter from '../components/Counter';
+---
+<BaseLayout title="Home">
+  <h1>Welcome</h1>
+  <Counter client:visible count={0} />
+</BaseLayout>
