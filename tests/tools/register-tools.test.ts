@@ -9,12 +9,13 @@ const ASTRO_TOOL_NAMES = [
   "astro_hydration_audit",
   "astro_route_map",
   "astro_config_analyze",
+  "astro_content_collections",
 ] as const;
 
 describe("register-tools — astro tools registration", () => {
   const defs = getToolDefinitions();
 
-  it("all 4 astro tools exist in TOOL_DEFINITIONS", () => {
+  it("all astro tools exist in TOOL_DEFINITIONS", () => {
     const names = defs.map((d) => d.name);
     for (const toolName of ASTRO_TOOL_NAMES) {
       expect(names, `${toolName} should be in TOOL_DEFINITIONS`).toContain(toolName);
@@ -48,7 +49,7 @@ describe("register-tools — astro tools registration", () => {
     });
   }
 
-  it("all 4 astro tools are in CORE_TOOL_NAMES", () => {
+  it("all astro tools are in CORE_TOOL_NAMES", () => {
     for (const toolName of ASTRO_TOOL_NAMES) {
       expect(
         CORE_TOOL_NAMES.has(toolName),

@@ -50,6 +50,7 @@ import { traceRoomSchema } from "./tools/room-tools.js";
 import { extractKotlinSerializationContract } from "./tools/serialization-tools.js";
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
+import { astroActionsAudit } from "./tools/astro-actions.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
 import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
 import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
@@ -643,6 +644,9 @@ export const CORE_TOOL_NAMES = new Set([
   "astro_hydration_audit",
   "astro_route_map",
   "astro_config_analyze",
+  "astro_actions_audit",
+  "astro_migration_check",
+  "astro_content_collections",
   // --- Hono tools (Task 23) ---
   "trace_middleware_chain",  // core: top Hono pain point (Discussion #4255)
   "analyze_hono_app",        // core: meta-tool, first call for any Hono project
@@ -3310,6 +3314,39 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return await astroConfigAnalyze({ project_root: index.root });
     },
   },
+  {
+    name: "astro_actions_audit",
+    category: "analysis",
+    searchHint: "astro actions defineAction zod refine passthrough multipart file enctype audit",
+    description: "Audit Astro Actions (src/actions/index.ts) for 6 known anti-patterns (AA01-AA06): missing handler return, top-level .refine() (Astro issue #11641), .passthrough() usage (issue #11693), File schema without multipart form, server-side invocation via actions.xxx(), and client calls to unknown actions. Returns issues grouped by severity with an A/B/C/D score.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      severity: z.enum(["all", "warnings", "errors"]).default("all").describe("Filter issues by severity (default: all)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof astroActionsAudit>[0] = {};
+      if (args.repo != null) opts.repo = args.repo as string;
+      if (args.severity != null) opts.severity = args.severity as "all" | "warnings" | "errors";
+      return await astroActionsAudit(opts);
+    },
+  },
+  {
+    name: "astro_content_collections",
+    category: "analysis",
+    searchHint: "astro content collections defineCollection zod schema reference glob loader frontmatter",
+    description: "Parse an Astro content collections config (src/content.config.ts or legacy src/content/config.ts), extract each collection's loader + Zod schema fields, build a reference() graph, and optionally validate entry frontmatter against required fields.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      validate_entries: z.boolean().default(true).describe("Validate entry frontmatter against required schema fields (default: true)"),
+    },
+    handler: async (args) => {
+      const index = await getCodeIndex(args.repo as string ?? "");
+      if (!index) throw new Error("Repository not found — run index_folder first");
+      const opts: Parameters<typeof astroContentCollections>[0] = { project_root: index.root };
+      if (args.validate_entries != null) opts.validate_entries = args.validate_entries as boolean;
+      return await astroContentCollections(opts);
+    },
+  },
 
   // --- Hono framework tools (Task 23) ---
   {
@@ -4014,6 +4051,45 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         }
       }
       return parts.join("\n");
+    },
+  },
+
+  // --- Astro v6 migration check ---
+  {
+    name: "astro_migration_check",
+    category: "analysis" as ToolCategory,
+    searchHint: "astro v6 migration upgrade breaking changes compatibility check AM01 AM10 content collections ViewTransitions",
+    description: "Scan an Astro project for v5→v6 breaking changes. Detects 10 issues (AM01–AM10): removed APIs (Astro.glob, emitESMImage), component renames (ViewTransitions→ClientRouter), content collection config changes, Node.js version requirements, Zod 4 deprecations, hybrid output mode, and removed integrations (@astrojs/lit). Returns a migration report with per-issue effort estimates.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      target_version: z.enum(["6"]).optional().describe("Target Astro version (default: '6')"),
+    },
+    handler: async (args) => {
+      const mcArgs: Parameters<typeof astroMigrationCheck>[0] = {};
+      if (args.repo != null) mcArgs.repo = args.repo as string;
+      if (args.target_version != null) mcArgs.target_version = args.target_version as "6";
+      const result = await astroMigrationCheck(mcArgs);
+      const lines: string[] = [];
+      lines.push(`ASTRO MIGRATION CHECK: v${result.current_version ?? "unknown"} → v${result.target_version}`);
+      lines.push(`Issues: ${result.summary.total_issues} | Estimated: ${result.summary.estimated_migration_hours}`);
+      if (Object.keys(result.summary.by_effort).length > 0) {
+        const effortStr = Object.entries(result.summary.by_effort)
+          .map(([k, v]) => `${v}×${k}`)
+          .join(", ");
+        lines.push(`Effort: ${effortStr}`);
+      }
+      if (result.breaking_changes.length === 0) {
+        lines.push("\n✓ No v6 breaking changes detected.");
+      } else {
+        lines.push("");
+        for (const issue of result.breaking_changes) {
+          const sev = issue.severity === "error" ? "✗" : issue.severity === "warning" ? "⚠" : "ℹ";
+          lines.push(`${sev} ${issue.code} [${issue.category}] — ${issue.message}`);
+          lines.push(`  effort: ${issue.effort} | files: ${issue.files.slice(0, 3).join(", ")}${issue.files.length > 3 ? ` +${issue.files.length - 3} more` : ""}`);
+          if (issue.migration_guide) lines.push(`  guide: ${issue.migration_guide}`);
+        }
+      }
+      return lines.join("\n");
     },
   },
 ];
