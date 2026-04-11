@@ -55,6 +55,13 @@ export interface WalkOptions {
    * When `false` (default) the returned paths are absolute.
    */
   relative?: boolean | undefined;
+
+  /**
+   * When `true`, follow symlinks and walk their targets.
+   * Cycle detection via inode tracking prevents infinite loops.
+   * Defaults to `false`.
+   */
+  followSymlinks?: boolean | undefined;
 }
 
 /**
@@ -71,6 +78,8 @@ export async function walkDirectory(
   const fileFilter = options?.fileFilter;
   const includePaths = options?.includePaths;
   const useRelative = options?.relative ?? false;
+  const followSymlinks = options?.followSymlinks ?? false;
+  const visitedInodes = new Set<number>();
   let limitReached = false;
 
   async function walk(dirPath: string): Promise<void> {
@@ -87,12 +96,37 @@ export async function walkDirectory(
       if (limitReached) return;
       const fullPath = join(dirPath, entry.name);
 
-      if (entry.isDirectory()) {
+      const isSymlink = entry.isSymbolicLink();
+      let isDir = entry.isDirectory();
+      let isFile = entry.isFile();
+
+      // Resolve symlinks when followSymlinks is enabled
+      if (isSymlink && followSymlinks) {
+        try {
+          const resolved = await stat(fullPath);
+          const ino = resolved.ino;
+          if (visitedInodes.has(ino)) {
+            // Cycle detected — skip
+            continue;
+          }
+          visitedInodes.add(ino);
+          isDir = resolved.isDirectory();
+          isFile = resolved.isFile();
+        } catch {
+          // Broken symlink — skip silently
+          continue;
+        }
+      } else if (isSymlink) {
+        // Not following symlinks — skip
+        continue;
+      }
+
+      if (isDir) {
         if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) {
           continue;
         }
         await walk(fullPath);
-      } else if (entry.isFile()) {
+      } else if (isFile) {
         const ext = extname(entry.name);
 
         // Apply caller's file filter (e.g. language check, binary exclusion)

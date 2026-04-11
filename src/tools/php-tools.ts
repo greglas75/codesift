@@ -526,6 +526,7 @@ export async function phpProjectAudit(
     if (result === "TIMEOUT") { gates.push({ name, status: "timeout", findings_count: 0, duration_ms: ms }); continue; }
 
     let count = 0;
+    // activerecord is informational (model count), not a problem finding — excluded from totalFindings and health score
     if (name === "security") { securityResult = result as PhpSecurityScanResult; count = securityResult.summary.total; }
     else if (name === "activerecord") { arResult = result as ActiveRecordAnalysis; count = arResult.total; }
     else if (name === "complexity") count = (result as { summary?: { above_threshold?: number } })?.summary?.above_threshold ?? 0;
@@ -534,13 +535,13 @@ export async function phpProjectAudit(
     else if (name === "clones") count = (result as { clones?: unknown[] })?.clones?.length ?? 0;
     else if (name === "hotspots") count = (result as { hotspots?: unknown[] })?.hotspots?.length ?? 0;
 
-    totalFindings += count;
+    if (name !== "activerecord") totalFindings += count;
     gates.push({ name, status: "ok", findings_count: count, duration_ms: ms });
   }
 
   const sec = securityResult.summary;
   const healthScore = Math.max(0, 100 - (sec.critical * 20 + sec.high * 10 + sec.medium * 5 + totalFindings));
-  const topRisks = gates.filter(g => g.findings_count > 0).sort((a, b) => b.findings_count - a.findings_count).slice(0, 3).map(g => `${g.name}: ${g.findings_count} findings`);
+  const topRisks = gates.filter(g => g.findings_count > 0 && g.name !== "activerecord").sort((a, b) => b.findings_count - a.findings_count).slice(0, 3).map(g => `${g.name}: ${g.findings_count} findings`);
 
   return {
     repo, duration_ms: Date.now() - startTime,

@@ -29,6 +29,11 @@ const REACT_SPECIAL_FILE = /(^|\/)(page|layout|loading|error|not-found|global-er
 /** Remix convention: routes/ directory with file-based routing */
 const REMIX_ROUTE_FILE = /(^|\/)routes\/.*\.(tsx|jsx)$/;
 
+/** Exported for testing — matches next.config.{js,mjs,cjs,ts} at root or src/ */
+export const NEXT_CONFIG_FILE = /^(src\/)?next\.config\.[mc]?[jt]s$/;
+/** Exported for testing — App Router convention files */
+export const NEXT_APP_CONVENTION_FILE = /(^|\/)app\/(.*\/)?(page|layout|loading|error|not-found|global-error|default|template|route)\.[jt]sx?$/;
+
 export function detectFrameworks(index: CodeIndex): Set<Framework> {
   const frameworks = new Set<Framework>();
   // Sample first 200 symbols' source for framework indicators
@@ -36,9 +41,17 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
 
   if (sources.includes("@nestjs/") || sources.includes("NestFactory")) frameworks.add("nestjs");
   if (sources.includes("from 'react'") || sources.includes('from "react"') || sources.includes("useState")) frameworks.add("react");
-  if (index.files.some((f) => f.path.includes("app/api/") && f.path.endsWith("route.ts"))) frameworks.add("nextjs");
   if (sources.includes("express()") || sources.includes("Router()")) frameworks.add("express");
   if (sources.includes("from 'astro'") || sources.includes('from "astro"') || sources.includes("from 'astro:") || sources.includes('from "astro:') || index.files.some((f) => f.path.endsWith(".astro"))) frameworks.add("astro");
+
+  // Next.js detection: broadened to cover config file, pages/ dir, and App Router conventions
+  const hasNextConfig = index.files.some((f) => NEXT_CONFIG_FILE.test(f.path));
+  const hasPagesDir = index.files.some((f) => NEXT_PAGES_FILE.test(f.path) && /\.[jt]sx?$/.test(f.path));
+  const hasAppConvention = index.files.some((f) => NEXT_APP_CONVENTION_FILE.test(f.path));
+  if (hasNextConfig || hasPagesDir || hasAppConvention) {
+    frameworks.add("nextjs");
+  }
+
   frameworks.add("test"); // always include test patterns
 
   return frameworks;

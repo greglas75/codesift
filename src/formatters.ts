@@ -342,6 +342,9 @@ interface RouteResult {
   handlers: Array<{ file: string; symbol?: { name: string; kind: string; file: string; start_line: number } }>;
   call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
   db_calls: Array<{ symbol_name: string; file: string; line: number; operation: string }>;
+  middleware?: { file: string; matchers: string[]; applies: boolean };
+  layout_chain?: string[];
+  server_actions?: Array<{ name: string; file: string; called_from?: string }>;
 }
 
 export function formatTraceRoute(data: RouteResult | string): string {
@@ -365,6 +368,24 @@ export function formatTraceRoute(data: RouteResult | string): string {
     parts.push("\nDB calls:");
     for (const d of data.db_calls) {
       parts.push(`  ${d.file}:${d.line} ${d.operation} ${d.symbol_name}`);
+    }
+  }
+  if (data.middleware) {
+    const mw = data.middleware;
+    const status = mw.applies ? "applies" : "does not apply";
+    parts.push(`\nMiddleware: ${mw.file} (${status})`);
+    if (mw.matchers.length > 0) {
+      parts.push(`  matchers: ${mw.matchers.join(", ")}`);
+    }
+  }
+  if (data.layout_chain && data.layout_chain.length > 0) {
+    parts.push(`\nLayout chain: ${data.layout_chain.join(" \u2192 ")}`);
+  }
+  if (data.server_actions && data.server_actions.length > 0) {
+    parts.push("\nServer Actions:");
+    for (const sa of data.server_actions) {
+      const from = sa.called_from ? ` (called from ${sa.called_from})` : "";
+      parts.push(`  ${sa.name} (${sa.file})${from}`);
     }
   }
   return parts.join("\n");

@@ -20,7 +20,12 @@ export interface PatternResult {
 
 // Built-in patterns inspired by CQ checklist + common React/TS anti-patterns
 // Exported for direct regex testing in unit tests.
-export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> = {
+export const BUILTIN_PATTERNS: Record<string, {
+  regex: RegExp;
+  description: string;
+  fileExcludePattern?: RegExp;
+  fileIncludePattern?: RegExp;
+}> = {
   "useEffect-no-cleanup": {
     regex: /useEffect\s*\(\s*(?:async\s*)?\(\)\s*=>\s*\{(?:(?!return\s*\(\s*\)\s*=>|return\s+\(\)\s*=>|return\s*\(\s*\)\s*\{|return\s+function)[\s\S])*\}\s*,/,
     description: "useEffect without cleanup return — potential memory leak (CQ22)",
@@ -194,6 +199,40 @@ export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: stri
     regex: /src\/content\/config\.ts/,
     description: "legacy content collection config — migrate to src/content.config.ts",
   },
+  // Next.js anti-patterns
+  "nextjs-wrong-router": {
+    regex: /from\s+['"]next\/router['"]|require\s*\(\s*['"]next\/router['"]\s*\)/,
+    description: "Using next/router (Pages Router) in App Router file — use next/navigation instead",
+    fileExcludePattern: /(^|\/)pages\//,
+  },
+  "nextjs-fetch-waterfall": {
+    regex: /await\s+fetch\s*\([^)]*\)[\s\S]{0,300}await\s+fetch\s*\(/,
+    description: "Sequential await fetch calls — use Promise.all to avoid waterfall (Next.js performance)",
+  },
+  "nextjs-unnecessary-use-client": {
+    regex: /['"]use client['"](?![\s\S]*(?:useState|useEffect|useRef|useCallback|useMemo|useContext|useReducer|onClick|onChange|onSubmit|window\.|document\.|localStorage\.))/,
+    description: "File has 'use client' but may not need it — no hooks, events, or browser globals detected",
+  },
+  "nextjs-pages-in-app": {
+    regex: /./,
+    description: "Pages Router convention (index.tsx) inside app/ directory — use page.tsx for App Router",
+    fileIncludePattern: /(^|\/)app\/.*\/index\.(tsx|jsx|ts|js)$|^app\/index\.(tsx|jsx|ts|js)$/,
+  },
+  "nextjs-missing-error-boundary": {
+    regex: /./,
+    description: "Page file without sibling error.tsx — no error boundary for graceful error handling",
+    fileIncludePattern: /(^|\/)app\/.*\/page\.[jt]sx?$/,
+  },
+  "nextjs-use-client-in-layout": {
+    regex: /^[\s\S]{0,512}['"]use client['"]/,
+    description: "Layout file with 'use client' — layouts should be Server Components for optimal performance",
+    fileIncludePattern: /(^|\/)app\/.*\/layout\.[jt]sx?$|^app\/layout\.[jt]sx?$/,
+  },
+  "nextjs-missing-metadata": {
+    regex: /./,
+    description: "Page file without metadata or generateMetadata export — missing SEO metadata",
+    fileIncludePattern: /(^|\/)app\/.*\/page\.[jt]sx?$/,
+  },
 };
 
 /**
@@ -221,11 +260,15 @@ export async function searchPatterns(
   // Resolve pattern: built-in name or custom regex
   let regex: RegExp;
   let patternName: string;
+  let fileExcludePattern: RegExp | undefined;
+  let fileIncludePattern: RegExp | undefined;
 
   const builtin = BUILTIN_PATTERNS[pattern];
   if (builtin) {
     regex = builtin.regex;
     patternName = `${pattern}: ${builtin.description}`;
+    fileExcludePattern = builtin.fileExcludePattern;
+    fileIncludePattern = builtin.fileIncludePattern;
   } else {
     try {
       regex = new RegExp(pattern);
@@ -244,6 +287,8 @@ export async function searchPatterns(
     if (!sym.source) continue;
     if (!includeTests && isTestFile(sym.file)) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
+    if (fileExcludePattern && fileExcludePattern.test(sym.file)) continue;
+    if (fileIncludePattern && !fileIncludePattern.test(sym.file)) continue;
 
     scanned++;
     const match = regex.exec(sym.source);
@@ -275,10 +320,17 @@ export async function searchPatterns(
 /**
  * List all available built-in patterns.
  */
-export function listPatterns(): Array<{ name: string; description: string }> {
-  return Object.entries(BUILTIN_PATTERNS).map(([name, { description }]) => ({
+export function listPatterns(): Array<{
+  name: string;
+  description: string;
+  fileExcludePattern?: string;
+  fileIncludePattern?: string;
+}> {
+  return Object.entries(BUILTIN_PATTERNS).map(([name, p]) => ({
     name,
-    description,
+    description: p.description,
+    ...(p.fileExcludePattern ? { fileExcludePattern: p.fileExcludePattern.source } : {}),
+    ...(p.fileIncludePattern ? { fileIncludePattern: p.fileIncludePattern.source } : {}),
   }));
 }
 

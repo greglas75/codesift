@@ -16,8 +16,8 @@ function makeIndex(overrides: Partial<CodeIndex> = {}): CodeIndex {
   };
 }
 
-function makeFile(path: string): FileEntry {
-  return { path, language: "astro", symbol_count: 0, last_modified: 0 };
+function makeFile(path: string, language?: string): FileEntry {
+  return { path, language: language ?? "typescript", symbol_count: 0, last_modified: 0 };
 }
 
 describe("detectFrameworks — Astro", () => {
@@ -57,7 +57,7 @@ describe("detectFrameworks — Astro", () => {
 
   it("returns 'astro' when any file has .astro extension", () => {
     const index = makeIndex({
-      files: [makeFile("src/pages/index.astro")],
+      files: [makeFile("src/pages/index.astro", "astro")],
     });
     const result = detectFrameworks(index);
     expect(result.has("astro")).toBe(true);
@@ -107,5 +107,78 @@ describe("isFrameworkEntryPoint — Astro", () => {
     expect(
       isFrameworkEntryPoint({ name: "helperFn", file: "src/lib/utils.ts" }, astroFrameworks),
     ).toBe(false);
+  });
+});
+
+describe("detectFrameworks — Next.js broadened detection", () => {
+  it("detects nextjs when only pages/index.tsx exists", () => {
+    const index = makeIndex({
+      files: [makeFile("pages/index.tsx")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nextjs")).toBe(true);
+  });
+
+  it("detects nextjs when app/page.tsx + app/layout.tsx exist", () => {
+    const index = makeIndex({
+      files: [makeFile("app/page.tsx"), makeFile("app/layout.tsx")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nextjs")).toBe(true);
+  });
+
+  it("detects nextjs when only next.config.ts at root exists", () => {
+    const index = makeIndex({
+      files: [makeFile("next.config.ts")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nextjs")).toBe(true);
+  });
+
+  it("does NOT detect nextjs for TanStack Router fixture", () => {
+    const index = makeIndex({
+      files: [
+        makeFile("app/routes/__root.tsx"),
+        makeFile("app/routes/index.tsx"),
+        makeFile("src/main.tsx"),
+      ],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nextjs")).toBe(false);
+  });
+
+  it("does NOT detect nextjs for SvelteKit", () => {
+    const index = makeIndex({
+      files: [makeFile("src/routes/+page.svelte")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nextjs")).toBe(false);
+  });
+
+  it("detects nextjs for App Router with API route", () => {
+    const index = makeIndex({
+      files: [makeFile("app/api/users/route.ts")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nextjs")).toBe(true);
+  });
+
+  it("detects nestjs NOT nextjs for NestJS project", () => {
+    const index = makeIndex({
+      symbols: [
+        {
+          name: "AppModule",
+          kind: "class",
+          file: "src/app.module.ts",
+          start_line: 1,
+          end_line: 10,
+          source: "import { Module } from '@nestjs/common';",
+        },
+      ],
+      files: [makeFile("src/app.module.ts")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("nestjs")).toBe(true);
+    expect(result.has("nextjs")).toBe(false);
   });
 });

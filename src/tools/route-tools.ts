@@ -6,6 +6,9 @@ import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
 import type { CodeSymbol, CodeIndex, CallNode, RouteFramework } from "../types.js";
 import { findAstroHandlers } from "./astro-routes.js";
+import { deriveUrlPath, computeLayoutChain, traceMiddleware, scanDirective } from "../utils/nextjs.js";
+import type { MiddlewareTraceResult } from "../utils/nextjs.js";
+import { join } from "node:path";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -27,6 +30,7 @@ interface RouteHandler {
   file: string;
   method?: string;
   framework: RouteFramework;
+  router?: "app" | "pages";
 }
 
 interface DbCall {
@@ -41,6 +45,9 @@ export interface RouteTraceResult {
   handlers: RouteHandler[];
   call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
   db_calls: DbCall[];
+  middleware?: MiddlewareTraceResult;
+  layout_chain?: string[];
+  server_actions?: Array<{ name: string; file: string; called_from?: string }>;
 }
 
 type RouteCallNode = RouteTraceResult["call_chain"][number];
@@ -124,11 +131,11 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
   const normalized = searchPath.replace(/^\/|\/$/g, "");
 
   for (const file of index.files) {
-    // Match app/api/...route.ts or app/...route.ts
-    if (!file.path.endsWith("/route.ts") && !file.path.endsWith("/route.js")) continue;
+    // Match app/api/...route.{ts,tsx,js,jsx} or app/...route.{ts,tsx,js,jsx}
+    if (!/\/route\.[jt]sx?$/.test(file.path)) continue;
 
     // Extract route path from file path: app/api/users/[id]/route.ts → /api/users/[id]
-    const routeMatch = file.path.match(/app\/(.*?)\/route\.\w+$/);
+    const routeMatch = file.path.match(/app\/(.*?)\/route\.[jt]sx?$/);
     if (!routeMatch) continue;
 
     // Strip route groups: (auth)/login → login
@@ -145,6 +152,7 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
           file: sym.file,
           method: sym.name,
           framework: "nextjs",
+          router: "app",
         });
       }
 
@@ -154,8 +162,72 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
           symbol: { id: file.path, name: "route", kind: "function", file: file.path, start_line: 1, end_line: 1 } as ReturnType<typeof stripSource>,
           file: file.path,
           framework: "nextjs",
+          router: "app",
         });
       }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Pages Router API route handlers via default exports in pages/api/.
+ * @internal exported for unit testing
+ */
+function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+
+  for (const file of index.files) {
+    // Only match files under pages/api/
+    if (!/pages\/api\//.test(file.path)) continue;
+
+    // Derive URL path from file path
+    const urlPath = deriveUrlPath(file.path, "pages");
+    const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
+    const normalizedUrl = urlPath.replace(/^\/|\/$/g, "");
+
+    if (normalizedUrl !== normalizedSearch) continue;
+
+    // Find default export or named handler in the file
+    const fileSymbols = index.symbols.filter((s) => s.file === file.path);
+
+    // Look for default export
+    const defaultExport = fileSymbols.find((s) => s.name === "default" || s.name === "handler");
+
+    if (defaultExport) {
+      handlers.push({
+        symbol: stripSource(defaultExport),
+        file: file.path,
+        framework: "nextjs",
+        router: "pages",
+      });
+    } else if (fileSymbols.length > 0) {
+      // Try variable indirection: find any exported function
+      const exported = fileSymbols.find((s) =>
+        s.kind === "function" || s.kind === "variable",
+      );
+      if (exported) {
+        handlers.push({
+          symbol: stripSource(exported),
+          file: file.path,
+          framework: "nextjs",
+          router: "pages",
+        });
+      }
+    }
+
+    // Fallback: at least mark the file as having a handler
+    if (handlers.filter((h) => h.file === file.path).length === 0) {
+      handlers.push({
+        symbol: {
+          id: file.path, name: "handler", kind: "function",
+          file: file.path, start_line: 1, end_line: 1,
+        } as ReturnType<typeof stripSource>,
+        file: file.path,
+        framework: "nextjs",
+        router: "pages",
+      });
     }
   }
 
@@ -195,6 +267,48 @@ function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler
 /**
  * Detect DB operations in a symbol's call chain.
  */
+/**
+ * Detect server actions in the call chain by checking for "use server" directive
+ * at the file level (not function-body level).
+ */
+async function findServerActions(
+  repoRoot: string,
+  calleeSymbols: CodeSymbol[],
+  callChain: Array<{ name: string; file: string; kind: string; depth: number }>,
+): Promise<Array<{ name: string; file: string; called_from?: string }>> {
+  const actions: Array<{ name: string; file: string; called_from?: string }> = [];
+  const checkedFiles = new Map<string, boolean>();
+
+  for (const sym of calleeSymbols) {
+    const absPath = join(repoRoot, sym.file);
+
+    let hasDirective: boolean;
+    if (checkedFiles.has(sym.file)) {
+      hasDirective = checkedFiles.get(sym.file)!;
+    } else {
+      const directive = await scanDirective(absPath);
+      hasDirective = directive === "use server";
+      checkedFiles.set(sym.file, hasDirective);
+    }
+
+    if (hasDirective) {
+      // Find who called this symbol
+      const callerIdx = callChain.findIndex(
+        (c) => c.file === sym.file && c.name === sym.name,
+      );
+      const calledFrom = callerIdx > 0 ? callChain[callerIdx - 1]?.name : undefined;
+
+      actions.push({
+        name: sym.name,
+        file: sym.file,
+        called_from: calledFrom,
+      });
+    }
+  }
+
+  return actions;
+}
+
 function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
   const calls: DbCall[] = [];
   for (const sym of symbols) {
@@ -251,8 +365,9 @@ function appendDbCalls(
 
 /**
  * Render a RouteTraceResult as a Mermaid sequence diagram.
+ * @internal exported for unit testing
  */
-function routeToMermaid(result: RouteTraceResult): string {
+export function routeToMermaid(result: RouteTraceResult): string {
   if (result.handlers.length === 0) {
     return "sequenceDiagram\n    Note over Client: No handler found for " + result.path;
   }
@@ -262,7 +377,26 @@ function routeToMermaid(result: RouteTraceResult): string {
   const method = handler.method ?? "REQUEST";
   const aliases = new Map<string, string>();
 
-  lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+  // Add Middleware participant if middleware applies
+  if (result.middleware?.applies) {
+    lines.push(`    participant Middleware`);
+    lines.push(`    Client->>+Middleware: ${method} ${result.path}`);
+    lines.push(`    Middleware->>+Controller: continue`);
+  } else {
+    lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+  }
+
+  // Add Layout chain rendering
+  if (result.layout_chain && result.layout_chain.length > 0) {
+    let prev = "Controller";
+    for (let i = 0; i < result.layout_chain.length; i++) {
+      const layoutName = `Layout${i + 1}`;
+      const layoutFile = result.layout_chain[i]!;
+      lines.push(`    participant ${layoutName}`);
+      lines.push(`    ${prev}->>+${layoutName}: render (${layoutFile})`);
+      prev = layoutName;
+    }
+  }
 
   const root = result.call_chain[0];
   if (root) {
@@ -298,7 +432,22 @@ function routeToMermaid(result: RouteTraceResult): string {
   }
 
   closeUntilDepth(0);
-  lines.push(`    Controller-->>-Client: response`);
+
+  // Close layout chain
+  if (result.layout_chain && result.layout_chain.length > 0) {
+    for (let i = result.layout_chain.length - 1; i >= 0; i--) {
+      const layoutName = `Layout${i + 1}`;
+      const returnTo = i > 0 ? `Layout${i}` : "Controller";
+      lines.push(`    ${layoutName}-->>-${returnTo}: rendered`);
+    }
+  }
+
+  if (result.middleware?.applies) {
+    lines.push(`    Controller-->>-Middleware: response`);
+    lines.push(`    Middleware-->>-Client: response`);
+  } else {
+    lines.push(`    Controller-->>-Client: response`);
+  }
   return lines.join("\n");
 }
 
@@ -670,6 +819,7 @@ export async function traceRoute(
   const handlers = [
     ...(await findNestJSHandlers(index, path)),
     ...findNextJSHandlers(index, path),
+    ...findPagesRouterHandlers(index, path),
     ...findExpressHandlers(index, path),
     ...(await findYii2Handlers(index, path)),
     ...(await findLaravelHandlers(index, path)),
@@ -714,6 +864,37 @@ export async function traceRoute(
   const dbCalls = findDbCalls(allCalleeSymbols);
 
   const result: RouteTraceResult = { path, handlers, call_chain: callChain, db_calls: dbCalls };
+
+  // Next.js-specific: layout chain, middleware, and server actions tracing
+  const hasNextjsHandler = handlers.some((h) => h.framework === "nextjs");
+  if (hasNextjsHandler) {
+    const repoRoot = index.root;
+
+    // Layout chain from the first handler's file
+    const firstFile = handlers[0]?.file;
+    if (firstFile) {
+      try {
+        result.layout_chain = await computeLayoutChain(firstFile, repoRoot);
+      } catch {
+        result.layout_chain = [];
+      }
+    } else {
+      result.layout_chain = [];
+    }
+
+    // Middleware tracing
+    try {
+      const mw = await traceMiddleware(repoRoot, path);
+      if (mw) {
+        result.middleware = mw;
+      }
+    } catch {
+      // Middleware tracing failed — skip
+    }
+
+    // Server actions detection
+    result.server_actions = await findServerActions(repoRoot, allCalleeSymbols, callChain);
+  }
 
   if (outputFormat === "mermaid") {
     return { mermaid: routeToMermaid(result) };
