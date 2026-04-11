@@ -62,6 +62,58 @@ describe("HonoExtractor — subapp-app", () => {
   });
 });
 
+describe("HonoExtractor — basepath-app", () => {
+  const basepathEntry = path.join(FIXTURES, "basepath-app", "src", "index.ts");
+  let extractor: HonoExtractor;
+
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("resolves basePath prefix onto child routes (AC-R6)", async () => {
+    const model = await extractor.parse(basepathEntry);
+    const paths = model.routes.map((r) => `${r.method} ${r.path}`);
+    const appVarNames = Object.keys(model.app_variables);
+    // Debug: ensure v1 was detected as basePath-derived variable
+    expect(appVarNames).toContain("v1");
+    expect(model.app_variables.v1?.created_via).toBe("basePath");
+    expect(model.app_variables.v1?.base_path).toBe("/v1");
+    expect(paths).toContain("GET /v1/users");
+    expect(paths).toContain("POST /v1/users");
+  });
+
+  it("detects app.all() as method ALL (AC-R3)", async () => {
+    const model = await extractor.parse(basepathEntry);
+    const allRoute = model.routes.find((r) => r.method === "ALL");
+    expect(allRoute).toBeDefined();
+    expect(allRoute?.path).toBe("/api/*");
+  });
+
+  it("fans out app.on([methods], path) into multiple routes (AC-R4)", async () => {
+    const model = await extractor.parse(basepathEntry);
+    const formRoutes = model.routes.filter((r) => r.path === "/form");
+    expect(formRoutes).toHaveLength(2);
+    const methods = formRoutes.map((r) => r.method).sort();
+    expect(methods).toEqual(["GET", "POST"]);
+  });
+
+  it("extracts regex constraint from :id{[0-9]+} (AC-R5)", async () => {
+    const model = await extractor.parse(basepathEntry);
+    const postRoute = model.routes.find((r) =>
+      r.path.includes("/posts/"),
+    );
+    expect(postRoute).toBeDefined();
+    expect(postRoute?.regex_constraint).toEqual({ id: "[0-9]+" });
+  });
+
+  it("records app.mount() as a hono_mount mount (AC-R7)", async () => {
+    const model = await extractor.parse(basepathEntry);
+    const legacyMount = model.mounts.find((m) => m.mount_path === "/legacy");
+    expect(legacyMount).toBeDefined();
+    expect(legacyMount?.mount_type).toBe("hono_mount");
+  });
+});
+
 describe("HonoExtractor — basic-app", () => {
   const basicEntry = path.join(FIXTURES, "basic-app", "src", "index.ts");
   let extractor: HonoExtractor;

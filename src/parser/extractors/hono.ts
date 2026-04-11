@@ -75,10 +75,11 @@ export class HonoExtractor {
     const cached = parsedCache.get(file);
     if (cached) {
       // Re-use parsed routes with fresh prefix
+      // route.path already has basePath applied — apply mount prefix on top
       for (const route of cached.routes) {
         model.routes.push({
           ...route,
-          path: joinPaths(prefix, route.raw_path),
+          path: joinPaths(prefix, route.path),
         });
       }
       return;
@@ -126,11 +127,11 @@ export class HonoExtractor {
       // Walk for HTTP routes (not app.route — those are handled separately)
       this.walkHttpRoutes(tree.rootNode, file, localAppVars, localRoutes);
 
-      // Apply prefix and add routes to model
+      // Apply mount prefix on top of routes (route.path already has basePath)
       for (const route of localRoutes) {
         model.routes.push({
           ...route,
-          path: joinPaths(prefix, route.raw_path),
+          path: joinPaths(prefix, route.path),
         });
       }
 
@@ -211,17 +212,33 @@ export class HonoExtractor {
       const valueNode = node.childForFieldName("value");
       if (!nameNode || !valueNode) return;
       if (nameNode.type !== "identifier") return;
+      const name = nameNode.text;
 
+      // Direct creation: new Hono(), new OpenAPIHono()
       const createdVia = classifyAppCreation(valueNode);
-      if (!createdVia) return;
+      if (createdVia) {
+        localVars[name] = {
+          variable_name: name,
+          file,
+          line: nameNode.startPosition.row + 1,
+          created_via: createdVia,
+          base_path: "",
+        };
+        return;
+      }
 
-      localVars[nameNode.text] = {
-        variable_name: nameNode.text,
-        file,
-        line: nameNode.startPosition.row + 1,
-        created_via: createdVia,
-        base_path: "",
-      };
+      // basePath derivation: const v1 = app.basePath("/v1")
+      const basePath = extractBasePathCall(valueNode, localVars);
+      if (basePath) {
+        localVars[name] = {
+          variable_name: name,
+          file,
+          line: nameNode.startPosition.row + 1,
+          created_via: "basePath",
+          base_path: basePath.prefix,
+          parent: basePath.parentVar,
+        };
+      }
     });
   }
 
@@ -244,13 +261,25 @@ export class HonoExtractor {
         return;
 
       const ownerVar = objectNode.text;
+      const appDef = appVars[ownerVar];
+      if (!appDef) return;
+
       const method = propertyNode.text.toLowerCase();
-      if (!appVars[ownerVar]) return;
       if (!HTTP_METHODS.has(method) || method === "use" || method === "route")
         return;
 
       const argList = argsNode.namedChildren;
       if (argList.length === 0) return;
+
+      // basePath prefix inherited from the HonoApp variable
+      const basePrefix = appDef.base_path || "";
+
+      // Handle app.on(["GET", "POST"], "/path", handler) — fan out
+      if (method === "on") {
+        this.handleOnMethod(argList, file, node, ownerVar, basePrefix, routes);
+        return;
+      }
+
       const firstArg = argList[0];
       if (!firstArg) return;
       const rawPath = stringLiteralValue(firstArg);
@@ -258,10 +287,11 @@ export class HonoExtractor {
 
       const handlerArg = argList[argList.length - 1];
       const handler: HonoHandler = buildHandler(handlerArg ?? firstArg, file);
+      const regexConstraint = parseRegexConstraints(rawPath);
 
       routes.push({
         method: method.toUpperCase() as HonoMethod,
-        path: rawPath,
+        path: joinPaths(basePrefix, rawPath),
         raw_path: rawPath,
         file,
         line: node.startPosition.row + 1,
@@ -269,8 +299,59 @@ export class HonoExtractor {
         handler,
         inline_middleware: [],
         validators: [],
+        ...(regexConstraint ? { regex_constraint: regexConstraint } : {}),
       });
     });
+  }
+
+  /** Handle app.on(methods, path, handler) — fan out into per-method routes. */
+  private handleOnMethod(
+    argList: Parser.SyntaxNode[],
+    file: string,
+    node: Parser.SyntaxNode,
+    ownerVar: string,
+    basePrefix: string,
+    routes: HonoRoute[],
+  ): void {
+    if (argList.length < 2) return;
+    const methodsArg = argList[0];
+    const pathArg = argList[1];
+    if (!methodsArg || !pathArg) return;
+
+    // Methods: string or array of strings
+    const methods: string[] = [];
+    if (methodsArg.type === "array") {
+      for (const el of methodsArg.namedChildren) {
+        const v = stringLiteralValue(el);
+        if (v) methods.push(v.toUpperCase());
+      }
+    } else {
+      const v = stringLiteralValue(methodsArg);
+      if (v) methods.push(v.toUpperCase());
+    }
+    if (methods.length === 0) return;
+
+    const rawPath = stringLiteralValue(pathArg);
+    if (rawPath == null) return;
+
+    const handlerArg = argList[argList.length - 1];
+    const handler: HonoHandler = buildHandler(handlerArg ?? pathArg, file);
+    const regexConstraint = parseRegexConstraints(rawPath);
+
+    for (const m of methods) {
+      routes.push({
+        method: m as HonoMethod,
+        path: joinPaths(basePrefix, rawPath),
+        raw_path: rawPath,
+        file,
+        line: node.startPosition.row + 1,
+        owner_var: ownerVar,
+        handler,
+        inline_middleware: [],
+        validators: [],
+        ...(regexConstraint ? { regex_constraint: regexConstraint } : {}),
+      });
+    }
   }
 
   /**
@@ -303,7 +384,31 @@ export class HonoExtractor {
 
       const ownerVar = objectNode.text;
       if (!appVars[ownerVar]) return;
-      if (propertyNode.text !== "route") return;
+      const methodName = propertyNode.text;
+
+      // app.mount("/legacy", handler) — non-Hono external handler mount
+      if (methodName === "mount") {
+        const args = argsNode.namedChildren;
+        if (args.length < 2) return;
+        const pathArg = args[0];
+        if (!pathArg) return;
+        const mountPath = stringLiteralValue(pathArg);
+        if (mountPath == null) return;
+        const basePrefix = appVars[ownerVar]?.base_path || "";
+        const fullMountPath = joinPaths(parentPrefix || basePrefix, mountPath);
+        const mount: HonoMount = {
+          parent_var: ownerVar,
+          mount_path: fullMountPath,
+          child_var: "<external>",
+          child_file: "",
+          mount_type: "hono_mount",
+        };
+        model.mounts.push(mount);
+        localMounts.push(mount);
+        return;
+      }
+
+      if (methodName !== "route") return;
 
       const argList = argsNode.namedChildren;
       if (argList.length < 2) return;
@@ -378,6 +483,54 @@ function emptyModel(
     extraction_status: Object.keys(skipReasons).length > 0 ? "partial" : "complete",
     skip_reasons: skipReasons,
   };
+}
+
+/**
+ * Detect `<parentVar>.basePath("/prefix")` call expression.
+ * Returns the parent variable name and prefix path, or null.
+ */
+function extractBasePathCall(
+  valueNode: Parser.SyntaxNode,
+  knownVars: Record<string, HonoApp>,
+): { parentVar: string; prefix: string } | null {
+  if (valueNode.type !== "call_expression") return null;
+  const fnNode = valueNode.childForFieldName("function");
+  if (!fnNode || fnNode.type !== "member_expression") return null;
+  const obj = fnNode.childForFieldName("object");
+  const prop = fnNode.childForFieldName("property");
+  if (!obj || !prop || obj.type !== "identifier") return null;
+  if (prop.text !== "basePath") return null;
+  if (!knownVars[obj.text]) return null;
+
+  const argsNode = valueNode.childForFieldName("arguments");
+  const firstArg = argsNode?.namedChildren[0];
+  if (!firstArg) return null;
+  const prefix = stringLiteralValue(firstArg);
+  if (prefix == null) return null;
+
+  // Combine parent's base_path with the new prefix
+  const parentBase = knownVars[obj.text]?.base_path || "";
+  return { parentVar: obj.text, prefix: joinPaths(parentBase, prefix) };
+}
+
+/**
+ * Parse regex constraints from Hono path parameters.
+ * e.g., ":id{[0-9]+}" → { id: "[0-9]+" }
+ */
+function parseRegexConstraints(
+  rawPath: string,
+): Record<string, string> | undefined {
+  const regex = /:(\w+)\{([^}]+)\}/g;
+  let match: RegExpExecArray | null;
+  const constraints: Record<string, string> = {};
+  let found = false;
+  while ((match = regex.exec(rawPath)) !== null) {
+    if (match[1] && match[2]) {
+      constraints[match[1]] = match[2];
+      found = true;
+    }
+  }
+  return found ? constraints : undefined;
 }
 
 function classifyAppCreation(
