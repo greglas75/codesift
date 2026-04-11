@@ -12,6 +12,7 @@ import {
   computeLayoutChain,
   deriveUrlPath,
   discoverWorkspaces,
+  extractFetchCalls,
   scanDirective,
   traceMiddleware,
 } from "../utils/nextjs.js";
@@ -68,6 +69,8 @@ export interface NextjsRouteEntry {
   layout_chain: string[];
   middleware_applies: boolean;
   is_client_component: boolean;
+  /** Free-text explanation of *why* a route is SSR. Set only when rendering === "ssr". */
+  rendering_reason?: string;
 }
 
 export interface NextjsRouteConflict {
@@ -375,7 +378,54 @@ export async function parseRouteFile(
   }
 
   const pagesSignals = router === "pages" ? detectPagesRouterSignals(tree) : undefined;
-  const rendering = classifyRendering(config, router, pagesSignals);
+  let rendering = classifyRendering(config, router, pagesSignals);
+
+  // Q2 — detect runtime SSR triggers (cookies/headers/fetch no-store) and
+  // upgrade `static` → `ssr` when present, capturing a human-readable reason.
+  let rendering_reason: string | undefined;
+  if (router === "app") {
+    if (rendering === "ssr") {
+      // Already SSR — explain why.
+      if (config.dynamic === "force-dynamic") {
+        rendering_reason = "dynamic='force-dynamic' config export";
+      } else {
+        const fetches = extractFetchCalls(tree, source);
+        const noStore = fetches.find(
+          (f) => f.callee === "fetch" && f.cacheOption === "no-store",
+        );
+        if (noStore) {
+          rendering_reason = `fetch with cache:'no-store' at line ${noStore.line}`;
+        } else {
+          const dynamicCall = fetches.find(
+            (f) => f.callee === "cookies" || f.callee === "headers",
+          );
+          if (dynamicCall) {
+            rendering_reason = `${dynamicCall.callee}() called at line ${dynamicCall.line}`;
+          } else {
+            rendering_reason = "unknown SSR trigger";
+          }
+        }
+      }
+    } else if (rendering === "static") {
+      // Maybe upgrade: presence of cookies/headers/fetch no-store implies SSR.
+      const fetches = extractFetchCalls(tree, source);
+      const noStore = fetches.find(
+        (f) => f.callee === "fetch" && f.cacheOption === "no-store",
+      );
+      if (noStore) {
+        rendering = "ssr";
+        rendering_reason = `fetch with cache:'no-store' at line ${noStore.line}`;
+      } else {
+        const dynamicCall = fetches.find(
+          (f) => f.callee === "cookies" || f.callee === "headers",
+        );
+        if (dynamicCall) {
+          rendering = "ssr";
+          rendering_reason = `${dynamicCall.callee}() called at line ${dynamicCall.line}`;
+        }
+      }
+    }
+  }
 
   const directive = await scanDirective(filePath);
   const is_client_component = directive === "use client";
@@ -398,6 +448,9 @@ export async function parseRouteFile(
   };
   if (methods !== undefined) {
     entry.methods = methods;
+  }
+  if (rendering_reason !== undefined) {
+    entry.rendering_reason = rendering_reason;
   }
   return entry;
 }
