@@ -18,7 +18,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 
 ## Tool Discovery (NEW — agents read this)
 
-Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 43 core tools are visible.
+Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 44 core tools are visible.
 To find hidden tools: `discover_tools(query="dead code")` → keyword search.
 To get full schema: `describe_tools(names=["find_dead_code"])` → returns params with types.
 To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
@@ -60,12 +60,12 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 3. **Quick grep to find all places with a number (e.g., tool count):**
    ```bash
-   grep -rn "106 tools\|106 MCP" src/ ../codesift-website/src/
+   grep -rn "108 tools\|108 MCP" src/ ../codesift-website/src/
    ```
 
 ## Architecture
 
-**106 MCP tools** (43 core + 63 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context
+**108 MCP tools** (44 core + 64 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + Next.js intelligence (server/client classifier + route map) + Hono framework intelligence
 
 **src/tools/** (34 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline). Includes: coupling-tools.ts (fan_in_fan_out, co_change_analysis, shared computeCoChangePairs), perf-tools.ts (6 perf anti-pattern scanners with balanced-brace loop body extraction), architecture-tools.ts (composite: communities + coupling + circular deps + LOC + entry points), query-tools.ts (Prisma→SQL explain), status-tools.ts (index status check), audit-tools.ts (5-gate composite), review-diff-tools.ts (10-check composite), php-tools.ts (7 PHP/Yii2 tools), react-tools.ts (React component/hook conventions).
 **src/lsp/** (4 files) — LSP bridge (6 languages)

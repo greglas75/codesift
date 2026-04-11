@@ -1,0 +1,8 @@
+{
+  "comment": "Frozen ground truth for nextjs_route_map on the hybrid fixture. Predetermined conflicts per QA-6 in the spec.",
+  "conflicts": [
+    { "url_path": "/",          "app": "apps/web-app/app/page.tsx",            "pages": "apps/web-pages/pages/index.tsx" },
+    { "url_path": "/api/users", "app": "apps/web-app/app/api/users/route.ts", "pages": "apps/web-pages/pages/api/users.ts" }
+  ],
+  "routes_count": 5
+}
