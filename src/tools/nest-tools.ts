@@ -280,14 +280,17 @@ function extractConstructorBody(source: string): string | null {
 /** Extract injected type names from a constructor body string */
 function extractInjectedTypes(ctorBody: string): string[] {
   const types: string[] = [];
-  // Split by commas (respecting nested parens)
+  // R-6 fix: separate depth counters for () and <> to avoid cross-corruption
   const params: string[] = [];
-  let depth = 0;
+  let parenDepth = 0;
+  let angleDepth = 0;
   let current = "";
   for (const ch of ctorBody) {
-    if (ch === "(" || ch === "<") depth++;
-    else if (ch === ")" || ch === ">") depth--;
-    if (ch === "," && depth === 0) {
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") parenDepth--;
+    else if (ch === "<") angleDepth++;
+    else if (ch === ">") angleDepth--;
+    if (ch === "," && parenDepth === 0 && angleDepth === 0) {
       params.push(current.trim());
       current = "";
     } else {
@@ -433,14 +436,24 @@ export interface NestGuardChainResult {
 // Shared helpers: guard/interceptor/pipe parsing (CQ14)
 // ---------------------------------------------------------------------------
 
-/** Parse @UseGuards(...) from source, returns guard class names */
+/** Parse @UseGuards(...) from source, returns guard class names.
+ * R-8 fix: handles both class-ref form @UseGuards(AuthGuard) and
+ * instantiation form @UseGuards(new ThrottlerGuard()). */
 function parseUseGuards(source: string): string[] {
   const results: string[] = [];
-  const re = /@UseGuards\s*\(\s*([\w\s,]+)\s*\)/g;
+  // Match the full @UseGuards(...) arg including nested parens for `new Guard()`
+  const re = /@UseGuards\s*\(\s*([^)]*(?:\([^)]*\)[^)]*)*)\s*\)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
-    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
-      results.push(name);
+    const args = m[1]!;
+    // Extract class names — both bare refs and `new ClassName(...)` instantiations
+    for (const part of args.split(",")) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const newMatch = /new\s+(\w+)/.exec(trimmed);
+      if (newMatch) { results.push(newMatch[1]!); continue; }
+      const bareMatch = /^(\w+)$/.exec(trimmed);
+      if (bareMatch) results.push(bareMatch[1]!);
     }
   }
   return results;
@@ -566,7 +579,10 @@ export async function nestGuardChain(
   for (const file of index.files) {
     if (!file.path.endsWith(".module.ts") && !file.path.endsWith(".module.js")) continue;
     let source: string;
-    try { source = await readFile(join(index.root, file.path), "utf-8"); } catch { continue; }
+    try { source = await readFile(join(index.root, file.path), "utf-8"); } catch (err) {
+      errors.push({ file: file.path, reason: `readFile failed: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
     const conv = extractNestConventions(source, file.path);
     for (const g of conv.global_guards) globalChain.push({ layer: "global", type: "guard", name: g.name, file: g.file });
     for (const f of conv.global_filters) globalChain.push({ layer: "global", type: "filter", name: f.name, file: f.file });

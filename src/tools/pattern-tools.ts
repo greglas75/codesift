@@ -251,11 +251,13 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   // Wave 2 anti-patterns
   "nest-graphql-no-auth": {
-    // Require @Resolver AND no @UseGuards anywhere in the file.
-    // Negative lookahead from string start disambiguates from @Query/@Mutation parameter
-    // decorators used in REST controllers (from @nestjs/common).
-    regex: /^(?:(?!@UseGuards)[\s\S])*?@Resolver\s*\([\s\S]*?@(?:Query|Mutation)\s*\((?:(?!@UseGuards)[\s\S])*$/,
+    // R-7 fix: restrict to .resolver.ts files (via fileIncludePattern) to avoid
+    // false positives on REST @Query() params. Regex checks for @Resolver + @Query/@Mutation
+    // present AND no @UseGuards anywhere in the matched span (capped at 2000 chars to avoid
+    // catastrophic backtracking — O(n) since the negation only runs once per symbol source).
+    regex: /^(?![\s\S]*@UseGuards)[\s\S]*@Resolver\s*\([\s\S]{0,500}?@(?:Query|Mutation)\s*\(/,
     description: "GraphQL resolver with @Query/@Mutation but no @UseGuards in file — likely unprotected (NestJS)",
+    fileIncludePattern: /\.resolver\.[jt]sx?$/,
   },
   "nest-eager-relation": {
     regex: /@(?:OneToMany|ManyToOne|OneToOne|ManyToMany)\s*\(\s*\(\)\s*=>\s*\w+[\s\S]{0,200}\beager:\s*true/,

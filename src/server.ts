@@ -36,13 +36,13 @@ registerTools(server, { deferNonCore: true });
  * Lets framework-specific tools (nest_*, etc.) appear in ListTools immediately
  * for projects detectable from dependencies, without waiting for a full index.
  */
-function autoEnableFrameworkToolsFromPackageJson(cwd: string): void {
+async function autoEnableFrameworkToolsFromPackageJson(cwd: string): Promise<void> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs");
-    const pkgPath = require("node:path").join(cwd, "package.json");
-    if (!fs.existsSync(pkgPath)) return;
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { join: joinPath } = await import("node:path");
+    const pkgPath = joinPath(cwd, "package.json");
+    if (!existsSync(pkgPath)) return;
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
     const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
     if ("@nestjs/core" in deps || "@nestjs/common" in deps) {
       const enabled = enableFrameworkToolBundle("nestjs");
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   console.error("CodeSift MCP server started");
 
   // Synchronous framework detection from package.json (runs before transport messages flow)
-  autoEnableFrameworkToolsFromPackageJson(process.cwd());
+  autoEnableFrameworkToolsFromPackageJson(process.cwd()).catch(() => {});
 
   // Auto-index current repo on first use (background, non-blocking)
   autoIndexCurrentRepo(process.cwd()).catch((err: unknown) => {

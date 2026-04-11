@@ -58,7 +58,8 @@ export async function nestGraphQLMap(
     const resolverClass = resolverClassMatch?.[1] ?? "UnknownResolver";
 
     // Extract GraphQL operation decorators with their handler names
-    const opRe = /@(Query|Mutation|Subscription|ResolveField)\s*\(([\s\S]*?)\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g;
+    // R-2 fix: cap decorator args to 300 chars to prevent cross-method boundary matching
+    const opRe = /@(Query|Mutation|Subscription|ResolveField)\s*\(([\s\S]{0,300}?)\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
     let m: RegExpExecArray | null;
     while ((m = opRe.exec(source)) !== null) {
       if (entries.length >= maxEntries) { truncated = true; break; }
@@ -149,7 +150,8 @@ export async function nestWebSocketMap(
     };
 
     // Port — first integer literal in args
-    const portMatch = /\b(\d+)\b/.exec(gwArgs);
+    // R-4 fix: only accept a leading bare integer as port (not nums inside namespace strings)
+    const portMatch = /^\s*(\d+)\s*(?:,|\))/.exec(gwArgs);
     if (portMatch) entry.port = parseInt(portMatch[1]!, 10);
 
     // Namespace — from options object
@@ -157,7 +159,7 @@ export async function nestWebSocketMap(
     if (nsMatch) entry.namespace = nsMatch[1]!;
 
     // Find @SubscribeMessage handlers
-    const subRe = /@SubscribeMessage\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g;
+    const subRe = /@SubscribeMessage\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
     let sm: RegExpExecArray | null;
     while ((sm = subRe.exec(source)) !== null) {
       entry.events.push({ event: sm[1]!, handler: sm[2]! });
@@ -242,22 +244,22 @@ export async function nestScheduleMap(
     }> = [
       {
         type: "@Cron",
-        regex: /@Cron\s*\(\s*['"`]([^'"`]+)['"`][^)]*\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g,
+        regex: /@Cron\s*\(\s*['"`]([^'"`]+)['"`][^)]*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
         parseArg: (arg) => ({ expression: arg }),
       },
       {
         type: "@Interval",
-        regex: /@Interval\s*\(\s*(\d+)\s*\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g,
+        regex: /@Interval\s*\(\s*(\d+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
         parseArg: (arg) => ({ interval_ms: parseInt(arg, 10) }),
       },
       {
         type: "@Timeout",
-        regex: /@Timeout\s*\(\s*(\d+)\s*\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g,
+        regex: /@Timeout\s*\(\s*(\d+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
         parseArg: (arg) => ({ interval_ms: parseInt(arg, 10) }),
       },
       {
         type: "@OnEvent",
-        regex: /@OnEvent\s*\(\s*['"`]([^'"`]+)['"`][^)]*\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g,
+        regex: /@OnEvent\s*\(\s*['"`]([^'"`]+)['"`][^)]*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
         parseArg: (arg) => ({ expression: arg }),
       },
     ];
@@ -277,6 +279,24 @@ export async function nestScheduleMap(
           ...parseArg(arg),
         });
       }
+    }
+
+    // R-12 fix: fallback — catch constant/expression args like @Cron(CronExpression.EVERY_10_SECONDS)
+    // These are not captured by the literal-specific regexes above.
+    const fallbackRe = /@(Cron|Interval|Timeout|OnEvent)\s*\(\s*([A-Z][\w.]+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
+    let fm: RegExpExecArray | null;
+    while ((fm = fallbackRe.exec(source)) !== null) {
+      if (entries.length >= maxSchedules) { truncated = true; break; }
+      const handler = fm[3]!;
+      // Skip if already captured by a literal regex above
+      if (entries.some((e) => e.file === file.path && e.handler === handler)) continue;
+      entries.push({
+        class_name: className,
+        file: file.path,
+        handler,
+        decorator: `@${fm[1]!}` as NestScheduledEntry["decorator"],
+        expression: fm[2]!, // raw constant expression, e.g. "CronExpression.EVERY_10_SECONDS"
+      });
     }
   }
 
@@ -339,12 +359,18 @@ export async function nestTypeOrmMap(
     }
 
     // @Entity() or @Entity('table_name') followed by class declaration
-    const entityRe = /@Entity\s*\(\s*(?:['"`]([^'"`]+)['"`])?\s*\)\s*(?:export\s+)?class\s+(\w+)/g;
+    // R-10 fix: also accept object-form @Entity({ name: 'users' }) — capture table from name field
+    const entityRe = /@Entity\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{[^}]*\})?\s*\)\s*(?:export\s+)?class\s+(\w+)/g;
     let em: RegExpExecArray | null;
     while ((em = entityRe.exec(source)) !== null) {
       if (entities.length >= maxEntities) { truncated = true; break; }
-      const tableName = em[1];
+      let tableName = em[1]; // from string form @Entity('users')
       const entityName = em[2]!;
+      // R-10: extract table name from object form @Entity({ name: 'users' })
+      if (!tableName) {
+        const objNameMatch = em[0].match(/\{\s*[^}]*name:\s*['"`]([^'"`]+)['"`]/);
+        if (objNameMatch) tableName = objNameMatch[1]!;
+      }
       const node: NestEntityNode = { name: entityName, file: file.path };
       if (tableName) node.table = tableName;
       entities.push(node);
@@ -428,7 +454,7 @@ export async function nestMicroserviceMap(
     const classMatch = /class\s+(\w+)/.exec(source);
     const controller = classMatch?.[1] ?? "UnknownController";
 
-    const patternRe = /@(MessagePattern|EventPattern)\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:async\s+)?(\w+)\s*\(/g;
+    const patternRe = /@(MessagePattern|EventPattern)\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
     let m: RegExpExecArray | null;
     while ((m = patternRe.exec(source)) !== null) {
       if (patterns.length >= maxPatterns) { truncated = true; break; }

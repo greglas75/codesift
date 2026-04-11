@@ -925,7 +925,9 @@ export function extractNestConventions(
   let inImports = false;
   let importsBracketDepth = 0;
   let inProviders = false;
+  let providersBracketDepth = 0;
   let inControllers = false;
+  let controllersBracketDepth = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -945,10 +947,27 @@ export function extractNestConventions(
       if (importsBracketDepth <= 0) { closeInImportsAfterLine = true; importsBracketDepth = 0; }
     }
 
-    if (/providers:\s*\[/.test(line)) inProviders = true;
-    if (/controllers:\s*\[/.test(line)) inControllers = true;
-    if (inProviders && /^\s*\]/.test(line)) inProviders = false;
-    if (inControllers && /^\s*\]/.test(line)) inControllers = false;
+    // R-1 fix: use bracket-depth tracking for providers/controllers too
+    // (same approach as imports) so single-line arrays close correctly.
+    let closeProvidersAfterLine = false;
+    if (/providers:\s*\[/.test(line)) {
+      inProviders = true;
+      providersBracketDepth += countBracketBalance(line.slice(line.indexOf("[", line.indexOf("providers"))));
+      if (providersBracketDepth <= 0) { closeProvidersAfterLine = true; providersBracketDepth = 0; }
+    } else if (inProviders) {
+      providersBracketDepth += countBracketBalance(line);
+      if (providersBracketDepth <= 0) { closeProvidersAfterLine = true; providersBracketDepth = 0; }
+    }
+
+    let closeControllersAfterLine = false;
+    if (/controllers:\s*\[/.test(line)) {
+      inControllers = true;
+      controllersBracketDepth += countBracketBalance(line.slice(line.indexOf("[", line.indexOf("controllers"))));
+      if (controllersBracketDepth <= 0) { closeControllersAfterLine = true; controllersBracketDepth = 0; }
+    } else if (inControllers) {
+      controllersBracketDepth += countBracketBalance(line);
+      if (controllersBracketDepth <= 0) { closeControllersAfterLine = true; controllersBracketDepth = 0; }
+    }
 
     // Extract module imports — scan for all module names on the line (not just
     // the first indented one). Handles single-line `imports: [A, B.forFeature([...]), C]`
@@ -1123,6 +1142,8 @@ export function extractNestConventions(
 
     // Close inImports at end of line iteration if brackets balanced
     if (closeInImportsAfterLine) inImports = false;
+    if (closeProvidersAfterLine) inProviders = false;
+    if (closeControllersAfterLine) inControllers = false;
   }
 
   // G1: parse middleware.configure(consumer) chains
@@ -1189,7 +1210,9 @@ export function parseMiddlewareChains(source: string, filePath: string): Middlew
 
     // Also capture bare ControllerClass (PascalCase identifier) if present
     for (const name of middlewareNames) {
-      const line = source.slice(0, source.indexOf(name, configureStart)).split("\n").length;
+      // R-3 fix: guard indexOf returning -1 (would produce wrong line via slice(0,-1))
+      const namePos = source.indexOf(name, configureStart);
+      const line = namePos >= 0 ? source.slice(0, namePos).split("\n").length : 0;
       results.push({ middleware: name, routes, file: filePath, line });
     }
   }
