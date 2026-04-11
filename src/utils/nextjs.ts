@@ -1,5 +1,7 @@
 import { readFile, readdir, access } from "node:fs/promises";
 import { join, dirname, relative, basename } from "node:path";
+import picomatch from "picomatch";
+import { parseFile } from "../parser/parser-manager.js";
 
 /** Maximum bytes to read when scanning for a directive. */
 export const DIRECTIVE_WINDOW = 512;
@@ -179,4 +181,131 @@ export async function computeLayoutChain(
   }
 
   return chain;
+}
+
+/** Candidate middleware file paths relative to repo root. */
+const MIDDLEWARE_CANDIDATES = [
+  "middleware.ts", "middleware.js",
+  "src/middleware.ts", "src/middleware.js",
+];
+
+/**
+ * Convert a Next.js matcher pattern to a picomatch-compatible glob.
+ * Next.js uses `:path*` syntax; picomatch uses `**`.
+ */
+function matcherToGlob(pattern: string): string {
+  return pattern.replace(/:[\w]+\*/g, "**").replace(/:[\w]+/g, "*");
+}
+
+/**
+ * Check if a URL path matches any of the provided Next.js matcher patterns.
+ */
+function matchesMatcher(patterns: string[], urlPath: string): boolean {
+  if (patterns.length === 0) return true; // No matcher = match all
+  return patterns.some((p) => {
+    const glob = matcherToGlob(p);
+    return picomatch.isMatch(urlPath, glob);
+  });
+}
+
+export interface MiddlewareTraceResult {
+  file: string;
+  matchers: string[];
+  applies: boolean;
+}
+
+/**
+ * Find and analyze middleware.ts for the given repo root.
+ * Returns null if no middleware file exists.
+ * Uses tree-sitter AST to extract matcher config.
+ */
+export async function traceMiddleware(
+  repoRoot: string,
+  urlPath: string,
+): Promise<MiddlewareTraceResult | null> {
+  // Find middleware file
+  let mwFile: string | null = null;
+  let mwRelPath: string | null = null;
+  for (const candidate of MIDDLEWARE_CANDIDATES) {
+    const absPath = join(repoRoot, candidate);
+    try {
+      await access(absPath);
+      mwFile = absPath;
+      mwRelPath = candidate;
+      break;
+    } catch {
+      // Not found
+    }
+  }
+  if (!mwFile || !mwRelPath) return null;
+
+  // Parse the middleware file with tree-sitter
+  let source: string;
+  try {
+    source = await readFile(mwFile, "utf8");
+  } catch {
+    return { file: mwRelPath, matchers: [], applies: true };
+  }
+
+  const tree = await parseFile(mwFile, source);
+  if (!tree) {
+    return { file: mwRelPath, matchers: [], applies: true };
+  }
+
+  // Find `export const config = { matcher: ... }`
+  const exportStatements = tree.rootNode.descendantsOfType("export_statement");
+  let matchers: string[] = [];
+  let foundConfig = false;
+
+  for (const exportNode of exportStatements) {
+    const decl = exportNode.descendantsOfType("variable_declarator");
+    for (const d of decl) {
+      const nameNode = d.childForFieldName("name");
+      if (nameNode?.text !== "config") continue;
+      foundConfig = true;
+
+      const init = d.childForFieldName("value");
+      if (!init) continue;
+
+      // Find the `matcher` property inside the object
+      const pairs = init.descendantsOfType("pair");
+      for (const pair of pairs) {
+        const key = pair.childForFieldName("key");
+        if (key?.text !== "matcher") continue;
+
+        const value = pair.childForFieldName("value");
+        if (!value) continue;
+
+        if (value.type === "string") {
+          // Single string matcher
+          const text = value.text.slice(1, -1); // Remove quotes
+          matchers = [text];
+        } else if (value.type === "array") {
+          // Array of matchers
+          const elements = value.namedChildren;
+          for (const el of elements) {
+            if (el.type === "string") {
+              matchers.push(el.text.slice(1, -1));
+            } else {
+              // Non-literal element — fail-open
+              matchers = ["<computed>"];
+              return { file: mwRelPath, matchers, applies: true };
+            }
+          }
+        } else {
+          // Computed matcher (identifier, call expression, etc.)
+          matchers = ["<computed>"];
+          return { file: mwRelPath, matchers, applies: true };
+        }
+      }
+    }
+  }
+
+  if (!foundConfig) {
+    // No config export → match all routes (Next.js default)
+    return { file: mwRelPath, matchers: [], applies: true };
+  }
+
+  const applies = matchesMatcher(matchers, urlPath);
+  return { file: mwRelPath, matchers, applies };
 }
