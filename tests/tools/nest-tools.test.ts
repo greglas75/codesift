@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap, nestModuleGraph } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -331,5 +331,173 @@ export class PrismaModule {}
     expect(result.errors).toBeDefined();
     expect(result.errors!.length).toBe(1);
     expect(result.errors![0]!.file).toBe("src/missing.module.ts");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nest_di_graph tests (Task 7)
+// ---------------------------------------------------------------------------
+
+describe("nest_di_graph", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-di-graph-"));
+    await mkdir(join(tmpRoot, "src"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
+    return {
+      root,
+      files: filePaths.map((p) => ({ path: p, size: 100 })),
+      symbols: [],
+    } as unknown as CodeIndex;
+  }
+
+  it("builds DI graph with constructor injection edges", async () => {
+    await writeFile(join(tmpRoot, "src/auth.service.ts"), `
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly userService: UserService,
+    private readonly configService: ConfigService,
+  ) {}
+}
+`);
+    await writeFile(join(tmpRoot, "src/user.service.ts"), `
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class UserService {
+  constructor(private readonly prismaService: PrismaService) {}
+}
+`);
+    await writeFile(join(tmpRoot, "src/prisma.service.ts"), `
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class PrismaService {
+  constructor() {}
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/auth.service.ts",
+      "src/user.service.ts",
+      "src/prisma.service.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo");
+
+    expect(result.nodes.length).toBe(3);
+    expect(result.nodes.map((n) => n.name).sort()).toEqual(["AuthService", "PrismaService", "UserService"]);
+
+    // AuthService → UserService, AuthService → ConfigService
+    expect(result.edges).toContainEqual({ from: "AuthService", to: "UserService", via: "inject" });
+    expect(result.edges).toContainEqual({ from: "AuthService", to: "ConfigService", via: "inject" });
+
+    // UserService → PrismaService
+    expect(result.edges).toContainEqual({ from: "UserService", to: "PrismaService", via: "inject" });
+
+    // PrismaService has no outgoing edges
+    expect(result.edges.filter((e) => e.from === "PrismaService")).toEqual([]);
+  });
+
+  it("handles decorated constructor params (@InjectRepository, @Optional)", async () => {
+    await writeFile(join(tmpRoot, "src/repo.service.ts"), `
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Optional } from '@nestjs/common';
+
+@Injectable()
+export class RepoService {
+  constructor(
+    @InjectRepository(User) private readonly repo: Repository<User>,
+    @Optional() private readonly logger: LoggerService,
+  ) {}
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, ["src/repo.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo");
+
+    expect(result.nodes.length).toBe(1);
+    expect(result.nodes[0]!.name).toBe("RepoService");
+    // Should extract Repository and LoggerService via paren-counting
+    expect(result.edges).toContainEqual({ from: "RepoService", to: "Repository", via: "inject" });
+    expect(result.edges).toContainEqual({ from: "RepoService", to: "LoggerService", via: "inject" });
+  });
+
+  it("detects circular DI dependencies", async () => {
+    await writeFile(join(tmpRoot, "src/a.service.ts"), `
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
+@Injectable()
+export class AService {
+  constructor(@Inject(forwardRef(() => BService)) private bService: BService) {}
+}
+`);
+    await writeFile(join(tmpRoot, "src/b.service.ts"), `
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
+@Injectable()
+export class BService {
+  constructor(@Inject(forwardRef(() => AService)) private aService: AService) {}
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, ["src/a.service.ts", "src/b.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo");
+    expect(result.cycles.length).toBeGreaterThan(0);
+  });
+
+  it("caps at max_nodes and sets truncated flag", async () => {
+    await writeFile(join(tmpRoot, "src/a.service.ts"), `
+@Injectable() export class AService { constructor() {} }
+`);
+    await writeFile(join(tmpRoot, "src/b.service.ts"), `
+@Injectable() export class BService { constructor() {} }
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, ["src/a.service.ts", "src/b.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo", { max_nodes: 1 });
+    expect(result.nodes.length).toBe(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("handles unreadable file gracefully (CQ8)", async () => {
+    const index = mockIndexWithRoot(tmpRoot, ["src/missing.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo");
+    expect(result.nodes).toEqual([]);
+    expect(result.errors!.length).toBe(1);
+  });
+
+  it("detects provider scope", async () => {
+    await writeFile(join(tmpRoot, "src/scoped.service.ts"), `
+import { Injectable, Scope } from '@nestjs/common';
+@Injectable({ scope: Scope.REQUEST })
+export class ScopedService {
+  constructor() {}
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, ["src/scoped.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestDIGraph("test-repo");
+    expect(result.nodes[0]!.scope).toBe("REQUEST");
   });
 });

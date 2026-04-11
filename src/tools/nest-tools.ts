@@ -259,6 +259,133 @@ export interface NestDIGraphResult {
 }
 
 // ---------------------------------------------------------------------------
+// Shared helpers: constructor injection parsing (CQ14)
+// ---------------------------------------------------------------------------
+
+/** Extract constructor parameter body using paren counting (handles decorated params) */
+function extractConstructorBody(source: string): string | null {
+  const ctorIdx = source.indexOf("constructor(");
+  if (ctorIdx === -1) return null;
+  const start = ctorIdx + "constructor(".length;
+  let depth = 1;
+  let i = start;
+  while (i < source.length && depth > 0) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")") depth--;
+    i++;
+  }
+  return depth === 0 ? source.slice(start, i - 1) : null;
+}
+
+/** Extract injected type names from a constructor body string */
+function extractInjectedTypes(ctorBody: string): string[] {
+  const types: string[] = [];
+  // Split by commas (respecting nested parens)
+  const params: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of ctorBody) {
+    if (ch === "(" || ch === "<") depth++;
+    else if (ch === ")" || ch === ">") depth--;
+    if (ch === "," && depth === 0) {
+      params.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) params.push(current.trim());
+
+  for (const param of params) {
+    // Extract type after the last `:` — handles decorators before the param name
+    const colonIdx = param.lastIndexOf(":");
+    if (colonIdx === -1) continue;
+    const typeStr = param.slice(colonIdx + 1).trim();
+    // Get first word (class name, before generics)
+    const typeMatch = typeStr.match(/^(\w+)/);
+    if (typeMatch) types.push(typeMatch[1]!);
+  }
+  return types;
+}
+
+/** Parse @Injectable() classes from source */
+function parseInjectableClasses(source: string): Array<{ name: string; scope?: string }> {
+  const results: Array<{ name: string; scope?: string }> = [];
+  const re = /@Injectable\s*\(([^)]*)\)\s*(?:export\s+)?class\s+(\w+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const args = m[1] ?? "";
+    const name = m[2]!;
+    const scopeMatch = args.match(/scope:\s*Scope\.(\w+)/);
+    results.push({ name, ...(scopeMatch ? { scope: scopeMatch[1] } : {}) });
+  }
+  return results;
+}
+
+export async function nestDIGraph(
+  repo: string,
+  options?: { max_nodes?: number; focus?: string },
+): Promise<NestDIGraphResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+
+  const maxNodes = options?.max_nodes ?? 200;
+  const focus = options?.focus;
+  const nodes: NestDINode[] = [];
+  const edges: NestDIEdge[] = [];
+  const errors: NestToolError[] = [];
+  let truncated = false;
+
+  // Scan files for @Injectable classes
+  const candidateFiles = index.files.filter((f) => {
+    if (focus && !f.path.includes(focus)) return false;
+    return f.path.endsWith(".ts") || f.path.endsWith(".js");
+  });
+
+  for (const file of candidateFiles) {
+    if (nodes.length >= maxNodes) { truncated = true; break; }
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch (err) {
+      errors.push({ file: file.path, reason: `readFile failed: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+
+    const injectables = parseInjectableClasses(source);
+    for (const inj of injectables) {
+      if (nodes.length >= maxNodes) { truncated = true; break; }
+      nodes.push({ name: inj.name, file: file.path, kind: "provider", scope: inj.scope });
+
+      // Extract constructor injection
+      // Find the class body for this specific injectable
+      const classIdx = source.indexOf(`class ${inj.name}`);
+      if (classIdx === -1) continue;
+      const classSource = source.slice(classIdx);
+      const ctorBody = extractConstructorBody(classSource);
+      if (!ctorBody) continue;
+      const injectedTypes = extractInjectedTypes(ctorBody);
+      for (const type of injectedTypes) {
+        edges.push({ from: inj.name, to: type, via: "inject" });
+      }
+    }
+  }
+
+  // Detect cycles
+  const nodeNames = nodes.map((n) => n.name);
+  const cycles = detectCycles(nodeNames, edges.map((e) => ({ from: e.from, to: e.to })));
+
+  return {
+    nodes,
+    edges,
+    cycles,
+    cross_module_warnings: [], // TODO: implement cross-module warnings in future task
+    ...(errors.length > 0 ? { errors } : {}),
+    ...(truncated ? { truncated } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // B2: nest_guard_chain — types (implementation in Task 8)
 // ---------------------------------------------------------------------------
 
