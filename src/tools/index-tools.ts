@@ -1,6 +1,6 @@
 import { readFile, stat, unlink, rm, mkdir as mkdirAsync } from "node:fs/promises";
 import { join, relative, extname, resolve, basename, dirname } from "node:path";
-import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EXTRACTOR_VERSIONS } from "./project-tools.js";
@@ -586,7 +586,7 @@ async function setupWatcher(
       );
     },
     (deletedFile) => {
-      handleFileDelete(repoName, indexPath, deletedFile).catch(
+      handleFileDelete(rootPath, repoName, indexPath, deletedFile).catch(
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[codesift] Watcher delete error for ${deletedFile}: ${message}`);
@@ -620,6 +620,14 @@ async function handleFileChange(
     // Best-effort — session-state may not be loaded
   }
 
+  // Invalidate Hono model cache for this file (canonicalized absolute path)
+  try {
+    const { honoCache } = await import("../cache/hono-cache.js");
+    honoCache.invalidate(fullPath);
+  } catch {
+    // Best-effort — hono-cache may not be loaded
+  }
+
   const result = await parseOneFile(fullPath, repoRoot, repoName);
   if (!result) return;
 
@@ -645,6 +653,7 @@ async function handleFileChange(
  * Removes all symbols for the deleted file from the index.
  */
 async function handleFileDelete(
+  repoRoot: string,
   repoName: string,
   indexPath: string,
   relativeFile: string,
@@ -656,6 +665,14 @@ async function handleFileDelete(
   codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
   scanOnDeleted(repoName, relativeFile);
+
+  // Invalidate Hono model cache
+  try {
+    const { honoCache } = await import("../cache/hono-cache.js");
+    honoCache.invalidate(join(repoRoot, relativeFile));
+  } catch {
+    // Best-effort
+  }
 }
 
 export interface RepoSummary {
