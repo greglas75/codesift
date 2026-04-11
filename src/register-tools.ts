@@ -47,6 +47,8 @@ import { indexStatus } from "./tools/status-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "./tools/nest-tools.js";
+import type { NestLifecycleMapResult, NestModuleGraphResult, NestDIGraphResult, NestGuardChainResult, NestRouteInventoryResult, NestAuditResult } from "./tools/nest-tools.js";
 import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
@@ -257,6 +259,7 @@ export type ToolCategory =
   | "security"
   | "reporting"
   | "cross-repo"
+  | "nestjs"
   | "meta";
 
 /** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
@@ -294,6 +297,7 @@ const CORE_TOOL_NAMES = new Set([
   "go_to_definition",        // 4 calls, 100% direct
   // --- Composite tools ---
   "audit_scan",              // one-call audit: CQ8+CQ11+CQ13+CQ14+CQ17
+  "nest_audit",              // one-call NestJS analysis: modules+DI+guards+routes+lifecycle
   // --- Essential infrastructure ---
   "index_folder",            // repo onboarding
   "discover_tools",          // meta: discovers remaining hidden tools
@@ -1941,6 +1945,127 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         for (const h of result.optimization_hints) parts.push(`  → ${h}`);
       }
       return parts.join("\n");
+    },
+  },
+  // --- NestJS analysis tools ---
+  {
+    name: "nest_lifecycle_map",
+    category: "nestjs",
+    searchHint: "nestjs lifecycle hook onModuleInit onApplicationBootstrap shutdown",
+    description: "Map NestJS lifecycle hooks across the codebase — onModuleInit, onModuleDestroy, etc.",
+    schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
+    handler: async (args: { repo?: string }) => nestLifecycleMap(args.repo ?? ""),
+    format: (r: NestLifecycleMapResult) => {
+      if (r.hooks.length === 0) return "No lifecycle hooks found.";
+      return r.hooks.map((h) => `${h.class_name}.${h.hook} (${h.file})${h.is_async ? " [async]" : ""}`).join("\n");
+    },
+  },
+  {
+    name: "nest_module_graph",
+    category: "nestjs",
+    searchHint: "nestjs module dependency graph circular import boundary",
+    description: "Build NestJS module dependency graph with circular dependency detection and boundary analysis.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_modules: z.number().optional().describe("Max modules to process (default: 200)"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: json (default) or mermaid"),
+    },
+    handler: async (args: { repo?: string; max_modules?: number; output_format?: "json" | "mermaid" }) => nestModuleGraph(args.repo ?? "", args),
+    format: (r: NestModuleGraphResult) => {
+      const lines = [`Modules: ${r.modules.length}`, `Edges: ${r.edges.length}`, `Circular deps: ${r.circular_deps.length}`];
+      if (r.truncated) lines.push("[truncated]");
+      for (const m of r.modules) lines.push(`  ${m.name} (${m.file})${m.is_global ? " [global]" : ""} → imports: [${m.imports.join(", ")}]`);
+      return lines.join("\n");
+    },
+  },
+  {
+    name: "nest_di_graph",
+    category: "nestjs",
+    searchHint: "nestjs dependency injection provider constructor inject graph cycle",
+    description: "Build NestJS provider DI graph with constructor injection tracking and cycle detection.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_nodes: z.number().optional().describe("Max provider nodes (default: 200)"),
+      focus: z.string().optional().describe("Path substring to filter files"),
+    },
+    handler: async (args: { repo?: string; max_nodes?: number; focus?: string }) => nestDIGraph(args.repo ?? "", args),
+    format: (r: NestDIGraphResult) => {
+      const lines = [`Providers: ${r.nodes.length}`, `Edges: ${r.edges.length}`, `Cycles: ${r.cycles.length}`];
+      if (r.truncated) lines.push("[truncated]");
+      for (const n of r.nodes) lines.push(`  ${n.name} (${n.file})${n.scope ? ` [${n.scope}]` : ""}`);
+      for (const e of r.edges) lines.push(`  ${e.from} → ${e.to} (${e.via})`);
+      return lines.join("\n");
+    },
+  },
+  {
+    name: "nest_guard_chain",
+    category: "nestjs",
+    searchHint: "nestjs guard interceptor pipe filter middleware chain route security",
+    description: "Show guard/interceptor/pipe/filter execution chain per NestJS route (global → controller → method).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      path: z.string().optional().describe("Filter to specific route path"),
+      max_routes: z.number().optional().describe("Max routes (default: 300)"),
+    },
+    handler: async (args: { repo?: string; path?: string; max_routes?: number }) => nestGuardChain(args.repo ?? "", args),
+    format: (r: NestGuardChainResult) => {
+      if (r.routes.length === 0) return "No routes found.";
+      const lines: string[] = [];
+      for (const route of r.routes) {
+        lines.push(`${route.method} ${route.route} (${route.controller})`);
+        if (route.chain.length === 0) { lines.push("  (no guards/interceptors)"); continue; }
+        for (const c of route.chain) lines.push(`  [${c.layer}] ${c.type}: ${c.name}`);
+      }
+      return lines.join("\n");
+    },
+  },
+  {
+    name: "nest_route_inventory",
+    category: "nestjs",
+    searchHint: "nestjs route endpoint api map inventory list all guards params",
+    description: "Full NestJS route map with guards, params, and protected/unprotected stats.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_routes: z.number().optional().describe("Max routes (default: 500)"),
+    },
+    handler: async (args: { repo?: string; max_routes?: number }) => nestRouteInventory(args.repo ?? "", args),
+    format: (r: NestRouteInventoryResult) => {
+      const lines = [`Routes: ${r.stats.total_routes} (${r.stats.protected} protected, ${r.stats.unprotected} unprotected)`];
+      for (const route of r.routes) {
+        const guards = route.guards.length > 0 ? ` [${route.guards.join(", ")}]` : "";
+        lines.push(`  ${route.method} ${route.path} → ${route.controller}.${route.handler}${guards}`);
+      }
+      return lines.join("\n");
+    },
+  },
+  {
+    name: "nest_audit",
+    category: "nestjs",
+    searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern",
+    description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, anti-patterns.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      checks: z.string().optional().describe("Comma-separated checks (default: all). Options: modules,routes,di,guards,lifecycle,patterns"),
+    },
+    handler: async (args: { repo?: string; checks?: string }) => {
+      const checks = args.checks?.split(",").map((s) => s.trim()).filter(Boolean);
+      return nestAudit(args.repo ?? "", checks ? { checks } : undefined);
+    },
+    format: (r: NestAuditResult) => {
+      if (!r.framework_detected) return "Not a NestJS repository.";
+      const lines = [
+        `NestJS Audit Summary`,
+        `  Routes: ${r.summary.total_routes}`,
+        `  Cycles: ${r.summary.cycles}`,
+        `  Anti-pattern hits: ${r.summary.anti_pattern_hits}`,
+        `  Failed checks: ${r.summary.failed_checks}`,
+      ];
+      if (r.summary.truncated_checks.length > 0) lines.push(`  Truncated: ${r.summary.truncated_checks.join(", ")}`);
+      if (r.errors && r.errors.length > 0) {
+        lines.push("  Errors:");
+        for (const e of r.errors) lines.push(`    ${e.check}: ${e.reason}`);
+      }
+      return lines.join("\n");
     },
   },
 ];
