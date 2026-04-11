@@ -424,7 +424,7 @@ export async function phpSecurityScan(
   const results = await Promise.all(
     selectedChecks.map((check) =>
       searchPatterns(repo, check.pattern, {
-        file_pattern: options?.file_pattern ?? "*.php",
+        file_pattern: options?.file_pattern ?? ".php",
         include_tests: false,
       }).then((r) => ({ check, result: r })).catch(() => null),
     ),
@@ -493,7 +493,7 @@ export async function phpProjectAudit(
   const gates: AuditGate[] = [];
   const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots"];
   const enabled = new Set(options?.checks ?? allChecks);
-  const fp = options?.file_pattern ?? "*.php";
+  const fp = options?.file_pattern ?? ".php";
   const secOpts: { file_pattern?: string } = {};
   if (options?.file_pattern) secOpts.file_pattern = options.file_pattern;
 
@@ -540,7 +540,13 @@ export async function phpProjectAudit(
   }
 
   const sec = securityResult.summary;
-  const healthScore = Math.max(0, 100 - (sec.critical * 20 + sec.high * 10 + sec.medium * 5 + totalFindings));
+  // Logarithmic penalties — a few critical findings are serious, but hundreds of
+  // complexity warnings shouldn't tank the score to 0. Each gate uses log2 scaling
+  // so 1 finding ≈ 0, 10 ≈ 17, 100 ≈ 33, 1000 ≈ 50 penalty points.
+  const secPenalty = sec.total > 0 ? Math.round(Math.log2(sec.total + 1) * (sec.critical > 0 ? 8 : 4)) : 0;
+  const qualityFindings = totalFindings - sec.total;
+  const qualPenalty = qualityFindings > 0 ? Math.round(Math.log2(qualityFindings + 1) * 4) : 0;
+  const healthScore = Math.max(0, Math.min(100, 100 - secPenalty - qualPenalty));
   const topRisks = gates.filter(g => g.findings_count > 0 && g.name !== "activerecord").sort((a, b) => b.findings_count - a.findings_count).slice(0, 3).map(g => `${g.name}: ${g.findings_count} findings`);
 
   return {
