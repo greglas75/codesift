@@ -910,6 +910,16 @@ export function extractHonoConventions(
 // NestJS Extractor
 // ---------------------------------------------------------------------------
 
+/** Count net `[` vs `]` on a line — positive means more open brackets. */
+function countBracketBalance(text: string): number {
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === "[") depth++;
+    else if (ch === "]") depth--;
+  }
+  return depth;
+}
+
 export function extractNestConventions(
   source: string,
   filePath: string,
@@ -937,6 +947,7 @@ export function extractNestConventions(
   let throttler: NestConventions["throttler"] = null;
 
   let inImports = false;
+  let importsBracketDepth = 0;
   let inProviders = false;
   let inControllers = false;
 
@@ -944,19 +955,37 @@ export function extractNestConventions(
     const line = lines[i]!;
     const lineNum = i + 1;
 
-    // Track @Module sections
-    if (/imports:\s*\[/.test(line)) inImports = true;
+    // Track @Module sections via bracket depth — handles both multi-line arrays
+    // (imports: [\n  A,\n  B,\n]) and single-line arrays (imports: [A, B]).
+    // Critical: mark inImports BEFORE scanning the current line so the scan
+    // block runs on single-line `imports: [...]` arrays.
+    let closeInImportsAfterLine = false;
+    if (/imports:\s*\[/.test(line)) {
+      inImports = true;
+      importsBracketDepth += countBracketBalance(line.slice(line.indexOf("[")));
+      if (importsBracketDepth <= 0) { closeInImportsAfterLine = true; importsBracketDepth = 0; }
+    } else if (inImports) {
+      importsBracketDepth += countBracketBalance(line);
+      if (importsBracketDepth <= 0) { closeInImportsAfterLine = true; importsBracketDepth = 0; }
+    }
+
     if (/providers:\s*\[/.test(line)) inProviders = true;
     if (/controllers:\s*\[/.test(line)) inControllers = true;
-    if (inImports && /^\s*\]/.test(line)) inImports = false;
     if (inProviders && /^\s*\]/.test(line)) inProviders = false;
     if (inControllers && /^\s*\]/.test(line)) inControllers = false;
 
-    // Extract module imports
+    // Extract module imports — scan for all module names on the line (not just
+    // the first indented one). Handles single-line `imports: [A, B.forFeature([...]), C]`
+    // where multiple modules share one line.
     if (inImports) {
-      // Match: ModuleName, or ModuleName.forRoot(), or ModuleName.forRootAsync({...})
-      const moduleMatch = line.match(/^\s+(\w+Module)(?:\.for(Root|Feature)(?:Async)?\s*\()?/);
-      if (moduleMatch) {
+      const moduleRe = /(\w+Module)(?:\.for(Root|Feature)(?:Async)?\s*\()?/g;
+      let moduleMatch: RegExpExecArray | null;
+      const matchedThisLine = new Set<string>();
+      while ((moduleMatch = moduleRe.exec(line)) !== null) {
+        // Avoid duplicates within the same line
+        const key = `${moduleMatch[1]}:${moduleMatch.index}`;
+        if (matchedThisLine.has(key)) continue;
+        matchedThisLine.add(key);
         const name = moduleMatch[1]!;
         const dynamicKind = moduleMatch[2]; // "Root" | "Feature" | undefined
         const isGlobal = /isGlobal:\s*true/.test(line) || /ConfigModule|SentryModule/.test(name);
@@ -1115,6 +1144,9 @@ export function extractNestConventions(
         }
       }
     }
+
+    // Close inImports at end of line iteration if brackets balanced
+    if (closeInImportsAfterLine) inImports = false;
   }
 
   // G1: parse middleware.configure(consumer) chains

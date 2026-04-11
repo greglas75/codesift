@@ -792,7 +792,9 @@ export async function nestRouteInventory(
       if (hMatch) endPos = methodIdx + hMatch.index;
       const after = source.slice(methodIdx, Math.min(source.length, endPos));
       const methodCtx = before + after;
-      const paramCtx = source.slice(methodIdx, Math.min(source.length, methodIdx + 400));
+      // Bound paramCtx to the method's own signature via paren counting —
+      // prevents leakage from adjacent methods in the same file.
+      const paramCtx = extractMethodSignature(source, endPos);
       const methodGuards = parseUseGuards(methodCtx);
       const allGuards = [...ctrlGuards, ...methodGuards];
       const methodVersion = parseVersionFromContext(methodCtx);
@@ -829,6 +831,30 @@ export async function nestRouteInventory(
     ...(errors.length > 0 ? { errors } : {}),
     ...(truncated ? { truncated } : {}),
   };
+}
+
+/**
+ * Extract the method parameter signature starting at the handler name position.
+ * Paren-counts to find the matching `)` for the parameter list — prevents
+ * scanning into adjacent methods which would produce duplicate @Param/@Body.
+ */
+function extractMethodSignature(source: string, handlerNamePos: number): string {
+  // Find the opening paren of the handler's parameter list
+  let i = handlerNamePos;
+  // Skip handler name + whitespace
+  while (i < source.length && /[\w\s]/.test(source[i]!)) i++;
+  if (source[i] !== "(") return source.slice(handlerNamePos, Math.min(source.length, handlerNamePos + 400));
+  // Paren-count to find matching close
+  let depth = 1;
+  const start = i + 1;
+  i++;
+  while (i < source.length && depth > 0) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")") depth--;
+    if (depth === 0) break;
+    i++;
+  }
+  return source.slice(start, i);
 }
 
 /** Parse @Param/@Body/@Query decorators from source context */

@@ -175,9 +175,10 @@ export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: stri
   },
   // Wave 2 anti-patterns
   "nest-graphql-no-auth": {
-    // Same-file check: resolver has @Query/@Mutation but no @UseGuards anywhere in the file.
-    // Uses negative lookahead across the whole source.
-    regex: /^(?:(?!@UseGuards)[\s\S])*@(?:Query|Mutation)\s*\((?:(?!@UseGuards)[\s\S])*$/,
+    // Require @Resolver AND no @UseGuards anywhere in the file.
+    // Negative lookahead from string start disambiguates from @Query/@Mutation parameter
+    // decorators used in REST controllers (from @nestjs/common).
+    regex: /^(?:(?!@UseGuards)[\s\S])*?@Resolver\s*\([\s\S]*?@(?:Query|Mutation)\s*\((?:(?!@UseGuards)[\s\S])*$/,
     description: "GraphQL resolver with @Query/@Mutation but no @UseGuards in file — likely unprotected (NestJS)",
   },
   "nest-eager-relation": {
