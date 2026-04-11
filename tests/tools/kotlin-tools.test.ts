@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { findExtensionFunctions, analyzeSealedHierarchy } from "../../src/tools/kotlin-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain } from "../../src/tools/kotlin-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 // Mock getCodeIndex
@@ -183,5 +183,165 @@ describe("analyzeSealedHierarchy", () => {
   it("throws for unknown repo", async () => {
     vi.mocked(getCodeIndex).mockResolvedValue(null);
     await expect(analyzeSealedHierarchy("missing", "Result")).rejects.toThrow("not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// traceSuspendChain
+// ---------------------------------------------------------------------------
+
+describe("traceSuspendChain", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the root function in the chain", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "fetchUser",
+        kind: "function",
+        signature: "suspend (id: Int): User",
+        file: "UserRepo.kt",
+        start_line: 10,
+        source: `suspend fun fetchUser(id: Int): User {
+    return withContext(Dispatchers.IO) {
+        api.getUser(id)
+    }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "fetchUser");
+    expect(result.root).toBe("fetchUser");
+    expect(result.chain).toContain("fetchUser");
+  });
+
+  it("detects Dispatchers.IO transition inside the chain", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "fetchUser",
+        kind: "function",
+        signature: "suspend (id: Int): User",
+        source: `suspend fun fetchUser(id: Int): User {
+    return withContext(Dispatchers.IO) { api.getUser(id) }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "fetchUser");
+    expect(result.dispatcher_transitions).toHaveLength(1);
+    expect(result.dispatcher_transitions[0]!.dispatcher).toBe("IO");
+    expect(result.dispatcher_transitions[0]!.function).toBe("fetchUser");
+  });
+
+  it("warns about runBlocking inside a suspend function", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "doWork",
+        kind: "function",
+        signature: "suspend (): Unit",
+        source: `suspend fun doWork() {
+    runBlocking {
+        delay(1000)
+    }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "doWork");
+    const runBlockingWarning = result.warnings.find((w) =>
+      w.message.toLowerCase().includes("runblocking"),
+    );
+    expect(runBlockingWarning).toBeDefined();
+    expect(runBlockingWarning!.function).toBe("doWork");
+  });
+
+  it("warns about Thread.sleep inside a suspend function", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "slowOp",
+        kind: "function",
+        signature: "suspend (): Unit",
+        source: `suspend fun slowOp() {
+    Thread.sleep(500)
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "slowOp");
+    const threadSleepWarning = result.warnings.find((w) =>
+      w.message.toLowerCase().includes("thread.sleep"),
+    );
+    expect(threadSleepWarning).toBeDefined();
+  });
+
+  it("warns about while(true) loops without ensureActive/isActive", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "pollUpdates",
+        kind: "function",
+        signature: "suspend (): Unit",
+        source: `suspend fun pollUpdates() {
+    while (true) {
+        val update = api.poll()
+        process(update)
+    }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "pollUpdates");
+    const loopWarning = result.warnings.find((w) =>
+      w.message.toLowerCase().includes("ensureactive") ||
+      w.message.toLowerCase().includes("cancellable"),
+    );
+    expect(loopWarning).toBeDefined();
+  });
+
+  it("does NOT warn about while(true) when ensureActive is present", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "pollUpdates",
+        kind: "function",
+        signature: "suspend (): Unit",
+        source: `suspend fun pollUpdates() {
+    while (true) {
+        ensureActive()
+        val update = api.poll()
+    }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "pollUpdates");
+    const loopWarning = result.warnings.find((w) =>
+      w.message.toLowerCase().includes("ensureactive"),
+    );
+    expect(loopWarning).toBeUndefined();
+  });
+
+  it("excludes non-suspend functions from the chain", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "fetchUser",
+        kind: "function",
+        signature: "(id: Int): User", // non-suspend
+        source: `fun fetchUser(id: Int): User = api.getUser(id)`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    await expect(traceSuspendChain("test", "fetchUser")).rejects.toThrow(/not a suspend/i);
+  });
+
+  it("throws when function is not found", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue(makeIndex([]));
+    await expect(traceSuspendChain("test", "nonExistent")).rejects.toThrow(/not found/i);
   });
 });

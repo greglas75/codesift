@@ -42,7 +42,7 @@ import {
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
-import { findExtensionFunctions, analyzeSealedHierarchy } from "./tools/kotlin-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain } from "./tools/kotlin-tools.js";
 import { traceHiltGraph } from "./tools/hilt-tools.js";
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
@@ -203,17 +203,20 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "find_extension_functions",
     "analyze_sealed_hierarchy",
     "trace_hilt_graph",
+    "trace_suspend_chain",
   ],
   "settings.gradle.kts": [
     "find_extension_functions",
     "analyze_sealed_hierarchy",
     "trace_hilt_graph",
+    "trace_suspend_chain",
   ],
   // Fallback — Android projects with Groovy gradle but Kotlin source
   "build.gradle": [
     "find_extension_functions",
     "analyze_sealed_hierarchy",
     "trace_hilt_graph",
+    "trace_suspend_chain",
   ],
 };
 
@@ -1707,6 +1710,22 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { depth?: number } = {};
       if (typeof args.depth === "number") opts.depth = args.depth;
       return await traceHiltGraph(args.repo as string, args.class_name as string, opts);
+    },
+  },
+  {
+    name: "trace_suspend_chain",
+    category: "analysis",
+    searchHint: "kotlin coroutine suspend dispatcher withContext runBlocking Thread.sleep blocking chain trace anti-pattern",
+    description: "Trace the call chain of a Kotlin suspend function, emitting dispatcher transitions (withContext(Dispatchers.X)) and warnings for coroutine anti-patterns: runBlocking inside suspend, Thread.sleep, non-cancellable while(true) loops. Lexical walk — follows callee names found in the source, filtered to suspend-only functions.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      function_name: z.string().describe("Name of the suspend function to trace"),
+      depth: z.number().optional().describe("Max chain depth (default: 3)"),
+    },
+    handler: async (args) => {
+      const opts: { depth?: number } = {};
+      if (typeof args.depth === "number") opts.depth = args.depth;
+      return await traceSuspendChain(args.repo as string, args.function_name as string, opts);
     },
   },
 
