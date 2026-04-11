@@ -190,6 +190,52 @@ function readConfigValue(
 }
 
 // ---------------------------------------------------------------------------
+// Rendering strategy classification
+// ---------------------------------------------------------------------------
+
+export interface PagesRouterSignals {
+  hasGetServerSideProps?: boolean;
+  hasGetStaticProps?: boolean;
+  hasRevalidateInReturn?: boolean;
+}
+
+/**
+ * Map a route segment config (+ optional Pages Router signals) to a
+ * rendering strategy.
+ *
+ * Priority (App Router): runtime=edge > force-dynamic > force-static >
+ * revalidate > generateStaticParams > default (static).
+ *
+ * Pages Router: getServerSideProps → ssr; getStaticProps + revalidate → isr;
+ * getStaticProps → static; otherwise unknown.
+ *
+ * @internal exported for unit testing
+ */
+export function classifyRendering(
+  config: RouteSegmentConfig,
+  router: "app" | "pages",
+  pagesSignals?: PagesRouterSignals,
+): RenderingStrategy {
+  if (router === "pages") {
+    if (pagesSignals?.hasGetServerSideProps) return "ssr";
+    if (pagesSignals?.hasGetStaticProps) {
+      return pagesSignals.hasRevalidateInReturn ? "isr" : "static";
+    }
+    return "unknown";
+  }
+
+  // App Router priority
+  if (config.runtime === "edge") return "edge";
+  if (config.dynamic === "force-dynamic") return "ssr";
+  if (config.dynamic === "force-static") return "static";
+  if (typeof config.revalidate === "number" && config.revalidate > 0) return "isr";
+  if (config.has_generate_static_params) return "static";
+
+  // Next.js 15 default: static
+  return "static";
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator stub (real impl in Task 30)
 // ---------------------------------------------------------------------------
 
