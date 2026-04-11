@@ -196,16 +196,22 @@ describe("PHP import graph support", () => {
     expect(typeof mod.extractPhpUseStatements).toBe("function");
   });
 
-  it("extracts PHP use statements", async () => {
+  it("extracts PHP use statements — uppercase and lowercase namespaces", async () => {
     const { extractPhpUseStatements } = await import("../../src/utils/import-graph.js");
     const uses = extractPhpUseStatements(`<?php
 use App\\Models\\User;
 use App\\Services\\AuthService as Auth;
+use app\\models\\Survey;
+use app\\components\\AppHelper;
 use Yii;
 `);
     expect(uses).toContain("App\\Models\\User");
     expect(uses).toContain("App\\Services\\AuthService");
-    // "Yii" alone doesn't match — needs uppercase + backslash namespace
+    // Yii2 convention — lowercase `app\...` namespace (common in older Yii2 apps)
+    expect(uses).toContain("app\\models\\Survey");
+    expect(uses).toContain("app\\components\\AppHelper");
+    // "Yii" alone must NOT match — it has no backslash (global class import)
+    expect(uses).not.toContain("Yii");
   });
 });
 

@@ -32,7 +32,11 @@ const IMPORT_PATTERNS = [
 // Patterns for extracting PHP `use` statements (FQCN imports — PSR-4 based).
 // These are NOT file paths; they need PSR-4 resolution via composer.json.
 // Exposed separately so the resolver tool can opt-in.
-const PHP_USE_PATTERN = /^\s*use\s+([A-Z][\w\\]+)(?:\s+as\s+\w+)?\s*;/gm;
+// Accepts both UpperCase (PSR-1/2 modern) and lowercase (common in older
+// Yii2 apps: `use app\models\Survey`) namespaces. The FQCN must contain at
+// least one backslash to exclude global/function `use` statements like
+// `use Closure;` which would be false positives for the import graph.
+const PHP_USE_PATTERN = /^\s*use\s+(\w+(?:\\\w+)+)(?:\s+as\s+\w+)?\s*;/gm;
 
 // Patterns for extracting Kotlin `import` statements (fully-qualified names).
 // These are NOT file paths; they need heuristic resolution against source roots.
