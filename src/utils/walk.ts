@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, relative, extname } from "node:path";
+import picomatch from "picomatch";
 
 /**
  * Directories to skip during filesystem walks.
@@ -62,6 +63,13 @@ export interface WalkOptions {
    * Defaults to `false`.
    */
   followSymlinks?: boolean | undefined;
+
+  /**
+   * Glob patterns to exclude (like .gitignore syntax).
+   * Matched against relative paths using picomatch.
+   * Example: ["dist/**", "*.generated.ts"]
+   */
+  excludePatterns?: string[] | undefined;
 }
 
 /**
@@ -81,6 +89,17 @@ export async function walkDirectory(
   const followSymlinks = options?.followSymlinks ?? false;
   const visitedInodes = new Set<number>();
   let limitReached = false;
+
+  // Compile exclude patterns once (picomatch)
+  let isExcluded: ((path: string) => boolean) | null = null;
+  if (options?.excludePatterns && options.excludePatterns.length > 0) {
+    try {
+      isExcluded = picomatch(options.excludePatterns, { dot: true });
+    } catch {
+      // Malformed patterns — warn and skip filtering
+      console.warn("[codesift] walkDirectory: invalid excludePatterns, ignoring");
+    }
+  }
 
   async function walk(dirPath: string): Promise<void> {
     if (limitReached) return;
@@ -137,6 +156,12 @@ export async function walkDirectory(
           const relPath = relative(rootPath, fullPath);
           const matches = includePaths.some((p) => relPath.startsWith(p));
           if (!matches) continue;
+        }
+
+        // Apply exclude patterns
+        if (isExcluded) {
+          const relPath = relative(rootPath, fullPath);
+          if (isExcluded(relPath)) continue;
         }
 
         // Skip files that are too large

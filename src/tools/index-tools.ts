@@ -329,9 +329,23 @@ export async function indexFolder(
   const repoName = getRepoName(rootPath);
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
+  // Read .codesiftignore for user-defined exclude patterns
+  let excludePatterns: string[] | undefined;
+  try {
+    const ignoreContent = await readFile(join(rootPath, ".codesiftignore"), "utf-8");
+    excludePatterns = ignoreContent
+      .split("\n")
+      .map((line) => line.replace(/#.*$/, "").trim())
+      .filter((line) => line.length > 0);
+    if (excludePatterns.length === 0) excludePatterns = undefined;
+  } catch {
+    // .codesiftignore not found — proceed without patterns
+  }
+
   // Walk directory and collect parseable files
   const files = await walkDirectory(rootPath, {
     includePaths: options?.include_paths,
+    excludePatterns,
     fileFilter: (ext, name) => !!getLanguageForExtension(ext) || (name?.startsWith(".env") ?? false),
   });
 

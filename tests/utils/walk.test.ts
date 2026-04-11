@@ -57,3 +57,91 @@ describe.skipIf(process.platform === "win32")("walkDirectory symlinks", () => {
     // Should not throw
   });
 });
+
+describe("walkDirectory excludePatterns", () => {
+  it("excludes files matching glob patterns", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-exclude-"));
+    await mkdir(join(tmpDir, "src"), { recursive: true });
+    await mkdir(join(tmpDir, "vendor"), { recursive: true });
+    await writeFile(join(tmpDir, "src/app.ts"), "code");
+    await writeFile(join(tmpDir, "vendor/lib.js"), "vendor");
+
+    const files = await walkDirectory(tmpDir, {
+      excludePatterns: ["vendor/**"],
+      relative: true,
+    });
+
+    expect(files).toContain("src/app.ts");
+    expect(files).not.toContain("vendor/lib.js");
+  });
+
+  it("excludes files matching extension pattern", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-exclude-ext-"));
+    await mkdir(join(tmpDir, "src"), { recursive: true });
+    await writeFile(join(tmpDir, "src/app.ts"), "code");
+    await writeFile(join(tmpDir, "src/app.generated.ts"), "generated");
+
+    const files = await walkDirectory(tmpDir, {
+      excludePatterns: ["**/*.generated.ts"],
+      relative: true,
+    });
+
+    expect(files).toContain("src/app.ts");
+    expect(files).not.toContain("src/app.generated.ts");
+  });
+
+  it("supports multiple patterns", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-exclude-multi-"));
+    await mkdir(join(tmpDir, "src"), { recursive: true });
+    await mkdir(join(tmpDir, "vendor"), { recursive: true });
+    await mkdir(join(tmpDir, "docs"), { recursive: true });
+    await writeFile(join(tmpDir, "src/app.ts"), "code");
+    await writeFile(join(tmpDir, "vendor/lib.js"), "vendor");
+    await writeFile(join(tmpDir, "docs/readme.md"), "docs");
+    await writeFile(join(tmpDir, "src/temp.log"), "log");
+
+    const files = await walkDirectory(tmpDir, {
+      excludePatterns: ["vendor/**", "**/*.log", "docs/**"],
+      relative: true,
+    });
+
+    expect(files).toContain("src/app.ts");
+    expect(files).not.toContain("vendor/lib.js");
+    expect(files).not.toContain("docs/readme.md");
+    expect(files).not.toContain("src/temp.log");
+  });
+
+  it("returns all files when excludePatterns is empty", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-exclude-empty-"));
+    await mkdir(join(tmpDir, "src"), { recursive: true });
+    await writeFile(join(tmpDir, "src/a.ts"), "a");
+    await writeFile(join(tmpDir, "src/b.ts"), "b");
+
+    const files = await walkDirectory(tmpDir, {
+      excludePatterns: [],
+      relative: true,
+    });
+
+    expect(files).toContain("src/a.ts");
+    expect(files).toContain("src/b.ts");
+  });
+
+  it("works alongside IGNORE_DIRS", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-exclude-combo-"));
+    await mkdir(join(tmpDir, "src"), { recursive: true });
+    await mkdir(join(tmpDir, "build"), { recursive: true }); // IGNORE_DIRS
+    await mkdir(join(tmpDir, "vendor"), { recursive: true });
+    await writeFile(join(tmpDir, "src/app.ts"), "code");
+    await writeFile(join(tmpDir, "build/out.js"), "built");
+    await writeFile(join(tmpDir, "vendor/lib.js"), "vendor");
+
+    const files = await walkDirectory(tmpDir, {
+      excludePatterns: ["vendor/**"],
+      relative: true,
+    });
+
+    expect(files).toContain("src/app.ts");
+    expect(files).not.toContain("build/out.js");  // IGNORE_DIRS
+    expect(files).not.toContain("vendor/lib.js"); // excludePatterns
+  });
+});

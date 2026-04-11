@@ -48,6 +48,8 @@ import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
 import { indexStatus } from "./tools/status-tools.js";
+import { auditAgentConfig } from "./tools/agent-config-tools.js";
+import { testImpactAnalysis } from "./tools/test-impact-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
@@ -588,7 +590,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { include_related?: boolean } = {};
       if (args.include_related != null) opts.include_related = args.include_related as boolean;
       const result = await getSymbol(args.repo as string, args.symbol_id as string, opts);
-      if (!result) return null;
+      if (!result) {
+        const hint = await checkTextStubHint(args.repo as string, "get_symbol", true);
+        return hint ?? null;
+      }
       let text = formatSymbolCompact(result.symbol);
       if (result.related && result.related.length > 0) {
         text += "\n\n--- children ---\n" + result.related.map((s) => `${s.kind} ${s.name}${s.signature ? s.signature : ""} [${s.file}:${s.start_line}]`).join("\n");
@@ -610,7 +615,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args) => {
       const syms = await getSymbols(args.repo as string, args.symbol_ids as string[]);
-      return formatSymbolsCompact(syms);
+      const output = formatSymbolsCompact(syms);
+      const hint = await checkTextStubHint(args.repo as string, "get_symbols", syms.length === 0);
+      return hint ? hint + output : output;
     },
   },
   {
@@ -669,8 +676,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
       }
       const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
-      // Compact format: drop col, use file:line: context (matches grep output)
-      return formatRefsCompact(refs);
+      const output = formatRefsCompact(refs);
+      const hint = await checkTextStubHint(args.repo as string, "find_references", refs.length === 0);
+      return hint ? hint + output : output;
     },
   },
   {
@@ -697,7 +705,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         output_format: args.output_format as "json" | "mermaid" | undefined,
         filter_react_hooks: args.filter_react_hooks as boolean | undefined,
       });
-      return formatCallTree(result as never);
+      const output = formatCallTree(result as never);
+      const isEmpty = typeof result === "object" && result != null && "children" in result && Array.isArray((result as { children: unknown[] }).children) && (result as { children: unknown[] }).children.length === 0;
+      const hint = await checkTextStubHint(args.repo as string, "trace_call_chain", isEmpty);
+      return hint ? hint + output : output;
     },
   },
   {
@@ -1170,7 +1181,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         file_pattern: args.file_pattern as string | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      return formatDeadCode(result as never);
+      const output = formatDeadCode(result as never);
+      const isEmpty = !result || ((result as { candidates: unknown[] }).candidates?.length ?? 0) === 0;
+      const hint = await checkTextStubHint(args.repo as string, "find_dead_code", isEmpty);
+      return hint ? hint + output : output;
     },
   },
   {
@@ -1219,7 +1233,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         min_complexity: args.min_complexity as number | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      return formatComplexity(result as never);
+      const output = formatComplexity(result as never);
+      const isEmpty = !result || ((result as { functions: unknown[] }).functions?.length ?? 0) === 0;
+      const hint = await checkTextStubHint(args.repo as string, "analyze_complexity", isEmpty);
+      return hint ? hint + output : output;
     },
   },
   {
@@ -2003,6 +2020,76 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (result.optimization_hints.length > 0) {
         parts.push("─── Optimization hints ───");
         for (const h of result.optimization_hints) parts.push(`  → ${h}`);
+      }
+      return parts.join("\n");
+    },
+  },
+
+  // --- Agent config audit ---
+  {
+    name: "audit_agent_config",
+    category: "meta",
+    searchHint: "audit agent config CLAUDE.md cursorrules stale symbols dead paths token waste redundancy",
+    description: "Scan a config file (CLAUDE.md, .cursorrules) for stale symbol references, dead file paths, token cost, and redundancy. Cross-references against the CodeSift index. Optionally compares two config files for redundant content blocks.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      config_path: z.string().optional().describe("Path to config file (default: CLAUDE.md in repo root)"),
+      compare_with: z.string().optional().describe("Path to second config file for redundancy detection"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof auditAgentConfig>[1] = {};
+      if (args.config_path != null) opts!.config_path = args.config_path as string;
+      if (args.compare_with != null) opts!.compare_with = args.compare_with as string;
+      const result = await auditAgentConfig(args.repo as string, opts);
+      const parts = [`audit_agent_config: ${result.config_path}`, `token_cost: ~${result.token_cost} tokens`];
+      if (result.stale_symbols.length > 0) {
+        parts.push(`\n─── Stale Symbols (${result.stale_symbols.length}) ───`);
+        for (const s of result.stale_symbols) parts.push(`  line ${s.line}: \`${s.symbol}\` — not found in index`);
+      }
+      if (result.dead_paths.length > 0) {
+        parts.push(`\n─── Dead Paths (${result.dead_paths.length}) ───`);
+        for (const p of result.dead_paths) parts.push(`  line ${p.line}: ${p.path} — file not in index`);
+      }
+      if (result.redundant_blocks.length > 0) {
+        parts.push(`\n─── Redundant Blocks (${result.redundant_blocks.length}) ───`);
+        for (const b of result.redundant_blocks) parts.push(`  "${b.text.slice(0, 60)}..." found in: ${b.found_in.join(", ")}`);
+      }
+      if (result.findings.length > 0) {
+        parts.push(`\n─── Findings ───`);
+        for (const f of result.findings) parts.push(`  ${f}`);
+      }
+      if (result.stale_symbols.length === 0 && result.dead_paths.length === 0 && result.redundant_blocks.length === 0) {
+        parts.push("\nAll references valid. No issues found.");
+      }
+      return parts.join("\n");
+    },
+  },
+
+  // --- Test impact analysis ---
+  {
+    name: "test_impact_analysis",
+    category: "analysis",
+    searchHint: "test impact analysis affected tests changed files CI confidence which tests to run",
+    description: "Determine which tests to run based on changed files. Uses impact analysis, co-change correlation, and naming convention matching. Returns prioritized test list with confidence scores and a suggested test command.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      since: z.string().optional().describe("Git ref to compare from (default: HEAD~1)"),
+      until: z.string().optional().describe("Git ref to compare to (default: HEAD)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof testImpactAnalysis>[1] = {};
+      if (args.since != null) opts!.since = args.since as string;
+      if (args.until != null) opts!.until = args.until as string;
+      const result = await testImpactAnalysis(args.repo as string, opts);
+      const parts = [`test_impact: ${result.affected_tests.length} tests affected | ${result.changed_files.length} files changed`];
+      if (result.suggested_command) parts.push(`\nRun: ${result.suggested_command}`);
+      if (result.affected_tests.length > 0) {
+        parts.push("\n─── Affected Tests ───");
+        for (const t of result.affected_tests) {
+          parts.push(`  ${t.test_file} (confidence: ${t.confidence.toFixed(2)}) — ${t.reasons.join(", ")}`);
+        }
+      } else {
+        parts.push("\nNo affected tests found.");
       }
       return parts.join("\n");
     },

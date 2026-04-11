@@ -99,6 +99,7 @@ let listReposCallCount = 0;
 const fileTreePaths = new Set<string>();
 let sessionSearchSymbolsCalled = false;
 let sessionGetSymbolCount = 0;
+const sessionSearchTextPatterns = new Set<string>(); // H12: track distinct file_patterns in search_text
 
 /** Cache completed responses */
 const responseCache = new Map<string, { text: string; ts: number }>();
@@ -162,6 +163,7 @@ export function trackSequentialCalls(toolName: string): void {
   if (toolName === "get_symbol") {
     sessionGetSymbolCount++;
   }
+  // H12 tracking is in buildResponseHint (needs args, which trackSequentialCalls doesn't receive)
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +256,15 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
   // H10: Session snapshot reminder after 50 calls (read-only check; flag set by wrapTool)
   if (getCallCount() >= 50 && !getSessionState().h10Emitted) {
     hints.push(`⚡H10 50+ tool calls this session → call get_session_snapshot to preserve context`);
+  }
+
+  // H12: Repeated search_text with different file_patterns → suggest codebase_retrieval batch
+  if (toolName === "search_text") {
+    const fp = (args["file_pattern"] as string | undefined) ?? "__none__";
+    sessionSearchTextPatterns.add(fp);
+    if (sessionSearchTextPatterns.size >= SEQUENTIAL_HINT_THRESHOLD) {
+      hints.push(`⚡H12(${sessionSearchTextPatterns.size}) ${sessionSearchTextPatterns.size}× search_text with different file_patterns → batch into codebase_retrieval(queries=[...])`);
+    }
   }
 
   return hints.length > 0 ? hints.join(" ") : null;
@@ -403,6 +414,7 @@ export function resetSessionState(): void {
   fileTreePaths.clear();
   sessionSearchSymbolsCalled = false;
   sessionGetSymbolCount = 0;
+  sessionSearchTextPatterns.clear();
   responseCache.clear();
   resetSession();
 }
