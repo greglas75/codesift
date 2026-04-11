@@ -7,6 +7,7 @@ import { join } from "node:path";
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: vi.fn(),
 }));
+import { getCodeIndex } from "../../src/tools/index-tools.js";
 
 import {
   nextjsRouteMap,
@@ -213,6 +214,90 @@ describe("parseRouteFile", () => {
       expect(entry.url_path).toBe("/login");
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nextjsRouteMap orchestrator", () => {
+  async function makeRepo(files: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "route-map-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = join(root, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(abs, content);
+    }
+    return root;
+  }
+
+  function mockIndex(root: string): void {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+  }
+
+  it("enumerates App Router routes with no conflicts", async () => {
+    const root = await makeRepo({
+      "app/layout.tsx": `export default function L({ children }: any) { return children; }\n`,
+      "app/page.tsx": `export default function P() { return <div/>; }\n`,
+      "app/(auth)/login/page.tsx": `export default function Login() { return <div/>; }\n`,
+      "app/api/users/route.ts": `export async function GET() { return new Response(); }\n`,
+      "middleware.ts": `export const config = { matcher: "/api/:path*" };\nexport function middleware() {}\n`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsRouteMap("test");
+      expect(result.routes.length).toBeGreaterThanOrEqual(4);
+      expect(result.conflicts).toEqual([]);
+      expect(result.scan_errors).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enumerates Pages Router routes with correct type values", async () => {
+    const root = await makeRepo({
+      "pages/_app.tsx": `export default function A({ Component, pageProps }: any) { return <Component {...pageProps}/>; }\n`,
+      "pages/_document.tsx": `export default function D() { return <div/>; }\n`,
+      "pages/_error.tsx": `export default function E() { return <div/>; }\n`,
+      "pages/index.tsx": `export default function H() { return <div/>; }\n`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsRouteMap("test");
+      const types = new Set(result.routes.map((r) => r.type));
+      expect(types.has("app")).toBe(true);
+      expect(types.has("document")).toBe(true);
+      expect(types.has("error_page")).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects hybrid conflict when same URL exists in both routers", async () => {
+    // Monorepo: two workspaces under apps/
+    const root = await makeRepo({
+      "apps/web-app/next.config.ts": `export default {};\n`,
+      "apps/web-app/app/page.tsx": `export default function P() { return <div/>; }\n`,
+      "apps/web-pages/next.config.js": `module.exports = {};\n`,
+      "apps/web-pages/pages/index.tsx": `export default function H() { return <div/>; }\n`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsRouteMap("test");
+      // Each workspace scanned for its own router; hybrid conflict requires
+      // the same URL appearing in both routers within a single workspace OR
+      // across workspaces. We emit conflicts by grouping on url_path.
+      const rootRoutes = result.routes.filter((r) => r.url_path === "/");
+      expect(rootRoutes.length).toBe(2);
+      expect(result.conflicts.length).toBeGreaterThanOrEqual(1);
+      expect(result.conflicts[0]!.url_path).toBe("/");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

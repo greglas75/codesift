@@ -5,14 +5,18 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { relative, basename } from "node:path";
+import { relative, basename, join } from "node:path";
 import type Parser from "web-tree-sitter";
 import { parseFile } from "../parser/parser-manager.js";
 import {
   computeLayoutChain,
   deriveUrlPath,
+  discoverWorkspaces,
   scanDirective,
+  traceMiddleware,
 } from "../utils/nextjs.js";
+import { walkDirectory } from "../utils/walk.js";
+import { getCodeIndex } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -399,12 +403,172 @@ export async function parseRouteFile(
 }
 
 // ---------------------------------------------------------------------------
-// Orchestrator stub (real impl in Task 30)
+// Orchestrator
 // ---------------------------------------------------------------------------
 
+const APP_CONVENTION_RE = /^(page|layout|loading|error|not-found|global-error|default|template|route)\.[jt]sx?$/;
+const ROUTE_EXTS = new Set([".tsx", ".jsx", ".ts", ".js"]);
+const DEFAULT_MAX_ROUTES = 1000;
+const ROUTE_PARSE_CONCURRENCY = 10;
+
+/** Whether a file in `app/` is a canonical convention route file. */
+function isAppConventionFile(name: string): boolean {
+  return APP_CONVENTION_RE.test(name);
+}
+
+/**
+ * Enumerate all Next.js routes (App + Pages Router) with rendering strategy
+ * classification and hybrid conflict detection.
+ */
 export async function nextjsRouteMap(
-  _repo: string,
-  _options?: NextjsRouteMapOptions,
+  repo: string,
+  options?: NextjsRouteMapOptions,
 ): Promise<NextjsRouteMapResult> {
-  throw new Error("nextjsRouteMap: not implemented");
+  if (process.env.CODESIFT_DISABLE_TOOLS?.includes("nextjs_route_map")) {
+    throw new Error("nextjs_route_map is disabled via CODESIFT_DISABLE_TOOLS");
+  }
+
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository not found: ${repo}. Run index_folder first.`);
+  }
+  const projectRoot = index.root;
+
+  // Resolve workspaces
+  let workspaceRoots: string[];
+  if (options?.workspace) {
+    workspaceRoots = [join(projectRoot, options.workspace)];
+  } else {
+    const discovered = await discoverWorkspaces(projectRoot);
+    workspaceRoots = discovered.length > 0
+      ? discovered.map((w) => w.root)
+      : [projectRoot];
+  }
+
+  const routerFilter = options?.router ?? "both";
+  const maxRoutes = options?.max_routes ?? DEFAULT_MAX_ROUTES;
+  const routes: NextjsRouteEntry[] = [];
+  const scan_errors: string[] = [];
+  const workspaces_scanned: string[] = [];
+  let truncated = false;
+  let truncated_at: number | undefined;
+
+  // Middleware: use the first workspace's middleware.ts (single-app case).
+  // traceMiddleware accepts a URL path for matching — we pass "/" as a probe
+  // so we can still return the file + matchers fields.
+  let middleware: NextjsRouteMapResult["middleware"] = null;
+
+  for (const wsRoot of workspaceRoots) {
+    workspaces_scanned.push(wsRoot);
+
+    // Collect candidate files
+    const appCandidates: string[] = [];
+    const pagesCandidates: string[] = [];
+
+    if (routerFilter === "app" || routerFilter === "both") {
+      for (const appDir of ["app", "src/app"]) {
+        try {
+          const walked = await walkDirectory(join(wsRoot, appDir), {
+            followSymlinks: true,
+            fileFilter: (ext, name) => {
+              if (!ROUTE_EXTS.has(ext)) return false;
+              return name ? isAppConventionFile(name) : false;
+            },
+          });
+          appCandidates.push(...walked);
+        } catch (err) {
+          scan_errors.push(`${appDir}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    if (routerFilter === "pages" || routerFilter === "both") {
+      for (const pagesDir of ["pages", "src/pages"]) {
+        try {
+          const walked = await walkDirectory(join(wsRoot, pagesDir), {
+            followSymlinks: true,
+            fileFilter: (ext) => ROUTE_EXTS.has(ext),
+          });
+          pagesCandidates.push(...walked);
+        } catch (err) {
+          scan_errors.push(`${pagesDir}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    const wsMiddleware = await traceMiddleware(wsRoot, "/").catch(() => null);
+    if (wsMiddleware && !middleware) {
+      middleware = { file: wsMiddleware.file, matchers: wsMiddleware.matchers };
+    }
+
+    // Process each router's candidates. Apply the global max_routes cap.
+    const workspaceFiles: Array<{ path: string; router: "app" | "pages" }> = [
+      ...appCandidates.map((p) => ({ path: p, router: "app" as const })),
+      ...pagesCandidates.map((p) => ({ path: p, router: "pages" as const })),
+    ];
+
+    for (let i = 0; i < workspaceFiles.length; i += ROUTE_PARSE_CONCURRENCY) {
+      if (routes.length >= maxRoutes) {
+        truncated = true;
+        truncated_at = maxRoutes;
+        break;
+      }
+      const chunk = workspaceFiles.slice(i, i + ROUTE_PARSE_CONCURRENCY);
+      const entries = await Promise.all(
+        chunk.map(async ({ path, router }) => {
+          try {
+            // Parse relative to workspace root so deriveUrlPath sees `app/…`
+            const entry = await parseRouteFile(path, wsRoot, router);
+            // Re-anchor file_path to the repo root for display
+            entry.file_path = relative(projectRoot, path);
+            // Fill middleware_applies per route
+            if (wsMiddleware) {
+              const perRoute = await traceMiddleware(wsRoot, entry.url_path).catch(() => null);
+              entry.middleware_applies = perRoute?.applies ?? false;
+            }
+            return entry;
+          } catch (err) {
+            const rel = relative(projectRoot, path);
+            scan_errors.push(`${rel}: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          }
+        }),
+      );
+      for (const entry of entries) {
+        if (entry === null) continue;
+        if (routes.length >= maxRoutes) {
+          truncated = true;
+          truncated_at = maxRoutes;
+          break;
+        }
+        routes.push(entry);
+      }
+    }
+  }
+
+  // Detect hybrid conflicts: same url_path appears in both routers
+  const byPath = new Map<string, { app?: string; pages?: string }>();
+  for (const route of routes) {
+    const bucket = byPath.get(route.url_path) ?? {};
+    if (route.router === "app" && !bucket.app) bucket.app = route.file_path;
+    if (route.router === "pages" && !bucket.pages) bucket.pages = route.file_path;
+    byPath.set(route.url_path, bucket);
+  }
+  const conflicts: NextjsRouteConflict[] = [];
+  for (const [url_path, bucket] of byPath.entries()) {
+    if (bucket.app && bucket.pages) {
+      conflicts.push({ url_path, app: bucket.app, pages: bucket.pages });
+    }
+  }
+
+  const result: NextjsRouteMapResult = {
+    routes,
+    conflicts,
+    middleware,
+    workspaces_scanned,
+    scan_errors,
+    truncated,
+  };
+  if (truncated_at !== undefined) result.truncated_at = truncated_at;
+  return result;
 }
