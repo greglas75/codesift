@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { parseFile } from "../../src/parser/parser-manager.js";
-import { parseMetadataExport } from "../../src/utils/nextjs.js";
+import {
+  parseMetadataExport,
+  extractFetchCalls,
+} from "../../src/utils/nextjs.js";
 
 async function parse(source: string) {
   const tree = await parseFile("test.tsx", source);
@@ -87,5 +90,111 @@ export const metadata = {
     const result = parseMetadataExport(tree, src);
     expect(result.twitter).toBeDefined();
     expect(result.twitter?.card).toBe("summary_large_image");
+  });
+});
+
+describe("extractFetchCalls", () => {
+  it("captures a single fetch call with null cacheOption", async () => {
+    const src = `
+async function load() {
+  const res = await fetch('/api/data');
+  return res;
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const fetches = calls.filter((c) => c.callee === "fetch");
+    expect(fetches.length).toBe(1);
+    expect(fetches[0]!.cacheOption).toBeNull();
+  });
+
+  it("detects cache: no-store option as SSR trigger", async () => {
+    const src = `
+async function load() {
+  const res = await fetch('/api/data', { cache: 'no-store' });
+  return res;
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const fetches = calls.filter((c) => c.callee === "fetch");
+    expect(fetches.length).toBe(1);
+    expect(fetches[0]!.cacheOption).toBe("no-store");
+    expect(fetches[0]!.isSsrTrigger).toBe(true);
+  });
+
+  it("parses next.revalidate config into isr-{seconds}", async () => {
+    const src = `
+async function load() {
+  const res = await fetch('/api/data', { next: { revalidate: 60 } });
+  return res;
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const fetches = calls.filter((c) => c.callee === "fetch");
+    expect(fetches.length).toBe(1);
+    expect(fetches[0]!.cacheOption).toBe("isr-60");
+  });
+
+  it("flags sequential awaits without shared identifier", async () => {
+    const src = `
+async function load() {
+  const first = await fetch('/api/a');
+  const second = await fetch('/api/b');
+  return [first, second];
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const fetches = calls.filter((c) => c.callee === "fetch");
+    expect(fetches.length).toBe(2);
+    expect(fetches[0]!.isSequential).toBe(false);
+    expect(fetches[1]!.isSequential).toBe(true);
+  });
+
+  it("does not flag dependent awaits where second references first", async () => {
+    const src = `
+async function load() {
+  const data = await fetch('/api/a');
+  const more = await fetch(\`/api/b/\${data}\`);
+  return more;
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const fetches = calls.filter((c) => c.callee === "fetch");
+    expect(fetches.length).toBe(2);
+    expect(fetches[1]!.isSequential).toBe(false);
+  });
+
+  it("captures cookies() as dynamic trigger", async () => {
+    const src = `
+import { cookies } from 'next/headers';
+async function load() {
+  const jar = cookies();
+  return jar.get('session');
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const cookieCalls = calls.filter((c) => c.callee === "cookies");
+    expect(cookieCalls.length).toBe(1);
+    expect(cookieCalls[0]!.isSsrTrigger).toBe(true);
+  });
+
+  it("captures headers() as dynamic trigger", async () => {
+    const src = `
+import { headers } from 'next/headers';
+async function load() {
+  const h = headers();
+  return h.get('x-custom');
+}
+`;
+    const tree = await parse(src);
+    const calls = extractFetchCalls(tree, src);
+    const headerCalls = calls.filter((c) => c.callee === "headers");
+    expect(headerCalls.length).toBe(1);
+    expect(headerCalls[0]!.isSsrTrigger).toBe(true);
   });
 });
