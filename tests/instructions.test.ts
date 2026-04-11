@@ -36,4 +36,8 @@ describe("CODESIFT_INSTRUCTIONS", () => {
     expect(CODESIFT_INSTRUCTIONS).toContain("compact");
     expect(CODESIFT_INSTRUCTIONS).toContain("counts");
   });
+
+  it("reports the 88 MCP tool count for Next.js additions", () => {
+    expect(CODESIFT_INSTRUCTIONS).toContain("88 MCP tools");
+  });
 });
