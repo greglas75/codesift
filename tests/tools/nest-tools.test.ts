@@ -863,6 +863,62 @@ export class HealthController {
     expect(result.routes).toEqual([]);
     expect(result.stats.total_routes).toBe(0);
   });
+
+  it("G9/G10/G11/G13: extracts version, swagger, inline pipes, health flag", async () => {
+    await writeFile(join(tmpRoot, "src/users.controller.ts"), `
+import { Controller, Get, Post, UseGuards, UsePipes, ValidationPipe, Version } from '@nestjs/common';
+import { ApiOperation, ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { HealthCheck } from '@nestjs/terminus';
+
+@Controller({ path: 'users', version: '2' })
+@ApiTags('users')
+export class UsersController {
+  @Get(':id')
+  @Version('3')
+  @ApiOperation({ summary: 'Get user by id' })
+  @ApiBearerAuth()
+  findOne() {}
+
+  @Get('health')
+  @HealthCheck()
+  health() {}
+
+  @Post()
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  create() {}
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/users.controller.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestRouteInventory("test-repo");
+
+    // G9 — method version overrides controller version
+    const findOne = result.routes.find((r) => r.handler === "findOne");
+    expect(findOne).toBeDefined();
+    expect(findOne!.version).toBe("3");
+
+    // G10 — Swagger summary + bearer + tags
+    expect(findOne!.swagger).toBeDefined();
+    expect(findOne!.swagger!.summary).toBe("Get user by id");
+    expect(findOne!.swagger!.bearer).toBe(true);
+    expect(findOne!.swagger!.tags).toContain("users");
+
+    // G13 — health check
+    const healthRoute = result.routes.find((r) => r.handler === "health");
+    expect(healthRoute).toBeDefined();
+    expect(healthRoute!.is_health_check).toBe(true);
+
+    // G11 — inline pipes
+    const create = result.routes.find((r) => r.handler === "create");
+    expect(create).toBeDefined();
+    expect(create!.inline_pipes).toContain("ValidationPipe");
+
+    // G9 — controller version applies when method has no override
+    // (health route inherits '2' from @Controller({ version: '2' }))
+    expect(healthRoute!.version).toBe("2");
+    expect(create!.version).toBe("2");
+  });
 });
 
 // ---------------------------------------------------------------------------
