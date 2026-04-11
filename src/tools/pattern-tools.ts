@@ -54,6 +54,31 @@ export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: stri
     regex: /\breturn\s+[^;{]*;\s*\n[\s\S]*?\buse[A-Z]\w*\s*\(/,
     description: "React hook called after early return — violates Rule of Hooks",
   },
+  // --- React anti-patterns (Wave 4b — additional) ---
+  "dangerously-set-html": {
+    regex: /dangerouslySetInnerHTML\s*=\s*\{/,
+    description: "dangerouslySetInnerHTML used — XSS risk unless content is sanitized (CQ24)",
+  },
+  "direct-dom-access": {
+    regex: /\bdocument\.(getElementById|querySelector|querySelectorAll|getElementsBy)\s*\(/,
+    description: "Direct DOM access in React component — use useRef instead (breaks SSR, bypasses virtual DOM)",
+  },
+  "unstable-default-value": {
+    regex: /(?:function\s+[A-Z]\w*|const\s+[A-Z]\w*\s*=\s*(?:\([^)]*\)|[^=]*)\s*=>)\s*[\s\S]{0,100}(?:\{\s*[^}]*=\s*\[\s*\]|\{\s*[^}]*=\s*\{\s*\})/,
+    description: "Default prop value [] or {} in component params — creates new reference every render, breaks memo/PureComponent",
+  },
+  "jsx-falsy-and": {
+    regex: /\{\s*(?:count|length|size|num|total|amount)\s*&&\s*</,
+    description: "Numeric variable used with && in JSX — renders '0' on screen when falsy. Use ternary or Boolean() (React gotcha)",
+  },
+  "nested-component-def": {
+    regex: /(?:function|const)\s+[A-Z]\w*\s*(?:=\s*(?:\([^)]*\)\s*=>|\(\)\s*=>)|(?:\([^)]*\)\s*\{))[\s\S]{0,2000}?(?:function|const)\s+[A-Z]\w*\s*(?:=\s*\(|[\s\S]{0,50}?return\s*(?:<|\())/,
+    description: "Component defined inside another component — remounts on every parent render, loses all state. Hoist to module level.",
+  },
+  "usecallback-no-deps": {
+    regex: /use(?:Callback|Memo)\s*\([\s\S]*?\)\s*\)\s*[;,]/,
+    description: "useCallback/useMemo with only one argument (no dependency array) — useless memoization, value recreated every render",
+  },
   "empty-catch": {
     regex: /catch\s*\([^)]*\)\s*\{\s*\}/,
     description: "Empty catch block — swallowed error (CQ8)",

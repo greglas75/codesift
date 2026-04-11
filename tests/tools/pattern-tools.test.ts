@@ -148,9 +148,90 @@ Button.displayName = 'Button';`;
     });
   });
 
+  describe("dangerously-set-html", () => {
+    const regex = BUILTIN_PATTERNS["dangerously-set-html"]!.regex;
+
+    it("matches dangerouslySetInnerHTML usage", () => {
+      const source = `<div dangerouslySetInnerHTML={{ __html: content }}/>`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match regular props", () => {
+      const source = `<div className="box">{content}</div>`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("direct-dom-access", () => {
+    const regex = BUILTIN_PATTERNS["direct-dom-access"]!.regex;
+
+    it("matches document.getElementById", () => {
+      const source = `const el = document.getElementById("root");`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches document.querySelector", () => {
+      const source = `document.querySelector(".modal");`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match useRef pattern", () => {
+      const source = `const ref = useRef(null); ref.current.focus();`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("jsx-falsy-and", () => {
+    const regex = BUILTIN_PATTERNS["jsx-falsy-and"]!.regex;
+
+    it("matches count && <Component>", () => {
+      const source = `{count && <UserList/>}`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches length && <Component>", () => {
+      const source = `{length && <Items/>}`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match boolean && <Component>", () => {
+      const source = `{isReady && <Dashboard/>}`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("nested-component-def", () => {
+    const regex = BUILTIN_PATTERNS["nested-component-def"]!.regex;
+
+    it("matches component defined inside another component", () => {
+      const source = `function ParentComponent() {
+  const InnerComponent = () => {
+    return <div>inner</div>;
+  };
+  return <InnerComponent/>;
+}`;
+      expect(regex.test(source)).toBe(true);
+    });
+  });
+
+  describe("usecallback-no-deps", () => {
+    const regex = BUILTIN_PATTERNS["usecallback-no-deps"]!.regex;
+
+    it("matches useCallback without dependency array", () => {
+      const source = `const handleClick = useCallback(() => doThing());`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match useCallback with deps", () => {
+      const source = `const handleClick = useCallback(() => doThing(), [dep]);`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
   describe("listPatterns — React patterns registered", () => {
-    it("includes all 8 new React patterns", () => {
+    it("includes all 14 React patterns", () => {
       const names = listPatterns().map((p) => p.name);
+      // Wave 2 (7 patterns)
       expect(names).toContain("hook-in-condition");
       expect(names).toContain("useEffect-async");
       expect(names).toContain("useEffect-object-dep");
@@ -158,6 +239,13 @@ Button.displayName = 'Button';`;
       expect(names).toContain("index-as-key");
       expect(names).toContain("inline-handler");
       expect(names).toContain("conditional-render-hook");
+      // Wave 4b (6 additional patterns)
+      expect(names).toContain("dangerously-set-html");
+      expect(names).toContain("direct-dom-access");
+      expect(names).toContain("unstable-default-value");
+      expect(names).toContain("jsx-falsy-and");
+      expect(names).toContain("nested-component-def");
+      expect(names).toContain("usecallback-no-deps");
     });
   });
 });
