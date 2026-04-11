@@ -355,8 +355,9 @@ function appendDbCalls(
 
 /**
  * Render a RouteTraceResult as a Mermaid sequence diagram.
+ * @internal exported for unit testing
  */
-function routeToMermaid(result: RouteTraceResult): string {
+export function routeToMermaid(result: RouteTraceResult): string {
   if (result.handlers.length === 0) {
     return "sequenceDiagram\n    Note over Client: No handler found for " + result.path;
   }
@@ -366,7 +367,26 @@ function routeToMermaid(result: RouteTraceResult): string {
   const method = handler.method ?? "REQUEST";
   const aliases = new Map<string, string>();
 
-  lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+  // Add Middleware participant if middleware applies
+  if (result.middleware?.applies) {
+    lines.push(`    participant Middleware`);
+    lines.push(`    Client->>+Middleware: ${method} ${result.path}`);
+    lines.push(`    Middleware->>+Controller: continue`);
+  } else {
+    lines.push(`    Client->>+Controller: ${method} ${result.path}`);
+  }
+
+  // Add Layout chain rendering
+  if (result.layout_chain && result.layout_chain.length > 0) {
+    let prev = "Controller";
+    for (let i = 0; i < result.layout_chain.length; i++) {
+      const layoutName = `Layout${i + 1}`;
+      const layoutFile = result.layout_chain[i]!;
+      lines.push(`    participant ${layoutName}`);
+      lines.push(`    ${prev}->>+${layoutName}: render (${layoutFile})`);
+      prev = layoutName;
+    }
+  }
 
   const root = result.call_chain[0];
   if (root) {
@@ -402,7 +422,22 @@ function routeToMermaid(result: RouteTraceResult): string {
   }
 
   closeUntilDepth(0);
-  lines.push(`    Controller-->>-Client: response`);
+
+  // Close layout chain
+  if (result.layout_chain && result.layout_chain.length > 0) {
+    for (let i = result.layout_chain.length - 1; i >= 0; i--) {
+      const layoutName = `Layout${i + 1}`;
+      const returnTo = i > 0 ? `Layout${i}` : "Controller";
+      lines.push(`    ${layoutName}-->>-${returnTo}: rendered`);
+    }
+  }
+
+  if (result.middleware?.applies) {
+    lines.push(`    Controller-->>-Middleware: response`);
+    lines.push(`    Middleware-->>-Client: response`);
+  } else {
+    lines.push(`    Controller-->>-Client: response`);
+  }
   return lines.join("\n");
 }
 
