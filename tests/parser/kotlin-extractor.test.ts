@@ -461,6 +461,71 @@ class ServiceTest {
   });
 });
 
+// --- Compose metadata ---
+
+describe("extractKotlinSymbols — Compose metadata", () => {
+  it("classifies @Composable fun as kind=component", async () => {
+    const symbols = await parseKotlin(`
+@Composable
+fun HomeScreen(name: String) {
+    Text(name)
+}
+`);
+    const comp = symbols.find((s) => s.name === "HomeScreen");
+    expect(comp).toBeDefined();
+    expect(comp!.kind).toBe("component");
+    expect(comp!.meta?.["compose"]).toBe(true);
+  });
+
+  it("flags @Preview composable with meta.compose_preview", async () => {
+    const symbols = await parseKotlin(`
+@Preview
+@Composable
+fun HomeScreenPreview() {
+    HomeScreen("test")
+}
+`);
+    const preview = symbols.find((s) => s.name === "HomeScreenPreview");
+    expect(preview).toBeDefined();
+    expect(preview!.kind).toBe("component");
+    expect(preview!.meta?.["compose"]).toBe(true);
+    expect(preview!.meta?.["compose_preview"]).toBe(true);
+  });
+
+  it("does NOT classify non-Composable function as component", async () => {
+    const symbols = await parseKotlin(`
+fun calculateTotal(items: List<Int>): Int = items.sum()
+`);
+    const fn = symbols.find((s) => s.name === "calculateTotal");
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe("function");
+    expect(fn!.meta?.["compose"]).toBeUndefined();
+  });
+
+  it("preserves @Composable in decorators field", async () => {
+    const symbols = await parseKotlin(`
+@Composable
+fun UserCard(user: User) { }
+`);
+    const comp = symbols.find((s) => s.name === "UserCard");
+    expect(comp!.decorators).toContain("Composable");
+  });
+
+  it("handles @Composable method inside a class", async () => {
+    const symbols = await parseKotlin(`
+class MyView {
+    @Composable
+    fun Content() { }
+}
+`);
+    const method = symbols.find((s) => s.name === "Content");
+    expect(method).toBeDefined();
+    // Methods with @Composable are still "component" (not "method")
+    expect(method!.kind).toBe("component");
+    expect(method!.meta?.["compose"]).toBe(true);
+  });
+});
+
 // --- KMP expect / actual ---
 
 describe("extractKotlinSymbols — KMP expect/actual modifiers", () => {

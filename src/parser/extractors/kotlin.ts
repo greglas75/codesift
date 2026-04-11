@@ -411,15 +411,25 @@ export function extractKotlinSymbols(
         const name = getName(node);
         if (name) {
           const testKind = getTestKind(node);
-          const kind: SymbolKind = testKind ?? (parentId ? "method" : "function");
           const annotations = getAnnotations(node);
+          const isComposable = annotations.includes("Composable");
+          const isPreview = annotations.includes("Preview");
+          const kind: SymbolKind = testKind
+            ?? (isComposable ? "component" : (parentId ? "method" : "function"));
           const kmp = getKmpModifier(node);
+
+          // Build meta — merge KMP, Compose, and Preview flags.
+          const meta: Record<string, unknown> = {};
+          if (kmp) meta["kmp_modifier"] = kmp;
+          if (isComposable) meta["compose"] = true;
+          if (isPreview) meta["compose_preview"] = true;
+
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: annotations.length > 0 ? annotations : undefined,
-            meta: kmp ? { kmp_modifier: kmp } : undefined,
+            meta: Object.keys(meta).length > 0 ? meta : undefined,
           });
           symbols.push(sym);
         }
