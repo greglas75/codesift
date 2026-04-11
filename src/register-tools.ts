@@ -39,6 +39,7 @@ import {
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy } from "./tools/kotlin-tools.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
@@ -1418,6 +1419,37 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         severity: args.severity as SecretSeverity | undefined,
       });
       return formatSecrets(result as never);
+    },
+  },
+
+  // --- Kotlin tools (discoverable via discover_tools(query="kotlin")) ---
+  {
+    name: "find_extension_functions",
+    category: "analysis",
+    searchHint: "kotlin extension function receiver type method discovery",
+    description: "Find all Kotlin extension functions for a given receiver type. Scans indexed symbols for signatures matching 'ReceiverType.' prefix.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      receiver_type: z.string().describe("Receiver type name, e.g. 'String', 'List', 'User'"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+    },
+    handler: async (args) => {
+      const opts: { file_pattern?: string } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      return await findExtensionFunctions(args.repo as string, args.receiver_type as string, opts);
+    },
+  },
+  {
+    name: "analyze_sealed_hierarchy",
+    category: "analysis",
+    searchHint: "kotlin sealed class interface subtype when exhaustive branch missing hierarchy",
+    description: "Analyze a Kotlin sealed class/interface: find all subtypes and check when() blocks for exhaustiveness (missing branches).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      sealed_class: z.string().describe("Name of the sealed class or interface to analyze"),
+    },
+    handler: async (args) => {
+      return await analyzeSealedHierarchy(args.repo as string, args.sealed_class as string);
     },
   },
 
