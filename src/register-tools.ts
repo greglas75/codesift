@@ -36,11 +36,14 @@ import {
   resolvePhpService,
   phpSecurityScan,
   phpProjectAudit,
+  findPhpNPlusOne,
+  findPhpGodModel,
 } from "./tools/php-tools.js";
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
 import { findExtensionFunctions, analyzeSealedHierarchy } from "./tools/kotlin-tools.js";
+import { traceHiltGraph } from "./tools/hilt-tools.js";
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
@@ -192,20 +195,25 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "resolve_php_service",
     "php_security_scan",
     "php_project_audit",
+    "find_php_n_plus_one",
+    "find_php_god_model",
   ],
   // Kotlin / Android / Gradle — detected by build.gradle.kts or settings.gradle.kts
   "build.gradle.kts": [
     "find_extension_functions",
     "analyze_sealed_hierarchy",
+    "trace_hilt_graph",
   ],
   "settings.gradle.kts": [
     "find_extension_functions",
     "analyze_sealed_hierarchy",
+    "trace_hilt_graph",
   ],
   // Fallback — Android projects with Groovy gradle but Kotlin source
   "build.gradle": [
     "find_extension_functions",
     "analyze_sealed_hierarchy",
+    "trace_hilt_graph",
   ],
 };
 
@@ -1685,6 +1693,22 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return await analyzeSealedHierarchy(args.repo as string, args.sealed_class as string);
     },
   },
+  {
+    name: "trace_hilt_graph",
+    category: "analysis",
+    searchHint: "hilt dagger DI dependency injection viewmodel inject module provides binds android kotlin graph",
+    description: "Trace a Hilt DI dependency tree rooted at a class annotated with @HiltViewModel / @AndroidEntryPoint / @HiltAndroidApp. Returns constructor dependencies with matching @Provides/@Binds providers and their module. Unresolved deps are flagged.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      class_name: z.string().describe("Name of the Hilt-annotated class (e.g. 'UserViewModel')"),
+      depth: z.number().optional().describe("Max traversal depth (default: 1)"),
+    },
+    handler: async (args) => {
+      const opts: { depth?: number } = {};
+      if (typeof args.depth === "number") opts.depth = args.depth;
+      return await traceHiltGraph(args.repo as string, args.class_name as string, opts);
+    },
+  },
 
   // --- PHP / Yii2 tools (all discoverable via discover_tools(query="php")) ---
   {
@@ -1792,6 +1816,42 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { file_pattern?: string } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
       return await phpProjectAudit(args.repo as string, opts);
+    },
+  },
+  {
+    name: "find_php_n_plus_one",
+    category: "analysis",
+    searchHint: "php n+1 query foreach activerecord with eager loading yii2 eloquent relation",
+    description: "Detect N+1 query patterns in PHP: foreach loops accessing ActiveRecord relations without eager loading via ->with(). Yii2/Laravel aware.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      limit: z.number().optional().describe("Max findings to return (default: 100)"),
+      file_pattern: z.string().optional().describe("Substring filter on file paths (e.g. 'controllers/')"),
+    },
+    handler: async (args) => {
+      const opts: { limit?: number; file_pattern?: string } = {};
+      if (typeof args.limit === "number") opts.limit = args.limit;
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      return await findPhpNPlusOne(args.repo as string, opts);
+    },
+  },
+  {
+    name: "find_php_god_model",
+    category: "analysis",
+    searchHint: "php god model god class anti-pattern too many methods relations oversized yii2 activerecord",
+    description: "Find oversized ActiveRecord models (god classes) with configurable thresholds for method, relation, and line counts. Reports reasons per model.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      min_methods: z.number().optional().describe("Method count threshold (default: 50)"),
+      min_relations: z.number().optional().describe("Relation count threshold (default: 15)"),
+      min_lines: z.number().optional().describe("Line count threshold (default: 500)"),
+    },
+    handler: async (args) => {
+      const opts: { min_methods?: number; min_relations?: number; min_lines?: number } = {};
+      if (typeof args.min_methods === "number") opts.min_methods = args.min_methods;
+      if (typeof args.min_relations === "number") opts.min_relations = args.min_relations;
+      if (typeof args.min_lines === "number") opts.min_lines = args.min_lines;
+      return await findPhpGodModel(args.repo as string, opts);
     },
   },
 
