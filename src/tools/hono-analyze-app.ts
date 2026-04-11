@@ -13,7 +13,7 @@ import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
 import { detectFrameworks } from "../utils/framework-detect.js";
 import { join } from "node:path";
-import type { HonoAppModel, HonoRoute, HonoMount } from "../parser/extractors/hono-model.js";
+import type { HonoAppModel, HonoRoute } from "../parser/extractors/hono-model.js";
 
 export interface AnalyzeHonoAppResult {
   framework?: "hono";

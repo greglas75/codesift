@@ -43,18 +43,20 @@ export async function traceRpcTypes(repo: string): Promise<RpcTypesResult> {
     return { error: `Failed to parse: ${msg}` };
   }
 
-  const exports = model.rpc_exports.map((r) => ({
-    name: r.export_name,
-    shape: r.shape,
-    is_slow: r.shape === "full_app",
-    source_var: r.source_var,
-    file: r.file,
-    line: r.line,
-    recommendation:
-      r.shape === "full_app"
-        ? "Split into per-route-group type exports (Hono docs + Issue #3869) to reduce tsc compile time."
-        : undefined,
-  }));
+  const exports = model.rpc_exports.map((r) => {
+    const entry: NonNullable<RpcTypesResult["exports"]>[number] = {
+      name: r.export_name,
+      shape: r.shape,
+      is_slow: r.shape === "full_app",
+      source_var: r.source_var,
+      file: r.file,
+      line: r.line,
+    };
+    if (r.shape === "full_app") {
+      entry.recommendation = "Split into per-route-group type exports (Hono docs + Issue #3869) to reduce tsc compile time.";
+    }
+    return entry;
+  });
 
   return {
     exports,

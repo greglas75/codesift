@@ -366,6 +366,9 @@ export const CORE_TOOL_NAMES = new Set([
   "astro_hydration_audit",
   "astro_route_map",
   "astro_config_analyze",
+  // --- Hono tools (Task 23) ---
+  "trace_middleware_chain",  // core: top Hono pain point (Discussion #4255)
+  "analyze_hono_app",        // core: meta-tool, first call for any Hono project
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -2214,6 +2217,125 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const index = await getCodeIndex(args.repo as string ?? "");
       if (!index) throw new Error("Repository not found — run index_folder first");
       return await astroConfigAnalyze({ project_root: index.root });
+    },
+  },
+
+  // --- Hono framework tools (Task 23) ---
+  {
+    name: "trace_middleware_chain",
+    category: "graph",
+    searchHint: "hono middleware chain trace order scope auth use",
+    description: "Trace the ordered middleware chain for a Hono route. Returns full middleware stack in registration order for a given path+method.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      path: z.string().describe("URL path to trace (e.g. '/api/users/:id')"),
+      method: z.string().optional().describe("HTTP method filter (GET, POST, etc.)"),
+    },
+    handler: async (args) => {
+      const { traceMiddlewareChain } = await import("./tools/hono-middleware-chain.js");
+      return await traceMiddlewareChain(
+        args.repo as string,
+        args.path as string,
+        args.method as string | undefined,
+      );
+    },
+  },
+  {
+    name: "analyze_hono_app",
+    category: "analysis",
+    searchHint: "hono overview analyze app routes middleware runtime env bindings rpc",
+    description: "Complete Hono application overview: routes grouped by method/scope, middleware map, context vars, OpenAPI status, RPC exports (flags Issue #3869 slow pattern), runtime, env bindings. One call for full project analysis.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      entry_file: z.string().optional().describe("Hono entry file (auto-detected if omitted)"),
+      force_refresh: z.boolean().optional().describe("Clear cache and rebuild"),
+    },
+    handler: async (args) => {
+      const { analyzeHonoApp } = await import("./tools/hono-analyze-app.js");
+      return await analyzeHonoApp(
+        args.repo as string,
+        args.entry_file as string | undefined,
+        args.force_refresh as boolean | undefined,
+      );
+    },
+  },
+  {
+    name: "trace_context_flow",
+    category: "analysis",
+    searchHint: "hono context flow c.set c.get c.var c.env middleware variable unguarded",
+    description: "Trace Hono context variable flow (c.set/c.get/c.var/c.env). Detects MISSING_CONTEXT_VARIABLE findings where routes access variables that no middleware in their scope sets.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      variable: z.string().optional().describe("Specific variable name to trace (default: all)"),
+    },
+    handler: async (args) => {
+      const { traceContextFlow } = await import("./tools/hono-context-flow.js");
+      return await traceContextFlow(
+        args.repo as string,
+        args.variable as string | undefined,
+      );
+    },
+  },
+  {
+    name: "extract_api_contract",
+    category: "analysis",
+    searchHint: "hono openapi contract api schema createRoute zValidator",
+    description: "Extract OpenAPI-style API contract from a Hono app. Uses explicit createRoute() definitions when available, infers from regular routes otherwise. Format: 'openapi' (paths object) or 'summary' (table).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      entry_file: z.string().optional().describe("Hono entry file (auto-detected if omitted)"),
+      format: z.enum(["openapi", "summary"]).optional().describe("Output format (default: openapi)"),
+    },
+    handler: async (args) => {
+      const { extractApiContract } = await import("./tools/hono-api-contract.js");
+      return await extractApiContract(
+        args.repo as string,
+        args.entry_file as string | undefined,
+        args.format as "openapi" | "summary" | undefined,
+      );
+    },
+  },
+  {
+    name: "trace_rpc_types",
+    category: "analysis",
+    searchHint: "hono rpc client type export typeof slow pattern Issue 3869 compile time",
+    description: "Analyze Hono RPC type exports. Detects the slow `export type X = typeof app` pattern from Issue #3869 (8-min CI compile time) and recommends splitting into per-route-group types.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const { traceRpcTypes } = await import("./tools/hono-rpc-types.js");
+      return await traceRpcTypes(args.repo as string);
+    },
+  },
+  {
+    name: "audit_hono_security",
+    category: "security",
+    searchHint: "hono security audit rate limit secure headers auth order csrf",
+    description: "Security audit of a Hono app: missing rate limiting on mutation routes, missing secure-headers middleware globally, auth middleware ordering violations. Returns prioritized findings.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const { auditHonoSecurity } = await import("./tools/hono-security.js");
+      return await auditHonoSecurity(args.repo as string);
+    },
+  },
+  {
+    name: "visualize_hono_routes",
+    category: "reporting",
+    searchHint: "hono routes visualize mermaid tree diagram documentation",
+    description: "Produce a visualization of Hono routing topology. Supports 'mermaid' (diagram) and 'tree' (ASCII) formats.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      format: z.enum(["mermaid", "tree"]).optional().describe("Output format (default: tree)"),
+    },
+    handler: async (args) => {
+      const { visualizeHonoRoutes } = await import("./tools/hono-visualize.js");
+      return await visualizeHonoRoutes(
+        args.repo as string,
+        args.format as "mermaid" | "tree" | undefined,
+      );
     },
   },
 ];

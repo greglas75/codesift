@@ -21,10 +21,8 @@ import type {
   HonoMethod,
   HonoMount,
   HonoRoute,
-  MiddlewareChain,
   MiddlewareEntry,
   ContextVariable,
-  ContextAccessPoint,
   OpenAPIRoute,
 } from "./hono-model.js";
 
@@ -416,7 +414,7 @@ export class HonoExtractor {
     root: Parser.SyntaxNode,
     file: string,
     appVars: Record<string, HonoApp>,
-    importMap: Map<string, string>,
+    _importMap: Map<string, string>,
     model: HonoAppModel,
   ): void {
     // Build local variable → array declaration map for spread expansion
@@ -556,17 +554,18 @@ export class HonoExtractor {
       importedFrom.startsWith("hono/") ||
       !importedFrom.startsWith(".")
     );
-    return {
+    const entry: MiddlewareEntry = {
       name,
       order,
       line,
       file,
       inline: name === "<inline>",
       is_third_party: isThirdParty,
-      imported_from: importedFrom,
-      expanded_from: expandedFrom,
       conditional: expandedFrom === "some",
     };
+    if (importedFrom) entry.imported_from = importedFrom;
+    if (expandedFrom) entry.expanded_from = expandedFrom;
+    return entry;
   }
 
   /**
@@ -905,7 +904,7 @@ export class HonoExtractor {
    */
   private async walkRouteMounts(
     root: Parser.SyntaxNode,
-    file: string,
+    _file: string,
     parentPrefix: string,
     appVars: Record<string, HonoApp>,
     importMap: Map<string, string>,
@@ -975,7 +974,7 @@ export class HonoExtractor {
     });
 
     // Process mounts — async because recursive parse needs file I/O
-    for (const { mountPath, childVar, line } of mounts) {
+    for (const { mountPath, childVar } of mounts) {
       const childFile = importMap.get(childVar);
       const fullMountPath = joinPaths(parentPrefix, mountPath);
 

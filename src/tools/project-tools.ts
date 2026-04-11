@@ -22,7 +22,7 @@ import type { AstroConventions } from "./astro-config.js";
 export const EXTRACTOR_VERSIONS = {
   stack_detector: "1.0.0",
   file_classifier: "1.0.0",
-  hono: "1.0.0",
+  hono: "2.0.0",
   nestjs: "1.0.0",
   nextjs: "1.0.0",
   express: "1.0.0",
