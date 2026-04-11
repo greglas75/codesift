@@ -1,0 +1,9 @@
+{
+  "handlers": [
+    { "method": "GET", "path": "/api/users" },
+    { "method": "POST", "path": "/api/users" },
+    { "method": "GET", "path": "/api/products/[id]" },
+    { "method": "DELETE", "path": "/api/products/[id]" }
+  ],
+  "total": 4
+}

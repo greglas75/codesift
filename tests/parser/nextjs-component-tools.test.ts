@@ -241,4 +241,91 @@ describe("analyzeNextjsComponents — App Router fixture", () => {
   });
 });
 
+describe("suggested_fix on NextjsComponentEntry", () => {
+  let tmpRoot: string;
+
+  beforeAll(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nextjs-suggested-fix-"));
+    await mkdir(join(tmpRoot, "app"), { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("suggests removing 'use client' directive when no client signals present", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "tmp-unnecessary",
+      root: tmpRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+
+    const filePath = join(tmpRoot, "app", "unnecessary.tsx");
+    await writeFile(
+      filePath,
+      `"use client";\nexport default function Pure() { return <div>hi</div>; }\n`,
+      "utf8",
+    );
+
+    const result = await analyzeNextjsComponents("tmp-unnecessary");
+    const entry = result.files.find((f) => f.path.endsWith("unnecessary.tsx"));
+    expect(entry).toBeDefined();
+    expect(entry!.violations).toContain("unnecessary_use_client");
+    expect(entry!.suggested_fix).toBe(
+      "Remove 'use client' directive (no client signals detected)",
+    );
+  });
+
+  it("suggests adding 'use client' directive when hooks used without it", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "tmp-inferred",
+      root: tmpRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+
+    const filePath = join(tmpRoot, "app", "inferred.tsx");
+    await writeFile(
+      filePath,
+      `import { useState } from "react";\nexport default function Form() { const [v, setV] = useState(""); return <input value={v}/>; }\n`,
+      "utf8",
+    );
+
+    const result = await analyzeNextjsComponents("tmp-inferred");
+    const entry = result.files.find((f) => f.path.endsWith("inferred.tsx"));
+    expect(entry).toBeDefined();
+    expect(entry!.classification).toBe("client_inferred");
+    expect(entry!.suggested_fix).toBe("Add 'use client' directive at top of file");
+  });
+
+  it("omits suggested_fix for pure server components", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "tmp-server",
+      root: tmpRoot,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+
+    const filePath = join(tmpRoot, "app", "server.tsx");
+    await writeFile(
+      filePath,
+      `export default function Page() { return <div>hello</div>; }\n`,
+      "utf8",
+    );
+
+    const result = await analyzeNextjsComponents("tmp-server");
+    const entry = result.files.find((f) => f.path.endsWith("server.tsx"));
+    expect(entry).toBeDefined();
+    expect(entry!.classification).toBe("server");
+    expect(entry!.suggested_fix).toBeUndefined();
+  });
+});
+
 

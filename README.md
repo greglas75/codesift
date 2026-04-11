@@ -404,7 +404,7 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 110 tools to AI agents (44 core + 66 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 116 tools to AI agents (46 core + 70 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 

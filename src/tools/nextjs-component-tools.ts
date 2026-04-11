@@ -41,6 +41,12 @@ export interface NextjsComponentEntry {
   directive: "use client" | "use server" | null;
   signals: ComponentSignals;
   violations: string[];
+  /**
+   * Actionable remediation text for classification violations.
+   * Set when the entry has `unnecessary_use_client` violation or
+   * `client_inferred` classification; omitted otherwise.
+   */
+  suggested_fix?: string;
 }
 
 export interface NextjsComponentsCounts {
@@ -540,11 +546,23 @@ async function classifyAndDetect(
   const signals = detectSignals(tree, source);
   const { classification, violations } = applyClassificationTable(confirmedDirective, signals);
 
-  return {
+  // Q1 — populate actionable suggested_fix for remediable states.
+  let suggested_fix: string | undefined;
+  if (violations.includes("unnecessary_use_client")) {
+    suggested_fix = "Remove 'use client' directive (no client signals detected)";
+  } else if (classification === "client_inferred") {
+    suggested_fix = "Add 'use client' directive at top of file";
+  }
+
+  const entry: NextjsComponentEntry = {
     path: relPath,
     classification,
     directive: confirmedDirective,
     signals,
     violations,
   };
+  if (suggested_fix !== undefined) {
+    entry.suggested_fix = suggested_fix;
+  }
+  return entry;
 }

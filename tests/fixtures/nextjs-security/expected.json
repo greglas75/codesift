@@ -1,0 +1,14 @@
+{
+  "actions": {
+    "secureAction": { "score": 100, "grade": "excellent" },
+    "noAuthAction": { "score": 30, "grade": "poor" },
+    "noValidationAction": { "score": 55, "grade": "needs_work" }
+  },
+  "counts": {
+    "excellent": 1,
+    "good": 0,
+    "needs_work": 1,
+    "poor": 1
+  },
+  "notes": "noValidationAction picks up its 'if (!session) throw' guard as manual validation (medium confidence) — heuristic limitation."
+}

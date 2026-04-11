@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { formatNextjsComponents, formatNextjsRouteMap } from "../../src/formatters.js";
+import { formatNextjsComponents, formatNextjsRouteMap, formatNextjsBoundaryAnalyzer } from "../../src/formatters.js";
+import type { NextjsBoundaryResult } from "../../src/tools/nextjs-boundary-tools.js";
 import type { NextjsComponentsResult } from "../../src/tools/nextjs-component-tools.js";
 import type { NextjsRouteMapResult } from "../../src/tools/nextjs-route-tools.js";
 import { getToolDefinitions, CORE_TOOL_NAMES } from "../../src/register-tools.js";
@@ -122,5 +123,43 @@ describe("nextjs_route_map tool registration", () => {
     expect(entry).toBeDefined();
     expect(entry!.category).toBe("analysis");
     expect(CORE_TOOL_NAMES.has("nextjs_route_map")).toBe(true);
+  });
+});
+
+describe("formatNextjsBoundaryAnalyzer", () => {
+  const sample = (): NextjsBoundaryResult => ({
+    entries: [
+      { rank: 1, path: "app/big.tsx", signals: { loc: 200, import_count: 8, dynamic_import_count: 0, third_party_imports: ["react", "lodash"] }, score: 390 },
+      { rank: 2, path: "app/medium.tsx", signals: { loc: 100, import_count: 4, dynamic_import_count: 1, third_party_imports: ["react"] }, score: 165 },
+      { rank: 3, path: "app/small.tsx", signals: { loc: 30, import_count: 2, dynamic_import_count: 0, third_party_imports: [] }, score: 70 },
+    ],
+    client_count: 3,
+    total_client_loc: 330,
+    largest_offender: null,
+    workspaces_scanned: ["/tmp/x"],
+    parse_failures: [],
+    scan_errors: [],
+    limitations: ["score is signal-based — no actual bundle bytes estimated"],
+  });
+
+  it("renders headers and at least 3 data rows", () => {
+    const out = formatNextjsBoundaryAnalyzer(sample());
+    expect(out).toContain("Rank");
+    expect(out).toContain("Path");
+    expect(out).toContain("LOC");
+    expect(out).toContain("Imports");
+    expect(out).toContain("Score");
+    expect(out).toContain("big.tsx");
+    expect(out).toContain("medium.tsx");
+    expect(out).toContain("small.tsx");
+  });
+});
+
+describe("nextjs_boundary_analyzer registration", () => {
+  it("registers with category 'analysis'", () => {
+    const defs = getToolDefinitions();
+    const entry = defs.find((t) => t.name === "nextjs_boundary_analyzer");
+    expect(entry).toBeDefined();
+    expect(entry!.category).toBe("analysis");
   });
 });

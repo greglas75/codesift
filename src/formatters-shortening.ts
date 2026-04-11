@@ -203,3 +203,76 @@ export function formatNextjsRouteMapCounts(raw: unknown): string {
   const data = raw as NextjsRouteMapRaw;
   return `${data.routes.length} routes, ${data.conflicts.length} conflicts, ${data.workspaces_scanned.length} workspaces`;
 }
+
+// ---------------------------------------------------------------------------
+// Next.js metadata audit (T1)
+// ---------------------------------------------------------------------------
+
+interface NextjsMetadataAuditRaw {
+  total_pages: number;
+  scores: Array<{
+    url_path: string;
+    file_path: string;
+    score: number;
+    grade: string;
+    violations: string[];
+    missing_fields: string[];
+  }>;
+  counts: { excellent: number; good: number; needs_work: number; poor: number };
+  top_issues: string[];
+  workspaces_scanned: string[];
+  parse_failures: string[];
+  scan_errors: string[];
+}
+
+export function formatNextjsMetadataAuditCompact(raw: unknown): string {
+  const data = raw as NextjsMetadataAuditRaw;
+  const lines: string[] = [];
+  lines.push(
+    `${data.total_pages} pages | excellent=${data.counts.excellent} good=${data.counts.good} needs_work=${data.counts.needs_work} poor=${data.counts.poor}`,
+  );
+  if (data.top_issues.length > 0) {
+    lines.push(`Top: ${data.top_issues.slice(0, 5).join(" | ")}`);
+  }
+  // Show top 3 worst-scoring routes
+  const worst = [...data.scores].sort((a, b) => a.score - b.score).slice(0, 3);
+  for (const s of worst) {
+    lines.push(`  ${s.url_path} (${s.score}/${s.grade})`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsMetadataAuditCounts(raw: unknown): string {
+  const data = raw as NextjsMetadataAuditRaw;
+  return `${data.total_pages} pages: excellent=${data.counts.excellent}, good=${data.counts.good}, needs_work=${data.counts.needs_work}, poor=${data.counts.poor}`;
+}
+
+// ---------------------------------------------------------------------------
+// Framework audit (T11)
+// ---------------------------------------------------------------------------
+
+interface FrameworkAuditRaw {
+  summary: {
+    overall_score: number;
+    grade: string;
+    dimensions: Record<string, { score: number; weight: number; contribution: number }>;
+    top_issues: string[];
+  };
+  tool_errors: Array<{ tool: string; error: string }>;
+  duration_ms: number;
+}
+
+export function formatFrameworkAuditCompact(raw: unknown): string {
+  const data = raw as FrameworkAuditRaw;
+  const lines: string[] = [];
+  lines.push(`Score: ${data.summary.overall_score}/100 (${data.summary.grade}) | ${data.duration_ms}ms`);
+  if (data.summary.top_issues.length > 0) {
+    lines.push(`Top: ${data.summary.top_issues.slice(0, 5).join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatFrameworkAuditCounts(raw: unknown): string {
+  const data = raw as FrameworkAuditRaw;
+  return `Score ${data.summary.overall_score}/100 (${data.summary.grade}), ${Object.keys(data.summary.dimensions).length} dimensions, ${data.tool_errors.length} errors`;
+}

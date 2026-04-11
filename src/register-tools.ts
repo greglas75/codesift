@@ -48,6 +48,15 @@ import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.
 import { astroRouteMap } from "./tools/astro-routes.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
 import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
+import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
+import { nextjsAuditServerActions } from "./tools/nextjs-security-tools.js";
+import { nextjsApiContract } from "./tools/nextjs-api-contract-tools.js";
+import { nextjsBoundaryAnalyzer } from "./tools/nextjs-boundary-tools.js";
+import { nextjsLinkIntegrity } from "./tools/nextjs-link-tools.js";
+import { nextjsDataFlow } from "./tools/nextjs-data-flow-tools.js";
+import { nextjsMiddlewareCoverage } from "./tools/nextjs-middleware-coverage-tools.js";
+import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
+import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -67,8 +76,8 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap } from "./formatters.js";
-import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts } from "./formatters-shortening.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow, formatNextjsMiddlewareCoverage, formatFrameworkAudit } from "./formatters.js";
+import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -515,6 +524,8 @@ export const CORE_TOOL_NAMES = new Set([
   "analyze_hono_app",        // core: meta-tool, first call for any Hono project
   // --- Next.js tools ---
   "nextjs_route_map",
+  "nextjs_metadata_audit",
+  "framework_audit",
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -2737,6 +2748,150 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return formatNextjsRouteMap(result);
     },
   },
+  {
+    name: "nextjs_metadata_audit",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs seo metadata title description og image audit canonical twitter json-ld",
+    description: "Audit Next.js page metadata for SEO completeness with per-route scoring. Walks app/page.tsx files, extracts title/description/openGraph/canonical/twitter/JSON-LD via tree-sitter, scores each route 0-100 with a weighted formula, and aggregates a per-grade distribution + top issue list.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      max_routes: z.number().int().positive().optional().describe("Max routes to process (default 1000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsMetadataAudit>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.max_routes != null) opts.max_routes = args.max_routes as number;
+      const result = await nextjsMetadataAudit(args.repo as string ?? "", opts);
+      return formatNextjsMetadataAudit(result);
+    },
+  },
+  {
+    name: "nextjs_audit_server_actions",
+    category: "security" as ToolCategory,
+    searchHint: "nextjs server actions security audit auth validation rate limit zod use server",
+    description: "Audit Next.js Server Actions for security weaknesses across four checks: authorization guards, input validation (Zod-aware), rate limiting, and structured error handling. Per-action weighted scoring (auth 40, validation 30, rate 20, errors 10) with grade buckets.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsAuditServerActions>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.max_files != null) opts.max_files = args.max_files as number;
+      const result = await nextjsAuditServerActions(args.repo as string ?? "", opts);
+      return formatNextjsAuditServerActions(result);
+    },
+  },
+  {
+    name: "nextjs_api_contract",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs api contract route handler openapi method body schema response zod",
+    description: "Extract API handler contracts from Next.js route handlers (App Router app/api/**/route.ts and Pages Router pages/api/**/*.ts). Captures HTTP methods, query params, request body schemas (Zod-aware), response shapes, and inferred status codes per handler.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      max_files: z.number().int().positive().optional().describe("Max files to scan (default 1000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsApiContract>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.max_files != null) opts.max_files = args.max_files as number;
+      const result = await nextjsApiContract(args.repo as string ?? "", opts);
+      return formatNextjsApiContract(result);
+    },
+  },
+  {
+    name: "nextjs_boundary_analyzer",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs client boundary use client component bundle imports loc score",
+    description: "Analyze Next.js client component boundaries — walks `app/**/*.{tsx,jsx}` files marked `\"use client\"`, computes a deterministic ranking score from cheap signals (LOC, import counts, dynamic imports, third-party imports), and returns a top-N list of largest offenders. Score is signal-based, not actual bundle bytes.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      top_n: z.number().int().positive().optional().describe("Number of top entries to return (default 20)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsBoundaryAnalyzer>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.top_n != null) opts.top_n = args.top_n as number;
+      const result = await nextjsBoundaryAnalyzer(args.repo as string ?? "", opts);
+      return formatNextjsBoundaryAnalyzer(result);
+    },
+  },
+  {
+    name: "nextjs_link_integrity",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs link integrity broken navigation Link href router push 404",
+    description: "Cross-reference Next.js navigation refs (<Link href>, router.push/.replace) against the route map to flag broken links. Template-literal hrefs are bucketed as 'unresolved' rather than guessed.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsLinkIntegrity>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.max_files != null) opts.max_files = args.max_files as number;
+      const result = await nextjsLinkIntegrity(args.repo as string ?? "", opts);
+      return formatNextjsLinkIntegrity(result);
+    },
+  },
+  {
+    name: "nextjs_data_flow",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs data flow fetch waterfall cache cookies headers ssr revalidate",
+    description: "Analyze data fetching patterns in Next.js pages: detect fetch waterfalls (sequential awaits in same scope), classify cache strategies (no-cache, cached, ISR), and aggregate per-page data flow with totals.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      url_path: z.string().optional().describe("Filter to a single URL path"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsDataFlow>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.url_path != null) opts.url_path = args.url_path as string;
+      const result = await nextjsDataFlow(args.repo as string ?? "", opts);
+      return formatNextjsDataFlow(result);
+    },
+  },
+  {
+    name: "nextjs_middleware_coverage",
+    category: "security" as ToolCategory,
+    searchHint: "nextjs middleware coverage protected admin auth route matcher security",
+    description: "Cross-reference Next.js routes with middleware matcher config to compute coverage. Flags admin/dashboard routes without middleware protection as high-severity warnings.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      flag_admin_prefix: z.union([z.string(), z.array(z.string())]).optional().describe("Admin path prefix(es) to flag (default: ['/admin', '/dashboard'])"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsMiddlewareCoverage>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.flag_admin_prefix != null) opts.flag_admin_prefix = args.flag_admin_prefix as string | string[];
+      const result = await nextjsMiddlewareCoverage(args.repo as string ?? "", opts);
+      return formatNextjsMiddlewareCoverage(result);
+    },
+  },
+  {
+    name: "framework_audit",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs framework audit meta-tool overall score security metadata routes components",
+    description: "Run all Next.js sub-audits (components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage) and aggregate into a unified weighted overall score with grade. Use as a single first-call for any Next.js project.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      tools: z.array(z.string()).optional().describe("Subset of tools to run (default: all 9). Names: components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof frameworkAudit>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.tools != null) opts.tools = args.tools as AuditDimension[];
+      const result = await frameworkAudit(args.repo as string ?? "", opts);
+      return formatFrameworkAudit(result);
+    },
+  },
 
   // ── SQL analysis tools (hidden/discoverable) ─────────────
   {
@@ -3048,6 +3203,8 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
   registerShortener("analyze_hotspots", { compact: formatHotspotsCompact, counts: formatHotspotsCounts });
   registerShortener("trace_route", { compact: formatTraceRouteCompact, counts: formatTraceRouteCounts });
   registerShortener("nextjs_route_map", { compact: formatNextjsRouteMapCompact, counts: formatNextjsRouteMapCounts });
+  registerShortener("nextjs_metadata_audit", { compact: formatNextjsMetadataAuditCompact, counts: formatNextjsMetadataAuditCounts });
+  registerShortener("framework_audit", { compact: formatFrameworkAuditCompact, counts: formatFrameworkAuditCounts });
   registerShortener("get_session_context", {
     compact: (text: string) => {
       try {

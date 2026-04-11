@@ -278,6 +278,81 @@ describe("nextjsRouteMap orchestrator", () => {
     }
   });
 
+  it("rendering_reason reports cookies() call as SSR trigger", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "rendering-reason-"));
+    try {
+      const rel = "app/profile/page.tsx";
+      const abs = join(tmpRoot, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(
+        abs,
+        `import { cookies } from 'next/headers';\nexport default async function Page() {\n  const jar = cookies();\n  return <div>{jar.get('session')?.value}</div>;\n}\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.rendering).toBe("ssr");
+      expect(entry.rendering_reason).toBeDefined();
+      expect(entry.rendering_reason!).toMatch(/cookies\(\)/);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rendering_reason reports fetch no-store as SSR trigger", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "rendering-reason-"));
+    try {
+      const rel = "app/feed/page.tsx";
+      const abs = join(tmpRoot, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(
+        abs,
+        `export default async function Page() {\n  const res = await fetch('/api/feed', { cache: 'no-store' });\n  return <div>{await res.text()}</div>;\n}\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.rendering).toBe("ssr");
+      expect(entry.rendering_reason).toBeDefined();
+      expect(entry.rendering_reason!).toMatch(/no-store/);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rendering_reason reports dynamic=force-dynamic config export", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "rendering-reason-"));
+    try {
+      const rel = "app/dashboard/page.tsx";
+      const abs = join(tmpRoot, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(
+        abs,
+        `export const dynamic = "force-dynamic";\nexport default function Page() { return <div>hi</div>; }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.rendering).toBe("ssr");
+      expect(entry.rendering_reason).toBeDefined();
+      expect(entry.rendering_reason!).toMatch(/force-dynamic/);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rendering_reason is undefined for static pages", async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), "rendering-reason-"));
+    try {
+      const rel = "app/about/page.tsx";
+      const abs = join(tmpRoot, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(
+        abs,
+        `export default function Page() { return <div>static</div>; }\n`,
+      );
+      const entry = await parseRouteFile(abs, tmpRoot, "app");
+      expect(entry.rendering).toBe("static");
+      expect(entry.rendering_reason).toBeUndefined();
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("detects hybrid conflict when same URL exists in both routers", async () => {
     // Monorepo: two workspaces under apps/
     const root = await makeRepo({
