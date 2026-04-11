@@ -82,6 +82,23 @@ Use this table to pick the right tool for each task:
 | data fetch waterfalls | `nextjs_data_flow` |
 | middleware coverage gaps | `nextjs_middleware_coverage` |
 | server vs client classify | `analyze_nextjs_components` |
+| Python project health audit | `python_audit` (compound: 8 checks, health score) |
+| Django/Flask/FastAPI routes | `trace_route(path="/api/users")` |
+| Python anti-patterns | `search_patterns("mutable-default"\|"bare-except"\|"eval-exec"\|"shell-true"\|"pickle-load"\|"n-plus-one-django")` |
+| async/await pitfalls | `analyze_async_correctness` (blocking requests/sleep, sync ORM in async) |
+| FastAPI Depends() graph | `trace_fastapi_depends` (Security, scopes, yield deps) |
+| Pydantic model schemas | `get_pydantic_models(output_format="mermaid")` |
+| Django/SQLAlchemy ORM graph | `get_model_graph` |
+| Django settings security audit | `analyze_django_settings` (15 checks) |
+| pytest fixture graph | `get_test_fixtures` (conftest hierarchy, scope, autouse) |
+| Celery task + canvas tracing | `trace_celery_chain` (orphan task detection) |
+| Django signals / Celery / middleware | `find_framework_wiring` |
+| Python cross-module callers | `find_python_callers(target_name=)` |
+| Python circular imports | `find_python_circular_imports` (TYPE_CHECKING-aware) |
+| run Ruff on Python | `run_ruff(categories=["B","PERF","SIM","S"])` |
+| run mypy / pyright | `run_mypy` or `run_pyright` |
+| parse pyproject.toml | `parse_pyproject` |
+| Python dep freshness + CVEs | `analyze_python_deps(check_pypi=true, check_vulns=true)` |
 
 ## When to Use (Situational Triggers)
 
