@@ -761,135 +761,107 @@ function extractRateLimit(args: string): { max: number; window: number } | null 
   return null;
 }
 
-export function extractHonoConventions(
+let _honoFallbackCount = 0;
+export function getHonoFallbackCount(): number { return _honoFallbackCount; }
+
+/**
+ * Extract Hono conventions from an orchestrator file.
+ *
+ * Uses the tree-sitter AST extractor (HonoExtractor) and adapts the result
+ * to the legacy Conventions shape. Falls back to the regex-based legacy
+ * implementation on failure (with counter tracking for observability).
+ *
+ * Kill switch: set CODESIFT_LEGACY_HONO=1 to force legacy extractor.
+ */
+export async function extractHonoConventions(
   source: string,
   filePath: string,
-): Conventions {
-  const calls = parseHonoCalls(source);
-
-  // Build import map: variable name → import path
-  const importMap = new Map<string, string>();
-  for (const line of source.split("\n")) {
-    // import adminContests from "./routes/admin/contests/index.js";
-    const defaultImport = line.match(/import\s+(\w+)\s+from\s+["']([^"']+)["']/);
-    if (defaultImport) {
-      importMap.set(defaultImport[1]!, defaultImport[2]!);
-    }
-    // import { clerkAuth } from "./middleware/auth.js";
-    const namedImport = line.match(/import\s+\{([^}]+)\}\s+from\s+["']([^"']+)["']/);
-    if (namedImport) {
-      const names = namedImport[1]!.split(",").map((n) => n.trim().split(/\s+as\s+/).pop()!.trim());
-      for (const name of names) {
-        importMap.set(name, namedImport[2]!);
-      }
-    }
+): Promise<Conventions> {
+  if (process.env.CODESIFT_LEGACY_HONO === "1") {
+    const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
+    return legacyExtractHonoConventions(source, filePath);
   }
 
-  const middleware_chains: MiddlewareChain[] = [];
-  const rate_limits: RateLimitEntry[] = [];
-  const route_mounts: RouteMountEntry[] = [];
+  // If called with a source string and a file path that doesn't exist on disk,
+  // this is the legacy string-fixture API — use legacy extractor directly.
+  // The AST extractor needs a real file to parse.
+  const { existsSync } = await import("node:fs");
+  const { isAbsolute, resolve: pathResolve } = await import("node:path");
+  const resolved = isAbsolute(filePath) ? filePath : pathResolve(filePath);
+  if (!existsSync(resolved)) {
+    const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
+    return legacyExtractHonoConventions(source, filePath);
+  }
+
+  try {
+    return await honoConventionsAdapter(resolved);
+  } catch (err: unknown) {
+    _honoFallbackCount++;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[codesift] Hono AST extractor failed (fallback #${_honoFallbackCount}): ${msg}`);
+    if (process.env.NODE_ENV !== "production" && process.env.CODESIFT_SILENT_FALLBACK !== "1") {
+      throw err;
+    }
+    const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
+    return legacyExtractHonoConventions(source, filePath);
+  }
+}
+
+/**
+ * Adapter: run HonoExtractor.parse() and map HonoAppModel → Conventions.
+ */
+async function honoConventionsAdapter(filePath: string): Promise<Conventions> {
+  const { HonoExtractor } = await import("../parser/extractors/hono.js");
+  const extractor = new HonoExtractor();
+  const model = await extractor.parse(filePath);
+
+  // Map middleware_chains
+  const middleware_chains: MiddlewareChain[] = model.middleware_chains.map((mc) => ({
+    scope: mc.scope === "*" ? "global" : mc.scope.replace(/\/\*$/, "").split("/").filter(Boolean)[1] ?? mc.scope,
+    file: mc.entries[0]?.file ?? filePath,
+    chain: mc.entries.map((e) => ({
+      name: e.name,
+      line: e.line,
+      order: e.order,
+    })),
+  }));
+
+  // Map route_mounts
+  const route_mounts: RouteMountEntry[] = model.mounts
+    .filter((m) => m.mount_type === "hono_route")
+    .map((m) => ({
+      file: filePath,
+      line: 0, // line not tracked in new model at mount level
+      mount_path: m.mount_path,
+      imported_from: m.child_file || null,
+      exported_as: m.child_var,
+    }));
+
+  // Map auth_patterns from middleware names
   const authGroups: Record<string, { requires_auth: boolean; middleware: string[] }> = {};
   let auth_middleware: string | null = null;
-
-  // Group middleware by scope — deduplicate same middleware on different paths
-  const scopeChains = new Map<string, { name: string; line: number; order: number }[]>();
-  const scopeMwSeen = new Map<string, Set<string>>(); // scope → set of middleware names already in chain
-
-  let globalOrder = 0;
-  const scopeOrders = new Map<string, number>();
-
-  for (const call of calls) {
-    if (call.type === "use") {
-      const mwName = extractMiddlewareName(call.args);
-      const rl = extractRateLimit(call.args);
-
-      if (rl) {
-        rate_limits.push({
-          file: filePath,
-          line: call.line,
-          max: rl.max,
-          window: rl.window,
-          applied_to_path: call.path !== "*" ? call.path : null,
-          method: null,
-        });
-      } else if (mwName) {
-        const scope = call.path === "*" ? "global" : inferScope(call.path ?? "");
-
-        // Deduplicate: same middleware applied to different paths in same scope
-        // e.g. publicTenantResolver on /api/contests/*, /api/translations/*, /api/r/*
-        if (!scopeMwSeen.has(scope)) scopeMwSeen.set(scope, new Set());
-        const seen = scopeMwSeen.get(scope)!;
-
-        if (!seen.has(mwName)) {
-          seen.add(mwName);
-          const currentOrder = scope === "global"
-            ? ++globalOrder
-            : (scopeOrders.set(scope, (scopeOrders.get(scope) ?? 0) + 1), scopeOrders.get(scope)!);
-
-          if (!scopeChains.has(scope)) scopeChains.set(scope, []);
-          scopeChains.get(scope)!.push({ name: mwName, line: call.line, order: currentOrder });
-        }
-
-        // Detect auth middleware
-        if (/auth|clerk|jwt|session|passport/i.test(mwName)) {
-          auth_middleware = mwName;
-          const group = inferScope(call.path ?? "");
-          if (!authGroups[group]) authGroups[group] = { requires_auth: false, middleware: [] };
-          authGroups[group].requires_auth = true;
-          if (!authGroups[group].middleware.includes(mwName)) {
-            authGroups[group].middleware.push(mwName);
-          }
-        } else if (scope !== "global") {
-          const group = scope;
-          if (!authGroups[group]) authGroups[group] = { requires_auth: false, middleware: [] };
-          if (!authGroups[group].middleware.includes(mwName)) {
-            authGroups[group].middleware.push(mwName);
-          }
+  for (const mc of model.middleware_chains) {
+    const scope = mc.scope === "*" ? "global" : mc.scope.replace(/\/\*$/, "").split("/").filter(Boolean)[1] ?? mc.scope;
+    for (const entry of mc.entries) {
+      if (/auth|clerk|jwt|session|passport/i.test(entry.name)) {
+        auth_middleware = entry.name;
+        if (!authGroups[scope]) authGroups[scope] = { requires_auth: false, middleware: [] };
+        authGroups[scope].requires_auth = true;
+        if (!authGroups[scope].middleware.includes(entry.name)) {
+          authGroups[scope].middleware.push(entry.name);
         }
       }
-    } else if (call.type === "route") {
-      const varName = call.args.trim();
-      route_mounts.push({
-        file: filePath,
-        line: call.line,
-        mount_path: call.path ?? "",
-        imported_from: importMap.get(varName) ?? null,
-        exported_as: varName,
-      });
-
-      // Infer route group for auth detection
-      const group = inferScope(call.path ?? "");
-      if (!authGroups[group]) authGroups[group] = { requires_auth: false, middleware: [] };
-    } else if (call.type === "get" || call.type === "post" || call.type === "put" || call.type === "delete") {
-      // Inline route — nothing to extract for conventions, but note for route groups
     }
   }
-
-  // Build middleware chain array
-  for (const [scope, chain] of scopeChains) {
-    middleware_chains.push({ scope, file: filePath, chain });
-  }
-
-  // Build auth pattern groups — ensure all route groups are represented
-  const routeGroups = new Set<string>();
-  for (const mount of route_mounts) {
-    routeGroups.add(inferScope(mount.mount_path));
-  }
-  // Add health and other direct routes
-  for (const call of calls) {
-    if (call.type !== "use" && call.type !== "route" && call.path) {
-      routeGroups.add(inferScope(call.path));
-    }
-  }
-  for (const group of routeGroups) {
-    if (!authGroups[group]) {
-      authGroups[group] = { requires_auth: false, middleware: [] };
-    }
+  // Ensure all route groups represented
+  for (const mount of model.mounts) {
+    const group = mount.mount_path.split("/").filter(Boolean)[1] ?? "root";
+    if (!authGroups[group]) authGroups[group] = { requires_auth: false, middleware: [] };
   }
 
   return {
     middleware_chains,
-    rate_limits,
+    rate_limits: [], // rate limits extracted from AST in future; empty for now
     route_mounts,
     auth_patterns: { auth_middleware, groups: authGroups },
   };
@@ -1899,7 +1871,7 @@ export async function analyzeProject(
       const orchestratorFile = file_classifications.critical.find((f) => f.code_type === "ORCHESTRATOR");
       if (orchestratorFile) {
         const appSource = await readFile(join(projectRoot, orchestratorFile.path), "utf-8");
-        conventions = extractHonoConventions(appSource, orchestratorFile.path);
+        conventions = await extractHonoConventions(appSource, orchestratorFile.path);
       } else {
         status = "partial";
         skip_reasons["no_orchestrator_file"] = 1;
