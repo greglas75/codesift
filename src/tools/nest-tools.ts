@@ -485,6 +485,43 @@ function parseUseFilters(source: string): string[] {
   return results;
 }
 
+/** Built-in NestJS decorators that should NOT be reported as custom metadata */
+const BUILTIN_DECORATORS = new Set([
+  "Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All",
+  "Controller", "Injectable", "Module", "Global",
+  "UseGuards", "UseInterceptors", "UsePipes", "UseFilters",
+  "Param", "Body", "Query", "Headers", "Req", "Res", "Next", "Ip", "Session", "HostParam",
+  "Version", "ApiOperation", "ApiBearerAuth", "ApiTags", "ApiResponse", "ApiProperty", "ApiParam", "ApiBody", "ApiQuery",
+  "HealthCheck", "HealthIndicator",
+  "Catch", "Optional", "Inject", "InjectRepository", "InjectModel",
+  "Resolver", "Query" /*gql*/, "Mutation", "Subscription", "Args", "ResolveField",
+  "WebSocketGateway", "SubscribeMessage", "MessageBody", "ConnectedSocket",
+  "MessagePattern", "EventPattern", "Payload", "Ctx",
+  "Cron", "Interval", "Timeout", "OnEvent",
+  "Entity", "Column", "PrimaryGeneratedColumn", "PrimaryColumn", "OneToMany", "ManyToOne", "OneToOne", "ManyToMany",
+  "JoinColumn", "JoinTable", "CreateDateColumn", "UpdateDateColumn", "DeleteDateColumn", "Index", "Unique",
+]);
+
+/**
+ * G4: Parse custom decorators on methods (e.g. @Roles('admin'), @Public(), @CurrentUser()).
+ * Returns decorator name + raw argument string (may be empty).
+ * Excludes built-in NestJS decorators (BUILTIN_DECORATORS set).
+ */
+function parseCustomDecorators(source: string): Array<{ name: string; args: string }> {
+  const results: Array<{ name: string; args: string }> = [];
+  // Match @PascalCase(args) — capture name and argument text
+  const re = /@([A-Z]\w*)\s*\(([^)]*)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const name = m[1]!;
+    if (BUILTIN_DECORATORS.has(name)) continue;
+    // Strip quotes from simple string args for readable output
+    const args = m[2]!.trim().replace(/^['"`]|['"`]$/g, "");
+    results.push({ name, args });
+  }
+  return results;
+}
+
 type ChainItem = NestGuardChainEntry["chain"][number];
 
 /** G1: glob-like matching for NestJS middleware forRoutes against resolved route paths */
@@ -598,6 +635,14 @@ export async function nestGuardChain(
       const methodPipes: ChainItem[] = parseUsePipes(methodCtx).map((n) => ({ layer: "method" as const, type: "pipe" as const, name: n }));
       const methodFilters: ChainItem[] = parseUseFilters(methodCtx).map((n) => ({ layer: "method" as const, type: "filter" as const, name: n }));
 
+      // G4: custom decorators (e.g. @Roles('admin'), @Public()) — method-level only
+      const methodMetadata: ChainItem[] = parseCustomDecorators(methodCtx).map((d) => ({
+        layer: "method" as const,
+        type: "metadata" as const,
+        name: d.name,
+        ...(d.args ? { args: d.args } : {}),
+      }));
+
       // G1: match middleware entries against this route
       const middlewareChain: ChainItem[] = [];
       for (const mw of middlewareEntries) {
@@ -614,7 +659,7 @@ export async function nestGuardChain(
         method: mm.method.toUpperCase(),
         controller: ctrlClass,
         file: file.path,
-        chain: [...globalChain, ...middlewareChain, ...ctrlLevelChain, ...methodGuards, ...methodInterceptors, ...methodPipes, ...methodFilters],
+        chain: [...globalChain, ...middlewareChain, ...ctrlLevelChain, ...methodGuards, ...methodInterceptors, ...methodPipes, ...methodFilters, ...methodMetadata],
       });
     }
   }

@@ -674,6 +674,42 @@ export class TestController {
     expect(ctrlGuards).toEqual([]);
   });
 
+  it("G4: custom decorators appear in chain as metadata", async () => {
+    await writeFile(join(tmpRoot, "src/admin.controller.ts"), `
+import { Controller, Get } from '@nestjs/common';
+import { Roles } from './roles.decorator';
+import { Public } from './public.decorator';
+
+@Controller('admin')
+export class AdminController {
+  @Roles('admin')
+  @Get('users')
+  listUsers() { return []; }
+
+  @Public()
+  @Get('status')
+  status() { return 'ok'; }
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/admin.controller.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestGuardChain("test-repo");
+    const adminRoute = result.routes.find((r) => r.route === "/admin/users");
+    expect(adminRoute).toBeDefined();
+    const rolesEntry = adminRoute!.chain.find((c) => c.name === "Roles");
+    expect(rolesEntry).toBeDefined();
+    expect(rolesEntry!.layer).toBe("method");
+    expect(rolesEntry!.type).toBe("metadata");
+    expect(rolesEntry!.args).toBe("admin");
+
+    const statusRoute = result.routes.find((r) => r.route === "/admin/status");
+    expect(statusRoute).toBeDefined();
+    const publicEntry = statusRoute!.chain.find((c) => c.name === "Public");
+    expect(publicEntry).toBeDefined();
+    expect(publicEntry!.type).toBe("metadata");
+  });
+
   it("G1: middleware-based auth appears in guard chain", async () => {
     // Module with middleware.configure(consumer) applying AuthMiddleware to users/*
     await writeFile(join(tmpRoot, "src/app.module.ts"), `
