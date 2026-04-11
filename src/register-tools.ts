@@ -60,6 +60,17 @@ import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
 import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
+import { getModelGraph } from "./tools/model-tools.js";
+import { getTestFixtures } from "./tools/pytest-tools.js";
+import { findFrameworkWiring } from "./tools/wiring-tools.js";
+import { runRuff } from "./tools/ruff-tools.js";
+import { parsePyproject } from "./tools/pyproject-tools.js";
+import { findPythonCallers } from "./tools/python-callers.js";
+import { analyzeDjangoSettings } from "./tools/django-settings.js";
+import { traceCeleryChain } from "./tools/celery-tools.js";
+import { runMypy, runPyright } from "./tools/typecheck-tools.js";
+import { analyzePythonDeps } from "./tools/python-deps-analyzer.js";
+import { findPythonCircularImports } from "./tools/python-circular-imports.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
@@ -3126,6 +3137,40 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       }
       if (result.warnings.length > 0) {
         parts.push(`Warnings: ${result.warnings.join("; ")}`);
+      }
+      return parts.join("\n");
+    },
+  },
+  {
+    name: "diff_migrations",
+    category: "analysis" as ToolCategory,
+    searchHint: "migration diff SQL destructive DROP ALTER ADD schema change deploy risk",
+    description: "Scan SQL migration files and classify operations as additive (CREATE TABLE), modifying (ALTER ADD), or destructive (DROP TABLE, DROP COLUMN, TRUNCATE). Flags deploy risks.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Scope to migration files matching pattern"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { diffMigrations } = await import("./tools/sql-tools.js");
+      const result = await diffMigrations(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Migration ops: ${result.summary.additive + result.summary.modifying + result.summary.destructive} across ${result.summary.total_files} files`);
+      parts.push(`  additive:    ${result.summary.additive}`);
+      parts.push(`  modifying:   ${result.summary.modifying}`);
+      parts.push(`  destructive: ${result.summary.destructive}`);
+      if (result.destructive.length > 0) {
+        parts.push("\n⚠ DESTRUCTIVE:");
+        for (const d of result.destructive) {
+          parts.push(`  [${d.severity.toUpperCase()}] ${d.operation} ${d.target}  (${d.file}:${d.line})`);
+        }
+      }
+      if (result.modifying.length > 0) {
+        parts.push("\nModifying:");
+        for (const m of result.modifying.slice(0, 20)) {
+          parts.push(`  ${m.operation} ${m.target}  (${m.file}:${m.line})`);
+        }
       }
       return parts.join("\n");
     },
