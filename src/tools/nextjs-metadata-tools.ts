@@ -7,7 +7,17 @@
  * distribution and top issues.
  */
 
-import type { MetadataFields } from "../utils/nextjs.js";
+import { readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
+import {
+  deriveUrlPath,
+  discoverWorkspaces,
+  parseMetadataExport,
+  type MetadataFields,
+} from "../utils/nextjs.js";
+import { parseFile } from "../parser/parser-manager.js";
+import { walkDirectory } from "../utils/walk.js";
+import { getCodeIndex } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,12 +167,159 @@ export function scoreMetadata(fields: MetadataFields): MetadataScore {
 }
 
 // ---------------------------------------------------------------------------
-// Stub orchestrator (Task 10 wires this)
+// Orchestrator (Task 10)
 // ---------------------------------------------------------------------------
 
+const PAGE_FILENAME_RE = /(^|\/)page\.(tsx|jsx|ts|js)$/;
+const PAGE_EXTS = new Set([".tsx", ".jsx", ".ts", ".js"]);
+const DEFAULT_MAX_ROUTES = 1000;
+const PARSE_CONCURRENCY = 10;
+const MAX_FILE_SIZE_BYTES = 2_097_152;
+
+/** Compute the union of present-but-zero / missing fields per the scorer rubric. */
+function missingFieldsFor(fields: MetadataFields, score: MetadataScore): string[] {
+  const missing: string[] = [];
+  if (!fields.title) missing.push("title");
+  if (!fields.description) missing.push("description");
+  if (!fields.openGraph?.images?.[0]) missing.push("og_image");
+  if (!fields.alternates?.canonical) missing.push("canonical");
+  if (!fields.twitter?.card) missing.push("twitter");
+  if (!fields.other || Object.keys(fields.other).length === 0) missing.push("json_ld");
+  // Length-gate violations also count as missing for reporter purposes.
+  if (score.violations.includes("title_too_short") && !missing.includes("title")) {
+    missing.push("title");
+  }
+  if (score.violations.includes("description_too_short") && !missing.includes("description")) {
+    missing.push("description");
+  }
+  return missing;
+}
+
+/**
+ * Audit a Next.js project's metadata coverage. Walks app/page.* files,
+ * extracts metadata via tree-sitter, scores each page, and returns a per-route
+ * + aggregate report.
+ */
 export async function nextjsMetadataAudit(
-  _repo: string,
-  _options?: NextjsMetadataAuditOptions,
+  repo: string,
+  options?: NextjsMetadataAuditOptions,
 ): Promise<NextjsMetadataAuditResult> {
-  throw new Error("not implemented");
+  if (process.env.CODESIFT_DISABLE_TOOLS?.includes("nextjs_metadata_audit")) {
+    throw new Error("nextjs_metadata_audit is disabled via CODESIFT_DISABLE_TOOLS");
+  }
+
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository not found: ${repo}. Run index_folder first.`);
+  }
+  const projectRoot = index.root;
+
+  // Resolve workspaces
+  let workspaces: string[];
+  if (options?.workspace) {
+    workspaces = [join(projectRoot, options.workspace)];
+  } else {
+    const discovered = await discoverWorkspaces(projectRoot);
+    workspaces = discovered.length > 0 ? discovered.map((w) => w.root) : [projectRoot];
+  }
+
+  const maxRoutes = options?.max_routes ?? DEFAULT_MAX_ROUTES;
+  const scores: NextjsMetadataAuditEntry[] = [];
+  const parse_failures: string[] = [];
+  const scan_errors: string[] = [];
+  const workspaces_scanned: string[] = [];
+  const top_issues_counter = new Map<string, number>();
+
+  for (const workspace of workspaces) {
+    workspaces_scanned.push(workspace);
+
+    const candidates: string[] = [];
+    for (const appDir of ["app", "src/app"]) {
+      const fullAppDir = join(workspace, appDir);
+      try {
+        const walked = await walkDirectory(fullAppDir, {
+          followSymlinks: true,
+          fileFilter: (ext) => PAGE_EXTS.has(ext),
+          maxFileSize: MAX_FILE_SIZE_BYTES,
+        });
+        for (const f of walked) {
+          if (PAGE_FILENAME_RE.test(f)) candidates.push(f);
+        }
+      } catch (err) {
+        scan_errors.push(`${fullAppDir}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const remaining = maxRoutes - scores.length;
+    const toProcess = candidates.slice(0, Math.max(0, remaining));
+
+    for (let i = 0; i < toProcess.length; i += PARSE_CONCURRENCY) {
+      const chunk = toProcess.slice(i, i + PARSE_CONCURRENCY);
+      const entries = await Promise.all(
+        chunk.map(async (filePath) => {
+          try {
+            const rel = relative(projectRoot, filePath);
+            const source = await readFile(filePath, "utf8");
+            const tree = await parseFile(filePath, source);
+            if (!tree) {
+              parse_failures.push(rel);
+              return null;
+            }
+            const fields = parseMetadataExport(tree, source);
+            const score = scoreMetadata(fields);
+            const missing_fields = missingFieldsFor(fields, score);
+            const url_path = deriveUrlPath(rel, "app");
+            const entry: NextjsMetadataAuditEntry = {
+              url_path,
+              file_path: rel,
+              score: score.score,
+              grade: score.grade,
+              violations: score.violations,
+              missing_fields,
+            };
+            return entry;
+          } catch (err) {
+            const rel = relative(projectRoot, filePath);
+            parse_failures.push(`${rel}: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          }
+        }),
+      );
+      for (const e of entries) {
+        if (!e) continue;
+        scores.push(e);
+        for (const v of e.violations) {
+          top_issues_counter.set(v, (top_issues_counter.get(v) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Aggregate counts by grade
+  const counts: NextjsMetadataAuditCounts = {
+    excellent: 0,
+    good: 0,
+    needs_work: 0,
+    poor: 0,
+  };
+  for (const s of scores) {
+    counts[s.grade]++;
+  }
+
+  // Sort top issues by frequency desc, take top 5
+  const top_issues = [...top_issues_counter.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([violation, count]) => `${violation} (${count})`);
+
+  return {
+    total_pages: scores.length,
+    scores,
+    counts,
+    top_issues,
+    workspaces_scanned,
+    parse_failures,
+    scan_errors,
+    limitations: ["does not check remote Open Graph image resolution"],
+  };
 }
