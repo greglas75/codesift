@@ -1,6 +1,7 @@
 import { readFile, readdir, access } from "node:fs/promises";
 import { join, dirname, relative, basename } from "node:path";
 import picomatch from "picomatch";
+import type Parser from "web-tree-sitter";
 import { parseFile } from "../parser/parser-manager.js";
 
 /** Maximum bytes to read when scanning for a directive. */
@@ -308,4 +309,250 @@ export async function traceMiddleware(
 
   const applies = matchesMatcher(matchers, urlPath);
   return { file: mwRelPath, matchers, applies };
+}
+
+// ---------------------------------------------------------------------------
+// Metadata export extraction (T1 helper)
+// ---------------------------------------------------------------------------
+
+export interface MetadataFields {
+  title?: string;
+  description?: string;
+  openGraph?: {
+    title?: string;
+    description?: string;
+    images?: string[];
+  };
+  twitter?: {
+    card?: string;
+    title?: string;
+    description?: string;
+  };
+  alternates?: {
+    canonical?: string;
+  };
+  robots?: string;
+  other?: Record<string, unknown>;
+  /** Set when the metadata export references an identifier or a non-literal expression. */
+  _non_literal?: boolean;
+}
+
+/** Unwrap a tree-sitter string node (e.g. `"foo"`, `'foo'`, `` `foo` ``) to its literal content, or null. */
+function readStringLiteral(node: Parser.SyntaxNode | null | undefined): string | null {
+  if (!node) return null;
+  if (node.type === "string") {
+    // Look for string_fragment child first (quoted string)
+    const frag = node.namedChildren.find((c) => c.type === "string_fragment");
+    if (frag) return frag.text;
+    const raw = node.text;
+    if (raw.length >= 2) return raw.slice(1, -1);
+    return raw;
+  }
+  if (node.type === "template_string") {
+    // Only accept fully-literal template strings (no substitutions)
+    const hasSubs = node.namedChildren.some((c) => c.type === "template_substitution");
+    if (hasSubs) return null;
+    const raw = node.text;
+    if (raw.length >= 2) return raw.slice(1, -1);
+    return raw;
+  }
+  return null;
+}
+
+/** Extract a string-literal array (e.g. `["a","b"]`) into a string[]. Returns null if any element is non-literal. */
+function readStringArray(node: Parser.SyntaxNode | null | undefined): string[] | null {
+  if (!node || node.type !== "array") return null;
+  const out: string[] = [];
+  for (const el of node.namedChildren) {
+    const s = readStringLiteral(el);
+    if (s === null) return null;
+    out.push(s);
+  }
+  return out;
+}
+
+/** Walk an object literal node and return a map of literal key -> child value node. */
+function readObjectPairs(
+  node: Parser.SyntaxNode,
+): Map<string, Parser.SyntaxNode> {
+  const map = new Map<string, Parser.SyntaxNode>();
+  if (node.type !== "object") return map;
+  for (const pair of node.namedChildren) {
+    if (pair.type !== "pair") continue;
+    const key = pair.childForFieldName("key") ?? pair.namedChild(0);
+    if (!key) continue;
+    let keyText: string | null = null;
+    if (key.type === "property_identifier" || key.type === "identifier") {
+      keyText = key.text;
+    } else if (key.type === "string") {
+      keyText = readStringLiteral(key);
+    }
+    if (!keyText) continue;
+    const value = pair.childForFieldName("value") ?? pair.namedChild(1);
+    if (value) map.set(keyText, value);
+  }
+  return map;
+}
+
+/** Read known metadata fields off an object-literal node into the MetadataFields shape. */
+function readMetadataObject(obj: Parser.SyntaxNode): MetadataFields {
+  const out: MetadataFields = {};
+  if (obj.type !== "object") return out;
+  const pairs = readObjectPairs(obj);
+
+  const title = pairs.get("title");
+  if (title) {
+    const s = readStringLiteral(title);
+    if (s !== null) out.title = s;
+  }
+
+  const description = pairs.get("description");
+  if (description) {
+    const s = readStringLiteral(description);
+    if (s !== null) out.description = s;
+  }
+
+  const robots = pairs.get("robots");
+  if (robots) {
+    const s = readStringLiteral(robots);
+    if (s !== null) out.robots = s;
+  }
+
+  const openGraph = pairs.get("openGraph");
+  if (openGraph && openGraph.type === "object") {
+    const ogPairs = readObjectPairs(openGraph);
+    const og: NonNullable<MetadataFields["openGraph"]> = {};
+    const ogTitle = ogPairs.get("title");
+    if (ogTitle) {
+      const s = readStringLiteral(ogTitle);
+      if (s !== null) og.title = s;
+    }
+    const ogDesc = ogPairs.get("description");
+    if (ogDesc) {
+      const s = readStringLiteral(ogDesc);
+      if (s !== null) og.description = s;
+    }
+    const ogImages = ogPairs.get("images");
+    if (ogImages) {
+      const arr = readStringArray(ogImages);
+      if (arr) og.images = arr;
+    }
+    out.openGraph = og;
+  }
+
+  const twitter = pairs.get("twitter");
+  if (twitter && twitter.type === "object") {
+    const tPairs = readObjectPairs(twitter);
+    const tw: NonNullable<MetadataFields["twitter"]> = {};
+    const tCard = tPairs.get("card");
+    if (tCard) {
+      const s = readStringLiteral(tCard);
+      if (s !== null) tw.card = s;
+    }
+    const tTitle = tPairs.get("title");
+    if (tTitle) {
+      const s = readStringLiteral(tTitle);
+      if (s !== null) tw.title = s;
+    }
+    const tDesc = tPairs.get("description");
+    if (tDesc) {
+      const s = readStringLiteral(tDesc);
+      if (s !== null) tw.description = s;
+    }
+    out.twitter = tw;
+  }
+
+  const alternates = pairs.get("alternates");
+  if (alternates && alternates.type === "object") {
+    const aPairs = readObjectPairs(alternates);
+    const alt: NonNullable<MetadataFields["alternates"]> = {};
+    const canonical = aPairs.get("canonical");
+    if (canonical) {
+      const s = readStringLiteral(canonical);
+      if (s !== null) alt.canonical = s;
+    }
+    out.alternates = alt;
+  }
+
+  const other = pairs.get("other");
+  if (other && other.type === "object") {
+    // Store the raw text; callers treat this as opaque "any custom fields exist" marker.
+    out.other = { _raw: other.text };
+  }
+
+  return out;
+}
+
+/**
+ * Parse a Next.js page/layout for `metadata` or `generateMetadata` exports.
+ *
+ * Supports two shapes:
+ *   - `export const metadata = { title: "...", ... }`
+ *   - `export async function generateMetadata() { return { ... }; }`
+ *
+ * Returns an empty object when no metadata export is present, and sets
+ * `_non_literal: true` when the export exists but is not a parseable object
+ * literal (e.g. `export const metadata = someExternal`).
+ */
+export function parseMetadataExport(tree: Parser.Tree, _source: string): MetadataFields {
+  const root = tree.rootNode;
+  const exportStatements = root.descendantsOfType("export_statement");
+
+  // Pass 1: look for `export const metadata = ...`
+  for (const exp of exportStatements) {
+    for (const decl of exp.descendantsOfType("variable_declarator")) {
+      const name = decl.childForFieldName("name");
+      if (name?.text !== "metadata") continue;
+      const value = decl.childForFieldName("value");
+      if (!value) return { _non_literal: true };
+      if (value.type !== "object") return { _non_literal: true };
+      return readMetadataObject(value);
+    }
+  }
+
+  // Pass 2: look for `export async function generateMetadata` (or variant).
+  for (const exp of exportStatements) {
+    const fnDecl = exp.descendantsOfType("function_declaration")[0];
+    if (!fnDecl) continue;
+    const fnName = fnDecl.childForFieldName("name");
+    if (fnName?.text !== "generateMetadata") continue;
+    // Walk the body for a `return <object>` statement.
+    const body = fnDecl.childForFieldName("body");
+    if (!body) continue;
+    const returns = body.descendantsOfType("return_statement");
+    for (const ret of returns) {
+      // Skip nested return statements belonging to inner functions.
+      // Compare by node.id because tree-sitter wrappers are not reference-stable.
+      let parent: Parser.SyntaxNode | null = ret.parent;
+      let inInnerFn = false;
+      while (parent && parent.id !== fnDecl.id) {
+        if (
+          parent.type === "function_declaration" ||
+          parent.type === "arrow_function" ||
+          parent.type === "function_expression" ||
+          parent.type === "method_definition"
+        ) {
+          inInnerFn = true;
+          break;
+        }
+        parent = parent.parent;
+      }
+      if (inInnerFn) continue;
+      const retValue = ret.namedChildren[0];
+      if (!retValue) continue;
+      // The returned expression may be wrapped in parentheses: `return ({ ... })`
+      const unwrap =
+        retValue.type === "parenthesized_expression"
+          ? retValue.namedChildren[0]
+          : retValue;
+      if (!unwrap) continue;
+      if (unwrap.type === "object") {
+        return readMetadataObject(unwrap);
+      }
+      // Non-literal return → flag
+      return { _non_literal: true };
+    }
+  }
+
+  return {};
 }
