@@ -163,6 +163,49 @@ describe("detectFrameworks — Next.js broadened detection", () => {
     expect(result.has("nextjs")).toBe(true);
   });
 
+  it("detects hono for Hono project", () => {
+    const index = makeIndex({
+      symbols: [
+        {
+          name: "app",
+          kind: "const",
+          file: "src/index.ts",
+          start_line: 1,
+          end_line: 5,
+          source: "import { Hono } from 'hono';\nconst app = new Hono();",
+        },
+      ],
+      files: [makeFile("src/index.ts")],
+    });
+    const result = detectFrameworks(index);
+    expect(result.has("hono")).toBe(true);
+  });
+
+  it("isFrameworkEntryPoint recognizes Hono handler from model", () => {
+    const symbol = { name: "getUserHandler", file: "/repo/src/routes/users.ts" };
+    const honoModel = {
+      entry_file: "/repo/src/index.ts",
+      app_variables: {},
+      routes: [{
+        method: "GET" as const,
+        path: "/users/:id",
+        raw_path: "/users/:id",
+        file: "/repo/src/routes/users.ts",
+        line: 5,
+        owner_var: "usersRouter",
+        handler: { name: "getUserHandler", inline: false, file: "/repo/src/routes/users.ts", line: 5 },
+        inline_middleware: [],
+        validators: [],
+      }],
+      mounts: [], middleware_chains: [], context_vars: [], openapi_routes: [],
+      rpc_exports: [], runtime: "unknown" as const, env_bindings: [],
+      files_used: ["/repo/src/routes/users.ts"],
+      extraction_status: "complete" as const, skip_reasons: {},
+    };
+    const frameworks = new Set<"hono">(["hono"]);
+    expect(isFrameworkEntryPoint(symbol, frameworks as never, honoModel)).toBe(true);
+  });
+
   it("detects nestjs NOT nextjs for NestJS project", () => {
     const index = makeIndex({
       symbols: [

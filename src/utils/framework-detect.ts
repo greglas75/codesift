@@ -1,6 +1,7 @@
 import type { CodeIndex, CodeSymbol } from "../types.js";
+import type { HonoAppModel } from "../parser/extractors/hono-model.js";
 
-export type Framework = "react" | "nestjs" | "nextjs" | "express" | "astro" | "test";
+export type Framework = "react" | "nestjs" | "nextjs" | "express" | "astro" | "hono" | "test";
 
 const NEXT_ROUTE_FILE = /(^|\/)app\/.*\/route\.[jt]sx?$/;
 const NEXT_APP_FILE = /(^|\/)app\/.+\.[jt]sx?$/;
@@ -42,6 +43,7 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
   if (sources.includes("@nestjs/") || sources.includes("NestFactory")) frameworks.add("nestjs");
   if (sources.includes("from 'react'") || sources.includes('from "react"') || sources.includes("useState")) frameworks.add("react");
   if (sources.includes("express()") || sources.includes("Router()")) frameworks.add("express");
+  if (sources.includes("from 'hono'") || sources.includes('from "hono"') || sources.includes("from '@hono/zod-openapi'") || sources.includes('from "@hono/zod-openapi"')) frameworks.add("hono");
   if (sources.includes("from 'astro'") || sources.includes('from "astro"') || sources.includes("from 'astro:") || sources.includes('from "astro:') || index.files.some((f) => f.path.endsWith(".astro"))) frameworks.add("astro");
 
   // Next.js detection: broadened to cover config file, pages/ dir, and App Router conventions
@@ -60,7 +62,22 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
 export function isFrameworkEntryPoint(
   symbol: Pick<CodeSymbol, "name" | "file"> & { source?: string },
   frameworks: Set<Framework>,
+  honoModel?: HonoAppModel | null,
 ): boolean {
+  if (frameworks.has("hono") && honoModel) {
+    // Symbol is in a file that the HonoExtractor reached
+    if (honoModel.files_used.includes(symbol.file)) {
+      // Handler function referenced by a route
+      if (honoModel.routes.some((r) => r.handler.name === symbol.name)) return true;
+      // Middleware referenced in any chain
+      if (honoModel.middleware_chains.some((mc) =>
+        mc.entries.some((e) => e.name === symbol.name))) return true;
+      // Sub-app variable mounted via app.route()
+      if (honoModel.mounts.some((m) => m.child_var === symbol.name)) return true;
+      // The root Hono app variable itself
+      if (honoModel.app_variables[symbol.name]) return true;
+    }
+  }
   if (frameworks.has("nextjs")) {
     if (NEXT_ROUTE_FILE.test(symbol.file) && NEXT_ROUTE_METHODS.test(symbol.name)) return true;
     if (NEXT_MIDDLEWARE_FILE.test(symbol.file) && symbol.name === "middleware") return true;
