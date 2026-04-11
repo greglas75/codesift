@@ -151,19 +151,36 @@ export async function analyzeActiveRecord(
     );
     model.methods = methods.map((m) => m.name);
 
-    // Extract relations from getX() methods that return hasOne/hasMany
+    // Extract relations from getX() methods that return hasOne/hasMany.
+    // Two-pass detection:
+    //   Pass 1: find the primary `->hasOne(Target::class, ...)` or
+    //           `->hasMany(Target::class, ...)` call.
+    //   Pass 2: scan the rest of the source for modifiers:
+    //             ->via('relation')         (Yii2 2.0.13+ junction table via relation)
+    //             ->viaTable('tbl', [...])  (direct junction table)
+    //             ->inverseOf('relation')   (bidirectional relation)
+    //           The presence of `via` or `viaTable` upgrades the relation type
+    //           to `manyMany`. `inverseOf` is decorative and doesn't change type.
     for (const m of methods) {
       if (!m.name.startsWith("get") || !m.source) continue;
       const relName = m.name.slice(3);
-      const relMatch = /->(hasOne|hasMany|hasMany\(\)->viaTable)\s*\(\s*([\w\\]+)(?:::class)?/.exec(m.source);
-      if (relMatch) {
-        const type = relMatch[1]!.startsWith("hasOne") ? "hasOne" : relMatch[1]!.includes("viaTable") ? "manyMany" : "hasMany";
-        model.relations.push({
-          name: relName.charAt(0).toLowerCase() + relName.slice(1),
-          type,
-          target_class: relMatch[2]!,
-        });
-      }
+      const primaryRe = /->(hasOne|hasMany)\s*\(\s*([\w\\]+)(?:::class)?/;
+      const primaryMatch = primaryRe.exec(m.source);
+      if (!primaryMatch) continue;
+
+      const baseType: "hasOne" | "hasMany" = primaryMatch[1] === "hasOne" ? "hasOne" : "hasMany";
+      const targetClass = primaryMatch[2]!;
+
+      // Scan the method source for junction-table modifiers on the same chain.
+      // If found, the semantic type is manyMany even though the primary call was hasMany.
+      const hasJunction = /->(?:via|viaTable)\s*\(/.test(m.source);
+      const type: "hasOne" | "hasMany" | "manyMany" = hasJunction ? "manyMany" : baseType;
+
+      model.relations.push({
+        name: relName.charAt(0).toLowerCase() + relName.slice(1),
+        type,
+        target_class: targetClass,
+      });
     }
 
     // Extract rule validators (loose regex on rules() method source)
