@@ -5,7 +5,8 @@
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
 import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
-import { deriveUrlPath } from "../utils/nextjs.js";
+import { deriveUrlPath, computeLayoutChain, traceMiddleware } from "../utils/nextjs.js";
+import type { MiddlewareTraceResult } from "../utils/nextjs.js";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -34,6 +35,9 @@ export interface RouteTraceResult {
   handlers: RouteHandler[];
   call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
   db_calls: DbCall[];
+  middleware?: MiddlewareTraceResult;
+  layout_chain?: string[];
+  server_actions?: Array<{ name: string; file: string; called_from?: string }>;
 }
 
 type RouteCallNode = RouteTraceResult["call_chain"][number];
@@ -414,6 +418,34 @@ export async function traceRoute(
   const dbCalls = findDbCalls(allCalleeSymbols);
 
   const result: RouteTraceResult = { path, handlers, call_chain: callChain, db_calls: dbCalls };
+
+  // Next.js-specific: layout chain and middleware tracing
+  const hasNextjsHandler = handlers.some((h) => h.framework === "nextjs");
+  if (hasNextjsHandler) {
+    const repoRoot = index.root;
+
+    // Layout chain from the first handler's file
+    const firstFile = handlers[0]?.file;
+    if (firstFile) {
+      try {
+        result.layout_chain = await computeLayoutChain(firstFile, repoRoot);
+      } catch {
+        result.layout_chain = [];
+      }
+    } else {
+      result.layout_chain = [];
+    }
+
+    // Middleware tracing
+    try {
+      const mw = await traceMiddleware(repoRoot, path);
+      if (mw) {
+        result.middleware = mw;
+      }
+    } catch {
+      // Middleware tracing failed — skip
+    }
+  }
 
   if (outputFormat === "mermaid") {
     return { mermaid: routeToMermaid(result) };

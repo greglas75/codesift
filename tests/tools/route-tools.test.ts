@@ -98,3 +98,55 @@ export default h;`,
     expect(result.handlers.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("layout_chain in traceRoute", () => {
+  it("returns layout chain for route with ancestor layouts", async () => {
+    const repo = await createIndexedFixture({
+      "app/layout.tsx": `export default function RootLayout({ children }) { return <html><body>{children}</body></html>; }`,
+      "app/products/layout.tsx": `export default function ProductsLayout({ children }) { return <div>{children}</div>; }`,
+      "app/products/[id]/page.tsx": `export default function ProductPage({ params }) { return <div>Product {params.id}</div>; }`,
+      "app/products/[id]/route.ts": `import { NextResponse } from "next/server";
+export async function GET() { return NextResponse.json({}); }`,
+    });
+    const result = await traceRoute(repo, "/products/123");
+    expect(result.layout_chain).toEqual(["app/layout.tsx", "app/products/layout.tsx"]);
+  });
+
+  it("returns empty layout chain when no layouts exist", async () => {
+    const repo = await createIndexedFixture({
+      "app/api/test/route.ts": `import { NextResponse } from "next/server";
+export async function GET() { return NextResponse.json({}); }`,
+    });
+    const result = await traceRoute(repo, "/api/test");
+    expect(result.layout_chain).toEqual([]);
+  });
+});
+
+describe("middleware in traceRoute", () => {
+  it("returns middleware.applies=true when matcher covers path", async () => {
+    const repo = await createIndexedFixture({
+      "middleware.ts": `import { NextResponse } from "next/server";
+export const config = { matcher: ["/api/:path*"] };
+export function middleware(req) { return NextResponse.next(); }`,
+      "app/api/users/route.ts": `import { NextResponse } from "next/server";
+export async function GET() { return NextResponse.json({}); }`,
+    });
+    const result = await traceRoute(repo, "/api/users");
+    expect(result.middleware).toBeDefined();
+    expect(result.middleware!.applies).toBe(true);
+    expect(result.middleware!.matchers).toEqual(["/api/:path*"]);
+  });
+
+  it("returns middleware.applies=false when matcher does not cover path", async () => {
+    const repo = await createIndexedFixture({
+      "middleware.ts": `import { NextResponse } from "next/server";
+export const config = { matcher: ["/admin/:path*"] };
+export function middleware(req) { return NextResponse.next(); }`,
+      "app/api/users/route.ts": `import { NextResponse } from "next/server";
+export async function GET() { return NextResponse.json({}); }`,
+    });
+    const result = await traceRoute(repo, "/api/users");
+    expect(result.middleware).toBeDefined();
+    expect(result.middleware!.applies).toBe(false);
+  });
+});
