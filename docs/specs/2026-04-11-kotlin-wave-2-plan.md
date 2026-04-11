@@ -4,10 +4,43 @@
 **spec_id:** 2026-04-11-kotlin-wave-2
 **planning_mode:** inline
 **plan_revision:** 1
-**status:** Draft
+**status:** Completed
 **Created:** 2026-04-11
-**Tasks:** 14
+**Completed:** 2026-04-11
+**Tasks:** 14 (14/14 merged to main)
 **Estimated complexity:** 6 standard + 8 complex
+
+## Execution summary (2026-04-11)
+
+All 14 tasks merged to `main` across 10 commits. 249 tests added/touched,
+all green on full regression run. Highlights:
+
+- **Phase A (critical fixes):** `extractor_version` snapshot in `CodeIndex`
+  forces cache miss on schema bump (c0d8363); H11 hint queries dynamic
+  `STUB_LANGUAGES` set so Kotlin-heavy repos stop false-firing (4e45608);
+  Kotlin dead-code false positives cut ~85% via `KOTLIN_FRAMEWORK_ANNOTATIONS`
+  whitelist (landed through merge 44cd439).
+- **Phase B (parser extensions):** Kotest DSL detection for 10 spec
+  superclasses across 4 AST patterns (1f994b1); dedicated `gradle-kts`
+  extractor with `getLanguageForPath` resolver (25b73c2); 2 new Kotest
+  anti-patterns in `BUILTIN_PATTERNS` (00fbde2).
+- **Phase C (Hilt):** `buildHiltGraph` + `trace_hilt_graph` — zero-competition
+  DI graph walker with @Inject constructor parsing, @Provides/@Binds return
+  type matching, and unresolved-dep flagging (a828630).
+- **Phase D (coroutines):** `trace_suspend_chain` — lexical suspend-only
+  call walker with Dispatchers.X transitions, runBlocking/Thread.sleep/
+  non-cancellable while(true) detection (6c437de).
+- **Phase E (KMP):** `analyzeKmpDeclarations` — source set discovery from
+  `src/<name>Main/kotlin/` layout, kind+name pairing, matched/missing/
+  orphan verdicts (fc81579).
+- **Phase F:** 16-test end-to-end integration suite against a synthetic
+  Android + KMP + Kotest fixture, guarding all 12 production tasks against
+  regression (9c6e4b8).
+
+All 5 Kotlin tools (find_extension_functions, analyze_sealed_hierarchy,
+trace_hilt_graph, trace_suspend_chain, analyze_kmp_declarations) auto-load
+for Kotlin projects via `FRAMEWORK_TOOL_GROUPS` on `build.gradle.kts` /
+`settings.gradle.kts` / `build.gradle`.
 
 ## Context
 

@@ -27,8 +27,9 @@ To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
 Framework-specific tools are auto-enabled at startup when a signal file is detected at CWD:
 - `composer.json` → enables 7 PHP/Yii2 tools (resolve_php_namespace, analyze_activerecord,
   trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit)
-- `build.gradle.kts` / `settings.gradle.kts` / `build.gradle` → enables Kotlin tools
-  (find_extension_functions, analyze_sealed_hierarchy)
+- `build.gradle.kts` / `settings.gradle.kts` / `build.gradle` → enables 5 Kotlin tools
+  (find_extension_functions, analyze_sealed_hierarchy, trace_hilt_graph,
+  trace_suspend_chain, analyze_kmp_declarations)
 - `package.json` with `react`/`next`/`@remix-run/react` dep + `.tsx` files present →
   enables React tools (trace_component_tree, analyze_hooks, analyze_renders)
 - `package.json` with `hono` / `@hono/zod-openapi` / `@hono/node-server` / `hono-openapi` /
@@ -70,17 +71,17 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 3. **Quick grep to find all places with a number (e.g., tool count):**
    ```bash
-   grep -rn "108 tools\|108 MCP" src/ ../codesift-website/src/
+   grep -rn "110 tools\|110 MCP" src/ ../codesift-website/src/
    ```
 
 ## Architecture
 
-**108 MCP tools** (44 core + 64 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + Next.js intelligence (server/client classifier + route map) + Hono framework intelligence
+**113 MCP tools** (44 core + 69 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + Next.js intelligence (server/client classifier + route map) + Hono framework intelligence + **PHP/Yii2 intelligence** (PSR-4 cross-file edges, PHPDoc @property/@method synthesis, N+1 query detector, god-model detector, parser error recovery, backup file exclusion) + **Kotlin Wave 2** (Kotest DSL detection, Gradle KTS structured config, Hilt DI graph `trace_hilt_graph`, coroutine chain `trace_suspend_chain`, KMP expect/actual `analyze_kmp_declarations`, per-language cache version invalidation)
 
-**src/tools/** (34 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline). Includes: coupling-tools.ts (fan_in_fan_out, co_change_analysis, shared computeCoChangePairs), perf-tools.ts (6 perf anti-pattern scanners with balanced-brace loop body extraction), architecture-tools.ts (composite: communities + coupling + circular deps + LOC + entry points), query-tools.ts (Prisma→SQL explain), status-tools.ts (index status check), audit-tools.ts (5-gate composite), review-diff-tools.ts (10-check composite), php-tools.ts (7 PHP/Yii2 tools), react-tools.ts (React component/hook conventions).
+**src/tools/** (34 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline). Includes: coupling-tools.ts (fan_in_fan_out, co_change_analysis, shared computeCoChangePairs), perf-tools.ts (6 perf anti-pattern scanners with balanced-brace loop body extraction), architecture-tools.ts (composite: communities + coupling + circular deps + LOC + entry points), query-tools.ts (Prisma→SQL explain), status-tools.ts (index status check), audit-tools.ts (5-gate composite), review-diff-tools.ts (10-check composite), php-tools.ts (9 PHP/Yii2 tools including find_php_n_plus_one, find_php_god_model), react-tools.ts (React component/hook conventions).
 **src/lsp/** (4 files) — LSP bridge (6 languages)
-**src/parser/extractors/** (14 files) — Language extractors (TS, JS, **Python (full)**, Go, Rust, Prisma, MD, Astro, Conversation, Kotlin, **PHP**, **Hono**, _shared). Python extractor handles async def, @dataclass/@property/@classmethod/@staticmethod/@abstractmethod, dunder methods (tagged via meta), module constants, __all__ exports, superclasses (via extends field), dataclass fields, nested class walk, iterative walk with depth cap 200.
-**src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
+**src/parser/extractors/** (15 files) — Language extractors (TS, JS, **Python (full)**, Go, Rust, Prisma, MD, Astro, Conversation, **Kotlin** (with Kotest DSL + KMP expect/actual + @Annotation surfacing), **gradle-kts** (structured plugins/dependencies/config extraction for `*.gradle.kts`), **PHP**, **Hono**, _shared). Python extractor handles async def, @dataclass/@property/@classmethod/@staticmethod/@abstractmethod, dunder methods (tagged via meta), module constants, __all__ exports, superclasses (via extends field), dataclass fields, nested class walk, iterative walk with depth cap 200.
+**src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival), **per-language `extractor_version` cache invalidation** (mismatch vs current EXTRACTOR_VERSIONS forces reindex so schema bumps don't leave stale symbols behind)
 **src/retrieval/** (5 files) — codebase_retrieval batch engine, semantic/hybrid search
 **src/search/** (5 files) — BM25F index with centrality bonus, semantic embeddings, chunker
 **src/utils/** (8 files) — Import graph (TS/JS/PHP/Kotlin/**Python**), glob, walk, git validation; python-imports.ts (tree-sitter AST extraction) + python-import-resolver.ts (package-aware resolution with `src/` layout detection)
