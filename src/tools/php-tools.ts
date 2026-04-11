@@ -470,6 +470,19 @@ const SCALAR_FIELD_NAMES = new Set([
   "uuid", "hash", "token", "key", "url", "path", "image", "avatar",
 ]);
 
+/**
+ * PHP method names that look like `get*` but are NOT ActiveRecord relation
+ * getters. `$item->save()` / `$item->validate()` inside a foreach is fine;
+ * flagging them as N+1 would be a false positive. These names are stripped
+ * from the `get\w+()` method-call detection before the eager-load check.
+ */
+const METHOD_CALL_BLOCKLIST = new Set([
+  "save", "validate", "delete", "refresh", "load", "populate", "toArray",
+  "afterSave", "beforeSave", "beforeDelete", "afterDelete",
+  "getAttributes", "getAttribute", "getIsNewRecord", "getErrors", "getFirstError",
+  "getOldAttributes", "getDirtyAttributes", "getPrimaryKey", "getTableSchema",
+]);
+
 export interface NPlusOneFinding {
   file: string;
   method: string;
@@ -501,6 +514,43 @@ export async function findPhpNPlusOne(
   const limit = options?.limit ?? 100;
   const filePattern = options?.file_pattern;
 
+  // Normalize `getProfile` → `profile` so the ->with() check matches whether
+  // the relation is accessed as a property or via its auto-generated getter.
+  const normalizeGetter = (name: string): string => {
+    const bare = name.replace(/^get/, "");
+    return bare.length > 0 ? bare.charAt(0).toLowerCase() + bare.slice(1) : "";
+  };
+
+  // A finding is emitted exactly once per (foreach × relation-name) tuple so
+  // that chained patterns don't double-report the same relation that the
+  // property pattern already caught in the same loop body.
+  const emitFinding = (
+    sym: { file: string; name: string; source: string; start_line: number },
+    foreachIdx: number,
+    relation: string,
+    pattern: string,
+    seen: Set<string>,
+  ): boolean => {
+    if (!relation || seen.has(relation)) return findings.length >= limit;
+    seen.add(relation);
+
+    if (SCALAR_FIELD_NAMES.has(relation.toLowerCase())) return findings.length >= limit;
+
+    const beforeForeach = sym.source.slice(0, foreachIdx);
+    const withRe = new RegExp(`\\bwith\\s*\\(\\s*['"]${relation}['"]`);
+    if (withRe.test(beforeForeach)) return findings.length >= limit;
+
+    const lineOffset = beforeForeach.split("\n").length - 1;
+    findings.push({
+      file: sym.file,
+      method: sym.name,
+      line: sym.start_line + lineOffset,
+      relation,
+      pattern,
+    });
+    return findings.length >= limit;
+  };
+
   for (const sym of index.symbols) {
     if (sym.kind !== "method" || !sym.file.endsWith(".php") || !sym.source) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
@@ -510,31 +560,45 @@ export async function findPhpNPlusOne(
     let fm: RegExpExecArray | null;
     while ((fm = foreachRe.exec(src)) !== null) {
       const itemVar = fm[2]!;
-      // Scan everything after the foreach opening for $itemVar->relation
-      // (property access, not method call — methods are too ambiguous).
-      const after = src.slice(fm.index);
-      const relRe = new RegExp(`\\$${itemVar}->(\\w+)(?!\\()`, "g");
-      const relMatch = relRe.exec(after);
-      if (!relMatch) continue;
-      const relation = relMatch[1]!;
+      const foreachIdx = fm.index;
+      const after = src.slice(foreachIdx);
+      // Guard against double-counting: each distinct relation name reported
+      // once per foreach, regardless of which pattern matched first.
+      const seen = new Set<string>();
 
-      // Skip well-known scalar fields
-      if (SCALAR_FIELD_NAMES.has(relation.toLowerCase())) continue;
+      // Pattern 1 — property access: $item->profile
+      // The negative lookahead `(?![\w(])` blocks both:
+      //   1) following word chars (prevents backtracking to a partial capture
+      //      like `$item->getProfile()` matching "getProfil" as a property);
+      //   2) an opening paren (excludes method calls, handled by pattern 2).
+      const propRe = new RegExp(`\\$${itemVar}->(\\w+)(?![\\w(])`, "g");
+      let m: RegExpExecArray | null;
+      while ((m = propRe.exec(after)) !== null) {
+        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, m[1]!, "foreach-access-without-with", seen)) {
+          return { findings, total: findings.length };
+        }
+      }
 
-      // Check if an earlier ->with('relation') eager-loads this relation
-      const beforeForeach = src.slice(0, fm.index);
-      const withRe = new RegExp(`\\bwith\\s*\\(\\s*['"]${relation}['"]`);
-      if (withRe.test(beforeForeach)) continue;
+      // Pattern 2 — getter method call: $item->getProfile()
+      // Normalize to bare relation name for both the dedup and the ->with() check.
+      const getterRe = new RegExp(`\\$${itemVar}->(get\\w+)\\s*\\(\\s*\\)`, "g");
+      while ((m = getterRe.exec(after)) !== null) {
+        const rawMethod = m[1]!;
+        if (METHOD_CALL_BLOCKLIST.has(rawMethod)) continue;
+        const normalized = normalizeGetter(rawMethod);
+        if (!normalized || METHOD_CALL_BLOCKLIST.has(normalized.toLowerCase())) continue;
+        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, normalized, "foreach-getter-without-with", seen)) {
+          return { findings, total: findings.length };
+        }
+      }
 
-      const lineOffset = beforeForeach.split("\n").length - 1;
-      findings.push({
-        file: sym.file,
-        method: sym.name,
-        line: sym.start_line + lineOffset,
-        relation,
-        pattern: "foreach-access-without-with",
-      });
-      if (findings.length >= limit) return { findings, total: findings.length };
+      // Pattern 3 — chained access: $item->rel->sub (the first segment is the trigger)
+      const chainRe = new RegExp(`\\$${itemVar}->(\\w+)->\\w`, "g");
+      while ((m = chainRe.exec(after)) !== null) {
+        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, m[1]!, "foreach-chained-without-with", seen)) {
+          return { findings, total: findings.length };
+        }
+      }
     }
   }
 
