@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations } from "../../src/tools/kotlin-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations, traceFlowChain } from "../../src/tools/kotlin-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 // Mock getCodeIndex
@@ -518,5 +518,103 @@ describe("analyzeKmpDeclarations", () => {
     expect(result.fully_matched).toBe(0);
     expect(result.missing_actuals).toHaveLength(0);
     expect(result.orphan_actuals).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// traceFlowChain
+// ---------------------------------------------------------------------------
+
+describe("traceFlowChain", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("detects a Flow operator chain (map/filter/collect)", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "loadUsers",
+        kind: "function",
+        signature: "(): Flow<List<User>>",
+        source: `fun loadUsers(): Flow<List<User>> = userDao.getAll()
+    .map { it.toDomain() }
+    .filter { it.isActive }`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceFlowChain("test", "loadUsers");
+    expect(result.root).toBe("loadUsers");
+    expect(result.operators).toContain("map");
+    expect(result.operators).toContain("filter");
+    expect(result.operator_count).toBeGreaterThanOrEqual(2);
+  });
+
+  it("warns about Flow.collect without catch", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "observeUsers",
+        kind: "function",
+        signature: "suspend (): Unit",
+        source: `suspend fun observeUsers() {
+    userDao.getAll()
+        .map { it.toDomain() }
+        .collect { users -> updateUi(users) }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceFlowChain("test", "observeUsers");
+    const catchWarning = result.warnings.find((w) => w.includes("catch"));
+    expect(catchWarning).toBeDefined();
+  });
+
+  it("does NOT warn when .catch is present", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "safeObserve",
+        kind: "function",
+        signature: "suspend (): Unit",
+        source: `suspend fun safeObserve() {
+    userDao.getAll()
+        .catch { emit(emptyList()) }
+        .collect { updateUi(it) }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceFlowChain("test", "safeObserve");
+    const catchWarning = result.warnings.find((w) => w.includes("catch"));
+    expect(catchWarning).toBeUndefined();
+  });
+
+  it("detects stateIn without scope parameter", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "usersFlow",
+        kind: "variable",
+        source: `val usersFlow = userDao.getAll()
+    .map { it.toDomain() }
+    .stateIn(initialValue = emptyList())`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceFlowChain("test", "usersFlow");
+    const stateInWarning = result.warnings.find((w) => w.includes("stateIn"));
+    expect(stateInWarning).toBeDefined();
+  });
+
+  it("throws for symbol without Flow usage", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "plainFun",
+        kind: "function",
+        source: `fun plainFun() = 42`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    await expect(traceFlowChain("test", "plainFun")).rejects.toThrow(/no flow/i);
   });
 });

@@ -655,3 +655,127 @@ export async function analyzeKmpDeclarations(
     orphan_actuals: orphanActuals,
   };
 }
+
+// ---------------------------------------------------------------------------
+// trace_flow_chain — Kotlin Flow<T> operator chain analysis
+// ---------------------------------------------------------------------------
+
+export interface FlowChainResult {
+  root: string;
+  file: string;
+  start_line: number;
+  operators: string[];
+  operator_count: number;
+  has_terminal: boolean;
+  warnings: string[];
+}
+
+/**
+ * Known Kotlin Flow operators — used to detect and classify operator chains.
+ * Categorized into transform, filter, combine, terminal, and lifecycle
+ * so downstream tools can reason about the chain semantics.
+ */
+const FLOW_OPERATORS = new Set([
+  // transform
+  "map", "mapNotNull", "mapLatest", "transform", "transformLatest",
+  "flatMapConcat", "flatMapMerge", "flatMapLatest",
+  // filter
+  "filter", "filterNotNull", "filterNot", "filterIsInstance",
+  "distinctUntilChanged", "distinctUntilChangedBy", "debounce", "sample",
+  "take", "takeWhile", "drop", "dropWhile",
+  // combine / merge
+  "combine", "zip", "merge", "onStart", "onEmpty",
+  // lifecycle / side-effect
+  "onEach", "onCompletion", "catch", "retry", "retryWhen",
+  "flowOn", "buffer", "conflate", "cancellable",
+  // terminal
+  "collect", "collectLatest", "first", "firstOrNull", "single",
+  "singleOrNull", "toList", "toSet", "fold", "reduce", "count",
+  // conversion
+  "stateIn", "shareIn", "asLiveData", "asFlow",
+]);
+
+const FLOW_TERMINAL_OPS = new Set([
+  "collect", "collectLatest", "first", "firstOrNull", "single",
+  "singleOrNull", "toList", "toSet", "fold", "reduce", "count",
+]);
+
+/**
+ * Trace a Kotlin Flow operator chain from a function or property. Scans the
+ * symbol source for `.operator(` calls matching known Flow operators, reports
+ * the ordered chain, and flags common issues:
+ *
+ *   - `.collect` without `.catch` — unhandled exception in flow
+ *   - `.stateIn(initialValue=...)` without a scope parameter — missing
+ *     lifecycle binding (requires `viewModelScope` or `lifecycleScope`)
+ *
+ * The function name can be either a function returning Flow<T> or a property
+ * initialized with a Flow chain.
+ */
+export async function traceFlowChain(
+  repo: string,
+  symbolName: string,
+): Promise<FlowChainResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+  }
+
+  const sym = index.symbols.find((s) => s.name === symbolName);
+  if (!sym) {
+    throw new Error(`Symbol "${symbolName}" not found.`);
+  }
+
+  const source = sym.source ?? "";
+
+  // Detect Flow operators — `.operatorName(` or `.operatorName {`
+  const operatorRe = /\.(\w+)\s*[({]/g;
+  const operators: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = operatorRe.exec(source)) !== null) {
+    const op = m[1]!;
+    if (FLOW_OPERATORS.has(op)) operators.push(op);
+  }
+
+  if (operators.length === 0) {
+    throw new Error(`"${symbolName}" has no Flow operator chain detected.`);
+  }
+
+  const hasTerminal = operators.some((op) => FLOW_TERMINAL_OPS.has(op));
+  const hasCatch = operators.includes("catch");
+  const hasCollect = operators.includes("collect") || operators.includes("collectLatest");
+  const hasStateIn = operators.includes("stateIn");
+
+  const warnings: string[] = [];
+
+  // Warn 1: collect without catch — unhandled exception in the flow.
+  if (hasCollect && !hasCatch) {
+    warnings.push(
+      `.collect without .catch — exceptions in the upstream flow propagate to the collector and crash the coroutine`,
+    );
+  }
+
+  // Warn 2: stateIn without scope (approximate: check if "scope" or
+  // "viewModelScope" or "lifecycleScope" appears near stateIn).
+  if (hasStateIn) {
+    const stateInIdx = source.indexOf(".stateIn(");
+    if (stateInIdx !== -1) {
+      const stateInContext = source.slice(stateInIdx, stateInIdx + 200);
+      if (!/\bscope\b|\bviewModelScope\b|\blifecycleScope\b|\bcoroutineScope\b/i.test(stateInContext)) {
+        warnings.push(
+          `.stateIn without a lifecycle scope parameter — the StateFlow will never complete, causing a memory leak unless bound to viewModelScope/lifecycleScope`,
+        );
+      }
+    }
+  }
+
+  return {
+    root: sym.name,
+    file: sym.file,
+    start_line: sym.start_line,
+    operators,
+    operator_count: operators.length,
+    has_terminal: hasTerminal,
+    warnings,
+  };
+}
