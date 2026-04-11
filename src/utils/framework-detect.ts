@@ -45,7 +45,7 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
 }
 
 export function isFrameworkEntryPoint(
-  symbol: Pick<CodeSymbol, "name" | "file">,
+  symbol: Pick<CodeSymbol, "name" | "file"> & { source?: string },
   frameworks: Set<Framework>,
 ): boolean {
   if (frameworks.has("nextjs")) {
@@ -74,6 +74,12 @@ export function isFrameworkEntryPoint(
     if (REACT_SPECIAL_FILE.test(symbol.file)) return true;
     if (REACT_ROUTE_FILE.test(symbol.file)) return true;
     if (REMIX_ROUTE_FILE.test(symbol.file)) return true;
+  }
+
+  // RSC boundary: "use client" / "use server" directive → framework entry point
+  if (symbol.source && (frameworks.has("react") || frameworks.has("nextjs"))) {
+    const head = symbol.source.slice(0, 200);
+    if (/['"]use client['"]/.test(head) || /['"]use server['"]/.test(head)) return true;
   }
 
   return false;
