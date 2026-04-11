@@ -31,6 +31,9 @@ export type HonoRuntime =
   | "bun"
   | "deno"
   | "lambda"
+  | "vercel"
+  | "netlify"
+  | "fly"
   | "unknown";
 
 export interface HonoApp {

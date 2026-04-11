@@ -1,0 +1,5 @@
+app = "my-hono-app"
+primary_region = "sea"
+
+[build]
+  builder = "paketobuildpacks/builder:base"

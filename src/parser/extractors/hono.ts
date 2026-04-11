@@ -1126,6 +1126,37 @@ export class HonoExtractor {
     if (source.includes("Bun.serve")) return "bun";
     if (source.includes("@hono/node-server") || source.includes("serve({ fetch")) return "node";
     if (source.includes("hono/aws-lambda") || source.includes("handle(")) return "lambda";
+
+    // T5: Advanced runtime detection — only runs when existing heuristics
+    // produced "unknown". Checks Cloudflare Bindings type signals and
+    // deployment-target config files in the project root.
+    return this.detectRuntimeAdvanced(source, projectRoot);
+  }
+
+  /**
+   * Fallback runtime detection. Runs after detectRuntime's primary signals
+   * miss — additive by design so Phase 1 tests remain stable.
+   *
+   * Signal precedence (first match wins):
+   *   1. Cloudflare Bindings type using KVNamespace/D1Database/R2Bucket/Queue
+   *   2. vercel.json at project root
+   *   3. netlify.toml OR netlify/functions/ dir at project root
+   *   4. fly.toml at project root
+   *   5. unknown
+   */
+  private detectRuntimeAdvanced(
+    source: string,
+    projectRoot: string,
+  ): HonoAppModel["runtime"] {
+    if (hasCloudflareBindingsType(source)) return "cloudflare";
+    if (existsSync(path.join(projectRoot, "vercel.json"))) return "vercel";
+    if (
+      existsSync(path.join(projectRoot, "netlify.toml")) ||
+      existsSync(path.join(projectRoot, "netlify", "functions"))
+    ) {
+      return "netlify";
+    }
+    if (existsSync(path.join(projectRoot, "fly.toml"))) return "fly";
     return "unknown";
   }
 
@@ -1546,6 +1577,34 @@ function classifyConditionType(
   if (/c\.req\.header\s*\(/.test(text) || /c\.req\.headers\b/.test(text)) return "header";
   if (/c\.req\.path\b/.test(text) || /c\.req\.url\b/.test(text)) return "path";
   return "custom";
+}
+
+/**
+ * T5: Cloudflare Workers signal. These types ship with
+ * @cloudflare/workers-types and never appear in non-Worker codebases, so
+ * a word-boundary match on the source is sufficient — we do NOT need to
+ * correlate with a Bindings declaration (which may be `type Bindings = {}`,
+ * `interface Bindings {}`, inline in `Hono<{Bindings: {}}>`, or split across
+ * nested type bodies with inner `}`). Removing the Bindings-block coupling
+ * also fixes the first-`}` truncation that the initial regex had.
+ *
+ * Generic names like `Fetcher` and `Service` were dropped — they collide
+ * with common non-CF type names in application code.
+ */
+const CF_WORKER_TYPES = [
+  "KVNamespace",
+  "D1Database",
+  "R2Bucket",
+  "DurableObjectNamespace",
+  "AnalyticsEngineDataset",
+];
+
+function hasCloudflareBindingsType(source: string): boolean {
+  for (const cfType of CF_WORKER_TYPES) {
+    const re = new RegExp(`\\b${cfType}\\b`);
+    if (re.test(source)) return true;
+  }
+  return false;
 }
 
 /** Check if a node is inside a conditional branch (if/switch/try body). */

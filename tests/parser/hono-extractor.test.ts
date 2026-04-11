@@ -424,3 +424,35 @@ describe("HonoExtractor — T4 conditional middleware (conditional-mw-app)", () 
     expect(inlineOuter?.applied_when).toBeUndefined();
   });
 });
+
+describe("HonoExtractor — T5 advanced runtime detection", () => {
+  let extractor: HonoExtractor;
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("detects cloudflare from Bindings type literal even without wrangler.toml", async () => {
+    const entry = path.join(FIXTURES, "cf-bindings-no-wrangler", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("cloudflare");
+  });
+
+  it("detects vercel from vercel.json at project root", async () => {
+    const entry = path.join(FIXTURES, "vercel-app", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("vercel");
+  });
+
+  it("detects fly from fly.toml at project root", async () => {
+    const entry = path.join(FIXTURES, "fly-app", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("fly");
+  });
+
+  it("still returns unknown when no signals are present", async () => {
+    // basic-app has no wrangler.toml, no vercel.json, no Bindings type with CF types
+    const entry = path.join(FIXTURES, "basic-app", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("unknown");
+  });
+});
