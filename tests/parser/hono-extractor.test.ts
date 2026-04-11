@@ -351,3 +351,76 @@ describe("HonoExtractor — basic-app", () => {
     }
   });
 });
+
+describe("HonoExtractor — T4 conditional middleware (conditional-mw-app)", () => {
+  const condEntry = path.join(FIXTURES, "conditional-mw-app", "src", "index.ts");
+  let extractor: HonoExtractor;
+
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("captures basicAuth applied conditionally on non-GET method", async () => {
+    const model = await extractor.parse(condEntry);
+    const postsChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/posts/*",
+    );
+    expect(postsChain).toBeDefined();
+    const basicAuthEntry = postsChain?.entries.find(
+      (e) => e.name === "basicAuth",
+    );
+    expect(basicAuthEntry).toBeDefined();
+    expect(basicAuthEntry?.applied_when).toBeDefined();
+    expect(basicAuthEntry?.applied_when?.condition_type).toBe("method");
+    expect(basicAuthEntry?.applied_when?.condition_text).toContain("method");
+    expect(basicAuthEntry?.conditional).toBe(true);
+  });
+
+  it("captures bearerAuth applied conditionally on missing header", async () => {
+    const model = await extractor.parse(condEntry);
+    const adminChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/admin/*",
+    );
+    expect(adminChain).toBeDefined();
+    const bearerEntry = adminChain?.entries.find(
+      (e) => e.name === "bearerAuth",
+    );
+    expect(bearerEntry).toBeDefined();
+    expect(bearerEntry?.applied_when?.condition_type).toBe("header");
+    expect(bearerEntry?.applied_when?.condition_text).toContain("header");
+  });
+
+  it("captures a conditional middleware gated on path with condition_type path", async () => {
+    const model = await extractor.parse(condEntry);
+    const deepChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/deep/*",
+    );
+    expect(deepChain).toBeDefined();
+    const logEntry = deepChain?.entries.find((e) => e.name === "logDeep");
+    expect(logEntry).toBeDefined();
+    expect(logEntry?.applied_when?.condition_type).toBe("path");
+  });
+
+  it("unconditional inline middleware has NO applied_when on its entry", async () => {
+    const model = await extractor.parse(condEntry);
+    const publicChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/public/*",
+    );
+    expect(publicChain).toBeDefined();
+    // Only the <inline> entry should be present — no conditional extras
+    const conditionalExtras = publicChain?.entries.filter(
+      (e) => e.applied_when !== undefined,
+    );
+    expect(conditionalExtras?.length ?? 0).toBe(0);
+  });
+
+  it("outer inline arrow wrapper does NOT get applied_when — only the inner gated call does", async () => {
+    const model = await extractor.parse(condEntry);
+    const postsChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/posts/*",
+    );
+    const inlineOuter = postsChain?.entries.find((e) => e.name === "<inline>");
+    expect(inlineOuter).toBeDefined();
+    expect(inlineOuter?.applied_when).toBeUndefined();
+  });
+});

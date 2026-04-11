@@ -25,6 +25,7 @@ import type {
   ContextVariable,
   OpenAPIRoute,
   InlineHandlerAnalysis,
+  ConditionalApplication,
 } from "./hono-model.js";
 import { HonoInlineAnalyzer } from "./hono-inline-analyzer.js";
 
@@ -527,6 +528,30 @@ export class HonoExtractor {
           mwName, file, arg.startPosition.row + 1, order,
           importSources, undefined,
         ));
+
+        // T4: If this is an inline arrow, scan its body for conditional
+        // middleware calls like `if (cond) return mw(c, next)`. Each match
+        // produces an ADDITIONAL entry with applied_when set.
+        if (
+          arg.type === "arrow_function" ||
+          arg.type === "function_expression"
+        ) {
+          const conditional = this.detectConditionalMiddlewareCalls(arg);
+          for (const found of conditional) {
+            order++;
+            const extra = this.buildMiddlewareEntry(
+              found.name,
+              file,
+              found.line,
+              order,
+              importSources,
+              undefined,
+            );
+            extra.conditional = true;
+            extra.applied_when = found.applied_when;
+            entries.push(extra);
+          }
+        }
       }
 
       if (entries.length > 0) {
@@ -548,6 +573,66 @@ export class HonoExtractor {
         }
       }
     });
+  }
+
+  /**
+   * T4: walk an inline middleware arrow body and surface any conditional
+   * calls of the form `if (cond) return mw(c, next)` or `if (cond) await mw(c, next)`.
+   *
+   * We only inspect the DIRECT `if` statements at the top of the body (one level
+   * of `statement_block` / `return_statement`). Deep nesting is out of scope to
+   * keep false positives low.
+   *
+   * Returns an entry per conditional call found, with name + condition info.
+   */
+  private detectConditionalMiddlewareCalls(
+    fnNode: Parser.SyntaxNode,
+  ): Array<{ name: string; line: number; applied_when: ConditionalApplication }> {
+    const results: Array<{
+      name: string;
+      line: number;
+      applied_when: ConditionalApplication;
+    }> = [];
+    // Arrow function body is either an expression or a statement_block
+    const block = fnNode.childForFieldName("body");
+    if (!block) return results;
+    // Only walk if the arrow body is a statement_block — expression-body
+    // arrows `(c) => foo(c, next)` are NOT conditional by definition.
+    if (block.type !== "statement_block") return results;
+
+    for (let i = 0; i < block.childCount; i++) {
+      const stmt = block.child(i);
+      if (stmt?.type !== "if_statement") continue;
+      const condition = stmt.childForFieldName("condition");
+      const consequence = stmt.childForFieldName("consequence");
+      if (!condition || !consequence) continue;
+
+      // Resolve block-local `const x = mwFactory({...})` aliases so that
+      //   const auth = basicAuth({...});
+      //   return auth(c, next);
+      // reports "basicAuth" instead of "auth".
+      const localAliases = collectLocalAliases(consequence);
+
+      // Find mw call inside the consequence.
+      const mwCall = findMiddlewareCallInBlock(consequence);
+      if (!mwCall) continue;
+
+      const rawName = extractCallCalleeName(mwCall);
+      if (!rawName) continue;
+      const name = localAliases.get(rawName) ?? rawName;
+
+      const condText = condition.text.slice(0, 200);
+      const applied_when: ConditionalApplication = {
+        condition_type: classifyConditionType(condition),
+        condition_text: condText,
+      };
+      results.push({
+        name,
+        line: mwCall.startPosition.row + 1,
+        applied_when,
+      });
+    }
+    return results;
   }
 
   private extractMiddlewareName(node: Parser.SyntaxNode): string {
@@ -1331,6 +1416,136 @@ function joinPaths(prefix: string, childPath: string): string {
   if (childPath === "/" || childPath === "") return p || "/";
   const c = childPath.startsWith("/") ? childPath : "/" + childPath;
   return p + c;
+}
+
+/**
+ * Given the `consequence` of an if_statement, locate a middleware-call
+ * expression of the form `mw(c, next)`. Walks the whole block (not just the
+ * first statement) so patterns like
+ *
+ *     if (cond) {
+ *       const auth = basicAuth({...});
+ *       return auth(c, next);
+ *     }
+ *
+ * are recognized. Only looks at top-level statements of the consequence —
+ * does not descend into nested blocks. The candidate call must have >= 2
+ * named arguments to heuristically match `mw(c, next)` shape.
+ */
+function findMiddlewareCallInBlock(
+  consequence: Parser.SyntaxNode,
+): Parser.SyntaxNode | null {
+  const statements =
+    consequence.type === "statement_block"
+      ? consequence.namedChildren
+      : [consequence];
+  for (const stmt of statements) {
+    let call: Parser.SyntaxNode | null = null;
+    if (stmt.type === "return_statement") {
+      const expr = stmt.namedChildren[0];
+      if (expr) call = unwrapCallExpression(expr);
+    } else if (stmt.type === "expression_statement") {
+      const expr = stmt.namedChildren[0];
+      if (expr) call = unwrapCallExpression(expr);
+    }
+    if (call && callHasAtLeastNArgs(call, 2)) return call;
+  }
+  return null;
+}
+
+function callHasAtLeastNArgs(
+  call: Parser.SyntaxNode,
+  n: number,
+): boolean {
+  const args = call.childForFieldName("arguments");
+  return (args?.namedChildren.length ?? 0) >= n;
+}
+
+/**
+ * Collect block-local alias declarations of the form
+ *   const X = <callee>(...)
+ * into a Map<X, <callee>>. Used to resolve `const auth = basicAuth({...})` so
+ * that `return auth(c, next)` reports "basicAuth" as the applied middleware.
+ */
+function collectLocalAliases(
+  consequence: Parser.SyntaxNode,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const statements =
+    consequence.type === "statement_block"
+      ? consequence.namedChildren
+      : [consequence];
+  for (const stmt of statements) {
+    if (stmt.type !== "lexical_declaration" && stmt.type !== "variable_declaration") continue;
+    for (const declarator of stmt.namedChildren) {
+      if (declarator.type !== "variable_declarator") continue;
+      const nameNode = declarator.childForFieldName("name");
+      const valueNode = declarator.childForFieldName("value");
+      if (nameNode?.type !== "identifier" || !valueNode) continue;
+      if (valueNode.type !== "call_expression") continue;
+      const calleeName = extractCallCalleeName(valueNode);
+      if (calleeName) map.set(nameNode.text, calleeName);
+    }
+  }
+  return map;
+}
+
+/** Peel off `await ...` wrappers and return the underlying call_expression, if any. */
+function unwrapCallExpression(
+  node: Parser.SyntaxNode,
+): Parser.SyntaxNode | null {
+  let current = node;
+  while (current.type === "await_expression") {
+    const inner = current.namedChildren[0];
+    if (!inner) return null;
+    current = inner;
+  }
+  if (current.type === "call_expression") return current;
+  return null;
+}
+
+/**
+ * Extract the name of the middleware at the call site. Supports:
+ *   - `foo(c, next)` → "foo"
+ *   - `foo.bar(c, next)` → "bar"
+ *   - `auth(c, next)` where `auth` came from `const auth = basicAuth({...})`
+ *     → returns "auth"; T4 reports the local identifier, and a separate
+ *     def-use pass could resolve it further (out of scope here).
+ *   - `basicAuth({...})(c, next)` → "basicAuth" (outer callee of the inner call)
+ */
+function extractCallCalleeName(callNode: Parser.SyntaxNode): string | null {
+  const fn = callNode.childForFieldName("function");
+  if (!fn) return null;
+  if (fn.type === "identifier") return fn.text;
+  if (fn.type === "member_expression") {
+    const prop = fn.childForFieldName("property");
+    return prop?.text ?? null;
+  }
+  // `basicAuth({...})(c, next)` — fn itself is a call_expression
+  if (fn.type === "call_expression") {
+    const innerFn = fn.childForFieldName("function");
+    if (innerFn?.type === "identifier") return innerFn.text;
+    if (innerFn?.type === "member_expression") {
+      const prop = innerFn.childForFieldName("property");
+      return prop?.text ?? null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Classify an if-condition into method / header / path / custom by looking at
+ * the leftmost member_expression chain. Keeps the check cheap and deterministic.
+ */
+function classifyConditionType(
+  condition: Parser.SyntaxNode,
+): ConditionalApplication["condition_type"] {
+  const text = condition.text;
+  // Normalize for substring checks
+  if (/c\.req\.method\b/.test(text)) return "method";
+  if (/c\.req\.header\s*\(/.test(text) || /c\.req\.headers\b/.test(text)) return "header";
+  if (/c\.req\.path\b/.test(text) || /c\.req\.url\b/.test(text)) return "path";
+  return "custom";
 }
 
 /** Check if a node is inside a conditional branch (if/switch/try body). */
