@@ -675,6 +675,42 @@ export class AppModule {}
       expect(config!.dynamic_config_keys).toEqual(expect.arrayContaining(["isGlobal", "envFilePath", "cache"]));
     });
 
+    it("G1: parseMiddlewareChains extracts configure(consumer) chains", () => {
+      const middlewareSrc = `import { Module, NestModule, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
+import { AuthMiddleware } from './auth.middleware';
+import { LogMiddleware } from './log.middleware';
+
+@Module({
+  imports: [],
+  controllers: [],
+})
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(AuthMiddleware)
+      .forRoutes({ path: 'users/*', method: RequestMethod.ALL });
+    consumer.apply(LogMiddleware).forRoutes('*');
+  }
+}
+`;
+      const conv = extractNestConventions(middlewareSrc, "app.module.ts");
+      expect(conv.middleware_chains).toBeDefined();
+      expect(conv.middleware_chains.length).toBe(2);
+
+      const auth = conv.middleware_chains.find((m) => m.middleware === "AuthMiddleware");
+      expect(auth).toBeDefined();
+      expect(auth!.routes).toContainEqual({ path: "users/*", method: "ALL" });
+
+      const log = conv.middleware_chains.find((m) => m.middleware === "LogMiddleware");
+      expect(log).toBeDefined();
+      expect(log!.routes).toContainEqual({ path: "*" });
+    });
+
+    it("G1: returns empty middleware_chains when no configure method", () => {
+      const conv = extractNestConventions(NEST_DYNAMIC_SOURCE, "app.module.ts");
+      expect(conv.middleware_chains).toEqual([]);
+    });
+
     it("static module (no forRoot/forFeature) has no entities or config_keys", () => {
       const staticSrc = `import { Module } from '@nestjs/common';
 @Module({

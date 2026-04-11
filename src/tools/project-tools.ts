@@ -151,6 +151,15 @@ export interface NestConventions {
   global_interceptors: NestProviderEntry[];
   controllers: string[];
   throttler: { ttl: number; limit: number } | null;
+  /** G1: middleware.configure(consumer) chains */
+  middleware_chains: MiddlewareChainEntry[];
+}
+
+export interface MiddlewareChainEntry {
+  middleware: string;
+  routes: Array<{ path: string; method?: string }>;
+  file: string;
+  line: number;
 }
 
 export interface NestModuleEntry {
@@ -1108,7 +1117,76 @@ export function extractNestConventions(
     }
   }
 
-  return { modules, global_guards, global_filters, global_pipes, global_interceptors, controllers, throttler };
+  // G1: parse middleware.configure(consumer) chains
+  const middleware_chains = parseMiddlewareChains(source, filePath);
+
+  return { modules, global_guards, global_filters, global_pipes, global_interceptors, controllers, throttler, middleware_chains };
+}
+
+/**
+ * G1: Parse `configure(consumer: MiddlewareConsumer) { ... }` blocks.
+ * Extracts consumer.apply(Middleware).forRoutes(...) chains.
+ */
+export function parseMiddlewareChains(source: string, filePath: string): MiddlewareChainEntry[] {
+  const results: MiddlewareChainEntry[] = [];
+
+  // Find configure( method — can be `configure(consumer` or `configure(consumer: MiddlewareConsumer)`
+  const configureStart = source.search(/\bconfigure\s*\(\s*\w+\s*(?::\s*\w+)?\s*\)\s*\{/);
+  if (configureStart === -1) return results;
+
+  // Extract body of configure method via brace counting
+  const bodyStart = source.indexOf("{", configureStart);
+  if (bodyStart === -1) return results;
+  let depth = 1;
+  let i = bodyStart + 1;
+  while (i < source.length && depth > 0) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") depth--;
+    i++;
+  }
+  const body = source.slice(bodyStart + 1, i - 1);
+
+  // Match: consumer.apply(Middleware).forRoutes(<args>) — may chain multiple middlewares
+  // Use a tolerant pattern that captures the apply(...) arg and forRoutes(...) arg separately.
+  const applyRe = /\.apply\s*\(\s*([\w,\s]+)\s*\)\s*\.forRoutes\s*\(([\s\S]*?)\)\s*[;}]/g;
+  let m: RegExpExecArray | null;
+  while ((m = applyRe.exec(body)) !== null) {
+    const middlewareNames = m[1]!.split(",").map((s) => s.trim()).filter(Boolean);
+    const routesArg = m[2]!;
+
+    const routes: Array<{ path: string; method?: string }> = [];
+
+    // Parse routesArg — supports:
+    //   '*'
+    //   'users/*'
+    //   { path: 'users', method: RequestMethod.GET }
+    //   ControllerClass
+    const stringPathRe = /['"`]([^'"`]+)['"`]/g;
+    let sm: RegExpExecArray | null;
+    while ((sm = stringPathRe.exec(routesArg)) !== null) {
+      // Check if this string is part of a { path: '...', method: ... } object literal
+      const before = routesArg.slice(Math.max(0, sm.index - 30), sm.index);
+      if (/path:\s*$/.test(before)) {
+        // Object form — capture path AND method
+        const objRe = /path:\s*['"`]([^'"`]+)['"`]\s*,\s*method:\s*(?:RequestMethod\.)?(\w+)/;
+        const afterContext = routesArg.slice(Math.max(0, sm.index - 20), sm.index + 200);
+        const objMatch = objRe.exec(afterContext);
+        if (objMatch) {
+          routes.push({ path: objMatch[1]!, method: objMatch[2]! });
+          continue;
+        }
+      }
+      routes.push({ path: sm[1]! });
+    }
+
+    // Also capture bare ControllerClass (PascalCase identifier) if present
+    for (const name of middlewareNames) {
+      const line = source.slice(0, source.indexOf(name, configureStart)).split("\n").length;
+      results.push({ middleware: name, routes, file: filePath, line });
+    }
+  }
+
+  return results;
 }
 
 // ---------------------------------------------------------------------------
