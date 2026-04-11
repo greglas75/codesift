@@ -16,6 +16,7 @@ import { searchPatterns, listPatterns } from "./pattern-tools.js";
 import { computeCoChangePairs } from "./coupling-tools.js";
 import { analyzeHotspots } from "./hotspot-tools.js";
 import { analyzeComplexity } from "./complexity-tools.js";
+import { hydrationAuditFromIndex } from "./astro-islands.js";
 import { validateGitRef } from "../utils/git-validation.js";
 import { isTestFile } from "../utils/test-file.js";
 import picomatch from "picomatch";
@@ -109,6 +110,7 @@ export function findingTier(check: string): 1 | 2 | 3 {
     case "dead-code":
     case "blast-radius":
     case "bug-patterns":
+    case "astro-hydration":
       return 2;
 
     default:
@@ -204,6 +206,7 @@ const ALL_CHECKS = [
   "bug-patterns",
   "test-gaps",
   "hotspots",
+  "astro-hydration",
 ] as const;
 
 type CheckName = (typeof ALL_CHECKS)[number];
@@ -414,6 +417,85 @@ const REACT_ONLY_PATTERNS = new Set([
   "tanstack-missing-invalidation",
 ]);
 
+/** Pattern names that only apply to Astro files — filtered out when no .astro changes. */
+const ASTRO_ONLY_PATTERNS = new Set([
+  "astro-client-on-astro",
+  "astro-glob-usage",
+  "astro-set-html-xss",
+  "astro-img-element",
+  "astro-missing-getStaticPaths",
+  "astro-legacy-content-collections",
+  "astro-no-image-dimensions",
+  "astro-inline-script-no-is-inline",
+  "astro-env-secret-in-client",
+  "astro-hardcoded-site-url",
+  "astro-missing-lang-attr",
+  "astro-form-without-action",
+  "astro-view-transitions-deprecated",
+]);
+
+/**
+ * Astro hydration check: run hydrationAuditFromIndex scoped to Astro files in diff.
+ * Returns skipped when diff has zero .astro files.
+ */
+export async function checkAstroHydration(
+  index: CodeIndex,
+  changedFiles: string[],
+): Promise<CheckResult> {
+  const start = Date.now();
+
+  const astroFiles = changedFiles.filter((f) => f.endsWith(".astro"));
+  if (astroFiles.length === 0) {
+    return {
+      check: "astro-hydration",
+      status: "pass",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: "skipped: no astro files in diff",
+    };
+  }
+
+  try {
+    // Use the common path prefix to scope the audit when files share one,
+    // otherwise pass no prefix to let path filtering happen at file-level.
+    const result = hydrationAuditFromIndex(index, "all");
+
+    // Filter to issues in changed Astro files only
+    const changedAstroSet = new Set(astroFiles);
+    const filteredIssues = result.issues.filter((i) => changedAstroSet.has(i.file));
+
+    const findings: ReviewFinding[] = filteredIssues.map((i) => {
+      const f: ReviewFinding = {
+        check: "astro-hydration",
+        severity: i.severity === "error" ? "error" : i.severity === "warning" ? "warn" : "info",
+        message: `[${i.code}] ${i.message} — ${i.fix}`,
+        file: i.file,
+        line: i.line,
+      };
+      if (i.component !== undefined) f.symbol = i.component;
+      return f;
+    });
+
+    return {
+      check: "astro-hydration",
+      status: findings.length > 0 ? "warn" : "pass",
+      findings,
+      duration_ms: Date.now() - start,
+      summary: findings.length > 0
+        ? `${findings.length} Astro hydration issue(s) found (score: ${result.score})`
+        : "No Astro hydration issues detected",
+    };
+  } catch (err: unknown) {
+    return {
+      check: "astro-hydration",
+      status: "error",
+      findings: [],
+      duration_ms: Date.now() - start,
+      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 export async function checkBugPatterns(
   index: CodeIndex,
   changedFiles: string[],
@@ -428,10 +510,14 @@ export async function checkBugPatterns(
 
     // React-aware filtering: only run React patterns when .tsx/.jsx files in diff (Item 12)
     const hasReactChanges = changedFiles.some((f) => /\.(tsx|jsx)$/.test(f));
+    // Astro-aware filtering: only run Astro patterns when .astro files in diff
+    const hasAstroChanges = changedFiles.some((f) => f.endsWith(".astro"));
     const allPatterns = listPatterns().map((p) => p.name);
-    const patterns = hasReactChanges
-      ? allPatterns
-      : allPatterns.filter((p) => !REACT_ONLY_PATTERNS.has(p));
+    const patterns = allPatterns.filter((p) => {
+      if (REACT_ONLY_PATTERNS.has(p) && !hasReactChanges) return false;
+      if (ASTRO_ONLY_PATTERNS.has(p) && !hasAstroChanges) return false;
+      return true;
+    });
 
     // Run all patterns in parallel
     const results = await Promise.all(
@@ -872,6 +958,8 @@ async function runCheck(
       return checkBreakingChanges(index, index.root, changedFiles, since, until);
     case "test-gaps":
       return checkTestGaps(index, changedFiles);
+    case "astro-hydration":
+      return checkAstroHydration(index, changedFiles);
     default: {
       const tier = findingTier(checkName);
       return {

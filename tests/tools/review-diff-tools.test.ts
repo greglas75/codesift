@@ -29,6 +29,7 @@ import {
   checkCouplingGaps,
   checkBreakingChanges,
   checkTestGaps,
+  checkAstroHydration,
 } from "../../src/tools/review-diff-tools.js";
 import type { ReviewFinding, CheckResult, ReviewDiffOptions, ReviewDiffResult } from "../../src/tools/review-diff-tools.js";
 import { formatReviewDiff } from "../../src/formatters.js";
@@ -42,7 +43,10 @@ import { searchPatterns, listPatterns } from "../../src/tools/pattern-tools.js";
 import { analyzeHotspots } from "../../src/tools/hotspot-tools.js";
 import { analyzeComplexity } from "../../src/tools/complexity-tools.js";
 import { execFileSync } from "node:child_process";
-import type { CodeIndex } from "../../src/types.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { CodeIndex, FileEntry } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1559,5 +1563,88 @@ describe("formatReviewDiff", () => {
     const excludeStr = "*.lock, dist/**";
     const parsed = excludeStr.split(",").map((p) => p.trim()).filter(Boolean);
     expect(parsed).toEqual(["*.lock", "dist/**"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check adapter — checkAstroHydration
+// ---------------------------------------------------------------------------
+
+let _astroFixtureCounter = 0;
+
+function makeAstroIndex(root: string, astroPaths: string[]): CodeIndex {
+  const files: FileEntry[] = astroPaths.map((p) => ({
+    path: p,
+    language: "astro" as const,
+    symbol_count: 1,
+    last_modified: Date.now(),
+  }));
+  return {
+    repo: "local/test",
+    root,
+    symbols: [],
+    files,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    symbol_count: files.length,
+    file_count: files.length,
+  };
+}
+
+function createAstroDir(files: Record<string, string>): string {
+  const dir = join(tmpdir(), `codesift-rd-astro-${Date.now()}-${_astroFixtureCounter++}`);
+  mkdirSync(dir, { recursive: true });
+  for (const [relPath, content] of Object.entries(files)) {
+    const abs = join(dir, relPath);
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, content);
+  }
+  return dir;
+}
+
+describe("checkAstroHydration", () => {
+  it("fires AH04 when .astro file in diff uses client:load in footer", async () => {
+    // AH04 fires when client:load is used below fold (in footer/aside/nav or document_order > 3)
+    const source = `---
+import A from './A.tsx';
+import B from './B.tsx';
+import C from './C.tsx';
+import D from './D.tsx';
+import Footer from './Footer.tsx';
+---
+<A client:load />
+<B client:load />
+<C client:load />
+<D client:load />
+<footer>
+  <Footer client:load />
+</footer>
+`;
+    const root = createAstroDir({ "src/pages/index.astro": source });
+    const index = makeAstroIndex(root, ["src/pages/index.astro"]);
+
+    const result = await checkAstroHydration(index, ["src/pages/index.astro"]);
+
+    expect(result.check).toBe("astro-hydration");
+    expect(result.status).toBe("warn");
+    // At least one AH04 finding
+    const ah04 = result.findings.find((f) => f.message.includes("AH04"));
+    expect(ah04).toBeDefined();
+    expect(ah04!.file).toBe("src/pages/index.astro");
+  });
+
+  it("returns skipped summary when diff has only .ts files", async () => {
+    const index = makeFakeIndex({
+      files: [
+        { path: "src/utils.ts", language: "typescript", symbol_count: 1, last_modified: 0 },
+      ],
+    });
+
+    const result = await checkAstroHydration(index, ["src/utils.ts"]);
+
+    expect(result.check).toBe("astro-hydration");
+    expect(result.status).toBe("pass");
+    expect(result.findings).toHaveLength(0);
+    expect(result.summary).toContain("skipped");
   });
 });
