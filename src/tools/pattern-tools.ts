@@ -144,6 +144,35 @@ export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: stri
     regex: /createCommand\s*\(\s*["'][^"']*\$\{?\w+/,
     description: "Yii2 createCommand with string interpolation — SQL injection risk",
   },
+  // NestJS anti-patterns
+  "nest-circular-inject": {
+    regex: /@Inject\s*\(\s*forwardRef\s*\(/,
+    description: "Circular dependency via forwardRef — restructure module boundaries (NestJS)",
+  },
+  "nest-catch-all-filter": {
+    regex: /@Catch\s*\(\s*\)/,
+    description: "@Catch() with no argument — catches all exceptions indiscriminately (NestJS)",
+  },
+  "nest-request-scope": {
+    regex: /scope:\s*Scope\.REQUEST/,
+    description: "Request-scoped provider — performance overhead, breaks singleton assumptions (NestJS)",
+  },
+  "nest-raw-exception": {
+    regex: /throw\s+new\s+Error\s*\(/,
+    description: "Raw Error thrown instead of NestJS HttpException/BadRequestException (NestJS)",
+  },
+  "nest-any-guard-return": {
+    regex: /canActivate[\s\S]{0,100}return\s+true\s*;/,
+    description: "Guard always returns true — security no-op (NestJS)",
+  },
+  "nest-service-locator": {
+    regex: /moduleRef\s*\.\s*(?:get|resolve)\s*\(/,
+    description: "Service locator via ModuleRef.get/resolve — use constructor injection instead (NestJS)",
+  },
+  "nest-direct-env": {
+    regex: /process\.env\.\w+/,
+    description: "Direct process.env access — use ConfigService for type-safe config (NestJS)",
+  },
 };
 
 /**
