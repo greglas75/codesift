@@ -305,7 +305,7 @@ function routeToMermaid(result: RouteTraceResult): string {
  * Find Yii2 route handlers via convention: controller-id/action-id → ControllerIdController::actionActionId().
  * Supports modules: module-id/controller-id/action-id.
  */
-function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+async function findYii2Handlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
   const handlers: RouteHandler[] = [];
   const normalized = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
   const segments = normalized.split("/").filter(Boolean);
@@ -345,7 +345,10 @@ function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] 
     (s) => s.name === controllerName && s.kind === "class",
   );
 
-  if (!controllerSymbol) return handlers;
+  if (!controllerSymbol) {
+    // Fallback: try urlManager rules from config/web.php
+    return findYii2HandlersFromConfig(index, searchPath);
+  }
 
   // Find action method within the controller
   const actionSymbol = index.symbols.find(
@@ -364,6 +367,58 @@ function findYii2Handlers(index: CodeIndex, searchPath: string): RouteHandler[] 
     handlers.push({
       symbol: stripSource(controllerSymbol),
       file: controllerSymbol.file,
+      framework: "yii2",
+    });
+  }
+
+  return handlers;
+}
+
+/**
+ * Fallback: parse Yii2 urlManager rules from config/web.php.
+ * Matches patterns like: 'GET api/users/<id>' => 'user/view'
+ */
+async function findYii2HandlersFromConfig(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const configFile = index.files.find((f) => /config\/web\.php$/.test(f.path));
+  if (!configFile) return handlers;
+
+  const { readFile: rf } = await import("node:fs/promises");
+  const { join: j } = await import("node:path");
+  let source: string;
+  try {
+    source = await rf(j(index.root, configFile.path), "utf-8");
+  } catch { return handlers; }
+
+  const normalized = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
+
+  // Match: 'route/pattern' => 'controller/action' or ['GET method/pattern'] => 'controller/action'
+  const ruleRe = /['"](?:(?:GET|POST|PUT|DELETE|PATCH)\s+)?([^'"]+)['"]\s*=>\s*['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+  while ((match = ruleRe.exec(source)) !== null) {
+    const rulePattern = match[1]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
+    if (!matchPath(rulePattern, normalized)) continue;
+
+    const route = match[2]!; // e.g. "user/view"
+    const parts = route.split("/");
+    if (parts.length < 2) continue;
+
+    const controllerId = parts[parts.length - 2]!;
+    const actionId = parts[parts.length - 1]!;
+    const toPascal = (s: string): string =>
+      s.split("-").map(p => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+
+    const controllerName = toPascal(controllerId) + "Controller";
+    const actionMethod = "action" + toPascal(actionId);
+
+    const ctrlSym = index.symbols.find(s => s.name === controllerName && s.kind === "class");
+    if (!ctrlSym) continue;
+
+    const actionSym = index.symbols.find(s => s.name === actionMethod && s.parent === ctrlSym.id);
+    handlers.push({
+      symbol: stripSource(actionSym ?? ctrlSym),
+      file: (actionSym ?? ctrlSym).file,
+      method: "GET",
       framework: "yii2",
     });
   }
@@ -614,7 +669,7 @@ export async function traceRoute(
     ...(await findNestJSHandlers(index, path)),
     ...findNextJSHandlers(index, path),
     ...findExpressHandlers(index, path),
-    ...findYii2Handlers(index, path),
+    ...(await findYii2Handlers(index, path)),
     ...(await findLaravelHandlers(index, path)),
     ...(await findKtorHandlers(index, path)),
     ...(await findSpringBootKotlinHandlers(index, path)),

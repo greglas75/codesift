@@ -73,8 +73,9 @@ export async function resolvePhpNamespace(
   const root = bestRoot.replace(/\/$/, "");
   const filePath = root + "/" + relativePath;
 
-  // Check if file exists in index
-  const exists = index.files.some((f) => f.path === filePath);
+  // Check if file exists in index (strip leading ./ for comparison)
+  const normalizedFP = filePath.replace(/^\.\//, "");
+  const exists = index.files.some((f) => f.path === normalizedFP || f.path === filePath);
 
   return {
     class_name: shortName,
@@ -456,60 +457,96 @@ export async function phpSecurityScan(
 // 7g. php_project_audit — Compound meta-tool
 // ---------------------------------------------------------------------------
 
+export interface AuditGate {
+  name: string;
+  status: "ok" | "error" | "timeout";
+  findings_count: number;
+  duration_ms: number;
+  error?: string;
+}
+
 export interface PhpProjectAudit {
   repo: string;
   duration_ms: number;
   checks_run: string[];
+  gates: AuditGate[];
   summary: {
-    security: number;
-    models: number;
-    events: number;
-    services: number;
-    views: number;
+    total_findings: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
     health_score: number;
+    top_risks: string[];
   };
   security: PhpSecurityScanResult;
   activerecord: ActiveRecordAnalysis;
 }
 
+const AUDIT_TIMEOUT = 8000;
+
 export async function phpProjectAudit(
   repo: string,
-  options?: { file_pattern?: string },
+  options?: { file_pattern?: string; checks?: string[] },
 ): Promise<PhpProjectAudit> {
   const startTime = Date.now();
-  const checksRun: string[] = [];
-
-  // Run independent checks in parallel
+  const gates: AuditGate[] = [];
+  const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots"];
+  const enabled = new Set(options?.checks ?? allChecks);
+  const fp = options?.file_pattern ?? "*.php";
   const secOpts: { file_pattern?: string } = {};
   if (options?.file_pattern) secOpts.file_pattern = options.file_pattern;
-  const [securityResult, arResult] = await Promise.all([
-    phpSecurityScan(repo, secOpts)
-      .then((r) => { checksRun.push("security"); return r; })
-      .catch(() => ({ findings: [], summary: { critical: 0, high: 0, medium: 0, low: 0, total: 0 }, checks_run: [] })),
-    analyzeActiveRecord(repo, options?.file_pattern ? { file_pattern: options.file_pattern } : undefined)
-      .then((r) => { checksRun.push("activerecord"); return r; })
-      .catch(() => ({ models: [], total: 0 })),
-  ]);
 
-  // Health score: 100 - (critical*20 + high*10 + medium*5)
-  const secSummary = securityResult.summary;
-  const healthScore = Math.max(
-    0,
-    100 - (secSummary.critical * 20 + secSummary.high * 10 + secSummary.medium * 5),
+  type Task = { name: string; run: () => Promise<unknown> };
+  const tasks: Task[] = [];
+
+  if (enabled.has("security")) tasks.push({ name: "security", run: () => phpSecurityScan(repo, secOpts) });
+  if (enabled.has("activerecord")) tasks.push({ name: "activerecord", run: () => analyzeActiveRecord(repo, options?.file_pattern ? { file_pattern: options.file_pattern } : undefined) });
+  if (enabled.has("complexity")) tasks.push({ name: "complexity", run: async () => { const { analyzeComplexity } = await import("./complexity-tools.js"); return analyzeComplexity(repo, { file_pattern: fp, top_n: 10 }); } });
+  if (enabled.has("dead_code")) tasks.push({ name: "dead_code", run: async () => { const { findDeadCode } = await import("./symbol-tools.js"); return findDeadCode(repo, { file_pattern: fp }); } });
+  if (enabled.has("patterns")) tasks.push({ name: "patterns", run: () => searchPatterns(repo, "empty-catch", { file_pattern: fp }) });
+  if (enabled.has("clones")) tasks.push({ name: "clones", run: async () => { const { findClones } = await import("./clone-tools.js"); return findClones(repo, { file_pattern: fp }); } });
+  if (enabled.has("hotspots")) tasks.push({ name: "hotspots", run: async () => { const { analyzeHotspots } = await import("./hotspot-tools.js"); return analyzeHotspots(repo, {}); } });
+
+  const settled = await Promise.allSettled(
+    tasks.map(async (t) => {
+      const s = Date.now();
+      const r = await Promise.race([t.run(), new Promise<"TIMEOUT">((ok) => setTimeout(() => ok("TIMEOUT"), AUDIT_TIMEOUT))]);
+      return { name: t.name, result: r, ms: Date.now() - s };
+    }),
   );
 
+  let securityResult: PhpSecurityScanResult = { findings: [], summary: { critical: 0, high: 0, medium: 0, low: 0, total: 0 }, checks_run: [] };
+  let arResult: ActiveRecordAnalysis = { models: [], total: 0 };
+  let totalFindings = 0;
+
+  for (const s of settled) {
+    if (s.status === "rejected") { gates.push({ name: "unknown", status: "error", findings_count: 0, duration_ms: 0, error: String(s.reason) }); continue; }
+    const { name, result, ms } = s.value;
+    if (result === "TIMEOUT") { gates.push({ name, status: "timeout", findings_count: 0, duration_ms: ms }); continue; }
+
+    let count = 0;
+    if (name === "security") { securityResult = result as PhpSecurityScanResult; count = securityResult.summary.total; }
+    else if (name === "activerecord") { arResult = result as ActiveRecordAnalysis; count = arResult.total; }
+    else if (name === "complexity") count = (result as { summary?: { above_threshold?: number } })?.summary?.above_threshold ?? 0;
+    else if (name === "dead_code") count = (result as { candidates?: unknown[] })?.candidates?.length ?? 0;
+    else if (name === "patterns") count = (result as { matches?: unknown[] })?.matches?.length ?? 0;
+    else if (name === "clones") count = (result as { clones?: unknown[] })?.clones?.length ?? 0;
+    else if (name === "hotspots") count = (result as { hotspots?: unknown[] })?.hotspots?.length ?? 0;
+
+    totalFindings += count;
+    gates.push({ name, status: "ok", findings_count: count, duration_ms: ms });
+  }
+
+  const sec = securityResult.summary;
+  const healthScore = Math.max(0, 100 - (sec.critical * 20 + sec.high * 10 + sec.medium * 5 + totalFindings));
+  const topRisks = gates.filter(g => g.findings_count > 0).sort((a, b) => b.findings_count - a.findings_count).slice(0, 3).map(g => `${g.name}: ${g.findings_count} findings`);
+
   return {
-    repo,
-    duration_ms: Date.now() - startTime,
-    checks_run: checksRun,
-    summary: {
-      security: secSummary.total,
-      models: arResult.total,
-      events: 0,
-      services: 0,
-      views: 0,
-      health_score: healthScore,
-    },
+    repo, duration_ms: Date.now() - startTime,
+    checks_run: gates.filter(g => g.status === "ok").map(g => g.name),
+    gates,
+    summary: { total_findings: totalFindings, critical: sec.critical, high: sec.high, medium: sec.medium, low: sec.low, health_score: healthScore, top_risks: topRisks },
     security: securityResult,
     activerecord: arResult,
   };
