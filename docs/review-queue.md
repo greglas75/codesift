@@ -199,3 +199,4 @@ Commits pending review. Auto-managed:
 - a88de11 (2026-04-11) fix adversarial review findings on HonoExtractor
 - b0ae5ff (2026-04-11) chore: stage pending WIP — Hono subapp routing, Python fixes, review + docs
 - 1b5ccdc (2026-04-11) feat(hono): subapp route flattening + multi-file import resolution
+- 61d7d28 (2026-04-11) docs: update review queue with latest commits
