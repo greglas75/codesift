@@ -251,3 +251,60 @@ export async function action() {
     expect(info.lib).toBe("none");
   });
 });
+
+describe("scoreServerAction", () => {
+  it("scores all-checks-high as 100 / excellent", () => {
+    const result = scoreServerAction({
+      auth: { confidence: "high", pattern: "direct" },
+      input_validation: { lib: "zod", confidence: "high" },
+      rate_limiting: { lib: "upstash", confidence: "high" },
+      error_handling: { has_try_catch: true, confidence: "high" },
+    });
+    expect(result.score).toBe(100);
+    expect(result.grade).toBe("excellent");
+  });
+
+  it("scores missing rate-limit only as 80", () => {
+    const result = scoreServerAction({
+      auth: { confidence: "high", pattern: "direct" },
+      input_validation: { lib: "zod", confidence: "high" },
+      rate_limiting: { lib: "none", confidence: "high" },
+      error_handling: { has_try_catch: true, confidence: "high" },
+    });
+    expect(result.score).toBe(80);
+  });
+
+  it("scores missing auth + validation as 20", () => {
+    const result = scoreServerAction({
+      auth: { confidence: "none", pattern: "none" },
+      input_validation: { lib: "none", confidence: "high" },
+      rate_limiting: { lib: "upstash", confidence: "high" },
+      error_handling: { has_try_catch: true, confidence: "high" },
+    });
+    expect(result.score).toBe(30); // rate=20 + error=10
+  });
+
+  it("scores no checks at all as 0 / poor", () => {
+    const result = scoreServerAction({
+      auth: { confidence: "none", pattern: "none" },
+      input_validation: { lib: "none", confidence: "high" },
+      rate_limiting: { lib: "none", confidence: "high" },
+      error_handling: { has_try_catch: false, confidence: "high" },
+    });
+    expect(result.score).toBe(0);
+    expect(result.grade).toBe("poor");
+  });
+
+  it("applies confidence multiplier (auth medium + validation high)", () => {
+    const result = scoreServerAction({
+      auth: { confidence: "medium", pattern: "direct" },
+      input_validation: { lib: "zod", confidence: "high" },
+      rate_limiting: { lib: "none", confidence: "high" },
+      error_handling: { has_try_catch: true, confidence: "high" },
+    });
+    // auth: 40 * 0.5 = 20, validation: 30, rate: 0, error: 10 → 60
+    // Grade: 40-69 needs_work
+    expect(result.score).toBe(60);
+    expect(result.grade).toBe("needs_work");
+  });
+});
