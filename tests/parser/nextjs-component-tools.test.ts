@@ -6,8 +6,17 @@ import {
   analyzeNextjsComponents,
   classifyFile,
   detectSignals,
+  applyClassificationTable,
 } from "../../src/tools/nextjs-component-tools.js";
+import type { ComponentSignals } from "../../src/tools/nextjs-component-tools.js";
 import { parseFile } from "../../src/parser/parser-manager.js";
+
+const emptySignals = (): ComponentSignals => ({
+  hooks: [],
+  event_handlers: [],
+  browser_globals: [],
+  dynamic_ssr_false: false,
+});
 
 describe("nextjs-component-tools exports", () => {
   it("exports analyzeNextjsComponents function", () => {
@@ -122,6 +131,71 @@ describe("detectSignals", () => {
     expect(signals.event_handlers).toEqual([]);
     expect(signals.browser_globals).toEqual([]);
     expect(signals.dynamic_ssr_false).toBe(false);
+  });
+});
+
+describe("applyClassificationTable", () => {
+  it("row 1: no directive + no signals -> server", () => {
+    expect(applyClassificationTable(null, emptySignals())).toEqual({
+      classification: "server",
+      violations: [],
+    });
+  });
+
+  it("row 2: no directive + hooks -> client_inferred", () => {
+    expect(
+      applyClassificationTable(null, { ...emptySignals(), hooks: ["useState"] }),
+    ).toEqual({ classification: "client_inferred", violations: [] });
+  });
+
+  it("row 3: no directive + events -> client_inferred", () => {
+    expect(
+      applyClassificationTable(null, {
+        ...emptySignals(),
+        event_handlers: ["onClick"],
+      }),
+    ).toEqual({ classification: "client_inferred", violations: [] });
+  });
+
+  it("row 4: no directive + browser globals -> client_inferred", () => {
+    expect(
+      applyClassificationTable(null, {
+        ...emptySignals(),
+        browser_globals: ["window"],
+      }),
+    ).toEqual({ classification: "client_inferred", violations: [] });
+  });
+
+  it("row 5: use client + no signals -> client_explicit + unnecessary_use_client", () => {
+    expect(applyClassificationTable("use client", emptySignals())).toEqual({
+      classification: "client_explicit",
+      violations: ["unnecessary_use_client"],
+    });
+  });
+
+  it("row 6: use client + hooks -> client_explicit, no violation", () => {
+    expect(
+      applyClassificationTable("use client", {
+        ...emptySignals(),
+        hooks: ["useState"],
+      }),
+    ).toEqual({ classification: "client_explicit", violations: [] });
+  });
+
+  it("row 7: use server + no signals -> server", () => {
+    expect(applyClassificationTable("use server", emptySignals())).toEqual({
+      classification: "server",
+      violations: [],
+    });
+  });
+
+  it("row 8: no directive + dynamic_ssr_false -> client_inferred", () => {
+    expect(
+      applyClassificationTable(null, {
+        ...emptySignals(),
+        dynamic_ssr_false: true,
+      }),
+    ).toEqual({ classification: "client_inferred", violations: [] });
   });
 });
 

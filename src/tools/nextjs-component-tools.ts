@@ -98,6 +98,48 @@ export const BROWSER_GLOBALS = new Set<string>([
 ]);
 
 // ---------------------------------------------------------------------------
+// Classification decision table
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure decision table for component classification. No I/O, no AST access.
+ *
+ * Rules (in priority order):
+ *   - directive === "use client":
+ *       has any signal     -> client_explicit
+ *       no signals         -> client_explicit + violation "unnecessary_use_client"
+ *   - directive === "use server" -> server
+ *   - directive === null:
+ *       has any signal     -> client_inferred
+ *       no signals         -> server
+ */
+export function applyClassificationTable(
+  directive: "use client" | "use server" | null,
+  signals: ComponentSignals,
+): { classification: ComponentClassification; violations: string[] } {
+  const hasAnySignal =
+    signals.hooks.length > 0 ||
+    signals.event_handlers.length > 0 ||
+    signals.browser_globals.length > 0 ||
+    signals.dynamic_ssr_false;
+
+  if (directive === "use client") {
+    return {
+      classification: "client_explicit",
+      violations: hasAnySignal ? [] : ["unnecessary_use_client"],
+    };
+  }
+  if (directive === "use server") {
+    return { classification: "server", violations: [] };
+  }
+  // directive === null
+  return {
+    classification: hasAnySignal ? "client_inferred" : "server",
+    violations: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Signal detection (hooks, JSX event handlers, browser globals, next/dynamic)
 // ---------------------------------------------------------------------------
 
