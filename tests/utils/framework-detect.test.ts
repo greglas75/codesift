@@ -115,4 +115,30 @@ describe("detectFrameworks", () => {
     const frameworks = detectFrameworks(index);
     expect(frameworks.has("nestjs")).toBe(false);
   });
+
+  // G7/G8 — NestJS sub-packages
+  it("detects nestjs from @nestjs/schedule import", () => {
+    const index = mockIndex(["import { Cron } from '@nestjs/schedule';"]);
+    expect(detectFrameworks(index).has("nestjs")).toBe(true);
+  });
+
+  it("detects nestjs from @nestjs/event-emitter import", () => {
+    const index = mockIndex(["import { OnEvent } from '@nestjs/event-emitter';"]);
+    expect(detectFrameworks(index).has("nestjs")).toBe(true);
+  });
+
+  it("detects nestjs from @nestjs/graphql import", () => {
+    const index = mockIndex(["import { Resolver, Query } from '@nestjs/graphql';"]);
+    expect(detectFrameworks(index).has("nestjs")).toBe(true);
+  });
+
+  it("detects nestjs from @nestjs/websockets import", () => {
+    const index = mockIndex(["import { WebSocketGateway } from '@nestjs/websockets';"]);
+    expect(detectFrameworks(index).has("nestjs")).toBe(true);
+  });
+
+  it("detects nestjs from @nestjs/microservices import", () => {
+    const index = mockIndex(["import { MessagePattern } from '@nestjs/microservices';"]);
+    expect(detectFrameworks(index).has("nestjs")).toBe(true);
+  });
 });
