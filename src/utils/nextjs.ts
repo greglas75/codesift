@@ -811,3 +811,237 @@ export function extractFetchCalls(tree: Parser.Tree, source: string): FetchCall[
 
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Zod schema extraction (T2, T3 helper)
+// ---------------------------------------------------------------------------
+
+/** Allowed top-level Zod field methods. */
+const ZOD_FIELD_METHODS = new Set([
+  "object",
+  "string",
+  "number",
+  "boolean",
+  "array",
+  "union",
+  "enum",
+  "literal",
+  "optional",
+  "nullable",
+  "record",
+  "tuple",
+  "discriminatedUnion",
+  "date",
+  "any",
+  "unknown",
+  "bigint",
+  "void",
+  "never",
+  "null",
+  "undefined",
+]);
+
+/** Allowed chained refinement methods (non-structural). */
+const ZOD_CHAIN_METHODS = new Set([
+  "extend",
+  "merge",
+  "omit",
+  "pick",
+  "strict",
+  "refine",
+  "superRefine",
+  "transform",
+  "brand",
+  "describe",
+  "default",
+  "catch",
+  "readonly",
+  "optional",
+  "nullable",
+  "nullish",
+]);
+
+/** Per-type constraint methods that we record (not exhaustive — tracks common cases). */
+const ZOD_CONSTRAINT_METHODS = new Set([
+  "int",
+  "min",
+  "max",
+  "length",
+  "email",
+  "url",
+  "uuid",
+  "regex",
+  "startsWith",
+  "endsWith",
+  "positive",
+  "negative",
+  "nonnegative",
+  "nonpositive",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "multipleOf",
+  "finite",
+  "safe",
+  "trim",
+  "toLowerCase",
+  "toUpperCase",
+]);
+
+export interface ZodFieldType {
+  type: string;
+  constraints?: string[];
+  nested?: Record<string, ZodFieldType>;
+  optional?: boolean;
+  nullable?: boolean;
+}
+
+export interface ZodShape {
+  fields: Record<string, ZodFieldType>;
+  partial: boolean;
+}
+
+/**
+ * Unwrap a call expression like `z.object({...}).strict().refine(...)` down to
+ * the root z.<method>(...) invocation. Returns the underlying call node, the
+ * captured field method, and any collected chain modifiers.
+ */
+function unwrapZodChain(
+  call: Parser.SyntaxNode,
+): { rootCall: Parser.SyntaxNode; rootMethod: string; chain: string[]; partial: boolean } | null {
+  const chain: string[] = [];
+  let partial = false;
+  let cur: Parser.SyntaxNode = call;
+
+  while (cur.type === "call_expression") {
+    const fn = cur.childForFieldName("function") ?? cur.namedChild(0);
+    if (!fn) return null;
+
+    // z.<method>(...) — base case
+    if (fn.type === "member_expression") {
+      const obj = fn.childForFieldName("object") ?? fn.namedChild(0);
+      const prop = fn.childForFieldName("property") ?? fn.namedChild(1);
+
+      if (obj?.type === "identifier" && (obj.text === "z" || obj.text === "zod")) {
+        if (prop?.type !== "property_identifier") return null;
+        const method = prop.text;
+        if (!ZOD_FIELD_METHODS.has(method)) return null;
+        return { rootCall: cur, rootMethod: method, chain, partial };
+      }
+
+      // Chained: <inner>.<chainMethod>(...)
+      if (prop?.type === "property_identifier") {
+        const method = prop.text;
+        if (ZOD_CHAIN_METHODS.has(method)) {
+          chain.unshift(method);
+          if (method === "extend" || method === "merge") partial = true;
+          if (!obj) return null;
+          if (obj.type === "call_expression") {
+            cur = obj;
+            continue;
+          }
+          // Identifier base (e.g. `BaseSchema.extend(...)`)
+          return null;
+        }
+        if (ZOD_CONSTRAINT_METHODS.has(method)) {
+          chain.unshift(method);
+          if (!obj) return null;
+          if (obj.type === "call_expression") {
+            cur = obj;
+            continue;
+          }
+          return null;
+        }
+        // Unknown chain method on unknown base
+        return null;
+      }
+    }
+
+    // Not a Zod chain
+    return null;
+  }
+
+  return null;
+}
+
+/** Recursively parse a single field call like `z.string()` into a ZodFieldType. */
+function parseZodField(call: Parser.SyntaxNode): ZodFieldType | null {
+  const unwrapped = unwrapZodChain(call);
+  if (!unwrapped) return null;
+  const { rootCall, rootMethod, chain } = unwrapped;
+
+  const field: ZodFieldType = { type: rootMethod };
+  const constraints = chain.filter((c) => ZOD_CONSTRAINT_METHODS.has(c));
+  if (constraints.length > 0) field.constraints = constraints;
+  if (chain.includes("optional")) field.optional = true;
+  if (chain.includes("nullable") || chain.includes("nullish")) field.nullable = true;
+
+  if (rootMethod === "object") {
+    const args = rootCall.childForFieldName("arguments") ?? rootCall.namedChild(1);
+    if (args) {
+      const objArg = args.namedChildren.find((c) => c.type === "object");
+      if (objArg) {
+        const nested = parseZodObjectArg(objArg);
+        if (nested) field.nested = nested;
+      }
+    }
+  }
+
+  return field;
+}
+
+/** Walk an `{ key: z.<method>(), ... }` object literal into a fields map. */
+function parseZodObjectArg(objNode: Parser.SyntaxNode): Record<string, ZodFieldType> | null {
+  if (objNode.type !== "object") return null;
+  const out: Record<string, ZodFieldType> = {};
+  for (const pair of objNode.namedChildren) {
+    if (pair.type !== "pair") continue;
+    const key = pair.childForFieldName("key") ?? pair.namedChild(0);
+    if (!key) continue;
+    let keyText: string | null = null;
+    if (key.type === "property_identifier" || key.type === "identifier") {
+      keyText = key.text;
+    } else if (key.type === "string") {
+      keyText = readStringLiteral(key);
+    }
+    if (!keyText) continue;
+    const value = pair.childForFieldName("value") ?? pair.namedChild(1);
+    if (!value || value.type !== "call_expression") continue;
+    const field = parseZodField(value);
+    if (field) out[keyText] = field;
+  }
+  return out;
+}
+
+/**
+ * Extract the shape of a top-level Zod schema from a source tree.
+ *
+ * Walks `variable_declarator` nodes and tries each one's initializer. Returns
+ * the first successfully parsed Zod schema, or `null` when no z.object(...) is
+ * found. Other validation libraries (Yup, Joi, etc.) intentionally return null
+ * — downstream tools wrap this and add `schema_lib: "unknown"` at their own
+ * aggregation level.
+ */
+export function extractZodSchema(tree: Parser.Tree, _source: string): ZodShape | null {
+  const root = tree.rootNode;
+
+  for (const decl of root.descendantsOfType("variable_declarator")) {
+    const value = decl.childForFieldName("value");
+    if (!value || value.type !== "call_expression") continue;
+    const unwrapped = unwrapZodChain(value);
+    if (!unwrapped) continue;
+    if (unwrapped.rootMethod !== "object") continue;
+
+    const args = unwrapped.rootCall.childForFieldName("arguments") ?? unwrapped.rootCall.namedChild(1);
+    if (!args) continue;
+    const objArg = args.namedChildren.find((c) => c.type === "object");
+    if (!objArg) continue;
+    const fields = parseZodObjectArg(objArg);
+    if (!fields) continue;
+
+    return { fields, partial: unwrapped.partial };
+  }
+
+  return null;
+}

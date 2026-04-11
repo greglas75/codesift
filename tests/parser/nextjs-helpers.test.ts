@@ -3,6 +3,7 @@ import { parseFile } from "../../src/parser/parser-manager.js";
 import {
   parseMetadataExport,
   extractFetchCalls,
+  extractZodSchema,
 } from "../../src/utils/nextjs.js";
 
 async function parse(source: string) {
@@ -196,5 +197,81 @@ async function load() {
     const headerCalls = calls.filter((c) => c.callee === "headers");
     expect(headerCalls.length).toBe(1);
     expect(headerCalls[0]!.isSsrTrigger).toBe(true);
+  });
+});
+
+describe("extractZodSchema", () => {
+  it("extracts simple z.object shape", async () => {
+    const src = `
+import { z } from 'zod';
+const schema = z.object({ name: z.string() });
+`;
+    const tree = await parse(src);
+    const shape = extractZodSchema(tree, src);
+    expect(shape).not.toBeNull();
+    expect(shape!.partial).toBe(false);
+    expect(shape!.fields.name).toBeDefined();
+    expect(shape!.fields.name!.type).toBe("string");
+  });
+
+  it("accepts chained methods like strict() and refine()", async () => {
+    const src = `
+import { z } from 'zod';
+const schema = z.object({ age: z.number() }).strict().refine(v => v.age > 0);
+`;
+    const tree = await parse(src);
+    const shape = extractZodSchema(tree, src);
+    expect(shape).not.toBeNull();
+    expect(shape!.partial).toBe(false);
+    expect(shape!.fields.age).toBeDefined();
+  });
+
+  it("captures constraints on chained numeric fields", async () => {
+    const src = `
+import { z } from 'zod';
+const schema = z.object({ age: z.number().int().min(0) });
+`;
+    const tree = await parse(src);
+    const shape = extractZodSchema(tree, src);
+    expect(shape).not.toBeNull();
+    expect(shape!.fields.age!.type).toBe("number");
+    expect(shape!.fields.age!.constraints).toBeDefined();
+    expect(shape!.fields.age!.constraints).toEqual(expect.arrayContaining(["int", "min"]));
+  });
+
+  it("returns null for plain object literals that are not Zod schemas", async () => {
+    const src = `
+const schema = { name: "foo" };
+`;
+    const tree = await parse(src);
+    const shape = extractZodSchema(tree, src);
+    expect(shape).toBeNull();
+  });
+
+  it("handles nested z.object shapes", async () => {
+    const src = `
+import { z } from 'zod';
+const schema = z.object({
+  user: z.object({ name: z.string() })
+});
+`;
+    const tree = await parse(src);
+    const shape = extractZodSchema(tree, src);
+    expect(shape).not.toBeNull();
+    expect(shape!.fields.user).toBeDefined();
+    expect(shape!.fields.user!.type).toBe("object");
+    expect(shape!.fields.user!.nested).toBeDefined();
+    expect(shape!.fields.user!.nested!.name).toBeDefined();
+    expect(shape!.fields.user!.nested!.name!.type).toBe("string");
+  });
+
+  it("returns null for Yup schema calls (Zod-only detection)", async () => {
+    const src = `
+import * as yup from 'yup';
+const schema = yup.object({ name: yup.string() });
+`;
+    const tree = await parse(src);
+    const shape = extractZodSchema(tree, src);
+    expect(shape).toBeNull();
   });
 });
