@@ -192,3 +192,4 @@ Commits pending review. Auto-managed:
 - bc122b7 (2026-04-11) feat(react): Wave 3 — 2 new tools (trace_component_tree, analyze_hooks) + hook filtering
 - 33e14e8 (2026-04-11) add HonoAppModel types for hono extractor
 - a03414d (2026-04-11) amend hono plan with adversarial review fixes (revision 2)
+- 6e30a8e (2026-04-11) feat: Python foundation + Astro/Next.js/NestJS/SQL specs and plans
