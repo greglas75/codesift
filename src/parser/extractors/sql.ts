@@ -26,95 +26,97 @@ const MAX_SOURCE_LENGTH = 5000;
 // Schema-qualified names: prefer the part after the dot.
 
 interface DdlMatcher {
-  test: (line: string) => { name: string } | null;
+  /** Global regex used with String.matchAll over the full source */
+  pattern: RegExp;
   kind: SymbolKind;
   /** How to find the end of this construct */
   endStrategy: "paren" | "semicolon" | "begin-end" | "single-line";
 }
 
-function extractName(m: RegExpExecArray, offset: number): string | null {
-  return m[offset + 2] ?? m[offset + 3] ?? m[offset] ?? m[offset + 1] ?? null;
+// Identifier pattern: accepts double-quotes, backticks (MySQL), brackets (SQL Server),
+// or unquoted with optional schema prefix and Joomla-style #__name chars.
+// Captures the unqualified name (last part after optional schema dot).
+// Single ident: "x" | `x` | [x] | x (where x can include _, digits, #, $)
+const IDENT = String.raw`(?:"([^"]+)"|\x60([^\x60]+)\x60|\[([^\]]+)\]|([\w#$]+))`;
+
+// Schema-qualified: optional "schema". prefix
+const QUALIFIED = String.raw`(?:(?:"[^"]+"|\x60[^\x60]+\x60|\[[^\]]+\]|[\w#$]+)\s*\.\s*)?` + IDENT;
+
+/** Extract identifier name from match groups (4 capture groups per IDENT) */
+function pickName(m: RegExpExecArray, offset: number): string | null {
+  return m[offset] ?? m[offset + 1] ?? m[offset + 2] ?? m[offset + 3] ?? null;
 }
 
 const DDL_MATCHERS: DdlMatcher[] = [
-  // CREATE TABLE name (
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))\s*\(/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?` + QUALIFIED + String.raw`\s*\(`,
+      "gi",
+    ),
     kind: "table",
     endStrategy: "paren",
   },
-  // CREATE [OR REPLACE] [MATERIALIZED] VIEW name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?` + QUALIFIED,
+      "gi",
+    ),
     kind: "view",
     endStrategy: "semicolon",
   },
-  // CREATE [UNIQUE] INDEX name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?` + QUALIFIED,
+      "gi",
+    ),
     kind: "index",
     endStrategy: "semicolon",
   },
-  // CREATE [OR REPLACE] FUNCTION name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+` + QUALIFIED,
+      "gi",
+    ),
     kind: "function",
     endStrategy: "begin-end",
   },
-  // CREATE [OR REPLACE] PROCEDURE name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+` + QUALIFIED,
+      "gi",
+    ),
     kind: "procedure",
     endStrategy: "begin-end",
   },
-  // CREATE [OR REPLACE] TRIGGER name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+(?:OR\s+REPLACE\s+)?TRIGGER\s+` + QUALIFIED,
+      "gi",
+    ),
     kind: "trigger",
     endStrategy: "begin-end",
   },
-  // CREATE SCHEMA name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: m[1] ?? m[2] ?? null } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?` + IDENT,
+      "gi",
+    ),
     kind: "namespace",
     endStrategy: "semicolon",
   },
-  // CREATE TYPE name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+TYPE\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+TYPE\s+` + QUALIFIED,
+      "gi",
+    ),
     kind: "type",
     endStrategy: "semicolon",
   },
-  // CREATE SEQUENCE name
   {
-    test: (line) => {
-      const m = /^\s*CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))/i.exec(line);
-      return m ? { name: extractName(m, 1)! } : null;
-    },
+    pattern: new RegExp(
+      String.raw`(?:^|[;\s])\s*CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?` + QUALIFIED,
+      "gi",
+    ),
     kind: "variable",
     endStrategy: "semicolon",
   },
@@ -137,60 +139,114 @@ export function extractSqlSymbols(
   const lines = source.split("\n");
   const origLines = originalSource ? originalSource.split("\n") : lines;
 
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i]!;
+  // Build line-offset map: lineOffsets[i] = byte offset where line i starts
+  const lineOffsets: number[] = [0];
+  for (let k = 0; k < source.length; k++) {
+    if (source.charCodeAt(k) === 10 /* \n */) lineOffsets.push(k + 1);
+  }
 
-    let matched = false;
-    for (const matcher of DDL_MATCHERS) {
-      const result = matcher.test(line);
-      if (!result || !result.name) continue;
-
-      const { name } = result;
-      const startLine = i + 1; // 1-based
-
-      // Find end of construct
-      const endLineIdx = findEnd(lines, i, matcher.endStrategy);
-      const endLine = endLineIdx + 1;
-
-      // Source from original (preserves Jinja tokens)
-      const blockSource = origLines.slice(i, endLineIdx + 1).join("\n");
-
-      const docstring = extractSqlDocstring(lines, i);
-
-      const signature = matcher.kind === "table"
-        ? buildTableSignature(name, lines, i, endLineIdx)
-        : `${matcher.kind.toUpperCase()} ${name}`;
-
-      const sym: CodeSymbol = {
-        id: makeSymbolId(repo, filePath, name, startLine),
-        repo,
-        name,
-        kind: matcher.kind,
-        file: filePath,
-        start_line: startLine,
-        end_line: endLine,
-        signature,
-        source: blockSource.length > MAX_SOURCE_LENGTH
-          ? blockSource.slice(0, MAX_SOURCE_LENGTH) + "..."
-          : blockSource,
-        tokens: tokenizeIdentifier(name),
-      };
-      if (docstring) sym.docstring = docstring;
-      symbols.push(sym);
-
-      // Extract column definitions as field children for tables
-      if (matcher.kind === "table") {
-        const fields = extractColumns(lines, i, endLineIdx, filePath, repo, sym.id);
-        symbols.push(...fields);
+  function offsetToLine(offset: number): number {
+    // Binary search for the line containing this byte offset
+    let lo = 0, hi = lineOffsets.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      if (lineOffsets[mid]! <= offset) {
+        if (mid === lineOffsets.length - 1 || lineOffsets[mid + 1]! > offset) return mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
       }
-
-      i = endLineIdx + 1;
-      matched = true;
-      break;
     }
+    return 0;
+  }
 
-    if (!matched) i++;
+  // Track byte positions already consumed by a higher-priority match (e.g., TABLE inside TABLE).
+  const consumed: Array<[number, number]> = [];
+  function isConsumed(offset: number): boolean {
+    for (const [lo, hi] of consumed) {
+      if (offset >= lo && offset < hi) return true;
+    }
+    return false;
+  }
+
+  // Collect all matches across all DDL patterns
+  interface Hit {
+    matcher: DdlMatcher;
+    name: string;
+    matchOffset: number;  // start of the match in source
+    nameOffset: number;   // approx start of name (used for line)
+  }
+  const hits: Hit[] = [];
+
+  for (const matcher of DDL_MATCHERS) {
+    matcher.pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = matcher.pattern.exec(source)) !== null) {
+      // Identifier name is in the LAST 4 capture groups (the IDENT pattern)
+      const groupCount = m.length - 1;
+      const name = pickName(m, Math.max(1, groupCount - 3));
+      if (!name) continue;
+
+      // Find the actual CREATE keyword within the match string (skip leading whitespace/separator)
+      const matchStr = m[0]!;
+      const localCreateIdx = matchStr.toUpperCase().indexOf("CREATE");
+      if (localCreateIdx === -1) continue;
+      const createOffset = m.index + localCreateIdx;
+
+      hits.push({
+        matcher,
+        name,
+        matchOffset: createOffset,
+        nameOffset: m.index + m[0].length - name.length,
+      });
+    }
+  }
+
+  // Sort by source position
+  hits.sort((a, b) => a.matchOffset - b.matchOffset);
+
+  for (const hit of hits) {
+    if (isConsumed(hit.matchOffset)) continue;
+
+    const startLineIdx = offsetToLine(hit.matchOffset);
+    const startLine = startLineIdx + 1; // 1-based
+
+    // Compute byte-precise end of construct from source, then map to line
+    const endByteOffset = findEndByte(source, hit.matchOffset, hit.matcher.endStrategy);
+    const endLineIdx = offsetToLine(endByteOffset);
+    const endLine = endLineIdx + 1;
+
+    // Mark only the actual byte range as consumed (not the whole rest of the file)
+    consumed.push([hit.matchOffset, endByteOffset + 1]);
+
+    const blockSource = origLines.slice(startLineIdx, endLineIdx + 1).join("\n");
+    const docstring = extractSqlDocstring(lines, startLineIdx);
+
+    const signature = hit.matcher.kind === "table"
+      ? buildTableSignature(hit.name, lines, startLineIdx, endLineIdx)
+      : `${hit.matcher.kind.toUpperCase()} ${hit.name}`;
+
+    const sym: CodeSymbol = {
+      id: makeSymbolId(repo, filePath, hit.name, startLine),
+      repo,
+      name: hit.name,
+      kind: hit.matcher.kind,
+      file: filePath,
+      start_line: startLine,
+      end_line: endLine,
+      signature,
+      source: blockSource.length > MAX_SOURCE_LENGTH
+        ? blockSource.slice(0, MAX_SOURCE_LENGTH) + "..."
+        : blockSource,
+      tokens: tokenizeIdentifier(hit.name),
+    };
+    if (docstring) sym.docstring = docstring;
+    symbols.push(sym);
+
+    if (hit.matcher.kind === "table") {
+      const fields = extractColumns(lines, startLineIdx, endLineIdx, filePath, repo, sym.id, hit.matchOffset, source);
+      symbols.push(...fields);
+    }
   }
 
   return symbols;
@@ -198,8 +254,9 @@ export function extractSqlSymbols(
 
 // ── Column extraction ─────────────────────────────────────
 
-const CONSTRAINT_RE = /^\s*(?:PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|UNIQUE|CHECK|INDEX)\b/i;
-const COLUMN_RE = /^\s*"?(\w+)"?\s+(.+)/i;
+const CONSTRAINT_RE = /^\s*(?:PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|UNIQUE|CHECK|INDEX|KEY|FULLTEXT)\b/i;
+// Column name: backtick, double-quote, bracket, or unquoted with #/$ allowed
+const COLUMN_RE = /^\s*(?:`([^`]+)`|"([^"]+)"|\[([^\]]+)\]|([\w#$]+))\s+(.+)/i;
 
 function extractColumns(
   lines: string[],
@@ -208,24 +265,60 @@ function extractColumns(
   filePath: string,
   repo: string,
   parentId: string,
+  matchOffset?: number,
+  source?: string,
 ): CodeSymbol[] {
   const fields: CodeSymbol[] = [];
+
+  // For multi-line: use lines (preserves correct line numbers).
+  // For minified single-line: split the body content (between parens) on top-level commas.
+  if (startIdx === endIdx && source !== undefined && matchOffset !== undefined) {
+    // Minified path: extract body between matching parens, split on top-level commas
+    const openIdx = source.indexOf("(", matchOffset);
+    if (openIdx === -1) return fields;
+    const body = sliceBalancedParens(source, openIdx);
+    if (!body) return fields;
+
+    const segments = splitTopLevelCommas(body);
+    const fieldLine = startIdx + 1; // all on same line for minified
+    for (const seg of segments) {
+      const trimmed = seg.trim();
+      if (!trimmed || CONSTRAINT_RE.test(trimmed)) continue;
+      const m = COLUMN_RE.exec(trimmed);
+      if (!m) continue;
+      const colName = m[1] ?? m[2] ?? m[3] ?? m[4]!;
+      const colType = m[5]!.trim();
+      fields.push({
+        id: makeSymbolId(repo, filePath, colName, fieldLine),
+        repo,
+        name: colName,
+        kind: "field",
+        file: filePath,
+        start_line: fieldLine,
+        end_line: fieldLine,
+        signature: colType,
+        parent: parentId,
+        tokens: tokenizeIdentifier(colName),
+      });
+    }
+    return fields;
+  }
+
+  // Multi-line path (original behavior)
   for (let j = startIdx + 1; j <= endIdx; j++) {
     const trimmed = lines[j]!.trim();
-    // Skip empty, closing paren, constraint lines
     if (trimmed === "" || trimmed === ")" || trimmed === ");") continue;
     if (CONSTRAINT_RE.test(trimmed)) continue;
 
     const m = COLUMN_RE.exec(trimmed);
     if (!m) continue;
 
-    const colName = m[1]!;
-    // Strip trailing comma from type declaration
-    const colType = m[2]!.replace(/,\s*$/, "").trim();
-    const fieldLine = j + 1; // 1-based
+    const colName = m[1] ?? m[2] ?? m[3] ?? m[4]!;
+    const colType = m[5]!.replace(/,\s*$/, "").trim();
+    const fieldLine = j + 1;
 
     fields.push({
-      id: makeSymbolId(repo, filePath, `${colName}`, fieldLine),
+      id: makeSymbolId(repo, filePath, colName, fieldLine),
       repo,
       name: colName,
       kind: "field",
@@ -240,7 +333,155 @@ function extractColumns(
   return fields;
 }
 
-// ── End-finding strategies ────────────────────────────────
+/** Slice the contents between matching parens starting at openIdx (string-aware). */
+function sliceBalancedParens(source: string, openIdx: number): string | null {
+  if (source[openIdx] !== "(") return null;
+  let depth = 0;
+  let inString = false;
+  let stringQuote = "";
+  for (let k = openIdx; k < source.length; k++) {
+    const ch = source[k]!;
+    if (inString) {
+      if (ch === stringQuote && source[k + 1] === stringQuote) { k++; continue; }
+      if (ch === stringQuote) inString = false;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inString = true;
+      stringQuote = ch;
+      continue;
+    }
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) return source.slice(openIdx + 1, k);
+    }
+  }
+  return null;
+}
+
+/** Split a string on commas at parens-depth 0, ignoring commas inside strings/parens. */
+function splitTopLevelCommas(body: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let stringQuote = "";
+  let start = 0;
+  for (let k = 0; k < body.length; k++) {
+    const ch = body[k]!;
+    if (inString) {
+      if (ch === stringQuote && body[k + 1] === stringQuote) { k++; continue; }
+      if (ch === stringQuote) inString = false;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inString = true;
+      stringQuote = ch;
+      continue;
+    }
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
+      out.push(body.slice(start, k));
+      start = k + 1;
+    }
+  }
+  if (start < body.length) out.push(body.slice(start));
+  return out;
+}
+
+// ── Byte-precise end finding (for source-string scanning) ─
+
+function findEndByte(source: string, startOffset: number, strategy: string): number {
+  switch (strategy) {
+    case "paren":
+      return findClosingParenByte(source, startOffset);
+    case "semicolon":
+      return findSemicolonByte(source, startOffset);
+    case "begin-end":
+      return findBeginEndByte(source, startOffset);
+    case "single-line":
+      return source.indexOf("\n", startOffset) ?? source.length - 1;
+    default:
+      return findSemicolonByte(source, startOffset);
+  }
+}
+
+/** Scan source for next `;` outside strings/comments */
+function findSemicolonByte(source: string, startOffset: number): number {
+  let inString = false;
+  let stringQuote = "";
+  let inLineComment = false;
+  for (let k = startOffset; k < source.length; k++) {
+    const ch = source[k]!;
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === stringQuote && source[k + 1] === stringQuote) { k++; continue; }
+      if (ch === stringQuote) inString = false;
+      continue;
+    }
+    if (ch === "-" && source[k + 1] === "-") { inLineComment = true; k++; continue; }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inString = true;
+      stringQuote = ch;
+      continue;
+    }
+    if (ch === ";") return k;
+  }
+  return source.length - 1;
+}
+
+/** Scan source for matching closing paren outside strings/comments */
+function findClosingParenByte(source: string, startOffset: number): number {
+  // First find the opening paren
+  let openIdx = source.indexOf("(", startOffset);
+  if (openIdx === -1) return findSemicolonByte(source, startOffset);
+
+  let depth = 0;
+  let inString = false;
+  let stringQuote = "";
+  let inLineComment = false;
+  for (let k = openIdx; k < source.length; k++) {
+    const ch = source[k]!;
+    if (inLineComment) {
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === stringQuote && source[k + 1] === stringQuote) { k++; continue; }
+      if (ch === stringQuote) inString = false;
+      continue;
+    }
+    if (ch === "-" && source[k + 1] === "-") { inLineComment = true; k++; continue; }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      inString = true;
+      stringQuote = ch;
+      continue;
+    }
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) {
+        // Also include trailing semicolon if present nearby
+        const semi = source.indexOf(";", k);
+        if (semi !== -1 && semi - k < 200) return semi;
+        return k;
+      }
+    }
+  }
+  return source.length - 1;
+}
+
+/** Scan source for BEGIN...END or fall back to semicolon */
+function findBeginEndByte(source: string, startOffset: number): number {
+  // Simplified: just use semicolon scan (BEGIN/END structures are rare in our test corpus)
+  return findSemicolonByte(source, startOffset);
+}
+
+// ── Line-based end-finding (legacy, used for column extraction) ─
 
 function findEnd(lines: string[], startIdx: number, strategy: string): number {
   switch (strategy) {

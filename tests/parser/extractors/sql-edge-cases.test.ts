@@ -51,6 +51,33 @@ describe("SQL extractor edge cases", () => {
     expect(tables.map((t) => t.name)).toEqual(["departments", "employees"]);
   });
 
+  it("MySQL backtick-quoted identifiers with #__ prefix (Joomla)", () => {
+    const symbols = extractSqlSymbols(load("mysql-backticks.sql"), "mysql.sql", "repo");
+    const tables = symbols.filter((s) => s.kind === "table");
+    expect(tables).toHaveLength(2);
+    expect(tables[0]!.name).toBe("#__action_log_config");
+    expect(tables[1]!.name).toBe("#__users");
+
+    // Backtick-quoted column names extracted
+    const idFields = symbols.filter((s) => s.kind === "field" && s.name === "id");
+    expect(idFields.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("minified single-line SQL with multiple statements", () => {
+    const symbols = extractSqlSymbols(load("minified.sql"), "minified.sql", "repo");
+    const tables = symbols.filter((s) => s.kind === "table");
+    expect(tables).toHaveLength(2);
+    expect(tables.map((t) => t.name)).toEqual(["users", "orders"]);
+
+    const indexes = symbols.filter((s) => s.kind === "index");
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0]!.name).toBe("idx_user");
+
+    // Columns extracted from minified table bodies
+    const fields = symbols.filter((s) => s.kind === "field");
+    expect(fields.length).toBeGreaterThanOrEqual(5); // 2 + 3 columns
+  });
+
   it("semicolon inside string literal does not terminate view early", () => {
     const symbols = extractSqlSymbols(load("semicolon-in-string.sql"), "test.sql", "repo");
     const view = symbols.find((s) => s.kind === "view");
