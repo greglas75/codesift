@@ -15,24 +15,28 @@ describe("Framework-specific tool bundle auto-enable", () => {
 
   it("nest_* tools are disabled by default (deferNonCore)", () => {
     const nestTools = [
+      // Wave 1
       "nest_lifecycle_map",
       "nest_module_graph",
       "nest_di_graph",
       "nest_guard_chain",
       "nest_route_inventory",
+      // Wave 2
+      "nest_graphql_map",
+      "nest_websocket_map",
+      "nest_schedule_map",
+      "nest_typeorm_map",
+      "nest_microservice_map",
     ];
     for (const name of nestTools) {
       const handle = getToolHandle(name);
       expect(handle).toBeDefined();
-      // Handle should be disabled (non-core tools disabled in deferNonCore mode)
-      // We can't directly check .enabled state without a public API, but we can verify
-      // the handle exists and is controllable
       expect(typeof handle.enable).toBe("function");
       expect(typeof handle.disable).toBe("function");
     }
   });
 
-  it("enableFrameworkToolBundle('nestjs') enables all 5 nest_* discoverable tools", () => {
+  it("enableFrameworkToolBundle('nestjs') enables all 10 nest_* discoverable tools", () => {
     const enabled = enableFrameworkToolBundle("nestjs");
     expect(enabled).toEqual([
       "nest_lifecycle_map",
@@ -40,6 +44,11 @@ describe("Framework-specific tool bundle auto-enable", () => {
       "nest_di_graph",
       "nest_guard_chain",
       "nest_route_inventory",
+      "nest_graphql_map",
+      "nest_websocket_map",
+      "nest_schedule_map",
+      "nest_typeorm_map",
+      "nest_microservice_map",
     ]);
   });
 
