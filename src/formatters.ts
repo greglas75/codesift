@@ -791,6 +791,7 @@ import type { NextjsRouteMapResult } from "./tools/nextjs-route-tools.js";
 import type { NextjsMetadataAuditResult } from "./tools/nextjs-metadata-tools.js";
 import type { ServerActionsAuditResult } from "./tools/nextjs-security-tools.js";
 import type { ApiContractResult } from "./tools/nextjs-api-contract-tools.js";
+import type { NextjsBoundaryResult } from "./tools/nextjs-boundary-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -970,6 +971,32 @@ export function formatNextjsApiContract(result: ApiContractResult): string {
   if (result.parse_failures.length > 0) {
     lines.push(`Parse failures: ${result.parse_failures.length}`);
   }
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+  if (result.limitations.length > 0) {
+    lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsBoundaryAnalyzer(result: NextjsBoundaryResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS CLIENT BOUNDARY ANALYZER");
+  lines.push("");
+  lines.push(`Client components: ${result.client_count} | Total LOC: ${result.total_client_loc}`);
+  lines.push("");
+  lines.push("Rank Path                                       LOC Imports Score");
+  lines.push("──── ─────────────────────────────────────────── ─── ─────── ─────");
+  for (const e of result.entries) {
+    const rank = String(e.rank).padStart(4);
+    const path = e.path.padEnd(43).slice(0, 43);
+    const loc = String(e.signals.loc).padStart(3);
+    const imports = String(e.signals.import_count).padStart(7);
+    const score = String(e.score).padStart(5);
+    lines.push(`${rank} ${path} ${loc} ${imports} ${score}`);
+  }
+  lines.push("");
   if (result.workspaces_scanned.length > 0) {
     lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
   }

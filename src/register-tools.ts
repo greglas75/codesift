@@ -51,6 +51,7 @@ import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
 import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
 import { nextjsAuditServerActions } from "./tools/nextjs-security-tools.js";
 import { nextjsApiContract } from "./tools/nextjs-api-contract-tools.js";
+import { nextjsBoundaryAnalyzer } from "./tools/nextjs-boundary-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -67,7 +68,7 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer } from "./formatters.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
@@ -2661,6 +2662,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.max_files != null) opts.max_files = args.max_files as number;
       const result = await nextjsApiContract(args.repo as string ?? "", opts);
       return formatNextjsApiContract(result);
+    },
+  },
+  {
+    name: "nextjs_boundary_analyzer",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs client boundary use client component bundle imports loc score",
+    description: "Analyze Next.js client component boundaries — walks `app/**/*.{tsx,jsx}` files marked `\"use client\"`, computes a deterministic ranking score from cheap signals (LOC, import counts, dynamic imports, third-party imports), and returns a top-N list of largest offenders. Score is signal-based, not actual bundle bytes.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      top_n: z.number().int().positive().optional().describe("Number of top entries to return (default 20)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsBoundaryAnalyzer>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.top_n != null) opts.top_n = args.top_n as number;
+      const result = await nextjsBoundaryAnalyzer(args.repo as string ?? "", opts);
+      return formatNextjsBoundaryAnalyzer(result);
     },
   },
 
