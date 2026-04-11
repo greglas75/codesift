@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scanDirective, deriveUrlPath } from "../../src/utils/nextjs.js";
+import { scanDirective, deriveUrlPath, discoverWorkspaces } from "../../src/utils/nextjs.js";
 
 let tmpDir: string;
 
@@ -104,5 +104,45 @@ describe("deriveUrlPath", () => {
 
   it("strips src/ prefix for app router", () => {
     expect(deriveUrlPath("src/app/page.tsx", "app")).toBe("/");
+  });
+});
+
+describe("discoverWorkspaces", () => {
+  it("returns empty for single next.config at root", async () => {
+    const root = await createFixture({
+      "next.config.ts": `export default {};`,
+      "app/page.tsx": `export default function Home() { return <div/>; }`,
+    });
+    expect(await discoverWorkspaces(root)).toEqual([]);
+  });
+
+  it("finds 2 workspaces in monorepo", async () => {
+    const root = await createFixture({
+      "apps/web/next.config.ts": `export default {};`,
+      "apps/admin/next.config.js": `module.exports = {};`,
+    });
+    const result = await discoverWorkspaces(root);
+    expect(result).toHaveLength(2);
+    const roots = result.map((w) => w.root).sort();
+    expect(roots).toEqual([
+      join(root, "apps/admin"),
+      join(root, "apps/web"),
+    ].sort());
+  });
+
+  it("returns 1 entry for single non-root config", async () => {
+    const root = await createFixture({
+      "apps/web/next.config.ts": `export default {};`,
+    });
+    const result = await discoverWorkspaces(root);
+    expect(result).toHaveLength(1);
+    expect(result[0].root).toBe(join(root, "apps/web"));
+  });
+
+  it("returns empty when no next.config files exist", async () => {
+    const root = await createFixture({
+      "src/index.ts": `console.log("hi");`,
+    });
+    expect(await discoverWorkspaces(root)).toEqual([]);
   });
 });
