@@ -80,7 +80,7 @@ export function resolveImportPath(importerFile: string, importPath: string): str
   }
 
   let resolved = parts.join("/");
-  resolved = resolved.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php)$/, "");
+  resolved = resolved.replace(/\.(astro|ts|tsx|js|jsx|mjs|cjs|php)$/, "");
 
   return resolved;
 }
@@ -192,7 +192,7 @@ export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string
 export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
   const normalizedPaths = new Map<string, string>();
   for (const file of index.files) {
-    const normalized = file.path.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php|kt|kts|py)$/, "");
+    const normalized = file.path.replace(/\.(astro|ts|tsx|js|jsx|mjs|cjs|php|kt|kts|py)$/, "");
     normalizedPaths.set(normalized, file.path);
     if (normalized.endsWith("/index")) {
       normalizedPaths.set(normalized.slice(0, -6), file.path);

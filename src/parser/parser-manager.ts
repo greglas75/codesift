@@ -19,6 +19,7 @@ const EXTENSION_MAP: Record<string, string> = {
   ".rb": "ruby",
   ".php": "php",
   ".md": "markdown",
+  ".mdx": "markdown",
   ".markdown": "markdown",
   ".css": "css",
   ".json": "config",

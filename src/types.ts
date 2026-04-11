@@ -124,6 +124,17 @@ export interface TextMatchGroup {
 
 export type Direction = "callers" | "callees";
 
+export type RouteFramework =
+  | "nestjs"
+  | "nextjs"
+  | "express"
+  | "yii2"
+  | "laravel"
+  | "ktor"
+  | "spring-kotlin"
+  | "astro"
+  | "unknown";
+
 export interface CallNode {
   symbol: CodeSymbol;
   children: CallNode[];

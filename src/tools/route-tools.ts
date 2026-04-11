@@ -4,7 +4,7 @@
  */
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
-import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
+import type { CodeSymbol, CodeIndex, CallNode, RouteFramework } from "../types.js";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -25,7 +25,7 @@ interface RouteHandler {
   symbol: ReturnType<typeof stripSource>;
   file: string;
   method?: string;
-  framework: "nestjs" | "nextjs" | "express" | "yii2" | "laravel" | "ktor" | "spring-kotlin" | "unknown";
+  framework: RouteFramework;
 }
 
 interface DbCall {
@@ -48,7 +48,7 @@ type RouteCallNode = RouteTraceResult["call_chain"][number];
  * Match a URL path pattern against a route definition.
  * Handles :param, [param], [...param], [[...param]] as wildcards.
  */
-function matchPath(routePath: string, searchPath: string): boolean {
+export function matchPath(routePath: string, searchPath: string): boolean {
   const normalize = (p: string) => p.replace(/^\/|\/$/g, "").toLowerCase();
   const routeParts = normalize(routePath).split("/");
   const searchParts = normalize(searchPath).split("/");

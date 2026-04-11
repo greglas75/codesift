@@ -1,6 +1,6 @@
 import type { CodeIndex, CodeSymbol } from "../types.js";
 
-export type Framework = "react" | "nestjs" | "nextjs" | "express" | "test";
+export type Framework = "react" | "nestjs" | "nextjs" | "express" | "astro" | "test";
 
 const NEXT_ROUTE_FILE = /(^|\/)app\/.*\/route\.[jt]sx?$/;
 const NEXT_APP_FILE = /(^|\/)app\/.+\.[jt]sx?$/;
@@ -16,6 +16,11 @@ const NEXT_CONFIG_EXPORTS = /^(metadata|viewport|dynamic|revalidate|runtime|pref
 /** NestJS lifecycle hooks + decorator-based entry points */
 const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown)$/;
 const NESTJS_CONTROLLER_FILE = /\.(controller|resolver|gateway)\.[jt]sx?$/;
+
+/** Astro file-based routing — pages/ directory with .astro, .ts, or .js files */
+const ASTRO_PAGES_FILE = /(^|\/)src\/pages\/.+\.(astro|[jt]sx?)$/;
+/** Astro special exports that the framework consumes implicitly */
+const ASTRO_ENTRY_SYMBOLS = /^(getStaticPaths|prerender|GET|POST|PUT|DELETE|PATCH)$/;
 
 /** React/Next.js app router file conventions — these are route entry points */
 const REACT_ROUTE_FILE = /(^|\/)(pages|app)\/.*\.(tsx|jsx)$/;
@@ -33,6 +38,7 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
   if (sources.includes("from 'react'") || sources.includes('from "react"') || sources.includes("useState")) frameworks.add("react");
   if (index.files.some((f) => f.path.includes("app/api/") && f.path.endsWith("route.ts"))) frameworks.add("nextjs");
   if (sources.includes("express()") || sources.includes("Router()")) frameworks.add("express");
+  if (sources.includes("from 'astro'") || sources.includes('from "astro"') || sources.includes("from 'astro:") || sources.includes('from "astro:') || index.files.some((f) => f.path.endsWith(".astro"))) frameworks.add("astro");
   frameworks.add("test"); // always include test patterns
 
   return frameworks;
@@ -53,6 +59,11 @@ export function isFrameworkEntryPoint(
   if (frameworks.has("nestjs")) {
     if (NESTJS_LIFECYCLE.test(symbol.name)) return true;
     if (NESTJS_CONTROLLER_FILE.test(symbol.file)) return true;
+  }
+
+  if (frameworks.has("astro")) {
+    if (ASTRO_PAGES_FILE.test(symbol.file)) return true;
+    if (ASTRO_ENTRY_SYMBOLS.test(symbol.name)) return true;
   }
 
   // React route/layout components: any default export from a routed file

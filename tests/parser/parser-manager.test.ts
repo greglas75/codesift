@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { getLanguageForExtension } from "../../src/parser/parser-manager.js";
+import { getLanguageForExtension, getParser } from "../../src/parser/parser-manager.js";
+
+describe("getParser", () => {
+  it("is exported and is a function", () => {
+    expect(typeof getParser).toBe("function");
+  });
+});
 
 describe("getLanguageForExtension", () => {
   describe("config file extensions", () => {
@@ -22,6 +28,10 @@ describe("getLanguageForExtension", () => {
 
   it("returns markdown for .md", () => {
     expect(getLanguageForExtension(".md")).toBe("markdown");
+  });
+
+  it("returns markdown for .mdx", () => {
+    expect(getLanguageForExtension(".mdx")).toBe("markdown");
   });
 
   it("returns conversation for .jsonl", () => {

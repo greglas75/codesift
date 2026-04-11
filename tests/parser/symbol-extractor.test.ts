@@ -43,6 +43,18 @@ describe("extractSymbols", () => {
     }
   });
 
+  it("returns empty array for language=astro (Astro uses regex path, not tree-sitter)", async () => {
+    // extractSymbols must not fall through to extractGenericSymbols for astro files.
+    // The real Astro extraction happens via extractAstroSymbols(source, filePath, repo)
+    // called directly by the indexing pipeline — tested in astro-extractor.test.ts.
+    const source = `---\nconst x = 1;\n---\n<div>{x}</div>`;
+    const parser = await getParser("typescript");
+    const tree = parser!.parse(source);
+    const symbols = extractSymbols(tree, "Card.astro", source, "test-repo", "astro");
+    expect(Array.isArray(symbols)).toBe(true);
+    expect(symbols).toEqual([]);
+  });
+
   it("falls back to generic extractor for unknown language", async () => {
     // Parse valid TS source, then route via an unrecognized language name
     // to hit the default branch → extractGenericSymbols
