@@ -115,18 +115,23 @@ function detectIssues(file: string, source: string, parse: AstroTemplateParse, i
   for (const il of islands) {
     const { component_name: cn, directive: d, line: ln } = il;
     if (il.target_kind === "astro" && isClient(d))
-      out.push(issue("AH01", "error", "client:* on Astro component (server-only)", file, ln, "Remove client:* or convert to framework component", cn));
+      out.push(issue("AH01", "error", "client:* on Astro component (server-only)", file, ln, "Remove client:* or convert to framework component", cn,
+        makeSnippet(source, ln, d + (il.directive_value ? `="${il.directive_value}"` : ""), "")));
     if (il.in_loop)
       out.push(issue("AH02", "warning", `${cn} hydrated inside a loop`, file, ln, "Lift hydration above loop or use wrapper component", cn));
     if (d === "client:load" && (il.document_order > 3 || (il.is_inside_section && ["footer","aside","nav"].includes(il.is_inside_section))))
-      out.push(issue("AH04", "warning", `${cn} uses client:load below fold`, file, ln, "Use client:visible or client:idle", cn));
+      out.push(issue("AH04", "warning", `${cn} uses client:load below fold`, file, ln, "Use client:visible or client:idle", cn,
+        makeSnippet(source, ln, "client:load", "client:visible")));
     if (d === "client:only" && !il.directive_value)
-      out.push(issue("AH05", "error", `${cn} uses client:only without framework`, file, ln, 'Add client:only="react"', cn));
+      out.push(issue("AH05", "error", `${cn} uses client:only without framework`, file, ln, 'Add client:only="react"', cn,
+        makeSnippet(source, ln, "client:only", 'client:only="react"')));
     if (d === "client:load" && hasStaticPropsOnly(source, il))
-      out.push(issue("AH07", "info", `${cn} uses client:load with static props only`, file, ln, "Consider client:idle or client:visible", cn));
+      out.push(issue("AH07", "info", `${cn} uses client:load with static props only`, file, ln, "Consider client:idle or client:visible", cn,
+        makeSnippet(source, ln, "client:load", "client:idle")));
     const impPath = il.resolves_to_file ?? imports.get(cn);
     if (d === "client:load" && impPath && isHeavy(impPath))
-      out.push(issue("AH09", "info", `${cn} eagerly loads heavy package (${impPath})`, file, ln, "Use client:idle or client:visible", cn));
+      out.push(issue("AH09", "info", `${cn} eagerly loads heavy package (${impPath})`, file, ln, "Use client:idle or client:visible", cn,
+        makeSnippet(source, ln, "client:load", "client:visible")));
     if (d === "server:defer" && !checkServerFallback(source, il))
       out.push(issue("AH10", "warning", `${cn} uses server:defer without fallback`, file, ln, "Add fallback content inside component tag", cn));
     if (isClient(d) && /^[a-z]/.test(cn))

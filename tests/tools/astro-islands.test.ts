@@ -307,4 +307,29 @@ describe("astroHydrationAudit", () => {
     expect(errors.length).toBeGreaterThanOrEqual(3);
     expect(result.score).toBe("D");
   });
+
+  it("AH04 fix_snippet replaces client:load with client:visible", () => {
+    const result = auditFixture({ "src/pages/page.astro": `---\nimport A from './A.tsx';\nimport B from './B.tsx';\nimport C from './C.tsx';\nimport D from './D.tsx';\nimport E from './E.tsx';\n---\n<A client:load />\n<B client:load />\n<C client:load />\n<D client:load />\n<footer>\n<E client:load />\n</footer>\n` });
+    const ah04 = result.issues.find((i) => i.code === "AH04");
+    expect(ah04).toBeDefined();
+    expect(ah04!.fix_snippet).toBeDefined();
+    expect(ah04!.fix_snippet).toContain("client:visible");
+    expect(ah04!.fix_snippet).not.toContain("client:load");
+  });
+
+  it("AH05 fix_snippet adds framework hint", () => {
+    const result = auditFixture({ "src/pages/page.astro": `---\nimport X from './X.tsx';\n---\n<X client:only />\n` });
+    const ah05 = result.issues.find((i) => i.code === "AH05");
+    expect(ah05).toBeDefined();
+    expect(ah05!.fix_snippet).toBeDefined();
+    expect(ah05!.fix_snippet).toContain('client:only="react"');
+  });
+
+  it("AH07 fix_snippet suggests client:idle", () => {
+    const result = auditFixture({ "src/pages/page.astro": `---\nimport X from './X.tsx';\n---\n<X client:load title="hello" />\n` });
+    const ah07 = result.issues.find((i) => i.code === "AH07");
+    expect(ah07).toBeDefined();
+    expect(ah07!.fix_snippet).toBeDefined();
+    expect(ah07!.fix_snippet).toContain("client:idle");
+  });
 });
