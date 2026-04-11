@@ -545,6 +545,8 @@ function extractImportLines(source: string): string[] {
 export interface ReactContext {
   /** Props type name extracted from the component's parameter type annotation */
   props_type: string | null;
+  /** Source of the props interface/type declaration when found in the index (Tier 4 — Item 16) */
+  props_interface_source: string | null;
   /** React hooks called inside this component (use*() patterns) */
   hooks_used: Array<{ name: string; is_stdlib: boolean }>;
   /** Child components rendered via JSX (<PascalCase>) */
@@ -678,7 +680,22 @@ function buildReactContext(
     props_type = propsMatch[1]!;
   }
 
-  return { props_type, hooks_used, child_components, parent_components, wrapper };
+  // Resolve props interface body when type name found in the index (Tier 4 — Item 16).
+  // Look for an interface or type alias with the same name as props_type.
+  let props_interface_source: string | null = null;
+  if (props_type) {
+    const decl = allSymbols.find(
+      (s) => (s.kind === "interface" || s.kind === "type") && s.name === props_type,
+    );
+    if (decl?.source) {
+      // Cap to 800 chars to keep bundle compact
+      props_interface_source = decl.source.length > 800
+        ? decl.source.slice(0, 800) + "..."
+        : decl.source;
+    }
+  }
+
+  return { props_type, props_interface_source, hooks_used, child_components, parent_components, wrapper };
 }
 
 /**

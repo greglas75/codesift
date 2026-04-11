@@ -8,6 +8,7 @@
  */
 import { getCodeIndex } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
+import { resolveAlias } from "../utils/react-alias.js";
 import type { CodeSymbol, CallNode } from "../types.js";
 
 export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, findRuleOfHooksViolations, findRenderRisks };
@@ -60,24 +61,70 @@ function buildJsxAdjacency(symbols: CodeSymbol[]): JsxAdjacency {
 
   // name → component symbols lookup (may have multiple definitions with same name)
   const nameToComponents = new Map<string, CodeSymbol[]>();
+  // file → component symbols lookup (used by alias-resolved imports)
+  const fileToComponents = new Map<string, CodeSymbol[]>();
   for (const sym of symbols) {
     if (sym.kind !== "component") continue;
     const existing = nameToComponents.get(sym.name);
     if (existing) existing.push(sym);
     else nameToComponents.set(sym.name, [sym]);
+    const fileExisting = fileToComponents.get(sym.file);
+    if (fileExisting) fileExisting.push(sym);
+    else fileToComponents.set(sym.file, [sym]);
   }
+
+  // Build a synthetic files list for resolveAlias() — needs only `path` field.
+  const filesList = [...fileToComponents.keys()].map((path) => ({ path }));
 
   for (const sym of symbols) {
     if (sym.kind !== "component" || !sym.source) continue;
 
     const rendered = extractJsxComponents(sym.source);
     const childList: CodeSymbol[] = [];
+
+    // Parse alias imports in this component's source for fallback resolution
+    // (Tier 4 — Item 8 wired into trace_component_tree).
+    // Pattern: import { X, Y as Z } from "@/components/Button"
+    // Pattern: import Default from "@/components/Foo"
+    const aliasImports = new Map<string, string>(); // localName → resolved file
+    const importRe = /import\s+(?:(\w+)|(?:\{([^}]+)\}))(?:\s*,\s*(?:(\w+)|(?:\{([^}]+)\})))?\s+from\s+["'](@\/[^"']+)["']/g;
+    let im: RegExpExecArray | null;
+    while ((im = importRe.exec(sym.source)) !== null) {
+      const aliasPath = im[5]!;
+      const resolved = resolveAlias(aliasPath, filesList);
+      if (!resolved) continue;
+      // default import
+      if (im[1]) aliasImports.set(im[1], resolved);
+      if (im[3]) aliasImports.set(im[3], resolved);
+      // named imports {A, B as C}
+      const namedGroup = im[2] ?? im[4];
+      if (namedGroup) {
+        for (const part of namedGroup.split(",")) {
+          const trimmed = part.trim();
+          // Handle "X as Y" → local name is Y
+          const asMatch = trimmed.match(/^(\w+)\s+as\s+(\w+)$/);
+          const localName = asMatch ? asMatch[2]! : trimmed.replace(/\s.*$/, "");
+          if (localName) aliasImports.set(localName, resolved);
+        }
+      }
+    }
+
     for (const name of rendered) {
       if (name === sym.name) continue; // skip self-reference
       const targets = nameToComponents.get(name);
-      if (!targets) continue;
-      for (const target of targets) {
-        if (target.id !== sym.id) childList.push(target);
+      if (targets) {
+        for (const target of targets) {
+          if (target.id !== sym.id) childList.push(target);
+        }
+        continue;
+      }
+      // Fallback: alias-resolved import lookup
+      const aliasTargetFile = aliasImports.get(name);
+      if (aliasTargetFile) {
+        const fileTargets = fileToComponents.get(aliasTargetFile) ?? [];
+        for (const target of fileTargets) {
+          if (target.id !== sym.id) childList.push(target);
+        }
       }
     }
     if (childList.length > 0) children.set(sym.id, childList);

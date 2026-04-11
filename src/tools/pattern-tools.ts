@@ -86,6 +86,41 @@ export const BUILTIN_PATTERNS: Record<string, {
     regex: /use(?:Callback|Memo)\s*\([\s\S]*?\)\s*\)\s*[;,]/,
     description: "useCallback/useMemo with only one argument (no dependency array) — useless memoization, value recreated every render",
   },
+  // --- React 19 features (Tier 4 — Item 19) ---
+  "react19-use-without-suspense": {
+    regex: /\buse\s*\(\s*[a-zA-Z_$][\w$]*\s*\)/,
+    description: "React 19 use(promise) — must be wrapped in <Suspense> or it throws. Verify Suspense boundary exists in parent.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "react19-server-action-not-async": {
+    regex: /^[\s\S]{0,200}["']use server["'][\s\S]{0,500}?\bexport\s+(?!async)function\s+\w+\s*\(/m,
+    description: "React 19 Server Action: function in 'use server' file must be async (returns Promise). Synchronous functions break the action contract.",
+    fileIncludePattern: /\.(tsx|jsx|ts|js)$/,
+  },
+  "react19-form-action-non-function": {
+    regex: /<form\s+[^>]*\baction\s*=\s*["'][^"']/,
+    description: "React 19 form action prop should be a function (Server Action), not a string URL. Use <form action={serverAction}> for progressive enhancement.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "react19-useoptimistic-no-transition": {
+    regex: /\buseOptimistic\s*\([\s\S]{0,300}?(?!useTransition|startTransition)/,
+    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. Without it, optimistic updates can be interrupted.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  // --- RSC boundary serializability (Tier 4 — Item 18) ---
+  "rsc-non-serializable-prop": {
+    // Detects patterns like onClick={fn} or callback={handler} on JSX elements
+    // when the file has "use client" directive or imports from a client component.
+    // Heuristic: prop=function-reference (not arrow inline, that's caught elsewhere).
+    regex: /\b(?:onClick|onChange|onSubmit|onError|callback|handler|render)\s*=\s*\{\s*[a-z_$][\w$]*\s*\}/,
+    description: "Function passed as prop across RSC boundary — must be a Server Action ('use server') or component must be Client Component ('use client'). Functions are not serializable.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "rsc-date-prop": {
+    regex: /\b\w+\s*=\s*\{\s*new\s+Date\s*\(/,
+    description: "Date object passed as prop — Date is serializable in JSON but loses prototype across RSC boundary. Use ISO string + parse on client side.",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
   "empty-catch": {
     regex: /catch\s*\([^)]*\)\s*\{\s*\}/,
     description: "Empty catch block — swallowed error (CQ8)",

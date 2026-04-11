@@ -105,6 +105,45 @@ describe("buildJsxAdjacency", () => {
     const adj = buildJsxAdjacency([Recursive]);
     expect(adj.children.get(Recursive.id)).toBeUndefined();
   });
+
+  it("resolves @/ alias imports as fallback (Tier 4 — Item 8 wired)", () => {
+    // Parent imports child via @/ alias; child has different exported name
+    // resolveAlias finds "src/components/Button.tsx", file lookup finds Btn
+    const Btn = sym({
+      id: "test:src/components/Button.tsx:Btn:1",
+      name: "Btn",
+      file: "src/components/Button.tsx",
+      source: `export const Btn = () => <button/>;`,
+    });
+    const Parent = sym({
+      id: "test:App.tsx:Parent:1",
+      name: "Parent",
+      file: "App.tsx",
+      source: `import { Btn } from "@/components/Button";
+function Parent() { return <Btn/>; }`,
+    });
+    const adj = buildJsxAdjacency([Btn, Parent]);
+    expect(adj.children.get(Parent.id)?.length).toBe(1);
+    expect(adj.children.get(Parent.id)?.[0]?.name).toBe("Btn");
+  });
+
+  it("resolves default-import alias", () => {
+    const Card = sym({
+      id: "test:src/Card.tsx:Card:1",
+      name: "Card",
+      file: "src/Card.tsx",
+      source: `export default function Card() { return <div/>; }`,
+    });
+    const App = sym({
+      id: "test:App.tsx:App:1",
+      name: "App",
+      file: "App.tsx",
+      source: `import Card from "@/Card";
+function App() { return <Card/>; }`,
+    });
+    const adj = buildJsxAdjacency([Card, App]);
+    expect(adj.children.get(App.id)?.[0]?.name).toBe("Card");
+  });
 });
 
 describe("buildComponentTree", () => {

@@ -302,6 +302,72 @@ function SecondComponent() {
     });
   });
 
+  describe("react19-use-without-suspense", () => {
+    const regex = BUILTIN_PATTERNS["react19-use-without-suspense"]!.regex;
+
+    it("matches use(promise) call", () => {
+      const source = `function Foo() { const data = use(dataPromise); return <div>{data}</div>; }`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match useState (different name)", () => {
+      const source = `const [x, setX] = useState(0);`;
+      expect(regex.test(source)).toBe(false);
+    });
+
+    it("does NOT match useEffect (different name)", () => {
+      const source = `useEffect(() => {}, []);`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("react19-form-action-non-function", () => {
+    const regex = BUILTIN_PATTERNS["react19-form-action-non-function"]!.regex;
+
+    it("matches form with string action URL", () => {
+      const source = `<form action="/api/submit" method="POST">`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match form with function action (Server Action)", () => {
+      const source = `<form action={createUser}>`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("rsc-non-serializable-prop", () => {
+    const regex = BUILTIN_PATTERNS["rsc-non-serializable-prop"]!.regex;
+
+    it("matches onClick with function reference", () => {
+      const source = `<Button onClick={handleClick}/>`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("matches callback prop with function reference", () => {
+      const source = `<Form callback={onSubmit}/>`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match string prop", () => {
+      const source = `<Button type="submit"/>`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("rsc-date-prop", () => {
+    const regex = BUILTIN_PATTERNS["rsc-date-prop"]!.regex;
+
+    it("matches new Date() in JSX prop", () => {
+      const source = `<Calendar today={new Date()}/>`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does NOT match string date", () => {
+      const source = `<Calendar today="2024-01-01"/>`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
   describe("usecallback-no-deps", () => {
     const regex = BUILTIN_PATTERNS["usecallback-no-deps"]!.regex;
 
