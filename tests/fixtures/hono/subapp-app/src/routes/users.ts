@@ -12,4 +12,6 @@ usersRouter.post("/", async (c) => {
   return c.json({ id: "u1", ...body }, 201);
 });
 
+export type UserRoutes = typeof usersRouter;
+
 export default usersRouter;

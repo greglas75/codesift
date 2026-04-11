@@ -142,6 +142,9 @@ export class HonoExtractor {
       // Walk for middleware chains: app.use("scope", mw1, mw2, ...)
       this.walkMiddleware(tree.rootNode, file, localAppVars, importMap, model);
 
+      // Walk for RPC type exports: export type AppType = typeof app
+      this.walkRPCExports(tree.rootNode, file, localAppVars, model);
+
       // Walk for OpenAPI: createRoute() definitions + app.openapi() registrations
       this.walkOpenAPI(tree.rootNode, file, localAppVars, prefix, model);
 
@@ -562,6 +565,54 @@ export class HonoExtractor {
       expanded_from: expandedFrom,
       conditional: expandedFrom === "some",
     };
+  }
+
+  /**
+   * Walk for `export type X = typeof varName` declarations.
+   * Classifies as "full_app" if varName is the root app (has mounts/middleware on it),
+   * or "route_group" if it's a sub-router without child mounts.
+   */
+  private walkRPCExports(
+    root: Parser.SyntaxNode,
+    file: string,
+    appVars: Record<string, HonoApp>,
+    model: HonoAppModel,
+  ): void {
+    const cursor = root.walk();
+    walk(cursor, (node) => {
+      // export_statement > type_alias_declaration
+      if (node.type !== "export_statement") return;
+      const typeAlias = node.namedChildren.find(
+        (c) => c.type === "type_alias_declaration",
+      );
+      if (!typeAlias) return;
+
+      const nameNode = typeAlias.childForFieldName("name");
+      const valueNode = typeAlias.childForFieldName("value");
+      if (!nameNode || !valueNode) return;
+
+      // typeof <varName>
+      if (valueNode.type !== "type_query") return;
+      const queryArg = valueNode.namedChildren[0];
+      if (!queryArg || queryArg.type !== "identifier") return;
+      const sourceVar = queryArg.text;
+
+      // Must reference a known Hono app variable
+      if (!appVars[sourceVar]) return;
+
+      // Classify: full_app if the variable is the root entry (has mounts), else route_group
+      const hasMounts = model.mounts.some((m) => m.parent_var === sourceVar);
+      const hasMiddleware = model.middleware_chains.some((mc) => mc.owner_var === sourceVar);
+      const shape = (hasMounts || hasMiddleware) ? "full_app" : "route_group";
+
+      model.rpc_exports.push({
+        export_name: nameNode.text,
+        file,
+        line: node.startPosition.row + 1,
+        shape,
+        source_var: sourceVar,
+      });
+    });
   }
 
   /**

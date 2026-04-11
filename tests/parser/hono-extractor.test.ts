@@ -70,6 +70,19 @@ describe("HonoExtractor — subapp-app", () => {
     expect(condSetPoint).toBeDefined();
   });
 
+  it("detects RPC type exports and classifies slow vs fast pattern (AC-R9 RPC)", async () => {
+    const model = await extractor.parse(subappEntry);
+    expect(model.rpc_exports.length).toBe(2);
+    const appExport = model.rpc_exports.find((e) => e.export_name === "AppType");
+    expect(appExport).toBeDefined();
+    expect(appExport?.shape).toBe("full_app");
+    expect(appExport?.source_var).toBe("app");
+    const userExport = model.rpc_exports.find((e) => e.export_name === "UserRoutes");
+    expect(userExport).toBeDefined();
+    expect(userExport?.shape).toBe("route_group");
+    expect(userExport?.source_var).toBe("usersRouter");
+  });
+
   it("sub-router routes reference the sub-router file, not the entry", async () => {
     const model = await extractor.parse(subappEntry);
     const usersRoutes = model.routes.filter((r) =>

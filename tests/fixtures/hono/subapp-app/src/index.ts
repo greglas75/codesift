@@ -15,4 +15,6 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 app.route("/api/users", usersRouter);
 app.route("/api/admin", adminRouter);
 
+export type AppType = typeof app;
+
 export default app;
