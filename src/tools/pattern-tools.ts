@@ -66,6 +66,34 @@ export const BUILTIN_PATTERNS: Record<string, {
     description: "Using next/router (Pages Router) in App Router file — use next/navigation instead",
     fileExcludePattern: /(^|\/)pages\//,
   },
+  "nextjs-fetch-waterfall": {
+    regex: /await\s+fetch\s*\([^)]*\)[\s\S]{0,300}await\s+fetch\s*\(/,
+    description: "Sequential await fetch calls — use Promise.all to avoid waterfall (Next.js performance)",
+  },
+  "nextjs-unnecessary-use-client": {
+    regex: /['"]use client['"](?![\s\S]*(?:useState|useEffect|useRef|useCallback|useMemo|useContext|useReducer|onClick|onChange|onSubmit|window\.|document\.|localStorage\.))/,
+    description: "File has 'use client' but may not need it — no hooks, events, or browser globals detected",
+  },
+  "nextjs-pages-in-app": {
+    regex: /./,
+    description: "Pages Router convention (index.tsx) inside app/ directory — use page.tsx for App Router",
+    fileIncludePattern: /(^|\/)app\/.*\/index\.(tsx|jsx|ts|js)$|^app\/index\.(tsx|jsx|ts|js)$/,
+  },
+  "nextjs-missing-error-boundary": {
+    regex: /./,
+    description: "Page file without sibling error.tsx — no error boundary for graceful error handling",
+    fileIncludePattern: /(^|\/)app\/.*\/page\.[jt]sx?$/,
+  },
+  "nextjs-use-client-in-layout": {
+    regex: /^[\s\S]{0,512}['"]use client['"]/,
+    description: "Layout file with 'use client' — layouts should be Server Components for optimal performance",
+    fileIncludePattern: /(^|\/)app\/.*\/layout\.[jt]sx?$|^app\/layout\.[jt]sx?$/,
+  },
+  "nextjs-missing-metadata": {
+    regex: /./,
+    description: "Page file without metadata or generateMetadata export — missing SEO metadata",
+    fileIncludePattern: /(^|\/)app\/.*\/page\.[jt]sx?$/,
+  },
 };
 
 /**
