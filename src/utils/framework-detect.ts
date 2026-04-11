@@ -15,7 +15,8 @@ const NEXT_CONFIG_EXPORTS = /^(metadata|viewport|dynamic|revalidate|runtime|pref
 
 /** NestJS lifecycle hooks + decorator-based entry points */
 const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown)$/;
-const NESTJS_CONTROLLER_FILE = /\.(controller|resolver|gateway)\.[jt]sx?$/;
+const NESTJS_ENTRY_FILE = /\.(controller|resolver|gateway|guard|interceptor|pipe|filter)\.[jt]sx?$/;
+const NESTJS_MAIN_FILE = /(^|\/)main\.[jt]sx?$/;
 
 export function detectFrameworks(index: CodeIndex): Set<Framework> {
   const frameworks = new Set<Framework>();
@@ -45,7 +46,8 @@ export function isFrameworkEntryPoint(
 
   if (frameworks.has("nestjs")) {
     if (NESTJS_LIFECYCLE.test(symbol.name)) return true;
-    if (NESTJS_CONTROLLER_FILE.test(symbol.file)) return true;
+    if (NESTJS_ENTRY_FILE.test(symbol.file)) return true;
+    if (NESTJS_MAIN_FILE.test(symbol.file) && symbol.name === "bootstrap") return true;
   }
 
   return false;
