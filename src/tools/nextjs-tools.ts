@@ -8,3 +8,4 @@ export * from "./nextjs-route-tools.js";
 export * from "./nextjs-metadata-tools.js";
 export * from "./nextjs-security-tools.js";
 export * from "./nextjs-api-contract-tools.js";
+export * from "./nextjs-boundary-tools.js";
