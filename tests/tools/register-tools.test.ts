@@ -177,4 +177,109 @@ describe("register-tools — React tools registration & auto-load", () => {
       }
     });
   });
+
+  describe("detectAutoLoadTools — Hono detection", () => {
+    async function createProject(files: Record<string, string>): Promise<string> {
+      const dir = await mkdtemp(join(tmpdir(), "codesift-hono-autoload-"));
+      for (const [rel, content] of Object.entries(files)) {
+        const full = join(dir, rel);
+        await mkdir(join(full, ".."), { recursive: true });
+        await writeFile(full, content);
+      }
+      return dir;
+    }
+
+    it("enables all 5 hidden Hono tools when package.json has hono dep", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ dependencies: { hono: "^4.7.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("trace_context_flow");
+        expect(tools).toContain("extract_api_contract");
+        expect(tools).toContain("trace_rpc_types");
+        expect(tools).toContain("audit_hono_security");
+        expect(tools).toContain("visualize_hono_routes");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("enables for @hono/zod-openapi dep", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({
+          dependencies: { "@hono/zod-openapi": "^0.16.0" },
+        }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("extract_api_contract");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("enables for @hono/node-server dep (node deployment)", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({
+          dependencies: { "@hono/node-server": "^1.19.0" },
+        }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("trace_rpc_types");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("enables when hono is in devDependencies", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({
+          devDependencies: { hono: "^4.7.0" },
+        }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("audit_hono_security");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does NOT enable when no hono dep present", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ dependencies: { express: "^4.0.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).not.toContain("trace_context_flow");
+        expect(tools).not.toContain("audit_hono_security");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("coexists with React detection (both apply if both deps present)", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({
+          dependencies: { hono: "^4.7.0", react: "^19.0.0" },
+        }),
+        "src/App.tsx": "export function App() { return null; }",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("trace_component_tree"); // React
+        expect(tools).toContain("audit_hono_security"); // Hono
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

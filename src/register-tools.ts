@@ -202,6 +202,23 @@ const REACT_TOOLS = [
 ];
 
 /**
+ * Hono-specific tools — auto-enabled when a Hono project is detected.
+ * Core tools (trace_middleware_chain, analyze_hono_app) are already in
+ * CORE_TOOL_NAMES. This list covers the 5 hidden tools that agents need
+ * to discover via describe_tools/discover_tools otherwise.
+ *
+ * Detection: package.json with "hono" OR "@hono/zod-openapi" dep.
+ * Content-based (not filename), so lives outside FRAMEWORK_TOOL_GROUPS.
+ */
+const HONO_TOOLS = [
+  "trace_context_flow",
+  "extract_api_contract",
+  "trace_rpc_types",
+  "audit_hono_security",
+  "visualize_hono_routes",
+];
+
+/**
  * Detect project type at CWD and return list of tools that should be auto-enabled.
  * Returns empty array if no framework-specific tools apply.
  * Exported for unit testing.
@@ -217,16 +234,31 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
     }
   }
 
-  // React detection: package.json has react dep AND .tsx/.jsx files exist.
-  // This is content-based, not filename-based, so it can't be in FRAMEWORK_TOOL_GROUPS.
+  // React + Hono detection: both need to read package.json for dep signals.
   const pkgPath = join(cwd, "package.json");
   if (existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+      // React: dep + .tsx/.jsx files
       const hasReact = !!(allDeps["react"] || allDeps["next"] || allDeps["@remix-run/react"]);
       if (hasReact && hasJsxFilesShallow(cwd, readdirSync)) {
         toEnable.push(...REACT_TOOLS);
+      }
+
+      // Hono: any hono package is enough — the framework is only pulled in
+      // when used, and all 5 hidden tools degrade gracefully on non-Hono repos
+      // so false positives are harmless (return "no Hono detected" errors).
+      const hasHono = !!(
+        allDeps["hono"] ||
+        allDeps["@hono/zod-openapi"] ||
+        allDeps["@hono/node-server"] ||
+        allDeps["hono-openapi"] ||
+        allDeps["chanfana"]
+      );
+      if (hasHono) {
+        toEnable.push(...HONO_TOOLS);
       }
     } catch { /* malformed package.json */ }
   }

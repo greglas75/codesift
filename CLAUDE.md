@@ -27,9 +27,19 @@ To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
 Framework-specific tools are auto-enabled at startup when a signal file is detected at CWD:
 - `composer.json` → enables 7 PHP/Yii2 tools (resolve_php_namespace, analyze_activerecord,
   trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit)
+- `build.gradle.kts` / `settings.gradle.kts` / `build.gradle` → enables Kotlin tools
+  (find_extension_functions, analyze_sealed_hierarchy)
+- `package.json` with `react`/`next`/`@remix-run/react` dep + `.tsx` files present →
+  enables React tools (trace_component_tree, analyze_hooks, analyze_renders)
+- `package.json` with `hono` / `@hono/zod-openapi` / `@hono/node-server` / `hono-openapi` /
+  `chanfana` dep → enables 5 hidden Hono tools (trace_context_flow, extract_api_contract,
+  trace_rpc_types, audit_hono_security, visualize_hono_routes). The 2 core Hono tools
+  (trace_middleware_chain, analyze_hono_app) are always visible.
 
-Agents working in PHP projects see these tools in ListTools from the first call — no need to
-run `discover_tools`/`describe_tools` first. Config in `FRAMEWORK_TOOL_GROUPS` at `src/register-tools.ts`.
+Agents working in framework-specific projects see relevant tools in ListTools from the
+first call — no need to run `discover_tools`/`describe_tools` first. Filename-based
+config lives in `FRAMEWORK_TOOL_GROUPS`; content-based detection (React, Hono) lives
+in `detectAutoLoadTools` at `src/register-tools.ts`.
 
 ### search_text ranked mode (NEW)
 `search_text(repo, query, ranked=true)` classifies each hit by its containing function, deduplicates (max 2 per function), and ranks by symbol centrality. Returns `TextMatch` with `containing_symbol` field. Saves 1-3 follow-up get_symbol calls. Takes precedence over `auto_group`.
