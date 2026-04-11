@@ -541,11 +541,24 @@ function extractImportLines(source: string): string[] {
   });
 }
 
+export interface ReactContext {
+  /** React hooks called inside this component (use*() patterns) */
+  hooks_used: Array<{ name: string; is_stdlib: boolean }>;
+  /** Child components rendered via JSX (<PascalCase>) */
+  child_components: string[];
+  /** Parent components that render this one via JSX */
+  parent_components: string[];
+  /** Detected wrapper pattern (memo, forwardRef, lazy) or null */
+  wrapper: "memo" | "forwardRef" | "lazy" | null;
+}
+
 export interface ContextBundle {
   symbol: CodeSymbol;
   imports: string[];
   siblings: Array<{ name: string; kind: SymbolKind; start_line: number; end_line: number }>;
   types_used: string[];  // type/interface names referenced in the symbol's source
+  /** Only populated when symbol.kind === "component" */
+  react_context?: ReactContext;
 }
 
 /**
@@ -592,7 +605,72 @@ export async function getContextBundle(
   // Extract type names used in the symbol's source
   const typesUsed = extractTypesUsed(fullSymbol.source ?? "", index.symbols);
 
-  return { symbol: fullSymbol, imports, siblings, types_used: typesUsed };
+  // React-specific enrichment for components
+  const bundle: ContextBundle = { symbol: fullSymbol, imports, siblings, types_used: typesUsed };
+  if (fullSymbol.kind === "component") {
+    bundle.react_context = buildReactContext(fullSymbol, index.symbols);
+  }
+
+  return bundle;
+}
+
+const REACT_STDLIB_HOOKS_SET = new Set([
+  "useState", "useEffect", "useCallback", "useMemo", "useRef",
+  "useContext", "useReducer", "useLayoutEffect", "useImperativeHandle",
+  "useDebugValue", "useDeferredValue", "useTransition", "useId",
+  "useSyncExternalStore", "useInsertionEffect", "useOptimistic",
+  "useFormState", "useFormStatus", "use",
+]);
+
+/**
+ * Build React-specific context for a component symbol:
+ * hooks used, child/parent components via JSX, wrapper pattern.
+ */
+function buildReactContext(
+  component: CodeSymbol,
+  allSymbols: CodeSymbol[],
+): ReactContext {
+  const source = component.source ?? "";
+
+  // Extract hooks used
+  const hooksMap = new Map<string, boolean>();
+  const hookPattern = /\b(use[A-Z]\w*)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = hookPattern.exec(source)) !== null) {
+    const name = m[1]!;
+    hooksMap.set(name, REACT_STDLIB_HOOKS_SET.has(name));
+  }
+  const hooks_used = [...hooksMap.entries()].map(([name, is_stdlib]) => ({ name, is_stdlib }));
+
+  // Extract child components from JSX (<PascalCase>)
+  const childSet = new Set<string>();
+  const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
+  while ((m = jsxPattern.exec(source)) !== null) {
+    const name = m[1]!;
+    if (name !== component.name) childSet.add(name);
+  }
+  const child_components = [...childSet].sort();
+
+  // Extract parent components: find other components whose source uses <ThisComponent>
+  const ownPattern = new RegExp(`<${component.name}\\b`);
+  const parent_components = allSymbols
+    .filter(
+      (s) =>
+        s.kind === "component" &&
+        s.id !== component.id &&
+        s.name !== component.name &&
+        s.source &&
+        ownPattern.test(s.source),
+    )
+    .map((s) => s.name);
+
+  // Detect wrapper pattern from source
+  let wrapper: "memo" | "forwardRef" | "lazy" | null = null;
+  if (/\b(?:React\.)?memo\s*\(/.test(source)) wrapper = "memo";
+  else if (/\b(?:React\.)?forwardRef\s*\(/.test(source)) wrapper = "forwardRef";
+  else if (/\b(?:React\.)?lazy\s*\(/.test(source)) wrapper = "lazy";
+
+  return { hooks_used, child_components, parent_components, wrapper };
 }
 
 /**

@@ -17,6 +17,13 @@ const NEXT_CONFIG_EXPORTS = /^(metadata|viewport|dynamic|revalidate|runtime|pref
 const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown)$/;
 const NESTJS_CONTROLLER_FILE = /\.(controller|resolver|gateway)\.[jt]sx?$/;
 
+/** React/Next.js app router file conventions — these are route entry points */
+const REACT_ROUTE_FILE = /(^|\/)(pages|app)\/.*\.(tsx|jsx)$/;
+/** Special Next.js/Remix file names that are always entry points regardless of export name */
+const REACT_SPECIAL_FILE = /(^|\/)(page|layout|loading|error|not-found|global-error|default|template|head)\.(tsx|jsx)$/;
+/** Remix convention: routes/ directory with file-based routing */
+const REMIX_ROUTE_FILE = /(^|\/)routes\/.*\.(tsx|jsx)$/;
+
 export function detectFrameworks(index: CodeIndex): Set<Framework> {
   const frameworks = new Set<Framework>();
   // Sample first 200 symbols' source for framework indicators
@@ -46,6 +53,16 @@ export function isFrameworkEntryPoint(
   if (frameworks.has("nestjs")) {
     if (NESTJS_LIFECYCLE.test(symbol.name)) return true;
     if (NESTJS_CONTROLLER_FILE.test(symbol.file)) return true;
+  }
+
+  // React route/layout components: any default export from a routed file
+  // (pages/, app/, or routes/) is an entry point — the framework renders it
+  // based on file path, not via explicit import. Without this, find_dead_code
+  // flags them as unused.
+  if (frameworks.has("react") || frameworks.has("nextjs")) {
+    if (REACT_SPECIAL_FILE.test(symbol.file)) return true;
+    if (REACT_ROUTE_FILE.test(symbol.file)) return true;
+    if (REMIX_ROUTE_FILE.test(symbol.file)) return true;
   }
 
   return false;

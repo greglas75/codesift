@@ -7,6 +7,7 @@ import {
   findRuleOfHooksViolations,
   REACT_STDLIB_HOOKS,
 } from "../../src/tools/react-tools.js";
+import { isFrameworkEntryPoint } from "../../src/utils/framework-detect.js";
 import type { CodeSymbol } from "../../src/types.js";
 
 function sym(
@@ -230,5 +231,46 @@ describe("REACT_STDLIB_HOOKS", () => {
   it("does not contain custom hooks", () => {
     expect(REACT_STDLIB_HOOKS.has("useAuth")).toBe(false);
     expect(REACT_STDLIB_HOOKS.has("useDebounce")).toBe(false);
+  });
+});
+
+describe("isFrameworkEntryPoint — React", () => {
+  const reactFrameworks = new Set(["react" as const]);
+  const nextFrameworks = new Set(["nextjs" as const, "react" as const]);
+
+  it("marks page.tsx in app/ as entry point", () => {
+    expect(isFrameworkEntryPoint({ name: "Page", file: "app/dashboard/page.tsx" }, nextFrameworks)).toBe(true);
+  });
+
+  it("marks layout.tsx in app/ as entry point", () => {
+    expect(isFrameworkEntryPoint({ name: "Layout", file: "app/layout.tsx" }, nextFrameworks)).toBe(true);
+  });
+
+  it("marks loading.tsx as entry point", () => {
+    expect(isFrameworkEntryPoint({ name: "Loading", file: "app/loading.tsx" }, nextFrameworks)).toBe(true);
+  });
+
+  it("marks error.tsx as entry point", () => {
+    expect(isFrameworkEntryPoint({ name: "ErrorBoundary", file: "app/error.tsx" }, nextFrameworks)).toBe(true);
+  });
+
+  it("marks not-found.tsx as entry point", () => {
+    expect(isFrameworkEntryPoint({ name: "NotFound", file: "app/not-found.tsx" }, nextFrameworks)).toBe(true);
+  });
+
+  it("marks components in pages/ as entry point (React/Next)", () => {
+    expect(isFrameworkEntryPoint({ name: "Home", file: "pages/index.tsx" }, reactFrameworks)).toBe(true);
+  });
+
+  it("marks Remix route files as entry point", () => {
+    expect(isFrameworkEntryPoint({ name: "Dashboard", file: "routes/dashboard.tsx" }, reactFrameworks)).toBe(true);
+  });
+
+  it("does not mark utility files as entry points", () => {
+    expect(isFrameworkEntryPoint({ name: "helper", file: "src/utils/helper.ts" }, reactFrameworks)).toBe(false);
+  });
+
+  it("does not mark component files outside routes as entry points", () => {
+    expect(isFrameworkEntryPoint({ name: "Button", file: "src/components/Button.tsx" }, reactFrameworks)).toBe(false);
   });
 });

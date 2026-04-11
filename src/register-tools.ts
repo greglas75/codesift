@@ -423,12 +423,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "ast_query",
     category: "search",
-    searchHint: "AST tree-sitter query structural pattern matching code shape",
-    description: "Search AST patterns via tree-sitter S-expressions. Finds code by structural shape.",
+    searchHint: "AST tree-sitter query structural pattern matching code shape jsx react",
+    description: "Search AST patterns via tree-sitter S-expressions. Finds code by structural shape. React examples (language='tsx'): `(jsx_element open_tag: (jsx_opening_element name: (identifier) @tag))` finds all JSX component usage; `(call_expression function: (identifier) @fn (#match? @fn \"^use[A-Z]\"))` finds all hook calls.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      query: z.string().describe("Tree-sitter query in S-expression syntax"),
-      language: z.string().describe("Tree-sitter grammar: typescript, javascript, python, go, rust, java, ruby, php"),
+      query: z.string().describe("Tree-sitter query in S-expression syntax. For JSX/React use language='tsx'."),
+      language: z.string().describe("Tree-sitter grammar: typescript, tsx, javascript, python, go, rust, java, ruby, php"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       max_matches: zNum().describe("Maximum matches to return (default: 50)"),
     },
