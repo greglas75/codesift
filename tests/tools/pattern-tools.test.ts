@@ -526,6 +526,39 @@ describe("listPatterns", () => {
     expect(wrongRouter!.fileExcludePattern).toContain("pages");
   });
 
+  it("includes all 7 hono patterns in BUILTIN_PATTERNS", () => {
+    const patterns = listPatterns();
+    const honoPatterns = patterns.filter((p) => p.name.startsWith("hono-"));
+    expect(honoPatterns.length).toBe(7);
+    const names = honoPatterns.map((p) => p.name).sort();
+    expect(names).toEqual([
+      "hono-env-type-any",
+      "hono-full-app-rpc-export",
+      "hono-missing-error-handler",
+      "hono-missing-status-code",
+      "hono-missing-validator",
+      "hono-throw-raw-error",
+      "hono-unguarded-json-parse",
+    ]);
+  });
+
+  it("hono-full-app-rpc-export matches typeof app export (AC-P1)", () => {
+    const pattern = BUILTIN_PATTERNS["hono-full-app-rpc-export"]!;
+    expect(pattern.regex.test("export type AppType = typeof app;")).toBe(true);
+    expect(pattern.regex.test("export type UserRoutes = typeof userRouter;")).toBe(false);
+  });
+
+  it("hono-unguarded-json-parse matches naked await c.req.json() (AC-P2)", () => {
+    const pattern = BUILTIN_PATTERNS["hono-unguarded-json-parse"]!;
+    expect(pattern.regex.test("const body = await c.req.json();")).toBe(true);
+  });
+
+  it("hono-env-type-any matches new Hono() without generic", () => {
+    const pattern = BUILTIN_PATTERNS["hono-env-type-any"]!;
+    expect(pattern.regex.test("const app = new Hono();")).toBe(true);
+    expect(pattern.regex.test("const app = new Hono<Env>();")).toBe(false);
+  });
+
   it("includes all 7 nextjs patterns plus existing patterns", () => {
     const patterns = listPatterns();
     const nextjsPatterns = patterns.filter((p) => p.name.startsWith("nextjs-"));
