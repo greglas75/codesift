@@ -81,7 +81,7 @@ export async function getModelGraph(
     const fields: ModelNode["fields"] = [];
 
     // Detect framework
-    if (source.includes("models.Model") || source.includes("ForeignKey") && source.includes("on_delete")) {
+    if (source.includes("models.Model") || (source.includes("ForeignKey") && source.includes("on_delete"))) {
       framework = "django";
     } else if (source.includes("Column(") || source.includes("relationship(")) {
       framework = "sqlalchemy";

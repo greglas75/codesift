@@ -16,7 +16,7 @@ vi.mock("node:child_process", async () => {
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { execFileSync } from "node:child_process";
-import { runRuff } from "../../src/tools/ruff-tools.js";
+import { runRuff, _resetRuffCache } from "../../src/tools/ruff-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 const mockedExecFileSync = vi.mocked(execFileSync);
@@ -37,7 +37,7 @@ function makeIndex(): CodeIndex {
 }
 
 describe("runRuff", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => { vi.clearAllMocks(); _resetRuffCache(); });
 
   it("returns ruff_available=false when ruff not installed", async () => {
     mockedGetCodeIndex.mockResolvedValue(makeIndex());

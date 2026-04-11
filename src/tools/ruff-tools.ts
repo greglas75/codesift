@@ -30,6 +30,22 @@ export interface RuffResult {
 /** Default rule categories worth exposing via MCP */
 const DEFAULT_CATEGORIES = ["B", "PERF", "SIM", "UP", "S", "ASYNC", "RET", "ARG"];
 
+/** Cached ruff availability — checked once per process. Exported for test reset. */
+export let _ruffAvailable: boolean | null = null;
+
+export function _resetRuffCache(): void { _ruffAvailable = null; }
+
+function isRuffAvailable(): boolean {
+  if (_ruffAvailable !== null) return _ruffAvailable;
+  try {
+    execFileSync("ruff", ["version"], { timeout: 5000, stdio: "pipe" });
+    _ruffAvailable = true;
+  } catch {
+    _ruffAvailable = false;
+  }
+  return _ruffAvailable;
+}
+
 /**
  * Run ruff on the repository and return structured findings.
  * Correlates each finding with the containing CodeSift symbol.
@@ -49,18 +65,8 @@ export async function runRuff(
   const filePattern = options?.file_pattern;
   const maxResults = options?.max_results ?? 100;
 
-  // Check if ruff is available
-  let ruffAvailable = true;
-  try {
-    execFileSync("ruff", ["version"], { timeout: 5000, stdio: "pipe" });
-  } catch {
-    ruffAvailable = false;
-    return {
-      findings: [],
-      total: 0,
-      by_rule: {},
-      ruff_available: false,
-    };
+  if (!isRuffAvailable()) {
+    return { findings: [], total: 0, by_rule: {}, ruff_available: false };
   }
 
   // Build ruff command
@@ -145,6 +151,6 @@ export async function runRuff(
     findings,
     total: findings.length,
     by_rule,
-    ruff_available: ruffAvailable,
+    ruff_available: true,
   };
 }
