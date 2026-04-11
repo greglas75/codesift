@@ -242,6 +242,13 @@ export const BUILTIN_PATTERNS: Record<string, {
     description: "Page file without metadata or generateMetadata export — missing SEO metadata",
     fileIncludePattern: /(^|\/)app\/.*\/page\.[jt]sx?$/,
   },
+  "nextjs-missing-use-client": {
+    // Match files containing client-only API references that do NOT begin with
+    // a "use client" / 'use client' / `use client` directive in the first 512 bytes.
+    regex: /^(?![\s\S]{0,512}["'`]use client["'`])[\s\S]*(?:useState|useEffect|useRef|useCallback|useMemo|useContext|onClick=|onChange=|onSubmit=)/,
+    description: "Client-only API used without 'use client' directive — component will error at build (Next.js App Router)",
+    fileIncludePattern: /(^|\/)app\/.*\.(tsx|jsx)$/,
+  },
 
   // --- Hono anti-patterns (Task 15) ---
   "hono-missing-error-handler": {

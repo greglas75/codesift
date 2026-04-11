@@ -517,6 +517,34 @@ describe("nextjs-missing-metadata", () => {
   });
 });
 
+describe("nextjs-missing-use-client", () => {
+  const pattern = BUILTIN_PATTERNS["nextjs-missing-use-client"]!;
+
+  it("matches a .tsx file with useState but no 'use client' directive", () => {
+    const source = `import { useState } from "react";
+export default function Form() {
+  const [v, setV] = useState("");
+  return <input value={v} onChange={(e) => setV(e.target.value)} />;
+}`;
+    expect(pattern.regex.test(source)).toBe(true);
+  });
+
+  it("does not match a .tsx file with 'use client' + useState", () => {
+    const source = `"use client";
+import { useState } from "react";
+export default function Form() {
+  const [v, setV] = useState("");
+  return <input value={v} />;
+}`;
+    expect(pattern.regex.test(source)).toBe(false);
+  });
+
+  it("fileIncludePattern excludes pages/ directory (Pages Router)", () => {
+    expect(pattern.fileIncludePattern!.test("pages/index.tsx")).toBe(false);
+    expect(pattern.fileIncludePattern!.test("app/dashboard/page.tsx")).toBe(true);
+  });
+});
+
 describe("listPatterns", () => {
   it("includes fileExcludePattern when present", () => {
     const patterns = listPatterns();
@@ -559,12 +587,12 @@ describe("listPatterns", () => {
     expect(pattern.regex.test("const app = new Hono<Env>();")).toBe(false);
   });
 
-  it("includes all 7 nextjs patterns plus existing patterns", () => {
+  it("includes all 8 nextjs patterns plus existing patterns", () => {
     const patterns = listPatterns();
     const nextjsPatterns = patterns.filter((p) => p.name.startsWith("nextjs-"));
-    expect(nextjsPatterns).toHaveLength(7);
-    // Total should include all existing + 7 new nextjs patterns
-    expect(patterns.length).toBeGreaterThanOrEqual(16); // 9 original + 7 nextjs
+    expect(nextjsPatterns).toHaveLength(8);
+    // Total should include all existing + 8 new nextjs patterns
+    expect(patterns.length).toBeGreaterThanOrEqual(17); // 9 original + 8 nextjs
   });
 });
 
