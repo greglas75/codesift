@@ -5,6 +5,7 @@
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
 import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
+import { deriveUrlPath } from "../utils/nextjs.js";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -18,6 +19,7 @@ interface RouteHandler {
   file: string;
   method?: string;
   framework: "nestjs" | "nextjs" | "express" | "unknown";
+  router?: "app" | "pages";
 }
 
 interface DbCall {
@@ -135,6 +137,7 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
           file: sym.file,
           method: sym.name,
           framework: "nextjs",
+          router: "app",
         });
       }
 
@@ -144,8 +147,72 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
           symbol: { id: file.path, name: "route", kind: "function", file: file.path, start_line: 1, end_line: 1 } as ReturnType<typeof stripSource>,
           file: file.path,
           framework: "nextjs",
+          router: "app",
         });
       }
+    }
+  }
+
+  return handlers;
+}
+
+/**
+ * Find Pages Router API route handlers via default exports in pages/api/.
+ * @internal exported for unit testing
+ */
+function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+
+  for (const file of index.files) {
+    // Only match files under pages/api/
+    if (!/pages\/api\//.test(file.path)) continue;
+
+    // Derive URL path from file path
+    const urlPath = deriveUrlPath(file.path, "pages");
+    const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
+    const normalizedUrl = urlPath.replace(/^\/|\/$/g, "");
+
+    if (normalizedUrl !== normalizedSearch) continue;
+
+    // Find default export or named handler in the file
+    const fileSymbols = index.symbols.filter((s) => s.file === file.path);
+
+    // Look for default export
+    const defaultExport = fileSymbols.find((s) => s.name === "default" || s.name === "handler");
+
+    if (defaultExport) {
+      handlers.push({
+        symbol: stripSource(defaultExport),
+        file: file.path,
+        framework: "nextjs",
+        router: "pages",
+      });
+    } else if (fileSymbols.length > 0) {
+      // Try variable indirection: find any exported function
+      const exported = fileSymbols.find((s) =>
+        s.kind === "function" || s.kind === "variable",
+      );
+      if (exported) {
+        handlers.push({
+          symbol: stripSource(exported),
+          file: file.path,
+          framework: "nextjs",
+          router: "pages",
+        });
+      }
+    }
+
+    // Fallback: at least mark the file as having a handler
+    if (handlers.filter((h) => h.file === file.path).length === 0) {
+      handlers.push({
+        symbol: {
+          id: file.path, name: "handler", kind: "function",
+          file: file.path, start_line: 1, end_line: 1,
+        } as ReturnType<typeof stripSource>,
+        file: file.path,
+        framework: "nextjs",
+        router: "pages",
+      });
     }
   }
 
@@ -307,6 +374,7 @@ export async function traceRoute(
   const handlers = [
     ...(await findNestJSHandlers(index, path)),
     ...findNextJSHandlers(index, path),
+    ...findPagesRouterHandlers(index, path),
     ...findExpressHandlers(index, path),
   ];
 

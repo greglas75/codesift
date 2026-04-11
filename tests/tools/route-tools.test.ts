@@ -57,3 +57,44 @@ export async function GET() {
     expect(result.handlers[0]!.symbol.name).toBe("GET");
   });
 });
+
+describe("PagesRouter handler detection", () => {
+  it("finds default export handler in pages/api/", async () => {
+    const repo = await createIndexedFixture({
+      "pages/api/users.ts": `export default function handler(req, res) {
+  res.status(200).json({ users: [] });
+}`,
+    });
+    const result = await traceRoute(repo, "/api/users");
+    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
+    expect(result.handlers[0]!.router).toBe("pages");
+  });
+
+  it("returns both handlers in hybrid App + Pages Router", async () => {
+    const repo = await createIndexedFixture({
+      "pages/api/users.ts": `export default function handler(req, res) {
+  res.status(200).json({ users: [] });
+}`,
+      "app/api/users/route.ts": `import { NextResponse } from "next/server";
+export async function GET() {
+  return NextResponse.json({ users: [] });
+}`,
+    });
+    const result = await traceRoute(repo, "/api/users");
+    expect(result.handlers.length).toBeGreaterThanOrEqual(2);
+    const routers = result.handlers.map((h) => h.router);
+    expect(routers).toContain("pages");
+    expect(routers).toContain("app");
+  });
+
+  it("resolves variable-indirection default export", async () => {
+    const repo = await createIndexedFixture({
+      "pages/api/exotic.ts": `const h = (req, res) => {
+  res.status(200).json({ ok: true });
+};
+export default h;`,
+    });
+    const result = await traceRoute(repo, "/api/exotic");
+    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
+  });
+});
