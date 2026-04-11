@@ -64,9 +64,10 @@ export function detectSrcLayout(indexedFiles: string[]): string | null {
 export function resolvePythonImport(
   imp: { module: string; level: number },
   importerFile: string,
-  indexedFiles: string[],
+  indexedFiles: string[] | Set<string>,
+  srcLayout?: string | null,
 ): string | null {
-  const fileSet = new Set(indexedFiles);
+  const fileSet = indexedFiles instanceof Set ? indexedFiles : new Set(indexedFiles);
   const { module, level } = imp;
 
   if (level > 0) {
@@ -85,7 +86,8 @@ export function resolvePythonImport(
 
   // Absolute import — try repo root first, then src/ layout
   const moduleSegments = module.split(".");
-  const searchRoots = ["", detectSrcLayout(indexedFiles)].filter(
+  const resolvedSrcLayout = srcLayout !== undefined ? srcLayout : detectSrcLayout([...fileSet]);
+  const searchRoots = ["", resolvedSrcLayout].filter(
     (r): r is string => r !== null,
   );
 

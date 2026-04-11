@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { CodeIndex } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { extractPythonImports } from "./python-imports.js";
-import { resolvePythonImport } from "./python-import-resolver.js";
+import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
 
 export interface ImportEdge {
   from: string; // importer file path
@@ -223,10 +223,13 @@ export async function collectImportEdges(
   // Rollback kill switch — skip Python import extraction if env var set
   const pythonDisabled = process.env.CODESIFT_DISABLE_PYTHON_IMPORTS === "1";
 
-  // Python needs the full indexed file list for package resolution
-  const indexedPyFiles = index.files
-    .filter((f) => f.path.endsWith(".py"))
-    .map((f) => f.path);
+  // Python needs the full indexed file set for package resolution — built once
+  const indexedPyFileSet = new Set(
+    index.files.filter((f) => f.path.endsWith(".py")).map((f) => f.path),
+  );
+  const pySrcLayout = indexedPyFileSet.size > 0
+    ? detectSrcLayout([...indexedPyFileSet])
+    : null;
 
   const files = fileFilter
     ? index.files.filter((f) => fileFilter.has(f.path))
@@ -291,7 +294,8 @@ export async function collectImportEdges(
             const targetFile = resolvePythonImport(
               { module: imp.module, level: imp.level },
               file.path,
-              indexedPyFiles,
+              indexedPyFileSet,
+              pySrcLayout,
             );
             if (targetFile) {
               addEdge(file.path, targetFile, {
