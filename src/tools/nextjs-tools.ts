@@ -11,3 +11,4 @@ export * from "./nextjs-api-contract-tools.js";
 export * from "./nextjs-boundary-tools.js";
 export * from "./nextjs-link-tools.js";
 export * from "./nextjs-data-flow-tools.js";
+export * from "./nextjs-middleware-coverage-tools.js";
