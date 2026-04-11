@@ -98,6 +98,120 @@ export const BROWSER_GLOBALS = new Set<string>([
 ]);
 
 // ---------------------------------------------------------------------------
+// Signal detection (hooks, JSX event handlers, browser globals, next/dynamic)
+// ---------------------------------------------------------------------------
+
+const HOOK_NAME_RE = /^use[A-Z]\w*$/;
+
+/**
+ * Walk the AST to collect client-component signals:
+ *   - hooks    — call_expression whose callee identifier matches /^use[A-Z]/
+ *   - events   — jsx_attribute property_identifier in EVENT_HANDLER_ATTRS
+ *   - globals  — member_expression object identifier in BROWSER_GLOBALS
+ *   - next/dynamic({ ssr: false }) — import from "next/dynamic" + call with ssr:false
+ */
+export function detectSignals(
+  tree: Parser.Tree,
+  _source: string,
+): ComponentSignals {
+  const hooks = new Set<string>();
+  const event_handlers = new Set<string>();
+  const browser_globals = new Set<string>();
+  let dynamic_ssr_false = false;
+
+  const root = tree.rootNode;
+
+  // Hooks: call_expression with identifier callee matching /^use[A-Z]/
+  for (const call of root.descendantsOfType("call_expression")) {
+    const fn = call.childForFieldName("function") ?? call.namedChild(0);
+    if (fn?.type === "identifier") {
+      const name = fn.text;
+      if (HOOK_NAME_RE.test(name) && !CLIENT_HOOKS_EXCLUDE.has(name)) {
+        hooks.add(name);
+      }
+    }
+  }
+
+  // JSX event handlers
+  for (const attr of root.descendantsOfType("jsx_attribute")) {
+    const nameNode = attr.namedChild(0);
+    if (nameNode?.type === "property_identifier" || nameNode?.type === "identifier") {
+      const name = nameNode.text;
+      if (EVENT_HANDLER_ATTRS.has(name)) {
+        event_handlers.add(name);
+      }
+    }
+  }
+
+  // Browser globals via member_expression (e.g. window.location)
+  for (const mem of root.descendantsOfType("member_expression")) {
+    const obj = mem.childForFieldName("object") ?? mem.namedChild(0);
+    if (obj?.type === "identifier" && BROWSER_GLOBALS.has(obj.text)) {
+      browser_globals.add(obj.text);
+    }
+  }
+
+  // next/dynamic with { ssr: false }
+  // Only trust if there's an import from "next/dynamic". We then look for any
+  // call expression with second argument containing { ssr: false }.
+  const importsNextDynamic = root
+    .descendantsOfType("import_statement")
+    .some((imp) => {
+      // The module source is a direct string child of import_statement
+      for (const child of imp.namedChildren) {
+        if (child.type === "string") {
+          const frag = child.namedChild(0);
+          const text = frag?.type === "string_fragment" ? frag.text : child.text.slice(1, -1);
+          if (text === "next/dynamic") return true;
+        }
+      }
+      return false;
+    });
+
+  if (importsNextDynamic) {
+    for (const call of root.descendantsOfType("call_expression")) {
+      const fn = call.childForFieldName("function") ?? call.namedChild(0);
+      if (fn?.type !== "identifier" || fn.text !== "dynamic") continue;
+
+      const args = call.childForFieldName("arguments") ?? call.namedChild(1);
+      if (!args) continue;
+
+      // Find the second argument (an object with ssr: false)
+      const argChildren = args.namedChildren;
+      if (argChildren.length < 2) continue;
+      const opts = argChildren[1];
+      if (opts.type !== "object") continue;
+
+      // Iterate pairs that are direct named children of the options object.
+      for (const pair of opts.namedChildren) {
+        if (pair.type !== "pair") continue;
+        const key = pair.childForFieldName("key") ?? pair.namedChild(0);
+        if (!key) continue;
+        const keyText = key.type === "property_identifier" || key.type === "identifier"
+          ? key.text
+          : key.type === "string"
+            ? key.text.slice(1, -1)
+            : null;
+        if (keyText !== "ssr") continue;
+
+        const value = pair.childForFieldName("value") ?? pair.namedChild(1);
+        if (value?.type === "false") {
+          dynamic_ssr_false = true;
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    hooks: [...hooks],
+    event_handlers: [...event_handlers],
+    browser_globals: [...browser_globals],
+    dynamic_ssr_false,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Two-stage directive detection
 // ---------------------------------------------------------------------------
 
