@@ -19,7 +19,12 @@ export interface PatternResult {
 }
 
 // Built-in patterns inspired by CQ checklist + common React/TS anti-patterns
-const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> = {
+export const BUILTIN_PATTERNS: Record<string, {
+  regex: RegExp;
+  description: string;
+  fileExcludePattern?: RegExp;
+  fileIncludePattern?: RegExp;
+}> = {
   "useEffect-no-cleanup": {
     regex: /useEffect\s*\(\s*(?:async\s*)?\(\)\s*=>\s*\{(?:(?!return\s*\(\s*\)\s*=>|return\s+\(\)\s*=>|return\s*\(\s*\)\s*\{|return\s+function)[\s\S])*\}\s*,/,
     description: "useEffect without cleanup return — potential memory leak (CQ22)",
@@ -56,6 +61,11 @@ const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: string }> =
     regex: /\/\/\s*(TODO|FIXME|HACK|XXX|TEMP|TEMPORARY)\b|\/\/\s*(Phase|Step|Stage)\s*\d|\/\/\s*(placeholder|stub|dummy)\b|throw new Error\(['"]not implemented['"]\)|console\.(log|warn)\(['"]TODO\b/i,
     description: "Scaffolding markers: TODO/FIXME/HACK, Phase/Step markers, placeholder stubs, not-implemented throws (tech debt)",
   },
+  "nextjs-wrong-router": {
+    regex: /from\s+['"]next\/router['"]|require\s*\(\s*['"]next\/router['"]\s*\)/,
+    description: "Using next/router (Pages Router) in App Router file — use next/navigation instead",
+    fileExcludePattern: /(^|\/)pages\//,
+  },
 };
 
 /**
@@ -83,11 +93,15 @@ export async function searchPatterns(
   // Resolve pattern: built-in name or custom regex
   let regex: RegExp;
   let patternName: string;
+  let fileExcludePattern: RegExp | undefined;
+  let fileIncludePattern: RegExp | undefined;
 
   const builtin = BUILTIN_PATTERNS[pattern];
   if (builtin) {
     regex = builtin.regex;
     patternName = `${pattern}: ${builtin.description}`;
+    fileExcludePattern = builtin.fileExcludePattern;
+    fileIncludePattern = builtin.fileIncludePattern;
   } else {
     try {
       regex = new RegExp(pattern);
@@ -106,6 +120,8 @@ export async function searchPatterns(
     if (!sym.source) continue;
     if (!includeTests && isTestFile(sym.file)) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
+    if (fileExcludePattern && fileExcludePattern.test(sym.file)) continue;
+    if (fileIncludePattern && !fileIncludePattern.test(sym.file)) continue;
 
     scanned++;
     const match = regex.exec(sym.source);
