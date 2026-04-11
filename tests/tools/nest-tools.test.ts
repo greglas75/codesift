@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 // Mock getCodeIndex before importing nest-tools
@@ -7,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -156,5 +159,177 @@ describe("nest_lifecycle_map", () => {
 
     const result = await nestLifecycleMap("test-repo");
     expect(result.hooks).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nest_module_graph tests (Task 6)
+// ---------------------------------------------------------------------------
+
+describe("nest_module_graph", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-module-graph-"));
+    await mkdir(join(tmpRoot, "src/auth"), { recursive: true });
+    await mkdir(join(tmpRoot, "src/prisma"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
+    return {
+      root,
+      files: filePaths.map((p) => ({ path: p, size: 100 })),
+      symbols: [],
+    } as unknown as CodeIndex;
+  }
+
+  it("builds module graph with edges from imports", async () => {
+    await writeFile(join(tmpRoot, "src/app.module.ts"), `
+import { Module } from '@nestjs/common';
+import { AuthModule } from './auth/auth.module';
+import { PrismaModule } from './prisma/prisma.module';
+
+@Module({
+  imports: [
+    AuthModule,
+    PrismaModule,
+  ],
+  controllers: [],
+  providers: [],
+})
+export class AppModule {}
+`);
+    await writeFile(join(tmpRoot, "src/auth/auth.module.ts"), `
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../prisma/prisma.module';
+
+@Module({
+  imports: [
+    PrismaModule,
+  ],
+  controllers: [AuthController],
+  providers: [AuthService],
+})
+export class AuthModule {}
+`);
+    await writeFile(join(tmpRoot, "src/prisma/prisma.module.ts"), `
+import { Module, Global } from '@nestjs/common';
+
+@Global()
+@Module({
+  imports: [],
+  providers: [PrismaService],
+  exports: [PrismaService],
+})
+export class PrismaModule {}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/app.module.ts",
+      "src/auth/auth.module.ts",
+      "src/prisma/prisma.module.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestModuleGraph("test-repo");
+
+    // 3 modules detected
+    expect(result.modules.length).toBe(3);
+    expect(result.modules.map((m) => m.name).sort()).toEqual(["AppModule", "AuthModule", "PrismaModule"]);
+
+    // Edges
+    expect(result.edges).toContainEqual({ from: "AppModule", to: "AuthModule" });
+    expect(result.edges).toContainEqual({ from: "AppModule", to: "PrismaModule" });
+    expect(result.edges).toContainEqual({ from: "AuthModule", to: "PrismaModule" });
+
+    // PrismaModule is @Global
+    const prisma = result.modules.find((m) => m.name === "PrismaModule");
+    expect(prisma!.is_global).toBe(true);
+
+    // PrismaModule exports PrismaService
+    expect(prisma!.exports).toContain("PrismaService");
+
+    // No circular deps in this graph
+    expect(result.circular_deps).toEqual([]);
+  });
+
+  it("detects circular module dependencies", async () => {
+    await writeFile(join(tmpRoot, "src/app.module.ts"), `
+import { Module } from '@nestjs/common';
+import { AuthModule } from './auth/auth.module';
+@Module({
+  imports: [
+    AuthModule,
+  ],
+})
+export class AppModule {}
+`);
+    await writeFile(join(tmpRoot, "src/auth/auth.module.ts"), `
+import { Module } from '@nestjs/common';
+import { AppModule } from '../app.module';
+@Module({
+  imports: [
+    AppModule,
+  ],
+})
+export class AuthModule {}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, ["src/app.module.ts", "src/auth/auth.module.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestModuleGraph("test-repo");
+    expect(result.circular_deps.length).toBeGreaterThan(0);
+  });
+
+  it("returns truncated: true when max_modules exceeded", async () => {
+    await writeFile(join(tmpRoot, "src/app.module.ts"), `
+@Module({ imports: [] })
+export class AppModule {}
+`);
+    await writeFile(join(tmpRoot, "src/auth/auth.module.ts"), `
+@Module({ imports: [] })
+export class AuthModule {}
+`);
+    await writeFile(join(tmpRoot, "src/prisma/prisma.module.ts"), `
+@Module({ imports: [] })
+export class PrismaModule {}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/app.module.ts",
+      "src/auth/auth.module.ts",
+      "src/prisma/prisma.module.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestModuleGraph("test-repo", { max_modules: 2 });
+    expect(result.modules.length).toBe(2);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("returns empty graph for repo with no module files", async () => {
+    const index = mockIndexWithRoot(tmpRoot, []);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestModuleGraph("test-repo");
+    expect(result.modules).toEqual([]);
+    expect(result.edges).toEqual([]);
+  });
+
+  it("handles unreadable module file gracefully (CQ8)", async () => {
+    // Don't write the file — readFile will fail
+    const index = mockIndexWithRoot(tmpRoot, ["src/missing.module.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestModuleGraph("test-repo");
+    expect(result.modules).toEqual([]);
+    expect(result.errors).toBeDefined();
+    expect(result.errors!.length).toBe(1);
+    expect(result.errors![0]!.file).toBe("src/missing.module.ts");
   });
 });
