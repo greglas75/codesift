@@ -638,6 +638,61 @@ describe("extractNestConventions", () => {
     expect(conv.global_interceptors).toEqual([]);
   });
 
+  describe("G2 dynamic module parsing", () => {
+    const NEST_DYNAMIC_SOURCE = `import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
+import { Article } from './article.entity';
+import { Comment } from './comment.entity';
+import { User } from './user.entity';
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([Article, Comment, User]),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+      cache: true,
+    }),
+  ],
+  controllers: [],
+  providers: [],
+})
+export class AppModule {}
+`;
+
+    it("extracts entity names from TypeOrmModule.forFeature", () => {
+      const conv = extractNestConventions(NEST_DYNAMIC_SOURCE, "app.module.ts");
+      const typeorm = conv.modules.find((m) => m.name === "TypeOrmModule");
+      expect(typeorm).toBeDefined();
+      expect(typeorm!.entities).toEqual(["Article", "Comment", "User"]);
+    });
+
+    it("extracts config keys from ConfigModule.forRoot", () => {
+      const conv = extractNestConventions(NEST_DYNAMIC_SOURCE, "app.module.ts");
+      const config = conv.modules.find((m) => m.name === "ConfigModule");
+      expect(config).toBeDefined();
+      expect(config!.dynamic_config_keys).toEqual(expect.arrayContaining(["isGlobal", "envFilePath", "cache"]));
+    });
+
+    it("static module (no forRoot/forFeature) has no entities or config_keys", () => {
+      const staticSrc = `import { Module } from '@nestjs/common';
+@Module({
+  imports: [
+    PrismaModule,
+    AuthModule,
+  ],
+})
+export class AppModule {}
+`;
+      const conv = extractNestConventions(staticSrc, "app.module.ts");
+      const prisma = conv.modules.find((m) => m.name === "PrismaModule");
+      expect(prisma).toBeDefined();
+      expect(prisma!.entities).toBeUndefined();
+      expect(prisma!.dynamic_config_keys).toBeUndefined();
+    });
+  });
+
   describe("APP_INTERCEPTOR extraction", () => {
     const NEST_INTERCEPTOR_SOURCE = `import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR, APP_GUARD, APP_FILTER } from '@nestjs/core';

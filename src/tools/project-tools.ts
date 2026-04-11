@@ -159,6 +159,10 @@ export interface NestModuleEntry {
   line: number;
   imported_from: string | null;
   is_global: boolean;
+  /** G2: entity class names from TypeOrmModule.forFeature([...]) / MongooseModule.forFeature([...]) */
+  entities?: string[];
+  /** G2: top-level config keys from forRoot({ ... }) */
+  dynamic_config_keys?: string[];
 }
 
 export interface NestProviderEntry {
@@ -942,17 +946,74 @@ export function extractNestConventions(
     // Extract module imports
     if (inImports) {
       // Match: ModuleName, or ModuleName.forRoot(), or ModuleName.forRootAsync({...})
-      const moduleMatch = line.match(/^\s+(\w+Module)(?:\.for(?:Root|Feature)(?:Async)?\s*\()?/);
+      const moduleMatch = line.match(/^\s+(\w+Module)(?:\.for(Root|Feature)(?:Async)?\s*\()?/);
       if (moduleMatch) {
         const name = moduleMatch[1]!;
+        const dynamicKind = moduleMatch[2]; // "Root" | "Feature" | undefined
         const isGlobal = /isGlobal:\s*true/.test(line) || /ConfigModule|SentryModule/.test(name);
-        modules.push({
+
+        const entry: NestModuleEntry = {
           name,
           file: filePath,
           line: lineNum,
           imported_from: importMap.get(name) ?? null,
           is_global: isGlobal,
-        });
+        };
+
+        // G2: forFeature([...]) — extract entity class names (scan ahead up to 15 lines)
+        if (dynamicKind === "Feature") {
+          const entities: string[] = [];
+          let bracketDepth = 0;
+          let started = false;
+          for (let j = i; j < Math.min(i + 15, lines.length); j++) {
+            for (const ch of lines[j]!) {
+              if (ch === "[") { bracketDepth++; started = true; }
+              else if (ch === "]") { bracketDepth--; if (started && bracketDepth === 0) break; }
+            }
+            // Capture entity names after the opening [
+            const featureMatch = lines[j]!.match(/forFeature\s*\(\s*\[([^\]]*)\]?/);
+            if (featureMatch) {
+              const inner = featureMatch[1]!;
+              for (const m of inner.matchAll(/\b([A-Z]\w*)\b/g)) entities.push(m[1]!);
+              // Continue to next lines if the array spans multiple
+              for (let k = j + 1; k < Math.min(j + 10, lines.length) && !/\]/.test(lines[k - 1]!); k++) {
+                for (const m of lines[k]!.matchAll(/\b([A-Z]\w*)\b/g)) entities.push(m[1]!);
+              }
+              break;
+            }
+            // Multi-line case: forFeature([ on one line, entities on next
+            if (/forFeature\s*\(\s*\[\s*$/.test(lines[j]!)) {
+              for (let k = j + 1; k < Math.min(j + 10, lines.length); k++) {
+                if (/^\s*\]/.test(lines[k]!)) break;
+                for (const m of lines[k]!.matchAll(/\b([A-Z]\w*)\b/g)) entities.push(m[1]!);
+              }
+              break;
+            }
+          }
+          if (entities.length > 0) entry.entities = entities;
+        }
+
+        // G2: forRoot({...}) — extract top-level config keys
+        if (dynamicKind === "Root") {
+          const keys: string[] = [];
+          let braceDepth = 0;
+          for (let j = i; j < Math.min(i + 15, lines.length); j++) {
+            for (const ch of lines[j]!) {
+              if (ch === "{") braceDepth++;
+              else if (ch === "}") braceDepth--;
+            }
+            // Only capture keys at the top-level of the forRoot config object
+            if (braceDepth >= 1) {
+              // Match indented key: value pattern at top-level (heuristic: 1-level indent)
+              const keyMatch = lines[j]!.match(/^\s{6,10}(\w+):\s*/);
+              if (keyMatch && !keys.includes(keyMatch[1]!)) keys.push(keyMatch[1]!);
+            }
+            if (braceDepth === 0 && j > i) break;
+          }
+          if (keys.length > 0) entry.dynamic_config_keys = keys;
+        }
+
+        modules.push(entry);
       }
 
       // Extract ThrottlerModule config
