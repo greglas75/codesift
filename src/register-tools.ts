@@ -2258,6 +2258,26 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "trace_fastapi_depends",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python fastapi depends dependency injection security scopes oauth2 authentication auth endpoint",
+    description: "Trace FastAPI Depends()/Security() dependency injection chains recursively from route handlers. Detects yield deps (resource cleanup), Security() with scopes, shared deps across endpoints, endpoints without auth.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      endpoint: z.string().optional().describe("Focus on a specific endpoint function name"),
+      max_depth: zFiniteNumber.optional().describe("Max dependency tree depth (default: 5)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof traceFastAPIDepends>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.endpoint != null) opts!.endpoint = args.endpoint as string;
+      if (args.max_depth != null) opts!.max_depth = args.max_depth as number;
+      return await traceFastAPIDepends(args.repo as string, opts);
+    },
+  },
+  {
     name: "python_audit",
     category: "analysis",
     requiresLanguage: "python",
