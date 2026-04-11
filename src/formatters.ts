@@ -782,3 +782,67 @@ export function formatNextjsComponents(result: NextjsComponentsResult): string {
 
   return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Next.js route map formatter
+// ---------------------------------------------------------------------------
+
+import type { NextjsRouteMapResult } from "./tools/nextjs-route-tools.js";
+
+export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS ROUTE MAP");
+  lines.push("");
+  lines.push(`Routes: ${result.routes.length} | Conflicts: ${result.conflicts.length}`);
+  if (result.middleware) {
+    const matchers = result.middleware.matchers.length > 0
+      ? result.middleware.matchers.join(", ")
+      : "(all routes)";
+    lines.push(`Middleware: ${result.middleware.file} — ${matchers}`);
+  }
+  if (result.truncated) {
+    const at = result.truncated_at != null ? ` (at ${result.truncated_at})` : "";
+    lines.push(`[truncated${at}]`);
+  }
+  lines.push("");
+
+  // Header row
+  lines.push("URL                              Type      Rendering  Router  Metadata");
+  lines.push("──────────────────────────────── ───────── ────────── ─────── ────────");
+  for (const r of result.routes.slice(0, 100)) {
+    const url = r.url_path.padEnd(32).slice(0, 32);
+    const type = r.type.padEnd(9).slice(0, 9);
+    const rendering = r.rendering.padEnd(10).slice(0, 10);
+    const router = r.router.padEnd(7).slice(0, 7);
+    const metadata = r.has_metadata ? "yes" : "no";
+    lines.push(`${url} ${type} ${rendering} ${router} ${metadata}`);
+  }
+  if (result.routes.length > 100) {
+    lines.push(`... +${result.routes.length - 100} more`);
+  }
+  lines.push("");
+
+  if (result.conflicts.length > 0) {
+    lines.push(`─── Hybrid Conflicts (${result.conflicts.length}) ───`);
+    for (const c of result.conflicts.slice(0, 20)) {
+      lines.push(`  ${c.url_path}`);
+      lines.push(`    app:   ${c.app}`);
+      lines.push(`    pages: ${c.pages}`);
+    }
+    lines.push("");
+  }
+
+  if (result.scan_errors.length > 0) {
+    lines.push(`─── Scan Errors (${result.scan_errors.length}) ───`);
+    for (const err of result.scan_errors.slice(0, 5)) {
+      lines.push(`  ${err}`);
+    }
+    lines.push("");
+  }
+
+  if (result.workspaces_scanned.length > 0) {
+    lines.push(`Workspaces scanned: ${result.workspaces_scanned.length}`);
+  }
+
+  return lines.join("\n");
+}

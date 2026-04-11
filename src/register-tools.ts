@@ -43,6 +43,7 @@ import { findExtensionFunctions, analyzeSealedHierarchy } from "./tools/kotlin-t
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
 import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
+import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -59,7 +60,8 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents } from "./formatters.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap } from "./formatters.js";
+import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -315,6 +317,8 @@ export const CORE_TOOL_NAMES = new Set([
   "astro_hydration_audit",
   "astro_route_map",
   "astro_config_analyze",
+  // --- Next.js tools ---
+  "nextjs_route_map",
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -2185,6 +2189,28 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return formatNextjsComponents(result);
     },
   },
+  {
+    name: "nextjs_route_map",
+    category: "analysis",
+    searchHint: "nextjs next.js route map app router pages router rendering strategy SSG SSR ISR edge middleware",
+    description: "Complete Next.js route map with rendering strategy per route. Enumerates App Router and Pages Router conventions, reads route segment config exports (dynamic/revalidate/runtime), classifies each route as static/ssr/isr/edge/client, detects metadata exports, computes layout chain, and flags hybrid conflicts where the same URL is served by both routers.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      router: z.enum(["app", "pages", "both"]).optional().describe("Which routers to scan (default 'both')"),
+      include_metadata: z.boolean().optional().describe("Include metadata export detection (default true)"),
+      max_routes: z.number().int().positive().optional().describe("Max routes to process (default 1000)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof nextjsRouteMap>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.router != null) opts.router = args.router as "app" | "pages" | "both";
+      if (args.include_metadata != null) opts.include_metadata = args.include_metadata as boolean;
+      if (args.max_routes != null) opts.max_routes = args.max_routes as number;
+      const result = await nextjsRouteMap(args.repo as string ?? "", opts);
+      return formatNextjsRouteMap(result);
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -2393,6 +2419,7 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
   registerShortener("find_clones", { compact: formatClonesCompact, counts: formatClonesCounts });
   registerShortener("analyze_hotspots", { compact: formatHotspotsCompact, counts: formatHotspotsCounts });
   registerShortener("trace_route", { compact: formatTraceRouteCompact, counts: formatTraceRouteCounts });
+  registerShortener("nextjs_route_map", { compact: formatNextjsRouteMapCompact, counts: formatNextjsRouteMapCounts });
   registerShortener("get_session_context", {
     compact: (text: string) => {
       try {

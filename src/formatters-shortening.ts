@@ -148,3 +148,58 @@ export function formatHotspotsCounts(raw: unknown): string {
   const data = raw as { hotspots: HotspotEntry[]; period: string };
   return `${data.hotspots.length} hotspots, period: ${data.period}`;
 }
+
+// ── Next.js route map ──────────────────────────────
+
+interface NextjsRouteMapRaw {
+  routes: Array<{
+    url_path: string;
+    router: "app" | "pages";
+    type: string;
+    rendering: string;
+    has_metadata: boolean;
+  }>;
+  conflicts: Array<{ url_path: string }>;
+  middleware: { file: string; matchers: string[] } | null;
+  workspaces_scanned: string[];
+  scan_errors: string[];
+  truncated: boolean;
+}
+
+const MAX_ROUTES_COMPACT = 25;
+
+/** Grouped counts by router + rendering, then show top N URLs. */
+export function formatNextjsRouteMapCompact(raw: unknown): string {
+  const data = raw as NextjsRouteMapRaw;
+  const lines: string[] = [];
+  lines.push(`Routes: ${data.routes.length} | Conflicts: ${data.conflicts.length}`);
+
+  const byRouter: Record<string, number> = {};
+  const byRendering: Record<string, number> = {};
+  for (const r of data.routes) {
+    byRouter[r.router] = (byRouter[r.router] ?? 0) + 1;
+    byRendering[r.rendering] = (byRendering[r.rendering] ?? 0) + 1;
+  }
+  const routerParts = Object.entries(byRouter).map(([k, v]) => `${k}=${v}`);
+  const renderingParts = Object.entries(byRendering).map(([k, v]) => `${k}=${v}`);
+  lines.push(`By router: ${routerParts.join(" ")}`);
+  lines.push(`By rendering: ${renderingParts.join(" ")}`);
+
+  if (data.middleware) {
+    lines.push(`Middleware: ${data.middleware.file}`);
+  }
+
+  const top = data.routes.slice(0, MAX_ROUTES_COMPACT);
+  for (const r of top) {
+    lines.push(`  ${r.url_path} [${r.router}/${r.rendering}]`);
+  }
+  if (data.routes.length > MAX_ROUTES_COMPACT) {
+    lines.push(`  ... +${data.routes.length - MAX_ROUTES_COMPACT} more`);
+  }
+  return lines.join("\n");
+}
+
+export function formatNextjsRouteMapCounts(raw: unknown): string {
+  const data = raw as NextjsRouteMapRaw;
+  return `${data.routes.length} routes, ${data.conflicts.length} conflicts, ${data.workspaces_scanned.length} workspaces`;
+}
