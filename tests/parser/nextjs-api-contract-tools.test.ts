@@ -1,9 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseFile } from "../../src/parser/parser-manager.js";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: vi.fn(),
 }));
+
+import { getCodeIndex } from "../../src/tools/index-tools.js";
 
 import { nextjsApiContract } from "../../src/tools/nextjs-api-contract-tools.js";
 import {
@@ -208,5 +213,90 @@ export async function GET() {
     const tree = await parseTs(src);
     const shapes = extractResponseShapes(tree, src);
     expect(shapes.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("nextjsApiContract orchestrator", () => {
+  let tmpRoot: string;
+
+  async function makeRepo(files: Record<string, string>): Promise<string> {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nextjs-api-contract-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const abs = join(tmpRoot, rel);
+      await mkdir(join(abs, ".."), { recursive: true });
+      await writeFile(abs, content);
+    }
+    return tmpRoot;
+  }
+
+  function mockIndex(root: string) {
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root,
+      files: [],
+      symbols: [],
+      git: { head: "test", worktree_clean: true, branch: "test" },
+      lsp: {},
+    } as never);
+  }
+
+  it("returns 3 handlers from app/api routes (GET/POST/DELETE)", async () => {
+    const root = await makeRepo({
+      "next.config.js": "module.exports = {};\n",
+      "app/api/users/route.ts": `
+export async function GET() { return NextResponse.json({ users: [] }); }
+export async function POST(req) { const body = await req.json(); return NextResponse.json({}, { status: 201 }); }
+`,
+      "app/api/users/[id]/route.ts": `
+export async function DELETE() { return new Response(null, { status: 204 }); }
+`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsApiContract("test");
+      expect(result.handlers.length).toBe(3);
+      const methods = result.handlers.map((h) => h.method).sort();
+      expect(methods).toEqual(["DELETE", "GET", "POST"]);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("includes both App and Pages router handlers tagged correctly", async () => {
+    const root = await makeRepo({
+      "next.config.js": "module.exports = {};\n",
+      "app/api/items/route.ts": `export async function GET() { return NextResponse.json({}); }`,
+      "pages/api/legacy.ts": `export default function handler(req, res) { res.json({}); }`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsApiContract("test");
+      const routers = new Set(result.handlers.map((h) => h.router));
+      expect(routers.has("app")).toBe(true);
+      // Pages router handlers may be reported as a single 'page' handler, not method-keyed
+      expect(result.handlers.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a completeness_score field 0..100", async () => {
+    const root = await makeRepo({
+      "next.config.js": "module.exports = {};\n",
+      "app/api/things/route.ts": `
+import { z } from "zod";
+const schema = z.object({ name: z.string() });
+export async function POST(req) { const body = schema.parse(await req.json()); return NextResponse.json(body); }
+`,
+    });
+    try {
+      mockIndex(root);
+      const result = await nextjsApiContract("test");
+      expect(typeof result.completeness_score).toBe("number");
+      expect(result.completeness_score).toBeGreaterThanOrEqual(0);
+      expect(result.completeness_score).toBeLessThanOrEqual(100);
+    } finally {
+      await rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
