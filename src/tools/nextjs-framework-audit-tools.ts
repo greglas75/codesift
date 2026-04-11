@@ -78,6 +78,10 @@ export interface FrameworkAuditOptions {
   tools?: AuditDimension[] | undefined;
   mode?: "full" | "priority" | undefined;
   priority_limit?: number | undefined;
+  /** Minimum severity to include in priority mode. Default: "low" (all). */
+  min_severity?: "low" | "medium" | "high" | undefined;
+  /** Glob pattern to filter findings by file path (e.g. "app/admin/**"). */
+  path_glob?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +410,17 @@ const TOOL_DISPATCHERS: Record<
     nextjsMiddlewareCoverage(repo, workspace ? { workspace } : undefined),
 };
 
+
+/** Convert a glob-like pattern to a RegExp for file path filtering. */
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "__DOUBLESTAR__")
+    .replace(/\*/g, "[^/]*")
+    .replace(/__DOUBLESTAR__/g, ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
 export async function frameworkAudit(
   repo: string,
   options?: FrameworkAuditOptions,
@@ -442,7 +457,22 @@ export async function frameworkAudit(
   const duration_ms = Date.now() - start;
 
   if (options?.mode === "priority") {
-    const allFindings = extractPriorityFindings(sub_results);
+    let allFindings = extractPriorityFindings(sub_results);
+
+    // Filter: min_severity
+    if (options.min_severity) {
+      const severityRank = { low: 1, medium: 2, high: 3 };
+      const minRank = severityRank[options.min_severity];
+      allFindings = allFindings.filter((f) => severityRank[f.severity] >= minRank);
+    }
+
+    // Filter: path_glob (simple substring + wildcard support)
+    if (options.path_glob) {
+      const pattern = options.path_glob;
+      const rx = globToRegex(pattern);
+      allFindings = allFindings.filter((f) => rx.test(f.file));
+    }
+
     const limit = options.priority_limit ?? 20;
     return {
       mode: "priority",
