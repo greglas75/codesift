@@ -180,6 +180,12 @@ export function extractSqlSymbols(
       if (docstring) sym.docstring = docstring;
       symbols.push(sym);
 
+      // Extract column definitions as field children for tables
+      if (matcher.kind === "table") {
+        const fields = extractColumns(lines, i, endLineIdx, filePath, repo, sym.id);
+        symbols.push(...fields);
+      }
+
       i = endLineIdx + 1;
       matched = true;
       break;
@@ -189,6 +195,50 @@ export function extractSqlSymbols(
   }
 
   return symbols;
+}
+
+// ── Column extraction ─────────────────────────────────────
+
+const CONSTRAINT_RE = /^\s*(?:PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|UNIQUE|CHECK|INDEX)\b/i;
+const COLUMN_RE = /^\s*"?(\w+)"?\s+(.+)/i;
+
+function extractColumns(
+  lines: string[],
+  startIdx: number,
+  endIdx: number,
+  filePath: string,
+  repo: string,
+  parentId: string,
+): CodeSymbol[] {
+  const fields: CodeSymbol[] = [];
+  for (let j = startIdx + 1; j <= endIdx; j++) {
+    const trimmed = lines[j]!.trim();
+    // Skip empty, closing paren, constraint lines
+    if (trimmed === "" || trimmed === ")" || trimmed === ");") continue;
+    if (CONSTRAINT_RE.test(trimmed)) continue;
+
+    const m = COLUMN_RE.exec(trimmed);
+    if (!m) continue;
+
+    const colName = m[1]!;
+    // Strip trailing comma from type declaration
+    const colType = m[2]!.replace(/,\s*$/, "").trim();
+    const fieldLine = j + 1; // 1-based
+
+    fields.push({
+      id: makeSymbolId(repo, filePath, `${colName}`, fieldLine),
+      repo,
+      name: colName,
+      kind: "field",
+      file: filePath,
+      start_line: fieldLine,
+      end_line: fieldLine,
+      signature: colType,
+      parent: parentId,
+      tokens: tokenizeIdentifier(colName),
+    });
+  }
+  return fields;
 }
 
 // ── End-finding strategies ────────────────────────────────

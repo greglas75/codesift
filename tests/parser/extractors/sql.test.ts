@@ -65,6 +65,36 @@ describe("extractSqlSymbols", () => {
     });
   });
 
+  describe("column extraction as field children", () => {
+    it("extracts columns as field symbols with parent reference", () => {
+      const source = loadFixture("columns.sql");
+      const symbols = extractSqlSymbols(source, "test.sql", "repo");
+
+      const table = symbols.find((s) => s.kind === "table");
+      expect(table).toBeDefined();
+
+      const fields = symbols.filter((s) => s.kind === "field");
+      expect(fields).toHaveLength(3);
+      expect(fields.map((f) => f.name)).toEqual(["id", "user_id", "total"]);
+
+      // All fields point to parent table
+      for (const field of fields) {
+        expect(field.parent).toBe(table!.id);
+      }
+    });
+
+    it("sets field signature to column type declaration", () => {
+      const source = loadFixture("columns.sql");
+      const symbols = extractSqlSymbols(source, "test.sql", "repo");
+
+      const idField = symbols.find((s) => s.name === "id" && s.kind === "field");
+      expect(idField!.signature).toContain("INT");
+
+      const totalField = symbols.find((s) => s.name === "total" && s.kind === "field");
+      expect(totalField!.signature).toContain("DECIMAL");
+    });
+  });
+
   describe("all DDL constructs", () => {
     it("extracts exactly 11 symbols with correct kinds", () => {
       const source = loadFixture("all-ddl.sql");
@@ -72,6 +102,8 @@ describe("extractSqlSymbols", () => {
 
       const expected = [
         { name: "users", kind: "table" },
+        { name: "id", kind: "field" },        // column child of users
+        { name: "name", kind: "field" },       // column child of users
         { name: "active_users", kind: "view" },
         { name: "user_stats", kind: "view" },
         { name: "idx_users_name", kind: "index" },
