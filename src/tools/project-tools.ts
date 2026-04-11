@@ -148,6 +148,7 @@ export interface NestConventions {
   global_guards: NestProviderEntry[];
   global_filters: NestProviderEntry[];
   global_pipes: NestProviderEntry[];
+  global_interceptors: NestProviderEntry[];
   controllers: string[];
   throttler: { ttl: number; limit: number } | null;
 }
@@ -918,6 +919,7 @@ export function extractNestConventions(
   const global_guards: NestProviderEntry[] = [];
   const global_filters: NestProviderEntry[] = [];
   const global_pipes: NestProviderEntry[] = [];
+  const global_interceptors: NestProviderEntry[] = [];
   const controllers: string[] = [];
   let throttler: NestConventions["throttler"] = null;
 
@@ -1027,10 +1029,25 @@ export function extractNestConventions(
           }
         }
       }
+      if (/provide:\s*APP_INTERCEPTOR/.test(line)) {
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          const useClassMatch = lines[j]!.match(/useClass:\s*(\w+)/);
+          if (useClassMatch) {
+            global_interceptors.push({
+              name: useClassMatch[1]!,
+              token: "APP_INTERCEPTOR",
+              file: filePath,
+              line: j + 1,
+              imported_from: importMap.get(useClassMatch[1]!) ?? null,
+            });
+            break;
+          }
+        }
+      }
     }
   }
 
-  return { modules, global_guards, global_filters, global_pipes, controllers, throttler };
+  return { modules, global_guards, global_filters, global_pipes, global_interceptors, controllers, throttler };
 }
 
 // ---------------------------------------------------------------------------
@@ -2029,6 +2046,7 @@ function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conve
     modules: p.nest_conventions.modules.length,
     global_guards: p.nest_conventions.global_guards.length,
     global_filters: p.nest_conventions.global_filters.length,
+    global_interceptors: p.nest_conventions.global_interceptors.length,
     controllers: p.nest_conventions.controllers.length,
     has_throttler: !!p.nest_conventions.throttler,
   };

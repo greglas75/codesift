@@ -635,5 +635,82 @@ describe("extractNestConventions", () => {
     const conv = extractNestConventions("const x = 1;\n", "plain.ts");
     expect(conv.modules).toEqual([]);
     expect(conv.global_guards).toEqual([]);
+    expect(conv.global_interceptors).toEqual([]);
+  });
+
+  describe("APP_INTERCEPTOR extraction", () => {
+    const NEST_INTERCEPTOR_SOURCE = `import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR, APP_GUARD, APP_FILTER } from '@nestjs/core';
+import { LoggingInterceptor } from './common/logging.interceptor';
+import { CacheInterceptor } from './common/cache.interceptor';
+import { ClerkAuthGuard } from './auth/clerk.guard';
+import { SentryGlobalFilter } from '@sentry/nestjs/setup';
+
+@Module({
+  imports: [],
+  controllers: [],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LoggingInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CacheInterceptor,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ClerkAuthGuard,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
+    },
+  ],
+})
+export class AppModule {}
+`;
+
+    it("extracts global interceptors with APP_INTERCEPTOR token", () => {
+      const conv = extractNestConventions(NEST_INTERCEPTOR_SOURCE, "app.module.ts");
+      expect(conv.global_interceptors.length).toBe(2);
+      const names = conv.global_interceptors.map((i) => i.name);
+      expect(names).toContain("LoggingInterceptor");
+      expect(names).toContain("CacheInterceptor");
+    });
+
+    it("interceptor entries have correct token", () => {
+      const conv = extractNestConventions(NEST_INTERCEPTOR_SOURCE, "app.module.ts");
+      for (const entry of conv.global_interceptors) {
+        expect(entry.token).toBe("APP_INTERCEPTOR");
+      }
+    });
+
+    it("resolves imported_from for interceptors", () => {
+      const conv = extractNestConventions(NEST_INTERCEPTOR_SOURCE, "app.module.ts");
+      const logging = conv.global_interceptors.find((i) => i.name === "LoggingInterceptor");
+      expect(logging!.imported_from).toBe("./common/logging.interceptor");
+      const cache = conv.global_interceptors.find((i) => i.name === "CacheInterceptor");
+      expect(cache!.imported_from).toBe("./common/cache.interceptor");
+    });
+
+    it("does not cross-contaminate APP_INTERCEPTOR with APP_GUARD or APP_FILTER", () => {
+      const conv = extractNestConventions(NEST_INTERCEPTOR_SOURCE, "app.module.ts");
+      const interceptorNames = conv.global_interceptors.map((i) => i.name);
+      const guardNames = conv.global_guards.map((g) => g.name);
+      const filterNames = conv.global_filters.map((f) => f.name);
+      expect(interceptorNames).not.toContain("ClerkAuthGuard");
+      expect(interceptorNames).not.toContain("SentryGlobalFilter");
+      expect(guardNames).not.toContain("LoggingInterceptor");
+      expect(guardNames).not.toContain("CacheInterceptor");
+      expect(filterNames).not.toContain("LoggingInterceptor");
+      expect(conv.global_guards.length).toBe(1);
+      expect(conv.global_filters.length).toBe(1);
+    });
+
+    it("returns empty global_interceptors array when no APP_INTERCEPTOR present", () => {
+      const conv = extractNestConventions(NEST_MODULE_SOURCE, "app.module.ts");
+      expect(conv.global_interceptors).toEqual([]);
+    });
   });
 });
