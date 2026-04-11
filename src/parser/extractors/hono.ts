@@ -135,6 +135,12 @@ export class HonoExtractor {
         });
       }
 
+      // Detect runtime and env bindings (only for entry file)
+      if (file === model.entry_file) {
+        model.runtime = await this.detectRuntime(file);
+        this.extractEnvBindings(tree.rootNode, source, model);
+      }
+
       // Cache local parse result (routes stored with raw_path, prefix applied on read)
       parsedCache.set(file, {
         app_variables: localAppVars,
@@ -205,6 +211,20 @@ export class HonoExtractor {
     file: string,
     localVars: Record<string, HonoApp>,
   ): void {
+    // First pass: detect factory variables (createFactory<Env>())
+    const factoryVars = new Set<string>();
+    const cursor1 = root.walk();
+    walk(cursor1, (node) => {
+      if (node.type !== "variable_declarator") return;
+      const nameNode = node.childForFieldName("name");
+      const valueNode = node.childForFieldName("value");
+      if (!nameNode || !valueNode || nameNode.type !== "identifier") return;
+      if (isCreateFactoryCall(valueNode)) {
+        factoryVars.add(nameNode.text);
+      }
+    });
+
+    // Second pass: detect Hono app variables
     const cursor = root.walk();
     walk(cursor, (node) => {
       if (node.type !== "variable_declarator") return;
@@ -237,6 +257,18 @@ export class HonoExtractor {
           created_via: "basePath",
           base_path: basePath.prefix,
           parent: basePath.parentVar,
+        };
+        return;
+      }
+
+      // factory.createApp(): const api = factory.createApp()
+      if (isFactoryCreateApp(valueNode, factoryVars)) {
+        localVars[name] = {
+          variable_name: name,
+          file,
+          line: nameNode.startPosition.row + 1,
+          created_via: "factory.createApp",
+          base_path: "",
         };
       }
     });
@@ -452,6 +484,94 @@ export class HonoExtractor {
       }
     }
   }
+
+  /** Detect Hono runtime from project files and source patterns. */
+  private async detectRuntime(entryFile: string): Promise<HonoAppModel["runtime"]> {
+    const dir = path.dirname(entryFile);
+    const projectRoot = path.dirname(dir); // assume src/ is one level down
+    // Check for wrangler.toml → Cloudflare Workers
+    if (existsSync(path.join(projectRoot, "wrangler.toml")) ||
+        existsSync(path.join(dir, "wrangler.toml"))) {
+      return "cloudflare";
+    }
+    let source: string;
+    try {
+      source = await readFile(entryFile, "utf-8");
+    } catch {
+      return "unknown";
+    }
+    if (source.includes("Deno.serve")) return "deno";
+    if (source.includes("Bun.serve")) return "bun";
+    if (source.includes("@hono/node-server") || source.includes("serve({ fetch")) return "node";
+    if (source.includes("hono/aws-lambda") || source.includes("handle(")) return "lambda";
+    return "unknown";
+  }
+
+  /**
+   * Extract env bindings from:
+   * 1. c.env.IDENTIFIER member accesses
+   * 2. Destructuring: const { A, B } = c.env
+   * 3. Bindings type literal from Hono<{ Bindings: {...} }> or createFactory<{ Bindings: {...} }>
+   */
+  private extractEnvBindings(
+    root: Parser.SyntaxNode,
+    source: string,
+    model: HonoAppModel,
+  ): void {
+    const bindings = new Set<string>();
+
+    // Pattern 1 & 2: Walk AST for c.env.X and const { X } = c.env
+    const cursor = root.walk();
+    walk(cursor, (node) => {
+      // c.env.IDENTIFIER
+      if (node.type === "member_expression") {
+        const obj = node.childForFieldName("object");
+        const prop = node.childForFieldName("property");
+        if (obj?.type === "member_expression" && prop) {
+          const innerObj = obj.childForFieldName("object");
+          const innerProp = obj.childForFieldName("property");
+          if (innerObj?.text === "c" && innerProp?.text === "env") {
+            bindings.add(prop.text);
+          }
+        }
+      }
+
+      // const { DATABASE_URL, KV } = c.env
+      if (node.type === "variable_declarator") {
+        const nameNode = node.childForFieldName("name");
+        const valueNode = node.childForFieldName("value");
+        if (nameNode?.type === "object_pattern" && valueNode?.type === "member_expression") {
+          const obj = valueNode.childForFieldName("object");
+          const prop = valueNode.childForFieldName("property");
+          if (obj?.text === "c" && prop?.text === "env") {
+            for (const child of nameNode.namedChildren) {
+              if (child.type === "shorthand_property_identifier_pattern" ||
+                  child.type === "shorthand_property_identifier") {
+                bindings.add(child.text);
+              }
+              if (child.type === "pair_pattern") {
+                const key = child.childForFieldName("key");
+                if (key) bindings.add(key.text);
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // Pattern 3: Bindings type literal from source using regex (simpler than full AST type resolution)
+    const bindingsMatch = source.match(/Bindings\s*:\s*\{([^}]+)\}/);
+    if (bindingsMatch?.[1]) {
+      const typeBody = bindingsMatch[1];
+      const propRegex = /(\w+)\s*:/g;
+      let m: RegExpExecArray | null;
+      while ((m = propRegex.exec(typeBody)) !== null) {
+        if (m[1]) bindings.add(m[1]);
+      }
+    }
+
+    model.env_bindings = [...bindings].sort();
+  }
 }
 
 // --- Utility functions ---
@@ -531,6 +651,35 @@ function parseRegexConstraints(
     }
   }
   return found ? constraints : undefined;
+}
+
+/** Check if a value is `createFactory(...)` or `createFactory<Env>(...)`. */
+function isCreateFactoryCall(valueNode: Parser.SyntaxNode): boolean {
+  if (valueNode.type !== "call_expression") return false;
+  const fn = valueNode.childForFieldName("function");
+  if (!fn) return false;
+  // createFactory<...>()
+  if (fn.type === "identifier" && fn.text === "createFactory") return true;
+  // hono/factory.createFactory<...>()
+  if (fn.type === "member_expression") {
+    const prop = fn.childForFieldName("property");
+    if (prop?.text === "createFactory") return true;
+  }
+  return false;
+}
+
+/** Check if a value is `<factoryVar>.createApp()`. */
+function isFactoryCreateApp(
+  valueNode: Parser.SyntaxNode,
+  factoryVars: Set<string>,
+): boolean {
+  if (valueNode.type !== "call_expression") return false;
+  const fn = valueNode.childForFieldName("function");
+  if (!fn || fn.type !== "member_expression") return false;
+  const obj = fn.childForFieldName("object");
+  const prop = fn.childForFieldName("property");
+  if (!obj || !prop || obj.type !== "identifier") return false;
+  return factoryVars.has(obj.text) && prop.text === "createApp";
 }
 
 function classifyAppCreation(

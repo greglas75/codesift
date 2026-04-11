@@ -62,6 +62,44 @@ describe("HonoExtractor — subapp-app", () => {
   });
 });
 
+describe("HonoExtractor — factory-app", () => {
+  const factoryEntry = path.join(FIXTURES, "factory-app", "src", "index.ts");
+  let extractor: HonoExtractor;
+
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("detects factory.createApp() with non-app variable name (AC-R8)", async () => {
+    const model = await extractor.parse(factoryEntry);
+    expect(model.app_variables.api).toBeDefined();
+    expect(model.app_variables.api?.created_via).toBe("factory.createApp");
+    expect(model.app_variables.api?.variable_name).toBe("api");
+  });
+
+  it("extracts routes on non-app variable", async () => {
+    const model = await extractor.parse(factoryEntry);
+    expect(model.routes.length).toBe(3);
+    const paths = model.routes.map((r) => `${r.method} ${r.path}`).sort();
+    expect(paths).toEqual(["GET /env", "GET /ping", "POST /data"]);
+    for (const r of model.routes) {
+      expect(r.owner_var).toBe("api");
+    }
+  });
+
+  it("detects Cloudflare Workers runtime from wrangler.toml (AC-A3)", async () => {
+    const model = await extractor.parse(factoryEntry);
+    expect(model.runtime).toBe("cloudflare");
+  });
+
+  it("extracts env bindings from Bindings type literal and c.env destructuring", async () => {
+    const model = await extractor.parse(factoryEntry);
+    // Should detect at minimum: DATABASE_URL from destructuring
+    // Ideally also KV, AUTH_SECRET from the Bindings type
+    expect(model.env_bindings).toContain("DATABASE_URL");
+  });
+});
+
 describe("HonoExtractor — basepath-app", () => {
   const basepathEntry = path.join(FIXTURES, "basepath-app", "src", "index.ts");
   let extractor: HonoExtractor;
