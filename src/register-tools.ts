@@ -10,7 +10,7 @@ import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.
 import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
 import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
 import { traceCallChain } from "./tools/graph-tools.js";
-import { traceComponentTree, analyzeHooks, analyzeRenders } from "./tools/react-tools.js";
+import { traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph } from "./tools/react-tools.js";
 import { impactAnalysis } from "./tools/impact-tools.js";
 import { traceRoute } from "./tools/route-tools.js";
 import { detectCommunities } from "./tools/community-tools.js";
@@ -245,6 +245,7 @@ const REACT_TOOLS = [
   "trace_component_tree",
   "analyze_hooks",
   "analyze_renders",
+  "analyze_context_graph",
 ];
 
 /**
@@ -1012,6 +1013,22 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         include_tests: args.include_tests as boolean | undefined,
         max_entries: args.max_entries as number | undefined,
       });
+      return JSON.stringify(result, null, 2);
+    },
+  },
+
+  {
+    name: "analyze_context_graph",
+    category: "analysis",
+    searchHint: "react context createContext provider useContext consumer re-render propagation",
+    description: "Map React context flows: createContext → Provider → useContext consumers. Shows which components consume each context and which provide values. Helps identify unnecessary re-renders from context value changes.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const index = await getCodeIndex(args.repo as string);
+      if (!index) throw new Error(`Repository not found: ${args.repo}`);
+      const result = buildContextGraph(index.symbols);
       return JSON.stringify(result, null, 2);
     },
   },

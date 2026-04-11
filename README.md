@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 82 search, retrieval, and analysis tools via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 120 MCP tools (46 core + 74 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 **Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
@@ -185,9 +185,9 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (108 total — 44 core + 64 discoverable)
+## MCP tools (120 total — 46 core + 74 discoverable)
 
-When running as an MCP server, CodeSift exposes 44 core tools directly. The remaining 64 niche tools are discoverable via `discover_tools` and `describe_tools`.
+When running as an MCP server, CodeSift exposes 46 core tools directly. The remaining 74 niche tools are discoverable via `discover_tools` and `describe_tools`.
 
 | Category | Tools |
 |----------|-------|
@@ -196,7 +196,7 @@ When running as an MCP server, CodeSift exposes 44 core tools directly. The rema
 | **Outline** | `get_file_tree`, `get_file_outline`, `get_repo_outline`, `suggest_queries` (React-aware: suggests component/hook queries when detected) |
 | **Symbol retrieval** | `get_symbol`, `get_symbols`, `find_and_show`, `get_context_bundle` (React enrichment: hooks_used, child_components, parent_components, wrapper pattern) |
 | **References & graph** | `find_references` (LSP-enhanced), `trace_call_chain` (JSX-aware: `<Component>` = call edge; `filter_react_hooks` option), `impact_analysis`, `trace_route` (HTTP route → handler → DB — NestJS/Next.js/Express/Ktor/Spring Boot/Yii2/Laravel) |
-| **React** | `trace_component_tree` (BFS JSX composition tree with Mermaid output), `analyze_hooks` (hook inventory, Rule of Hooks violations, custom hook composition, usage summary) |
+| **React** | `trace_component_tree` (BFS JSX composition tree with Mermaid output), `analyze_hooks` (hook inventory, Rule of Hooks violations, custom hook composition), `analyze_renders` (re-render risk: inline props, missing memo, children-aware threshold, markdown output), `analyze_context_graph` (createContext → Provider → useContext consumer mapping) |
 | **LSP bridge** | `go_to_definition` (LSP + index fallback), `get_type_info` (hover), `rename_symbol` (cross-file type-safe rename) |
 | **Context & knowledge** | `assemble_context` (level: L0/L1/L2/L3), `get_knowledge_map`, `detect_communities` (Louvain) |
 | **Conversation search** | `index_conversations`, `search_conversations`, `find_conversations_for_symbol` |
@@ -204,7 +204,7 @@ When running as an MCP server, CodeSift exposes 44 core tools directly. The rema
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget, incl. `type: "conversation"`) |
 | **Security** | `scan_secrets` (AST-aware secret detection, ~1,100 rules, masked output) |
 | **PHP / Yii2** | `resolve_php_namespace` (PSR-4 FQCN→file via composer.json), `analyze_activerecord` (model schema: tableName, relations, rules, behaviors), `trace_php_event` (event trigger→listener chain), `find_php_views` (render→view file mapping), `resolve_php_service` (Yii::\$app→concrete class via config), `php_security_scan` (compound: SQL injection, XSS, eval, exec, unserialize — parallel checks), `php_project_audit` (meta-tool: security + ActiveRecord + health score) |
-| **Analysis** | `find_dead_code` (framework-aware incl. React/Next.js route entry points), `analyze_complexity` (React: hook_count, state_count, effect_count, jsx_depth), `find_clones`, `analyze_hotspots`, `search_patterns` (33 built-in: JS/TS ×9, React ×14, Kotlin ×6, PHP ×4), `list_patterns`, `frequency_analysis` (AST subtree clustering), `find_perf_hotspots` (6 perf anti-patterns: unbounded queries, sync I/O, N+1 loops, unbounded parallel, missing pagination, expensive recompute), `explain_query` (Prisma→SQL with EXPLAIN ANALYZE), `audit_scan` (5-gate composite: dead code + clones + patterns + complexity + hotspots) |
+| **Analysis** | `find_dead_code` (framework-aware incl. React/Next.js route entry points), `analyze_complexity` (React: hook_count, state_count, effect_count, jsx_depth), `find_clones`, `analyze_hotspots`, `search_patterns` (33 built-in: JS/TS ×9, React ×20, Kotlin ×6, PHP ×4), `list_patterns`, `frequency_analysis` (AST subtree clustering), `find_perf_hotspots` (6 perf anti-patterns: unbounded queries, sync I/O, N+1 loops, unbounded parallel, missing pagination, expensive recompute), `explain_query` (Prisma→SQL with EXPLAIN ANALYZE), `audit_scan` (5-gate composite: dead code + clones + patterns + complexity + hotspots) |
 | **Architecture** | `classify_roles` (symbol role classification via call graph), `check_boundaries` (architecture boundary enforcement), `ast_query` (structural grep via tree-sitter), `fan_in_fan_out` (import graph coupling: most-imported, most-dependent, hub files, coupling score 0-100), `co_change_analysis` (temporal coupling from git history: Jaccard similarity, cluster detection), `architecture_summary` (one-call composite: stack + communities + coupling + circular deps + LOC + entry points, Mermaid output) |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
 | **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
@@ -353,7 +353,7 @@ The `patterns` command searches for common code quality issues across your codeb
 | `lateinit-no-check` | Kotlin: `lateinit var` without `isInitialized` check |
 | `empty-when-branch` | Kotlin: empty `when` branch — swallowed case |
 | `mutable-shared-state` | Kotlin: mutable `var` inside `object`/`companion` — thread-unsafe |
-| **React (14)** | |
+| **React (14 + 6 below)** | |
 | `useEffect-no-cleanup` | useEffect without cleanup return — memory leak |
 | `hook-in-condition` | Hook inside if/for/while/switch — Rule of Hooks violation |
 | `useEffect-async` | async function directly in useEffect |
@@ -368,6 +368,14 @@ The `patterns` command searches for common code quality issues across your codeb
 | `jsx-falsy-and` | `{count && <Comp/>}` renders "0" when count is 0 |
 | `nested-component-def` | Component inside component — remounts every render |
 | `usecallback-no-deps` | useCallback/useMemo without dep array — useless memoization |
+| **React 19 (4)** | |
+| `react19-use-without-suspense` | use(promise) call — verify Suspense boundary |
+| `react19-server-action-not-async` | Non-async function in `"use server"` file |
+| `react19-form-action-non-function` | `<form action="url">` instead of action={fn} |
+| `react19-useoptimistic-no-transition` | useOptimistic without useTransition pair |
+| **RSC (2)** | |
+| `rsc-non-serializable-prop` | Function passed as prop across RSC boundary |
+| `rsc-date-prop` | Date object in JSX prop — loses prototype across boundary |
 | **PHP (7)** | |
 | `sql-injection-php` | User input flowing into SQL query |
 | `xss-php` | Unescaped user input echoed to output |
@@ -404,7 +412,7 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 116 tools to AI agents (46 core + 70 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 120 tools to AI agents (46 core + 74 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -581,9 +589,11 @@ File pattern parameters (`file_pattern`) support full glob syntax via [picomatch
 
 ## Supported languages
 
-TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, **Kotlin**, Java, Ruby, PHP, Markdown, CSS, Prisma, Astro.
+TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, **Kotlin**, Java, Ruby, PHP, Markdown, CSS, Prisma, **Astro**.
 
-**React/JSX/TSX** has first-class support across 4 waves + Tier 3 polish: `component` and `hook` SymbolKind values, JSX-aware call graph (all graph tools see `<Component>` usage as call edges), 14 React anti-patterns including multiline `hook-in-condition` and bug-free `nested-component-def` detection, `trace_component_tree` (BFS JSX composition tree), `analyze_hooks` (hook inventory + Rule of Hooks violation detection), `analyze_renders` (re-render risk with children-aware threshold + markdown output), `buildContextGraph` (createContext → Provider → useContext consumer mapping), React complexity metrics (hook_count, state_count, effect_count, jsx_depth), enriched `get_context_bundle` (hooks_used, child_components, parent_components, wrapper pattern incl. forwardRef generics, props_type), `filter_react_hooks` option on `trace_call_chain`, audit_scan REACT gate, React-aware review_diff (skips React patterns on non-.tsx diffs), generate_report React section (component/hook stats, top hooks), React/Next.js/Remix route entry point detection (prevents dead code false positives), shadcn/ui + Tailwind + form library detection in ReactConventions, `@/` alias resolution, RSC boundary detection (`"use client"`/`"use server"`), and build tool detection (Vite, CRA, webpack, Parcel, esbuild, Rspack, Rsbuild, Turbopack). Auto-loaded on React projects (package.json + .tsx files).
+**React/JSX/TSX** has first-class support across 4 waves + Tier 3 polish: `component` and `hook` SymbolKind values, JSX-aware call graph (all graph tools see `<Component>` usage as call edges), 20 React anti-patterns including multiline `hook-in-condition` and bug-free `nested-component-def` detection, `trace_component_tree` (BFS JSX composition tree), `analyze_hooks` (hook inventory + Rule of Hooks violation detection), `analyze_renders` (re-render risk with children-aware threshold + markdown output), `buildContextGraph` (createContext → Provider → useContext consumer mapping), React complexity metrics (hook_count, state_count, effect_count, jsx_depth), enriched `get_context_bundle` (hooks_used, child_components, parent_components, wrapper pattern incl. forwardRef generics, props_type), `filter_react_hooks` option on `trace_call_chain`, audit_scan REACT gate, React-aware review_diff (skips React patterns on non-.tsx diffs), generate_report React section (component/hook stats, top hooks), React/Next.js/Remix route entry point detection (prevents dead code false positives), shadcn/ui + Tailwind + form library detection in ReactConventions, `@/` alias resolution, RSC boundary detection (`"use client"`/`"use server"`), and build tool detection (Vite, CRA, webpack, Parcel, esbuild, Rspack, Rsbuild, Turbopack). Auto-loaded on React projects (package.json + .tsx files).
+
+**Astro** has deep framework intelligence — the first and only static code intelligence for Astro in the MCP ecosystem. 4 dedicated tools: `astro_analyze_islands` (detect all `client:*`/`server:defer` directives, group by framework, track server islands), `astro_hydration_audit` (12 anti-pattern detectors AH01-AH12 with A/B/C/D scoring — catches `client:load` on Astro components, islands in loops, missing framework hints, below-fold eager hydration, and more), `astro_route_map` (file-based routing analysis with dynamic params, route conflicts, rendering mode per page, endpoint method detection), `astro_config_analyze` (tree-sitter AST walker for `astro.config.mjs` — extracts output mode, adapter, integrations, i18n, redirects with `config_resolution` honesty field). Also: 6 Astro anti-patterns in `search_patterns`, Astro-aware `trace_route`, `analyze_project` returns full `astro_conventions`, `.astro` extension normalization in import graph, framework detection for dead-code analysis, `.mdx` file indexing. Template parser (`parseAstroTemplate`) extracts islands, slots, component usages, and directives from HTML template section with balanced-brace tracking, conditional/loop detection, and landmark section awareness.
 
 Kotlin support includes full tree-sitter parsing with a dedicated extractor for functions, classes (data/sealed/enum/abstract/annotation), interfaces, objects (singleton + companion), properties (val/var/const), type aliases, extension functions, suspend functions, generics, KDoc comments, and JUnit test detection (@Test, @BeforeEach, @AfterEach, @BeforeAll, @AfterAll). Route tracing supports Ktor DSL and Spring Boot Kotlin. Six Kotlin anti-patterns are built-in.
 | PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (9 tools: resolve_php_namespace, analyze_activerecord, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit, find_php_n_plus_one, find_php_god_model), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |

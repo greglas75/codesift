@@ -21,11 +21,11 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
-**108 MCP tools total** (43 core visible + 65 discoverable).
+**120 MCP tools total** (46 core visible + 74 discoverable).
 
-43 core tools appear in ListTools. Remaining 65 niche tools are discovered on demand:
+46 core tools appear in ListTools. Remaining 74 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 108 tools
+- `discover_tools(query="dead code")` — keyword search across all 120 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
@@ -75,8 +75,14 @@ Use this table to pick the right tool for each task:
 | what changed | `changed_symbols(since=)` |
 | React component tree | `trace_component_tree` |
 | React hook analysis | `analyze_hooks` |
+| React re-render analysis | `analyze_renders` |
+| React context graph | `analyze_context_graph` |
 | find components | `search_symbols(kind="component")` |
 | find hooks | `search_symbols(kind="hook")` |
+| Astro islands/hydration | `astro_analyze_islands` |
+| Astro hydration audit | `astro_hydration_audit` |
+| Astro route map | `astro_route_map` |
+| Astro config analysis | `astro_config_analyze` |
 
 ## When to Use (Situational Triggers)
 

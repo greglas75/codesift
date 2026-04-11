@@ -2,9 +2,9 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 116 MCP tools (46 core, 70 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 121 MCP tools (46 core, 75 hidden via disable()).
 
-DISCOVERY (for the 70 hidden/niche tools)
+DISCOVERY (for the 75 hidden/niche tools)
   discover_tools(query="dead code")    → keyword search → returns tool names
   describe_tools(names=["find_dead_code"])  → full schema with param types
   describe_tools(names=[...], reveal=true) → also adds tool to ListTools
@@ -60,5 +60,8 @@ TOOL MAPPING (quick ref)
   session snapshot  → get_session_snapshot | session → get_session_context
   React components  → search_symbols(kind=component) | hooks → search_symbols(kind=hook)
   component tree    → trace_component_tree | hook analysis → analyze_hooks
+  re-render risk    → analyze_renders | context flow → analyze_context_graph
   React anti-pats   → search_patterns("hook-in-condition") | clean graph → trace_call_chain(filter_react_hooks=true)
+  Astro islands     → astro_analyze_islands | hydration audit → astro_hydration_audit
+  Astro routes      → astro_route_map | config → astro_config_analyze
 `;
