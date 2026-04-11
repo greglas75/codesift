@@ -18,7 +18,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 
 ## Tool Discovery (NEW — agents read this)
 
-Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 36 core tools are visible.
+Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 38 core tools are visible.
 To find hidden tools: `discover_tools(query="dead code")` → keyword search.
 To get full schema: `describe_tools(names=["find_dead_code"])` → returns params with types.
 To reveal in ListTools: `describe_tools(names=["find_dead_code"], reveal=true)`.
@@ -52,14 +52,14 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 3. **Quick grep to find all places with a number (e.g., tool count):**
    ```bash
-   grep -rn "72 tools\|72 MCP" src/ ../codesift-website/src/
+   grep -rn "88 tools\|88 MCP" src/ ../codesift-website/src/
    ```
 
 ## Architecture
 
-**72 MCP tools** (36 core + 36 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context
+**88 MCP tools** (38 core + 50 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + NestJS analysis
 
-**src/tools/** (26 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
+**src/tools/** (27 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline) + nest-tools.ts (6 NestJS analysis tools)
 **src/lsp/** (4 files) — LSP bridge (6 languages)
 **src/parser/extractors/** (10 files) — Language extractors (TS, JS, **Python (full)**, Go, Rust, Prisma, MD, Astro, Conversation, Kotlin). Python extractor handles async def, @dataclass/@property/@classmethod/@staticmethod/@abstractmethod, dunder methods (tagged via meta), module constants, __all__ exports, superclasses (via extends field), dataclass fields, nested class walk, iterative walk with depth cap 200.
 **src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
