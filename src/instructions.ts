@@ -2,9 +2,9 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 108 MCP tools (44 core, 64 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 116 MCP tools (46 core, 70 hidden via disable()).
 
-DISCOVERY (for the 63 hidden/niche tools)
+DISCOVERY (for the 70 hidden/niche tools)
   discover_tools(query="dead code")    → keyword search → returns tool names
   describe_tools(names=["find_dead_code"])  → full schema with param types
   describe_tools(names=[...], reveal=true) → also adds tool to ListTools
