@@ -249,3 +249,89 @@ Button.displayName = 'Button';`;
     });
   });
 });
+
+describe("pattern-tools — Astro anti-patterns", () => {
+  describe("astro-client-on-astro", () => {
+    const regex = BUILTIN_PATTERNS["astro-client-on-astro"]!.regex;
+
+    it("matches client:load directive on .astro import", () => {
+      const source = `<MyWidget client:load src="Widget.astro" />`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match client directive on .tsx component", () => {
+      const source = `<MyWidget client:load src="Widget.tsx" />`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("astro-glob-usage", () => {
+    const regex = BUILTIN_PATTERNS["astro-glob-usage"]!.regex;
+
+    it("matches Astro.glob() call", () => {
+      const source = `const posts = await Astro.glob('../posts/**/*.md');`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match import.meta.glob()", () => {
+      const source = `const posts = import.meta.glob('../posts/**/*.md');`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("astro-set-html-xss", () => {
+    const regex = BUILTIN_PATTERNS["astro-set-html-xss"]!.regex;
+
+    it("matches set:html with dynamic variable", () => {
+      const source = `<div set:html={userContent} />`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match set:html with a quoted string literal", () => {
+      const source = `<div set:html={"<b>safe</b>"} />`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("astro-img-element", () => {
+    const regex = BUILTIN_PATTERNS["astro-img-element"]!.regex;
+
+    it("matches raw <img> element", () => {
+      const source = `<img src="/logo.png" alt="logo" />`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match <Image> component", () => {
+      const source = `<Image src="/logo.png" alt="logo" />`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("astro-missing-getStaticPaths", () => {
+    const regex = BUILTIN_PATTERNS["astro-missing-getStaticPaths"]!.regex;
+
+    it("matches dynamic route filename with bracket param", () => {
+      const source = `// file: src/pages/posts/[slug].astro`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match static route filename", () => {
+      const source = `// file: src/pages/posts/index.astro`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+
+  describe("astro-legacy-content-collections", () => {
+    const regex = BUILTIN_PATTERNS["astro-legacy-content-collections"]!.regex;
+
+    it("matches legacy src/content/config.ts path", () => {
+      const source = `import { defineCollection } from 'src/content/config.ts';`;
+      expect(regex.test(source)).toBe(true);
+    });
+
+    it("does not match new src/content.config.ts path", () => {
+      const source = `import { defineCollection } from 'src/content.config.ts';`;
+      expect(regex.test(source)).toBe(false);
+    });
+  });
+});

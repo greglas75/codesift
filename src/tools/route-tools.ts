@@ -5,6 +5,7 @@
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
 import type { CodeSymbol, CodeIndex, CallNode, RouteFramework } from "../types.js";
+import { findAstroHandlers } from "./astro-routes.js";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -665,6 +666,7 @@ export async function traceRoute(
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   // Try all frameworks
+  const astroHandlers = findAstroHandlers(index, path);
   const handlers = [
     ...(await findNestJSHandlers(index, path)),
     ...findNextJSHandlers(index, path),
@@ -673,6 +675,7 @@ export async function traceRoute(
     ...(await findLaravelHandlers(index, path)),
     ...(await findKtorHandlers(index, path)),
     ...(await findSpringBootKotlinHandlers(index, path)),
+    ...astroHandlers,
   ];
 
   if (handlers.length === 0) {

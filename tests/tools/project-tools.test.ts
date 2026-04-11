@@ -1,7 +1,18 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// ---------------------------------------------------------------------------
+// Mock index-tools so analyzeProject tests don't need a real registry
+// ---------------------------------------------------------------------------
+
+vi.mock("../../src/tools/index-tools.js", () => ({
+  getCodeIndex: vi.fn(),
+}));
+
+import { getCodeIndex } from "../../src/tools/index-tools.js";
+
 import {
   detectStack,
   classifyFiles,
@@ -9,8 +20,10 @@ import {
   extractNestConventions,
   getExtractorVersions,
   EXTRACTOR_VERSIONS,
+  analyzeProject,
+  buildConventionsSummary,
 } from "../../src/tools/project-tools.js";
-import type { ProfileSummary } from "../../src/tools/project-tools.js";
+import type { ProfileSummary, ProjectProfile } from "../../src/tools/project-tools.js";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -635,5 +648,121 @@ describe("extractNestConventions", () => {
     const conv = extractNestConventions("const x = 1;\n", "plain.ts");
     expect(conv.modules).toEqual([]);
     expect(conv.global_guards).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Astro branch in analyzeProject + buildConventionsSummary (Task 14)
+// ---------------------------------------------------------------------------
+
+import { initParser } from "../../src/parser/parser-manager.js";
+
+const ASTRO_CONFIG_SOURCE = `import { defineConfig } from "astro/config";
+import vercel from "@astrojs/vercel";
+import tailwind from "@astrojs/tailwind";
+
+export default defineConfig({
+  output: "server",
+  adapter: vercel(),
+  integrations: [tailwind()],
+  site: "https://example.com",
+});
+`;
+
+describe("analyzeProject — astro branch", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  it("returns status: complete for Astro project", async () => {
+    const root = await createFixture("astro-analyze", {
+      "package.json": JSON.stringify({
+        name: "test-astro",
+        dependencies: { astro: "^4.0.0" },
+      }),
+      "astro.config.mjs": ASTRO_CONFIG_SOURCE,
+    });
+
+    const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+    mockedGetCodeIndex.mockResolvedValueOnce({
+      repo: "local/test-astro",
+      root,
+      symbols: [],
+      files: [
+        { path: "astro.config.mjs", language: "javascript", symbol_count: 1, last_modified: Date.now() },
+        { path: "package.json", language: "json", symbol_count: 0, last_modified: Date.now() },
+      ],
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      symbol_count: 1,
+      file_count: 2,
+    } as CodeIndex);
+
+    const summary = await analyzeProject("local/test-astro");
+    expect(summary.status).toBe("complete");
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("response includes astro_conventions with populated fields", async () => {
+    const root = await createFixture("astro-analyze-conv", {
+      "package.json": JSON.stringify({
+        name: "test-astro-conv",
+        dependencies: { astro: "^4.0.0" },
+      }),
+      "astro.config.mjs": ASTRO_CONFIG_SOURCE,
+    });
+
+    const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+    mockedGetCodeIndex.mockResolvedValueOnce({
+      repo: "local/test-astro-conv",
+      root,
+      symbols: [],
+      files: [
+        { path: "astro.config.mjs", language: "javascript", symbol_count: 1, last_modified: Date.now() },
+        { path: "package.json", language: "json", symbol_count: 0, last_modified: Date.now() },
+      ],
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      symbol_count: 1,
+      file_count: 2,
+    } as CodeIndex);
+
+    const summary = await analyzeProject("local/test-astro-conv");
+    const conv = (summary.conventions_summary as any);
+    expect(conv).toBeDefined();
+    expect(conv.type).toBe("astro");
+    expect(conv.output_mode).toBe("server");
+    expect(conv.adapter).toBe("@astrojs/vercel");
+    expect(conv.integrations).toBeGreaterThanOrEqual(1);
+
+    await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("buildConventionsSummary — astro branch", () => {
+  it("produces astro section from profile with astro_conventions", () => {
+    const fakeProfile = {
+      astro_conventions: {
+        output_mode: "server",
+        adapter: "@astrojs/vercel",
+        integrations: ["@astrojs/tailwind", "@astrojs/react"],
+        site: "https://example.com",
+        base: null,
+        i18n: null,
+        redirects: {},
+        config_resolution: "static",
+        config_file: "astro.config.mjs",
+      },
+    } as unknown as ProjectProfile;
+
+    const summary = buildConventionsSummary(fakeProfile);
+    expect(summary).toBeDefined();
+    expect((summary as any).type).toBe("astro");
+    expect((summary as any).output_mode).toBe("server");
+    expect((summary as any).adapter).toBe("@astrojs/vercel");
+    expect((summary as any).integrations).toBe(2);
+    expect((summary as any).has_i18n).toBe(false);
+    expect((summary as any).config_resolution).toBe("static");
   });
 });

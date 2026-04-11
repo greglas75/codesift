@@ -169,6 +169,31 @@ export const BUILTIN_PATTERNS: Record<string, { regex: RegExp; description: stri
     regex: /createCommand\s*\(\s*["'][^"']*\$\{?\w+/,
     description: "Yii2 createCommand with string interpolation — SQL injection risk",
   },
+  // Astro anti-patterns
+  "astro-client-on-astro": {
+    regex: /client:(load|idle|visible|media|only).*\.astro/,
+    description: "client directive on .astro component import (Astro components cannot hydrate)",
+  },
+  "astro-glob-usage": {
+    regex: /Astro\.glob\s*\(/,
+    description: "deprecated Astro.glob() — use getCollection() or import.meta.glob()",
+  },
+  "astro-set-html-xss": {
+    regex: /set:html=\{[^"'][^}]*\}/,
+    description: "set:html with dynamic content — potential XSS risk",
+  },
+  "astro-img-element": {
+    regex: /<img\s/,
+    description: "raw <img> element — use <Image> from astro:assets for optimization",
+  },
+  "astro-missing-getStaticPaths": {
+    regex: /\[[\w.]+\]\.astro/,
+    description: "dynamic route file — verify getStaticPaths is exported",
+  },
+  "astro-legacy-content-collections": {
+    regex: /src\/content\/config\.ts/,
+    description: "legacy content collection config — migrate to src/content.config.ts",
+  },
 };
 
 /**

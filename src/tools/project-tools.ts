@@ -12,6 +12,8 @@ import { join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
+import { extractAstroConventions } from "./astro-config.js";
+import type { AstroConventions } from "./astro-config.js";
 
 // ---------------------------------------------------------------------------
 // Versioning — used by get_extractor_versions
@@ -1887,6 +1889,7 @@ export async function analyzeProject(
   let reactConventions: ReactConventions | undefined;
   let pythonConventions: PythonConventions | undefined;
   let phpConventions: PhpConventions | undefined;
+  let astroConventions: AstroConventions | undefined;
   let status: ProjectProfile["status"] = "complete";
 
   const fw = stack.framework;
@@ -1932,6 +1935,10 @@ export async function analyzeProject(
       phpConventions = extractYii2Conventions(index.files);
     } else if (fw === "laravel" || fw === "symfony") {
       phpConventions = extractPhpConventions(index.files);
+    } else if (fw === "astro") {
+      const astroResult = await extractAstroConventions(index.files.map((f) => f.path), projectRoot);
+      astroConventions = astroResult.conventions;
+      status = "complete";
     } else {
       status = "partial";
     }
@@ -1963,6 +1970,7 @@ export async function analyzeProject(
     ...(reactConventions ? { react_conventions: reactConventions } : {}),
     ...(pythonConventions ? { python_conventions: pythonConventions } : {}),
     ...(phpConventions ? { php_conventions: phpConventions } : {}),
+    ...(astroConventions ? { astro_conventions: astroConventions } : {}),
     dependency_health: await extractDependencyHealth(projectRoot) ?? undefined,
     git_health: extractGitHealth(projectRoot) ?? undefined,
     generation_metadata: {
@@ -2017,7 +2025,7 @@ export interface ProfileSummary {
   duration_ms: number;
 }
 
-function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conventions_summary"] {
+export function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conventions_summary"] {
   const p = profile as any;
   if (p.conventions) return {
     middleware_chains: p.conventions.middleware_chains.length,
@@ -2068,6 +2076,14 @@ function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conve
     middleware: p.php_conventions.middleware.length,
     models: p.php_conventions.models.length,
     migrations: p.php_conventions.migrations_count,
+  };
+  if (p.astro_conventions) return {
+    type: "astro",
+    output_mode: p.astro_conventions.output_mode,
+    adapter: p.astro_conventions.adapter,
+    integrations: p.astro_conventions.integrations.length,
+    has_i18n: !!p.astro_conventions.i18n,
+    config_resolution: p.astro_conventions.config_resolution,
   };
   return null;
 }
