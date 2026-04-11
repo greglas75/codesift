@@ -188,10 +188,51 @@ describe("HonoExtractor — basic-app", () => {
     expect(model.entry_file).toBe(basicEntry);
   });
 
-  it("marks extraction_status as partial (middleware/context/openapi not yet extracted)", async () => {
+  it("marks extraction_status as partial (context/openapi not yet extracted)", async () => {
     const model = await extractor.parse(basicEntry);
     expect(model.extraction_status).toBe("partial");
-    expect(model.skip_reasons.middleware_not_extracted).toBe(1);
+  });
+
+  it("extracts middleware chains with third-party classification (AC-M5)", async () => {
+    const model = await extractor.parse(basicEntry);
+    const globalChain = model.middleware_chains.find((mc) => mc.scope === "*");
+    expect(globalChain).toBeDefined();
+    const loggerEntry = globalChain?.entries.find((e) => e.name === "logger");
+    expect(loggerEntry?.is_third_party).toBe(true);
+    expect(loggerEntry?.imported_from).toBe("hono/logger");
+    const corsEntry = globalChain?.entries.find((e) => e.name === "cors");
+    expect(corsEntry?.is_third_party).toBe(true);
+    expect(corsEntry?.imported_from).toBe("hono/cors");
+  });
+
+  it("detects inline arrow middleware as <inline> (AC-M2)", async () => {
+    const model = await extractor.parse(basicEntry);
+    const globalChain = model.middleware_chains.find((mc) => mc.scope === "*");
+    const inlineEntry = globalChain?.entries.find((e) => e.name === "<inline>");
+    expect(inlineEntry).toBeDefined();
+    expect(inlineEntry?.inline).toBe(true);
+  });
+
+  it("expands some() from hono/combine with conditional flag (AC-M1)", async () => {
+    const model = await extractor.parse(basicEntry);
+    const apiChain = model.middleware_chains.find((mc) => mc.scope === "/api/*");
+    expect(apiChain).toBeDefined();
+    const expanded = apiChain?.entries.filter((e) => e.expanded_from === "some");
+    expect(expanded?.length).toBe(2);
+    const names = expanded?.map((e) => e.name).sort();
+    expect(names).toEqual(["authMw", "publicMw"]);
+    for (const e of expanded ?? []) {
+      expect(e.conditional).toBe(true);
+    }
+  });
+
+  it("expands spread array middleware (AC-M4)", async () => {
+    const model = await extractor.parse(basicEntry);
+    const adminChain = model.middleware_chains.find((mc) => mc.scope === "/admin/*");
+    expect(adminChain).toBeDefined();
+    const names = adminChain?.entries.map((e) => e.name);
+    expect(names).toContain("authMw");
+    expect(names).toContain("tenantMw");
   });
 
   it("every route references the same owner_var", async () => {

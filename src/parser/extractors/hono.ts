@@ -21,6 +21,8 @@ import type {
   HonoMethod,
   HonoMount,
   HonoRoute,
+  MiddlewareChain,
+  MiddlewareEntry,
 } from "./hono-model.js";
 
 const HTTP_METHODS = new Set([
@@ -39,7 +41,6 @@ export class HonoExtractor {
   async parse(entryFile: string): Promise<HonoAppModel> {
     const absoluteEntry = canonicalize(path.resolve(entryFile));
     const model = emptyModel(absoluteEntry, {
-      middleware_not_extracted: 1,
       context_flow_not_extracted: 1,
       openapi_not_extracted: 1,
     });
@@ -134,6 +135,9 @@ export class HonoExtractor {
           path: joinPaths(prefix, route.path),
         });
       }
+
+      // Walk for middleware chains: app.use("scope", mw1, mw2, ...)
+      this.walkMiddleware(tree.rootNode, file, localAppVars, importMap, model);
 
       // Detect runtime and env bindings (only for entry file)
       if (file === model.entry_file) {
@@ -384,6 +388,217 @@ export class HonoExtractor {
         ...(regexConstraint ? { regex_constraint: regexConstraint } : {}),
       });
     }
+  }
+
+  /**
+   * Walk for app.use(scope, mw1, mw2, ...) calls.
+   * Handles: identifiers, inline arrows, some()/every() from hono/combine,
+   * spread arrays, call expressions like cors().
+   */
+  private walkMiddleware(
+    root: Parser.SyntaxNode,
+    file: string,
+    appVars: Record<string, HonoApp>,
+    importMap: Map<string, string>,
+    model: HonoAppModel,
+  ): void {
+    // Build local variable → array declaration map for spread expansion
+    const arrayVars = this.collectArrayVars(root);
+    // Identify which imported names come from which packages
+    const importSources = this.collectImportSources(root);
+
+    const cursor = root.walk();
+    walk(cursor, (node) => {
+      if (node.type !== "call_expression") return;
+      const fnNode = node.childForFieldName("function");
+      const argsNode = node.childForFieldName("arguments");
+      if (!fnNode || !argsNode || fnNode.type !== "member_expression") return;
+
+      const objectNode = fnNode.childForFieldName("object");
+      const propertyNode = fnNode.childForFieldName("property");
+      if (!objectNode || !propertyNode || objectNode.type !== "identifier")
+        return;
+
+      const ownerVar = objectNode.text;
+      if (!appVars[ownerVar]) return;
+      if (propertyNode.text !== "use") return;
+
+      const argList = argsNode.namedChildren;
+      if (argList.length === 0) return;
+
+      // First arg may be a scope path string, or directly a middleware
+      let scope = "*";
+      let mwStartIdx = 0;
+      const firstArg = argList[0];
+      if (firstArg) {
+        const maybeScope = stringLiteralValue(firstArg);
+        if (maybeScope != null) {
+          scope = maybeScope;
+          mwStartIdx = 1;
+        }
+      }
+
+      const entries: MiddlewareEntry[] = [];
+      let order = 0;
+
+      for (let i = mwStartIdx; i < argList.length; i++) {
+        const arg = argList[i];
+        if (!arg) continue;
+        order++;
+
+        // Spread: ...adminChain
+        if (arg.type === "spread_element") {
+          const inner = arg.namedChildren[0];
+          if (inner?.type === "identifier") {
+            const arrItems = arrayVars.get(inner.text);
+            if (arrItems) {
+              for (const item of arrItems) {
+                entries.push(this.buildMiddlewareEntry(
+                  item, file, node.startPosition.row + 1, order++,
+                  importSources, undefined,
+                ));
+              }
+            }
+          }
+          continue;
+        }
+
+        // some(mw1, mw2) / every(mw1, mw2) from hono/combine
+        if (arg.type === "call_expression") {
+          const callFn = arg.childForFieldName("function");
+          const callArgs = arg.childForFieldName("arguments");
+          if (callFn?.type === "identifier" &&
+            (callFn.text === "some" || callFn.text === "every") && callArgs) {
+            const combineType = callFn.text;
+            for (const innerArg of callArgs.namedChildren) {
+              entries.push(this.buildMiddlewareEntry(
+                innerArg.type === "identifier" ? innerArg.text : "<inline>",
+                file, innerArg.startPosition.row + 1, order++,
+                importSources, combineType,
+              ));
+            }
+            continue;
+          }
+        }
+
+        // Regular middleware: identifier, call expression, or inline arrow
+        const mwName = this.extractMiddlewareName(arg);
+        entries.push(this.buildMiddlewareEntry(
+          mwName, file, arg.startPosition.row + 1, order,
+          importSources, undefined,
+        ));
+      }
+
+      if (entries.length > 0) {
+        // Merge into existing chain for same scope, or create new
+        const existing = model.middleware_chains.find(
+          (mc) => mc.scope === scope && mc.owner_var === ownerVar,
+        );
+        if (existing) {
+          existing.entries.push(...entries);
+        } else {
+          model.middleware_chains.push({
+            scope,
+            scope_pattern: scope === "*" ? ".*" : scope.replace(/\*/g, ".*"),
+            owner_var: ownerVar,
+            entries,
+          });
+        }
+      }
+    });
+  }
+
+  private extractMiddlewareName(node: Parser.SyntaxNode): string {
+    if (node.type === "identifier") return node.text;
+    if (node.type === "arrow_function" || node.type === "function_expression") {
+      return "<inline>";
+    }
+    if (node.type === "call_expression") {
+      const fn = node.childForFieldName("function");
+      if (fn?.type === "identifier") return fn.text;
+      if (fn?.type === "member_expression") {
+        const prop = fn.childForFieldName("property");
+        return prop?.text ?? "<inline>";
+      }
+    }
+    return "<inline>";
+  }
+
+  private buildMiddlewareEntry(
+    name: string,
+    file: string,
+    line: number,
+    order: number,
+    importSources: Map<string, string>,
+    expandedFrom: string | undefined,
+  ): MiddlewareEntry {
+    const importedFrom = importSources.get(name);
+    const isThirdParty = !!importedFrom && (
+      importedFrom.startsWith("hono/") ||
+      !importedFrom.startsWith(".")
+    );
+    return {
+      name,
+      order,
+      line,
+      file,
+      inline: name === "<inline>",
+      is_third_party: isThirdParty,
+      imported_from: importedFrom,
+      expanded_from: expandedFrom,
+      conditional: expandedFrom === "some",
+    };
+  }
+
+  /** Collect local array variable declarations: const adminChain = [authMw, tenantMw] */
+  private collectArrayVars(root: Parser.SyntaxNode): Map<string, string[]> {
+    const result = new Map<string, string[]>();
+    const cursor = root.walk();
+    walk(cursor, (node) => {
+      if (node.type !== "variable_declarator") return;
+      const nameNode = node.childForFieldName("name");
+      const valueNode = node.childForFieldName("value");
+      if (!nameNode || !valueNode || nameNode.type !== "identifier") return;
+      if (valueNode.type !== "array") return;
+      const items: string[] = [];
+      for (const el of valueNode.namedChildren) {
+        if (el.type === "identifier") items.push(el.text);
+      }
+      if (items.length > 0) result.set(nameNode.text, items);
+    });
+    return result;
+  }
+
+  /** Collect import source mapping: variableName → packageSpecifier */
+  private collectImportSources(root: Parser.SyntaxNode): Map<string, string> {
+    const result = new Map<string, string>();
+    const cursor = root.walk();
+    walk(cursor, (node) => {
+      if (node.type !== "import_statement") return;
+      const sourceNode = node.childForFieldName("source");
+      if (!sourceNode) return;
+      const specifier = stringLiteralValue(sourceNode);
+      if (!specifier) return;
+
+      const importClause = node.children.find((c) => c.type === "import_clause");
+      if (!importClause) return;
+      for (const child of importClause.namedChildren) {
+        if (child.type === "identifier") {
+          result.set(child.text, specifier);
+        }
+        if (child.type === "named_imports") {
+          for (const spec of child.namedChildren) {
+            if (spec.type === "import_specifier") {
+              const alias = spec.childForFieldName("alias");
+              const name = spec.childForFieldName("name");
+              const varName = alias?.text ?? name?.text;
+              if (varName) result.set(varName, specifier);
+            }
+          }
+        }
+      }
+    });
+    return result;
   }
 
   /**
