@@ -45,9 +45,14 @@ export function extractPythonImports(
           walk(consequence, inTypeChecking || isTypeCheck);
         }
 
-        // Walk elif / else clauses (named "alternative") without type_only
+        // Walk elif / else clauses (named "alternative") without type_only.
+        // Compare by start index since node refs from childForFieldName are
+        // distinct JS objects from the namedChildren array.
+        const conditionStart = condition?.startIndex;
+        const consequenceStart = consequence?.startIndex;
         for (const child of node.namedChildren) {
-          if (child === condition || child === consequence) continue;
+          if (child.startIndex === conditionStart) continue;
+          if (child.startIndex === consequenceStart) continue;
           walk(child, inTypeChecking);
         }
         return;
