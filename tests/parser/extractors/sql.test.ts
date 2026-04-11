@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Will fail until the extractor is created
-import { extractSqlSymbols } from "../../../src/parser/extractors/sql.js";
+import { extractSqlSymbols, stripJinjaTokens } from "../../../src/parser/extractors/sql.js";
 
 const FIXTURES = join(import.meta.dirname, "../../fixtures/sql");
 
@@ -92,6 +92,48 @@ describe("extractSqlSymbols", () => {
 
       const totalField = symbols.find((s) => s.name === "total" && s.kind === "field");
       expect(totalField!.signature).toContain("DECIMAL");
+    });
+  });
+
+  describe("stripJinjaTokens", () => {
+    it("replaces Jinja expressions with spaces preserving length", () => {
+      const input = "SELECT {{ ref('x') }} FROM a";
+      const output = stripJinjaTokens(input);
+      // {{ ref('x') }} = 16 chars → 16 spaces
+      expect(output.length).toBe(input.length);
+      expect(output).not.toContain("{{");
+      expect(output).not.toContain("}}");
+      expect(output).toContain("SELECT ");
+      expect(output).toContain(" FROM a");
+    });
+
+    it("preserves newlines inside Jinja blocks", () => {
+      const input = "{% if x %}\nCREATE TABLE foo (id INT);\n{% endif %}";
+      const output = stripJinjaTokens(input);
+      expect(output).toContain("\nCREATE TABLE foo (id INT);\n");
+      // Jinja markers replaced with spaces, newlines preserved
+      expect(output.split("\n")).toHaveLength(3);
+    });
+
+    it("extracts table at correct line from Jinja-stripped source", () => {
+      const source = loadFixture("jinja-model.sql");
+      const stripped = stripJinjaTokens(source);
+      const symbols = extractSqlSymbols(stripped, "model.sql", "repo", source);
+
+      const table = symbols.find((s) => s.kind === "table");
+      expect(table).toBeDefined();
+      expect(table!.name).toBe("derived_orders");
+      expect(table!.start_line).toBe(7); // line 7 in the original
+    });
+
+    it("preserves original source in symbol source field", () => {
+      const source = loadFixture("jinja-model.sql");
+      const stripped = stripJinjaTokens(source);
+      const symbols = extractSqlSymbols(stripped, "model.sql", "repo", source);
+
+      const table = symbols.find((s) => s.kind === "table");
+      // source field comes from originalSource, not stripped
+      expect(table!.source).toContain("CREATE TABLE derived_orders");
     });
   });
 
