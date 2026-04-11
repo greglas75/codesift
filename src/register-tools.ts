@@ -2979,6 +2979,36 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "search_columns",
+    category: "search" as ToolCategory,
+    searchHint: "search column SQL table field name type database schema find",
+    description: "Search SQL columns across all tables by name (substring), type (int/string/float/...), or parent table. Returns column name, type, table, file, and line. Like search_symbols but scoped to SQL fields.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      query: z.string().describe("Column name substring to match (case-insensitive). Empty = no name filter."),
+      type: z.string().optional().describe("Filter by normalized type: int, string, float, bool, datetime, json, uuid, bytes"),
+      table: z.string().optional().describe("Filter by table name substring"),
+      file_pattern: z.string().optional().describe("Scope to files matching pattern"),
+      max_results: zNum().describe("Max columns to return (default: 100)"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { searchColumns } = await import("./tools/sql-tools.js");
+      const result = await searchColumns(args.repo as string, {
+        query: (args.query as string) ?? "",
+        type: args.type as string | undefined,
+        table: args.table as string | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Columns: ${result.columns.length}${result.truncated ? `/${result.total} (truncated)` : ""}`);
+      for (const c of result.columns) {
+        parts.push(`  ${c.table}.${c.name.padEnd(24)} ${c.normalized_type.padEnd(10)} ${c.file}:${c.line}`);
+      }
+      return parts.join("\n");
+    },
+  },
+  {
     name: "analyze_schema_drift",
     category: "analysis" as ToolCategory,
     searchHint: "schema drift ORM Prisma Drizzle SQL mismatch migration type field comparison database",
