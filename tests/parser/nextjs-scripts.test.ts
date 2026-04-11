@@ -30,5 +30,18 @@ describe("nextjs scripts smoke test", () => {
       console.error(res.stderr);
     }
     expect(res.status).toBe(0);
+  }, 120000);
+
+  it("validate-nextjs-route-count.ts exits with code 0", () => {
+    const res = spawnSync(
+      "npx",
+      ["tsx", "scripts/validate-nextjs-route-count.ts"],
+      { cwd: repoRoot, encoding: "utf8" },
+    );
+    if (res.status !== 0) {
+      console.error(res.stdout);
+      console.error(res.stderr);
+    }
+    expect(res.status).toBe(0);
   }, 60000);
 });
