@@ -7,6 +7,7 @@
  */
 
 import { readFile, writeFile, access, readdir, mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
@@ -1037,12 +1038,14 @@ export function extractNestConventions(
 // ---------------------------------------------------------------------------
 
 export interface NextConventions {
-  pages: { path: string; type: "page" | "layout" | "loading" | "error" }[];
+  pages: { path: string; type: "page" | "layout" | "loading" | "error" | "not-found" | "global-error" | "default" | "template" }[];
   middleware: { file: string; matchers: string[] } | null;
   api_routes: { path: string; methods: string[]; file: string }[];
   services_count: number;
   inngest_functions: string[];
   webhooks: string[];
+  client_component_count: number;
+  server_action_count: number;
   config: {
     app_router: boolean;
     src_dir: boolean;
@@ -1059,6 +1062,8 @@ export function extractNextConventions(
   const inngest_functions: string[] = [];
   const webhooks: string[] = [];
   let services_count = 0;
+  let client_component_count = 0;
+  let server_action_count = 0;
   let middleware: NextConventions["middleware"] = null;
 
   const hasAppDir = files.some((f) => f.path.includes("app/"));
@@ -1086,6 +1091,18 @@ export function extractNextConventions(
     if (/app\/.*\/error\.(tsx|jsx|ts|js)$/.test(p)) {
       pages.push({ path: p, type: "error" });
     }
+    if (/app\/.*\/not-found\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "not-found" });
+    }
+    if (/app\/.*\/global-error\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "global-error" });
+    }
+    if (/app\/.*\/default\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "default" });
+    }
+    if (/app\/.*\/template\.(tsx|jsx|ts|js)$/.test(p)) {
+      pages.push({ path: p, type: "template" });
+    }
 
     // API routes (App Router — route.ts files under app/api/)
     if (/app\/api\/.*route\.(ts|js)$/.test(p)) {
@@ -1111,6 +1128,17 @@ export function extractNextConventions(
     if (/webhook/.test(p) && /route\.(ts|js)$/.test(p)) {
       webhooks.push(p);
     }
+
+    // Directive scanning — check first line for "use client" / "use server"
+    if (/\.(tsx|ts|jsx|js)$/.test(p) && /app\//.test(p)) {
+      try {
+        const head = readFileSync(join(_projectRoot, p), { encoding: "utf8", flag: "r" }).slice(0, 80);
+        if (/['"]use client['"]/.test(head)) client_component_count++;
+        if (/['"]use server['"]/.test(head)) server_action_count++;
+      } catch {
+        // file may have been deleted since indexing
+      }
+    }
   }
 
   return {
@@ -1118,6 +1146,8 @@ export function extractNextConventions(
     middleware,
     api_routes,
     services_count,
+    client_component_count,
+    server_action_count,
     inngest_functions,
     webhooks,
     config: { app_router: hasAppDir, src_dir: hasSrcDir, i18n: hasI18n },
@@ -1249,6 +1279,8 @@ export function extractReactConventions(
   const component_patterns = { memo: 0, forwardRef: 0, lazy: 0 };
 
   if (symbols) {
+    // Set of stdlib hooks to exclude from "hook usage" tracking — we want
+    // to highlight which library/custom hooks components consume.
     for (const sym of symbols) {
       if (sym.kind === "component") {
         actual_component_count++;

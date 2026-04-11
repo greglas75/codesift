@@ -10,6 +10,12 @@ const NEXT_MIDDLEWARE_FILE = /(^|\/)middleware\.[jt]sx?$/;
 const NEXT_ROUTE_METHODS = /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/;
 const NEXT_PAGES_DATA_FUNCTIONS = /^(getServerSideProps|getStaticProps|getStaticPaths)$/;
 const NEXT_APP_METADATA_FUNCTIONS = /^(generateMetadata|generateStaticParams)$/;
+/** Next.js config exports that are framework entry points (not dead code) */
+const NEXT_CONFIG_EXPORTS = /^(metadata|viewport|dynamic|revalidate|runtime|preferredRegion|maxDuration|fetchCache|dynamicParams)$/;
+
+/** NestJS lifecycle hooks + decorator-based entry points */
+const NESTJS_LIFECYCLE = /^(onModuleInit|onModuleDestroy|onApplicationBootstrap|onApplicationShutdown|beforeApplicationShutdown)$/;
+const NESTJS_CONTROLLER_FILE = /\.(controller|resolver|gateway)\.[jt]sx?$/;
 
 export function detectFrameworks(index: CodeIndex): Set<Framework> {
   const frameworks = new Set<Framework>();
@@ -34,6 +40,12 @@ export function isFrameworkEntryPoint(
     if (NEXT_MIDDLEWARE_FILE.test(symbol.file) && symbol.name === "middleware") return true;
     if (NEXT_PAGES_FILE.test(symbol.file) && NEXT_PAGES_DATA_FUNCTIONS.test(symbol.name)) return true;
     if (NEXT_APP_FILE.test(symbol.file) && NEXT_APP_METADATA_FUNCTIONS.test(symbol.name)) return true;
+    if (NEXT_APP_FILE.test(symbol.file) && NEXT_CONFIG_EXPORTS.test(symbol.name)) return true;
+  }
+
+  if (frameworks.has("nestjs")) {
+    if (NESTJS_LIFECYCLE.test(symbol.name)) return true;
+    if (NESTJS_CONTROLLER_FILE.test(symbol.file)) return true;
   }
 
   return false;

@@ -61,11 +61,11 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 **src/tools/** (26 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline)
 **src/lsp/** (4 files) — LSP bridge (6 languages)
-**src/parser/extractors/** (10 files) — Language extractors (TS, JS, Python, Go, Rust, Prisma, MD, Astro, Conversation)
+**src/parser/extractors/** (10 files) — Language extractors (TS, JS, **Python (full)**, Go, Rust, Prisma, MD, Astro, Conversation, Kotlin). Python extractor handles async def, @dataclass/@property/@classmethod/@staticmethod/@abstractmethod, dunder methods (tagged via meta), module constants, __all__ exports, superclasses (via extends field), dataclass fields, nested class walk, iterative walk with depth cap 200.
 **src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
 **src/retrieval/** (5 files) — codebase_retrieval batch engine, semantic/hybrid search
 **src/search/** (5 files) — BM25F index with centrality bonus, semantic embeddings, chunker
-**src/utils/** (6 files) — Import graph, glob, walk, git validation
+**src/utils/** (8 files) — Import graph (TS/JS/PHP/Kotlin/**Python**), glob, walk, git validation; python-imports.ts (tree-sitter AST extraction) + python-import-resolver.ts (package-aware resolution with `src/` layout detection)
 **src/cli/** (5 files) — CLI commands + hooks.ts (PreToolUse/PostToolUse/PreCompact)
 **src/formatters-shortening.ts** — Compact/counts formatters for progressive cascade
 **src/instructions.ts** — CODESIFT_INSTRUCTIONS (~800 tok) sent via MCP instructions field

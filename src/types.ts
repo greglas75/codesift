@@ -44,6 +44,10 @@ export interface CodeSymbol extends FileLocation {
   source?: string;      // full source text of symbol
   parent?: string;      // parent symbol id (for methods inside classes)
   tokens?: string[];    // pre-computed BM25 tokens (name + signature split)
+  decorators?: string[];                // e.g. ["@pytest.fixture", "@classmethod"]
+  extends?: string[];                   // superclass / base types
+  is_async?: boolean;                   // async def, async fn, etc.
+  meta?: Record<string, unknown>;       // language-specific metadata
 }
 
 export interface FileEntry {

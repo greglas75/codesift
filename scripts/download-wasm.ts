@@ -58,7 +58,9 @@ const GRAMMARS: GrammarDef[] = [
     wasmPaths: ["tree-sitter-javascript.wasm"],
   },
   {
-    pkg: "tree-sitter-python",
+    // Pinned to 0.23.6 — ABI 14 compat with web-tree-sitter 0.24.x.
+    // tree-sitter-python 0.24+ requires ABI 15.
+    pkg: "tree-sitter-python@0.23.6",
     wasmPaths: ["tree-sitter-python.wasm"],
   },
   {

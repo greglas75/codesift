@@ -160,3 +160,35 @@ Commits pending review. Auto-managed:
 - 1a63366 (2026-04-09) release: v0.2.7 — feat: analyze_project + get_extractor_versions tools
 - dfffd27 (2026-04-09) fix: stack detector scans workspace package.json in monorepos
 - c7b2eec (2026-04-09) release: v0.2.8 — fix: monorepo workspace scanning for stack detection
+- f71ec6d (2026-04-09) fix: TS errors + rebuild dist for 0.2.9 with workspace scanning
+- 46594f2 (2026-04-09) fix: resolve all TS strict mode errors in project-tools
+- 13f9991 (2026-04-09) fix: dedup per-path middleware + resolve imported_from via import map
+- 097e9e0 (2026-04-09) feat: write profile to disk + return compact summary via MCP
+- 4cb08de (2026-04-09) feat: NestJS extractor + CWD fallback for conversation index root
+- 7c187f7 (2026-04-09) feat: add Next.js, Express, React, Python, PHP convention extractors
+- 7e638f0 (2026-04-10) feat: promote analyze_project + get_extractor_versions to core tools
+- db3b185 (2026-04-10) fix: Next.js extractor — detect API routes, services, Inngest, webhooks
+- 75db457 (2026-04-10) feat: add dependency_health + git_health to project profile
+- e1005f5 (2026-04-10) fix: compact important tier — top 30 + aggregates instead of full list
+- 5a023a0 (2026-04-10) feat: Phase 1B — add identity, dependency_graph, test_conventions, known_gotchas
+- a8ed695 (2026-04-10) feat: add Yii2 framework detection
+- fdd4096 (2026-04-10) docs: add H10 hint code to all rules files and instructions.ts
+- 8a75752 (2026-04-10) feat: promote 21 direct-use tools to core (14→35 visible)
+- 5f6b4ca (2026-04-11) fix: get_extractor_versions returns structured output with parser_languages
+- 9fc9387 (2026-04-11) feat: index Kotlin/Swift/Dart/Scala/etc. as text_stub (no parser needed)
+- 5b7f154 (2026-04-11) feat: add PreToolUse precheck-bash hook for Codex CLI
+- f192d8d (2026-04-11) feat: H11 hint for text_stub repos + list_repos name_contains filter
+- 0b1be11 (2026-04-11) fix: handle .kt mapped to "kotlin" language in index + H11 check
+- edf6f55 (2026-04-11) feat: audit_scan composite tool — one call for 5 CQ gates
+- 92720f4 (2026-04-11) feat(kotlin): add full Kotlin parser support with tree-sitter
+- 9828402 (2026-04-11) docs: add Kotlin tools extension plan (12 tasks, 5 phases)
+- b334439 (2026-04-11) feat(kotlin): Phase 1+3 — fix 5 downstream tools + add 6 anti-patterns
+- 750ba91 (2026-04-11) feat(kotlin): Phase 2+4 — import graph + Ktor/Spring Boot route tracing
+- 25dd3e6 (2026-04-11) feat: add 6 agent-requested MCP tools (66 → 72)
+- 9570503 (2026-04-11) feat(react): Wave 1 — component/hook kinds + JSX-aware call graph
+- 9da5cf0 (2026-04-11) feat(php): full PHP/Yii2 support — extractor, conventions, 7 new tools
+- 10ca30e (2026-04-11) feat(react): Wave 2 — 7 anti-patterns + semantic ReactConventions + complexity metrics
+- c373057 (2026-04-11) fix(review): 3 MUST-FIX bugs from audit of 6-tool commit
+- bc122b7 (2026-04-11) feat(react): Wave 3 — 2 new tools (trace_component_tree, analyze_hooks) + hook filtering
+- 33e14e8 (2026-04-11) add HonoAppModel types for hono extractor
+- a03414d (2026-04-11) amend hono plan with adversarial review fixes (revision 2)

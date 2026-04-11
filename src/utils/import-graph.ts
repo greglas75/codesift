@@ -4,10 +4,16 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CodeIndex } from "../types.js";
+import { getParser } from "../parser/parser-manager.js";
+import { extractPythonImports } from "./python-imports.js";
+import { resolvePythonImport } from "./python-import-resolver.js";
 
 export interface ImportEdge {
   from: string; // importer file path
   to: string;   // imported file path
+  type_only?: boolean;   // Python: `if TYPE_CHECKING:` import
+  star_import?: boolean; // Python: `from X import *`
+  raw?: string;          // original import source for debugging
 }
 
 // Patterns for detecting import statements across common languages
@@ -186,10 +192,14 @@ export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string
 export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
   const normalizedPaths = new Map<string, string>();
   for (const file of index.files) {
-    const normalized = file.path.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php|kt|kts)$/, "");
+    const normalized = file.path.replace(/\.(ts|tsx|js|jsx|mjs|cjs|php|kt|kts|py)$/, "");
     normalizedPaths.set(normalized, file.path);
     if (normalized.endsWith("/index")) {
       normalizedPaths.set(normalized.slice(0, -6), file.path);
+    }
+    // Python package index: map `foo/__init__` → `foo`
+    if (normalized.endsWith("/__init__")) {
+      normalizedPaths.set(normalized.slice(0, -9), file.path);
     }
   }
   return normalizedPaths;
@@ -210,16 +220,32 @@ export async function collectImportEdges(
   const edgeSet = new Set<string>();
   const edges: ImportEdge[] = [];
 
+  // Rollback kill switch — skip Python import extraction if env var set
+  const pythonDisabled = process.env.CODESIFT_DISABLE_PYTHON_IMPORTS === "1";
+
+  // Python needs the full indexed file list for package resolution
+  const indexedPyFiles = index.files
+    .filter((f) => f.path.endsWith(".py"))
+    .map((f) => f.path);
+
   const files = fileFilter
     ? index.files.filter((f) => fileFilter.has(f.path))
     : index.files;
 
-  const addEdge = (from: string, to: string): void => {
+  const addEdge = (
+    from: string,
+    to: string,
+    extras?: Pick<ImportEdge, "type_only" | "star_import" | "raw">,
+  ): void => {
     if (to === from) return;
     const edgeKey = `${from}->${to}`;
     if (edgeSet.has(edgeKey)) return;
     edgeSet.add(edgeKey);
-    edges.push({ from, to });
+    const edge: ImportEdge = { from, to };
+    if (extras?.type_only) edge.type_only = true;
+    if (extras?.star_import) edge.star_import = true;
+    if (extras?.raw) edge.raw = extras.raw;
+    edges.push(edge);
   };
 
   for (const file of files) {
@@ -244,6 +270,35 @@ export async function collectImportEdges(
       for (const fqName of kotlinImports) {
         const targetFile = resolveKotlinImport(fqName, kotlinFilesByBasename);
         if (targetFile) addEdge(file.path, targetFile);
+      }
+    }
+
+    // Python imports via tree-sitter AST + package-aware resolution
+    if (!pythonDisabled && file.path.endsWith(".py")) {
+      try {
+        const parser = await getParser("python");
+        if (parser) {
+          const tree = parser.parse(source);
+          const pyImports = extractPythonImports(tree);
+          for (const imp of pyImports) {
+            const targetFile = resolvePythonImport(
+              { module: imp.module, level: imp.level },
+              file.path,
+              indexedPyFiles,
+            );
+            if (targetFile) {
+              addEdge(file.path, targetFile, {
+                type_only: imp.is_type_only,
+                star_import: imp.is_star,
+              });
+            }
+          }
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[import-graph] python extraction failed for ${file.path}: ${message}`,
+        );
       }
     }
   }
