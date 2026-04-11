@@ -199,8 +199,8 @@ export async function nestModuleGraph(
   };
 }
 
-/** DFS cycle detection on directed graph */
-function detectCycles(
+/** DFS cycle detection on directed graph. Exported for reuse in nest-ext-tools.ts (G12). */
+export function detectCycles(
   nodes: string[],
   edges: Array<{ from: string; to: string }>,
 ): string[][] {

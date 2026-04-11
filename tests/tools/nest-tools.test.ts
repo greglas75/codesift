@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, detectCycles } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -159,6 +159,24 @@ describe("nest_lifecycle_map", () => {
 
     const result = await nestLifecycleMap("test-repo");
     expect(result.hooks).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectCycles export (Task 4 — prerequisite for G12 reuse)
+// ---------------------------------------------------------------------------
+
+describe("detectCycles export", () => {
+  it("detects simple A → B → A cycle", () => {
+    const cycles = detectCycles(["A", "B"], [{ from: "A", to: "B" }, { from: "B", to: "A" }]);
+    expect(cycles.length).toBeGreaterThan(0);
+    expect(cycles[0]).toContain("A");
+    expect(cycles[0]).toContain("B");
+  });
+
+  it("returns empty array for acyclic graph", () => {
+    const cycles = detectCycles(["A", "B", "C"], [{ from: "A", to: "B" }, { from: "B", to: "C" }]);
+    expect(cycles).toEqual([]);
   });
 });
 
