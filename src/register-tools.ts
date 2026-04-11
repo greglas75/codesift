@@ -55,6 +55,8 @@ import { nextjsBoundaryAnalyzer } from "./tools/nextjs-boundary-tools.js";
 import { nextjsLinkIntegrity } from "./tools/nextjs-link-tools.js";
 import { nextjsDataFlow } from "./tools/nextjs-data-flow-tools.js";
 import { nextjsMiddlewareCoverage } from "./tools/nextjs-middleware-coverage-tools.js";
+import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
+import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
@@ -71,8 +73,8 @@ import { formatSnapshot, getContext, getSessionState } from "./storage/session-s
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow, formatNextjsMiddlewareCoverage } from "./formatters.js";
-import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts } from "./formatters-shortening.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow, formatNextjsMiddlewareCoverage, formatFrameworkAudit } from "./formatters.js";
+import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -520,6 +522,7 @@ export const CORE_TOOL_NAMES = new Set([
   // --- Next.js tools ---
   "nextjs_route_map",
   "nextjs_metadata_audit",
+  "framework_audit",
 ]);
 
 /** Get all tool definitions (exported for testing) */
@@ -2739,6 +2742,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return formatNextjsMiddlewareCoverage(result);
     },
   },
+  {
+    name: "framework_audit",
+    category: "analysis" as ToolCategory,
+    searchHint: "nextjs framework audit meta-tool overall score security metadata routes components",
+    description: "Run all Next.js sub-audits (components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage) and aggregate into a unified weighted overall score with grade. Use as a single first-call for any Next.js project.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
+      tools: z.array(z.string()).optional().describe("Subset of tools to run (default: all 9). Names: components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof frameworkAudit>[1] = {};
+      if (args.workspace != null) opts.workspace = args.workspace as string;
+      if (args.tools != null) opts.tools = args.tools as AuditDimension[];
+      const result = await frameworkAudit(args.repo as string ?? "", opts);
+      return formatFrameworkAudit(result);
+    },
+  },
 
   // ── SQL analysis tools (hidden/discoverable) ─────────────
   {
@@ -3051,6 +3072,7 @@ export function registerTools(server: McpServer, options?: { deferNonCore?: bool
   registerShortener("trace_route", { compact: formatTraceRouteCompact, counts: formatTraceRouteCounts });
   registerShortener("nextjs_route_map", { compact: formatNextjsRouteMapCompact, counts: formatNextjsRouteMapCounts });
   registerShortener("nextjs_metadata_audit", { compact: formatNextjsMetadataAuditCompact, counts: formatNextjsMetadataAuditCounts });
+  registerShortener("framework_audit", { compact: formatFrameworkAuditCompact, counts: formatFrameworkAuditCounts });
   registerShortener("get_session_context", {
     compact: (text: string) => {
       try {

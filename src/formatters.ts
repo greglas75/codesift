@@ -795,6 +795,7 @@ import type { NextjsBoundaryResult } from "./tools/nextjs-boundary-tools.js";
 import type { LinkIntegrityResult } from "./tools/nextjs-link-tools.js";
 import type { NextjsDataFlowResult } from "./tools/nextjs-data-flow-tools.js";
 import type { NextjsMiddlewareCoverageResult } from "./tools/nextjs-middleware-coverage-tools.js";
+import type { FrameworkAuditResult } from "./tools/nextjs-framework-audit-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -1069,6 +1070,42 @@ export function formatNextjsMiddlewareCoverage(result: NextjsMiddlewareCoverageR
   }
   if (result.limitations.length > 0) {
     lines.push(`Limitations: ${result.limitations.join("; ")}`);
+  }
+  return lines.join("\n");
+}
+
+export function formatFrameworkAudit(result: FrameworkAuditResult): string {
+  const lines: string[] = [];
+  lines.push("NEXT.JS FRAMEWORK AUDIT");
+  lines.push("");
+  lines.push(
+    `Overall: ${result.summary.overall_score}/100 (${result.summary.grade}) | Duration: ${result.duration_ms}ms`,
+  );
+  lines.push("");
+
+  lines.push("Dimension          Score Weight Contribution");
+  lines.push("─────────────────── ───── ────── ────────────");
+  for (const [dim, info] of Object.entries(result.summary.dimensions)) {
+    if (!info) continue;
+    const dimText = dim.padEnd(19).slice(0, 19);
+    const score = String(info.score).padStart(5);
+    const weight = String(info.weight).padStart(6);
+    const contribution = info.contribution.toFixed(1).padStart(12);
+    lines.push(`${dimText} ${score} ${weight} ${contribution}`);
+  }
+  lines.push("");
+
+  if (result.summary.top_issues.length > 0) {
+    lines.push(`Top issues:`);
+    for (const issue of result.summary.top_issues.slice(0, 10)) {
+      lines.push(`  - ${issue}`);
+    }
+  }
+  if (result.tool_errors.length > 0) {
+    lines.push(`Tool errors: ${result.tool_errors.length}`);
+    for (const e of result.tool_errors.slice(0, 5)) {
+      lines.push(`  - ${e.tool}: ${e.error}`);
+    }
   }
   return lines.join("\n");
 }
