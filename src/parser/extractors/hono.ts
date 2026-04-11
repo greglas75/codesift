@@ -25,6 +25,7 @@ import type {
   MiddlewareEntry,
   ContextVariable,
   ContextAccessPoint,
+  OpenAPIRoute,
 } from "./hono-model.js";
 
 const HTTP_METHODS = new Set([
@@ -42,9 +43,7 @@ interface ChildParseResult {
 export class HonoExtractor {
   async parse(entryFile: string): Promise<HonoAppModel> {
     const absoluteEntry = canonicalize(path.resolve(entryFile));
-    const model = emptyModel(absoluteEntry, {
-      openapi_not_extracted: 1,
-    });
+    const model = emptyModel(absoluteEntry, {});
     const parsedCache = new Map<string, ChildParseResult>();
     await this.parseFile(absoluteEntry, "", new Set(), parsedCache, model);
     return model;
@@ -142,6 +141,9 @@ export class HonoExtractor {
 
       // Walk for middleware chains: app.use("scope", mw1, mw2, ...)
       this.walkMiddleware(tree.rootNode, file, localAppVars, importMap, model);
+
+      // Walk for OpenAPI: createRoute() definitions + app.openapi() registrations
+      this.walkOpenAPI(tree.rootNode, file, localAppVars, prefix, model);
 
       // Scan imported files for context flow (middleware files like auth.ts)
       for (const [, importedFile] of importMap) {
@@ -560,6 +562,113 @@ export class HonoExtractor {
       expanded_from: expandedFrom,
       conditional: expandedFrom === "some",
     };
+  }
+
+  /**
+   * Walk for createRoute() definitions and app.openapi(route, handler) registrations.
+   * - createRoute({method, path, ...}) → tracked in a local map by variable name
+   * - app.openapi(routeVar, handler) → emits OpenAPIRoute + adds to model.routes
+   */
+  private walkOpenAPI(
+    root: Parser.SyntaxNode,
+    file: string,
+    appVars: Record<string, HonoApp>,
+    prefix: string,
+    model: HonoAppModel,
+  ): void {
+    // First pass: collect createRoute() variable definitions
+    const routeDefs = new Map<string, { method: string; path: string; line: number }>();
+    const cursor1 = root.walk();
+    walk(cursor1, (node) => {
+      if (node.type !== "variable_declarator") return;
+      const nameNode = node.childForFieldName("name");
+      const valueNode = node.childForFieldName("value");
+      if (!nameNode || !valueNode || nameNode.type !== "identifier") return;
+      if (valueNode.type !== "call_expression") return;
+      const fn = valueNode.childForFieldName("function");
+      if (!fn || fn.text !== "createRoute") return;
+
+      const args = valueNode.childForFieldName("arguments");
+      const objArg = args?.namedChildren[0];
+      if (!objArg || objArg.type !== "object") return;
+
+      let method = "";
+      let routePath = "";
+      for (const prop of objArg.namedChildren) {
+        if (prop.type !== "pair") continue;
+        const key = prop.childForFieldName("key");
+        const val = prop.childForFieldName("value");
+        if (!key || !val) continue;
+        if (key.text === "method") {
+          method = stringLiteralValue(val) ?? "";
+        }
+        if (key.text === "path") {
+          routePath = stringLiteralValue(val) ?? "";
+        }
+      }
+      if (method && routePath) {
+        routeDefs.set(nameNode.text, {
+          method,
+          path: routePath,
+          line: node.startPosition.row + 1,
+        });
+      }
+    });
+
+    // Second pass: find app.openapi(routeVar, handler) calls
+    const cursor2 = root.walk();
+    walk(cursor2, (node) => {
+      if (node.type !== "call_expression") return;
+      const fnNode = node.childForFieldName("function");
+      const argsNode = node.childForFieldName("arguments");
+      if (!fnNode || !argsNode || fnNode.type !== "member_expression") return;
+
+      const obj = fnNode.childForFieldName("object");
+      const prop = fnNode.childForFieldName("property");
+      if (!obj || !prop || obj.type !== "identifier") return;
+      if (!appVars[obj.text]) return;
+      if (prop.text !== "openapi") return;
+
+      const argList = argsNode.namedChildren;
+      if (argList.length < 2) return;
+      const routeRef = argList[0];
+      const handlerArg = argList[1];
+      if (!routeRef || !handlerArg) return;
+      if (routeRef.type !== "identifier") return;
+
+      const routeDef = routeDefs.get(routeRef.text);
+      if (!routeDef) return;
+
+      const honoPath = routeDef.path.replace(/\{(\w+)\}/g, ":$1");
+      const openapiRoute: OpenAPIRoute = {
+        id: `openapi_${routeRef.text}`,
+        method: routeDef.method,
+        path: routeDef.path,
+        hono_path: honoPath,
+        request_schemas: {},
+        response_schemas: {},
+        middleware: [],
+        hidden: false,
+        file,
+        line: routeDef.line,
+      };
+      model.openapi_routes.push(openapiRoute);
+
+      // Also add as a regular route
+      const handler = buildHandler(handlerArg, file);
+      model.routes.push({
+        method: routeDef.method.toUpperCase() as HonoMethod,
+        path: joinPaths(prefix, honoPath),
+        raw_path: honoPath,
+        file,
+        line: node.startPosition.row + 1,
+        owner_var: obj.text,
+        handler,
+        inline_middleware: [],
+        validators: [],
+        openapi_route_id: openapiRoute.id,
+      });
+    });
   }
 
   /**

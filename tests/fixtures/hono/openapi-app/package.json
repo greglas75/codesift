@@ -1,0 +1,11 @@
+{
+  "name": "openapi-hono-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "hono": "^4.7.0",
+    "@hono/zod-openapi": "^0.16.0",
+    "zod": "^3.23.0"
+  }
+}

@@ -81,6 +81,47 @@ describe("HonoExtractor — subapp-app", () => {
   });
 });
 
+describe("HonoExtractor — openapi-app", () => {
+  const openapiEntry = path.join(FIXTURES, "openapi-app", "src", "index.ts");
+  let extractor: HonoExtractor;
+
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("detects OpenAPIHono as an app variable (AC-R9 partial)", async () => {
+    const model = await extractor.parse(openapiEntry);
+    expect(model.app_variables.app).toBeDefined();
+    expect(model.app_variables.app?.created_via).toBe("OpenAPIHono");
+  });
+
+  it("extracts openapi_routes from createRoute() definitions", async () => {
+    const model = await extractor.parse(openapiEntry);
+    expect(model.openapi_routes.length).toBe(2);
+    const methods = model.openapi_routes.map((r) => r.method).sort();
+    expect(methods).toEqual(["get", "get"]);
+    const openapiPaths = model.openapi_routes.map((r) => r.path).sort();
+    expect(openapiPaths).toEqual(["/users", "/users/{id}"]);
+  });
+
+  it("converts OpenAPI {param} path to Hono :param path", async () => {
+    const model = await extractor.parse(openapiEntry);
+    const userRoute = model.openapi_routes.find((r) => r.path === "/users/{id}");
+    expect(userRoute).toBeDefined();
+    expect(userRoute?.hono_path).toBe("/users/:id");
+  });
+
+  it("also registers openapi routes in the main routes array", async () => {
+    const model = await extractor.parse(openapiEntry);
+    // 2 openapi routes + 1 regular GET /health = 3 total
+    expect(model.routes.length).toBe(3);
+    const paths = model.routes.map((r) => r.path).sort();
+    expect(paths).toContain("/users/:id");
+    expect(paths).toContain("/users");
+    expect(paths).toContain("/health");
+  });
+});
+
 describe("HonoExtractor — factory-app", () => {
   const factoryEntry = path.join(FIXTURES, "factory-app", "src", "index.ts");
   let extractor: HonoExtractor;
@@ -207,9 +248,9 @@ describe("HonoExtractor — basic-app", () => {
     expect(model.entry_file).toBe(basicEntry);
   });
 
-  it("marks extraction_status as partial (context/openapi not yet extracted)", async () => {
+  it("marks extraction_status as complete for well-formed app", async () => {
     const model = await extractor.parse(basicEntry);
-    expect(model.extraction_status).toBe("partial");
+    expect(model.extraction_status).toBe("complete");
   });
 
   it("extracts middleware chains with third-party classification (AC-M5)", async () => {
