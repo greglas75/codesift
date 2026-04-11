@@ -68,12 +68,15 @@ import { getTestFixtures } from "./tools/pytest-tools.js";
 import { findFrameworkWiring } from "./tools/wiring-tools.js";
 import { runRuff } from "./tools/ruff-tools.js";
 import { parsePyproject } from "./tools/pyproject-tools.js";
+import { resolveConstantValue } from "./tools/python-constants-tools.js";
+import { effectiveDjangoViewSecurity } from "./tools/django-view-security-tools.js";
 import { findPythonCallers } from "./tools/python-callers.js";
 import { analyzeDjangoSettings } from "./tools/django-settings.js";
 import { traceCeleryChain } from "./tools/celery-tools.js";
 import { runMypy, runPyright } from "./tools/typecheck-tools.js";
 import { analyzePythonDeps } from "./tools/python-deps-analyzer.js";
 import { findPythonCircularImports } from "./tools/python-circular-imports.js";
+import { pythonAudit } from "./tools/python-audit.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
@@ -731,12 +734,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search",
     searchHint: "search find symbols functions classes types methods by name signature",
     outputSchema: OutputSchemas.searchResults,
-    description: "Search symbols by name/signature. detail_level: compact (~15 tok), standard (default), full.",
+    description: "Search symbols by name/signature. Supports kind, file, and decorator filters. detail_level: compact (~15 tok), standard (default), full.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Search query string"),
       kind: z.string().optional().describe("Filter by symbol kind (function, class, etc.)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
+      decorator: z.string().optional().describe("Filter by decorator metadata, e.g. login_required, @dataclass, router.get"),
       include_source: zBool().describe("Include full source code of each symbol"),
       top_k: zNum().describe("Maximum number of results to return (default 50)"),
       source_chars: zNum().describe("Truncate each symbol's source to N characters (reduces output size)"),
@@ -748,6 +752,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const results = await searchSymbols(args.repo as string, args.query as string, {
         kind: args.kind as SymbolKind | undefined,
         file_pattern: args.file_pattern as string | undefined,
+        decorator: args.decorator as string | undefined,
         include_source: args.include_source as boolean | undefined,
         top_k: args.top_k as number | undefined,
         source_chars: args.source_chars as number | undefined,
@@ -2079,6 +2084,47 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "Parse pyproject.toml: name, version, Python version, build system, dependencies, optional groups, entry points, configured tools.",
     schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
     handler: async (args) => { return await parsePyproject(args.repo as string); },
+  },
+  {
+    name: "resolve_constant_value",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python resolve constant value literal alias import default parameter propagation",
+    description: "Resolve Python constants and function default values through simple aliases and import-from chains. Returns literals or explicit unresolved reasons.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      symbol_name: z.string().describe("Constant, function, or method name to resolve"),
+      file_pattern: z.string().optional().describe("Filter candidate symbols by file path substring"),
+      max_depth: zFiniteNumber.optional().describe("Maximum alias/import resolution depth (default: 8)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof resolveConstantValue>[2] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.max_depth != null) opts!.max_depth = args.max_depth as number;
+      return await resolveConstantValue(args.repo as string, args.symbol_name as string, opts);
+    },
+  },
+  {
+    name: "effective_django_view_security",
+    category: "security",
+    requiresLanguage: "python",
+    searchHint: "python django view auth csrf login_required middleware mixin route security posture",
+    description: "Assess effective Django view security from decorators, mixins, settings middleware, and optional route resolution.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      path: z.string().optional().describe("Django route path to resolve first, e.g. /settings/"),
+      symbol_name: z.string().optional().describe("View function/class/method name when you already know the symbol"),
+      file_pattern: z.string().optional().describe("Filter candidate symbols by file path substring"),
+      settings_file: z.string().optional().describe("Explicit Django settings file path (auto-detects if omitted)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof effectiveDjangoViewSecurity>[1] = {};
+      if (args.path != null) opts.path = args.path as string;
+      if (args.symbol_name != null) opts.symbol_name = args.symbol_name as string;
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.settings_file != null) opts.settings_file = args.settings_file as string;
+      return await effectiveDjangoViewSecurity(args.repo as string, opts);
+    },
   },
   {
     name: "find_python_callers",
@@ -3563,11 +3609,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
       tools: z.array(z.string()).optional().describe("Subset of tools to run (default: all 9). Names: components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage"),
+      mode: z.enum(["full", "priority"]).optional().describe("Output mode: 'full' returns per-tool results + aggregated summary; 'priority' returns a single unified top-N actionable findings list sorted by severity × cross-tool occurrences"),
+      priority_limit: z.number().int().positive().optional().describe("Max findings in priority mode (default: 20)"),
     },
     handler: async (args) => {
       const opts: Parameters<typeof frameworkAudit>[1] = {};
       if (args.workspace != null) opts.workspace = args.workspace as string;
       if (args.tools != null) opts.tools = args.tools as AuditDimension[];
+      if (args.mode != null) opts.mode = args.mode as "full" | "priority";
+      if (args.priority_limit != null) opts.priority_limit = args.priority_limit as number;
       const result = await frameworkAudit(args.repo as string ?? "", opts);
       return formatFrameworkAudit(result);
     },

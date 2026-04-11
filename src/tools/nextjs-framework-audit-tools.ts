@@ -54,9 +54,30 @@ export interface FrameworkAuditResult {
   duration_ms: number;
 }
 
+
+export interface PrioritizedFinding {
+  severity: "high" | "medium" | "low";
+  tool: AuditDimension;
+  file: string;
+  line?: number;
+  issue: string;
+  suggested_fix?: string;
+  weight: number;
+}
+
+export interface PrioritizedAudit {
+  mode: "priority";
+  findings: PrioritizedFinding[];
+  total_findings: number;
+  tools_run: AuditDimension[];
+  duration_ms: number;
+}
+
 export interface FrameworkAuditOptions {
   workspace?: string | undefined;
   tools?: AuditDimension[] | undefined;
+  mode?: "full" | "priority" | undefined;
+  priority_limit?: number | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +205,167 @@ export function aggregateScores(
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Priority findings extractor (A2)
+// ---------------------------------------------------------------------------
+
+const SEVERITY_WEIGHT: Record<PrioritizedFinding["severity"], number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+export function extractPriorityFindings(
+  sub_results: Partial<Record<AuditDimension, unknown>>,
+): PrioritizedFinding[] {
+  const findings: PrioritizedFinding[] = [];
+
+  // metadata: pages with score < 70
+  const meta = sub_results.metadata as { scores?: Array<{ file_path: string; score: number; grade: string; missing?: string[] }> } | undefined;
+  if (meta?.scores) {
+    for (const s of meta.scores) {
+      if (s.score >= 70) continue;
+      const severity: PrioritizedFinding["severity"] = s.score < 40 ? "high" : "medium";
+      findings.push({
+        severity,
+        tool: "metadata",
+        file: s.file_path,
+        issue: `SEO metadata incomplete (${s.score}/100, grade: ${s.grade})`,
+        suggested_fix: s.missing && s.missing.length > 0 ? `Add: ${s.missing.join(", ")}` : undefined,
+        weight: SEVERITY_WEIGHT[severity],
+      });
+    }
+  }
+
+  // security: server actions with score < 70
+  const sec = sub_results.security as { actions?: Array<{ file: string; name: string; score: number; grade: string; top_missing?: string[] }> } | undefined;
+  if (sec?.actions) {
+    for (const a of sec.actions) {
+      if (a.score >= 70) continue;
+      const severity: PrioritizedFinding["severity"] = a.score < 40 ? "high" : "medium";
+      findings.push({
+        severity,
+        tool: "security",
+        file: a.file,
+        issue: `Server action "${a.name}" security score ${a.score}/100 (${a.grade})`,
+        suggested_fix: a.top_missing && a.top_missing.length > 0 ? `Missing: ${a.top_missing.join(", ")}` : undefined,
+        weight: SEVERITY_WEIGHT[severity],
+      });
+    }
+  }
+
+  // components: client_inferred or unnecessary_use_client
+  const comp = sub_results.components as { files?: Array<{ path: string; classification: string; violations: string[]; suggested_fix?: string; signals?: { signal_locations?: Array<{ line: number }> } }> } | undefined;
+  if (comp?.files) {
+    for (const f of comp.files) {
+      if (f.classification === "client_inferred") {
+        findings.push({
+          severity: "medium",
+          tool: "components",
+          file: f.path,
+          line: f.signals?.signal_locations?.[0]?.line,
+          issue: "Component uses client-only APIs without 'use client' directive",
+          suggested_fix: f.suggested_fix,
+          weight: SEVERITY_WEIGHT.medium,
+        });
+      } else if (f.violations.includes("unnecessary_use_client")) {
+        findings.push({
+          severity: "low",
+          tool: "components",
+          file: f.path,
+          issue: "Unnecessary 'use client' directive",
+          suggested_fix: f.suggested_fix,
+          weight: SEVERITY_WEIGHT.low,
+        });
+      }
+    }
+  }
+
+  // links: broken internal links
+  const links = sub_results.links as { broken?: Array<{ href: string; file: string; line?: number }> } | undefined;
+  if (links?.broken) {
+    for (const b of links.broken) {
+      findings.push({
+        severity: "high",
+        tool: "links",
+        file: b.file,
+        line: b.line,
+        issue: `Broken internal link: ${b.href}`,
+        weight: SEVERITY_WEIGHT.high,
+      });
+    }
+  }
+
+  // data_flow: pages with waterfalls
+  const df = sub_results.data_flow as { entries?: Array<{ url_path: string; file_path: string; waterfall_count: number }> } | undefined;
+  if (df?.entries) {
+    for (const e of df.entries) {
+      if (e.waterfall_count === 0) continue;
+      findings.push({
+        severity: "medium",
+        tool: "data_flow",
+        file: e.file_path,
+        issue: `Fetch waterfall detected (${e.waterfall_count} sequential awaits)`,
+        suggested_fix: "Parallelize with Promise.all or use dependent data in single request",
+        weight: SEVERITY_WEIGHT.medium,
+      });
+    }
+  }
+
+  // middleware_coverage: unprotected admin routes
+  const mw = sub_results.middleware_coverage as { warnings?: Array<{ severity: string; route: string; reason: string }> } | undefined;
+  if (mw?.warnings) {
+    for (const w of mw.warnings) {
+      if (w.severity !== "high") continue;
+      findings.push({
+        severity: "high",
+        tool: "middleware_coverage",
+        file: w.route,
+        issue: w.reason,
+        suggested_fix: "Add middleware matcher to protect this route",
+        weight: SEVERITY_WEIGHT.high,
+      });
+    }
+  }
+
+  // routes: hybrid conflicts
+  const routes = sub_results.routes as { conflicts?: Array<{ url_path: string; app: string; pages: string }> } | undefined;
+  if (routes?.conflicts) {
+    for (const c of routes.conflicts) {
+      findings.push({
+        severity: "high",
+        tool: "routes",
+        file: c.app,
+        issue: `Hybrid routing conflict at ${c.url_path} (also in ${c.pages})`,
+        suggested_fix: "Next.js prioritizes App Router; remove Pages Router entry or rename",
+        weight: SEVERITY_WEIGHT.high,
+      });
+    }
+  }
+
+  // api_contract: handlers with low completeness
+  const api = sub_results.api_contract as { handlers?: Array<{ method: string; path: string; completeness: number; file: string }> } | undefined;
+  if (api?.handlers) {
+    for (const h of api.handlers) {
+      if (h.completeness >= 0.5) continue;
+      findings.push({
+        severity: "medium",
+        tool: "api_contract",
+        file: h.file,
+        issue: `${h.method} ${h.path} has incomplete contract (${Math.round(h.completeness * 100)}%)`,
+        suggested_fix: "Add Zod schema for body/query validation",
+        weight: SEVERITY_WEIGHT.medium,
+      });
+    }
+  }
+
+  // Sort by severity weight desc, then file for stable ordering
+  findings.sort((a, b) => b.weight - a.weight || a.file.localeCompare(b.file));
+
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher (Task 46)
 // ---------------------------------------------------------------------------
@@ -227,7 +409,7 @@ const TOOL_DISPATCHERS: Record<
 export async function frameworkAudit(
   repo: string,
   options?: FrameworkAuditOptions,
-): Promise<FrameworkAuditResult> {
+): Promise<FrameworkAuditResult | PrioritizedAudit> {
   if (process.env.CODESIFT_DISABLE_TOOLS?.includes("framework_audit")) {
     throw new Error("framework_audit is disabled via CODESIFT_DISABLE_TOOLS");
   }
@@ -257,8 +439,21 @@ export async function frameworkAudit(
     deactivateGlobalCache();
   }
 
-  const summary = aggregateScores(sub_results);
   const duration_ms = Date.now() - start;
+
+  if (options?.mode === "priority") {
+    const allFindings = extractPriorityFindings(sub_results);
+    const limit = options.priority_limit ?? 20;
+    return {
+      mode: "priority",
+      findings: allFindings.slice(0, limit),
+      total_findings: allFindings.length,
+      tools_run: tools,
+      duration_ms,
+    };
+  }
+
+  const summary = aggregateScores(sub_results);
 
   return {
     summary,

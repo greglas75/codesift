@@ -795,7 +795,7 @@ import type { NextjsBoundaryResult } from "./tools/nextjs-boundary-tools.js";
 import type { LinkIntegrityResult } from "./tools/nextjs-link-tools.js";
 import type { NextjsDataFlowResult } from "./tools/nextjs-data-flow-tools.js";
 import type { NextjsMiddlewareCoverageResult } from "./tools/nextjs-middleware-coverage-tools.js";
-import type { FrameworkAuditResult } from "./tools/nextjs-framework-audit-tools.js";
+import type { FrameworkAuditResult, PrioritizedAudit } from "./tools/nextjs-framework-audit-tools.js";
 
 export function formatNextjsRouteMap(result: NextjsRouteMapResult): string {
   const lines: string[] = [];
@@ -1074,7 +1074,33 @@ export function formatNextjsMiddlewareCoverage(result: NextjsMiddlewareCoverageR
   return lines.join("\n");
 }
 
-export function formatFrameworkAudit(result: FrameworkAuditResult): string {
+export function formatFrameworkAudit(result: FrameworkAuditResult | PrioritizedAudit): string {
+  // Priority mode: unified top-N findings list
+  if ("mode" in result && result.mode === "priority") {
+    const lines: string[] = [];
+    lines.push("NEXT.JS FRAMEWORK AUDIT — PRIORITY MODE");
+    lines.push("");
+    lines.push(
+      `Top ${result.findings.length} findings of ${result.total_findings} total | ${result.tools_run.length} tools | ${result.duration_ms}ms`,
+    );
+    lines.push("");
+    lines.push("Sev    Tool               File                                          Issue");
+    lines.push("────── ────────────────── ─────────────────────────────────────────── ──────────────────────");
+    for (const f of result.findings) {
+      const sev = f.severity.padEnd(6);
+      const tool = f.tool.padEnd(18).slice(0, 18);
+      const loc = f.line ? `${f.file}:${f.line}` : f.file;
+      const file = loc.padEnd(43).slice(0, 43);
+      const issue = f.issue.slice(0, 60);
+      lines.push(`${sev} ${tool} ${file} ${issue}`);
+      if (f.suggested_fix) {
+        lines.push(`        → ${f.suggested_fix.slice(0, 90)}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  // Full mode (default)
   const lines: string[] = [];
   lines.push("NEXT.JS FRAMEWORK AUDIT");
   lines.push("");
