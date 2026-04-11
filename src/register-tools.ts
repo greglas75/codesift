@@ -3637,6 +3637,37 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "scan_dml_safety",
+    category: "analysis" as ToolCategory,
+    searchHint: "DML safety SQL DELETE UPDATE SELECT star WHERE clause unbounded dangerous query",
+    description: "Scan codebase for unsafe SQL DML patterns: DELETE/UPDATE without WHERE (data loss risk), SELECT * (unbounded reads). Cross-language — finds SQL in .ts, .py, .go, .php files.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Scope to files matching pattern"),
+      max_results: zNum().describe("Max findings per pattern (default: 200)"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { scanDmlSafety } = await import("./tools/sql-tools.js");
+      const result = await scanDmlSafety(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        max_results: args.max_results as number | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`DML safety: ${result.summary.total} findings across ${result.summary.files_scanned} files`);
+      for (const [rule, count] of Object.entries(result.summary.by_rule)) {
+        parts.push(`  ${rule}: ${count}`);
+      }
+      const high = result.findings.filter((f) => f.severity === "high");
+      if (high.length > 0) {
+        parts.push("\n⚠ HIGH RISK:");
+        for (const f of high.slice(0, 20)) {
+          parts.push(`  [${f.rule}] ${f.file}:${f.line}  ${f.context ?? ""}`);
+        }
+      }
+      return parts.join("\n");
+    },
+  },
+  {
     name: "lint_schema",
     category: "analysis" as ToolCategory,
     searchHint: "lint SQL schema anti-pattern primary key wide table duplicate index design",
