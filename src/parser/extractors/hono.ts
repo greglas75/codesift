@@ -484,10 +484,12 @@ function canonicalize(filePath: string): string {
   }
 }
 
-/** Join a parent prefix with a child path, avoiding double slashes. */
+/** Join a parent prefix with a child path, avoiding double/trailing slashes. */
 function joinPaths(prefix: string, childPath: string): string {
   if (!prefix) return childPath;
   const p = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+  // In Hono, a sub-router's "/" matches the mount path exactly (no trailing slash)
+  if (childPath === "/" || childPath === "") return p || "/";
   const c = childPath.startsWith("/") ? childPath : "/" + childPath;
   return p + c;
 }
