@@ -2511,6 +2511,92 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return formatNextjsRouteMap(result);
     },
   },
+
+  // ── SQL analysis tools (hidden/discoverable) ─────────────
+  {
+    name: "analyze_schema",
+    category: "analysis" as ToolCategory,
+    searchHint: "SQL schema ERD entity relationship tables views columns foreign key database migration",
+    description: "Analyze SQL schema: tables, views, columns, foreign keys, relationships. Output as JSON or Mermaid ERD.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter SQL files by pattern (e.g. 'migrations/')"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format (default: json)"),
+      include_columns: zBool().describe("Include column details in output (default: true)"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { analyzeSchema } = await import("./tools/sql-tools.js");
+      const result = await analyzeSchema(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+        output_format: args.output_format as "json" | "mermaid" | undefined,
+        include_columns: args.include_columns as boolean | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Tables: ${result.tables.length} | Views: ${result.views.length} | Relationships: ${result.relationships.length}`);
+      if (result.warnings.length > 0) parts.push(`Warnings: ${result.warnings.join("; ")}`);
+      if (result.mermaid) {
+        parts.push("");
+        parts.push(result.mermaid);
+      } else {
+        for (const t of result.tables) {
+          const cols = t.columns.map((c) => `${c.name} ${c.type}`).join(", ");
+          parts.push(`  ${t.name} (${t.file}:${t.line}) — ${cols || "(no columns)"}`);
+        }
+        for (const v of result.views) {
+          parts.push(`  VIEW ${v.name} (${v.file}:${v.line})`);
+        }
+        if (result.relationships.length > 0) {
+          parts.push("Relationships:");
+          for (const r of result.relationships) {
+            parts.push(`  ${r.from_table}.${r.from_column} → ${r.to_table}.${r.to_column} [${r.type}]`);
+          }
+        }
+      }
+      return parts.join("\n");
+    },
+  },
+  {
+    name: "trace_query",
+    category: "analysis" as ToolCategory,
+    searchHint: "SQL table query trace references cross-language ORM Prisma Drizzle migration",
+    description: "Trace SQL table references across the codebase: DDL, DML, FK, and ORM models (Prisma, Drizzle).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      table: z.string().describe("Table name to trace (required)"),
+      include_orm: zBool().describe("Check Prisma/Drizzle ORM models (default: true)"),
+      file_pattern: z.string().optional().describe("Scope search to files matching pattern"),
+      max_references: zNum().describe("Maximum references to return (default: 500)"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { traceQuery } = await import("./tools/sql-tools.js");
+      const result = await traceQuery(args.repo as string, {
+        table: args.table as string,
+        include_orm: args.include_orm as boolean | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        max_references: args.max_references as number | undefined,
+      });
+      const parts: string[] = [];
+      if (result.table_definition) {
+        parts.push(`Definition: ${result.table_definition.file}:${result.table_definition.line} [${result.table_definition.kind}]`);
+      } else {
+        parts.push(`Definition: not found in index`);
+      }
+      parts.push(`SQL references: ${result.sql_references.length}${result.truncated ? " (truncated)" : ""}`);
+      for (const ref of result.sql_references.slice(0, 50)) {
+        parts.push(`  ${ref.file}:${ref.line} [${ref.type}] ${ref.context}`);
+      }
+      if (result.orm_references.length > 0) {
+        parts.push(`ORM references: ${result.orm_references.length}`);
+        for (const ref of result.orm_references) {
+          parts.push(`  ${ref.file}:${ref.line} [${ref.orm}] model ${ref.model_name}`);
+        }
+      }
+      if (result.warnings.length > 0) {
+        parts.push(`Warnings: ${result.warnings.join("; ")}`);
+      }
+      return parts.join("\n");
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------

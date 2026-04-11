@@ -1,0 +1,1 @@
+CREATE TABLE `users` ( `id` int(11) NOT NULL, `name` varchar(255) ); INSERT INTO `users` VALUES (1, 'foo'), (2, 'bar'); CREATE TABLE `orders` ( `id` int(11) NOT NULL, `user_id` int(11) NOT NULL, `total` decimal(10,2) ); CREATE INDEX `idx_user` ON `orders`(`user_id`);

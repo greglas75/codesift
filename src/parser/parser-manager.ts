@@ -51,6 +51,8 @@ const EXTENSION_MAP: Record<string, string> = {
   ".nim": "text_stub",   // Nim
   ".gradle": "text_stub", // Gradle build scripts
   ".sbt": "text_stub",   // SBT build scripts
+  // --- SQL (regex extractor, no tree-sitter) ---
+  ".sql": "sql",          // SQL DDL/DML
 };
 
 export async function initParser(): Promise<void> {
@@ -129,5 +131,11 @@ export async function parseFile(
   const parser = await getParser(language);
   if (!parser) return null;
 
-  return parser.parse(source);
+  try {
+    return parser.parse(source);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[parser] Parse error in ${filePath}: ${message}`);
+    return null;
+  }
 }

@@ -5,10 +5,15 @@ import type { TextMatch, CodeIndex, CodeSymbol } from "../types.js";
 const LABEL_BONUS: Record<string, number> = {
   function: 1.0,
   component: 1.0,  // React component — same priority as function
+  table: 1.0,      // SQL CREATE TABLE — high signal
   method: 0.9,
   hook: 0.9,       // React custom hook — same priority as method
   class: 0.8,
+  view: 0.8,       // SQL CREATE VIEW
+  procedure: 0.7,  // SQL CREATE PROCEDURE
+  trigger: 0.6,    // SQL CREATE TRIGGER
   type: 0.5,
+  index: 0.5,      // SQL CREATE INDEX
 };
 const DEFAULT_LABEL_BONUS = 0.3;
 

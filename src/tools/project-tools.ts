@@ -2109,6 +2109,8 @@ export const PARSER_LANGUAGES = [
   "prisma",
   "markdown",
   "astro",
+  "sql",
+  "sql-jinja",
 ] as const;
 
 /**

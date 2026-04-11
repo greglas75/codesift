@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { EXTRACTOR_VERSIONS } from "./project-tools.js";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
+import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js";
 import { getLanguageForExtension } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta } from "../storage/registry.js";
@@ -53,6 +54,7 @@ async function parseOneFile(
       ?? (baseName.startsWith(".env") ? "config" : "unknown");
 
     let symbols: CodeSymbol[];
+    let effectiveLanguage = language;
 
     if (language === "markdown") {
       symbols = extractMarkdownSymbols(source, relPath, repoName);
@@ -62,6 +64,16 @@ async function parseOneFile(
       symbols = extractAstroSymbols(source, relPath, repoName);
     } else if (language === "conversation") {
       symbols = extractConversationSymbols(source, relPath, repoName);
+    } else if (language === "sql") {
+      // SQL: regex extractor, no tree-sitter. Detect Jinja/dbt templates.
+      const hasJinja = /\{\{|\{%|\{#/.test(source);
+      if (hasJinja) {
+        const stripped = stripJinjaTokens(source);
+        symbols = extractSqlSymbols(stripped, relPath, repoName, source);
+        effectiveLanguage = "sql-jinja";
+      } else {
+        symbols = extractSqlSymbols(source, relPath, repoName);
+      }
     } else if (language === "config" || language === "text_stub") {
       // text_stub: Swift/Dart/Scala/etc. — indexed as FileEntry but no symbol
       // extraction until a tree-sitter grammar + extractor is added.
@@ -75,7 +87,7 @@ async function parseOneFile(
 
     const entry: FileEntry = {
       path: relPath,
-      language,
+      language: effectiveLanguage,
       symbol_count: symbols.length,
       last_modified: Date.now(),
       mtime_ms: Math.round(stat.mtimeMs),

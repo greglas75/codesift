@@ -225,3 +225,115 @@ describe("detectFrameworks — Next.js broadened detection", () => {
     expect(result.has("nextjs")).toBe(false);
   });
 });
+
+describe("detectFrameworks — Kotlin/Android", () => {
+  it("adds 'kotlin-android' when any file has .kt extension", () => {
+    const index = makeIndex({
+      files: [makeFile("app/src/main/java/com/x/Foo.kt", "kotlin")],
+    });
+    const frameworks = detectFrameworks(index);
+    expect(frameworks.has("kotlin-android")).toBe(true);
+  });
+
+  it("adds 'kotlin-android' for .kts build scripts", () => {
+    const index = makeIndex({
+      files: [makeFile("build.gradle.kts", "kotlin")],
+    });
+    const frameworks = detectFrameworks(index);
+    expect(frameworks.has("kotlin-android")).toBe(true);
+  });
+
+  it("does NOT add 'kotlin-android' for a pure TypeScript repo", () => {
+    const index = makeIndex({
+      files: [makeFile("src/a.ts", "typescript")],
+    });
+    const frameworks = detectFrameworks(index);
+    expect(frameworks.has("kotlin-android")).toBe(false);
+  });
+});
+
+describe("isFrameworkEntryPoint — Kotlin annotation whitelist", () => {
+  const kotlinFrameworks = new Set(["kotlin-android"]) as Set<never>;
+
+  function kotlinSymbol(name: string, decorators: string[] = [], source?: string) {
+    return {
+      name,
+      file: "app/src/main/java/com/x/UserViewModel.kt",
+      decorators: decorators.length > 0 ? decorators : undefined,
+      ...(source !== undefined ? { source } : {}),
+    };
+  }
+
+  it("treats @HiltViewModel as a framework entry point (decorators field)", () => {
+    const symbol = kotlinSymbol("UserViewModel", ["HiltViewModel"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Composable as a framework entry point", () => {
+    const symbol = kotlinSymbol("HomeScreen", ["Composable"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Preview as a framework entry point", () => {
+    const symbol = kotlinSymbol("HomeScreenPreview", ["Preview"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Serializable as a framework entry point", () => {
+    const symbol = kotlinSymbol("User", ["Serializable"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Entity as a framework entry point (Room)", () => {
+    const symbol = kotlinSymbol("UserEntity", ["Entity"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Dao as a framework entry point (Room)", () => {
+    const symbol = kotlinSymbol("UserDao", ["Dao"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Inject + @Provides as framework entry points (Hilt/Dagger)", () => {
+    expect(isFrameworkEntryPoint(kotlinSymbol("repo", ["Inject"]), kotlinFrameworks)).toBe(true);
+    expect(isFrameworkEntryPoint(kotlinSymbol("provideRepo", ["Provides"]), kotlinFrameworks)).toBe(true);
+  });
+
+  it("treats @Test methods as framework entry points (JUnit)", () => {
+    const symbol = kotlinSymbol("shouldValidateEmail", ["Test"]);
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("does NOT treat a plain Kotlin class without annotations as entry point", () => {
+    const symbol = kotlinSymbol("UnusedHelper", [], "class UnusedHelper { fun foo() {} }");
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(false);
+  });
+
+  it("falls back to source scan when decorators field is missing", () => {
+    // Legacy/edge path: symbol.source contains the annotation text but the
+    // extractor didn't populate `decorators`. The source-scan fallback should
+    // still recognize it.
+    const symbol = kotlinSymbol("LegacyViewModel", [], "@HiltViewModel\nclass LegacyViewModel");
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(true);
+  });
+
+  it("does NOT false-match @HiltViewModelX (word-boundary check)", () => {
+    const symbol = kotlinSymbol("Foo", [], "@HiltViewModelExtra\nclass Foo");
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(false);
+  });
+
+  it("does NOT apply Kotlin whitelist to non-.kt files", () => {
+    const symbol = {
+      name: "UserViewModel",
+      file: "src/components/UserViewModel.tsx",
+      decorators: ["HiltViewModel"], // wrong file type
+    };
+    expect(isFrameworkEntryPoint(symbol, kotlinFrameworks)).toBe(false);
+  });
+
+  it("is a no-op when kotlin-android framework is not present", () => {
+    const nonKotlin = new Set() as Set<never>;
+    const symbol = kotlinSymbol("UserViewModel", ["HiltViewModel"]);
+    expect(isFrameworkEntryPoint(symbol, nonKotlin)).toBe(false);
+  });
+});

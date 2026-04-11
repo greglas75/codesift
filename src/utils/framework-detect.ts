@@ -1,7 +1,35 @@
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import type { HonoAppModel } from "../parser/extractors/hono-model.js";
 
-export type Framework = "react" | "nestjs" | "nextjs" | "express" | "astro" | "hono" | "test";
+export type Framework = "react" | "nestjs" | "nextjs" | "express" | "astro" | "hono" | "test" | "kotlin-android";
+
+/**
+ * Kotlin/Android annotations that mark a symbol as referenced by the runtime
+ * rather than by static imports. `find_dead_code` must treat these as live
+ * because Hilt (reflection), Compose (tooling), Room (KSP), kotlinx.serialization
+ * (JSON), and JUnit/Kotest (runner) all instantiate or invoke symbols outside
+ * the normal call graph.
+ */
+export const KOTLIN_FRAMEWORK_ANNOTATIONS: ReadonlySet<string> = new Set([
+  // Hilt / Dagger DI
+  "HiltViewModel", "HiltAndroidApp", "AndroidEntryPoint",
+  "Inject", "Module", "Provides", "Binds", "InstallIn", "Singleton",
+  // Jetpack Compose + Compose tooling
+  "Composable", "Preview", "PreviewParameter",
+  // kotlinx.serialization
+  "Serializable", "SerialName", "Transient",
+  // Room persistence
+  "Entity", "Dao", "Database", "Query", "Insert", "Update", "Delete",
+  "TypeConverter", "TypeConverters", "PrimaryKey", "Embedded", "Relation",
+  // Android framework entry points
+  "Keep", "JvmStatic", "JvmOverloads", "JvmName", "JvmField",
+  // Test runners (JUnit4/5 + Kotest)
+  "Test", "BeforeEach", "AfterEach", "BeforeAll", "AfterAll",
+  "Before", "After", "BeforeClass", "AfterClass",
+  "ParameterizedTest", "RepeatedTest",
+  // Kotlin Multiplatform
+  "JsExport", "ObjCName", "Throws",
+]);
 
 const NEXT_ROUTE_FILE = /(^|\/)app\/.*\/route\.[jt]sx?$/;
 const NEXT_APP_FILE = /(^|\/)app\/.+\.[jt]sx?$/;
@@ -57,6 +85,15 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
   }
   if (sources.includes("from 'astro'") || sources.includes('from "astro"') || sources.includes("from 'astro:") || sources.includes('from "astro:') || index.files.some((f) => f.path.endsWith(".astro"))) frameworks.add("astro");
 
+  // Kotlin/Android detection: any .kt file is a signal. The annotation
+  // whitelist kicks in across all Kotlin symbols regardless of whether Hilt
+  // is actually in use — the cost of a false negative (flagging @HiltViewModel
+  // as dead code) is much higher than the cost of a false positive (allowing
+  // a few annotated symbols through when the project isn't Android).
+  if (index.files.some((f) => f.path.endsWith(".kt") || f.path.endsWith(".kts"))) {
+    frameworks.add("kotlin-android");
+  }
+
   // Next.js detection: broadened to cover config file, pages/ dir, and App Router conventions
   const hasNextConfig = index.files.some((f) => NEXT_CONFIG_FILE.test(f.path));
   const hasPagesDir = index.files.some((f) => NEXT_PAGES_FILE.test(f.path) && /\.[jt]sx?$/.test(f.path));
@@ -71,10 +108,33 @@ export function detectFrameworks(index: CodeIndex): Set<Framework> {
 }
 
 export function isFrameworkEntryPoint(
-  symbol: Pick<CodeSymbol, "name" | "file"> & { source?: string },
+  symbol: Pick<CodeSymbol, "name" | "file"> & { source?: string; decorators?: string[] | undefined },
   frameworks: Set<Framework>,
   honoModel?: HonoAppModel | null,
 ): boolean {
+  // Kotlin/Android: whitelisted annotations mark a symbol as runtime-referenced
+  // (Hilt, Compose, Room, serialization, Android entry points, JUnit).
+  if (frameworks.has("kotlin-android") && (symbol.file.endsWith(".kt") || symbol.file.endsWith(".kts"))) {
+    const decorators = symbol.decorators;
+    if (decorators && decorators.length > 0) {
+      for (const decorator of decorators) {
+        if (KOTLIN_FRAMEWORK_ANNOTATIONS.has(decorator)) return true;
+      }
+    }
+    // Fallback for symbols where the extractor didn't surface decorators yet:
+    // scan the first 400 chars of source for any whitelisted @Annotation.
+    // Cheaper than re-parsing and keeps correctness as the extractor evolves.
+    const head = symbol.source?.slice(0, 400);
+    if (head) {
+      for (const annotation of KOTLIN_FRAMEWORK_ANNOTATIONS) {
+        // Word-boundary match against "@Annotation" to avoid false matches on
+        // @HiltViewModelInternal or similar.
+        const re = new RegExp(`@${annotation}\\b`);
+        if (re.test(head)) return true;
+      }
+    }
+  }
+
   if (frameworks.has("hono") && honoModel) {
     // Symbol is in a file that the HonoExtractor reached
     if (honoModel.files_used.includes(symbol.file)) {

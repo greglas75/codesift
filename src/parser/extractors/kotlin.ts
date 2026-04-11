@@ -216,10 +216,12 @@ export function extractKotlinSymbols(
         if (name) {
           const testKind = getTestKind(node);
           const kind: SymbolKind = testKind ?? (parentId ? "method" : "function");
+          const annotations = getAnnotations(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
+            decorators: annotations.length > 0 ? annotations : undefined,
           });
           symbols.push(sym);
         }
@@ -231,9 +233,11 @@ export function extractKotlinSymbols(
         if (name) {
           // Distinguish interface from class by checking for unnamed `interface` keyword
           const kind: SymbolKind = isInterface(node) ? "interface" : "class";
+          const annotations = getAnnotations(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            decorators: annotations.length > 0 ? annotations : undefined,
           });
           symbols.push(sym);
 
@@ -318,9 +322,11 @@ export function extractKotlinSymbols(
       case "object_declaration": {
         const name = getName(node);
         if (name) {
+          const annotations = getAnnotations(node);
           const sym = makeSymbol(node, name, "class", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            decorators: annotations.length > 0 ? annotations : undefined,
           });
           symbols.push(sym);
 
@@ -370,9 +376,11 @@ export function extractKotlinSymbols(
           } else {
             kind = "variable";
           }
+          const annotations = getAnnotations(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            decorators: annotations.length > 0 ? annotations : undefined,
           });
           symbols.push(sym);
         }

@@ -19,6 +19,11 @@ export type SymbolKind =
   | "test_hook"     // beforeEach() etc.
   | "component"     // React component (returns JSX)
   | "hook"          // React custom hook (useXxx)
+  | "table"         // SQL CREATE TABLE
+  | "view"          // SQL CREATE VIEW / MATERIALIZED VIEW
+  | "index"         // SQL CREATE INDEX
+  | "trigger"       // SQL CREATE TRIGGER
+  | "procedure"     // SQL CREATE PROCEDURE
   | "default_export"
   | "conversation_turn"   // user+assistant exchange pair
   | "conversation_summary" // compaction summary
