@@ -178,9 +178,17 @@ function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[
 function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
   const handlers: RouteHandler[] = [];
 
+  // Require Next.js project signal to disambiguate from Astro's src/pages/api/*.
+  // Accept next.config.* at root/src OR an App Router convention file.
+  const hasNextSignal = index.files.some((f) =>
+    /^(src\/)?next\.config\.[mc]?[jt]sx?$/.test(f.path) ||
+    /(^|\/)app\/.*\/(page|layout|route)\.[jt]sx?$/.test(f.path),
+  );
+  if (!hasNextSignal) return handlers;
+
   for (const file of index.files) {
-    // Only match files under pages/api/
-    if (!/pages\/api\//.test(file.path)) continue;
+    // Only match files under pages/api/ (not src/pages/api/ which is Astro convention)
+    if (!/^(\.\/)?pages\/api\//.test(file.path)) continue;
 
     // Derive URL path from file path
     const urlPath = deriveUrlPath(file.path, "pages");

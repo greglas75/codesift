@@ -197,6 +197,7 @@ export async function GET() {
 describe("PagesRouter handler detection", () => {
   it("finds default export handler in pages/api/", async () => {
     const repo = await createIndexedFixture({
+      "next.config.js": `module.exports = {};`,
       "pages/api/users.ts": `export default function handler(req, res) {
   res.status(200).json({ users: [] });
 }`,
@@ -225,6 +226,7 @@ export async function GET() {
 
   it("resolves variable-indirection default export", async () => {
     const repo = await createIndexedFixture({
+      "next.config.js": `module.exports = {};`,
       "pages/api/exotic.ts": `const h = (req, res) => {
   res.status(200).json({ ok: true });
 };
