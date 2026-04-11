@@ -187,11 +187,24 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
 };
 
 /**
+ * React-specific tools — auto-enabled when a React project is detected.
+ * Detection requires BOTH a package.json with react dependency AND presence
+ * of .tsx/.jsx files (prevents false positives on non-UI projects that happen
+ * to have react as a transitive dep).
+ */
+const REACT_TOOLS = [
+  "trace_component_tree",
+  "analyze_hooks",
+  "analyze_renders",
+];
+
+/**
  * Detect project type at CWD and return list of tools that should be auto-enabled.
  * Returns empty array if no framework-specific tools apply.
+ * Exported for unit testing.
  */
-async function detectAutoLoadTools(cwd: string): Promise<string[]> {
-  const { existsSync } = await import("node:fs");
+export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
+  const { existsSync, readFileSync, readdirSync } = await import("node:fs");
   const { join } = await import("node:path");
 
   const toEnable: string[] = [];
@@ -200,7 +213,66 @@ async function detectAutoLoadTools(cwd: string): Promise<string[]> {
       toEnable.push(...tools);
     }
   }
+
+  // React detection: package.json has react dep AND .tsx/.jsx files exist.
+  // This is content-based, not filename-based, so it can't be in FRAMEWORK_TOOL_GROUPS.
+  const pkgPath = join(cwd, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+      const hasReact = !!(allDeps["react"] || allDeps["next"] || allDeps["@remix-run/react"]);
+      if (hasReact && hasJsxFilesShallow(cwd, readdirSync)) {
+        toEnable.push(...REACT_TOOLS);
+      }
+    } catch { /* malformed package.json */ }
+  }
+
   return toEnable;
+}
+
+/**
+ * Quick recursive scan for .tsx/.jsx files in common source dirs.
+ * Limits depth to 3 and stops on first match to stay fast (<10ms on typical repos).
+ * Skips node_modules, dist, build, .next, .astro, .git.
+ */
+function hasJsxFilesShallow(
+  cwd: string,
+  readdirSyncFn: typeof import("node:fs").readdirSync,
+): boolean {
+  const { join } = require("node:path") as typeof import("node:path");
+  const IGNORE = new Set([
+    "node_modules", "dist", "build", ".next", ".astro", ".git",
+    "out", "coverage", ".turbo", ".vercel", ".cache",
+  ]);
+  const ROOTS = ["src", "app", "pages", "components", "."];
+
+  function scan(dir: string, depth: number): boolean {
+    if (depth > 3) return false;
+    let entries;
+    try {
+      entries = readdirSyncFn(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (e.isFile() && /\.(tsx|jsx)$/.test(e.name)) return true;
+    }
+    for (const e of entries) {
+      if (e.isDirectory() && !IGNORE.has(e.name) && !e.name.startsWith(".")) {
+        if (scan(join(dir, e.name), depth + 1)) return true;
+      }
+    }
+    return false;
+  }
+
+  for (const root of ROOTS) {
+    const dir = root === "." ? cwd : join(cwd, root);
+    try {
+      if (scan(dir, 0)) return true;
+    } catch { /* skip */ }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
