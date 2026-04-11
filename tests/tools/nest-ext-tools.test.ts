@@ -262,6 +262,33 @@ export class BillingService {
     const result = await nestScheduleMap("test-repo");
     expect(result.errors!.length).toBe(1);
   });
+
+  it("R-12: captures constant-expression args (CronExpression.EVERY_10_SECONDS)", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/const.service.ts"), `
+import { Injectable } from '@nestjs/common';
+import { Cron, CronExpression, Interval } from '@nestjs/schedule';
+
+const HEARTBEAT_MS = 60000;
+
+@Injectable()
+export class ConstService {
+  @Cron(CronExpression.EVERY_10_SECONDS)
+  handleEveryTen() {}
+
+  @Interval(HEARTBEAT_MS)
+  handleHeartbeat() {}
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/jobs/const.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestScheduleMap("test-repo");
+    // Constant expression should be captured in fallback
+    const cronEntry = result.entries.find((e) => e.handler === "handleEveryTen");
+    expect(cronEntry).toBeDefined();
+    expect(cronEntry!.decorator).toBe("@Cron");
+    expect(cronEntry!.expression).toBe("CronExpression.EVERY_10_SECONDS");
+  });
 });
 
 // ---------------------------------------------------------------------------

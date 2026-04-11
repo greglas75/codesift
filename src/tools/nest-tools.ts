@@ -459,44 +459,28 @@ function parseUseGuards(source: string): string[] {
   return results;
 }
 
-/** Parse @UseInterceptors(...) from source */
-function parseUseInterceptors(source: string): string[] {
-  const results: string[] = [];
-  const re = /@UseInterceptors\s*\(\s*([\w\s,]+)\s*\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
-    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
-      results.push(name);
+/**
+ * Factory for @Use*() decorator parsers. parseUseGuards is separate because
+ * it needs to handle `new Guard()` instantiation form (R-8 fix).
+ */
+function makeUseDecoratorParser(decoratorName: string): (source: string) => string[] {
+  const re = new RegExp(`@${decoratorName}\\s*\\(\\s*([\\w\\s,]+)\\s*\\)`, "g");
+  return (source: string): string[] => {
+    const results: string[] = [];
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(source)) !== null) {
+      for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
+        results.push(name);
+      }
     }
-  }
-  return results;
+    return results;
+  };
 }
 
-/** Parse @UsePipes(...) from source */
-function parseUsePipes(source: string): string[] {
-  const results: string[] = [];
-  const re = /@UsePipes\s*\(\s*([\w\s,]+)\s*\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
-    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
-      results.push(name);
-    }
-  }
-  return results;
-}
-
-/** Parse @UseFilters(...) from source */
-function parseUseFilters(source: string): string[] {
-  const results: string[] = [];
-  const re = /@UseFilters\s*\(\s*([\w\s,]+)\s*\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
-    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
-      results.push(name);
-    }
-  }
-  return results;
-}
+const parseUseInterceptors = makeUseDecoratorParser("UseInterceptors");
+const parseUsePipes = makeUseDecoratorParser("UsePipes");
+const parseUseFilters = makeUseDecoratorParser("UseFilters");
 
 /** Built-in NestJS decorators that should NOT be reported as custom metadata */
 const BUILTIN_DECORATORS = new Set([
@@ -598,7 +582,7 @@ export async function nestGuardChain(
   const controllerFiles = index.files.filter(
     (f) => f.path.endsWith(".controller.ts") || f.path.endsWith(".controller.js"),
   );
-  const methods = ["Get", "Post", "Put", "Delete", "Patch"];
+  const methods = ["Get", "Post", "Put", "Delete", "Patch", "All", "Head", "Options"];
 
   for (const file of controllerFiles) {
     if (routes.length >= maxRoutes) { truncated = true; break; }
@@ -739,7 +723,7 @@ export async function nestRouteInventory(
   );
 
   const routes: NestRouteEntry[] = [];
-  const methods = ["Get", "Post", "Put", "Delete", "Patch"];
+  const methods = ["Get", "Post", "Put", "Delete", "Patch", "All", "Head", "Options"];
 
   for (const file of controllerFiles) {
     if (routes.length >= maxRoutes) { truncated = true; break; }
@@ -1238,7 +1222,7 @@ export async function nestAudit(
     summary: {
       total_routes: totalRoutes,
       cycles,
-      violations: 0, // TODO: boundary violations from module_graph
+      violations: (moduleResult?.circular_deps.length ?? 0) + (diResult?.cross_module_warnings.length ?? 0),
       anti_pattern_hits: antiPatternHits,
       failed_checks: auditErrors.length,
       truncated_checks: truncatedChecks,
