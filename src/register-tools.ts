@@ -3109,6 +3109,33 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "find_orphan_tables",
+    category: "analysis" as ToolCategory,
+    searchHint: "orphan table SQL unused dead unreferenced no query no model drop candidate",
+    description: "Find SQL tables with zero references in the codebase — no DML queries, no ORM models, no FK references. Candidates for DROP TABLE.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Scope to SQL files matching pattern"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { findOrphanTables } = await import("./tools/sql-tools.js");
+      const result = await findOrphanTables(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Tables: ${result.total_tables} | Orphans: ${result.orphan_count}`);
+      if (result.orphans.length > 0) {
+        parts.push("");
+        for (const o of result.orphans) {
+          parts.push(`  ${o.name.padEnd(30)} ${o.column_count} cols  ${o.file}:${o.line}`);
+        }
+      } else {
+        parts.push("No orphan tables found — all tables have at least one reference.");
+      }
+      return parts.join("\n");
+    },
+  },
+  {
     name: "search_columns",
     category: "search" as ToolCategory,
     searchHint: "search column SQL table field name type database schema find",
