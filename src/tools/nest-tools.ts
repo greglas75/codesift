@@ -409,6 +409,161 @@ export interface NestGuardChainResult {
 }
 
 // ---------------------------------------------------------------------------
+// Shared helpers: guard/interceptor/pipe parsing (CQ14)
+// ---------------------------------------------------------------------------
+
+/** Parse @UseGuards(...) from source, returns guard class names */
+function parseUseGuards(source: string): string[] {
+  const results: string[] = [];
+  const re = /@UseGuards\s*\(\s*([\w\s,]+)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
+      results.push(name);
+    }
+  }
+  return results;
+}
+
+/** Parse @UseInterceptors(...) from source */
+function parseUseInterceptors(source: string): string[] {
+  const results: string[] = [];
+  const re = /@UseInterceptors\s*\(\s*([\w\s,]+)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
+      results.push(name);
+    }
+  }
+  return results;
+}
+
+/** Parse @UsePipes(...) from source */
+function parseUsePipes(source: string): string[] {
+  const results: string[] = [];
+  const re = /@UsePipes\s*\(\s*([\w\s,]+)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
+      results.push(name);
+    }
+  }
+  return results;
+}
+
+/** Parse @UseFilters(...) from source */
+function parseUseFilters(source: string): string[] {
+  const results: string[] = [];
+  const re = /@UseFilters\s*\(\s*([\w\s,]+)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    for (const name of m[1]!.split(",").map((s) => s.trim()).filter(Boolean)) {
+      results.push(name);
+    }
+  }
+  return results;
+}
+
+type ChainItem = NestGuardChainEntry["chain"][number];
+
+export async function nestGuardChain(
+  repo: string,
+  options?: { path?: string; max_routes?: number },
+): Promise<NestGuardChainResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+
+  const maxRoutes = options?.max_routes ?? 300;
+  const routes: NestGuardChainEntry[] = [];
+  const errors: NestToolError[] = [];
+  let truncated = false;
+
+  // 1. Collect global guards/interceptors/pipes from module files
+  const globalChain: ChainItem[] = [];
+  for (const file of index.files) {
+    if (!file.path.endsWith(".module.ts") && !file.path.endsWith(".module.js")) continue;
+    let source: string;
+    try { source = await readFile(join(index.root, file.path), "utf-8"); } catch { continue; }
+    const conv = extractNestConventions(source, file.path);
+    for (const g of conv.global_guards) globalChain.push({ layer: "global", type: "guard", name: g.name, file: g.file });
+    for (const f of conv.global_filters) globalChain.push({ layer: "global", type: "filter", name: f.name, file: f.file });
+    for (const p of conv.global_pipes) globalChain.push({ layer: "global", type: "pipe", name: p.name, file: p.file });
+    for (const i of conv.global_interceptors) globalChain.push({ layer: "global", type: "interceptor", name: i.name, file: i.file });
+  }
+
+  // 2. Scan controller files
+  const controllerFiles = index.files.filter(
+    (f) => f.path.endsWith(".controller.ts") || f.path.endsWith(".controller.js"),
+  );
+  const methods = ["Get", "Post", "Put", "Delete", "Patch"];
+
+  for (const file of controllerFiles) {
+    if (routes.length >= maxRoutes) { truncated = true; break; }
+    let source: string;
+    try { source = await readFile(join(index.root, file.path), "utf-8"); } catch (err) {
+      errors.push({ file: file.path, reason: `readFile failed: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+
+    // Controller-level info
+    const ctrlMatch = /@Controller\s*\(\s*['"`]([^'"`]*)['"`]/.exec(source);
+    const ctrlPrefix = ctrlMatch?.[1] ?? "";
+    const ctrlClassMatch = /class\s+(\w+)/.exec(source);
+    const ctrlClass = ctrlClassMatch?.[1] ?? "UnknownController";
+
+    // Controller-level decorators (before class body — find source before first method)
+    const classIdx = source.indexOf(`class ${ctrlClass}`);
+    const ctrlHeader = classIdx >= 0 ? source.slice(0, classIdx) : "";
+    const ctrlGuards: ChainItem[] = parseUseGuards(ctrlHeader).map((n) => ({ layer: "controller" as const, type: "guard" as const, name: n }));
+    const ctrlInterceptors: ChainItem[] = parseUseInterceptors(ctrlHeader).map((n) => ({ layer: "controller" as const, type: "interceptor" as const, name: n }));
+    const ctrlPipes: ChainItem[] = parseUsePipes(ctrlHeader).map((n) => ({ layer: "controller" as const, type: "pipe" as const, name: n }));
+    const ctrlFilters: ChainItem[] = parseUseFilters(ctrlHeader).map((n) => ({ layer: "controller" as const, type: "filter" as const, name: n }));
+    const ctrlLevelChain = [...ctrlGuards, ...ctrlInterceptors, ...ctrlPipes, ...ctrlFilters];
+
+    // Collect ALL method decorator positions first to bound lookback correctly
+    const allMethodPositions: Array<{ method: string; path: string; pos: number }> = [];
+    for (const method of methods) {
+      const reStr = new RegExp(`@${method}\\s*\\(\\s*['"\`]([^'"\`]*)['"\`]\\s*\\)`, "g");
+      const reEmpty = new RegExp(`@${method}\\s*\\(\\s*\\)`, "g");
+      let m: RegExpExecArray | null;
+      while ((m = reStr.exec(source)) !== null) allMethodPositions.push({ method, path: m[1] ?? "", pos: m.index });
+      while ((m = reEmpty.exec(source)) !== null) allMethodPositions.push({ method, path: "", pos: m.index });
+    }
+    allMethodPositions.sort((a, b) => a.pos - b.pos);
+
+    for (let idx = 0; idx < allMethodPositions.length; idx++) {
+      if (routes.length >= maxRoutes) { truncated = true; break; }
+      const mm = allMethodPositions[idx]!;
+      const fullPath = `/${ctrlPrefix}/${mm.path}`.replace(/\/+/g, "/") || "/";
+
+      if (options?.path && fullPath !== options.path) continue;
+
+      // Lookback window: from previous method decorator (or class start) to current
+      const prevEnd = idx > 0 ? allMethodPositions[idx - 1]!.pos + 10 : (classIdx >= 0 ? classIdx : 0);
+      const methodCtx = source.slice(Math.max(prevEnd, 0), mm.pos);
+      const methodGuards: ChainItem[] = parseUseGuards(methodCtx).map((n) => ({ layer: "method" as const, type: "guard" as const, name: n }));
+      const methodInterceptors: ChainItem[] = parseUseInterceptors(methodCtx).map((n) => ({ layer: "method" as const, type: "interceptor" as const, name: n }));
+      const methodPipes: ChainItem[] = parseUsePipes(methodCtx).map((n) => ({ layer: "method" as const, type: "pipe" as const, name: n }));
+      const methodFilters: ChainItem[] = parseUseFilters(methodCtx).map((n) => ({ layer: "method" as const, type: "filter" as const, name: n }));
+
+      routes.push({
+        route: fullPath,
+        method: mm.method.toUpperCase(),
+        controller: ctrlClass,
+        file: file.path,
+        chain: [...globalChain, ...ctrlLevelChain, ...methodGuards, ...methodInterceptors, ...methodPipes, ...methodFilters],
+      });
+    }
+  }
+
+  return {
+    routes,
+    ...(errors.length > 0 ? { errors } : {}),
+    ...(truncated ? { truncated } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // B4: nest_route_inventory — types (implementation in Task 9)
 // ---------------------------------------------------------------------------
 

@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -499,5 +499,127 @@ export class ScopedService {
 
     const result = await nestDIGraph("test-repo");
     expect(result.nodes[0]!.scope).toBe("REQUEST");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nest_guard_chain tests (Task 8)
+// ---------------------------------------------------------------------------
+
+describe("nest_guard_chain", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-guard-chain-"));
+    await mkdir(join(tmpRoot, "src"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
+    return {
+      root,
+      files: filePaths.map((p) => ({ path: p, size: 100 })),
+      symbols: [],
+    } as unknown as CodeIndex;
+  }
+
+  it("builds guard chain with global → controller → method layers", async () => {
+    // Module with global guard
+    await writeFile(join(tmpRoot, "src/app.module.ts"), `
+import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard } from '@nestjs/throttler';
+@Module({
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
+})
+export class AppModule {}
+`);
+    // Controller with class-level + method-level guards
+    await writeFile(join(tmpRoot, "src/users.controller.ts"), `
+import { Controller, Get, UseGuards, UseInterceptors } from '@nestjs/common';
+import { AuthGuard } from './auth.guard';
+import { RolesGuard } from './roles.guard';
+import { LoggingInterceptor } from './logging.interceptor';
+
+@UseGuards(AuthGuard)
+@Controller('users')
+export class UsersController {
+  @UseGuards(RolesGuard)
+  @UseInterceptors(LoggingInterceptor)
+  @Get('admin')
+  findAdmin() { return []; }
+
+  @Get('public')
+  findPublic() { return []; }
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/app.module.ts",
+      "src/users.controller.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestGuardChain("test-repo");
+
+    // Should find 2 routes
+    expect(result.routes.length).toBe(2);
+
+    // Admin route has global + controller + method guards
+    const adminRoute = result.routes.find((r) => r.route === "/users/admin");
+    expect(adminRoute).toBeDefined();
+    expect(adminRoute!.chain.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
+    expect(adminRoute!.chain.some((c) => c.layer === "controller" && c.name === "AuthGuard")).toBe(true);
+    expect(adminRoute!.chain.some((c) => c.layer === "method" && c.name === "RolesGuard")).toBe(true);
+    expect(adminRoute!.chain.some((c) => c.layer === "method" && c.type === "interceptor" && c.name === "LoggingInterceptor")).toBe(true);
+
+    // Public route has global + controller guards only (no method-level)
+    const publicRoute = result.routes.find((r) => r.route === "/users/public");
+    expect(publicRoute).toBeDefined();
+    expect(publicRoute!.chain.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
+    expect(publicRoute!.chain.some((c) => c.layer === "controller" && c.name === "AuthGuard")).toBe(true);
+    expect(publicRoute!.chain.filter((c) => c.layer === "method")).toEqual([]);
+  });
+
+  it("returns empty chain for route with no guards", async () => {
+    await writeFile(join(tmpRoot, "src/health.controller.ts"), `
+@Controller('health')
+export class HealthController {
+  @Get()
+  check() { return 'ok'; }
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/health.controller.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestGuardChain("test-repo");
+    expect(result.routes.length).toBe(1);
+    expect(result.routes[0]!.chain).toEqual([]);
+  });
+
+  it("handles @UseGuards() with empty args", async () => {
+    await writeFile(join(tmpRoot, "src/test.controller.ts"), `
+@UseGuards()
+@Controller('test')
+export class TestController {
+  @Get('x')
+  test() {}
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/test.controller.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestGuardChain("test-repo");
+    expect(result.routes.length).toBe(1);
+    // Empty @UseGuards() should add no guards (not crash)
+    const ctrlGuards = result.routes[0]!.chain.filter((c) => c.layer === "controller" && c.type === "guard");
+    expect(ctrlGuards).toEqual([]);
   });
 });
