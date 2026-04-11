@@ -52,14 +52,14 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 3. **Quick grep to find all places with a number (e.g., tool count):**
    ```bash
-   grep -rn "88 tools\|88 MCP" src/ ../codesift-website/src/
+   grep -rn "93 tools\|93 MCP" src/ ../codesift-website/src/
    ```
 
 ## Architecture
 
-**88 MCP tools** (38 core + 50 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + NestJS analysis
+**93 MCP tools** (38 core + 55 discoverable) | tree-sitter AST + BM25F + semantic search + LSP bridge + conversation search + secret detection + session-aware context + NestJS analysis (Wave 1 + Wave 2: GraphQL, WebSocket, schedule, TypeORM, microservices)
 
-**src/tools/** (27 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline) + nest-tools.ts (6 NestJS analysis tools)
+**src/tools/** (28 files) — MCP tool handlers + search-ranker.ts (4-phase ranked pipeline) + nest-tools.ts (6 Wave 1 NestJS tools) + nest-ext-tools.ts (5 Wave 2 NestJS tools)
 **src/lsp/** (4 files) — LSP bridge (6 languages)
 **src/parser/extractors/** (10 files) — Language extractors (TS, JS, **Python (full)**, Go, Rust, Prisma, MD, Astro, Conversation, Kotlin). Python extractor handles async def, @dataclass/@property/@classmethod/@staticmethod/@abstractmethod, dunder methods (tagged via meta), module constants, __all__ exports, superclasses (via extends field), dataclass fields, nested class walk, iterative walk with depth cap 200.
 **src/storage/** (10 files) — Index persistence, embeddings, usage tracker, watcher, session-state (compaction survival)
