@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@mrleebo/prisma-ast": "^0.15.0",
     "@sanity-labs/secret-scan": "^1.1.0",
     "chokidar": "^4.0.0",
     "ignore": "^6.0.0",

@@ -56,6 +56,9 @@ import type { AuditScanOptions } from "./tools/audit-tools.js";
 import { indexStatus } from "./tools/status-tools.js";
 import { auditAgentConfig } from "./tools/agent-config-tools.js";
 import { testImpactAnalysis } from "./tools/test-impact-tools.js";
+import { dependencyAudit } from "./tools/dependency-audit-tools.js";
+import { migrationLint } from "./tools/migration-lint-tools.js";
+import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
@@ -2372,6 +2375,131 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         }
       } else {
         parts.push("\nNo affected tests found.");
+      }
+      return parts.join("\n");
+    },
+  },
+
+  // --- Dependency audit (composite) ---
+  {
+    name: "dependency_audit",
+    category: "analysis",
+    searchHint: "dependency audit npm vulnerabilities CVE licenses outdated freshness lockfile drift supply chain",
+    description: "Composite dependency health check: vulnerabilities (npm/pnpm/yarn audit), licenses (problematic copyleft detection), freshness (outdated count + major gaps), lockfile integrity (drift, duplicates). Runs 4 sub-checks in parallel. Replaces ~40 manual bash calls for D1-D5 audit dimensions.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace_path: z.string().optional().describe("Workspace path (default: index root)"),
+      skip_licenses: zBool().describe("Skip license check (faster, default: false)"),
+      min_severity: z.enum(["low", "moderate", "high", "critical"]).optional().describe("Filter vulnerabilities by minimum severity"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof dependencyAudit>[1] = {};
+      if (args.workspace_path != null) opts!.workspace_path = args.workspace_path as string;
+      if (args.skip_licenses != null) opts!.skip_licenses = args.skip_licenses as boolean;
+      if (args.min_severity != null) opts!.min_severity = args.min_severity as "low" | "moderate" | "high" | "critical";
+      const result = await dependencyAudit(args.repo as string, opts);
+      const parts = [
+        `dependency_audit: ${result.workspace} (${result.package_manager}) — ${result.duration_ms}ms`,
+        `\n─── Vulnerabilities (${result.vulnerabilities.total}) ───`,
+        `  critical: ${result.vulnerabilities.by_severity.critical} | high: ${result.vulnerabilities.by_severity.high} | moderate: ${result.vulnerabilities.by_severity.moderate} | low: ${result.vulnerabilities.by_severity.low}`,
+      ];
+      for (const v of result.vulnerabilities.findings.slice(0, 10)) {
+        parts.push(`  [${v.severity}] ${v.package}${v.fix_available ? " (fix available)" : ""}`);
+      }
+      parts.push(`\n─── Licenses (${result.licenses.total}) ───`);
+      if (result.licenses.problematic.length > 0) {
+        parts.push(`  ⚠ Problematic: ${result.licenses.problematic.length}`);
+        for (const l of result.licenses.problematic.slice(0, 10)) parts.push(`    ${l.package}: ${l.license}`);
+      }
+      parts.push(`\n─── Freshness (${result.freshness.outdated_count} outdated) ───`);
+      for (const o of result.freshness.major_gaps.slice(0, 10)) {
+        parts.push(`  ${o.package}: ${o.current} → ${o.latest} (${o.major_gap} major)`);
+      }
+      parts.push(`\n─── Lockfile ───`);
+      parts.push(`  present: ${result.lockfile.present} | issues: ${result.lockfile.issues.length}`);
+      for (const i of result.lockfile.issues.slice(0, 5)) parts.push(`    ${i.type}: ${i.message}`);
+      if (result.errors.length > 0) {
+        parts.push(`\n─── Sub-check errors (${result.errors.length}) ───`);
+        for (const e of result.errors) parts.push(`  ${e}`);
+      }
+      return parts.join("\n");
+    },
+  },
+
+  // --- Migration safety linter (squawk wrapper) ---
+  {
+    name: "migration_lint",
+    category: "analysis",
+    searchHint: "migration lint squawk SQL postgresql safety linter unsafe-migration not-null drop-column alter-column-type concurrently",
+    description: "PostgreSQL migration safety linter via squawk wrapper. Detects 30+ anti-patterns: NOT NULL without default, DROP COLUMN, ALTER COLUMN TYPE, CREATE INDEX without CONCURRENTLY, etc. Requires squawk CLI installed (brew install squawk OR cargo install squawk-cli). Auto-discovers prisma/migrations, migrations/, db/migrate, drizzle/.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      migration_glob: z.string().optional().describe("Custom migration file glob pattern"),
+      excluded_rules: z.union([z.array(z.string()), z.string().transform((s) => s.split(",").map((x) => x.trim()))]).optional().describe("Squawk rules to exclude (comma-sep or array)"),
+      pg_version: z.string().optional().describe("PostgreSQL version for version-aware rules (e.g. '13')"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof migrationLint>[1] = {};
+      if (args.migration_glob != null) opts!.migration_glob = args.migration_glob as string;
+      if (args.excluded_rules != null) opts!.excluded_rules = args.excluded_rules as string[];
+      if (args.pg_version != null) opts!.pg_version = args.pg_version as string;
+      const result = await migrationLint(args.repo as string, opts);
+      if (!result.squawk_installed) {
+        return `migration_lint: squawk not installed.\n${result.install_hint}\n${result.files_checked} migration files would be checked.`;
+      }
+      const parts = [
+        `migration_lint: squawk ${result.squawk_version ?? "unknown"} — ${result.files_checked} files checked`,
+        `errors: ${result.by_severity.error} | warnings: ${result.by_severity.warning}`,
+      ];
+      if (result.findings.length > 0) {
+        parts.push("\n─── Findings ───");
+        for (const f of result.findings.slice(0, 30)) {
+          parts.push(`  [${f.level}] ${f.file}:${f.line} ${f.rule} — ${f.message}`);
+        }
+      } else {
+        parts.push("\nNo issues found.");
+      }
+      return parts.join("\n");
+    },
+  },
+
+  // --- Prisma schema analyzer ---
+  {
+    name: "analyze_prisma_schema",
+    category: "analysis",
+    searchHint: "prisma schema analyze ast model field index foreign-key relation soft-delete enum coverage",
+    description: "Parse schema.prisma into structured AST. Returns model coverage: fields, indexes, FKs, relations, soft-delete detection, FK index coverage %, unindexed FKs (audit warning), status-as-String suggestions. Uses @mrleebo/prisma-ast for proper AST parsing (vs regex-only extractor).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      schema_path: z.string().optional().describe("Path to schema.prisma (default: auto-detected)"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof analyzePrismaSchema>[1] = {};
+      if (args.schema_path != null) opts!.schema_path = args.schema_path as string;
+      const result = await analyzePrismaSchema(args.repo as string, opts);
+      const parts = [
+        `analyze_prisma_schema: ${result.schema_path}`,
+        `models: ${result.model_count} | enums: ${result.enum_count}`,
+        `\n─── FK Index Coverage ───`,
+        `  ${result.totals.fk_with_index}/${result.totals.fk_columns} FKs indexed (${result.totals.fk_index_coverage_pct.toFixed(1)}%)`,
+        `  unindexed FKs: ${result.totals.fk_without_index}`,
+        `  soft-delete models: ${result.totals.soft_delete_models}`,
+        `  composite indexes: ${result.totals.composite_indexes} | single indexes: ${result.totals.single_indexes}`,
+      ];
+      if (result.warnings.length > 0) {
+        parts.push(`\n─── Warnings (${result.warnings.length}) ───`);
+        for (const w of result.warnings.slice(0, 20)) parts.push(`  ⚠ ${w}`);
+      }
+      // List models with audit issues
+      const auditModels = result.models.filter((m) => m.fk_columns_without_index.length > 0 || m.status_like_string_fields.length > 0);
+      if (auditModels.length > 0) {
+        parts.push(`\n─── Models with issues (${auditModels.length}) ───`);
+        for (const m of auditModels.slice(0, 15)) {
+          const issues: string[] = [];
+          if (m.fk_columns_without_index.length > 0) issues.push(`unindexed FKs: ${m.fk_columns_without_index.join(",")}`);
+          if (m.status_like_string_fields.length > 0) issues.push(`status-as-String: ${m.status_like_string_fields.join(",")}`);
+          parts.push(`  ${m.name} — ${issues.join(" | ")}`);
+        }
       }
       return parts.join("\n");
     },
