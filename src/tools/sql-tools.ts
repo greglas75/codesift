@@ -196,9 +196,24 @@ function detectCircularRefs(relationships: Relationship[], warnings: string[]): 
   }
 }
 
-/** Sanitize a name for Mermaid erDiagram — replace non-alphanumeric with _ */
-function mermaidSafe(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_]/g, "_");
+/**
+ * Sanitize a name for Mermaid erDiagram entities.
+ * Strips leading non-word chars (e.g. Joomla's `#__`), keeps the rest readable.
+ * If the name becomes empty, returns "anon".
+ */
+function mermaidSafeName(name: string): string {
+  // Strip leading non-word chars, replace remaining non-word with _
+  const cleaned = name
+    .replace(/^[^a-zA-Z0-9]+/, "")    // strip leading #, $, @, etc.
+    .replace(/[^a-zA-Z0-9_]/g, "_");
+  return cleaned || "anon";
+}
+
+/** Sanitize a column type for Mermaid — keep the base type name only (drop size/precision). */
+function mermaidSafeType(type: string): string {
+  // "int(10) unsigned" → "int", "varchar(255)" → "varchar", "DECIMAL(10,2)" → "decimal"
+  const m = /^[a-zA-Z][a-zA-Z0-9_]*/.exec(type);
+  return m ? m[0].toLowerCase() : "unknown";
 }
 
 function generateMermaid(
@@ -208,18 +223,18 @@ function generateMermaid(
   const lines: string[] = ["erDiagram"];
 
   for (const table of tables) {
-    const safeName = mermaidSafe(table.name);
+    const safeName = mermaidSafeName(table.name);
     lines.push(`  ${safeName} {`);
     for (const col of table.columns) {
-      const typeName = (col.type.split(/\s/)[0] ?? "unknown").replace(/[^a-zA-Z0-9_]/g, "_");
-      lines.push(`    ${typeName} ${mermaidSafe(col.name)}`);
+      const typeName = mermaidSafeType(col.type);
+      lines.push(`    ${typeName} ${mermaidSafeName(col.name)}`);
     }
     lines.push("  }");
   }
 
   for (const rel of relationships) {
     const arrow = rel.type === "self_reference" ? "||--o|" : "||--o{";
-    lines.push(`  ${mermaidSafe(rel.from_table)} ${arrow} ${mermaidSafe(rel.to_table)} : "${mermaidSafe(rel.from_column)}"`);
+    lines.push(`  ${mermaidSafeName(rel.from_table)} ${arrow} ${mermaidSafeName(rel.to_table)} : "${mermaidSafeName(rel.from_column)}"`);
   }
 
   return lines.join("\n");
@@ -283,7 +298,22 @@ export async function traceQuery(
 
   // Search for references across all indexed files
   const sql_references: SqlReference[] = [];
-  const tableRegex = new RegExp(`\\b${escapeRegex(tableName)}\\b`, "gi");
+
+  // Build a "boundary" regex that handles names with special chars (#, $, @, _).
+  // \b only works at word↔non-word transitions; for names starting/ending with
+  // non-word chars (like #__joomla_table) we need explicit anchors.
+  // Strategy: name must NOT be preceded/followed by an identifier char (a-z, 0-9, _, #, $).
+  const IDENT_CHAR = "[a-zA-Z0-9_#$@]";
+  const escaped = escapeRegex(tableName);
+  // Use lookbehind/lookahead negation. This handles `users`, `#__users`, `wp_users`, `tbl@users`.
+  const tableRegex = new RegExp(
+    `(?<!${IDENT_CHAR})${escaped}(?!${IDENT_CHAR})`,
+    "gi",
+  );
+
+  // Fast literal-substring prefilter (much faster than regex test on every line)
+  const literalNeedle = tableName.toLowerCase();
+
   let truncated = false;
 
   // Pre-build file→symbols map (O(n) instead of O(files*symbols))
@@ -301,9 +331,15 @@ export async function traceQuery(
     const fileSymbols = symbolsByFile.get(fileEntry.path) ?? [];
     for (const sym of fileSymbols) {
       if (!sym.source) continue;
+
+      // Fast prefilter: skip whole symbol if name not present at all
+      if (!sym.source.toLowerCase().includes(literalNeedle)) continue;
+
       const sourceLines = sym.source.split("\n");
       for (let lineIdx = 0; lineIdx < sourceLines.length; lineIdx++) {
         const line = sourceLines[lineIdx]!;
+        // Per-line literal check first (faster than regex)
+        if (!line.toLowerCase().includes(literalNeedle)) continue;
         if (tableRegex.test(line)) {
           tableRegex.lastIndex = 0;
           // Don't include the definition itself as a reference
