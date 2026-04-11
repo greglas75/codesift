@@ -49,7 +49,34 @@ export class HonoExtractor {
     const model = emptyModel(absoluteEntry, {});
     const parsedCache = new Map<string, ChildParseResult>();
     await this.parseFile(absoluteEntry, "", new Set(), parsedCache, model);
+    // Post-pass runtime upgrade: if the entry-file-only detector left runtime
+    // as "unknown" but an imported file (e.g. bindings.ts) contains a CF
+    // Worker type, promote runtime to "cloudflare". Real Hono apps commonly
+    // isolate Bindings type definitions in a separate file.
+    if (model.runtime === "unknown") {
+      model.runtime = await this.upgradeRuntimeFromImports(model.files_used);
+    }
     return model;
+  }
+
+  /**
+   * Post-parse runtime upgrade. Scans each file in files_used (excluding the
+   * entry file, which was already checked) for Cloudflare Worker type
+   * references. Returns "cloudflare" on first match, "unknown" otherwise.
+   */
+  private async upgradeRuntimeFromImports(
+    filesUsed: readonly string[],
+  ): Promise<HonoAppModel["runtime"]> {
+    for (const file of filesUsed) {
+      let source: string;
+      try {
+        source = await readFile(file, "utf-8");
+      } catch {
+        continue;
+      }
+      if (hasCloudflareBindingsType(source)) return "cloudflare";
+    }
+    return "unknown";
   }
 
   /**
