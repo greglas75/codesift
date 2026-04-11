@@ -1,9 +1,10 @@
 /**
  * Kotlin-specific analysis tools.
  *
- * find_extension_functions — discover all extension functions for a receiver type
- * analyze_sealed_hierarchy — find subtypes and missing when() branches
- * trace_suspend_chain      — suspend call chain + dispatcher + blocking anti-patterns
+ * find_extension_functions  — discover all extension functions for a receiver type
+ * analyze_sealed_hierarchy  — find subtypes and missing when() branches
+ * trace_suspend_chain       — suspend call chain + dispatcher + blocking anti-patterns
+ * analyze_kmp_declarations  — match expect/actual across KMP source sets
  */
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
@@ -427,5 +428,171 @@ export async function traceSuspendChain(
     dispatcher_transitions: allTransitions,
     warnings: allWarnings,
     depth: maxDepth,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// analyze_kmp_declarations — Kotlin Multiplatform expect/actual validation
+// ---------------------------------------------------------------------------
+
+export interface KmpMatchedDeclaration {
+  name: string;
+  kind: string;
+  expect_source_set: string;
+  actual_source_sets: string[];
+}
+
+export interface KmpMissingDeclaration {
+  name: string;
+  kind: string;
+  source_set: string;
+  missing_from: string[];
+}
+
+export interface KmpOrphanDeclaration {
+  name: string;
+  kind: string;
+  source_set: string;
+  file: string;
+}
+
+export interface KmpAnalysisResult {
+  total_expects: number;
+  fully_matched: number;
+  source_sets_detected: string[];
+  matched: KmpMatchedDeclaration[];
+  missing_actuals: KmpMissingDeclaration[];
+  orphan_actuals: KmpOrphanDeclaration[];
+}
+
+/**
+ * Parse the source set segment from a KMP-layout file path. Returns the
+ * source set name (e.g. "commonMain", "androidMain") or null when the file
+ * isn't under a recognized `src/<name>Main/kotlin/` layout.
+ */
+function parseSourceSet(filePath: string): string | null {
+  const match = /src\/(\w+Main)\/kotlin\//.exec(filePath);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Analyze KMP expect/actual declarations across source sets. Groups symbols
+ * tagged with `meta.kmp_modifier` by simple name, splits them into expects
+ * and actuals, and reports three verdicts per declaration:
+ *
+ *   - matched:         commonMain expect + at least one platform actual
+ *   - missing_actuals: commonMain expect but one or more platform source
+ *                      sets (discovered from the index files list) have no
+ *                      corresponding `actual`
+ *   - orphan_actuals:  actual without any commonMain expect
+ */
+export async function analyzeKmpDeclarations(
+  repo: string,
+): Promise<KmpAnalysisResult> {
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+  }
+
+  // Discover all source sets present in the repo (from file paths) so we can
+  // compute missing_actuals against the ones that actually exist. Fallback
+  // list covers the common KMP targets when source sets can't be detected
+  // from the files array.
+  const sourceSetsInRepo = new Set<string>();
+  for (const file of index.files) {
+    const sourceSet = parseSourceSet(file.path);
+    if (sourceSet) sourceSetsInRepo.add(sourceSet);
+  }
+  // Drop commonMain from the "platforms to check" list — commonMain holds
+  // expects, not actuals.
+  const platformSourceSets = [...sourceSetsInRepo].filter(
+    (s) => s !== "commonMain",
+  );
+
+  // Group KMP-tagged symbols by simple name + kind so a class and a function
+  // with the same name don't cross-contaminate.
+  interface Grouped {
+    expects: Array<{ sym: CodeSymbol; sourceSet: string }>;
+    actuals: Array<{ sym: CodeSymbol; sourceSet: string }>;
+  }
+  const groups = new Map<string, Grouped>();
+
+  for (const sym of index.symbols) {
+    const kmp = sym.meta?.["kmp_modifier"];
+    if (kmp !== "expect" && kmp !== "actual") continue;
+    const sourceSet = parseSourceSet(sym.file);
+    if (!sourceSet) continue;
+
+    const key = `${sym.kind}::${sym.name}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { expects: [], actuals: [] };
+      groups.set(key, group);
+    }
+    if (kmp === "expect") {
+      group.expects.push({ sym, sourceSet });
+    } else {
+      group.actuals.push({ sym, sourceSet });
+    }
+  }
+
+  const matched: KmpMatchedDeclaration[] = [];
+  const missingActuals: KmpMissingDeclaration[] = [];
+  const orphanActuals: KmpOrphanDeclaration[] = [];
+  let fullyMatched = 0;
+
+  for (const group of groups.values()) {
+    if (group.expects.length === 0) {
+      // All entries are actuals with no expect → orphans.
+      for (const { sym, sourceSet } of group.actuals) {
+        orphanActuals.push({
+          name: sym.name,
+          kind: sym.kind,
+          source_set: sourceSet,
+          file: sym.file,
+        });
+      }
+      continue;
+    }
+
+    // A group has an expect. Walk each expect (usually just one from
+    // commonMain) and check actuals.
+    for (const expectEntry of group.expects) {
+      const actualSets = group.actuals.map((a) => a.sourceSet);
+      const missingFrom = platformSourceSets.filter(
+        (s) => !actualSets.includes(s),
+      );
+
+      if (missingFrom.length === 0 && actualSets.length > 0) {
+        fullyMatched++;
+      }
+
+      if (actualSets.length > 0) {
+        matched.push({
+          name: expectEntry.sym.name,
+          kind: expectEntry.sym.kind,
+          expect_source_set: expectEntry.sourceSet,
+          actual_source_sets: actualSets,
+        });
+      }
+
+      if (missingFrom.length > 0) {
+        missingActuals.push({
+          name: expectEntry.sym.name,
+          kind: expectEntry.sym.kind,
+          source_set: expectEntry.sourceSet,
+          missing_from: missingFrom,
+        });
+      }
+    }
+  }
+
+  return {
+    total_expects: [...groups.values()].reduce((n, g) => n + g.expects.length, 0),
+    fully_matched: fullyMatched,
+    source_sets_detected: [...sourceSetsInRepo].sort(),
+    matched,
+    missing_actuals: missingActuals,
+    orphan_actuals: orphanActuals,
   };
 }

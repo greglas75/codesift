@@ -461,6 +461,53 @@ class ServiceTest {
   });
 });
 
+// --- KMP expect / actual ---
+
+describe("extractKotlinSymbols — KMP expect/actual modifiers", () => {
+  it("marks `expect class Platform` with kmp_modifier=expect", async () => {
+    const symbols = await parseKotlin(`
+expect class Platform {
+    val name: String
+}
+`);
+    const cls = symbols.find((s) => s.name === "Platform" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.meta?.["kmp_modifier"]).toBe("expect");
+  });
+
+  it("marks `actual class Platform` with kmp_modifier=actual", async () => {
+    const symbols = await parseKotlin(`
+actual class Platform {
+    actual val name: String = "Android"
+}
+`);
+    const cls = symbols.find((s) => s.name === "Platform" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.meta?.["kmp_modifier"]).toBe("actual");
+  });
+
+  it("marks `expect fun getPlatformName()` with kmp_modifier=expect", async () => {
+    const symbols = await parseKotlin(`expect fun getPlatformName(): String`);
+    const fn = symbols.find((s) => s.name === "getPlatformName");
+    expect(fn).toBeDefined();
+    expect(fn!.meta?.["kmp_modifier"]).toBe("expect");
+  });
+
+  it("marks `actual fun getPlatformName()` with kmp_modifier=actual", async () => {
+    const symbols = await parseKotlin(`actual fun getPlatformName(): String = "Android"`);
+    const fn = symbols.find((s) => s.name === "getPlatformName");
+    expect(fn).toBeDefined();
+    expect(fn!.meta?.["kmp_modifier"]).toBe("actual");
+  });
+
+  it("does NOT set kmp_modifier on a plain class", async () => {
+    const symbols = await parseKotlin(`class Platform { val name: String = "" }`);
+    const cls = symbols.find((s) => s.name === "Platform" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.meta?.["kmp_modifier"]).toBeUndefined();
+  });
+});
+
 // --- Kotest DSL ---
 
 describe("extractKotlinSymbols — Kotest DSL", () => {

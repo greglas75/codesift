@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain } from "../../src/tools/kotlin-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations } from "../../src/tools/kotlin-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 // Mock getCodeIndex
@@ -343,5 +343,119 @@ describe("traceSuspendChain", () => {
   it("throws when function is not found", async () => {
     vi.mocked(getCodeIndex).mockResolvedValue(makeIndex([]));
     await expect(traceSuspendChain("test", "nonExistent")).rejects.toThrow(/not found/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// analyzeKmpDeclarations
+// ---------------------------------------------------------------------------
+
+describe("analyzeKmpDeclarations", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("matches a commonMain expect with an androidMain actual", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "Platform",
+        kind: "class",
+        file: "shared/src/commonMain/kotlin/Platform.kt",
+        meta: { kmp_modifier: "expect" },
+      }),
+      makeSymbol({
+        name: "Platform",
+        kind: "class",
+        file: "shared/src/androidMain/kotlin/Platform.kt",
+        meta: { kmp_modifier: "actual" },
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeKmpDeclarations("test");
+    expect(result.total_expects).toBe(1);
+    expect(result.fully_matched).toBe(1);
+    expect(result.missing_actuals).toHaveLength(0);
+    expect(result.orphan_actuals).toHaveLength(0);
+  });
+
+  it("reports missing actuals when iosMain has no implementation", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "Platform",
+        kind: "class",
+        file: "shared/src/commonMain/kotlin/Platform.kt",
+        meta: { kmp_modifier: "expect" },
+      }),
+      makeSymbol({
+        name: "Platform",
+        kind: "class",
+        file: "shared/src/androidMain/kotlin/Platform.kt",
+        meta: { kmp_modifier: "actual" },
+      }),
+    ], [
+      { path: "shared/src/commonMain/kotlin/Platform.kt", language: "kotlin", symbol_count: 1, last_modified: 0 },
+      { path: "shared/src/androidMain/kotlin/Platform.kt", language: "kotlin", symbol_count: 1, last_modified: 0 },
+      { path: "shared/src/iosMain/kotlin/Other.kt", language: "kotlin", symbol_count: 0, last_modified: 0 },
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeKmpDeclarations("test");
+    expect(result.missing_actuals).toHaveLength(1);
+    expect(result.missing_actuals[0]!.name).toBe("Platform");
+    expect(result.missing_actuals[0]!.missing_from).toContain("iosMain");
+  });
+
+  it("reports orphan actuals without a matching expect", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "Logger",
+        kind: "class",
+        file: "shared/src/androidMain/kotlin/Logger.kt",
+        meta: { kmp_modifier: "actual" },
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeKmpDeclarations("test");
+    expect(result.orphan_actuals).toHaveLength(1);
+    expect(result.orphan_actuals[0]!.name).toBe("Logger");
+    expect(result.orphan_actuals[0]!.source_set).toBe("androidMain");
+  });
+
+  it("parses source set from androidMain/iosMain/jvmMain/jsMain paths", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "Fetcher",
+        kind: "function",
+        file: "shared/src/commonMain/kotlin/net/Fetcher.kt",
+        meta: { kmp_modifier: "expect" },
+        signature: "suspend (): String",
+      }),
+      makeSymbol({
+        name: "Fetcher",
+        kind: "function",
+        file: "shared/src/jvmMain/kotlin/net/Fetcher.kt",
+        meta: { kmp_modifier: "actual" },
+        signature: "suspend (): String",
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeKmpDeclarations("test");
+    expect(result.fully_matched).toBe(1);
+  });
+
+  it("returns zeroes on a non-KMP project (no expect/actual symbols)", async () => {
+    const index = makeIndex([
+      makeSymbol({ name: "Plain", kind: "class", file: "src/main/kotlin/Plain.kt" }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeKmpDeclarations("test");
+    expect(result.total_expects).toBe(0);
+    expect(result.fully_matched).toBe(0);
+    expect(result.missing_actuals).toHaveLength(0);
+    expect(result.orphan_actuals).toHaveLength(0);
   });
 });

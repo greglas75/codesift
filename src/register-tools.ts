@@ -42,7 +42,7 @@ import {
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
 import { frequencyAnalysis } from "./tools/frequency-tools.js";
-import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain } from "./tools/kotlin-tools.js";
+import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations } from "./tools/kotlin-tools.js";
 import { traceHiltGraph } from "./tools/hilt-tools.js";
 import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
 import { astroRouteMap } from "./tools/astro-routes.js";
@@ -204,12 +204,14 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "analyze_sealed_hierarchy",
     "trace_hilt_graph",
     "trace_suspend_chain",
+    "analyze_kmp_declarations",
   ],
   "settings.gradle.kts": [
     "find_extension_functions",
     "analyze_sealed_hierarchy",
     "trace_hilt_graph",
     "trace_suspend_chain",
+    "analyze_kmp_declarations",
   ],
   // Fallback — Android projects with Groovy gradle but Kotlin source
   "build.gradle": [
@@ -217,6 +219,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "analyze_sealed_hierarchy",
     "trace_hilt_graph",
     "trace_suspend_chain",
+    "analyze_kmp_declarations",
   ],
 };
 
@@ -1726,6 +1729,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { depth?: number } = {};
       if (typeof args.depth === "number") opts.depth = args.depth;
       return await traceSuspendChain(args.repo as string, args.function_name as string, opts);
+    },
+  },
+  {
+    name: "analyze_kmp_declarations",
+    category: "analysis",
+    searchHint: "kotlin multiplatform kmp expect actual source set common main android ios jvm js missing orphan",
+    description: "Validate Kotlin Multiplatform expect/actual declarations across source sets. For each `expect` in commonMain, check every platform source set (androidMain/iosMain/jvmMain/jsMain/etc. discovered from the repo layout) for a matching `actual`. Reports fully matched pairs, expects missing on a platform, and orphan actuals with no corresponding expect.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      return await analyzeKmpDeclarations(args.repo as string);
     },
   },
 

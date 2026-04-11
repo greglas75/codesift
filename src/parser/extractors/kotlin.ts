@@ -68,6 +68,23 @@ function hasModifier(node: Parser.SyntaxNode, modifier: string): boolean {
 }
 
 /**
+ * Detects KMP platform modifiers (expect / actual). The Kotlin grammar
+ * surfaces these as `platform_modifier` nodes inside `modifiers`. Returns
+ * "expect", "actual", or null.
+ */
+function getKmpModifier(node: Parser.SyntaxNode): "expect" | "actual" | null {
+  const mods = node.namedChildren.find((c) => c.type === "modifiers");
+  if (!mods) return null;
+  for (const m of mods.namedChildren) {
+    if (m.type !== "platform_modifier") continue;
+    const text = m.text.trim();
+    if (text === "expect") return "expect";
+    if (text === "actual") return "actual";
+  }
+  return null;
+}
+
+/**
  * Gets annotation names from a node's modifiers.
  * Annotation structure: modifiers → annotation → @ + user_type → identifier
  */
@@ -396,11 +413,13 @@ export function extractKotlinSymbols(
           const testKind = getTestKind(node);
           const kind: SymbolKind = testKind ?? (parentId ? "method" : "function");
           const annotations = getAnnotations(node);
+          const kmp = getKmpModifier(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: annotations.length > 0 ? annotations : undefined,
+            meta: kmp ? { kmp_modifier: kmp } : undefined,
           });
           symbols.push(sym);
         }
@@ -415,10 +434,12 @@ export function extractKotlinSymbols(
           const baseKind: SymbolKind = isInterface(node) ? "interface" : "class";
           const kind: SymbolKind = kotestLambda ? "test_suite" : baseKind;
           const annotations = getAnnotations(node);
+          const kmp = getKmpModifier(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             decorators: annotations.length > 0 ? annotations : undefined,
+            meta: kmp ? { kmp_modifier: kmp } : undefined,
           });
           symbols.push(sym);
 
@@ -563,10 +584,12 @@ export function extractKotlinSymbols(
             kind = "variable";
           }
           const annotations = getAnnotations(node);
+          const kmp = getKmpModifier(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             decorators: annotations.length > 0 ? annotations : undefined,
+            meta: kmp ? { kmp_modifier: kmp } : undefined,
           });
           symbols.push(sym);
         }
