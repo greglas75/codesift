@@ -91,6 +91,24 @@ export function getLanguageForExtension(ext: string): string | null {
 }
 
 /**
+ * Full-path language resolver. Checks multi-dot suffixes first (e.g.
+ * `.gradle.kts` beats `.kts`) so build scripts can be routed to a dedicated
+ * extractor while regular `.kts` scripts still use the plain Kotlin pipeline.
+ *
+ * Returns the language string or null if the path has no recognized
+ * extension / suffix.
+ */
+export function getLanguageForPath(filePath: string): string | null {
+  // Multi-dot suffix table — longest match wins. Keep this list small; any
+  // entry here represents a file format that shares a primary extension with
+  // another format but needs a different extractor.
+  if (filePath.endsWith(".gradle.kts")) return "gradle-kts";
+
+  const ext = path.extname(filePath);
+  return EXTENSION_MAP[ext] ?? null;
+}
+
+/**
  * Languages that do NOT produce structured symbols through the normal parser
  * pipeline. A `FileEntry.language` falling in this set means the file is only
  * indexed via its file entry + ripgrep + secret scanning — symbol tools
@@ -124,8 +142,13 @@ export async function parseFile(
   filePath: string,
   source: string,
 ): Promise<Parser.Tree | null> {
-  const ext = path.extname(filePath);
-  const language = getLanguageForExtension(ext);
+  // Gradle KTS files share the Kotlin tree-sitter grammar but route through
+  // a dedicated symbol extractor. parseFile() only needs a parser, so fall
+  // back to the Kotlin parser here — the extractor split happens in
+  // symbol-extractor.ts via the `gradle-kts` language case.
+  const language = getLanguageForPath(filePath) === "gradle-kts"
+    ? "kotlin"
+    : getLanguageForExtension(path.extname(filePath));
   if (!language) return null;
 
   const parser = await getParser(language);

@@ -7,7 +7,7 @@ import { EXTRACTOR_VERSIONS } from "./project-tools.js";
 import { parseFile } from "../parser/parser-manager.js";
 import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js";
-import { getLanguageForExtension } from "../parser/parser-manager.js";
+import { getLanguageForExtension, getLanguageForPath } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
@@ -48,9 +48,10 @@ async function parseOneFile(
     const stat = await import("node:fs/promises").then((fs) => fs.stat(filePath));
     const source = await readFile(filePath, "utf-8");
     const relPath = relative(repoRoot, filePath);
-    const ext = extname(filePath);
     const baseName = filePath.split("/").pop() ?? "";
-    const language = getLanguageForExtension(ext)
+    // Use full-path resolver so multi-dot suffixes like `.gradle.kts` beat
+    // single-extension lookups (which would otherwise map to plain Kotlin).
+    const language = getLanguageForPath(filePath)
       ?? (baseName.startsWith(".env") ? "config" : "unknown");
 
     let symbols: CodeSymbol[];
