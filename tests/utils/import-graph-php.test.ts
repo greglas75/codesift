@@ -58,6 +58,29 @@ describe("collectImportEdges — PHP edge cases", () => {
   });
 });
 
+describe("PHP resilience — malformed/missing composer.json", () => {
+  const MALFORMED_ROOT = resolve(join(__dirname, "..", "fixtures", "php-malformed-composer"));
+  const NO_COMPOSER_ROOT = resolve(join(__dirname, "..", "fixtures", "php-no-composer"));
+
+  it("resolvePhpNamespace returns exists=false on malformed composer.json (no crash)", async () => {
+    await indexFolder(MALFORMED_ROOT);
+    const r = await resolvePhpNamespace("local/php-malformed-composer", "Something\\Else");
+    // readJsonSafe catches JSON.parse errors and returns null, causing psr4 map
+    // to be empty → no prefix match → exists=false. Key assertion: no throw.
+    expect(r.exists).toBe(false);
+    expect(r.psr4_prefix).toBeNull();
+  });
+
+  it("collectImportEdges handles repo with no composer.json gracefully", async () => {
+    await indexFolder(NO_COMPOSER_ROOT);
+    const index = await getCodeIndex("local/php-no-composer");
+    expect(index).not.toBeNull();
+    // Should not throw when scanning PHP files without a composer.json to resolve against.
+    const edges = await collectImportEdges(index!);
+    expect(Array.isArray(edges)).toBe(true);
+  });
+});
+
 describe("extractPhpUseStatements — grouped imports", () => {
   it("expands `use App\\Models\\{User, Post, Comment};` into 3 FQCNs", () => {
     const uses = extractPhpUseStatements(`<?php
