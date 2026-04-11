@@ -24,7 +24,9 @@ import type {
   MiddlewareEntry,
   ContextVariable,
   OpenAPIRoute,
+  InlineHandlerAnalysis,
 } from "./hono-model.js";
+import { HonoInlineAnalyzer } from "./hono-inline-analyzer.js";
 
 const HTTP_METHODS = new Set([
   "get", "post", "put", "delete", "patch", "options", "all", "on",
@@ -39,6 +41,8 @@ interface ChildParseResult {
 }
 
 export class HonoExtractor {
+  private inlineAnalyzer = new HonoInlineAnalyzer();
+
   async parse(entryFile: string): Promise<HonoAppModel> {
     const absoluteEntry = canonicalize(path.resolve(entryFile));
     const model = emptyModel(absoluteEntry, {});
@@ -336,9 +340,11 @@ export class HonoExtractor {
       const rawPath = stringLiteralValue(firstArg);
       if (rawPath == null) return;
 
-      const handlerArg = argList[argList.length - 1];
-      const handler: HonoHandler = buildHandler(handlerArg ?? firstArg, file);
+      // Resolve once so buildHandler and analyzeHandlerIfInline see the same node.
+      const handlerNode = argList[argList.length - 1] ?? firstArg;
+      const handler: HonoHandler = buildHandler(handlerNode, file);
       const regexConstraint = parseRegexConstraints(rawPath);
+      const inlineAnalysis = this.analyzeHandlerIfInline(handler, handlerNode);
 
       routes.push({
         method: method.toUpperCase() as HonoMethod,
@@ -351,8 +357,24 @@ export class HonoExtractor {
         inline_middleware: [],
         validators: [],
         ...(regexConstraint ? { regex_constraint: regexConstraint } : {}),
+        ...(inlineAnalysis ? { inline_analysis: inlineAnalysis } : {}),
       });
     });
+  }
+
+  /**
+   * Run InlineHandlerAnalyzer on the handler AST node when buildHandler
+   * classified the handler as inline. Returns undefined for named-identifier
+   * handlers — those are defined elsewhere and analyzed via their symbol.
+   * The caller must pass the SAME node used by buildHandler so the two
+   * decisions cannot disagree.
+   */
+  private analyzeHandlerIfInline(
+    handler: HonoHandler,
+    handlerNode: Parser.SyntaxNode,
+  ): InlineHandlerAnalysis | undefined {
+    if (!handler.inline) return undefined;
+    return this.inlineAnalyzer.analyze(handlerNode);
   }
 
   /** Handle app.on(methods, path, handler) — fan out into per-method routes. */
@@ -385,9 +407,11 @@ export class HonoExtractor {
     const rawPath = stringLiteralValue(pathArg);
     if (rawPath == null) return;
 
-    const handlerArg = argList[argList.length - 1];
-    const handler: HonoHandler = buildHandler(handlerArg ?? pathArg, file);
+    // Resolve once so buildHandler and analyzeHandlerIfInline see the same node.
+    const handlerNode = argList[argList.length - 1] ?? pathArg;
+    const handler: HonoHandler = buildHandler(handlerNode, file);
     const regexConstraint = parseRegexConstraints(rawPath);
+    const inlineAnalysis = this.analyzeHandlerIfInline(handler, handlerNode);
 
     for (const m of methods) {
       routes.push({
@@ -401,6 +425,7 @@ export class HonoExtractor {
         inline_middleware: [],
         validators: [],
         ...(regexConstraint ? { regex_constraint: regexConstraint } : {}),
+        ...(inlineAnalysis ? { inline_analysis: inlineAnalysis } : {}),
       });
     }
   }

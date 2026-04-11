@@ -314,4 +314,40 @@ describe("HonoExtractor — basic-app", () => {
       expect(route.owner_var).toBe("app");
     }
   });
+
+  it("T3: every inline-handler route has inline_analysis populated", async () => {
+    const model = await extractor.parse(basicEntry);
+    // All 5 routes in basic-app use inline arrow handlers
+    for (const route of model.routes) {
+      expect(route.handler.inline).toBe(true);
+      expect(route.inline_analysis).toBeDefined();
+    }
+  });
+
+  it("T3: inline_analysis captures c.json response with 201 status for POST /users", async () => {
+    const model = await extractor.parse(basicEntry);
+    const postUsers = model.routes.find(
+      (r) => r.method === "POST" && r.path === "/users",
+    );
+    expect(postUsers?.inline_analysis?.responses.some((r) => r.status === 201 && r.kind === "json")).toBe(true);
+  });
+
+  it("T3: inline_analysis captures c.text response for GET /", async () => {
+    const model = await extractor.parse(basicEntry);
+    const root = model.routes.find(
+      (r) => r.method === "GET" && r.path === "/",
+    );
+    expect(root?.inline_analysis?.responses[0]?.kind).toBe("text");
+    expect(root?.inline_analysis?.responses[0]?.status).toBe(200);
+  });
+
+  it("T3: inline_analysis is undefined when handler is a named identifier", async () => {
+    const subappEntry = path.join(FIXTURES, "subapp-app", "src", "index.ts");
+    const model = await extractor.parse(subappEntry);
+    // subapp-app uses named handlers (getHealth, listUsers, etc.) — should NOT have inline_analysis
+    const namedRoutes = model.routes.filter((r) => !r.handler.inline);
+    for (const route of namedRoutes) {
+      expect(route.inline_analysis).toBeUndefined();
+    }
+  });
 });
