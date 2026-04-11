@@ -15,6 +15,7 @@ codesift-report.html
 __pycache__/
 .claude/
 .zuvo/
+.worktrees/
 
 # Competitor benchmarks — local only, not for public repo
 benchmarks/codesift-vs-jcodemunch*.py
