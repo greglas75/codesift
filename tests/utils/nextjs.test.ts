@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scanDirective, deriveUrlPath, discoverWorkspaces } from "../../src/utils/nextjs.js";
+import { scanDirective, deriveUrlPath, discoverWorkspaces, computeLayoutChain } from "../../src/utils/nextjs.js";
 
 let tmpDir: string;
 
@@ -144,5 +144,43 @@ describe("discoverWorkspaces", () => {
       "src/index.ts": `console.log("hi");`,
     });
     expect(await discoverWorkspaces(root)).toEqual([]);
+  });
+});
+
+describe("computeLayoutChain", () => {
+  it("returns chain from root to leaf for nested layouts", async () => {
+    const root = await createFixture({
+      "app/layout.tsx": `export default function RootLayout({ children }) { return <html><body>{children}</body></html>; }`,
+      "app/products/layout.tsx": `export default function ProductsLayout({ children }) { return <div>{children}</div>; }`,
+      "app/products/[id]/page.tsx": `export default function ProductPage() { return <div>Product</div>; }`,
+    });
+    const chain = await computeLayoutChain("app/products/[id]/page.tsx", root);
+    expect(chain).toEqual(["app/layout.tsx", "app/products/layout.tsx"]);
+  });
+
+  it("returns empty array when no layouts exist", async () => {
+    const root = await createFixture({
+      "app/page.tsx": `export default function Home() { return <div/>; }`,
+    });
+    const chain = await computeLayoutChain("app/page.tsx", root);
+    expect(chain).toEqual([]);
+  });
+
+  it("returns only root layout when no nested layouts", async () => {
+    const root = await createFixture({
+      "app/layout.tsx": `export default function RootLayout({ children }) { return <html><body>{children}</body></html>; }`,
+      "app/products/[id]/page.tsx": `export default function ProductPage() { return <div>Product</div>; }`,
+    });
+    const chain = await computeLayoutChain("app/products/[id]/page.tsx", root);
+    expect(chain).toEqual(["app/layout.tsx"]);
+  });
+
+  it("excludes self when target is a layout", async () => {
+    const root = await createFixture({
+      "app/layout.tsx": `export default function RootLayout({ children }) { return <html><body>{children}</body></html>; }`,
+      "app/products/layout.tsx": `export default function ProductsLayout({ children }) { return <div>{children}</div>; }`,
+    });
+    const chain = await computeLayoutChain("app/products/layout.tsx", root);
+    expect(chain).toEqual(["app/layout.tsx"]);
   });
 });

@@ -1,5 +1,5 @@
-import { readFile, readdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { readFile, readdir, access } from "node:fs/promises";
+import { join, dirname, relative, basename } from "node:path";
 
 /** Maximum bytes to read when scanning for a directive. */
 export const DIRECTIVE_WINDOW = 512;
@@ -131,4 +131,52 @@ export async function discoverWorkspaces(
   }
 
   return results;
+}
+
+const LAYOUT_EXTENSIONS = ["tsx", "jsx", "ts", "js"];
+
+/**
+ * Walk up from `filePath` through ancestor directories collecting layout files.
+ * Returns relative paths from root to leaf order. Stops at the `app/` boundary.
+ * If `filePath` is itself a layout, it is excluded from the chain.
+ */
+export async function computeLayoutChain(
+  filePath: string,
+  repoRoot: string,
+): Promise<string[]> {
+  const chain: string[] = [];
+  const rel = filePath.startsWith("/") ? relative(repoRoot, filePath) : filePath;
+  const segments = rel.split("/");
+
+  // Find the app/ boundary index
+  const appIdx = segments.indexOf("app");
+  if (appIdx < 0) return [];
+
+  // Walk from app/ directory down to the parent of the target file
+  // Skip the file's own directory if the file itself is a layout
+  const targetBasename = basename(rel);
+  const isLayout = /^layout\.[jt]sx?$/.test(targetBasename);
+  const targetDir = dirname(rel);
+
+  // Build paths from app/ to target's parent directory
+  for (let i = appIdx; i < segments.length - 1; i++) {
+    const dirPath = segments.slice(0, i + 1).join("/");
+
+    // If the target is a layout, skip its own directory
+    if (isLayout && dirPath === targetDir) continue;
+
+    for (const ext of LAYOUT_EXTENSIONS) {
+      const layoutPath = join(dirPath, `layout.${ext}`);
+      const absPath = join(repoRoot, layoutPath);
+      try {
+        await access(absPath);
+        chain.push(layoutPath);
+        break; // Found a layout in this directory, move to next
+      } catch {
+        // No layout with this extension
+      }
+    }
+  }
+
+  return chain;
 }
