@@ -142,13 +142,35 @@ function parsePluginCall(call: Parser.SyntaxNode): ParsedPlugin | null {
   if (!args) return null;
   const firstArg = args.namedChildren.find((c) => c.type === "value_argument");
   if (!firstArg) return null;
-  const strLit = firstArg.namedChildren.find((c) => c.type === "string_literal");
-  if (!strLit) return null;
 
-  return {
-    declarator: callee.text,
-    name: unquoteStringLiteral(strLit),
-  };
+  // Two supported argument shapes:
+  //
+  //   1. String literal:     id("com.android.application")
+  //   2. Version catalog:    alias(libs.plugins.android.application)
+  //
+  // The catalog form shows up as `navigation_expression` in the AST; we
+  // strip the `libs.plugins.` prefix so the emitted name matches what a
+  // developer would write in libs.versions.toml ("android.application").
+  const strLit = firstArg.namedChildren.find((c) => c.type === "string_literal");
+  if (strLit) {
+    return {
+      declarator: callee.text,
+      name: unquoteStringLiteral(strLit),
+    };
+  }
+
+  const nav = firstArg.namedChildren.find((c) => c.type === "navigation_expression");
+  if (nav) {
+    const fullPath = nav.text.trim();
+    // Strip libs.plugins. prefix when using version catalog convention.
+    const stripped = fullPath.replace(/^libs\.plugins\./, "");
+    return {
+      declarator: callee.text,
+      name: stripped || fullPath,
+    };
+  }
+
+  return null;
 }
 
 function makePluginSymbol(
@@ -195,15 +217,37 @@ function emitDependencySymbols(
     if (!args) continue;
     const firstArg = args.namedChildren.find((c) => c.type === "value_argument");
     if (!firstArg) continue;
-    const strLit = firstArg.namedChildren.find((c) => c.type === "string_literal");
-    if (!strLit) continue;
 
-    const coordinate = unquoteStringLiteral(strLit);
+    // Two supported argument shapes:
+    //
+    //   1. GAV coordinate:   implementation("io.ktor:ktor-server:2.3.0")
+    //   2. Version catalog:  implementation(libs.androidx.core.ktx)
+    //
+    // Both land as a `variable` symbol with meta.gradle_type="dependency";
+    // version catalog refs additionally carry meta.source="catalog" so
+    // downstream tools can distinguish literal coordinates from indirections.
+    let coordinate: string | null = null;
+    let via: "literal" | "catalog" = "literal";
+
+    const strLit = firstArg.namedChildren.find((c) => c.type === "string_literal");
+    if (strLit) {
+      coordinate = unquoteStringLiteral(strLit);
+    } else {
+      const nav = firstArg.namedChildren.find((c) => c.type === "navigation_expression");
+      if (nav) {
+        coordinate = nav.text.trim();
+        via = "catalog";
+      }
+    }
+
+    if (!coordinate) continue;
+
     symbols.push(
       makeSymbol(entry, coordinate, "variable", filePath, source, repo, {
         meta: {
           gradle_type: "dependency",
           configuration,
+          source: via,
         },
       }),
     );

@@ -115,6 +115,57 @@ kotlin {
   });
 });
 
+describe("extractGradleKtsSymbols — version catalog (libs.plugins.*)", () => {
+  it("extracts `alias(libs.plugins.android.application)` as plugin", async () => {
+    const symbols = await parseGradleKts(`
+plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android)
+}
+`);
+    const plugins = symbols.filter((s) => s.meta?.["gradle_type"] === "plugin");
+    expect(plugins).toHaveLength(2);
+    const names = plugins.map((p) => p.name);
+    // libs.plugins. prefix is stripped so the name matches libs.versions.toml
+    expect(names).toContain("android.application");
+    expect(names).toContain("kotlin.android");
+    for (const p of plugins) {
+      expect(p.meta?.["declarator"]).toBe("alias");
+    }
+  });
+
+  it("extracts `implementation(libs.androidx.core.ktx)` as catalog dependency", async () => {
+    const symbols = await parseGradleKts(`
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.hilt.android)
+}
+`);
+    const deps = symbols.filter((s) => s.meta?.["gradle_type"] === "dependency");
+    expect(deps).toHaveLength(2);
+    const ktxDep = deps.find((d) => d.name === "libs.androidx.core.ktx");
+    expect(ktxDep).toBeDefined();
+    expect(ktxDep!.meta?.["configuration"]).toBe("implementation");
+    expect(ktxDep!.meta?.["source"]).toBe("catalog");
+  });
+
+  it("mixes literal GAV + catalog dependencies in same file", async () => {
+    const symbols = await parseGradleKts(`
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation("io.ktor:ktor-server:2.3.0")
+}
+`);
+    const deps = symbols.filter((s) => s.meta?.["gradle_type"] === "dependency");
+    expect(deps).toHaveLength(2);
+    const catalog = deps.find((d) => d.meta?.["source"] === "catalog");
+    const literal = deps.find((d) => d.meta?.["source"] === "literal");
+    expect(catalog).toBeDefined();
+    expect(literal).toBeDefined();
+    expect(literal!.name).toBe("io.ktor:ktor-server:2.3.0");
+  });
+});
+
 describe("extractGradleKtsSymbols — integration", () => {
   it("handles a complete build.gradle.kts with plugins + dependencies + android", async () => {
     const symbols = await parseGradleKts(`
