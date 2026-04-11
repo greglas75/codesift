@@ -181,10 +181,17 @@ export async function searchPatterns(
 /**
  * List all available built-in patterns.
  */
-export function listPatterns(): Array<{ name: string; description: string }> {
-  return Object.entries(BUILTIN_PATTERNS).map(([name, { description }]) => ({
+export function listPatterns(): Array<{
+  name: string;
+  description: string;
+  fileExcludePattern?: string;
+  fileIncludePattern?: string;
+}> {
+  return Object.entries(BUILTIN_PATTERNS).map(([name, p]) => ({
     name,
-    description,
+    description: p.description,
+    ...(p.fileExcludePattern ? { fileExcludePattern: p.fileExcludePattern.source } : {}),
+    ...(p.fileIncludePattern ? { fileIncludePattern: p.fileIncludePattern.source } : {}),
   }));
 }
 

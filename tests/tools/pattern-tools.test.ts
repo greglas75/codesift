@@ -180,3 +180,21 @@ describe("nextjs-missing-metadata", () => {
     expect(pattern.fileIncludePattern!.test("app/about/page.tsx")).toBe(true);
   });
 });
+
+describe("listPatterns", () => {
+  it("includes fileExcludePattern when present", () => {
+    const patterns = listPatterns();
+    const wrongRouter = patterns.find((p) => p.name === "nextjs-wrong-router");
+    expect(wrongRouter).toBeDefined();
+    expect(wrongRouter!.fileExcludePattern).toBeDefined();
+    expect(wrongRouter!.fileExcludePattern).toContain("pages");
+  });
+
+  it("includes all 7 nextjs patterns plus existing patterns", () => {
+    const patterns = listPatterns();
+    const nextjsPatterns = patterns.filter((p) => p.name.startsWith("nextjs-"));
+    expect(nextjsPatterns).toHaveLength(7);
+    // Total should include all existing + 7 new nextjs patterns
+    expect(patterns.length).toBeGreaterThanOrEqual(16); // 9 original + 7 nextjs
+  });
+});
