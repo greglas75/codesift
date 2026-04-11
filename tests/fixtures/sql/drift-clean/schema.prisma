@@ -1,0 +1,8 @@
+// Clean fixture — Prisma and SQL match exactly
+
+model User {
+  id        Int    @id @default(autoincrement())
+  email     String @unique
+  name      String
+  @@map("users")
+}

@@ -2978,6 +2978,45 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return parts.join("\n");
     },
   },
+  {
+    name: "analyze_schema_drift",
+    category: "analysis" as ToolCategory,
+    searchHint: "schema drift ORM Prisma Drizzle SQL mismatch migration type field comparison database",
+    description: "Detect schema drift between ORM models (Prisma) and SQL schema. Flags fields in ORM not in SQL, SQL columns not in ORM, and type mismatches. Catches 'forgot to run migration' bugs before production.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Scope analysis to files matching pattern"),
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const { analyzeSchemaDrift } = await import("./tools/sql-tools.js");
+      const result = await analyzeSchemaDrift(args.repo as string, {
+        file_pattern: args.file_pattern as string | undefined,
+      });
+      const parts: string[] = [];
+      parts.push(`Schema drift: ${result.summary.total} issue${result.summary.total === 1 ? "" : "s"}`);
+      parts.push(`  extra in ORM:     ${result.summary.extra_in_orm}`);
+      parts.push(`  extra in SQL:     ${result.summary.extra_in_sql}`);
+      parts.push(`  type mismatches:  ${result.summary.type_mismatches}`);
+      parts.push(`  ORMs detected:    ${result.orms_detected.join(", ") || "(none)"}`);
+      if (result.warnings.length > 0) {
+        parts.push("");
+        for (const w of result.warnings) parts.push(`⚠ ${w}`);
+      }
+      if (result.drifts.length > 0) {
+        parts.push("");
+        parts.push("─── Drifts ───");
+        for (const d of result.drifts.slice(0, 50)) {
+          const loc = d.orm_file ? `${d.orm_file}:${d.orm_line}` : (d.sql_file ? `${d.sql_file}:${d.sql_line}` : "");
+          parts.push(`  [${d.kind}] ${loc}`);
+          parts.push(`    ${d.detail}`);
+        }
+        if (result.drifts.length > 50) {
+          parts.push(`  ... and ${result.drifts.length - 50} more`);
+        }
+      }
+      return parts.join("\n");
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------

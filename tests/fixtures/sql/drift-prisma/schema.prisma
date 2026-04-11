@@ -1,0 +1,21 @@
+// Prisma schema — source of truth for the ORM layer.
+// Intentionally drifts from the SQL schema for testing.
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String
+  // `avatarUrl` exists in Prisma but NOT in SQL — drift!
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  @@map("users")
+}
+
+model Order {
+  id       Int    @id @default(autoincrement())
+  userId   Int
+  // `total` type mismatch: Prisma says Float, SQL says INT
+  total    Float
+  status   String
+  @@map("orders")
+}
