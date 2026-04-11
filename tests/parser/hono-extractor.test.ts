@@ -314,4 +314,171 @@ describe("HonoExtractor — basic-app", () => {
       expect(route.owner_var).toBe("app");
     }
   });
+
+  it("T3: every inline-handler route has inline_analysis populated", async () => {
+    const model = await extractor.parse(basicEntry);
+    // All 5 routes in basic-app use inline arrow handlers
+    for (const route of model.routes) {
+      expect(route.handler.inline).toBe(true);
+      expect(route.inline_analysis).toBeDefined();
+    }
+  });
+
+  it("T3: inline_analysis captures c.json response with 201 status for POST /users", async () => {
+    const model = await extractor.parse(basicEntry);
+    const postUsers = model.routes.find(
+      (r) => r.method === "POST" && r.path === "/users",
+    );
+    expect(postUsers?.inline_analysis?.responses.some((r) => r.status === 201 && r.kind === "json")).toBe(true);
+  });
+
+  it("T3: inline_analysis captures c.text response for GET /", async () => {
+    const model = await extractor.parse(basicEntry);
+    const root = model.routes.find(
+      (r) => r.method === "GET" && r.path === "/",
+    );
+    expect(root?.inline_analysis?.responses[0]?.kind).toBe("text");
+    expect(root?.inline_analysis?.responses[0]?.status).toBe(200);
+  });
+
+  it("T3: inline_analysis is undefined when handler is a named identifier", async () => {
+    const subappEntry = path.join(FIXTURES, "subapp-app", "src", "index.ts");
+    const model = await extractor.parse(subappEntry);
+    // subapp-app uses named handlers (getHealth, listUsers, etc.) — should NOT have inline_analysis
+    const namedRoutes = model.routes.filter((r) => !r.handler.inline);
+    for (const route of namedRoutes) {
+      expect(route.inline_analysis).toBeUndefined();
+    }
+  });
+});
+
+describe("HonoExtractor — T4 conditional middleware (conditional-mw-app)", () => {
+  const condEntry = path.join(FIXTURES, "conditional-mw-app", "src", "index.ts");
+  let extractor: HonoExtractor;
+
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("captures basicAuth applied conditionally on non-GET method", async () => {
+    const model = await extractor.parse(condEntry);
+    const postsChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/posts/*",
+    );
+    expect(postsChain).toBeDefined();
+    const basicAuthEntry = postsChain?.entries.find(
+      (e) => e.name === "basicAuth",
+    );
+    expect(basicAuthEntry).toBeDefined();
+    expect(basicAuthEntry?.applied_when).toBeDefined();
+    expect(basicAuthEntry?.applied_when?.condition_type).toBe("method");
+    expect(basicAuthEntry?.applied_when?.condition_text).toContain("method");
+    expect(basicAuthEntry?.conditional).toBe(true);
+  });
+
+  it("captures bearerAuth applied conditionally on missing header", async () => {
+    const model = await extractor.parse(condEntry);
+    const adminChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/admin/*",
+    );
+    expect(adminChain).toBeDefined();
+    const bearerEntry = adminChain?.entries.find(
+      (e) => e.name === "bearerAuth",
+    );
+    expect(bearerEntry).toBeDefined();
+    expect(bearerEntry?.applied_when?.condition_type).toBe("header");
+    expect(bearerEntry?.applied_when?.condition_text).toContain("header");
+  });
+
+  it("captures a conditional middleware gated on path with condition_type path", async () => {
+    const model = await extractor.parse(condEntry);
+    const deepChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/deep/*",
+    );
+    expect(deepChain).toBeDefined();
+    const logEntry = deepChain?.entries.find((e) => e.name === "logDeep");
+    expect(logEntry).toBeDefined();
+    expect(logEntry?.applied_when?.condition_type).toBe("path");
+  });
+
+  it("unconditional inline middleware has NO applied_when on its entry", async () => {
+    const model = await extractor.parse(condEntry);
+    const publicChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/public/*",
+    );
+    expect(publicChain).toBeDefined();
+    // Only the <inline> entry should be present — no conditional extras
+    const conditionalExtras = publicChain?.entries.filter(
+      (e) => e.applied_when !== undefined,
+    );
+    expect(conditionalExtras?.length ?? 0).toBe(0);
+  });
+
+  it("outer inline arrow wrapper does NOT get applied_when — only the inner gated call does", async () => {
+    const model = await extractor.parse(condEntry);
+    const postsChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/posts/*",
+    );
+    const inlineOuter = postsChain?.entries.find((e) => e.name === "<inline>");
+    expect(inlineOuter).toBeDefined();
+    expect(inlineOuter?.applied_when).toBeUndefined();
+  });
+});
+
+describe("HonoExtractor — T6 local sub-app fallback", () => {
+  let extractor: HonoExtractor;
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("populates child_file with the parent file for a LOCAL sub-app", async () => {
+    const entry = path.join(FIXTURES, "local-subapp", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.mounts).toHaveLength(1);
+    const mount = model.mounts[0];
+    expect(mount?.child_var).toBe("middleware");
+    // BEFORE T6 this would be "" (unresolved import). Now it should be the
+    // same file the parent app is declared in.
+    expect(mount?.child_file).toBe(entry);
+  });
+
+  it("does NOT increment skip_reasons.unresolved_import for a LOCAL sub-app", async () => {
+    const entry = path.join(FIXTURES, "local-subapp", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    // The "middleware" local sub-app should resolve via fallback, so
+    // unresolved_import should not be bumped for it.
+    expect(model.skip_reasons.unresolved_import ?? 0).toBe(0);
+  });
+});
+
+describe("HonoExtractor — T5 advanced runtime detection", () => {
+  let extractor: HonoExtractor;
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("detects cloudflare from Bindings type literal even without wrangler.toml", async () => {
+    const entry = path.join(FIXTURES, "cf-bindings-no-wrangler", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("cloudflare");
+  });
+
+  it("detects vercel from vercel.json at project root", async () => {
+    const entry = path.join(FIXTURES, "vercel-app", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("vercel");
+  });
+
+  it("detects fly from fly.toml at project root", async () => {
+    const entry = path.join(FIXTURES, "fly-app", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("fly");
+  });
+
+  it("still returns unknown when no signals are present", async () => {
+    // basic-app has no wrangler.toml, no vercel.json, no Bindings type with CF types
+    const entry = path.join(FIXTURES, "basic-app", "src", "index.ts");
+    const model = await extractor.parse(entry);
+    expect(model.runtime).toBe("unknown");
+  });
 });

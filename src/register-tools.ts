@@ -264,6 +264,13 @@ const HONO_TOOLS = [
   "trace_rpc_types",
   "audit_hono_security",
   "visualize_hono_routes",
+  // Phase 2 additions — closes blog-API demo gaps + GitHub issues #3587/#4121/#4270
+  "trace_conditional_middleware",
+  "analyze_inline_handler",
+  "extract_response_types",
+  "detect_middleware_env_regression",
+  "detect_hono_modules",
+  "find_dead_hono_routes",
 ];
 
 /**
@@ -2735,6 +2742,96 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         args.repo as string,
         args.format as "mermaid" | "tree" | undefined,
       );
+    },
+  },
+
+  // --- Hono Phase 2 tools (T13) ---
+  {
+    name: "trace_conditional_middleware",
+    category: "analysis",
+    searchHint: "hono conditional middleware applied_when if method header path basicAuth auth gated",
+    description: "List Hono middleware entries that are applied under a runtime condition (e.g., basicAuth only for non-GET methods). Each entry carries condition_type (method|header|path|custom) + condition_text. Closes blog-API false positive where audit_hono_security flagged inline-arrow conditional auth as missing.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      scope: z.string().optional().describe("Filter to a specific middleware scope (e.g. '/posts/*')"),
+    },
+    handler: async (args) => {
+      const { traceConditionalMiddleware } = await import("./tools/hono-conditional-middleware.js");
+      return await traceConditionalMiddleware(
+        args.repo as string,
+        args.scope as string | undefined,
+      );
+    },
+  },
+  {
+    name: "analyze_inline_handler",
+    category: "analysis",
+    searchHint: "hono inline handler analyze c.json c.text status response error db fetch context",
+    description: "Structured body analysis for each Hono inline handler: responses (c.json/text/html/redirect/newResponse with status + shape_hint), errors (throw new HTTPException/Error), db calls (prisma/db/knex/drizzle/mongoose/supabase), fetch calls, c.set/get/var/env access, inline validators, has_try_catch. Optional method + path filter. Named-handler routes return empty.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      method: z.string().optional().describe("HTTP method filter (case-insensitive)"),
+      path: z.string().optional().describe("Route path filter (exact match, e.g. '/users/:id')"),
+    },
+    handler: async (args) => {
+      const { analyzeInlineHandler } = await import("./tools/hono-inline-analyze.js");
+      return await analyzeInlineHandler(
+        args.repo as string,
+        args.method as string | undefined,
+        args.path as string | undefined,
+      );
+    },
+  },
+  {
+    name: "extract_response_types",
+    category: "analysis",
+    searchHint: "hono response types status codes error paths RPC client InferResponseType Issue 4270",
+    description: "Aggregate statically-knowable response types per route: c.json/text/html/body/redirect/newResponse emissions + throw new HTTPException/Error entries with status codes. Closes Hono Issue #4270 — RPC clients can generate types that include error paths. Returns routes[] plus total_statuses across the app.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const { extractResponseTypes } = await import("./tools/hono-response-types.js");
+      return await extractResponseTypes(args.repo as string);
+    },
+  },
+  {
+    name: "detect_middleware_env_regression",
+    category: "analysis",
+    searchHint: "hono middleware env regression createMiddleware generic BlankEnv type Issue 3587",
+    description: "Heuristic static check for Hono Issue #3587: flags middleware chains of 3+ entries where an intermediate member is declared with plain createMiddleware(...) (no Env generic), which resets the accumulated Env type to BlankEnv for downstream middleware. Reports chain_scope + chain_length + middleware_name + definition file:line. Includes a heuristic disclaimer in the result note.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const { detectMiddlewareEnvRegression } = await import("./tools/hono-env-regression.js");
+      return await detectMiddlewareEnvRegression(args.repo as string);
+    },
+  },
+  {
+    name: "detect_hono_modules",
+    category: "analysis",
+    searchHint: "hono modules architecture cluster path prefix middleware bindings enterprise Issue 4121",
+    description: "Cluster Hono routes into logical modules by 2-segment path prefix, rolling up middleware chains, env bindings (from inline_analysis context_access), and source files per module. Closes Hono Issue #4121 — surfaces the implicit module structure for architecture review of enterprise apps. No new AST walking; post-processes the existing HonoAppModel.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const { detectHonoModules } = await import("./tools/hono-modules.js");
+      return await detectHonoModules(args.repo as string);
+    },
+  },
+  {
+    name: "find_dead_hono_routes",
+    category: "analysis",
+    searchHint: "hono dead routes unused RPC client caller refactor monorepo cleanup",
+    description: "Heuristically flag Hono server routes whose path segments do not appear in any non-server .ts/.tsx/.js/.jsx source file in the repo. Useful in monorepos to identify server endpoints that no Hono RPC client calls after refactors. Fully-dynamic routes (`/:id` only) are skipped. Documented as best-effort via the result note field.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    },
+    handler: async (args) => {
+      const { findDeadHonoRoutes } = await import("./tools/hono-dead-routes.js");
+      return await findDeadHonoRoutes(args.repo as string);
     },
   },
 
