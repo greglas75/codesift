@@ -1,0 +1,9 @@
+{
+  "name": "basic-hono-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "hono": "^4.7.0"
+  }
+}
