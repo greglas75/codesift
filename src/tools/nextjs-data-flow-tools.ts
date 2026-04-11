@@ -28,7 +28,6 @@ export type CacheStrategy = "cached" | "no-cache" | "default" | string;
 export interface FetchAnalysis {
   fetches: FetchCall[];
   waterfall_pairs: Array<{ first: number; second: number }>;
-  has_opt_out: boolean;
 }
 
 export interface DataFlowEntry {
@@ -61,7 +60,6 @@ export interface NextjsDataFlowOptions {
 
 export function classifyFetches(fetches: FetchCall[]): FetchAnalysis {
   const waterfall_pairs: Array<{ first: number; second: number }> = [];
-  let has_opt_out = false;
   for (let i = 0; i < fetches.length; i++) {
     const cur = fetches[i]!;
     if (cur.isSequential) {
@@ -72,7 +70,7 @@ export function classifyFetches(fetches: FetchCall[]): FetchAnalysis {
       }
     }
   }
-  return { fetches, waterfall_pairs, has_opt_out };
+  return { fetches, waterfall_pairs };
 }
 
 export function classifyCacheStrategy(fetch: FetchCall): CacheStrategy {

@@ -31,7 +31,7 @@ import { scoreServerAction } from "./nextjs-security-scoring.js";
 
 export type AuthConfidence = "high" | "medium" | "low" | "none";
 
-export type ValidationLib = "zod" | "yup" | "joi" | "manual" | "none";
+export type ValidationLib = "zod" | "manual" | "none";
 
 export type RateLimitLib = "upstash" | "vercel" | "express" | "manual" | "none";
 

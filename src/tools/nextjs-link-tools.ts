@@ -137,7 +137,7 @@ export async function nextjsLinkIntegrity(
   for (const workspace of workspaces) {
     workspaces_scanned.push(workspace);
     const candidates: string[] = [];
-    for (const dir of ["app", "src/app"]) {
+    for (const dir of ["app", "src/app", "pages", "src/pages"]) {
       const fullDir = join(workspace, dir);
       try {
         const walked = await walkDirectory(fullDir, {

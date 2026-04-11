@@ -83,7 +83,6 @@ export interface ApiContractResult {
 
 export interface NextjsApiContractOptions {
   workspace?: string | undefined;
-  output?: "handler_shape" | "openapi31" | undefined;
   max_files?: number | undefined;
 }
 
