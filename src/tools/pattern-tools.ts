@@ -120,7 +120,7 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   // --- React Compiler bailout patterns (GA v1.0, Oct 2025 — Next.js 16 stable) ---
   "compiler-side-effect-in-render": {
-    regex: /(?:^|\n)\s*(?:console\.(?:log|warn|error|info)\s*\(|Math\.random\s*\(|Date\.now\s*\(|document\.(?:getElementById|querySelector|createElement)\s*\()/,
+    regex: /\b(?:console\.(?:log|warn|error|info)\s*\(|Math\.random\s*\(|Date\.now\s*\(|document\.(?:getElementById|querySelector|createElement)\s*\()/,
     description: "Side effect in render body — React Compiler silently skips memoization. Move to useEffect or event handler.",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },

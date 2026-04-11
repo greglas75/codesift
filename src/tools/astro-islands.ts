@@ -75,7 +75,7 @@ export function analyzeIslandsFromIndex(index: CodeIndex, pathPrefix?: string): 
 
 // -- 11. astro_hydration_audit -----------------------------------------------
 
-export interface AuditIssue { code: string; severity: "error" | "warning" | "info"; message: string; file: string; line: number; component?: string; fix: string; }
+export interface AuditIssue { code: string; severity: "error" | "warning" | "info"; message: string; file: string; line: number; component?: string | undefined; fix: string; fix_snippet?: string | undefined; }
 export interface HydrationAuditResult { issues: AuditIssue[]; anti_patterns_checked: string[]; score: "A" | "B" | "C" | "D"; }
 
 const ALL_CODES = ["AH01","AH02","AH03","AH04","AH05","AH06","AH07","AH08","AH09","AH10","AH11","AH12"];
@@ -85,8 +85,19 @@ const HEAVY_SCOPES = ["@nivo/","@monaco-editor/","@fullcalendar/","@react-three/
 function isHeavy(p: string) { return HEAVY_PKGS.has(p) || HEAVY_SCOPES.some((s) => p.startsWith(s)); }
 function fwFromPath(p: string) { if (p.endsWith(".tsx") || p.endsWith(".jsx")) return "react"; if (p.endsWith(".vue")) return "vue"; if (p.endsWith(".svelte")) return "svelte"; return undefined; }
 
-function issue(code: string, sev: AuditIssue["severity"], msg: string, file: string, line: number, fix: string, comp?: string): AuditIssue {
-  return comp ? { code, severity: sev, message: msg, file, line, component: comp, fix } : { code, severity: sev, message: msg, file, line, fix };
+function issue(code: string, sev: AuditIssue["severity"], msg: string, file: string, line: number, fix: string, comp?: string, snippet?: string): AuditIssue {
+  const base: AuditIssue = { code, severity: sev, message: msg, file, line, fix };
+  if (comp) base.component = comp;
+  if (snippet) base.fix_snippet = snippet;
+  return base;
+}
+
+/** Generate a concrete fix snippet by replacing the directive in the source line */
+function makeSnippet(source: string, lineNum: number, from: string, to: string): string | undefined {
+  const line = source.split("\n")[lineNum - 1];
+  if (!line) return undefined;
+  const fixed = line.replace(from, to);
+  return fixed !== line ? fixed.trim() : undefined;
 }
 
 function hasStaticPropsOnly(source: string, island: Island): boolean {
