@@ -31,3 +31,62 @@ describe("nextjs-api-contract-tools exports", () => {
     expect(typeof extractResponseShapes).toBe("function");
   });
 });
+
+describe("extractHttpMethods", () => {
+  it("returns ['GET'] for a single GET export", async () => {
+    const tree = await parseTs(`export async function GET() { return new Response(); }`);
+    const info = extractHttpMethods(tree);
+    expect(info.methods).toEqual(["GET"]);
+    expect(info.wrapped).toBe(false);
+  });
+
+  it("returns sorted methods for GET+POST+DELETE", async () => {
+    const tree = await parseTs(`
+export async function GET() { return new Response(); }
+export async function POST() { return new Response(); }
+export async function DELETE() { return new Response(); }
+`);
+    const info = extractHttpMethods(tree);
+    expect(info.methods).toEqual(["DELETE", "GET", "POST"]);
+  });
+
+  it("returns empty array when no HTTP methods exported", async () => {
+    const tree = await parseTs(`export async function helper() { return 1; }`);
+    const info = extractHttpMethods(tree);
+    expect(info.methods).toEqual([]);
+  });
+
+  it("flags wrapped exports (export const GET = withAuth(...))", async () => {
+    const tree = await parseTs(`
+export const GET = withAuth(async function() { return new Response(); });
+`);
+    const info = extractHttpMethods(tree);
+    expect(info.methods).toEqual(["GET"]);
+    expect(info.wrapped).toBe(true);
+  });
+});
+
+describe("extractQueryParams", () => {
+  it("returns wildcard for runtime URL access", async () => {
+    const src = `
+export async function GET(req) {
+  const { searchParams } = new URL(req.url);
+  return new Response(searchParams.get("id"));
+}
+`;
+    const tree = await parseTs(src);
+    const params = extractQueryParams(tree, src);
+    expect(params).toBe("*");
+  });
+
+  it("returns empty array when no query access detected", async () => {
+    const src = `
+export async function GET() {
+  return new Response("hello");
+}
+`;
+    const tree = await parseTs(src);
+    const params = extractQueryParams(tree, src);
+    expect(params).toEqual([]);
+  });
+});
