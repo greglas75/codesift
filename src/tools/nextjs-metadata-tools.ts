@@ -63,7 +63,101 @@ export interface NextjsMetadataAuditOptions {
 export type { MetadataFields };
 
 // ---------------------------------------------------------------------------
-// Stub orchestrator (Task 9 implements scoreMetadata, Task 10 wires this)
+// Pure scoring function (Task 9)
+// ---------------------------------------------------------------------------
+
+/** Field weights per design D4. Sum = 100. */
+export const METADATA_WEIGHTS = {
+  title: 25,
+  description: 20,
+  og_image: 20,
+  canonical: 15,
+  twitter: 10,
+  json_ld: 10,
+} as const;
+
+const TITLE_MIN_LENGTH = 10;
+const DESCRIPTION_MIN_LENGTH = 50;
+
+/** Substrings that mark an OG image as a placeholder, not a real per-route asset. */
+const PLACEHOLDER_OG_IMAGES = ["/og-image.png", "/favicon.ico", ""];
+
+function isPlaceholderOgImage(url: string): boolean {
+  if (!url || url.trim() === "") return true;
+  return PLACEHOLDER_OG_IMAGES.includes(url);
+}
+
+function gradeFromScore(score: number): MetadataGrade {
+  if (score >= 90) return "excellent";
+  if (score >= 70) return "good";
+  if (score >= 40) return "needs_work";
+  return "poor";
+}
+
+/**
+ * Score a `MetadataFields` object against the weighted rubric (D4).
+ *
+ * Pure function — no I/O, no AST. Returns a numeric score 0-100, a grade
+ * bucket, and a list of violation tags. Length gates zero out title/desc
+ * scores when below thresholds. Placeholder OG images zero out the OG image
+ * score and flag a violation.
+ */
+export function scoreMetadata(fields: MetadataFields): MetadataScore {
+  let score = 0;
+  const violations: string[] = [];
+
+  // Title (weight 25, length gate)
+  if (fields.title) {
+    if (fields.title.length >= TITLE_MIN_LENGTH) {
+      score += METADATA_WEIGHTS.title;
+    } else {
+      violations.push("title_too_short");
+    }
+  }
+
+  // Description (weight 20, length gate)
+  if (fields.description) {
+    if (fields.description.length >= DESCRIPTION_MIN_LENGTH) {
+      score += METADATA_WEIGHTS.description;
+    } else {
+      violations.push("description_too_short");
+    }
+  }
+
+  // Open Graph image (weight 20, placeholder check)
+  const ogImage = fields.openGraph?.images?.[0];
+  if (ogImage) {
+    if (isPlaceholderOgImage(ogImage)) {
+      violations.push("og_image_placeholder");
+    } else {
+      score += METADATA_WEIGHTS.og_image;
+    }
+  }
+
+  // Canonical (weight 15)
+  if (fields.alternates?.canonical) {
+    score += METADATA_WEIGHTS.canonical;
+  }
+
+  // Twitter card (weight 10)
+  if (fields.twitter?.card) {
+    score += METADATA_WEIGHTS.twitter;
+  }
+
+  // JSON-LD (weight 10) — detected via the `other` catch-all
+  if (fields.other && Object.keys(fields.other).length > 0) {
+    score += METADATA_WEIGHTS.json_ld;
+  }
+
+  return {
+    score,
+    grade: gradeFromScore(score),
+    violations,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stub orchestrator (Task 10 wires this)
 // ---------------------------------------------------------------------------
 
 export async function nextjsMetadataAudit(
