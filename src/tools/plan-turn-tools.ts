@@ -23,7 +23,7 @@ import { getCodeIndex } from "./index-tools.js";
 import {
   getToolDefinitions,
   CORE_TOOL_NAMES,
-  detectAutoLoadTools,
+  detectAutoLoadToolsCached,
 } from "../register-tools.js";
 import {
   rankTools,
@@ -436,11 +436,11 @@ export async function planTurn(
   }
 
   // --- 4. Build ranker context (parallel fetch) --------------------------
-  const toolDefs = [...getToolDefinitions()];
+  const toolDefs = getToolDefinitions();
 
   const [usageFreq, frameworkTools, embeddings] = await Promise.all([
     getUsageFrequency(),
-    detectAutoLoadTools(process.cwd()).catch(() => [] as string[]),
+    detectAutoLoadToolsCached(process.cwd()).catch(() => [] as string[]),
     getToolEmbeddings(toolDefs).catch(() => null),
   ]);
 

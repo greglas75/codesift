@@ -385,6 +385,12 @@ const HONO_TOOLS = [
   "find_dead_hono_routes",
 ];
 
+const AUTO_LOAD_CACHE_TTL_MS = 5_000;
+const autoLoadToolsCache = new Map<string, {
+  expiresAt: number;
+  value: Promise<string[]>;
+}>();
+
 /**
  * Detect project type at CWD and return list of tools that should be auto-enabled.
  * Returns empty array if no framework-specific tools apply.
@@ -431,6 +437,27 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
   }
 
   return toEnable;
+}
+
+export function detectAutoLoadToolsCached(cwd: string): Promise<string[]> {
+  const now = Date.now();
+  const cached = autoLoadToolsCache.get(cwd);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const value = detectAutoLoadTools(cwd)
+    .then((tools) => [...new Set(tools)])
+    .catch((err) => {
+      autoLoadToolsCache.delete(cwd);
+      throw err;
+    });
+
+  autoLoadToolsCache.set(cwd, {
+    expiresAt: now + AUTO_LOAD_CACHE_TTL_MS,
+    value,
+  });
+  return value;
 }
 
 /**
@@ -3701,6 +3728,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 ];
 
+const TOOL_DEFINITION_MAP = new Map<string, ToolDefinition>(
+  TOOL_DEFINITIONS.map((tool) => [tool.name, tool]),
+);
+
+const TOOL_SUMMARIES: ToolSummary[] = TOOL_DEFINITIONS.map((tool) => ({
+  name: tool.name,
+  category: tool.category,
+  description: tool.description,
+  searchHint: tool.searchHint,
+}));
+
+const TOOL_CATEGORIES = [...new Set(
+  TOOL_SUMMARIES.map((summary) => summary.category).filter(Boolean),
+)] as string[];
+
+const TOOL_PARAMS_CACHE = new Map<string, Array<{ name: string; required: boolean; description: string }>>();
+
 // ---------------------------------------------------------------------------
 // Tool discovery — lets LLM find deferred tools by keyword search
 // ---------------------------------------------------------------------------
@@ -3713,19 +3757,17 @@ interface ToolSummary {
 }
 
 function buildToolSummaries(): ToolSummary[] {
-  return TOOL_DEFINITIONS.map((t) => ({
-    name: t.name,
-    category: t.category,
-    description: t.description,
-    searchHint: t.searchHint,
-  }));
+  return TOOL_SUMMARIES;
 }
 
 /**
  * Extract structured param info from a ToolDefinition's Zod schema.
  */
 function extractToolParams(def: ToolDefinition): Array<{ name: string; required: boolean; description: string }> {
-  return Object.entries(def.schema).map(([key, val]) => {
+  const cached = TOOL_PARAMS_CACHE.get(def.name);
+  if (cached) return cached;
+
+  const params = Object.entries(def.schema).map(([key, val]) => {
     const zodVal = val as z.ZodTypeAny;
     const isOptional = zodVal.isOptional?.() ?? false;
     return {
@@ -3734,6 +3776,8 @@ function extractToolParams(def: ToolDefinition): Array<{ name: string; required:
       description: zodVal.description ?? "",
     };
   });
+  TOOL_PARAMS_CACHE.set(def.name, params);
+  return params;
 }
 
 interface DescribeToolsResult {
@@ -3757,7 +3801,7 @@ export function describeTools(names: string[]): DescribeToolsResult {
   const not_found: string[] = [];
 
   for (const name of capped) {
-    const def = TOOL_DEFINITIONS.find((t) => t.name === name);
+    const def = TOOL_DEFINITION_MAP.get(name);
     if (!def) {
       not_found.push(name);
       continue;
@@ -3786,7 +3830,7 @@ export function discoverTools(query: string, category?: string): {
 } {
   const summaries = buildToolSummaries();
   const queryTokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const categories = [...new Set(summaries.map((s) => s.category).filter(Boolean))] as string[];
+  const categories = TOOL_CATEGORIES;
 
   let filtered = summaries;
   if (category) {
@@ -3813,7 +3857,7 @@ export function discoverTools(query: string, category?: string): {
     .slice(0, 15)
     .map((s) => {
       // Look up full definition to extract param info for deferred tools
-      const fullDef = TOOL_DEFINITIONS.find((t) => t.name === s.tool.name);
+      const fullDef = TOOL_DEFINITION_MAP.get(s.tool.name);
       const params = fullDef
         ? extractToolParams(fullDef).map(
             (p) => `${p.name}${p.required ? "" : "?"}: ${p.description || "string"}`,
@@ -3931,7 +3975,7 @@ export function registerTools(
 
     // Auto-enable framework-specific tools when project type is detected at CWD.
     // E.g. composer.json → enable PHP/Yii2 tools automatically.
-    detectAutoLoadTools(process.cwd())
+    detectAutoLoadToolsCached(process.cwd())
       .then((toEnable) => {
         for (const name of toEnable) {
           const h = toolHandles.get(name);

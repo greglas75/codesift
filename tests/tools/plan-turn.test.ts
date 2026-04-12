@@ -27,6 +27,7 @@ vi.mock("../../src/register-tools.js", () => ({
     "get_file_outline",
   ]),
   detectAutoLoadTools: vi.fn(),
+  detectAutoLoadToolsCached: vi.fn(),
   getToolDefinitions: vi.fn(() => [
     { name: "search_text", description: "text search", category: "search" },
     { name: "find_dead_code", description: "dead code", category: "analysis" },
@@ -46,7 +47,7 @@ import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { rankTools, getToolEmbeddings } from "../../src/search/tool-ranker.js";
 import { getSessionState } from "../../src/storage/session-state.js";
 import { getUsageStats } from "../../src/storage/usage-stats.js";
-import { detectAutoLoadTools } from "../../src/register-tools.js";
+import { detectAutoLoadToolsCached } from "../../src/register-tools.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -178,7 +179,7 @@ const getToolEmbeddingsMock = vi.mocked(getToolEmbeddings);
 const getCodeIndexMock = vi.mocked(getCodeIndex);
 const getSessionStateMock = vi.mocked(getSessionState);
 const getUsageStatsMock = vi.mocked(getUsageStats);
-const detectAutoLoadToolsMock = vi.mocked(detectAutoLoadTools);
+const detectAutoLoadToolsMock = vi.mocked(detectAutoLoadToolsCached);
 
 function rec(
   name: string,

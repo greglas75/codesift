@@ -38,7 +38,7 @@ export interface ToolRecommendation {
 
 export interface ToolRankerContext {
   query: string;
-  toolDefs: ToolDefinition[];
+  toolDefs: readonly ToolDefinition[];
   embeddings: Map<string, number[]> | null;
   queryEmbedding: number[] | null;
   usageFrequency: Map<string, number>;
@@ -103,7 +103,7 @@ let bm25Cache: ToolBM25Cache | null = null;
  *
  * Exported for tests that need to predict cache-hit behaviour.
  */
-export function toolDefsFingerprint(toolDefs: ToolDefinition[]): string {
+export function toolDefsFingerprint(toolDefs: readonly ToolDefinition[]): string {
   // Stable subset: name, description, searchHint, category. Schema handler
   // is not stringifiable and not relevant to ranking.
   const subset = toolDefs.map((d) => [
@@ -146,7 +146,7 @@ function toolToSymbol(def: ToolDefinition): CodeSymbol {
  * Build (or return cached) BM25 index for a tool catalog. Cache is keyed
  * by fingerprint — subsequent calls with the same shape return instantly.
  */
-export function buildToolBM25Index(toolDefs: ToolDefinition[]): BM25Index {
+export function buildToolBM25Index(toolDefs: readonly ToolDefinition[]): BM25Index {
   const fingerprint = toolDefsFingerprint(toolDefs);
   if (bm25Cache && bm25Cache.fingerprint === fingerprint) {
     return bm25Cache.index;
@@ -496,7 +496,7 @@ async function writeToolEmbeddingCache(
  *     provider call fails — callers should degrade to non-semantic ranking.
  */
 export async function getToolEmbeddings(
-  defs: ToolDefinition[],
+  defs: readonly ToolDefinition[],
 ): Promise<Map<string, number[]> | null> {
   if (defs.length === 0) return new Map();
 
