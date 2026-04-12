@@ -151,19 +151,36 @@ export async function analyzeActiveRecord(
     );
     model.methods = methods.map((m) => m.name);
 
-    // Extract relations from getX() methods that return hasOne/hasMany
+    // Extract relations from getX() methods that return hasOne/hasMany.
+    // Two-pass detection:
+    //   Pass 1: find the primary `->hasOne(Target::class, ...)` or
+    //           `->hasMany(Target::class, ...)` call.
+    //   Pass 2: scan the rest of the source for modifiers:
+    //             ->via('relation')         (Yii2 2.0.13+ junction table via relation)
+    //             ->viaTable('tbl', [...])  (direct junction table)
+    //             ->inverseOf('relation')   (bidirectional relation)
+    //           The presence of `via` or `viaTable` upgrades the relation type
+    //           to `manyMany`. `inverseOf` is decorative and doesn't change type.
     for (const m of methods) {
       if (!m.name.startsWith("get") || !m.source) continue;
       const relName = m.name.slice(3);
-      const relMatch = /->(hasOne|hasMany|hasMany\(\)->viaTable)\s*\(\s*([\w\\]+)(?:::class)?/.exec(m.source);
-      if (relMatch) {
-        const type = relMatch[1]!.startsWith("hasOne") ? "hasOne" : relMatch[1]!.includes("viaTable") ? "manyMany" : "hasMany";
-        model.relations.push({
-          name: relName.charAt(0).toLowerCase() + relName.slice(1),
-          type,
-          target_class: relMatch[2]!,
-        });
-      }
+      const primaryRe = /->(hasOne|hasMany)\s*\(\s*([\w\\]+)(?:::class)?/;
+      const primaryMatch = primaryRe.exec(m.source);
+      if (!primaryMatch) continue;
+
+      const baseType: "hasOne" | "hasMany" = primaryMatch[1] === "hasOne" ? "hasOne" : "hasMany";
+      const targetClass = primaryMatch[2]!;
+
+      // Scan the method source for junction-table modifiers on the same chain.
+      // If found, the semantic type is manyMany even though the primary call was hasMany.
+      const hasJunction = /->(?:via|viaTable)\s*\(/.test(m.source);
+      const type: "hasOne" | "hasMany" | "manyMany" = hasJunction ? "manyMany" : baseType;
+
+      model.relations.push({
+        name: relName.charAt(0).toLowerCase() + relName.slice(1),
+        type,
+        target_class: targetClass,
+      });
     }
 
     // Extract rule validators (loose regex on rules() method source)
@@ -470,6 +487,19 @@ const SCALAR_FIELD_NAMES = new Set([
   "uuid", "hash", "token", "key", "url", "path", "image", "avatar",
 ]);
 
+/**
+ * PHP method names that look like `get*` but are NOT ActiveRecord relation
+ * getters. `$item->save()` / `$item->validate()` inside a foreach is fine;
+ * flagging them as N+1 would be a false positive. These names are stripped
+ * from the `get\w+()` method-call detection before the eager-load check.
+ */
+const METHOD_CALL_BLOCKLIST = new Set([
+  "save", "validate", "delete", "refresh", "load", "populate", "toArray",
+  "afterSave", "beforeSave", "beforeDelete", "afterDelete",
+  "getAttributes", "getAttribute", "getIsNewRecord", "getErrors", "getFirstError",
+  "getOldAttributes", "getDirtyAttributes", "getPrimaryKey", "getTableSchema",
+]);
+
 export interface NPlusOneFinding {
   file: string;
   method: string;
@@ -501,6 +531,43 @@ export async function findPhpNPlusOne(
   const limit = options?.limit ?? 100;
   const filePattern = options?.file_pattern;
 
+  // Normalize `getProfile` → `profile` so the ->with() check matches whether
+  // the relation is accessed as a property or via its auto-generated getter.
+  const normalizeGetter = (name: string): string => {
+    const bare = name.replace(/^get/, "");
+    return bare.length > 0 ? bare.charAt(0).toLowerCase() + bare.slice(1) : "";
+  };
+
+  // A finding is emitted exactly once per (foreach × relation-name) tuple so
+  // that chained patterns don't double-report the same relation that the
+  // property pattern already caught in the same loop body.
+  const emitFinding = (
+    sym: { file: string; name: string; source: string; start_line: number },
+    foreachIdx: number,
+    relation: string,
+    pattern: string,
+    seen: Set<string>,
+  ): boolean => {
+    if (!relation || seen.has(relation)) return findings.length >= limit;
+    seen.add(relation);
+
+    if (SCALAR_FIELD_NAMES.has(relation.toLowerCase())) return findings.length >= limit;
+
+    const beforeForeach = sym.source.slice(0, foreachIdx);
+    const withRe = new RegExp(`\\bwith\\s*\\(\\s*['"]${relation}['"]`);
+    if (withRe.test(beforeForeach)) return findings.length >= limit;
+
+    const lineOffset = beforeForeach.split("\n").length - 1;
+    findings.push({
+      file: sym.file,
+      method: sym.name,
+      line: sym.start_line + lineOffset,
+      relation,
+      pattern,
+    });
+    return findings.length >= limit;
+  };
+
   for (const sym of index.symbols) {
     if (sym.kind !== "method" || !sym.file.endsWith(".php") || !sym.source) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
@@ -510,31 +577,45 @@ export async function findPhpNPlusOne(
     let fm: RegExpExecArray | null;
     while ((fm = foreachRe.exec(src)) !== null) {
       const itemVar = fm[2]!;
-      // Scan everything after the foreach opening for $itemVar->relation
-      // (property access, not method call — methods are too ambiguous).
-      const after = src.slice(fm.index);
-      const relRe = new RegExp(`\\$${itemVar}->(\\w+)(?!\\()`, "g");
-      const relMatch = relRe.exec(after);
-      if (!relMatch) continue;
-      const relation = relMatch[1]!;
+      const foreachIdx = fm.index;
+      const after = src.slice(foreachIdx);
+      // Guard against double-counting: each distinct relation name reported
+      // once per foreach, regardless of which pattern matched first.
+      const seen = new Set<string>();
 
-      // Skip well-known scalar fields
-      if (SCALAR_FIELD_NAMES.has(relation.toLowerCase())) continue;
+      // Pattern 1 — property access: $item->profile
+      // The negative lookahead `(?![\w(])` blocks both:
+      //   1) following word chars (prevents backtracking to a partial capture
+      //      like `$item->getProfile()` matching "getProfil" as a property);
+      //   2) an opening paren (excludes method calls, handled by pattern 2).
+      const propRe = new RegExp(`\\$${itemVar}->(\\w+)(?![\\w(])`, "g");
+      let m: RegExpExecArray | null;
+      while ((m = propRe.exec(after)) !== null) {
+        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, m[1]!, "foreach-access-without-with", seen)) {
+          return { findings, total: findings.length };
+        }
+      }
 
-      // Check if an earlier ->with('relation') eager-loads this relation
-      const beforeForeach = src.slice(0, fm.index);
-      const withRe = new RegExp(`\\bwith\\s*\\(\\s*['"]${relation}['"]`);
-      if (withRe.test(beforeForeach)) continue;
+      // Pattern 2 — getter method call: $item->getProfile()
+      // Normalize to bare relation name for both the dedup and the ->with() check.
+      const getterRe = new RegExp(`\\$${itemVar}->(get\\w+)\\s*\\(\\s*\\)`, "g");
+      while ((m = getterRe.exec(after)) !== null) {
+        const rawMethod = m[1]!;
+        if (METHOD_CALL_BLOCKLIST.has(rawMethod)) continue;
+        const normalized = normalizeGetter(rawMethod);
+        if (!normalized || METHOD_CALL_BLOCKLIST.has(normalized.toLowerCase())) continue;
+        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, normalized, "foreach-getter-without-with", seen)) {
+          return { findings, total: findings.length };
+        }
+      }
 
-      const lineOffset = beforeForeach.split("\n").length - 1;
-      findings.push({
-        file: sym.file,
-        method: sym.name,
-        line: sym.start_line + lineOffset,
-        relation,
-        pattern: "foreach-access-without-with",
-      });
-      if (findings.length >= limit) return { findings, total: findings.length };
+      // Pattern 3 — chained access: $item->rel->sub (the first segment is the trigger)
+      const chainRe = new RegExp(`\\$${itemVar}->(\\w+)->\\w`, "g");
+      while ((m = chainRe.exec(after)) !== null) {
+        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, m[1]!, "foreach-chained-without-with", seen)) {
+          return { findings, total: findings.length };
+        }
+      }
     }
   }
 
@@ -555,49 +636,92 @@ export interface GodModelFinding {
 }
 
 /**
- * Flag ActiveRecord models with too many methods, relations, or lines.
- * Thresholds are configurable (default 50/15/500). Uses analyzeActiveRecord
- * for model detection, then cross-references the class symbol for line span.
+ * Flag oversized PHP classes. Two scopes:
  *
- * Classic anti-pattern in large Yii2 apps — Survey.php in Mobi2 has 175
- * methods, 30 relations, split across a single 3000-line file.
+ * - `scope: "activerecord"` (default) — only models extending ActiveRecord.
+ *   Uses `analyzeActiveRecord` for model detection and counts relations as a
+ *   third threshold alongside methods and lines. Classic Yii2 god-model case:
+ *   Survey.php in Mobi2 with 175 methods, 30 relations, 2291 lines.
+ *
+ * - `scope: "all"` — every PHP class in the index, regardless of base class.
+ *   Captures service god-classes (UserService with 80 methods), component
+ *   aggregates, and any other PHP class that outgrew its responsibility.
+ *   `relation_count` is 0 for non-AR classes — the `min_relations` check is
+ *   skipped so a service with 60 methods isn't hidden by a relation threshold.
+ *
+ * Thresholds default to 50/15/500 but are configurable for both scopes.
  */
 export async function findPhpGodModel(
   repo: string,
-  options?: { min_methods?: number; min_relations?: number; min_lines?: number },
+  options?: {
+    min_methods?: number;
+    min_relations?: number;
+    min_lines?: number;
+    scope?: "activerecord" | "all";
+  },
 ): Promise<{ models: GodModelFinding[]; total: number }> {
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
-  const ar = await analyzeActiveRecord(repo);
   const minM = options?.min_methods ?? 50;
   const minR = options?.min_relations ?? 15;
   const minL = options?.min_lines ?? 500;
+  const scope = options?.scope ?? "activerecord";
 
   const models: GodModelFinding[] = [];
-  for (const m of ar.models) {
-    // Look up the class symbol by (name, kind, file) — file match keeps
-    // duplicate class names in different paths (e.g. Survey.php + Survey copy.php)
-    // reported independently.
-    const classSym = index.symbols.find(
-      (s) => s.name === m.name && s.kind === "class" && s.file === m.file,
+
+  if (scope === "activerecord") {
+    const ar = await analyzeActiveRecord(repo);
+    for (const m of ar.models) {
+      // Look up the class symbol by (name, kind, file) — file match keeps
+      // duplicate class names in different paths reported independently.
+      const classSym = index.symbols.find(
+        (s) => s.name === m.name && s.kind === "class" && s.file === m.file,
+      );
+      const lineCount = classSym ? classSym.end_line - classSym.start_line : 0;
+
+      const reasons: string[] = [];
+      if (m.methods.length > minM) reasons.push(`methods: ${m.methods.length} > ${minM}`);
+      if (m.relations.length > minR) reasons.push(`relations: ${m.relations.length} > ${minR}`);
+      if (lineCount > minL) reasons.push(`lines: ${lineCount} > ${minL}`);
+
+      if (reasons.length > 0) {
+        models.push({
+          name: m.name,
+          file: m.file,
+          method_count: m.methods.length,
+          relation_count: m.relations.length,
+          line_count: lineCount,
+          reasons,
+        });
+      }
+    }
+  } else {
+    // scope === "all" — iterate every PHP class symbol directly.
+    const classSyms = index.symbols.filter(
+      (s) => s.kind === "class" && s.file.endsWith(".php"),
     );
-    const lineCount = classSym ? classSym.end_line - classSym.start_line : 0;
+    for (const cls of classSyms) {
+      const methodCount = index.symbols.filter(
+        (s) => s.parent === cls.id && s.kind === "method",
+      ).length;
+      const lineCount = cls.end_line - cls.start_line;
 
-    const reasons: string[] = [];
-    if (m.methods.length > minM) reasons.push(`methods: ${m.methods.length} > ${minM}`);
-    if (m.relations.length > minR) reasons.push(`relations: ${m.relations.length} > ${minR}`);
-    if (lineCount > minL) reasons.push(`lines: ${lineCount} > ${minL}`);
+      const reasons: string[] = [];
+      if (methodCount > minM) reasons.push(`methods: ${methodCount} > ${minM}`);
+      if (lineCount > minL) reasons.push(`lines: ${lineCount} > ${minL}`);
+      // min_relations intentionally skipped in "all" scope — not AR, no relations
 
-    if (reasons.length > 0) {
-      models.push({
-        name: m.name,
-        file: m.file,
-        method_count: m.methods.length,
-        relation_count: m.relations.length,
-        line_count: lineCount,
-        reasons,
-      });
+      if (reasons.length > 0) {
+        models.push({
+          name: cls.name,
+          file: cls.file,
+          method_count: methodCount,
+          relation_count: 0,
+          line_count: lineCount,
+          reasons,
+        });
+      }
     }
   }
 

@@ -33,11 +33,17 @@ const IMPORT_PATTERNS = [
 // Patterns for extracting PHP `use` statements (FQCN imports — PSR-4 based).
 // These are NOT file paths; they need PSR-4 resolution via composer.json.
 // Exposed separately so the resolver tool can opt-in.
+//
 // Accepts both UpperCase (PSR-1/2 modern) and lowercase (common in older
 // Yii2 apps: `use app\models\Survey`) namespaces. The FQCN must contain at
-// least one backslash to exclude global/function `use` statements like
-// `use Closure;` which would be false positives for the import graph.
-const PHP_USE_PATTERN = /^\s*use\s+(\w+(?:\\\w+)+)(?:\s+as\s+\w+)?\s*;/gm;
+// least one backslash to exclude global class imports like `use Closure;`
+// and `use Yii;` which would be noise for the import graph.
+//
+// Two separate patterns:
+//   SINGLE — `use App\Models\User;` or `use App\Models\User as U;`
+//   GROUP  — `use App\Models\{User, Post, Comment};` or with aliases
+const PHP_USE_SINGLE_PATTERN = /^\s*use\s+(\w+(?:\\\w+)+)(?:\s+as\s+\w+)?\s*;/gm;
+const PHP_USE_GROUP_PATTERN = /^\s*use\s+(\w+(?:\\\w+)*)\\\{([^}]+)\}\s*;/gm;
 
 // Patterns for extracting Kotlin `import` statements (fully-qualified names).
 // These are NOT file paths; they need heuristic resolution against source roots.
@@ -95,15 +101,38 @@ export function resolveImportPath(importerFile: string, importPath: string): str
  * Extract PHP `use` statements (FQCN imports).
  * Returns fully-qualified class/namespace names without the leading backslash.
  * These are NOT file paths — they require PSR-4 resolution against composer.json.
+ *
+ * Handles both single-FQCN and grouped forms:
+ *   `use App\Models\User;`
+ *   `use App\Models\User as U;`
+ *   `use App\Models\{User, Post, Comment};`
+ *   `use App\{Models\User, Services\Auth as A};`
  */
 export function extractPhpUseStatements(source: string): string[] {
   const uses = new Set<string>();
-  PHP_USE_PATTERN.lastIndex = 0;
+
+  // Single FQCN form
+  PHP_USE_SINGLE_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = PHP_USE_PATTERN.exec(source)) !== null) {
+  while ((match = PHP_USE_SINGLE_PATTERN.exec(source)) !== null) {
     const fqcn = match[1]?.replace(/^\\/, "");
     if (fqcn) uses.add(fqcn);
   }
+
+  // Grouped form — split the brace content on commas, strip aliases,
+  // concatenate each fragment with the prefix.
+  PHP_USE_GROUP_PATTERN.lastIndex = 0;
+  while ((match = PHP_USE_GROUP_PATTERN.exec(source)) !== null) {
+    const prefix = match[1]?.replace(/^\\/, "");
+    const members = match[2];
+    if (!prefix || !members) continue;
+    for (const raw of members.split(",")) {
+      // Strip `as Alias` and surrounding whitespace
+      const bare = raw.replace(/\s+as\s+\w+\s*$/, "").trim();
+      if (bare) uses.add(`${prefix}\\${bare}`);
+    }
+  }
+
   return [...uses];
 }
 

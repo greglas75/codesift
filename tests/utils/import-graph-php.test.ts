@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { join, resolve } from "node:path";
 import { indexFolder, getCodeIndex } from "../../src/tools/index-tools.js";
-import { collectImportEdges } from "../../src/utils/import-graph.js";
+import { collectImportEdges, extractPhpUseStatements } from "../../src/utils/import-graph.js";
 import { resolvePhpNamespace } from "../../src/tools/php-tools.js";
 
 const FIXTURE_ROOT = resolve(join(__dirname, "..", "fixtures", "php-psr4"));
@@ -55,5 +55,72 @@ describe("collectImportEdges — PHP edge cases", () => {
       expect(seen.has(key)).toBe(false);
       seen.add(key);
     }
+  });
+});
+
+describe("PHP resilience — malformed/missing composer.json", () => {
+  const MALFORMED_ROOT = resolve(join(__dirname, "..", "fixtures", "php-malformed-composer"));
+  const NO_COMPOSER_ROOT = resolve(join(__dirname, "..", "fixtures", "php-no-composer"));
+
+  it("resolvePhpNamespace returns exists=false on malformed composer.json (no crash)", async () => {
+    await indexFolder(MALFORMED_ROOT);
+    const r = await resolvePhpNamespace("local/php-malformed-composer", "Something\\Else");
+    // readJsonSafe catches JSON.parse errors and returns null, causing psr4 map
+    // to be empty → no prefix match → exists=false. Key assertion: no throw.
+    expect(r.exists).toBe(false);
+    expect(r.psr4_prefix).toBeNull();
+  });
+
+  it("collectImportEdges handles repo with no composer.json gracefully", async () => {
+    await indexFolder(NO_COMPOSER_ROOT);
+    const index = await getCodeIndex("local/php-no-composer");
+    expect(index).not.toBeNull();
+    // Should not throw when scanning PHP files without a composer.json to resolve against.
+    const edges = await collectImportEdges(index!);
+    expect(Array.isArray(edges)).toBe(true);
+  });
+});
+
+describe("extractPhpUseStatements — grouped imports", () => {
+  it("expands `use App\\Models\\{User, Post, Comment};` into 3 FQCNs", () => {
+    const uses = extractPhpUseStatements(`<?php
+use App\\Models\\{User, Post, Comment};
+use App\\Services\\AuthService;
+`);
+    expect(uses).toContain("App\\Models\\User");
+    expect(uses).toContain("App\\Models\\Post");
+    expect(uses).toContain("App\\Models\\Comment");
+    expect(uses).toContain("App\\Services\\AuthService");
+    expect(uses).toHaveLength(4);
+  });
+
+  it("strips aliases from grouped imports", () => {
+    const uses = extractPhpUseStatements(`<?php
+use App\\{Foo, Bar as B, Baz as Qux};
+`);
+    expect(uses).toContain("App\\Foo");
+    expect(uses).toContain("App\\Bar");
+    expect(uses).toContain("App\\Baz");
+    expect(uses).toHaveLength(3);
+  });
+
+  it("resolves deeply nested paths inside a group", () => {
+    const uses = extractPhpUseStatements(`<?php
+use App\\Services\\{Auth\\LoginService, Auth\\LogoutService, Mail\\MailerService};
+`);
+    expect(uses).toContain("App\\Services\\Auth\\LoginService");
+    expect(uses).toContain("App\\Services\\Auth\\LogoutService");
+    expect(uses).toContain("App\\Services\\Mail\\MailerService");
+    expect(uses).toHaveLength(3);
+  });
+
+  it("tolerates extra whitespace around group members", () => {
+    const uses = extractPhpUseStatements(`<?php
+use App\\Models\\{ User , Post , Comment };
+`);
+    expect(uses).toContain("App\\Models\\User");
+    expect(uses).toContain("App\\Models\\Post");
+    expect(uses).toContain("App\\Models\\Comment");
+    expect(uses).toHaveLength(3);
   });
 });

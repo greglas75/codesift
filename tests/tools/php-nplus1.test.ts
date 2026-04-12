@@ -51,4 +51,39 @@ describe("findPhpNPlusOne", () => {
     // the function doesn't crash with limit option.
     expect(typeof r.total).toBe("number");
   });
+
+  it("flags $user->getProfile() method call in MethodCallController actionBad", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const bad = r.findings.filter(
+      (f) => f.file.includes("MethodCallController.php") && f.method === "actionBad",
+    );
+    expect(bad.length).toBe(1);
+    expect(bad[0]?.relation).toBe("profile"); // normalized from getProfile
+    expect(bad[0]?.pattern).toBe("foreach-getter-without-with");
+  });
+
+  it("does not flag MethodCallController actionGood (has ->with('profile'))", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const good = r.findings.filter(
+      (f) => f.file.includes("MethodCallController.php") && f.method === "actionGood",
+    );
+    expect(good.length).toBe(0);
+  });
+
+  it("does not flag save/validate method calls in actionBlocklisted (METHOD_CALL_BLOCKLIST)", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const blocked = r.findings.filter(
+      (f) => f.file.includes("MethodCallController.php") && f.method === "actionBlocklisted",
+    );
+    expect(blocked.length).toBe(0);
+  });
+
+  it("flags chained access ($order->customer->address->city) in ChainedController", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const chained = r.findings.filter((f) => f.file.includes("ChainedController.php"));
+    // `customer` is the trigger (first segment); subsequent chained access
+    // is irrelevant to the N+1 detection and MUST NOT create duplicates.
+    expect(chained.length).toBeGreaterThanOrEqual(1);
+    expect(chained.some((f) => f.relation === "customer")).toBe(true);
+  });
 });

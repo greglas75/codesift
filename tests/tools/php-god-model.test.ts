@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { findPhpGodModel, analyzeActiveRecord } from "../../src/tools/php-tools.js";
 
-function makeClassSym(name: string, file: string, startLine: number, endLine: number) {
+function makeClassSym(name: string, file: string, startLine: number, endLine: number, source?: string) {
   return {
     id: `${file}:${name}:${startLine}`,
     repo: "test",
@@ -21,9 +21,14 @@ function makeClassSym(name: string, file: string, startLine: number, endLine: nu
     end_line: endLine,
     start_byte: 0,
     end_byte: 0,
-    source: `class ${name} extends ActiveRecord {}`,
+    source: source ?? `class ${name} extends ActiveRecord {}`,
     tokens: [name.toLowerCase()],
   };
+}
+
+function makePlainClassSym(name: string, file: string, startLine: number, endLine: number) {
+  // Non-AR service/component class — no `extends ActiveRecord` anywhere.
+  return makeClassSym(name, file, startLine, endLine, `class ${name} { public function hello() {} }`);
 }
 
 function makeMethodSym(name: string, parent: string, file: string, startLine: number) {
@@ -175,5 +180,108 @@ describe("findPhpGodModel", () => {
     expect(surveys).toHaveLength(2);
     const paths = surveys.map((s) => s.file).sort();
     expect(paths).toEqual(["models/Survey copy.php", "models/Survey.php"]);
+  });
+});
+
+describe("findPhpGodModel — scope: 'all'", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("flags non-AR service class with too many methods when scope=all", async () => {
+    const svc = makePlainClassSym("ReportService", "services/ReportService.php", 1, 801);
+    const methods = Array.from({ length: 60 }, (_, i) =>
+      makeMethodSym(`process${i}`, svc.id, "services/ReportService.php", 10 + i),
+    );
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp/test",
+      symbols: [svc, ...methods],
+      files: [{ path: "services/ReportService.php", language: "php", symbol_count: 61, last_modified: 0 }],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 61,
+      file_count: 1,
+    });
+
+    const r = await findPhpGodModel("test", { scope: "all" });
+    const hit = r.models.find((m) => m.name === "ReportService");
+    expect(hit).toBeDefined();
+    expect(hit!.method_count).toBe(60);
+    expect(hit!.line_count).toBe(800);
+    expect(hit!.relation_count).toBe(0); // non-AR
+    expect(hit!.reasons.some((x) => x.includes("methods: 60 > 50"))).toBe(true);
+    expect(hit!.reasons.some((x) => x.includes("lines: 800 > 500"))).toBe(true);
+  });
+
+  it("does NOT flag the same non-AR service under default scope (activerecord-only)", async () => {
+    const svc = makePlainClassSym("ReportService", "services/ReportService.php", 1, 801);
+    const methods = Array.from({ length: 60 }, (_, i) =>
+      makeMethodSym(`process${i}`, svc.id, "services/ReportService.php", 10 + i),
+    );
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp/test",
+      symbols: [svc, ...methods],
+      files: [{ path: "services/ReportService.php", language: "php", symbol_count: 61, last_modified: 0 }],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 61,
+      file_count: 1,
+    });
+
+    const r = await findPhpGodModel("test"); // default scope
+    expect(r.models.find((m) => m.name === "ReportService")).toBeUndefined();
+  });
+
+  it("respects custom min_methods threshold in scope=all", async () => {
+    const svc = makePlainClassSym("SmallService", "services/Small.php", 1, 100);
+    const methods = Array.from({ length: 12 }, (_, i) =>
+      makeMethodSym(`m${i}`, svc.id, "services/Small.php", 5 + i),
+    );
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp/test",
+      symbols: [svc, ...methods],
+      files: [{ path: "services/Small.php", language: "php", symbol_count: 13, last_modified: 0 }],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 13,
+      file_count: 1,
+    });
+
+    // Default thresholds → not flagged
+    const defaultR = await findPhpGodModel("test", { scope: "all" });
+    expect(defaultR.models.find((m) => m.name === "SmallService")).toBeUndefined();
+
+    // Lowered threshold → flagged
+    const tightR = await findPhpGodModel("test", { scope: "all", min_methods: 10 });
+    const hit = tightR.models.find((m) => m.name === "SmallService");
+    expect(hit).toBeDefined();
+    expect(hit!.reasons.some((x) => x.includes("methods: 12 > 10"))).toBe(true);
+  });
+
+  it("does NOT flag tiny non-AR class even with scope=all", async () => {
+    const svc = makePlainClassSym("TinyHelper", "helpers/Tiny.php", 1, 50);
+    const methods = Array.from({ length: 3 }, (_, i) =>
+      makeMethodSym(`m${i}`, svc.id, "helpers/Tiny.php", 5 + i),
+    );
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp/test",
+      symbols: [svc, ...methods],
+      files: [{ path: "helpers/Tiny.php", language: "php", symbol_count: 4, last_modified: 0 }],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 4,
+      file_count: 1,
+    });
+
+    const r = await findPhpGodModel("test", { scope: "all" });
+    expect(r.models.find((m) => m.name === "TinyHelper")).toBeUndefined();
   });
 });

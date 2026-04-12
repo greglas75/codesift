@@ -441,3 +441,128 @@ class Plain {
     expect(synthetic).toHaveLength(0);
   });
 });
+
+describe("extractPhpSymbols — interface/trait PHPDoc synthesis", () => {
+  it("synthesizes @property field on an interface", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @property int $id
+ * @property string $name
+ */
+interface Identifiable {
+    public function getId(): int;
+}
+`);
+    const iface = symbols.find(s => s.name === "Identifiable" && s.kind === "interface");
+    expect(iface).toBeDefined();
+
+    const idField = symbols.find(s => s.name === "id" && s.kind === "field");
+    const nameField = symbols.find(s => s.name === "name" && s.kind === "field");
+
+    expect(idField).toBeDefined();
+    expect(nameField).toBeDefined();
+    expect(idField!.meta?.synthetic).toBe(true);
+    expect(idField!.parent).toBe(iface!.id);
+    expect(idField!.signature).toBe("int");
+    expect(nameField!.meta?.synthetic).toBe(true);
+  });
+
+  it("synthesizes @property and @method on a trait", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @property string $timestamp
+ * @method void touch()
+ */
+trait Timestamps {
+}
+`);
+    const trait = symbols.find(s => s.name === "Timestamps" && s.kind === "type");
+    expect(trait).toBeDefined();
+
+    const timestamp = symbols.find(s => s.name === "timestamp" && s.kind === "field");
+    const touch = symbols.find(s => s.name === "touch" && s.kind === "method");
+
+    expect(timestamp).toBeDefined();
+    expect(touch).toBeDefined();
+    expect(timestamp!.meta?.synthetic).toBe(true);
+    expect(touch!.meta?.synthetic).toBe(true);
+    expect(timestamp!.parent).toBe(trait!.id);
+    expect(touch!.parent).toBe(trait!.id);
+  });
+
+  it("dedups synthetic @method against real trait method", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @method array getPosts()
+ */
+trait HasPosts {
+    public function getPosts(): array {
+        return [];
+    }
+}
+`);
+    const getPosts = symbols.filter(s => s.name === "getPosts");
+    expect(getPosts).toHaveLength(1);
+    expect(getPosts[0].meta?.synthetic).toBeUndefined();
+  });
+
+  it("does not synthesize when interface has no docblock", async () => {
+    const symbols = await parse(`<?php
+interface Plain {
+    public function hello(): void;
+}
+`);
+    const synthetic = symbols.filter(s => s.meta?.synthetic);
+    expect(synthetic).toHaveLength(0);
+  });
+});
+
+describe("extractPhpSymbols — interface/trait synthesis edge cases", () => {
+  it("handles @property-read and @property-write on interfaces", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @property-read int $id
+ * @property-write string $password
+ */
+interface Credentials {
+}
+`);
+    const id = symbols.find(s => s.name === "id" && s.kind === "field");
+    const password = symbols.find(s => s.name === "password" && s.kind === "field");
+    expect(id).toBeDefined();
+    expect(password).toBeDefined();
+    expect(id!.meta?.synthetic).toBe(true);
+    expect(password!.meta?.synthetic).toBe(true);
+  });
+
+  it("each trait synthesizes only from its own docblock, not a sibling's", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @property string $a
+ */
+trait FirstTrait {}
+
+/**
+ * @property string $b
+ */
+trait SecondTrait {}
+`);
+    const first = symbols.find(s => s.name === "FirstTrait");
+    const second = symbols.find(s => s.name === "SecondTrait");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    const aField = symbols.find(s => s.name === "a" && s.kind === "field");
+    const bField = symbols.find(s => s.name === "b" && s.kind === "field");
+    expect(aField).toBeDefined();
+    expect(bField).toBeDefined();
+    expect(aField!.parent).toBe(first!.id);
+    expect(bField!.parent).toBe(second!.id);
+
+    // Neither trait should have BOTH fields — each only synthesizes its own
+    const firstChildren = symbols.filter(s => s.parent === first!.id);
+    const secondChildren = symbols.filter(s => s.parent === second!.id);
+    expect(firstChildren.map(s => s.name).sort()).toEqual(["a"]);
+    expect(secondChildren.map(s => s.name).sort()).toEqual(["b"]);
+  });
+});

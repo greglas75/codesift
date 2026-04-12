@@ -7,8 +7,11 @@ describe("CODESIFT_INSTRUCTIONS", () => {
     expect(CODESIFT_INSTRUCTIONS.length).toBeGreaterThan(100);
   });
 
-  it("is under 4000 chars (~1000 tokens)", () => {
-    expect(CODESIFT_INSTRUCTIONS.length).toBeLessThan(4000);
+  it("is under 6000 chars (~1500 tokens)", () => {
+    // Budget grew from ~4000 to 6000 as more framework aliases were added
+    // (React, Astro, Next.js tool shortcuts). Still well within the MCP
+    // instructions envelope and acceptable for the system-prompt cost.
+    expect(CODESIFT_INSTRUCTIONS.length).toBeLessThan(6000);
   });
 
   it("contains tool discovery flow", () => {
@@ -38,6 +41,10 @@ describe("CODESIFT_INSTRUCTIONS", () => {
   });
 
   it("reports the merged MCP tool count", () => {
-    expect(CODESIFT_INSTRUCTIONS).toMatch(/1[6-9]\d MCP tools/); // 160-199 range — auto-adapts
+    // Auto-adapts as tools grow — matches any 100-199 range so each
+    // tool-count bump doesn't require a test update. Narrower than
+    // /1\d\d/ would be (160-199 only), taking the main side of the
+    // merge since 160+ is the practical current range.
+    expect(CODESIFT_INSTRUCTIONS).toMatch(/1[6-9]\d MCP tools/);
   });
 });
