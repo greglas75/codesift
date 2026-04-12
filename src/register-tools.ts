@@ -484,7 +484,7 @@ function hasJsxFilesShallow(
 // Tool definition type
 // ---------------------------------------------------------------------------
 
-interface ToolDefinition {
+export interface ToolDefinition {
   name: string;
   description: string;
   schema: Record<string, z.ZodTypeAny>;
@@ -647,9 +647,9 @@ export const CORE_TOOL_NAMES = new Set([
   "analyze_project",         // project profile
   "get_extractor_versions",  // cache invalidation
   "index_status",            // meta: check if repo is indexed
-  // --- Astro tools ---
+  // --- Astro tools (7 core) ---
   "astro_analyze_islands",
-  "astro_hydration_audit",
+  // astro_hydration_audit: discoverable — use astro_audit for full check or call directly
   "astro_route_map",
   "astro_config_analyze",
   "astro_actions_audit",
@@ -3941,88 +3941,36 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    name: "analyze_schema_complexity",
+    name: "sql_audit",
     category: "analysis" as ToolCategory,
-    searchHint: "schema complexity god table column count FK index score refactor",
-    description: "Per-table complexity score based on column count, FK relationships, and indexes. Identifies god tables needing refactoring. Sorted by score descending.",
+    searchHint: "SQL audit composite drift orphan lint DML safety complexity god table schema diagnostic",
+    description: "Composite SQL audit — runs 5 diagnostic gates (drift, orphan, lint, dml, complexity) in one call. Use this instead of calling the individual gate functions separately.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      checks: z.array(z.enum(["drift", "orphan", "lint", "dml", "complexity"])).optional().describe("Subset of gates to run (default: all 5)"),
       file_pattern: z.string().optional().describe("Scope to files matching pattern"),
-      top_n: zNum().describe("Return top N most complex tables (default: 50)"),
+      max_results: zNum().describe("Max DML findings per pattern (default: 200)"),
     },
     handler: async (args: Record<string, unknown>) => {
-      const { analyzeSchemaComplexity } = await import("./tools/sql-tools.js");
-      const opts: Parameters<typeof analyzeSchemaComplexity>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      if (args.top_n != null) opts!.top_n = args.top_n as number;
-      const result = await analyzeSchemaComplexity(args.repo as string, opts);
+      const { sqlAudit } = await import("./tools/sql-tools.js");
+      const opts: Parameters<typeof sqlAudit>[1] = {};
+      if (args.checks != null) opts.checks = args.checks as ("drift" | "orphan" | "lint" | "dml" | "complexity")[];
+      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
+      if (args.max_results != null) opts.max_results = args.max_results as number;
+      const result = await sqlAudit(args.repo as string, opts);
       const parts: string[] = [];
-      parts.push(`Schema complexity: ${result.tables.length} tables`);
-      parts.push(`${"Table".padEnd(30)} ${"Cols".padStart(5)} ${"FKs".padStart(4)} ${"Idx".padStart(4)} ${"Score".padStart(7)}`);
-      for (const t of result.tables) {
-        parts.push(`  ${t.name.padEnd(28)} ${String(t.column_count).padStart(5)} ${String(t.fk_count).padStart(4)} ${String(t.index_count).padStart(4)} ${t.score.toFixed(1).padStart(7)}`);
-      }
-      return parts.join("\n");
-    },
-  },
-  {
-    name: "scan_dml_safety",
-    category: "analysis" as ToolCategory,
-    searchHint: "DML safety SQL DELETE UPDATE SELECT star WHERE clause unbounded dangerous query",
-    description: "Scan codebase for unsafe SQL DML patterns: DELETE/UPDATE without WHERE (data loss risk), SELECT * (unbounded reads). Cross-language — finds SQL in .ts, .py, .go, .php files.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Scope to files matching pattern"),
-      max_results: zNum().describe("Max findings per pattern (default: 200)"),
-    },
-    handler: async (args: Record<string, unknown>) => {
-      const { scanDmlSafety } = await import("./tools/sql-tools.js");
-      const opts: Parameters<typeof scanDmlSafety>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      if (args.max_results != null) opts!.max_results = args.max_results as number;
-      const result = await scanDmlSafety(args.repo as string, opts);
-      const parts: string[] = [];
-      parts.push(`DML safety: ${result.summary.total} findings across ${result.summary.files_scanned} files`);
-      for (const [rule, count] of Object.entries(result.summary.by_rule)) {
-        parts.push(`  ${rule}: ${count}`);
-      }
-      const high = result.findings.filter((f) => f.severity === "high");
-      if (high.length > 0) {
-        parts.push("\n⚠ HIGH RISK:");
-        for (const f of high.slice(0, 20)) {
-          parts.push(`  [${f.rule}] ${f.file}:${f.line}  ${f.context ?? ""}`);
-        }
-      }
-      return parts.join("\n");
-    },
-  },
-  {
-    name: "lint_schema",
-    category: "analysis" as ToolCategory,
-    searchHint: "lint SQL schema anti-pattern primary key wide table duplicate index design",
-    description: "Lint SQL schema for anti-patterns: missing primary key, wide tables (>20 cols), duplicate index names. Conservative ruleset with near-zero false positives.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Scope to files matching pattern"),
-    },
-    handler: async (args: Record<string, unknown>) => {
-      const { lintSchema } = await import("./tools/sql-tools.js");
-      const opts: Parameters<typeof lintSchema>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      const result = await lintSchema(args.repo as string, opts);
-      const parts: string[] = [];
-      parts.push(`Schema lint: ${result.summary.total} finding${result.summary.total === 1 ? "" : "s"}`);
-      for (const [rule, count] of Object.entries(result.summary.by_rule)) {
-        parts.push(`  ${rule}: ${count}`);
+      parts.push(`SQL audit: ${result.summary.gates_run} gates run, ${result.summary.gates_passed} passed, ${result.summary.gates_failed} failed`);
+      parts.push(`  Total findings:    ${result.summary.total_findings}`);
+      parts.push(`  Critical findings: ${result.summary.critical_findings}`);
+      parts.push("");
+      for (const g of result.gates) {
+        const icon = g.pass ? "✓" : (g.critical ? "✗ CRITICAL" : "⚠");
+        parts.push(`${icon} ${g.check}: ${g.summary}`);
       }
       if (result.warnings.length > 0) {
-        for (const w of result.warnings) parts.push(`⚠ ${w}`);
-      }
-      if (result.findings.length > 0) {
         parts.push("");
-        for (const f of result.findings.slice(0, 30)) {
-          parts.push(`  [${f.severity.toUpperCase()}] ${f.rule}: ${f.detail}  (${f.file}:${f.line})`);
-        }
+        parts.push("─── Warnings ───");
+        for (const w of result.warnings) parts.push(`  ⚠ ${w}`);
       }
       return parts.join("\n");
     },
@@ -4062,33 +4010,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    name: "find_orphan_tables",
-    category: "analysis" as ToolCategory,
-    searchHint: "orphan table SQL unused dead unreferenced no query no model drop candidate",
-    description: "Find SQL tables with zero references in the codebase — no DML queries, no ORM models, no FK references. Candidates for DROP TABLE.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Scope to SQL files matching pattern"),
-    },
-    handler: async (args: Record<string, unknown>) => {
-      const { findOrphanTables } = await import("./tools/sql-tools.js");
-      const opts: Parameters<typeof findOrphanTables>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      const result = await findOrphanTables(args.repo as string, opts);
-      const parts: string[] = [];
-      parts.push(`Tables: ${result.total_tables} | Orphans: ${result.orphan_count}`);
-      if (result.orphans.length > 0) {
-        parts.push("");
-        for (const o of result.orphans) {
-          parts.push(`  ${o.name.padEnd(30)} ${o.column_count} cols  ${o.file}:${o.line}`);
-        }
-      } else {
-        parts.push("No orphan tables found — all tables have at least one reference.");
-      }
-      return parts.join("\n");
-    },
-  },
-  {
     name: "search_columns",
     category: "search" as ToolCategory,
     searchHint: "search column SQL table field name type database schema find",
@@ -4119,46 +4040,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return parts.join("\n");
     },
   },
-  {
-    name: "analyze_schema_drift",
-    category: "analysis" as ToolCategory,
-    searchHint: "schema drift ORM Prisma Drizzle SQL mismatch migration type field comparison database",
-    description: "Detect schema drift between ORM models (Prisma) and SQL schema. Flags fields in ORM not in SQL, SQL columns not in ORM, and type mismatches. Catches 'forgot to run migration' bugs before production.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Scope analysis to files matching pattern"),
-    },
-    handler: async (args: Record<string, unknown>) => {
-      const { analyzeSchemaDrift } = await import("./tools/sql-tools.js");
-      const opts: Parameters<typeof analyzeSchemaDrift>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      const result = await analyzeSchemaDrift(args.repo as string, opts);
-      const parts: string[] = [];
-      parts.push(`Schema drift: ${result.summary.total} issue${result.summary.total === 1 ? "" : "s"}`);
-      parts.push(`  extra in ORM:     ${result.summary.extra_in_orm}`);
-      parts.push(`  extra in SQL:     ${result.summary.extra_in_sql}`);
-      parts.push(`  type mismatches:  ${result.summary.type_mismatches}`);
-      parts.push(`  ORMs detected:    ${result.orms_detected.join(", ") || "(none)"}`);
-      if (result.warnings.length > 0) {
-        parts.push("");
-        for (const w of result.warnings) parts.push(`⚠ ${w}`);
-      }
-      if (result.drifts.length > 0) {
-        parts.push("");
-        parts.push("─── Drifts ───");
-        for (const d of result.drifts.slice(0, 50)) {
-          const loc = d.orm_file ? `${d.orm_file}:${d.orm_line}` : (d.sql_file ? `${d.sql_file}:${d.sql_line}` : "");
-          parts.push(`  [${d.kind}] ${loc}`);
-          parts.push(`    ${d.detail}`);
-        }
-        if (result.drifts.length > 50) {
-          parts.push(`  ... and ${result.drifts.length - 50} more`);
-        }
-      }
-      return parts.join("\n");
-    },
-  },
-
   // --- Astro v6 migration check ---
   {
     name: "astro_migration_check",
