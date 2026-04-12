@@ -973,13 +973,18 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
   }
   const config = loadConfig();
   let meta = await getRepo(config.registryPath, resolved);
-  if (!meta && resolved !== repoName) {
-    // CWD-based name didn't match — if there's exactly 1 repo, use it
+  if (!meta && !repoName) {
+    // CWD-based name didn't match — search all repos by root path
+    const cwd = process.cwd();
     const allRepos = await listRegistryRepos(config.registryPath);
-    if (allRepos.length === 1) {
-      const only = allRepos[0]!;
-      resolved = only.name;
-      meta = only;
+    const byRoot = allRepos.find((r) => r.root === cwd);
+    if (byRoot) {
+      resolved = byRoot.name;
+      meta = byRoot;
+    } else if (allRepos.length === 1) {
+      // Single-repo fallback
+      resolved = allRepos[0]!.name;
+      meta = allRepos[0]!;
     }
   }
   if (!meta) return null;

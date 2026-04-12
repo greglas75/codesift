@@ -1,3 +1,4 @@
+<!-- codesift-rules-start -->
 <!-- codesift-rules v0.1.0 hash:PLACEHOLDER -->
 
 # CodeSift MCP — Agent Rules (Gemini / GEMINI.md)
@@ -252,3 +253,4 @@ Installs two hooks in `.claude/settings.local.json`:
 - **PostToolUse** (`postindex-file`) — auto-runs `index_file` after `Edit` or `Write`
 
 This ensures the index stays current without manual `index_file` calls after every edit.
+<!-- codesift-rules-end -->
