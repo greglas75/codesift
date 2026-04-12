@@ -13,14 +13,10 @@
  * BM25-only path runs without API key. Semantic path requires
  * CODESIFT_OPENAI_API_KEY or CODESIFT_VOYAGE_API_KEY.
  *
- * Uses the local codesift-mcp repo as the benchmark target. Run
- * `codesift index .` first if needed.
+ * Uses the local codesift-mcp repo as the benchmark target.
+ * Run codesift index . from the project root if not indexed yet.
  *
- * Usage: npx vitest run scripts/run-plan-turn-benchmark.ts
- *    OR: npx tsx --conditions=require scripts/run-plan-turn-benchmark.ts
- *
- * Note: run via vitest for correct ESM module resolution with prisma-ast alias.
- * Direct tsx invocation may fail if @mrleebo/prisma-ast CJS path is missing.
+ * Usage: npx tsx scripts/run-plan-turn-benchmark.ts
  */
 
 import { readFileSync } from "node:fs";
@@ -28,19 +24,11 @@ import { join } from "node:path";
 import { planTurn, _resetPlanTurnCaches } from "../src/tools/plan-turn-tools.js";
 import { listAllRepos } from "../src/tools/index-tools.js";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 interface BenchEntry {
   query: string;
   expected_tools: string[];
   category: string;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -58,26 +46,19 @@ function loadFixture(): BenchEntry[] {
     console.error((err as Error).message);
     process.exit(1);
   }
-
-  const entries: BenchEntry[] = raw
+  return raw
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line, i) => {
       try {
         return JSON.parse(line) as BenchEntry;
-      } catch (err) {
+      } catch {
         console.error(`ERROR: Invalid JSON on line ${i + 1}: ${line}`);
         process.exit(1);
       }
     });
-
-  return entries;
 }
-
-// ---------------------------------------------------------------------------
-// Core logic — exported so vitest can run it as a test
-// ---------------------------------------------------------------------------
 
 export async function runBenchmark(): Promise<{
   hits: number;
@@ -96,9 +77,7 @@ export async function runBenchmark(): Promise<{
 
   const repos = (await listAllRepos()) as string[];
   if (repos.length === 0) {
-    throw new Error(
-      "No repos are indexed. Run `codesift index .` from the project root first."
-    );
+    throw new Error("No repos are indexed. Run codesift index . first.");
   }
   const codesiftRepo = repos.find((r) => r.includes("codesift-mcp"));
   const repoName = codesiftRepo ?? repos[0]!;
@@ -118,7 +97,7 @@ export async function runBenchmark(): Promise<{
     let result;
     try {
       result = await planTurn(repoName, entry.query, { skip_session: true });
-    } catch (err) {
+    } catch {
       failures.push({ query: entry.query, category: entry.category, top5: [] });
       continue;
     }
@@ -130,24 +109,18 @@ export async function runBenchmark(): Promise<{
       warmLatencies.push(latencyMs);
     }
 
-    // Gap queries: hit if gap_analysis set OR confidence is very low
-    if (entry.category === "gap") {
-      const hasGap = result.gap_analysis !== undefined;
-      const lowConf = result.confidence <= 0.3;
-      if (hasGap || lowConf) {
-        hits++;
-      } else {
-        failures.push({
-          query: entry.query,
-          category: entry.category,
-          top5: result.tools.slice(0, 5).map((t) => t.name),
-        });
-      }
-      continue;
-    }
-
     const top5Names = result.tools.slice(0, 5).map((t) => t.name);
-    const isHit = entry.expected_tools.some((e) => top5Names.includes(e));
+
+    let isHit: boolean;
+    if (entry.expected_tools.length === 0) {
+      // Pure gap query: pass if gap_analysis present or very low confidence
+      isHit = result.gap_analysis !== undefined || result.confidence <= 0.3;
+    } else {
+      isHit = entry.expected_tools.some((e) => top5Names.includes(e));
+      if (!isHit && entry.category === "gap") {
+        isHit = result.gap_analysis !== undefined;
+      }
+    }
 
     if (isHit) {
       hits++;
@@ -168,10 +141,6 @@ export async function runBenchmark(): Promise<{
   };
 }
 
-// ---------------------------------------------------------------------------
-// CLI entry point
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
   console.log("=".repeat(60));
   console.log("plan_turn Benchmark Runner");
@@ -181,16 +150,13 @@ async function main(): Promise<void> {
   try {
     const repos = (await listAllRepos()) as string[];
     if (repos.length === 0) {
-      console.error(
-        "ERROR: No repos are indexed. Run `codesift index .` from the project root first."
-      );
+      console.error("ERROR: No repos indexed. Run codesift index . first.");
       process.exit(2);
     }
     const codesiftRepo = repos.find((r) => r.includes("codesift-mcp"));
     repoName = codesiftRepo ?? repos[0]!;
   } catch (err) {
-    console.error("ERROR: Could not list repos.");
-    console.error((err as Error).message);
+    console.error("ERROR: Could not list repos.", (err as Error).message);
     process.exit(2);
   }
   console.log(`\nUsing repo: ${repoName}\n`);
@@ -216,15 +182,14 @@ async function main(): Promise<void> {
 
   const SUCCESS_THRESHOLD = 0.70;
   if (result.recall >= SUCCESS_THRESHOLD) {
-    console.log(`\nPASS — Recall@5 ${recallPct}% >= ${(SUCCESS_THRESHOLD * 100).toFixed(0)}% threshold`);
+    console.log(`\nPASS - Recall@5 ${recallPct}% >= ${(SUCCESS_THRESHOLD * 100).toFixed(0)}% threshold`);
     process.exit(0);
   } else {
-    console.log(`\nFAIL — Recall@5 ${recallPct}% < ${(SUCCESS_THRESHOLD * 100).toFixed(0)}% threshold`);
+    console.log(`\nFAIL - Recall@5 ${recallPct}% < ${(SUCCESS_THRESHOLD * 100).toFixed(0)}% threshold`);
     process.exit(1);
   }
 }
 
-// Run as CLI when invoked directly
 main().catch((err: unknown) => {
   console.error("Unhandled error:", (err as Error).message ?? err);
   process.exit(1);

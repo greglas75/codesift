@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 161 MCP tools (48 core + 113 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 146 MCP tools (51 core + 95 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 **Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
@@ -186,9 +186,9 @@ codesift retrieve local/my-project \
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (161 total — 48 core + 113 discoverable)
+## MCP tools (146 total — 51 core + 95 discoverable)
 
-When running as an MCP server, CodeSift exposes 48 core tools directly. The remaining 113 niche tools are discoverable via `discover_tools` and `describe_tools`.
+When running as an MCP server, CodeSift exposes 51 core tools directly. The remaining 95 niche tools are discoverable via `discover_tools` and `describe_tools`, or via `plan_turn` which routes a natural-language task to the best-fit tools and auto-reveals any hidden ones.
 
 | Category | Tools |
 |----------|-------|
@@ -204,7 +204,7 @@ When running as an MCP server, CodeSift exposes 48 core tools directly. The rema
 | **Diff** | `diff_outline`, `changed_symbols` |
 | **Batch retrieval** | `codebase_retrieval` (batch multiple sub-queries with shared token budget, incl. `type: "conversation"`) |
 | **Security** | `scan_secrets` (AST-aware secret detection, ~1,100 rules, masked output) |
-| **PHP / Yii2** | `resolve_php_namespace` (PSR-4 FQCN→file), `analyze_activerecord` (model schema: tableName, relations, rules, behaviors), `trace_php_event` (event→listener chain), `find_php_views` (render→view mapping), `resolve_php_service` (Yii::\$app→concrete class), `php_security_scan` (compound: SQL injection, XSS, eval, exec, unserialize), `php_project_audit` (9-gate meta-tool), `find_php_n_plus_one` (foreach N+1 detection), `find_php_god_model` (oversized AR model detector) |
+| **PHP / Yii2** | `resolve_php_namespace` (PSR-4 FQCN→file), `trace_php_event` (event→listener chain), `find_php_views` (render→view mapping), `resolve_php_service` (Yii::\$app→concrete class), `php_security_scan` (compound: SQL injection, XSS, eval, exec, unserialize), `php_project_audit` (meta-tool — includes ActiveRecord analysis, N+1 detection, god-model detection via `checks=` parameter) |
 | **Analysis** | `find_dead_code` (framework-aware incl. React/Next.js route entry points), `analyze_complexity` (React: hook_count, state_count, effect_count, jsx_depth), `find_clones`, `analyze_hotspots`, `search_patterns` (33 built-in: JS/TS ×9, React ×20, Kotlin ×6, PHP ×4), `list_patterns`, `frequency_analysis` (AST subtree clustering), `find_perf_hotspots` (6 perf anti-patterns: unbounded queries, sync I/O, N+1 loops, unbounded parallel, missing pagination, expensive recompute), `explain_query` (Prisma→SQL with EXPLAIN ANALYZE), `audit_scan` (5-gate composite: dead code + clones + patterns + complexity + hotspots) |
 | **Architecture** | `classify_roles` (symbol role classification via call graph), `check_boundaries` (architecture boundary enforcement), `ast_query` (structural grep via tree-sitter), `fan_in_fan_out` (import graph coupling: most-imported, most-dependent, hub files, coupling score 0-100), `co_change_analysis` (temporal coupling from git history: Jaccard similarity, cluster detection), `architecture_summary` (one-call composite: stack + communities + coupling + circular deps + LOC + entry points, Mermaid output) |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
@@ -285,7 +285,7 @@ Full PHP code intelligence with first-on-market Yii2 framework awareness. No oth
 **Yii2 framework awareness:**
 - Convention routing: `trace_route("site/index")` resolves to `SiteController::actionIndex()` (incl. module nesting)
 - `analyze_project` detects Yii2 via `composer.json` and extracts: controllers, models, modules, widgets, behaviors, components, assets, config files
-- 9 PHP-specific tools: namespace resolution (PSR-4), ActiveRecord schema extraction (relations, rules, behaviors), event/listener tracing, view mapping, service locator resolution, security scanning, project audit (9-gate), N+1 query detection, god-model detection
+- 6 PHP-specific tools: namespace resolution (PSR-4), event/listener tracing, view mapping, service locator resolution, security scanning, project audit (meta-tool with ActiveRecord analysis, N+1 detection, god-model detection via `checks=` parameter)
 - **Auto-load**: PHP tools are automatically enabled when `composer.json` is detected at CWD — no need to call `discover_tools`/`describe_tools` first
 
 **Laravel support:**
@@ -296,8 +296,8 @@ Full PHP code intelligence with first-on-market Yii2 framework awareness. No oth
 # Trace a Yii2 route
 trace_route(repo, path="site/about")
 
-# Analyze ActiveRecord models
-analyze_activerecord(repo, model_name="User")
+# Analyze ActiveRecord models (via php_project_audit)
+php_project_audit(repo, checks=["activerecord"], model_name="User")
 
 # PHP security scan (8 parallel checks)
 php_security_scan(repo)
@@ -310,18 +310,11 @@ resolve_php_namespace(repo, class_name="App\\Models\\User")
 
 ### Next.js intelligence
 
-Deep Next.js static analysis — 10 dedicated tools covering routing, rendering, security, SEO, and architecture:
+Deep Next.js static analysis — 3 core tools covering routing, rendering, security, SEO, and architecture:
 
-- `framework_audit` — one-call meta-audit: runs route map + metadata + server actions + boundary + data flow checks, returns composite score with prioritized findings
+- `framework_audit` — one-call meta-audit: runs route map + metadata + server actions + boundary + data flow + middleware + component classification checks. Returns composite score with prioritized findings. Use `checks=` parameter to run individual checks (e.g., `checks=["server-actions"]`, `checks=["boundary"]`, `checks=["link-integrity"]`, `checks=["data-flow"]`, `checks=["middleware"]`, `checks=["components"]`, `checks=["api-contract"]`)
 - `nextjs_route_map` — maps all App Router and Pages Router routes with rendering strategy (SSG/SSR/ISR/PPR), dynamic params, route groups, parallel routes, and intercepting routes
 - `nextjs_metadata_audit` — detects missing/incomplete metadata exports, OpenGraph gaps, missing robots/sitemap, and SEO anti-patterns across all routes
-- `nextjs_audit_server_actions` — security review of `"use server"` functions: input validation, auth checks, rate limiting, error exposure, and CSRF protection
-- `nextjs_api_contract` — extracts API route contracts: HTTP methods, request/response shapes, middleware chain, and error responses
-- `nextjs_boundary_analyzer` — analyzes `"use client"` boundaries: identifies unnecessary client components, bundle impact, and suggests server component opportunities
-- `nextjs_link_integrity` — finds broken internal `<Link href>` references, orphan pages, and redirect chain issues
-- `nextjs_data_flow` — detects data fetching waterfalls, redundant fetches, missing caching, and suggests parallel/streaming patterns
-- `nextjs_middleware_coverage` — maps middleware.ts matcher patterns against routes to find unprotected endpoints
-- `analyze_nextjs_components` — classifies components as server/client with confidence scoring and `suggested_fix` when boundary is suboptimal
 
 **Auto-load**: Next.js tools are automatically enabled when `next` is detected in package.json — no manual discovery needed.
 
@@ -348,7 +341,8 @@ Deep Next.js static analysis — 10 dedicated tools covering routing, rendering,
 | Rename across files | `rename_symbol` | LSP type-safe rename in all files at once |
 | Detect hardcoded secrets | `scan_secrets` | ~1,100 rules, AST-aware, masked output, auto-cached |
 | Ranked text search | `search_text(ranked=true)` | Classifies hits by function, saves follow-up get_symbol calls |
-| Find hidden tools | `discover_tools` + `describe_tools` | 102 tools hidden by default — search by keyword, get full schema |
+| Find hidden tools | `discover_tools` + `describe_tools` | 95 tools hidden by default — search by keyword, get full schema |
+| Route task → tools | `plan_turn(query="...")` | Natural-language router: ranked tool/symbol/file recommendations with auto-reveal |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
@@ -431,7 +425,7 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 161 tools to AI agents (48 core + 113 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 146 tools to AI agents (51 core + 95 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 
@@ -688,7 +682,7 @@ TypeScript, JavaScript (JSX/TSX), Python, Go, Rust, **Kotlin**, Java, Ruby, PHP,
 **Astro** has deep framework intelligence — the first and only static code intelligence for Astro in the MCP ecosystem. 4 dedicated tools: `astro_analyze_islands` (detect all `client:*`/`server:defer` directives, group by framework, track server islands), `astro_hydration_audit` (12 anti-pattern detectors AH01-AH12 with A/B/C/D scoring — catches `client:load` on Astro components, islands in loops, missing framework hints, below-fold eager hydration, and more), `astro_route_map` (file-based routing analysis with dynamic params, route conflicts, rendering mode per page, endpoint method detection), `astro_config_analyze` (tree-sitter AST walker for `astro.config.mjs` — extracts output mode, adapter, integrations, i18n, redirects with `config_resolution` honesty field). Also: 6 Astro anti-patterns in `search_patterns`, Astro-aware `trace_route`, `analyze_project` returns full `astro_conventions`, `.astro` extension normalization in import graph, framework detection for dead-code analysis, `.mdx` file indexing. Template parser (`parseAstroTemplate`) extracts islands, slots, component usages, and directives from HTML template section with balanced-brace tracking, conditional/loop detection, and landmark section awareness.
 
 Kotlin support includes full tree-sitter parsing with a dedicated extractor for functions, classes (data/sealed/enum/abstract/annotation), interfaces, objects (singleton + companion), properties (val/var/const), type aliases, extension functions, suspend functions, generics, KDoc comments, and JUnit test detection (@Test, @BeforeEach, @AfterEach, @BeforeAll, @AfterAll). Route tracing supports Ktor DSL and Spring Boot Kotlin. Six Kotlin anti-patterns are built-in.
-| PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (9 tools: resolve_php_namespace, analyze_activerecord, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit, find_php_n_plus_one, find_php_god_model), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
+| PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (6 tools: resolve_php_namespace, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
 
 ## Development
 
@@ -698,7 +692,7 @@ cd codesift-mcp
 npm install
 npm run download-wasm   # Download tree-sitter WASM grammars
 npm run build           # TypeScript compilation
-npm test                # Run tests (Vitest, 1300+ tests)
+npm test                # Run tests (Vitest, 2900+ tests)
 npm run test:coverage   # Coverage report
 npm run lint            # Type check (tsc --noEmit)
 ```
@@ -751,7 +745,7 @@ If using `npx -y codesift-mcp` (the default in MCP config), the latest version i
 ### Checklist before publishing
 
 - [ ] `npm run build` — 0 TypeScript errors
-- [ ] `npm test` — 1300+ tests pass
+- [ ] `npm test` — 2900+ tests pass
 - [ ] `rules/codesift.md` updated if hints or tools changed
 - [ ] `src/instructions.ts` updated if rules changed (compact version)
 - [ ] `README.md` updated if features added
@@ -766,7 +760,7 @@ BSL-1.1
 <!-- Evidence Map
 | Section | Source file(s) |
 |---------|---------------|
-| Tool count (66) | src/register-tools.ts (64 in TOOL_DEFINITIONS + discover_tools + describe_tools) |
+| Tool count (146) | src/register-tools.ts (TOOL_DEFINITIONS array, 51 in CORE_TOOL_NAMES, 95 discoverable) |
 | Quick install | package.json:bin (line 8-11) |
 | Quick start | src/cli/commands.ts |
 | Benchmark | benchmarks/ directory, previously measured |
@@ -783,7 +777,7 @@ BSL-1.1
 | Secret scanning | src/tools/secret-tools.ts, @sanity-labs/secret-scan (package.json) |
 | Languages | src/parser/parser-manager.ts, src/parser/extractors/ (incl. kotlin.ts) |
 | Kotlin support | kotlin.ts, graph-tools KEYWORD_SET, complexity when/?.let, test-file Test.kt, lsp-tools .kt, import-graph FQN, route-tools Ktor/Spring, pattern-tools 6 anti-patterns |
-| PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (9 tools: resolve_php_namespace, analyze_activerecord, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit, find_php_n_plus_one, find_php_god_model), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
+| PHP/Yii2 support | src/parser/extractors/php.ts (+ PHPDoc @property/@method synthesis), src/tools/php-tools.ts (6 tools: resolve_php_namespace, trace_php_event, find_php_views, resolve_php_service, php_security_scan, php_project_audit), src/tools/project-tools.ts (Yii2Conventions), src/tools/route-tools.ts (findYii2Handlers, findLaravelHandlers), src/tools/pattern-tools.ts (8 PHP anti-patterns), src/tools/graph-tools.ts (PHP method call detection), src/utils/import-graph.ts (PHP require/include + PSR-4 cross-file edges via resolvePhpNamespace), src/utils/walk.ts (BACKUP_FILE_PATTERNS auto-exclusion), src/parser/parser-manager.ts (error recovery try/catch), src/lsp/lsp-servers.ts (Intelephense), scripts/download-wasm.ts (tree-sitter-php@0.23.12) |
 | Development | package.json:scripts (line 19-28) |
 | Git URL | package.json:repository (line 62-64) |
 -->

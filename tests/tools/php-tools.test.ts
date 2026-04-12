@@ -224,20 +224,18 @@ describe("PHP tools auto-load on composer.json detection", () => {
     expect(source).toContain("FRAMEWORK_TOOL_GROUPS");
     expect(source).toContain('"composer.json"');
 
-    // Verify all 9 PHP tools are in the auto-load list
+    // Verify remaining 6 PHP tools are in the auto-load list
+    // (3 sub-tools absorbed into php_project_audit in Phase 1 consolidation)
     const composerSection = source.slice(
       source.indexOf('"composer.json"'),
       source.indexOf('"composer.json"') + 800,
     );
     expect(composerSection).toContain("resolve_php_namespace");
-    expect(composerSection).toContain("analyze_activerecord");
     expect(composerSection).toContain("trace_php_event");
     expect(composerSection).toContain("find_php_views");
     expect(composerSection).toContain("resolve_php_service");
     expect(composerSection).toContain("php_security_scan");
     expect(composerSection).toContain("php_project_audit");
-    expect(composerSection).toContain("find_php_n_plus_one");
-    expect(composerSection).toContain("find_php_god_model");
   });
 
   it("has detectAutoLoadTools function that checks file existence", async () => {
@@ -247,26 +245,26 @@ describe("PHP tools auto-load on composer.json detection", () => {
     expect(source).toContain("existsSync");
   });
 
-  it("registers find_php_n_plus_one and find_php_god_model as TOOL_DEFINITIONS entries", async () => {
+  it("PHP sub-tools absorbed into php_project_audit — no longer standalone entries", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/register-tools.ts", "utf-8");
-    expect(source).toContain('name: "find_php_n_plus_one"');
-    expect(source).toContain('name: "find_php_god_model"');
-    expect(source).toContain("findPhpNPlusOne");
-    expect(source).toContain("findPhpGodModel");
+    // Sub-tools no longer have standalone TOOL_DEFINITIONS entries
+    expect(source).not.toContain('name: "find_php_n_plus_one"');
+    expect(source).not.toContain('name: "find_php_god_model"');
+    expect(source).not.toContain('name: "analyze_activerecord"');
+    // But the parent meta-tool is still registered
+    expect(source).toContain('name: "php_project_audit"');
   });
 
-  it("CLAUDE.md references the new PHP tools", async () => {
+  it("CLAUDE.md references php_project_audit as the composite tool", async () => {
     const { readFileSync } = await import("node:fs");
     const claudeMd = readFileSync("CLAUDE.md", "utf-8");
-    expect(claudeMd).toContain("find_php_n_plus_one");
-    expect(claudeMd).toContain("find_php_god_model");
+    expect(claudeMd).toContain("php_project_audit");
   });
 
-  it("README.md references the new PHP tools", async () => {
+  it("README.md references php_project_audit as the composite tool", async () => {
     const { readFileSync } = await import("node:fs");
     const readme = readFileSync("README.md", "utf-8");
-    expect(readme).toContain("find_php_n_plus_one");
-    expect(readme).toContain("find_php_god_model");
+    expect(readme).toContain("php_project_audit");
   });
 });

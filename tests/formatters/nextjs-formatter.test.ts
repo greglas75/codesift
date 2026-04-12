@@ -48,12 +48,11 @@ describe("formatNextjsComponents", () => {
   });
 });
 
-describe("analyze_nextjs_components tool registration", () => {
-  it("is included in TOOL_DEFINITIONS with category 'analysis'", () => {
+describe("analyze_nextjs_components absorbed into framework_audit", () => {
+  it("is no longer a standalone TOOL_DEFINITIONS entry", () => {
     const defs = getToolDefinitions();
     const entry = defs.find((t) => t.name === "analyze_nextjs_components");
-    expect(entry).toBeDefined();
-    expect(entry!.category).toBe("analysis");
+    expect(entry).toBeUndefined();
   });
 });
 
@@ -155,11 +154,10 @@ describe("formatNextjsBoundaryAnalyzer", () => {
   });
 });
 
-describe("nextjs_boundary_analyzer registration", () => {
-  it("registers with category 'analysis'", () => {
+describe("nextjs_boundary_analyzer absorbed into framework_audit", () => {
+  it("is no longer a standalone TOOL_DEFINITIONS entry", () => {
     const defs = getToolDefinitions();
     const entry = defs.find((t) => t.name === "nextjs_boundary_analyzer");
-    expect(entry).toBeDefined();
-    expect(entry!.category).toBe("analysis");
+    expect(entry).toBeUndefined();
   });
 });

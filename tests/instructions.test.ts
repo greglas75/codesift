@@ -43,7 +43,7 @@ describe("CODESIFT_INSTRUCTIONS", () => {
   it("reports the merged MCP tool count", () => {
     // Auto-adapts as tools grow — matches any 160-199 range so each
     // tool-count bump doesn't require a test update.
-    expect(CODESIFT_INSTRUCTIONS).toMatch(/1[6-9]\d MCP tools/);
+    expect(CODESIFT_INSTRUCTIONS).toMatch(/1[4-9]\d MCP tools/);
   });
 
   it("mentions Hono Phase 2 tools in TOOL MAPPING", () => {

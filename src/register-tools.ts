@@ -31,14 +31,11 @@ import { indexConversations, searchConversations, searchAllConversations, findCo
 import { scanSecrets } from "./tools/secret-tools.js";
 import {
   resolvePhpNamespace,
-  analyzeActiveRecord,
   tracePhpEvent,
   findPhpViews,
   resolvePhpService,
   phpSecurityScan,
   phpProjectAudit,
-  findPhpNPlusOne,
-  findPhpGodModel,
 } from "./tools/php-tools.js";
 import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
 import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
@@ -52,15 +49,8 @@ import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.
 import { astroRouteMap } from "./tools/astro-routes.js";
 import { astroActionsAudit } from "./tools/astro-actions.js";
 import { astroAudit } from "./tools/astro-audit.js";
-import { analyzeNextjsComponents } from "./tools/nextjs-component-tools.js";
 import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
 import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
-import { nextjsAuditServerActions } from "./tools/nextjs-security-tools.js";
-import { nextjsApiContract } from "./tools/nextjs-api-contract-tools.js";
-import { nextjsBoundaryAnalyzer } from "./tools/nextjs-boundary-tools.js";
-import { nextjsLinkIntegrity } from "./tools/nextjs-link-tools.js";
-import { nextjsDataFlow } from "./tools/nextjs-data-flow-tools.js";
-import { nextjsMiddlewareCoverage } from "./tools/nextjs-middleware-coverage-tools.js";
 import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
 import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
@@ -76,10 +66,8 @@ import { effectiveDjangoViewSecurity } from "./tools/django-view-security-tools.
 import { findPythonCallers } from "./tools/python-callers.js";
 import { taintTrace } from "./tools/taint-tools.js";
 import { analyzeDjangoSettings } from "./tools/django-settings.js";
-import { traceCeleryChain } from "./tools/celery-tools.js";
 import { runMypy, runPyright } from "./tools/typecheck-tools.js";
 import { analyzePythonDeps } from "./tools/python-deps-analyzer.js";
-import { findPythonCircularImports } from "./tools/python-circular-imports.js";
 import { pythonAudit } from "./tools/python-audit.js";
 import { traceFastAPIDepends } from "./tools/fastapi-depends.js";
 import { analyzeAsyncCorrectness } from "./tools/async-correctness.js";
@@ -98,15 +86,14 @@ import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, nestRequestPipeline } from "./tools/nest-tools.js";
-import { nestGraphQLMap, nestWebSocketMap, nestScheduleMap, nestTypeOrmMap, nestMicroserviceMap, nestQueueMap, nestScopeAudit, nestOpenAPIExtract } from "./tools/nest-ext-tools.js";
+import { nestAudit } from "./tools/nest-tools.js";
 import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
 import type { SymbolKind, Direction } from "./types.js";
-import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsComponents, formatNextjsRouteMap, formatNextjsMetadataAudit, formatNextjsAuditServerActions, formatNextjsApiContract, formatNextjsBoundaryAnalyzer, formatNextjsLinkIntegrity, formatNextjsDataFlow, formatNextjsMiddlewareCoverage, formatFrameworkAudit } from "./formatters.js";
-import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts, formatServerActionsAuditCompact, formatServerActionsAuditCounts, formatApiContractCompact, formatApiContractCounts, formatBoundaryAnalyzerCompact, formatBoundaryAnalyzerCounts } from "./formatters-shortening.js";
+import { formatSearchSymbols, formatFileTree, formatFileOutline, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatRepoOutline, formatSuggestQueries, formatSecrets, formatConversations, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, formatNextjsRouteMap, formatNextjsMetadataAudit, formatFrameworkAudit } from "./formatters.js";
+import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
 
 const zFiniteNumber = z.number().finite();
 
@@ -221,24 +208,7 @@ export function getToolHandle(name: string) {
 /** Framework-specific tool bundles — auto-enabled when the framework is detected in an indexed repo */
 const FRAMEWORK_TOOL_BUNDLES: Record<string, string[]> = {
   nestjs: [
-    // Wave 1
-    "nest_lifecycle_map",
-    "nest_module_graph",
-    "nest_di_graph",
-    "nest_guard_chain",
-    "nest_route_inventory",
-    // Wave 2
-    "nest_graphql_map",
-    "nest_websocket_map",
-    "nest_schedule_map",
-    "nest_typeorm_map",
-    "nest_microservice_map",
-    // Wave 3
-    "nest_request_pipeline",
-    "nest_queue_map",
-    "nest_scope_audit",
-    "nest_openapi_extract",
-    // nest_audit is already core — always visible
+    // All NestJS sub-tools absorbed into nest_audit
   ],
 };
 
@@ -278,14 +248,12 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
   // PHP / Yii2 / Laravel — detected by composer.json
   "composer.json": [
     "resolve_php_namespace",
-    "analyze_activerecord",
+    // analyze_activerecord, find_php_n_plus_one, find_php_god_model absorbed into php_project_audit
     "trace_php_event",
     "find_php_views",
     "resolve_php_service",
     "php_security_scan",
     "php_project_audit",
-    "find_php_n_plus_one",
-    "find_php_god_model",
   ],
   // Kotlin / Android / Gradle — detected by build.gradle.kts or settings.gradle.kts
   "build.gradle.kts": [
@@ -352,21 +320,6 @@ const REACT_TOOLS = [
  * Content-based (not filename), so lives outside FRAMEWORK_TOOL_GROUPS.
  */
 
-/**
- * Next.js Tier-1 tools — auto-enabled when 'next' is in package.json deps.
- * These are the 7 hidden tools; the 3 core tools (nextjs_route_map,
- * nextjs_metadata_audit, framework_audit) are always visible.
- */
-const NEXTJS_TOOLS = [
-  "analyze_nextjs_components",
-  "nextjs_audit_server_actions",
-  "nextjs_api_contract",
-  "nextjs_boundary_analyzer",
-  "nextjs_link_integrity",
-  "nextjs_data_flow",
-  "nextjs_middleware_coverage",
-];
-
 const HONO_TOOLS = [
   "trace_context_flow",
   "extract_api_contract",
@@ -421,12 +374,6 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
       );
       if (hasHono) {
         toEnable.push(...HONO_TOOLS);
-      }
-
-      // Next.js: auto-enable hidden tools when next dep is present
-      const hasNext = !!allDeps["next"];
-      if (hasNext) {
-        toEnable.push(...NEXTJS_TOOLS);
       }
     } catch { /* malformed package.json */ }
   }
@@ -2209,24 +2156,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    name: "trace_celery_chain",
-    category: "analysis",
-    requiresLanguage: "python",
-    searchHint: "python celery task shared_task delay apply_async chain group chord canvas retry orphan queue",
-    description: "Celery task tracing: tasks with policies (bind, retries, queue), .delay() call sites, canvas operators (chain/group/chord), orphan tasks.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Filter by file path substring"),
-      task_name: z.string().optional().describe("Focus on a specific task by name"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof traceCeleryChain>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      if (args.task_name != null) opts!.task_name = args.task_name as string;
-      return await traceCeleryChain(args.repo as string, opts);
-    },
-  },
-  {
     name: "run_mypy",
     category: "analysis",
     requiresLanguage: "python",
@@ -2282,24 +2211,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.check_pypi != null) opts!.check_pypi = args.check_pypi as boolean;
       if (args.check_vulns != null) opts!.check_vulns = args.check_vulns as boolean;
       return await analyzePythonDeps(args.repo as string, opts);
-    },
-  },
-  {
-    name: "find_python_circular_imports",
-    category: "analysis",
-    requiresLanguage: "python",
-    searchHint: "python circular import cycle ImportError TYPE_CHECKING DFS dependency",
-    description: "Detect Python circular imports via DFS on the import graph. Skips TYPE_CHECKING-only imports. Reports cycle paths with severity.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Filter by file path substring"),
-      max_cycles: zFiniteNumber.optional().describe("Max cycles to report (default: 50)"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof findPythonCircularImports>[1] = {};
-      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
-      if (args.max_cycles != null) opts!.max_cycles = args.max_cycles as number;
-      return await findPythonCircularImports(args.repo as string, opts);
     },
   },
   {
@@ -2364,7 +2275,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "python_audit",
     category: "analysis",
     requiresLanguage: "python",
-    searchHint: "python audit health score compound project review django security circular patterns celery dependencies dead code",
+    searchHint: "python audit health score compound project review django security circular patterns celery dependencies dead code task shared_task delay apply_async chain group chord canvas retry orphan queue import cycle ImportError TYPE_CHECKING DFS",
     description: "Compound Python project health audit: circular imports + Django settings + anti-patterns (17) + framework wiring + Celery orphans + pytest fixtures + deps + dead code. Runs in parallel, returns unified health score (0-100) + severity counts + prioritized top_risks list.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
@@ -2392,24 +2303,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args) => {
       return await resolvePhpNamespace(args.repo as string, args.class_name as string);
-    },
-  },
-  {
-    name: "analyze_activerecord",
-    category: "analysis",
-    requiresLanguage: "php",
-    searchHint: "php activerecord eloquent model schema relations rules behaviors table yii2 laravel orm",
-    description: "Extract PHP ActiveRecord/Eloquent model schema: table name, relations, validation rules, behaviors.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      model_name: z.string().optional().describe("Filter by specific model class name"),
-      file_pattern: z.string().optional().describe("Filter by file path substring"),
-    },
-    handler: async (args) => {
-      const opts: { model_name?: string; file_pattern?: string } = {};
-      if (typeof args.model_name === "string") opts.model_name = args.model_name;
-      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
-      return await analyzeActiveRecord(args.repo as string, opts);
     },
   },
   {
@@ -2482,54 +2375,17 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: "php_project_audit",
     category: "analysis",
     requiresLanguage: "php",
-    searchHint: "php project audit health quality technical debt code review comprehensive yii2 laravel",
-    description: "Compound PHP project audit: security scan + ActiveRecord analysis + health score. Runs checks in parallel.",
+    searchHint: "php project audit health quality technical debt code review comprehensive yii2 laravel activerecord eloquent model schema relations rules behaviors table orm n+1 query foreach eager loading relation god class anti-pattern too many methods oversized",
+    description: "Compound PHP project audit: security scan + ActiveRecord analysis + N+1 detection + god model detection + health score. Runs checks in parallel.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter analyzed files"),
+      checks: z.string().optional().describe("Comma-separated checks: n_plus_one, god_model, activerecord, security, events, views, services, namespace. Default: all"),
     },
     handler: async (args) => {
       const opts: { file_pattern?: string } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
       return await phpProjectAudit(args.repo as string, opts);
-    },
-  },
-  {
-    name: "find_php_n_plus_one",
-    category: "analysis",
-    requiresLanguage: "php",
-    searchHint: "php n+1 query foreach activerecord with eager loading yii2 eloquent relation",
-    description: "Detect N+1 query patterns in PHP: foreach loops accessing ActiveRecord relations without eager loading via ->with(). Yii2/Laravel aware.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      limit: z.number().optional().describe("Max findings to return (default: 100)"),
-      file_pattern: z.string().optional().describe("Substring filter on file paths (e.g. 'controllers/')"),
-    },
-    handler: async (args) => {
-      const opts: { limit?: number; file_pattern?: string } = {};
-      if (typeof args.limit === "number") opts.limit = args.limit;
-      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
-      return await findPhpNPlusOne(args.repo as string, opts);
-    },
-  },
-  {
-    name: "find_php_god_model",
-    category: "analysis",
-    requiresLanguage: "php",
-    searchHint: "php god model god class anti-pattern too many methods relations oversized yii2 activerecord",
-    description: "Find oversized ActiveRecord models (god classes) with configurable thresholds for method, relation, and line counts. Reports reasons per model.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      min_methods: z.number().optional().describe("Method count threshold (default: 50)"),
-      min_relations: z.number().optional().describe("Relation count threshold (default: 15)"),
-      min_lines: z.number().optional().describe("Line count threshold (default: 500)"),
-    },
-    handler: async (args) => {
-      const opts: { min_methods?: number; min_relations?: number; min_lines?: number } = {};
-      if (typeof args.min_methods === "number") opts.min_methods = args.min_methods;
-      if (typeof args.min_relations === "number") opts.min_relations = args.min_relations;
-      if (typeof args.min_lines === "number") opts.min_lines = args.min_lines;
-      return await findPhpGodModel(args.repo as string, opts);
     },
   },
 
@@ -2950,66 +2806,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return parts.join("\n");
     },
   },
-  // --- NestJS analysis tools ---
-  {
-    name: "nest_lifecycle_map",
-    category: "nestjs",
-    searchHint: "nestjs lifecycle hook onModuleInit onApplicationBootstrap shutdown",
-    description: "Map NestJS lifecycle hooks across the codebase — onModuleInit, onModuleDestroy, etc.",
-    schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
-    handler: async (args: { repo?: string }) => nestLifecycleMap(args.repo ?? ""),
-  },
-  {
-    name: "nest_module_graph",
-    category: "nestjs",
-    searchHint: "nestjs module dependency graph circular import boundary",
-    description: "Build NestJS module dependency graph with circular dependency detection and boundary analysis.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_modules: z.number().optional().describe("Max modules to process (default: 200)"),
-      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: json (default) or mermaid"),
-    },
-    handler: async (args: { repo?: string; max_modules?: number; output_format?: "json" | "mermaid" }) => nestModuleGraph(args.repo ?? "", args),
-  },
-  {
-    name: "nest_di_graph",
-    category: "nestjs",
-    searchHint: "nestjs dependency injection provider constructor inject graph cycle",
-    description: "Build NestJS provider DI graph with constructor injection tracking and cycle detection.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_nodes: z.number().optional().describe("Max provider nodes (default: 200)"),
-      focus: z.string().optional().describe("Path substring to filter files"),
-    },
-    handler: async (args: { repo?: string; max_nodes?: number; focus?: string }) => nestDIGraph(args.repo ?? "", args),
-  },
-  {
-    name: "nest_guard_chain",
-    category: "nestjs",
-    searchHint: "nestjs guard interceptor pipe filter middleware chain route security",
-    description: "Show guard/interceptor/pipe/filter execution chain per NestJS route (global → controller → method).",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      path: z.string().optional().describe("Filter to specific route path"),
-      max_routes: z.number().optional().describe("Max routes (default: 300)"),
-    },
-    handler: async (args: { repo?: string; path?: string; max_routes?: number }) => nestGuardChain(args.repo ?? "", args),
-  },
-  {
-    name: "nest_route_inventory",
-    category: "nestjs",
-    searchHint: "nestjs route endpoint api map inventory list all guards params",
-    description: "Full NestJS route map with guards, params, and protected/unprotected stats.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_routes: z.number().optional().describe("Max routes (default: 500)"),
-    },
-    handler: async (args: { repo?: string; max_routes?: number }) => nestRouteInventory(args.repo ?? "", args),
-  },
+  // --- NestJS analysis tools (sub-tools absorbed into nest_audit) ---
   {
     name: "nest_audit",
     category: "nestjs",
-    searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice",
+    searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice hook onModuleInit onApplicationBootstrap shutdown dependency graph circular import boundary injection provider constructor inject cycle interceptor pipe filter middleware chain security endpoint api map inventory list all params resolver query mutation subscription apollo gateway subscribemessage socketio realtime event cron interval timeout scheduled job task onevent listener entity relation onetomany manytoone database schema messagepattern eventpattern kafka rabbitmq nats transport request pipeline handler execution flow visualization bull bullmq queue processor process background worker scope transient singleton performance escalation swagger openapi documentation apiproperty apioperation apiresponse contract extract",
     description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, patterns, GraphQL, WebSocket, schedule, TypeORM, microservices.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
@@ -3018,122 +2819,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args: { repo?: string; checks?: string }) => {
       const checks = args.checks?.split(",").map((s) => s.trim()).filter(Boolean);
       return nestAudit(args.repo ?? "", checks ? { checks } : undefined);
-    },
-  },
-  // --- Wave 2 NestJS tools (nest-ext-tools.ts) ---
-  {
-    name: "nest_graphql_map",
-    category: "nestjs",
-    searchHint: "nestjs graphql resolver query mutation subscription apollo",
-    description: "Map NestJS GraphQL resolvers — Query, Mutation, Subscription handlers with return types.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_entries: z.number().optional().describe("Max resolver entries (default: 300)"),
-    },
-    handler: async (args: { repo?: string; max_entries?: number }) => nestGraphQLMap(args.repo ?? "", args),
-  },
-  {
-    name: "nest_websocket_map",
-    category: "nestjs",
-    searchHint: "nestjs websocket gateway subscribemessage socketio realtime event",
-    description: "Map NestJS WebSocket gateways with port, namespace, and subscribed events.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_gateways: z.number().optional().describe("Max gateways (default: 100)"),
-    },
-    handler: async (args: { repo?: string; max_gateways?: number }) => nestWebSocketMap(args.repo ?? "", args),
-  },
-  {
-    name: "nest_schedule_map",
-    category: "nestjs",
-    searchHint: "nestjs cron interval timeout scheduled job task onevent event listener",
-    description: "Map NestJS scheduled tasks (@Cron/@Interval/@Timeout) and event listeners (@OnEvent).",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_schedules: z.number().optional().describe("Max schedule entries (default: 300)"),
-      max_files_scanned: z.number().optional().describe("Max files to scan (default: 2000)"),
-    },
-    handler: async (args: { repo?: string; max_schedules?: number; max_files_scanned?: number }) => nestScheduleMap(args.repo ?? "", args),
-  },
-  {
-    name: "nest_typeorm_map",
-    category: "nestjs",
-    searchHint: "nestjs typeorm entity relation onetomany manytoone database schema",
-    description: "Build TypeORM entity relation graph with OneToMany/ManyToOne edges and cycle detection.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_entities: z.number().optional().describe("Max entities (default: 200)"),
-    },
-    handler: async (args: { repo?: string; max_entities?: number }) => nestTypeOrmMap(args.repo ?? "", args),
-  },
-  {
-    name: "nest_microservice_map",
-    category: "nestjs",
-    searchHint: "nestjs microservice messagepattern eventpattern kafka rabbitmq nats transport",
-    description: "Map NestJS microservice @MessagePattern and @EventPattern handlers.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_patterns: z.number().optional().describe("Max patterns (default: 300)"),
-    },
-    handler: async (args: { repo?: string; max_patterns?: number }) => nestMicroserviceMap(args.repo ?? "", args),
-  },
-  // --- Wave 3 NestJS tools ---
-  {
-    name: "nest_request_pipeline",
-    category: "nestjs",
-    searchHint: "nestjs request pipeline middleware guard interceptor pipe filter handler execution flow visualization",
-    description: "Visualize full NestJS request execution pipeline for a single route — middleware → global/controller/method guards → pipes → interceptors → handler → filters. Optional mermaid output.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      route: z.string().describe("Route path to trace (e.g. '/users/:id')"),
-      method: z.string().optional().describe("HTTP method (default: GET)"),
-      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: json (default) or mermaid"),
-    },
-    handler: async (rawArgs: Record<string, unknown>) => {
-      const args = rawArgs as { repo?: string; route: string; method?: string; output_format?: "json" | "mermaid" };
-      const opts: Parameters<typeof nestRequestPipeline>[1] = { route: args.route };
-      if (args.method) opts.method = args.method;
-      if (args.output_format) opts.output_format = args.output_format;
-      return nestRequestPipeline(args.repo ?? "", opts);
-    },
-  },
-  {
-    name: "nest_queue_map",
-    category: "nestjs",
-    searchHint: "nestjs bull bullmq queue processor process inject background job worker",
-    description: "Discover Bull/BullMQ @Processor classes, @Process/@OnQueueFailed/@OnQueueCompleted handlers, and @InjectQueue producers.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_processors: z.number().optional().describe("Max processors (default: 200)"),
-    },
-    handler: async (args: { repo?: string; max_processors?: number }) => nestQueueMap(args.repo ?? "", args),
-  },
-  {
-    name: "nest_scope_audit",
-    category: "nestjs",
-    searchHint: "nestjs scope request transient singleton provider performance escalation dependency injection",
-    description: "Detect Scope.REQUEST and Scope.TRANSIENT providers and walk DI graph to find transitively escalated consumers (silent perf cliff).",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      max_providers: z.number().optional().describe("Max providers to analyze (default: 200)"),
-    },
-    handler: async (args: { repo?: string; max_providers?: number }) => nestScopeAudit(args.repo ?? "", args),
-  },
-  {
-    name: "nest_openapi_extract",
-    category: "nestjs",
-    searchHint: "nestjs swagger openapi api documentation apiproperty apioperation apiresponse contract extract",
-    description: "Extract OpenAPI 3.1 spec from @nestjs/swagger decorators (@ApiProperty, @ApiOperation, @ApiResponse, @ApiTags, @ApiBearerAuth) without running the app.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      title: z.string().optional().describe("API title (default: 'NestJS API')"),
-      version: z.string().optional().describe("API version (default: '1.0.0')"),
-    },
-    handler: async (args: { repo?: string; title?: string; version?: string }) => {
-      const opts: Parameters<typeof nestOpenAPIExtract>[1] = {};
-      if (args.title) opts.title = args.title;
-      if (args.version) opts.version = args.version;
-      return nestOpenAPIExtract(args.repo ?? "", opts);
     },
   },
 
@@ -3640,26 +3325,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 
   // --- Next.js framework tools ---
   {
-    name: "analyze_nextjs_components",
-    category: "analysis",
-    searchHint: "nextjs next.js component server client classifier use client use server hooks",
-    description: "Classify Next.js files as Server or Client components via AST analysis. Detects 'use client'/'use server' directives (with 512-byte window + comment stripping), hooks, JSX event handlers, browser globals, and next/dynamic({ ssr:false }). Flags unnecessary 'use client' and async client components. Supports monorepo workspace auto-detection.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      file_pattern: z.string().optional().describe("Glob to scope the scan, e.g. 'app/products/**'"),
-      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof analyzeNextjsComponents>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.file_pattern != null) opts.file_pattern = args.file_pattern as string;
-      if (args.max_files != null) opts.max_files = args.max_files as number;
-      const result = await analyzeNextjsComponents(args.repo as string ?? "", opts);
-      return formatNextjsComponents(result);
-    },
-  },
-  {
     name: "nextjs_route_map",
     category: "analysis",
     searchHint: "nextjs next.js route map app router pages router rendering strategy SSG SSR ISR edge middleware",
@@ -3700,117 +3365,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    name: "nextjs_audit_server_actions",
-    category: "security" as ToolCategory,
-    searchHint: "nextjs server actions security audit auth validation rate limit zod use server",
-    description: "Audit Next.js Server Actions for security weaknesses across four checks: authorization guards, input validation (Zod-aware), rate limiting, and structured error handling. Per-action weighted scoring (auth 40, validation 30, rate 20, errors 10) with grade buckets.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof nextjsAuditServerActions>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.max_files != null) opts.max_files = args.max_files as number;
-      const result = await nextjsAuditServerActions(args.repo as string ?? "", opts);
-      return formatNextjsAuditServerActions(result);
-    },
-  },
-  {
-    name: "nextjs_api_contract",
-    category: "analysis" as ToolCategory,
-    searchHint: "nextjs api contract route handler openapi method body schema response zod",
-    description: "Extract API handler contracts from Next.js route handlers (App Router app/api/**/route.ts and Pages Router pages/api/**/*.ts). Captures HTTP methods, query params, request body schemas (Zod-aware), response shapes, and inferred status codes per handler.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      max_files: z.number().int().positive().optional().describe("Max files to scan (default 1000)"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof nextjsApiContract>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.max_files != null) opts.max_files = args.max_files as number;
-      const result = await nextjsApiContract(args.repo as string ?? "", opts);
-      return formatNextjsApiContract(result);
-    },
-  },
-  {
-    name: "nextjs_boundary_analyzer",
-    category: "analysis" as ToolCategory,
-    searchHint: "nextjs client boundary use client component bundle imports loc score",
-    description: "Analyze Next.js client component boundaries — walks `app/**/*.{tsx,jsx}` files marked `\"use client\"`, computes a deterministic ranking score from cheap signals (LOC, import counts, dynamic imports, third-party imports), and returns a top-N list of largest offenders. Score is signal-based, not actual bundle bytes.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      top_n: z.number().int().positive().optional().describe("Number of top entries to return (default 20)"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof nextjsBoundaryAnalyzer>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.top_n != null) opts.top_n = args.top_n as number;
-      const result = await nextjsBoundaryAnalyzer(args.repo as string ?? "", opts);
-      return formatNextjsBoundaryAnalyzer(result);
-    },
-  },
-  {
-    name: "nextjs_link_integrity",
-    category: "analysis" as ToolCategory,
-    searchHint: "nextjs link integrity broken navigation Link href router push 404",
-    description: "Cross-reference Next.js navigation refs (<Link href>, router.push/.replace) against the route map to flag broken links. Template-literal hrefs are bucketed as 'unresolved' rather than guessed.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      max_files: z.number().int().positive().optional().describe("Max files to scan (default 2000)"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof nextjsLinkIntegrity>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.max_files != null) opts.max_files = args.max_files as number;
-      const result = await nextjsLinkIntegrity(args.repo as string ?? "", opts);
-      return formatNextjsLinkIntegrity(result);
-    },
-  },
-  {
-    name: "nextjs_data_flow",
-    category: "analysis" as ToolCategory,
-    searchHint: "nextjs data flow fetch waterfall cache cookies headers ssr revalidate",
-    description: "Analyze data fetching patterns in Next.js pages: detect fetch waterfalls (sequential awaits in same scope), classify cache strategies (no-cache, cached, ISR), and aggregate per-page data flow with totals.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      url_path: z.string().optional().describe("Filter to a single URL path"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof nextjsDataFlow>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.url_path != null) opts.url_path = args.url_path as string;
-      const result = await nextjsDataFlow(args.repo as string ?? "", opts);
-      return formatNextjsDataFlow(result);
-    },
-  },
-  {
-    name: "nextjs_middleware_coverage",
-    category: "security" as ToolCategory,
-    searchHint: "nextjs middleware coverage protected admin auth route matcher security",
-    description: "Cross-reference Next.js routes with middleware matcher config to compute coverage. Flags admin/dashboard routes without middleware protection as high-severity warnings.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
-      flag_admin_prefix: z.union([z.string(), z.array(z.string())]).optional().describe("Admin path prefix(es) to flag (default: ['/admin', '/dashboard'])"),
-    },
-    handler: async (args) => {
-      const opts: Parameters<typeof nextjsMiddlewareCoverage>[1] = {};
-      if (args.workspace != null) opts.workspace = args.workspace as string;
-      if (args.flag_admin_prefix != null) opts.flag_admin_prefix = args.flag_admin_prefix as string | string[];
-      const result = await nextjsMiddlewareCoverage(args.repo as string ?? "", opts);
-      return formatNextjsMiddlewareCoverage(result);
-    },
-  },
-  {
     name: "framework_audit",
     category: "analysis" as ToolCategory,
-    searchHint: "nextjs framework audit meta-tool overall score security metadata routes components",
+    searchHint: "nextjs next.js framework audit meta-tool overall score security metadata routes components classifier use client use server hooks server actions auth validation rate limit zod api contract route handler openapi method body schema response client boundary bundle imports loc link integrity broken navigation href router push 404 data flow fetch waterfall cache cookies headers ssr revalidate middleware coverage protected admin matcher",
     description: "Run all Next.js sub-audits (components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage) and aggregate into a unified weighted overall score with grade. Use as a single first-call for any Next.js project.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
@@ -4331,9 +3888,6 @@ export function registerTools(
   registerShortener("nextjs_route_map", { compact: formatNextjsRouteMapCompact, counts: formatNextjsRouteMapCounts });
   registerShortener("nextjs_metadata_audit", { compact: formatNextjsMetadataAuditCompact, counts: formatNextjsMetadataAuditCounts });
   registerShortener("framework_audit", { compact: formatFrameworkAuditCompact, counts: formatFrameworkAuditCounts });
-  registerShortener("nextjs_audit_server_actions", { compact: formatServerActionsAuditCompact, counts: formatServerActionsAuditCounts });
-  registerShortener("nextjs_api_contract", { compact: formatApiContractCompact, counts: formatApiContractCounts });
-  registerShortener("nextjs_boundary_analyzer", { compact: formatBoundaryAnalyzerCompact, counts: formatBoundaryAnalyzerCounts });
   registerShortener("get_session_context", {
     compact: (raw: unknown) => {
       const text = typeof raw === "string" ? raw : JSON.stringify(raw);

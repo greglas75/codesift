@@ -21,15 +21,16 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
-**161 MCP tools total** (48 core visible + 113 discoverable).
+**146 MCP tools total** (51 core visible + 95 discoverable).
 
-48 core tools appear in ListTools. The remaining 113 niche tools are discovered on demand:
+51 core tools appear in ListTools. The remaining 95 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 161 tools
+- `plan_turn(query="find dead code in auth")` — natural-language router: ranked tool/symbol/file recommendations with auto-reveal of hidden tools (preferred entry point at start of a task)
+- `discover_tools(query="dead code")` — keyword search across all 146 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
-Core tools (48) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, `find_perf_hotspots`, `fan_in_fan_out`, `architecture_summary`, `explain_query`, etc.
+Core tools (51) always visible — includes search, symbols, context, analysis, architecture, conversations, meta, and `plan_turn`. Use `plan_turn` when you don't know which tool fits the task. Use `discover_tools` for direct keyword search over niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, `find_perf_hotspots`, `fan_in_fan_out`, `architecture_summary`, `explain_query`, etc.
 
 ## Tool Mapping
 
@@ -87,13 +88,13 @@ Use this table to pick the right tool for each task:
 | Next.js full audit | `framework_audit` |
 | route map + rendering | `nextjs_route_map` |
 | SEO / metadata gaps | `nextjs_metadata_audit` |
-| server actions security | `nextjs_audit_server_actions` |
-| API contract extraction | `nextjs_api_contract` |
-| client boundary / bundle | `nextjs_boundary_analyzer` |
-| broken internal links | `nextjs_link_integrity` |
-| data fetch waterfalls | `nextjs_data_flow` |
-| middleware coverage gaps | `nextjs_middleware_coverage` |
-| server vs client classify | `analyze_nextjs_components` |
+| server actions security | `framework_audit(checks=["server-actions"])` |
+| API contract extraction | `framework_audit(checks=["api-contract"])` |
+| client boundary / bundle | `framework_audit(checks=["boundary"])` |
+| broken internal links | `framework_audit(checks=["link-integrity"])` |
+| data fetch waterfalls | `framework_audit(checks=["data-flow"])` |
+| middleware coverage gaps | `framework_audit(checks=["middleware"])` |
+| server vs client classify | `framework_audit(checks=["components"])` |
 | Python project health audit | `python_audit` (compound: 8 checks, health score) |
 | Django/Flask/FastAPI routes | `trace_route(path="/api/users")` |
 | Python anti-patterns | `search_patterns("mutable-default"\|"bare-except"\|"eval-exec"\|"shell-true"\|"pickle-load"\|"n-plus-one-django")` |
@@ -103,10 +104,10 @@ Use this table to pick the right tool for each task:
 | Django/SQLAlchemy ORM graph | `get_model_graph` |
 | Django settings security audit | `analyze_django_settings` (15 checks) |
 | pytest fixture graph | `get_test_fixtures` (conftest hierarchy, scope, autouse) |
-| Celery task + canvas tracing | `trace_celery_chain` (orphan task detection) |
+| Celery task + canvas tracing | `python_audit(checks=["celery"])` |
 | Django signals / Celery / middleware | `find_framework_wiring` |
 | Python cross-module callers | `find_python_callers(target_name=)` |
-| Python circular imports | `find_python_circular_imports` (TYPE_CHECKING-aware) |
+| Python circular imports | `python_audit(checks=["circular-imports"])` |
 | run Ruff on Python | `run_ruff(categories=["B","PERF","SIM","S"])` |
 | run mypy / pyright | `run_mypy` or `run_pyright` |
 | parse pyproject.toml | `parse_pyproject` |
@@ -159,9 +160,9 @@ Use this table to pick the right tool for each task:
 | React call graph (clean) | `trace_call_chain(filter_react_hooks=true)` |
 | new Next.js project (first look) | `framework_audit` |
 | SEO audit / metadata review | `nextjs_metadata_audit` |
-| security review (Next.js) | `nextjs_audit_server_actions` |
+| security review (Next.js) | `framework_audit(checks=["server-actions"])` |
 | rendering strategy check | `nextjs_route_map` |
-| bundle size concerns | `nextjs_boundary_analyzer` |
+| bundle size concerns | `framework_audit(checks=["boundary"])` |
 | new Hono project (first look) | `analyze_hono_app` |
 | Hono middleware order bug | `trace_middleware_chain` |
 | Hono auth false positive (blog pattern) | `trace_middleware_chain(only_conditional=true)` |

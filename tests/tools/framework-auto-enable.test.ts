@@ -13,57 +13,28 @@ describe("Framework-specific tool bundle auto-enable", () => {
     registerTools(server, { deferNonCore: true });
   });
 
-  it("nest_* tools are disabled by default (deferNonCore)", () => {
-    const nestTools = [
-      // Wave 1
-      "nest_lifecycle_map",
-      "nest_module_graph",
-      "nest_di_graph",
-      "nest_guard_chain",
-      "nest_route_inventory",
-      // Wave 2
-      "nest_graphql_map",
-      "nest_websocket_map",
-      "nest_schedule_map",
-      "nest_typeorm_map",
-      "nest_microservice_map",
-      // Wave 3
-      "nest_request_pipeline",
-      "nest_queue_map",
-      "nest_scope_audit",
-      "nest_openapi_extract",
+  it("NestJS sub-tools absorbed into nest_audit — no longer registered as standalone", () => {
+    // After Phase 1 consolidation, all 14 NestJS sub-tools were absorbed into nest_audit.
+    // Their handler functions still exist but they're no longer in TOOL_DEFINITIONS.
+    const absorbedNames = [
+      "nest_lifecycle_map", "nest_module_graph", "nest_di_graph",
+      "nest_guard_chain", "nest_route_inventory", "nest_graphql_map",
+      "nest_websocket_map", "nest_schedule_map", "nest_typeorm_map",
+      "nest_microservice_map", "nest_request_pipeline", "nest_queue_map",
+      "nest_scope_audit", "nest_openapi_extract",
     ];
-    for (const name of nestTools) {
+    for (const name of absorbedNames) {
       const handle = getToolHandle(name);
-      expect(handle).toBeDefined();
-      expect(typeof handle.enable).toBe("function");
-      expect(typeof handle.disable).toBe("function");
+      expect(handle).toBeUndefined();
     }
   });
 
-  it("enableFrameworkToolBundle('nestjs') enables all 14 nest_* discoverable tools", () => {
+  it("enableFrameworkToolBundle('nestjs') returns empty — all sub-tools absorbed", () => {
     const enabled = enableFrameworkToolBundle("nestjs");
-    expect(enabled).toEqual([
-      "nest_lifecycle_map",
-      "nest_module_graph",
-      "nest_di_graph",
-      "nest_guard_chain",
-      "nest_route_inventory",
-      "nest_graphql_map",
-      "nest_websocket_map",
-      "nest_schedule_map",
-      "nest_typeorm_map",
-      "nest_microservice_map",
-      "nest_request_pipeline",
-      "nest_queue_map",
-      "nest_scope_audit",
-      "nest_openapi_extract",
-    ]);
+    expect(enabled).toEqual([]);
   });
 
   it("enableFrameworkToolBundle is idempotent — second call returns empty", () => {
-    const first = enableFrameworkToolBundle("nestjs");
-    // Already called in previous test, so this should return empty
     const second = enableFrameworkToolBundle("nestjs");
     expect(second).toEqual([]);
   });
@@ -101,7 +72,7 @@ bootstrap();
   });
 
   afterAll(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("indexFolder on a NestJS project triggers framework detection", async () => {
