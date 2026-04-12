@@ -4,9 +4,19 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getToolDefinitions, CORE_TOOL_NAMES } from "../../src/register-tools.js";
 
+// All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
   "astro_analyze_islands",
   "astro_hydration_audit",
+  "astro_route_map",
+  "astro_config_analyze",
+  "astro_content_collections",
+] as const;
+
+// Core Astro tools (visible in ListTools by default — subset of ASTRO_TOOL_NAMES)
+// astro_hydration_audit is demoted to discoverable since astro_audit provides full coverage
+const ASTRO_CORE_TOOL_NAMES = [
+  "astro_analyze_islands",
   "astro_route_map",
   "astro_config_analyze",
   "astro_content_collections",
@@ -49,13 +59,17 @@ describe("register-tools — astro tools registration", () => {
     });
   }
 
-  it("all astro tools are in CORE_TOOL_NAMES", () => {
-    for (const toolName of ASTRO_TOOL_NAMES) {
+  it("core astro tools are in CORE_TOOL_NAMES", () => {
+    for (const toolName of ASTRO_CORE_TOOL_NAMES) {
       expect(
         CORE_TOOL_NAMES.has(toolName),
         `${toolName} should be in CORE_TOOL_NAMES`,
       ).toBe(true);
     }
+  });
+
+  it("astro_hydration_audit is NOT in CORE_TOOL_NAMES (demoted to discoverable)", () => {
+    expect(CORE_TOOL_NAMES.has("astro_hydration_audit")).toBe(false);
   });
 });
 
