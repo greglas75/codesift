@@ -70,8 +70,8 @@ describe("setup", () => {
 
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain("[mcp_servers.codesift]");
-      expect(content).toMatch(/command = ".*npx"/);
-      expect(content).toContain('args = ["-y", "codesift-mcp"]');
+      expect(content).toMatch(/command = ".*(?:node|npx)"/);
+      expect(content).toMatch(/args = \[.*codesift.*\]/);
       expect(content).toContain("tool_timeout_sec = 120");
     });
 
@@ -123,8 +123,8 @@ describe("setup", () => {
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -144,8 +144,8 @@ describe("setup", () => {
       expect(content.theme).toBe("dark");
       expect(content.mcpServers.other.command).toBe("foo");
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -162,14 +162,14 @@ describe("setup", () => {
       expect(result.status).toBe("updated");
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.command).toMatch(/npx$/);
+      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
     });
 
     it("skips when already configured", async () => {
       const configDir = join(tempHome, ".claude");
       await mkdir(configDir, { recursive: true });
       const original = {
-        mcpServers: { codesift: { command: expect.stringMatching(/npx$/), args: ["-y", "codesift-mcp"] } },
+        mcpServers: { codesift: { command: expect.stringMatching(/node$|npx$/), args: expect.arrayContaining([expect.stringMatching(/codesift/)]) } },
       };
       await writeFile(
         join(configDir, "settings.json"),
@@ -198,7 +198,7 @@ describe("setup", () => {
       expect(result.status).toBe("updated");
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.command).toMatch(/npx$/);
+      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
     });
   });
 
@@ -215,8 +215,8 @@ describe("setup", () => {
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -248,8 +248,8 @@ describe("setup", () => {
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -269,8 +269,8 @@ describe("setup", () => {
       expect(content.theme).toBe("dark");
       expect(content.mcpServers.other.command).toBe("foo");
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -302,8 +302,8 @@ describe("setup", () => {
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -323,8 +323,8 @@ describe("setup", () => {
       expect(content.theme).toBe("dark");
       expect(content.mcpServers.other.command).toBe("foo");
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
 
@@ -351,8 +351,8 @@ describe("setup", () => {
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/npx$/),
-        args: ["-y", "codesift-mcp"],
+        command: expect.stringMatching(/node$|npx$/),
+        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
       });
     });
   });
@@ -916,7 +916,7 @@ describe("setup", () => {
       await setupGeminiHooks();
 
       const content = JSON.parse(await readFile(join(configDir, "settings.json"), "utf-8"));
-      expect(content.mcpServers.codesift.command).toMatch(/npx$/);
+      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
       expect(content.hooks.BeforeTool).toHaveLength(1);
     });
 

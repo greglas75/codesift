@@ -35,31 +35,42 @@ export interface InstallRulesResult {
 // Platform configs
 // ---------------------------------------------------------------------------
 
-// Lazy — resolved at runtime so resolveNpxCommand() is called after module init
 function getCodexTomlBlock(): string {
+  const entry = resolveMcpServerEntry();
+  const argsToml = entry.args.map((a) => `"${a}"`).join(", ");
   return `
 [mcp_servers.codesift]
-command = "${resolveNpxCommand()}"
-args = ["-y", "codesift-mcp"]
+command = "${entry.command}"
+args = [${argsToml}]
 tool_timeout_sec = 120
 `;
 }
 
-// Resolve full path to npx — GUI apps (Antigravity, Claude Desktop) often
-// don't inherit shell PATH so bare "npx" fails with "executable not found".
-function resolveNpxCommand(): string {
+// Resolve MCP server entry — GUI apps (Antigravity, Claude Desktop) don't
+// inherit shell PATH, so both "npx" and "node" fail. We resolve full paths
+// and prefer direct node invocation when the package is globally installed.
+function resolveMcpServerEntry(): { command: string; args: string[] } {
   try {
     const { execSync } = require("node:child_process") as typeof import("node:child_process");
-    const full = execSync("which npx", { encoding: "utf-8" }).trim();
-    if (full) return full;
+    const nodePath = execSync("which node", { encoding: "utf-8" }).trim();
+    // Check if codesift-mcp is globally installed
+    const serverPath = execSync("which codesift-mcp", { encoding: "utf-8" }).trim();
+    if (nodePath && serverPath) {
+      // Resolve symlink to actual server.js path
+      const { realpathSync } = require("node:fs") as typeof import("node:fs");
+      const realPath = realpathSync(serverPath);
+      return { command: nodePath, args: [realPath] };
+    }
+  } catch { /* not globally installed — fall back to npx */ }
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    const npxPath = execSync("which npx", { encoding: "utf-8" }).trim();
+    if (npxPath) return { command: npxPath, args: ["-y", "codesift-mcp"] };
   } catch { /* fallback */ }
-  return "npx";
+  return { command: "npx", args: ["-y", "codesift-mcp"] };
 }
 
-const MCP_SERVER_ENTRY = {
-  command: resolveNpxCommand(),
-  args: ["-y", "codesift-mcp"],
-};
+const MCP_SERVER_ENTRY = resolveMcpServerEntry();
 
 interface JsonPlatformConfig {
   configDirName: string;
