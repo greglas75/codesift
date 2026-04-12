@@ -97,7 +97,7 @@ describe("nextjsMiddlewareCoverage orchestrator", () => {
         expect.arrayContaining(["/", "/about"]),
       );
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -135,7 +135,7 @@ describe("nextjsMiddlewareCoverage orchestrator", () => {
       expect(adminWarning).toBeDefined();
       expect(adminWarning!.severity).toBe("high");
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

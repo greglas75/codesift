@@ -33,7 +33,7 @@ describe("walkDirectory — backup exclusion integration", () => {
   afterEach(() => {
     delete process.env.CODESIFT_INCLUDE_BACKUPS;
     if (tmpDir) {
-      try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      try { rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
     }
   });
 

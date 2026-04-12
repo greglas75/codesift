@@ -154,7 +154,7 @@ describe("parseRouteFile", () => {
       expect(entry.url_path).toBe("/");
       expect(entry.type).toBe("page");
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -169,7 +169,7 @@ describe("parseRouteFile", () => {
       expect(entry.has_metadata).toBe(true);
       expect(entry.url_path).toBe("/products/[id]");
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -184,7 +184,7 @@ describe("parseRouteFile", () => {
       expect(entry.type).toBe("route");
       expect(entry.methods).toEqual(expect.arrayContaining(["GET", "POST"]));
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -199,7 +199,7 @@ describe("parseRouteFile", () => {
       expect(entry.router).toBe("pages");
       expect(entry.url_path).toBe("/api/users");
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -213,7 +213,7 @@ describe("parseRouteFile", () => {
       const entry = await parseRouteFile(abs, tmpRoot, "app");
       expect(entry.url_path).toBe("/login");
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
@@ -255,7 +255,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(result.conflicts).toEqual([]);
       expect(result.scan_errors).toEqual([]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -274,7 +274,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(types.has("document")).toBe(true);
       expect(types.has("error_page")).toBe(true);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -293,7 +293,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(entry.rendering_reason).toBeDefined();
       expect(entry.rendering_reason!).toMatch(/cookies\(\)/);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -312,7 +312,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(entry.rendering_reason).toBeDefined();
       expect(entry.rendering_reason!).toMatch(/no-store/);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -331,7 +331,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(entry.rendering_reason).toBeDefined();
       expect(entry.rendering_reason!).toMatch(/force-dynamic/);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -349,7 +349,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(entry.rendering).toBe("static");
       expect(entry.rendering_reason).toBeUndefined();
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -372,7 +372,7 @@ describe("nextjsRouteMap orchestrator", () => {
       expect(result.conflicts.length).toBeGreaterThanOrEqual(1);
       expect(result.conflicts[0]!.url_path).toBe("/");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

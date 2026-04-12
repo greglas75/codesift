@@ -24,8 +24,8 @@ describe("codebase_retrieval — conversation query type", () => {
     }
     const { resetConfigCache } = await import("../../src/config.js");
     resetConfigCache();
-    await rm(tmpDir, { recursive: true, force: true });
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("SubQuerySchema parses conversation type correctly", async () => {

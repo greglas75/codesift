@@ -46,7 +46,7 @@ describe("checkAstroExtractorVersion", () => {
 
   afterEach(async () => {
     try {
-      await rm(TMP_ROOT, { recursive: true, force: true });
+      await rm(TMP_ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch { /* cleanup best-effort */ }
   });
 

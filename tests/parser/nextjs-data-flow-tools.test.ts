@@ -110,7 +110,7 @@ describe("nextjsDataFlow orchestrator", () => {
       const result = await nextjsDataFlow("test");
       expect(result.total_waterfalls).toBeGreaterThanOrEqual(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -130,7 +130,7 @@ describe("nextjsDataFlow orchestrator", () => {
       // fetches are arguments to the same Promise.all call (same statement).
       expect(result.total_waterfalls).toBe(0);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -170,7 +170,7 @@ describe("nextjsDataFlow orchestrator", () => {
       const result = await nextjsDataFlow("test");
       expect(result.total_waterfalls).toBe(0);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

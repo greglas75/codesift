@@ -258,7 +258,7 @@ export async function DELETE() { return new Response(null, { status: 204 }); }
       const methods = result.handlers.map((h) => h.method).sort();
       expect(methods).toEqual(["DELETE", "GET", "POST"]);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -276,7 +276,7 @@ export async function DELETE() { return new Response(null, { status: 204 }); }
       // Pages router handlers may be reported as a single 'page' handler, not method-keyed
       expect(result.handlers.length).toBeGreaterThanOrEqual(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -322,7 +322,7 @@ export async function POST(req) { const body = schema.parse(await req.json()); r
       expect(result.completeness_score).toBeGreaterThanOrEqual(0);
       expect(result.completeness_score).toBeLessThanOrEqual(100);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

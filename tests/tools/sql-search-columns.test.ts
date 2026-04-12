@@ -49,8 +49,8 @@ CREATE TABLE products (
 
   afterEach(() => {
     delete process.env["CODESIFT_DATA_DIR"];
-    try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
-    try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
+    try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
   it("finds exact column name across tables", async () => {

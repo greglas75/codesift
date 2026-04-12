@@ -47,8 +47,8 @@ DROP INDEX idx_orders_user;
 
   afterEach(() => {
     delete process.env["CODESIFT_DATA_DIR"];
-    try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
-    try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
+    try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
   it("classifies operations as additive, destructive, or modifying", async () => {

@@ -194,7 +194,7 @@ describe("nest_module_graph", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
@@ -365,7 +365,7 @@ describe("nest_di_graph", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
@@ -566,7 +566,7 @@ describe("nest_guard_chain", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
@@ -784,7 +784,7 @@ describe("nest_route_inventory", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
@@ -1045,7 +1045,7 @@ describe("nest_request_pipeline", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {

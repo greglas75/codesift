@@ -66,9 +66,9 @@ describe("conversation path resolution", () => {
     }
     const { resetConfigCache } = await import("../../src/config.js");
     resetConfigCache();
-    await rm(tempHome, { recursive: true, force: true });
-    await rm(projectRoot, { recursive: true, force: true });
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("indexConversations auto-detects the Claude conversation directory from cwd when path is omitted", async () => {

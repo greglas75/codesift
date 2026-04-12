@@ -56,7 +56,7 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
   resetConfigCache();
-  await rm(dataDir, { recursive: true, force: true }).catch(() => {});
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
 });
 
 describe("checkBoundaries", () => {

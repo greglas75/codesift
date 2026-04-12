@@ -116,7 +116,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         expect(tools).toContain("analyze_hooks");
         expect(tools).toContain("analyze_renders");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -130,7 +130,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).toContain("trace_component_tree");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -144,7 +144,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).not.toContain("trace_component_tree");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -158,7 +158,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).not.toContain("trace_component_tree");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -172,7 +172,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).toContain("trace_component_tree");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -188,7 +188,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).not.toContain("trace_component_tree");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
   });
@@ -229,7 +229,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         expect(tools).not.toContain("trace_conditional_middleware");
         expect(tools).not.toContain("detect_middleware_env_regression");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -268,7 +268,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).toContain("extract_api_contract");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -283,7 +283,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).toContain("trace_rpc_types");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -298,7 +298,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadTools(dir);
         expect(tools).toContain("audit_hono_security");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -312,7 +312,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         expect(tools).not.toContain("trace_context_flow");
         expect(tools).not.toContain("audit_hono_security");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
 
@@ -329,7 +329,7 @@ describe("register-tools — React tools registration & auto-load", () => {
         expect(tools).toContain("trace_component_tree"); // React
         expect(tools).toContain("audit_hono_security"); // Hono
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
   });

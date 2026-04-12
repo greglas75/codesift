@@ -24,7 +24,7 @@ describe("hook installation", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpDir, { recursive: true, force: true });
+    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("creates .claude/settings.local.json with correct hook format", async () => {

@@ -23,7 +23,7 @@ async function withConfig(
   try {
     await fn(root);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -91,7 +91,7 @@ export default defineConfig({
       expect(result.conventions.config_file).toBeNull();
       expect(result.issues).toContain("No astro.config.{mjs,ts,cjs} found");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 

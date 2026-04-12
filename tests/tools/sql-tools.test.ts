@@ -69,7 +69,7 @@ export function getOrders() { return query; }
   }, 30_000);
 
   afterAll(() => {
-    try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
   describe("analyzeSchema", () => {
@@ -120,7 +120,7 @@ export function getOrders() { return query; }
       expect(result.warnings).toContain("No SQL files indexed in this repository.");
       expect(result.tables).toEqual([]);
 
-      rmSync(emptyTmp, { recursive: true, force: true });
+      rmSync(emptyTmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
 
     it("throws on unindexed repo", async () => {

@@ -16,7 +16,7 @@ describe("analyzeSchemaDrift", () => {
   });
   afterEach(() => {
     delete process.env["CODESIFT_DATA_DIR"];
-    try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
   describe("drift-prisma fixture (known drifts)", () => {
@@ -32,7 +32,7 @@ describe("analyzeSchemaDrift", () => {
     }, 30_000);
 
     afterEach(() => {
-      try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+      try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
     });
 
     it("detects extra field in ORM not in SQL (User.avatarUrl)", async () => {
@@ -89,7 +89,7 @@ describe("analyzeSchemaDrift", () => {
     }, 30_000);
 
     afterEach(() => {
-      try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+      try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
     });
 
     it("reports zero drifts when schemas match", async () => {
@@ -119,7 +119,7 @@ describe("analyzeSchemaDrift", () => {
       expect(result.warnings.some((w) => /no orm models/i.test(w))).toBe(true);
       expect(result.orms_detected).toEqual([]);
 
-      rmSync(TMP, { recursive: true, force: true });
+      rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
   });
 });

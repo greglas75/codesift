@@ -74,8 +74,8 @@ CREATE INDEX idx_users_email ON users(name);
 
   afterEach(() => {
     delete process.env["CODESIFT_DATA_DIR"];
-    try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
-    try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmSync(DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
+    try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
   it("detects tables without PRIMARY KEY", async () => {
@@ -128,6 +128,6 @@ CREATE INDEX idx_users_email ON users(name);
     const emptyR = await indexFolder(emptyTmp, { watch: false });
     const result = await lintSchema(emptyR.repo);
     expect(result.warnings.some((w) => /no sql/i.test(w))).toBe(true);
-    rmSync(emptyTmp, { recursive: true, force: true });
+    rmSync(emptyTmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 });

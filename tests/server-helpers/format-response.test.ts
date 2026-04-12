@@ -15,7 +15,7 @@ describe("formatResponse behavior (via wrapTool)", () => {
 
   afterEach(async () => {
     delete process.env["CODESIFT_DATA_DIR"];
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   });
 
   it("passes short response through with savings hint", async () => {
@@ -58,7 +58,7 @@ describe("progressive cascade", () => {
 
   afterEach(async () => {
     delete process.env["CODESIFT_DATA_DIR"];
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
     resetShorteningRegistry();
   });
 

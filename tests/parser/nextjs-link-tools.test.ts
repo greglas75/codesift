@@ -76,7 +76,7 @@ describe("nextjsLinkIntegrity orchestrator", () => {
       const result = await nextjsLinkIntegrity("test");
       expect(result.broken_count).toBe(0);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -90,7 +90,7 @@ describe("nextjsLinkIntegrity orchestrator", () => {
       const result = await nextjsLinkIntegrity("test");
       expect(result.broken_count).toBeGreaterThanOrEqual(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -104,7 +104,7 @@ describe("nextjsLinkIntegrity orchestrator", () => {
       const result = await nextjsLinkIntegrity("test");
       expect(result.unresolved_count).toBeGreaterThanOrEqual(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -147,7 +147,7 @@ describe("nextjsLinkIntegrity orchestrator", () => {
       const result = await nextjsLinkIntegrity("test");
       expect(result.broken_count + result.resolved_count + result.unresolved_count).toBeGreaterThanOrEqual(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

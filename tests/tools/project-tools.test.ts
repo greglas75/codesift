@@ -869,7 +869,7 @@ describe("analyzeProject — astro branch", () => {
     const summary = await analyzeProject("local/test-astro");
     expect(summary.status).toBe("complete");
 
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("response includes astro_conventions with populated fields", async () => {
@@ -904,7 +904,7 @@ describe("analyzeProject — astro branch", () => {
     expect(conv.adapter).toBe("@astrojs/vercel");
     expect(conv.integrations).toBeGreaterThanOrEqual(1);
 
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 });
 

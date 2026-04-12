@@ -154,7 +154,7 @@ describe("nextjsBoundaryAnalyzer orchestrator", () => {
       expect(result.entries[0]!.path).toContain("big.tsx");
       expect(result.client_count).toBe(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -170,7 +170,7 @@ describe("nextjsBoundaryAnalyzer orchestrator", () => {
       expect(result.entries.length).toBe(2);
       expect(result.entries[0]!.score).toBeGreaterThanOrEqual(result.entries[1]!.score);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -186,7 +186,7 @@ describe("nextjsBoundaryAnalyzer orchestrator", () => {
       expect(result.total_client_loc).toBeGreaterThan(0);
       expect(result.largest_offender).toBeDefined();
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

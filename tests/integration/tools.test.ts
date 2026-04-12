@@ -37,7 +37,7 @@ afterEach(async () => {
   // when rm() starts, causing an ENOTEMPTY on the final rmdir() call.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       break;
     } catch {
       if (attempt < 2) await new Promise((r) => setTimeout(r, 50));

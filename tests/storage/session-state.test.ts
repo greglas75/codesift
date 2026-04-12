@@ -490,7 +490,7 @@ describe("session-state", () => {
 
     afterEach(() => {
       vi.unstubAllEnvs();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
 
     it("flushSidecar writes JSON to session file", async () => {

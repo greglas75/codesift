@@ -21,7 +21,7 @@ beforeEach(async () => {
 afterEach(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
   resetConfigCache();
-  await rm(tmpDir, { recursive: true, force: true });
+  await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("config file indexing (DD2)", () => {

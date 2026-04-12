@@ -43,7 +43,7 @@ describe("nest_graphql_map", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts Query, Mutation, Subscription handlers", async () => {
@@ -122,7 +122,7 @@ describe("nest_websocket_map", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts gateway with port, namespace, and event handlers", async () => {
@@ -181,7 +181,7 @@ describe("nest_schedule_map", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts @Cron, @Interval, @Timeout, @OnEvent handlers", async () => {
@@ -307,7 +307,7 @@ describe("nest_typeorm_map", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts entities with table names and relation edges", async () => {
@@ -391,7 +391,7 @@ describe("nest_microservice_map", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts @MessagePattern and @EventPattern handlers", async () => {
@@ -465,7 +465,7 @@ describe("nest_queue_map", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts @Processor class with @Process/@OnQueueFailed handlers", async () => {
@@ -545,7 +545,7 @@ describe("nest_scope_audit", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("detects REQUEST-scoped providers and walks consumers", async () => {
@@ -609,7 +609,7 @@ describe("nest_openapi_extract", () => {
   });
 
   afterEach(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("extracts OpenAPI spec from @ApiProperty DTOs + @ApiOperation routes", async () => {

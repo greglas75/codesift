@@ -384,7 +384,7 @@ export async function noValidation(input) {
       const noAuth = result.actions.find((a) => a.name === "noAuth")!;
       expect(secure.score).toBeGreaterThan(noAuth.score);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -399,7 +399,7 @@ export async function noValidation(input) {
       expect(result.total).toBe(0);
       expect(result.actions).toEqual([]);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -446,7 +446,7 @@ export async function good() { return 1; }
       expect(result).toBeDefined();
       expect(result.actions.length).toBeGreaterThanOrEqual(1);
     } finally {
-      await rm(tmpRoot, { recursive: true, force: true });
+      await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

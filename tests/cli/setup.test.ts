@@ -37,7 +37,7 @@ describe("setup", () => {
   });
 
   afterEach(async () => {
-    await rm(tempHome, { recursive: true, force: true });
+    await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   // -------------------------------------------------------------------------
@@ -690,7 +690,7 @@ describe("setup", () => {
 
       afterEach(async () => {
         vi.restoreAllMocks();
-        await rm(tempCwd, { recursive: true, force: true });
+        await rm(tempCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       });
 
       it("creates AGENTS.md with delimited block when file does not exist", async () => {
@@ -770,7 +770,7 @@ describe("setup", () => {
 
       afterEach(async () => {
         vi.restoreAllMocks();
-        await rm(tempCwd, { recursive: true, force: true });
+        await rm(tempCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       });
 
       it("creates GEMINI.md with delimited block when file does not exist", async () => {

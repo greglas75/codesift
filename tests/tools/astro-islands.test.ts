@@ -48,7 +48,7 @@ function makeIndex(root: string, astroPaths: string[]): CodeIndex {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  try { rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* ok */ }
+  try { rmSync(TMP_ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ok */ }
 });
 
 // ---------------------------------------------------------------------------

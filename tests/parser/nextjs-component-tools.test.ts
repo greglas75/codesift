@@ -40,7 +40,7 @@ describe("classifyFile directive detection", () => {
   });
 
   afterAll(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   async function makeFile(rel: string, content: string): Promise<string> {
@@ -250,7 +250,7 @@ describe("suggested_fix on NextjsComponentEntry", () => {
   });
 
   afterAll(async () => {
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("suggests removing 'use client' directive when no client signals present", async () => {

@@ -12,7 +12,7 @@ afterEach(async () => {
   if (tmpDir) {
     delete process.env["CODESIFT_DATA_DIR"];
     resetConfigCache();
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 });
 

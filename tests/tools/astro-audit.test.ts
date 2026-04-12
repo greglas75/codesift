@@ -76,7 +76,7 @@ import Counter from '../components/Counter.tsx';
 // ---------------------------------------------------------------------------
 
 beforeEach(async () => {
-  try { rmSync(TMP_ROOT, { recursive: true, force: true }); } catch { /* ok */ }
+  try { rmSync(TMP_ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ok */ }
   await initParser();
 });
 
