@@ -70,10 +70,9 @@ TOOL MAPPING (quick ref)
   broken links      → nextjs_link_integrity | data waterfalls → nextjs_data_flow
   middleware gaps   → nextjs_middleware_coverage | server/client → analyze_nextjs_components
   Hono overview     → analyze_hono_app (FIRST for any Hono project)
-  Hono middleware   → trace_middleware_chain | context flow → trace_context_flow
-  Hono conditional  → trace_conditional_middleware | inline handler → analyze_inline_handler
+  Hono middleware   → trace_middleware_chain (modes: route/scope/app-wide, only_conditional=true for applied_when)
+  Hono context flow → trace_context_flow | inline handler → analyze_inline_handler
   Hono API contract → extract_api_contract | response types → extract_response_types
-  Hono RPC types    → trace_rpc_types | security audit → audit_hono_security
-  Hono env types    → detect_middleware_env_regression | modules → detect_hono_modules
-  Hono dead routes  → find_dead_hono_routes | visualize → visualize_hono_routes
+  Hono RPC types    → trace_rpc_types | security+env → audit_hono_security (rate-limit, auth, env-regression #3587)
+  Hono modules      → detect_hono_modules | dead routes → find_dead_hono_routes | visualize → visualize_hono_routes
 `;

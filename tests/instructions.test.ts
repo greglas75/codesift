@@ -45,7 +45,13 @@ describe("CODESIFT_INSTRUCTIONS", () => {
 
   it("mentions Hono Phase 2 tools in TOOL MAPPING", () => {
     expect(CODESIFT_INSTRUCTIONS).toContain("analyze_hono_app");
-    expect(CODESIFT_INSTRUCTIONS).toContain("trace_conditional_middleware");
+    expect(CODESIFT_INSTRUCTIONS).toContain("trace_middleware_chain");
+    expect(CODESIFT_INSTRUCTIONS).toContain("only_conditional");
     expect(CODESIFT_INSTRUCTIONS).toContain("analyze_inline_handler");
+  });
+
+  it("does not reference tools merged out in consolidation", () => {
+    expect(CODESIFT_INSTRUCTIONS).not.toContain("trace_conditional_middleware");
+    expect(CODESIFT_INSTRUCTIONS).not.toContain("detect_middleware_env_regression");
   });
 });
