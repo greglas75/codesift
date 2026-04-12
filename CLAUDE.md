@@ -60,6 +60,26 @@ Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts
 ### CLI hooks (NEW)
 `codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift), PostToolUse (auto index-file after Edit/Write), and PreCompact (inject session snapshot before context compaction). Hooks go to `.claude/settings.local.json`.
 
+## Release & Install
+
+### Building and publishing a new version
+```bash
+npm run build                    # compile TypeScript → dist/
+npm version patch                # or: minor / major (bumps package.json + git tag)
+npm publish --ignore-scripts     # publish to npm (requires OTP)
+git push origin main --tags      # push commits + tag to GitHub
+```
+
+### Installing (for users)
+```bash
+npm install -g codesift-mcp      # install globally (always gets latest)
+codesift setup all               # configure all platforms (Claude, Codex, Cursor, Gemini, Antigravity)
+```
+
+Or per-platform: `codesift setup claude`, `codesift setup codex`, `codesift setup cursor`, `codesift setup gemini`.
+
+No version number needed — `npm install -g codesift-mcp` always installs latest. MCP configs use `npx -y codesift-mcp` which also auto-updates.
+
 ## After adding/changing features — update checklist
 
 When you add a new tool, change tool count, update benchmarks, or modify behavior:
@@ -69,7 +89,7 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
    - `rules/codesift.md` + `rules/codesift.mdc` + `rules/codex.md` + `rules/gemini.md` — update tool mapping
    - `CLAUDE.md` — update architecture section, tool count
    - `README.md` — update tool count, benchmarks, feature table
-   - Bump version: `npm version patch/minor` → `npm publish --ignore-scripts`
+   - Bump version + publish: see "Release & Install" above
 
 2. **Website (../codesift-website):**
    - `public/llms.txt` — update features, install instructions, tool count
