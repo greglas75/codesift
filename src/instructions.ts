@@ -2,7 +2,7 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 160 MCP tools (47 core, 113 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 161 MCP tools (48 core, 113 hidden via disable()).
 
 DISCOVERY (for the 113 hidden/niche tools)
   discover_tools(query="dead code")    → keyword search → returns tool names
@@ -49,6 +49,7 @@ TOOL MAPPING (quick ref)
   API endpoint      → trace_route (FIRST) | secrets → scan_secrets
   source → sink     → taint_trace(file_pattern=, framework="python-django")
   past sessions     → search_conversations | changed code → changed_symbols(since=)
+  plan next task    → plan_turn(query=...)
   session snapshot  → get_session_snapshot | session → get_session_context
   React components  → search_symbols(kind=component) | hooks → search_symbols(kind=hook)
   component tree    → trace_component_tree | hook analysis → analyze_hooks

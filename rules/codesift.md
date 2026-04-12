@@ -21,15 +21,15 @@ The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift t
 
 ## Tool Discovery
 
-**160 MCP tools total** (47 core visible + 113 discoverable).
+**161 MCP tools total** (48 core visible + 113 discoverable).
 
-47 core tools appear in ListTools. The remaining 113 niche tools are discovered on demand:
+48 core tools appear in ListTools. The remaining 113 niche tools are discovered on demand:
 
-- `discover_tools(query="dead code")` — keyword search across all 148 tools
+- `discover_tools(query="dead code")` — keyword search across all 161 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
-Core tools (46) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, `find_perf_hotspots`, `fan_in_fan_out`, `architecture_summary`, `explain_query`, etc.
+Core tools (48) always visible — includes search, symbols, context, analysis, architecture, conversations, and meta tools. Use `discover_tools` for niche tools like `classify_roles`, `find_unused_imports`, `rename_symbol`, `ast_query`, `find_perf_hotspots`, `fan_in_fan_out`, `architecture_summary`, `explain_query`, etc.
 
 ## Tool Mapping
 
@@ -73,6 +73,7 @@ Use this table to pick the right tool for each task:
 | index conversations | `index_conversations` |
 | structural diff | `diff_outline(since=)` |
 | what changed | `changed_symbols(since=)` |
+| start of task / unclear where to begin | `plan_turn(query=...)` |
 | React component tree | `trace_component_tree` |
 | React hook analysis | `analyze_hooks` |
 | React re-render analysis | `analyze_renders` |
@@ -152,6 +153,7 @@ Use this table to pick the right tool for each task:
 | security audit | `scan_secrets(min_confidence="high")` |
 | code audit | `search_patterns("empty-catch")` |
 | past decisions | `find_conversations_for_symbol` |
+| starting a task, want tool recommendations | `plan_turn(query=...)` |
 | React codebase | `trace_component_tree("App")` + `analyze_hooks` |
 | React anti-patterns | `search_patterns("hook-in-condition")` |
 | React call graph (clean) | `trace_call_chain(filter_react_hooks=true)` |
