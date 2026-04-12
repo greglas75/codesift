@@ -15,6 +15,9 @@ import {
   nestScheduleMap,
   nestTypeOrmMap,
   nestMicroserviceMap,
+  nestQueueMap,
+  nestScopeAudit,
+  nestOpenAPIExtract,
 } from "../../src/tools/nest-ext-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
@@ -446,5 +449,237 @@ export class OrdersController {
     mockedGetCodeIndex.mockResolvedValue(index);
     const result = await nestMicroserviceMap("test-repo");
     expect(result.errors!.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3 Feature 2: nest_queue_map (Bull/BullMQ)
+// ---------------------------------------------------------------------------
+
+describe("nest_queue_map", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-queue-"));
+    await mkdir(join(tmpRoot, "src/jobs"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("extracts @Processor class with @Process/@OnQueueFailed handlers", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/email.processor.ts"), `
+import { Processor, Process, OnQueueActive, OnQueueFailed } from '@nestjs/bull';
+import { Job } from 'bullmq';
+
+@Processor('email')
+export class EmailProcessor {
+  @Process()
+  async handleSend(job: Job) {}
+
+  @Process('welcome')
+  async handleWelcome(job: Job) {}
+
+  @OnQueueActive()
+  onActive(job: Job) {}
+
+  @OnQueueFailed()
+  onFailed(job: Job, err: Error) {}
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/jobs/email.processor.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestQueueMap("test-repo");
+    expect(result.processors.length).toBe(1);
+    const proc = result.processors[0]!;
+    expect(proc.processor_class).toBe("EmailProcessor");
+    expect(proc.queue_name).toBe("email");
+    expect(proc.handlers.length).toBe(4);
+    const processes = proc.handlers.filter((h) => h.decorator === "@Process");
+    expect(processes.length).toBe(2);
+    expect(processes.find((h) => h.handler === "handleWelcome")!.job_name).toBe("welcome");
+    expect(proc.handlers.some((h) => h.decorator === "@OnQueueFailed")).toBe(true);
+  });
+
+  it("extracts @InjectQueue producers", async () => {
+    await mkdir(join(tmpRoot, "src/mail"), { recursive: true });
+    await writeFile(join(tmpRoot, "src/mail/mail.service.ts"), `
+import { Injectable } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bullmq';
+
+@Injectable()
+export class MailService {
+  constructor(@InjectQueue('email') private readonly emailQueue: Queue) {}
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/mail/mail.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestQueueMap("test-repo");
+    expect(result.producers.length).toBe(1);
+    expect(result.producers[0]!.queue_name).toBe("email");
+    expect(result.producers[0]!.class_name).toBe("MailService");
+  });
+
+  it("CQ8: unreadable file appended to errors", async () => {
+    const index = mockIndexWithRoot(tmpRoot, ["src/jobs/missing.processor.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+    const result = await nestQueueMap("test-repo");
+    expect(result.errors).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3 Feature 3: nest_scope_audit (Request scope escalation)
+// ---------------------------------------------------------------------------
+
+describe("nest_scope_audit", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-scope-"));
+    await mkdir(join(tmpRoot, "src"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("detects REQUEST-scoped providers and walks consumers", async () => {
+    await writeFile(join(tmpRoot, "src/request.service.ts"), `
+import { Injectable, Scope } from '@nestjs/common';
+@Injectable({ scope: Scope.REQUEST })
+export class RequestService {
+  constructor() {}
+}
+`);
+    await writeFile(join(tmpRoot, "src/user.service.ts"), `
+import { Injectable } from '@nestjs/common';
+@Injectable()
+export class UserService {
+  constructor(private readonly reqSvc: RequestService) {}
+}
+`);
+    await writeFile(join(tmpRoot, "src/user.controller.ts"), `
+@Injectable()
+export class UserController {
+  constructor(private readonly userSvc: UserService) {}
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/request.service.ts",
+      "src/user.service.ts",
+      "src/user.controller.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestScopeAudit("test-repo");
+    expect(result.request_scoped.length).toBe(1);
+    const issue = result.request_scoped[0]!;
+    expect(issue.provider).toBe("RequestService");
+    expect(issue.escalated_consumers).toContain("UserService");
+    expect(issue.escalated_consumers).toContain("UserController");
+  });
+
+  it("returns empty when no REQUEST/TRANSIENT scopes", async () => {
+    await writeFile(join(tmpRoot, "src/default.service.ts"), `
+@Injectable() export class DefaultService { constructor() {} }
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/default.service.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+    const result = await nestScopeAudit("test-repo");
+    expect(result.request_scoped).toEqual([]);
+    expect(result.transient_scoped).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3 Feature 4: nest_openapi_extract (@nestjs/swagger → OpenAPI 3.1)
+// ---------------------------------------------------------------------------
+
+describe("nest_openapi_extract", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-openapi-"));
+    await mkdir(join(tmpRoot, "src/users"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("extracts OpenAPI spec from @ApiProperty DTOs + @ApiOperation routes", async () => {
+    await writeFile(join(tmpRoot, "src/users/create-user.dto.ts"), `
+import { ApiProperty } from '@nestjs/swagger';
+
+export class CreateUserDto {
+  @ApiProperty({ description: 'User name' })
+  readonly name: string;
+
+  @ApiProperty({ description: 'User email' })
+  readonly email: string;
+
+  @ApiProperty({ enum: ['admin', 'user'] })
+  readonly role?: string;
+}
+`);
+    await writeFile(join(tmpRoot, "src/users/users.controller.ts"), `
+import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { CreateUserDto } from './create-user.dto';
+
+@ApiTags('users')
+@Controller('users')
+export class UsersController {
+  @Get(':id')
+  @ApiOperation({ summary: 'Get user by id' })
+  @ApiBearerAuth()
+  @ApiResponse({ status: 200, description: 'User found', type: CreateUserDto })
+  findOne(@Param('id') id: string) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Create new user' })
+  create(@Body() dto: CreateUserDto) {}
+}
+`);
+
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/users/create-user.dto.ts",
+      "src/users/users.controller.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestOpenAPIExtract("test-repo", { title: "Test API", version: "2.0.0" });
+
+    expect(result.openapi).toBe("3.1.0");
+    expect(result.info.title).toBe("Test API");
+
+    // Schema
+    expect(result.components.schemas.CreateUserDto).toBeDefined();
+    expect(result.components.schemas.CreateUserDto!.properties.name).toBeDefined();
+    expect(result.components.schemas.CreateUserDto!.properties.name!.description).toBe("User name");
+    expect(result.components.schemas.CreateUserDto!.properties.role!.enum).toEqual(["admin", "user"]);
+
+    // Paths
+    expect(result.paths["/users/:id"]).toBeDefined();
+    expect(result.paths["/users/:id"]!.get!.summary).toBe("Get user by id");
+    expect(result.paths["/users/:id"]!.get!.tags).toContain("users");
+    expect(result.paths["/users/:id"]!.get!.security).toEqual([{ bearer: [] }]);
+
+    expect(result.paths["/users"]).toBeDefined();
+    expect(result.paths["/users"]!.post!.summary).toBe("Create new user");
+    expect(result.paths["/users"]!.post!.requestBody).toBeDefined();
+  });
+
+  it("returns empty paths when no controllers have Swagger decorators", async () => {
+    const index = mockIndexWithRoot(tmpRoot, []);
+    mockedGetCodeIndex.mockResolvedValue(index);
+    const result = await nestOpenAPIExtract("test-repo");
+    expect(result.paths).toEqual({});
+    expect(result.components.schemas).toEqual({});
   });
 });

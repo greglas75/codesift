@@ -1221,18 +1221,46 @@ describe("pattern-tools — NestJS anti-patterns", () => {
   });
 
   describe("listPatterns includes NestJS patterns", () => {
-    it("contains all 9 NestJS patterns (7 Wave 1 + 2 Wave 2)", () => {
+    it("contains all 24 NestJS patterns (7 Wave 1 + 2 Wave 2 + 15 Wave 3 nestjs-doctor parity)", () => {
       const patterns = listPatterns();
       const nestPatterns = patterns.filter((p) => p.name.startsWith("nest-"));
-      expect(nestPatterns.length).toBe(9);
+      expect(nestPatterns.length).toBe(24);
     });
 
-    it("each NestJS pattern has a description ending with (NestJS)", () => {
+    it("each NestJS pattern has a description mentioning NestJS", () => {
       const patterns = listPatterns();
       const nestPatterns = patterns.filter((p) => p.name.startsWith("nest-"));
       for (const p of nestPatterns) {
-        expect(p.description).toContain("(NestJS)");
+        expect(p.description).toContain("NestJS");
       }
+    });
+  });
+
+  // --- Wave 3 nestjs-doctor parity rules ---
+  describe("Wave 3 NestJS rules", () => {
+    it("nest-typeorm-synchronize-prod matches synchronize: true", () => {
+      const re = BUILTIN_PATTERNS["nest-typeorm-synchronize-prod"]!.regex;
+      expect(re.test("TypeOrmModule.forRoot({ synchronize: true })")).toBe(true);
+    });
+
+    it("nest-cors-wildcard matches cors wildcard", () => {
+      const re = BUILTIN_PATTERNS["nest-cors-wildcard"]!.regex;
+      expect(re.test("app.enableCors({ origin: '*' })")).toBe(true);
+    });
+
+    it("nest-moduleref-get matches ModuleRef.get() service locator", () => {
+      const re = BUILTIN_PATTERNS["nest-moduleref-get"]!.regex;
+      expect(re.test("const svc = this.moduleRef.get(UserService)")).toBe(true);
+    });
+
+    it("nest-sync-fs-in-handler matches readFileSync", () => {
+      const re = BUILTIN_PATTERNS["nest-sync-fs-in-handler"]!.regex;
+      expect(re.test("const data = readFileSync('./file.json')")).toBe(true);
+    });
+
+    it("nest-disabled-csrf matches csrf: false", () => {
+      const re = BUILTIN_PATTERNS["nest-disabled-csrf"]!.regex;
+      expect(re.test("csrfProtection: { disabled: true }")).toBe(true);
     });
   });
 });

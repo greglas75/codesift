@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CodeIndex } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
+import { getCachedParse, setCachedParse } from "../parser/parse-cache.js";
 import { extractPythonImports } from "./python-imports.js";
 import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
 import { resolvePhpNamespace } from "../tools/php-tools.js";
@@ -312,12 +313,19 @@ export async function collectImportEdges(
       }
     }
 
-    // Python imports via tree-sitter AST + package-aware resolution
+    // Python imports via tree-sitter AST + package-aware resolution.
+    // Uses parse cache to avoid re-parsing files already parsed by the
+    // symbol extractor pipeline — Python files are the only ones parsed
+    // twice per index (once for symbols, once for imports here).
     if (!pythonDisabled && file.path.endsWith(".py")) {
       try {
         const parser = await getParser("python");
         if (parser) {
-          const tree = parser.parse(source);
+          let tree = getCachedParse("python", source);
+          if (!tree) {
+            tree = parser.parse(source);
+            setCachedParse("python", source, tree);
+          }
           const pyImports = extractPythonImports(tree);
           for (const imp of pyImports) {
             const targetFile = resolvePythonImport(

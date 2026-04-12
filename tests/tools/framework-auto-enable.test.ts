@@ -27,6 +27,11 @@ describe("Framework-specific tool bundle auto-enable", () => {
       "nest_schedule_map",
       "nest_typeorm_map",
       "nest_microservice_map",
+      // Wave 3
+      "nest_request_pipeline",
+      "nest_queue_map",
+      "nest_scope_audit",
+      "nest_openapi_extract",
     ];
     for (const name of nestTools) {
       const handle = getToolHandle(name);
@@ -36,7 +41,7 @@ describe("Framework-specific tool bundle auto-enable", () => {
     }
   });
 
-  it("enableFrameworkToolBundle('nestjs') enables all 10 nest_* discoverable tools", () => {
+  it("enableFrameworkToolBundle('nestjs') enables all 14 nest_* discoverable tools", () => {
     const enabled = enableFrameworkToolBundle("nestjs");
     expect(enabled).toEqual([
       "nest_lifecycle_map",
@@ -49,6 +54,10 @@ describe("Framework-specific tool bundle auto-enable", () => {
       "nest_schedule_map",
       "nest_typeorm_map",
       "nest_microservice_map",
+      "nest_request_pipeline",
+      "nest_queue_map",
+      "nest_scope_audit",
+      "nest_openapi_extract",
     ]);
   });
 

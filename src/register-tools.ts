@@ -65,6 +65,7 @@ import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
 import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { astroContentCollections } from "./tools/astro-content-collections.js";
+import { astroAudit } from "./tools/astro-audit.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { getModelGraph } from "./tools/model-tools.js";
 import { getTestFixtures } from "./tools/pytest-tools.js";
@@ -83,6 +84,7 @@ import { findPythonCircularImports } from "./tools/python-circular-imports.js";
 import { pythonAudit } from "./tools/python-audit.js";
 import { traceFastAPIDepends } from "./tools/fastapi-depends.js";
 import { analyzeAsyncCorrectness } from "./tools/async-correctness.js";
+import { getPydanticModels } from "./tools/pydantic-models.js";
 import { reviewDiff } from "./tools/review-diff-tools.js";
 import { auditScan } from "./tools/audit-tools.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
@@ -96,8 +98,8 @@ import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
 import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
 import { architectureSummary } from "./tools/architecture-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit } from "./tools/nest-tools.js";
-import { nestGraphQLMap, nestWebSocketMap, nestScheduleMap, nestTypeOrmMap, nestMicroserviceMap } from "./tools/nest-ext-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, nestRequestPipeline } from "./tools/nest-tools.js";
+import { nestGraphQLMap, nestWebSocketMap, nestScheduleMap, nestTypeOrmMap, nestMicroserviceMap, nestQueueMap, nestScopeAudit, nestOpenAPIExtract } from "./tools/nest-ext-tools.js";
 import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
@@ -231,6 +233,11 @@ const FRAMEWORK_TOOL_BUNDLES: Record<string, string[]> = {
     "nest_schedule_map",
     "nest_typeorm_map",
     "nest_microservice_map",
+    // Wave 3
+    "nest_request_pipeline",
+    "nest_queue_map",
+    "nest_scope_audit",
+    "nest_openapi_extract",
     // nest_audit is already core — always visible
   ],
 };
@@ -2336,6 +2343,24 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "get_pydantic_models",
+    category: "analysis",
+    requiresLanguage: "python",
+    searchHint: "python pydantic basemodel fastapi schema request response contract validator field constraint type classdiagram",
+    description: "Extract Pydantic models: fields with types, validators, Field() constraints, model_config, cross-model references (list[X], Optional[Y]), inheritance. JSON or mermaid classDiagram.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Filter by file path substring"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output as structured JSON or mermaid classDiagram"),
+    },
+    handler: async (args) => {
+      const opts: Parameters<typeof getPydanticModels>[1] = {};
+      if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
+      if (args.output_format != null) opts!.output_format = args.output_format as "json" | "mermaid";
+      return await getPydanticModels(args.repo as string, opts);
+    },
+  },
+  {
     name: "python_audit",
     category: "analysis",
     requiresLanguage: "python",
@@ -3052,6 +3077,65 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args: { repo?: string; max_patterns?: number }) => nestMicroserviceMap(args.repo ?? "", args),
   },
+  // --- Wave 3 NestJS tools ---
+  {
+    name: "nest_request_pipeline",
+    category: "nestjs",
+    searchHint: "nestjs request pipeline middleware guard interceptor pipe filter handler execution flow visualization",
+    description: "Visualize full NestJS request execution pipeline for a single route — middleware → global/controller/method guards → pipes → interceptors → handler → filters. Optional mermaid output.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      route: z.string().describe("Route path to trace (e.g. '/users/:id')"),
+      method: z.string().optional().describe("HTTP method (default: GET)"),
+      output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: json (default) or mermaid"),
+    },
+    handler: async (rawArgs: Record<string, unknown>) => {
+      const args = rawArgs as { repo?: string; route: string; method?: string; output_format?: "json" | "mermaid" };
+      const opts: Parameters<typeof nestRequestPipeline>[1] = { route: args.route };
+      if (args.method) opts.method = args.method;
+      if (args.output_format) opts.output_format = args.output_format;
+      return nestRequestPipeline(args.repo ?? "", opts);
+    },
+  },
+  {
+    name: "nest_queue_map",
+    category: "nestjs",
+    searchHint: "nestjs bull bullmq queue processor process inject background job worker",
+    description: "Discover Bull/BullMQ @Processor classes, @Process/@OnQueueFailed/@OnQueueCompleted handlers, and @InjectQueue producers.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_processors: z.number().optional().describe("Max processors (default: 200)"),
+    },
+    handler: async (args: { repo?: string; max_processors?: number }) => nestQueueMap(args.repo ?? "", args),
+  },
+  {
+    name: "nest_scope_audit",
+    category: "nestjs",
+    searchHint: "nestjs scope request transient singleton provider performance escalation dependency injection",
+    description: "Detect Scope.REQUEST and Scope.TRANSIENT providers and walk DI graph to find transitively escalated consumers (silent perf cliff).",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      max_providers: z.number().optional().describe("Max providers to analyze (default: 200)"),
+    },
+    handler: async (args: { repo?: string; max_providers?: number }) => nestScopeAudit(args.repo ?? "", args),
+  },
+  {
+    name: "nest_openapi_extract",
+    category: "nestjs",
+    searchHint: "nestjs swagger openapi api documentation apiproperty apioperation apiresponse contract extract",
+    description: "Extract OpenAPI 3.1 spec from @nestjs/swagger decorators (@ApiProperty, @ApiOperation, @ApiResponse, @ApiTags, @ApiBearerAuth) without running the app.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      title: z.string().optional().describe("API title (default: 'NestJS API')"),
+      version: z.string().optional().describe("API version (default: '1.0.0')"),
+    },
+    handler: async (args: { repo?: string; title?: string; version?: string }) => {
+      const opts: Parameters<typeof nestOpenAPIExtract>[1] = {};
+      if (args.title) opts.title = args.title;
+      if (args.version) opts.version = args.version;
+      return nestOpenAPIExtract(args.repo ?? "", opts);
+    },
+  },
 
   // --- Agent config audit ---
   {
@@ -3276,12 +3360,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       severity: z.enum(["all", "warnings", "errors"]).default("all").describe("Filter issues by severity (default: all)"),
       path_prefix: z.string().optional().describe("Only scan files under this path prefix"),
+      fail_on: z.enum(["error", "warning", "info"]).optional().describe("Set exit_code gate: 'error' exits 1 on any errors; 'warning' exits 2 on warnings; 'info' exits 2 on info or warnings"),
     },
     handler: async (args) => {
       const opts: Parameters<typeof astroHydrationAudit>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
       if (args.severity != null) opts.severity = args.severity as "all" | "warnings" | "errors";
       if (args.path_prefix != null) opts.path_prefix = args.path_prefix as string;
+      if (args.fail_on != null) opts.fail_on = args.fail_on as "error" | "warning" | "info";
       return await astroHydrationAudit(opts);
     },
   },
@@ -3353,11 +3439,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "astro_audit",
     category: "analysis",
-    searchHint: "astro meta audit full health check score gates recommendations",
+    searchHint: "astro meta audit full health check score gates recommendations islands hydration routes config actions content migration patterns",
     description: "One-call Astro project health check: runs all 7 Astro tools + 13 Astro patterns in parallel, returns unified {score, gates, sections, recommendations}. Mirrors react_quickstart pattern.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      skip: z.array(z.string()).optional().describe("Skip specific sections (e.g., ['migration', 'content'])"),
+      skip: z.array(z.string()).optional().describe("Sections to skip: config, hydration, routes, actions, content, migration, patterns"),
     },
     handler: async (args) => {
       const opts: Parameters<typeof astroAudit>[0] = {};

@@ -54,6 +54,7 @@ export type DetailLevel = "compact" | "standard" | "full";
 export interface SearchSymbolsOptions {
   kind?: SymbolKind | undefined;
   file_pattern?: string | undefined;
+  decorator?: string | undefined;
   include_source?: boolean | undefined;
   top_k?: number | undefined;
   source_chars?: number | undefined;
@@ -75,13 +76,28 @@ export interface SearchTextOptions {
 
 // ── Private helpers ─────────────────────────────────────
 
+function matchesDecoratorFilter(
+  decorators: string[] | undefined,
+  decoratorFilter: string | undefined,
+): boolean {
+  if (!decoratorFilter) return true;
+  if (!decorators || decorators.length === 0) return false;
+
+  const normalizedFilter = decoratorFilter.trim().replace(/^@/, "");
+  return decorators.some((decorator) => {
+    const normalized = decorator.trim().replace(/^@/, "");
+    return normalized === normalizedFilter || normalized.startsWith(`${normalizedFilter}(`);
+  });
+}
+
 /** Check if a symbol matches the active kind and file_pattern filters. */
 function matchesSymbolFilters(
-  symbol: { kind: string; file: string },
-  options?: Pick<SearchSymbolsOptions, "kind" | "file_pattern">,
+  symbol: { kind: string; file: string; decorators?: string[] },
+  options?: Pick<SearchSymbolsOptions, "kind" | "file_pattern" | "decorator">,
 ): boolean {
   if (options?.kind && symbol.kind !== options.kind) return false;
   if (options?.file_pattern && !matchFilePattern(symbol.file, options.file_pattern)) return false;
+  if (!matchesDecoratorFilter(symbol.decorators, options?.decorator)) return false;
   return true;
 }
 
@@ -430,10 +446,10 @@ function groupMatchesByFile(matches: TextMatch[]): TextMatchGroup[] {
 
 /**
  * Search symbols by name/signature/docstring using BM25 ranking.
- * Supports filtering by symbol kind and file pattern.
+ * Supports filtering by symbol kind, file pattern, and decorator metadata.
  *
  * When query is empty, returns all symbols matching the filters (up to top_k).
- * When kind or file_pattern filters are active, BM25 searches a wider candidate
+ * When kind, decorator, or file_pattern filters are active, BM25 searches a wider candidate
  * set to avoid post-filter truncation.
  */
 export async function searchSymbols(
@@ -450,7 +466,7 @@ export async function searchSymbols(
   const includeSource = options?.include_source ?? true;
   const defaultK = (includeSource && !options?.file_pattern) ? DEFAULT_TOP_K_WITH_SOURCE : config.defaultTopK;
   const topK = options?.top_k ?? defaultK;
-  const hasFilters = !!options?.kind || !!options?.file_pattern;
+  const hasFilters = !!options?.kind || !!options?.file_pattern || !!options?.decorator;
 
   let results: SearchResult[];
 

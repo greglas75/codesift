@@ -10,7 +10,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, detectCycles } from "../../src/tools/nest-tools.js";
+import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, detectCycles, nestRequestPipeline } from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -1029,5 +1029,124 @@ describe("nest_audit", () => {
     expect(result.microservice_map).toBeUndefined();
     // Wave 1 fields also undefined
     expect(result.lifecycle_map).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3 Feature 1: nest_request_pipeline
+// ---------------------------------------------------------------------------
+
+describe("nest_request_pipeline", () => {
+  let tmpRoot: string;
+
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "nest-pipeline-"));
+    await mkdir(join(tmpRoot, "src"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  function mockIndexWithRoot(root: string, filePaths: string[]): CodeIndex {
+    return {
+      root,
+      files: filePaths.map((p) => ({ path: p, size: 100 })),
+      symbols: [],
+    } as unknown as CodeIndex;
+  }
+
+  it("returns ordered pipeline steps for a single route", async () => {
+    await writeFile(join(tmpRoot, "src/app.module.ts"), `
+import { Module } from '@nestjs/common';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+@Module({
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
+  ],
+})
+export class AppModule {}
+`);
+    await writeFile(join(tmpRoot, "src/users.controller.ts"), `
+import { Controller, Get, UseGuards } from '@nestjs/common';
+
+@UseGuards(AuthGuard)
+@Controller('users')
+export class UsersController {
+  @UseGuards(RolesGuard)
+  @Get(':id')
+  findOne() { return {}; }
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, [
+      "src/app.module.ts",
+      "src/users.controller.ts",
+    ]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestRequestPipeline("test-repo", {
+      route: "/users/:id",
+      method: "GET",
+    });
+
+    expect(result.route).toBe("/users/:id");
+    expect(result.method).toBe("GET");
+    expect(result.controller).toBe("UsersController");
+    expect(result.handler).toBe("findOne");
+    expect(result.steps.length).toBeGreaterThan(0);
+
+    // Verify order: global → controller → method → handler
+    const layers = result.steps.map((s) => s.layer);
+    const globalGuardIdx = layers.indexOf("global-guard");
+    const ctrlGuardIdx = layers.indexOf("controller-guard");
+    const methodGuardIdx = layers.indexOf("method-guard");
+    const handlerIdx = layers.indexOf("handler");
+
+    expect(globalGuardIdx).toBeGreaterThanOrEqual(0);
+    expect(ctrlGuardIdx).toBeGreaterThan(globalGuardIdx);
+    expect(methodGuardIdx).toBeGreaterThan(ctrlGuardIdx);
+    expect(handlerIdx).toBeGreaterThan(methodGuardIdx);
+
+    // Verify specific guard names
+    expect(result.steps.some((s) => s.name === "ThrottlerGuard")).toBe(true);
+    expect(result.steps.some((s) => s.name === "AuthGuard")).toBe(true);
+    expect(result.steps.some((s) => s.name === "RolesGuard")).toBe(true);
+  });
+
+  it("produces mermaid output when output_format=mermaid", async () => {
+    await writeFile(join(tmpRoot, "src/health.controller.ts"), `
+@Controller('health')
+export class HealthController {
+  @Get()
+  check() { return 'ok'; }
+}
+`);
+    const index = mockIndexWithRoot(tmpRoot, ["src/health.controller.ts"]);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestRequestPipeline("test-repo", {
+      route: "/health",
+      method: "GET",
+      output_format: "mermaid",
+    });
+
+    expect(result.mermaid).toBeDefined();
+    expect(result.mermaid!).toContain("flowchart TD");
+    expect(result.mermaid!).toContain("Request");
+    expect(result.mermaid!).toContain("check");
+  });
+
+  it("returns NotFound when route does not exist", async () => {
+    const index = mockIndexWithRoot(tmpRoot, []);
+    mockedGetCodeIndex.mockResolvedValue(index);
+
+    const result = await nestRequestPipeline("test-repo", {
+      route: "/nonexistent",
+      method: "GET",
+    });
+
+    expect(result.controller).toBe("NotFound");
+    expect(result.steps).toEqual([]);
   });
 });

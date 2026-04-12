@@ -155,7 +155,18 @@ export async function parseFile(
   if (!parser) return null;
 
   try {
-    return parser.parse(source);
+    // Check parse cache first — Python files are parsed twice per index
+    // (symbols + imports), so caching the tree saves a second tree-sitter
+    // walk. Other languages are also cacheable but currently parse once.
+    // Uses dynamic import to avoid a circular dep (parse-cache imports
+    // Parser type, parser-manager depends on parse-cache for cache hits).
+    const { getCachedParse, setCachedParse } = await import("./parse-cache.js");
+    const cached = getCachedParse(language, source);
+    if (cached) return cached;
+
+    const tree = parser.parse(source);
+    setCachedParse(language, source, tree);
+    return tree;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[parser] Parse error in ${filePath}: ${message}`);

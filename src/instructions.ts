@@ -18,29 +18,20 @@ HINT CODES (act on immediately when they appear in responses)
   H9     → use semantic_search       H10 → call get_session_snapshot
   H11    → use search_text instead
 
-ALWAYS
-  repo auto-resolves from CWD — skip list_repos. Pass file_pattern when scope known.
-  Use get_symbols (batch) for 2+. Batch 3+ into codebase_retrieval(queries=[...]).
-  Pass token_budget. Call index_file(path) after edits. Use trace_route for endpoints.
-  Use semantic_search for conceptual queries.
+ALWAYS: repo auto-resolves, skip list_repos. file_pattern when scoped. get_symbols (batch)
+  for 2+. Batch 3+ into codebase_retrieval. token_budget to cap. index_file after edits.
+  trace_route for endpoints. semantic_search for conceptual queries.
 
-NEVER
-  index_folder if already indexed. list_repos in single-repo sessions.
-  get_knowledge_map without detect_communities (129K+). Read file for return type → get_type_info.
+NEVER: index_folder if already indexed. list_repos in single-repo. get_knowledge_map
+  without detect_communities (129K+). Read file for return type → get_type_info.
 
 KEY PARAMS
-  search_symbols:  detail_level=compact (~15 tok/result) | token_budget=N | kind=function/class/type/component/hook
-  search_text:     group_by_file=true (-80% output) | auto_group=true (>50 matches)
-                   ranked=true → classify by function, dedup (max 2/fn), rank by centrality
-  assemble_context: level=L0 (full source) | L1 (signatures, 3-5x denser) | L2 (summaries) | L3 (dirs)
-  codebase_retrieval: always pass token_budget; batch 3+ queries
-  get_knowledge_map: ALWAYS pass focus= to avoid 129K+ token dumps
+  search_symbols: detail_level=compact | token_budget=N | kind=function/class/component/hook
+  search_text: group_by_file=true | auto_group | ranked=true (dedup by function)
+  assemble_context: L0 full | L1 sigs (3-5x denser) | L2 summaries | L3 dirs
+  codebase_retrieval: always token_budget | get_knowledge_map: ALWAYS focus=
 
-RESPONSE CASCADE (auto, no params needed)
-  >52.5K chars → compact format    [compact] annotation prepended
-  >87.5K chars → counts only       [counts] annotation prepended
-  >105K chars  → hard truncate
-  Cascade skipped when detail_level or token_budget is explicitly set.
+CASCADE (auto): >52.5K→compact, >87.5K→counts, >105K→truncate. Skipped if detail_level/token_budget set.
 
 TOOL MAPPING (quick ref)
   text pattern      → search_text(file_pattern=)
@@ -56,6 +47,7 @@ TOOL MAPPING (quick ref)
   architecture/deps → detect_communities(focus=) | git churn → analyze_hotspots(since_days=90)
   mermaid diagram   → trace_call_chain(output_format="mermaid")
   API endpoint      → trace_route (FIRST) | secrets → scan_secrets
+  source → sink     → taint_trace(file_pattern=, framework="python-django")
   past sessions     → search_conversations | changed code → changed_symbols(since=)
   session snapshot  → get_session_snapshot | session → get_session_context
   React components  → search_symbols(kind=component) | hooks → search_symbols(kind=hook)
