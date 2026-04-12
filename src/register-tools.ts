@@ -160,6 +160,38 @@ export const zNum = () =>
       .pipe(zFiniteNumber),
   ]).optional();
 
+type ToolSchemaShape = Record<string, z.ZodTypeAny>;
+
+function lazySchema(factory: () => ToolSchemaShape): ToolSchemaShape {
+  let cached: ToolSchemaShape | undefined;
+  const resolve = (): ToolSchemaShape => {
+    cached ??= factory();
+    return cached;
+  };
+
+  return new Proxy({} as ToolSchemaShape, {
+    get(_target, prop) {
+      return resolve()[prop as keyof ToolSchemaShape];
+    },
+    has(_target, prop) {
+      return prop in resolve();
+    },
+    ownKeys() {
+      return Reflect.ownKeys(resolve());
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      const descriptor = Object.getOwnPropertyDescriptor(resolve(), prop);
+      if (descriptor) return descriptor;
+      return {
+        configurable: true,
+        enumerable: true,
+        writable: false,
+        value: resolve()[prop as keyof ToolSchemaShape],
+      };
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // H11 — warn when symbol tools return empty for repos with text_stub languages
 // ---------------------------------------------------------------------------
@@ -257,6 +289,63 @@ export function getToolHandle(name: string) {
   return toolHandles.get(name);
 }
 
+interface RegistrationContext {
+  server: Pick<McpServer, "tool">;
+  languages: ProjectLanguages;
+}
+
+let registrationContext: RegistrationContext | null = null;
+
+function isToolLanguageEnabled(tool: ToolDefinition, languages: ProjectLanguages): boolean {
+  if (!tool.requiresLanguage) return true;
+  return languages[tool.requiresLanguage];
+}
+
+function registerToolDefinition(
+  server: Pick<McpServer, "tool">,
+  tool: ToolDefinition,
+  languages: ProjectLanguages,
+) {
+  const existing = toolHandles.get(tool.name);
+  if (existing) return existing;
+
+  const handle = server.tool(
+    tool.name,
+    tool.description,
+    tool.schema,
+    async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
+  );
+
+  if (!isToolLanguageEnabled(tool, languages) && typeof handle.disable === "function") {
+    handle.disable();
+  }
+
+  toolHandles.set(tool.name, handle);
+  return handle;
+}
+
+function ensureToolRegistered(name: string) {
+  const existing = toolHandles.get(name);
+  if (existing) return existing;
+
+  const context = registrationContext;
+  if (!context) return undefined;
+
+  const tool = TOOL_DEFINITION_MAP.get(name);
+  if (!tool) return undefined;
+
+  return registerToolDefinition(context.server, tool, context.languages);
+}
+
+function enableToolByName(name: string): boolean {
+  const handle = ensureToolRegistered(name);
+  if (!handle) return false;
+  if (typeof handle.enable === "function") {
+    handle.enable();
+  }
+  return true;
+}
+
 /** Framework-specific tool bundles — auto-enabled when the framework is detected in an indexed repo */
 const FRAMEWORK_TOOL_BUNDLES: Record<string, string[]> = {
   nestjs: [
@@ -278,9 +367,7 @@ export function enableFrameworkToolBundle(framework: string): string[] {
 
   const enabled: string[] = [];
   for (const name of bundle) {
-    const handle = toolHandles.get(name);
-    if (handle && typeof handle.enable === "function") {
-      handle.enable();
+    if (enableToolByName(name)) {
       enabled.push(name);
     }
   }
@@ -707,11 +794,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "indexing",
     searchHint: "index local folder directory project parse symbols",
     description: "Index a local folder, extracting symbols and building the search index",
-    schema: {
+    schema: lazySchema(() => ({
       path: z.string().describe("Absolute path to the folder to index"),
       incremental: zBool().describe("Only re-index changed files"),
       include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
-    },
+    })),
     handler: (args) => indexFolder(args.path as string, {
       incremental: args.incremental as boolean | undefined,
       include_paths: args.include_paths as string[] | undefined,
@@ -722,11 +809,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "indexing",
     searchHint: "clone remote git repository index",
     description: "Clone and index a remote git repository",
-    schema: {
+    schema: lazySchema(() => ({
       url: z.string().describe("Git clone URL"),
       branch: z.string().optional().describe("Branch to checkout"),
       include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
-    },
+    })),
     handler: (args) => indexRepo(args.url as string, {
       branch: args.branch as string | undefined,
       include_paths: args.include_paths as string[] | undefined,
@@ -738,10 +825,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "list indexed repositories repos available",
     outputSchema: OutputSchemas.repoList,
     description: "List indexed repos. Only needed for multi-repo discovery — single-repo tools auto-resolve from CWD. Set compact=false for full metadata.",
-    schema: {
+    schema: lazySchema(() => ({
       compact: zBool().describe("true=names only (default), false=full metadata"),
       name_contains: z.string().optional().describe("Filter repos by name substring (case-insensitive). E.g. 'tgm' matches 'local/tgm-panel'"),
-    },
+    })),
     handler: (args) => {
       const opts: { compact?: boolean; name_contains?: string } = {
         compact: (args.compact as boolean | undefined) ?? true,
@@ -755,9 +842,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "indexing",
     searchHint: "clear cache invalidate re-index refresh",
     description: "Clear the index cache for a repository, forcing full re-index on next use",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: (args) => invalidateCache(args.repo as string),
   },
 
@@ -766,9 +853,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "indexing",
     searchHint: "re-index single file update incremental",
     description: "Re-index a single file after editing. Auto-finds repo, skips if unchanged.",
-    schema: {
+    schema: lazySchema(() => ({
       path: z.string().describe("Absolute path to the file to re-index"),
-    },
+    })),
     handler: (args) => indexFile(args.path as string),
   },
 
@@ -779,7 +866,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "search find symbols functions classes types methods by name signature",
     outputSchema: OutputSchemas.searchResults,
     description: "Search symbols by name/signature. Supports kind, file, and decorator filters. detail_level: compact (~15 tok), standard (default), full.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Search query string"),
       kind: z.string().optional().describe("Filter by symbol kind (function, class, etc.)"),
@@ -791,7 +878,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       detail_level: z.enum(["compact", "standard", "full"]).optional().describe("compact (~15 tok), standard (default), full (all source)"),
       token_budget: zNum().describe("Max tokens for results — greedily packs results until budget exhausted. Overrides top_k."),
       rerank: zBool().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
-    },
+    })),
     handler: async (args) => {
       const results = await searchSymbols(args.repo as string, args.query as string, {
         kind: args.kind as SymbolKind | undefined,
@@ -814,13 +901,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search",
     searchHint: "AST tree-sitter query structural pattern matching code shape jsx react",
     description: "Search AST patterns via tree-sitter S-expressions. Finds code by structural shape. React examples (language='tsx'): `(jsx_element open_tag: (jsx_opening_element name: (identifier) @tag))` finds all JSX component usage; `(call_expression function: (identifier) @fn (#match? @fn \"^use[A-Z]\"))` finds all hook calls.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Tree-sitter query in S-expression syntax. For JSX/React use language='tsx'."),
       language: z.string().describe("Tree-sitter grammar: typescript, tsx, javascript, python, go, rust, java, ruby, php"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       max_matches: zNum().describe("Maximum matches to return (default: 50)"),
-    },
+    })),
     handler: async (args) => {
       const { astQuery } = await import("./tools/ast-query-tools.js");
       return astQuery(args.repo as string, args.query as string, {
@@ -835,14 +922,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search",
     searchHint: "semantic meaning intent concept embedding vector natural language",
     description: "Search code by meaning using embeddings. For intent-based queries: 'error handling', 'auth flow'. Requires indexed embeddings.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Natural language query describing what you're looking for"),
       top_k: zNum().describe("Number of results (default: 10)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       exclude_tests: zBool().describe("Exclude test files from results"),
       rerank: zBool().describe("Re-rank results with cross-encoder for better precision"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof semanticSearch>[2] = {};
       if (args.top_k != null) opts.top_k = args.top_k as number;
@@ -857,7 +944,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search",
     searchHint: "full-text search grep regex keyword content files",
     description: "Full-text search across all files. For conceptual queries use semantic_search.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Search query or regex pattern"),
       regex: zBool().describe("Treat query as a regex pattern"),
@@ -867,7 +954,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       group_by_file: zBool().describe("Group by file: {file, count, lines[], first_match}. ~80% less output."),
       auto_group: zBool().describe("Auto group_by_file when >50 matches."),
       ranked: z.boolean().optional().describe("Classify hits by containing symbol and rank by centrality"),
-    },
+    })),
     handler: (args) => searchText(args.repo as string, args.query as string, {
       regex: args.regex as boolean | undefined,
       context_lines: args.context_lines as number | undefined,
@@ -886,14 +973,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "file tree directory structure listing files symbols",
     outputSchema: OutputSchemas.fileTree,
     description: "File tree with symbol counts. compact=true for flat list (10-50x less output). Cached 5min.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
       name_pattern: z.string().optional().describe("Glob pattern to filter file names"),
       depth: zNum().describe("Maximum directory depth to traverse"),
       compact: zBool().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
       min_symbols: zNum().describe("Only include files with at least this many symbols"),
-    },
+    })),
     handler: async (args) => {
       const result = await getFileTree(args.repo as string, {
         path_prefix: args.path_prefix as string | undefined,
@@ -911,10 +998,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "file outline symbols functions classes exports single file",
     outputSchema: OutputSchemas.fileOutline,
     description: "Get the symbol outline of a single file (functions, classes, exports)",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_path: z.string().describe("Relative file path within the repository"),
-    },
+    })),
     handler: async (args) => {
       const result = await getFileOutline(args.repo as string, args.file_path as string);
       const output = formatFileOutline(result as never);
@@ -928,9 +1015,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "outline",
     searchHint: "repository outline overview directory structure high-level",
     description: "Get a high-level outline of the entire repository grouped by directory",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const result = await getRepoOutline(args.repo as string);
       return formatRepoOutline(result as never);
@@ -942,9 +1029,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "outline",
     searchHint: "suggest queries explore unfamiliar repo onboarding first call",
     description: "Suggest queries for exploring a new repo. Returns top files, kind distribution, examples.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const result = await suggestQueries(args.repo as string);
       return formatSuggestQueries(result as never);
@@ -958,11 +1045,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "get retrieve single symbol source code by ID",
     outputSchema: OutputSchemas.symbol,
     description: "Get symbol by ID with source. Auto-prefetches children for classes. For batch: get_symbols. For context: get_context_bundle.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_id: z.string().describe("Unique symbol identifier"),
       include_related: zBool().describe("Include children/related symbols (default: true)"),
-    },
+    })),
     handler: async (args) => {
       const opts: { include_related?: boolean } = {};
       if (args.include_related != null) opts.include_related = args.include_related as boolean;
@@ -983,13 +1070,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "symbols",
     searchHint: "batch get multiple symbols by IDs",
     description: "Retrieve multiple symbols by ID in a single batch call",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_ids: z.union([
         z.array(z.string()),
         z.string().transform((s) => JSON.parse(s) as string[]),
       ]).describe("Array of symbol identifiers. Can be passed as JSON string."),
-    },
+    })),
     handler: async (args) => {
       const syms = await getSymbols(args.repo as string, args.symbol_ids as string[]);
       const output = await formatSymbolsCompact(syms);
@@ -1002,11 +1089,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "symbols",
     searchHint: "find symbol by name show source code references",
     description: "Find a symbol by name and show its source, optionally including references",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Symbol name or query to search for"),
       include_refs: zBool().describe("Include locations that reference this symbol"),
-    },
+    })),
     handler: async (args) => {
       const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
       if (!result) return null;
@@ -1022,10 +1109,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "symbols",
     searchHint: "context bundle symbol imports siblings callers one call",
     description: "Symbol + imports + siblings in one call. Saves 2-3 round-trips.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to find"),
-    },
+    })),
     handler: async (args) => {
       const bundle = await getContextBundle(args.repo as string, args.symbol_name as string);
       if (!bundle) return null;
@@ -1040,13 +1127,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "find references usages callers who uses symbol",
     outputSchema: OutputSchemas.references,
     description: "Find all references to a symbol. Pass symbol_names array for batch search.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
       symbol_names: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional()
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
-    },
+    })),
     handler: async (args) => {
       const names = args.symbol_names as string[] | undefined;
       if (names && names.length > 0) {
@@ -1064,7 +1151,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "trace call chain callers callees dependency graph mermaid react hooks",
     outputSchema: OutputSchemas.callTree,
     description: "Trace call chain: callers or callees. output_format='mermaid' for diagram. filter_react_hooks=true skips useState/useEffect etc. for cleaner React graphs.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Name of the symbol to trace"),
       direction: z.enum(["callers", "callees"]).describe("Trace direction"),
@@ -1073,7 +1160,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_tests: zBool().describe("Include test files in trace results (default: false)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (flowchart diagram)"),
       filter_react_hooks: zBool().describe("Skip edges to React stdlib hooks (useState, useEffect, etc.) to reduce call graph noise in React codebases (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const result = await traceCallChain(args.repo as string, args.symbol_name as string, args.direction as Direction, {
         depth: args.depth as number | undefined,
@@ -1094,13 +1181,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "impact analysis blast radius git changes affected symbols",
     outputSchema: OutputSchemas.impactAnalysis,
     description: "Blast radius of git changes — affected symbols and files.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().describe("Git ref to compare from (e.g. HEAD~3, commit SHA, branch)"),
       depth: zNum().describe("Depth of dependency traversal"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_source: zBool().describe("Include full source code of affected symbols (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const result = await impactAnalysis(args.repo as string, args.since as string, {
         depth: args.depth as number | undefined,
@@ -1116,14 +1203,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "graph",
     searchHint: "react component tree composition render jsx parent child hierarchy",
     description: "Trace React component composition tree from a root component. Shows which components render which via JSX. React equivalent of trace_call_chain. output_format='mermaid' for diagram.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       component_name: z.string().describe("Root component name (must have kind 'component' in index)"),
       depth: zNum().describe("Maximum depth of composition tree (default: 3)"),
       include_source: zBool().describe("Include full source of each component (default: false)"),
       include_tests: zBool().describe("Include test files (default: false)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid'"),
-    },
+    })),
     handler: async (args) => {
       const result = await traceComponentTree(args.repo as string, args.component_name as string, {
         depth: args.depth as number | undefined,
@@ -1140,13 +1227,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "react hooks analyze inventory rule of hooks violations usestate useeffect custom",
     description: "Analyze React hooks: inventory per component, Rule of Hooks violations (hook inside if/loop, hook after early return), custom hook composition, codebase-wide hook usage summary.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       component_name: z.string().optional().describe("Filter to single component/hook (default: all)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       max_entries: zNum().describe("Max entries to return (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const result = await analyzeHooks(args.repo as string, {
         component_name: args.component_name as string | undefined,
@@ -1163,13 +1250,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "react render performance inline props memo useCallback useMemo re-render risk optimization",
     description: "Static re-render risk analysis for React components. Detects inline object/array/function props in JSX (new reference every render), unstable default values (= [] or = {}), and components missing React.memo that render children. Returns per-component risk level (low/medium/high) with actionable suggestions.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       component_name: z.string().optional().describe("Filter to single component (default: all)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       max_entries: zNum().describe("Max entries to return (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const result = await analyzeRenders(args.repo as string, {
         component_name: args.component_name as string | undefined,
@@ -1186,9 +1273,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "react context createContext provider useContext consumer re-render propagation",
     description: "Map React context flows: createContext → Provider → useContext consumers. Shows which components consume each context and which provide values. Helps identify unnecessary re-renders from context value changes.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const index = await getCodeIndex(args.repo as string);
       if (!index) throw new Error(`Repository not found: ${args.repo}`);
@@ -1202,11 +1289,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "react compiler forget memoization bailout readiness migration adoption auto-memo",
     description: "Audit React Compiler (v1.0) adoption readiness. Scans all components for patterns that cause silent bailout (side effects in render, ref reads, prop/state mutation, try/catch). Returns readiness score (0-100), prioritized fix list, and count of redundant manual memoization safe to remove post-adoption. No competitor offers codebase-wide compiler readiness analysis.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const result = await auditCompilerReadiness(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
@@ -1221,9 +1308,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "react onboarding day-1 overview stack inventory components hooks critical issues",
     description: "Day-1 onboarding composite for React projects. Single call returns: component/hook inventory, stack detection (state mgmt, routing, UI lib, form lib, build tool), critical pattern scan (XSS, Rule of Hooks, memory leaks), top hook usage, and suggested next queries. Replaces 5-6 manual tool calls. First tool to run on an unfamiliar React codebase.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const result = await reactQuickstart(args.repo as string);
       return JSON.stringify(result, null, 2);
@@ -1235,11 +1322,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "graph",
     searchHint: "trace HTTP route handler API endpoint service database NestJS Express Next.js",
     description: "Trace HTTP route → handler → service → DB. NestJS, Next.js, Express.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path: z.string().describe("URL path to trace (e.g. '/api/users', '/api/projects/:id')"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (sequence diagram)"),
-    },
+    })),
     handler: async (args) => {
       const result = await traceRoute(args.repo as string, args.path as string, args.output_format as "json" | "mermaid" | undefined);
       return formatTraceRoute(result as never);
@@ -1252,13 +1339,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "go to definition jump navigate LSP language server",
     outputSchema: OutputSchemas.definition,
     description: "Go to the definition of a symbol. Uses LSP when available for type-safe precision, falls back to index search.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to find definition of"),
       file_path: z.string().optional().describe("File containing the symbol reference (for LSP precision)"),
       line: zNum().describe("0-based line number of the reference"),
       character: zNum().describe("0-based column of the reference"),
-    },
+    })),
     handler: async (args) => {
       const result = await goToDefinition(
         args.repo as string,
@@ -1279,13 +1366,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "type information hover documentation return type parameters LSP",
     outputSchema: OutputSchemas.typeInfo,
     description: "Get type info via LSP hover (return type, params, docs). Hint if LSP unavailable.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to get type info for"),
       file_path: z.string().optional().describe("File containing the symbol"),
       line: zNum().describe("0-based line number"),
       character: zNum().describe("0-based column"),
-    },
+    })),
     handler: (args) => getTypeInfo(
       args.repo as string,
       args.symbol_name as string,
@@ -1301,14 +1388,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "rename symbol refactor LSP type-safe all files",
     outputSchema: OutputSchemas.renameResult,
     description: "Rename symbol across all files via LSP. Type-safe, updates imports/refs.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Current name of the symbol to rename"),
       new_name: z.string().describe("New name for the symbol"),
       file_path: z.string().optional().describe("File containing the symbol"),
       line: zNum().describe("0-based line number"),
       character: zNum().describe("0-based column"),
-    },
+    })),
     handler: (args) => renameSymbol(
       args.repo as string,
       args.symbol_name as string,
@@ -1325,13 +1412,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "call hierarchy incoming outgoing calls who calls what calls LSP callers callees",
     outputSchema: OutputSchemas.callHierarchy,
     description: "LSP call hierarchy: incoming + outgoing calls. Complements trace_call_chain.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to get call hierarchy for"),
       file_path: z.string().optional().describe("File containing the symbol (for LSP precision)"),
       line: zNum().describe("0-based line number"),
       character: zNum().describe("0-based column"),
-    },
+    })),
     handler: async (args) => {
       const result = await getCallHierarchy(
         args.repo as string,
@@ -1376,12 +1463,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "community detection clusters modules Louvain import graph boundaries",
     description: "Louvain community detection on import graph. Discovers module boundaries.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Path substring to filter files (e.g. 'src/lib')"),
       resolution: zNum().describe("Louvain resolution: higher = more smaller communities, lower = fewer larger (default: 1.0)"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (graph diagram)"),
-    },
+    })),
     handler: async (args) => {
       const result = await detectCommunities(
         args.repo as string,
@@ -1398,11 +1485,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "circular dependency cycle import loop detection",
     description: "Detect circular dependencies in the import graph via DFS. Returns file-level cycles.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       max_cycles: zNum().describe("Maximum cycles to report (default: 50)"),
-    },
+    })),
     handler: async (args) => {
       const { findCircularDeps } = await import("./tools/graph-tools.js");
       const opts: Parameters<typeof findCircularDeps>[1] = {};
@@ -1424,7 +1511,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "boundary rules architecture enforcement imports CI gate hexagonal onion",
     description: "Check architecture boundary rules against imports. Path substring matching.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       rules: z.union([
         z.array(z.object({
@@ -1435,7 +1522,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         z.string().transform((s) => JSON.parse(s) as Array<{ from: string; cannot_import?: string[]; can_only_import?: string[] }>),
       ]).describe("Array of boundary rules to check. JSON string OK."),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-    },
+    })),
     handler: async (args) => {
       const { checkBoundaries } = await import("./tools/boundary-tools.js");
       return checkBoundaries(
@@ -1450,12 +1537,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "classify roles entry core utility dead leaf symbol architecture",
     description: "Classify symbol roles (entry/core/utility/dead/leaf) by call graph connectivity.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       top_n: zNum().describe("Maximum number of symbols to return (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const { classifySymbolRoles } = await import("./tools/graph-tools.js");
       const result = await classifySymbolRoles(args.repo as string, {
@@ -1473,13 +1560,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "context",
     searchHint: "assemble context token budget L0 L1 L2 L3 source signatures summaries",
     description: "Assemble code context within token budget. L0=source, L1=signatures, L2=files, L3=dirs.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Natural language query describing what context is needed"),
       token_budget: zNum().describe("Maximum tokens for the assembled context"),
       level: z.enum(["L0", "L1", "L2", "L3"]).optional().describe("L0=source (default), L1=signatures, L2=files, L3=dirs"),
       rerank: zBool().describe("Rerank results using cross-encoder model for improved relevance (requires @huggingface/transformers)"),
-    },
+    })),
     handler: async (args) => {
       const result = await assembleContext(
         args.repo as string,
@@ -1496,12 +1583,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "context",
     searchHint: "knowledge map module dependency graph architecture overview mermaid",
     description: "Get the module dependency map showing how files and directories relate",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Focus on a specific module or directory"),
       depth: zNum().describe("Maximum depth of the dependency graph"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format: 'json' (default) or 'mermaid' (dependency diagram)"),
-    },
+    })),
     handler: async (args) => {
       const result = await getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined, args.output_format as "json" | "mermaid" | undefined);
       return formatKnowledgeMap(result as never);
@@ -1514,11 +1601,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "diff",
     searchHint: "diff outline structural changes git refs compare",
     description: "Get a structural outline of what changed between two git refs",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
-    },
+    })),
     handler: async (args) => {
       const result = await diffOutline(args.repo as string, args.since as string, args.until as string | undefined);
       return formatDiffOutline(result as never);
@@ -1529,12 +1616,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "diff",
     searchHint: "changed symbols added modified removed git diff",
     description: "List symbols that were added, modified, or removed between two git refs",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_diff: zBool().describe("Include unified diff per changed file (truncated to 500 chars)"),
-    },
+    })),
     handler: async (args) => {
       const opts: { include_diff?: boolean } = {};
       if (args.include_diff === true) opts.include_diff = true;
@@ -1549,10 +1636,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "reporting",
     searchHint: "generate CLAUDE.md project summary documentation",
     description: "Generate a CLAUDE.md project summary file from the repository index",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       output_path: z.string().optional().describe("Custom output file path"),
-    },
+    })),
     handler: (args) => generateClaudeMd(args.repo as string, args.output_path as string | undefined),
   },
 
@@ -1563,7 +1650,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "batch retrieval multi-query semantic hybrid token budget",
     outputSchema: OutputSchemas.batchResults,
     description: "Batch multi-query retrieval with shared token budget. Supports symbols/text/semantic/hybrid.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       queries: z
         .union([
@@ -1572,7 +1659,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         ])
         .describe("Sub-queries array (symbols/text/file_tree/outline/references/call_chain/impact/context/knowledge_map). JSON string OK."),
       token_budget: zNum().describe("Maximum total tokens across all sub-query results"),
-    },
+    })),
     handler: async (args) => {
       const result = await codebaseRetrieval(
         args.repo as string,
@@ -1597,11 +1684,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "dead code unused exports unreferenced symbols cleanup",
     outputSchema: OutputSchemas.deadCode,
     description: "Find dead code: exported symbols with zero external references.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files in scan (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const result = await findDeadCode(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
@@ -1618,11 +1705,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "unused imports dead cleanup lint",
     description: "Find imported names never referenced in the file body. Complements find_dead_code.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files in scan (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const { findUnusedImports } = await import("./tools/symbol-tools.js");
       const opts: Parameters<typeof findUnusedImports>[1] = {};
@@ -1645,13 +1732,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "complexity cyclomatic nesting refactoring functions",
     outputSchema: OutputSchemas.complexity,
     description: "Top N most complex functions by cyclomatic complexity, nesting, lines.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       top_n: zNum().describe("Return top N most complex functions (default: 30)"),
       min_complexity: zNum().describe("Minimum cyclomatic complexity to include (default: 1)"),
       include_tests: zBool().describe("Include test files (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const result = await analyzeComplexity(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
@@ -1671,13 +1758,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "code clones duplicates copy-paste detection similar functions",
     outputSchema: OutputSchemas.clones,
     description: "Find code clones: similar function pairs via hash bucketing + line-similarity.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       min_similarity: zNum().describe("Minimum similarity threshold 0-1 (default: 0.7)"),
       min_lines: zNum().describe("Minimum normalized lines to consider (default: 10)"),
       include_tests: zBool().describe("Include test files (default: false)"),
-    },
+    })),
     handler: async (args) => {
       const result = await findClones(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
@@ -1693,7 +1780,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "frequency analysis common patterns AST shape clusters",
     description: "Group functions by normalized AST shape. Finds emergent patterns invisible to regex.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       top_n: zNum().optional().describe("Number of clusters to return (default: 30)"),
       min_nodes: zNum().optional().describe("Minimum AST nodes in a subtree to include (default: 5)"),
@@ -1701,7 +1788,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       kind: z.string().optional().describe("Filter by symbol kind, comma-separated (default: function,method)"),
       include_tests: zBool().describe("Include test files (default: false)"),
       token_budget: zNum().optional().describe("Max tokens for response"),
-    },
+    })),
     handler: async (args) => frequencyAnalysis(
       args.repo as string,
       {
@@ -1719,12 +1806,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hotspots git churn bug-prone change frequency complexity",
     description: "Git churn hotspots: change frequency × complexity. Higher score = more bug-prone.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since_days: zNum().describe("Look back N days (default: 90)"),
       top_n: zNum().describe("Return top N hotspots (default: 30)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-    },
+    })),
     handler: async (args) => {
       const result = await analyzeHotspots(args.repo as string, {
         since_days: args.since_days as number | undefined,
@@ -1741,13 +1828,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "cross-repo",
     searchHint: "cross-repo search symbols across all repositories monorepo microservice",
     description: "Search symbols across ALL indexed repositories. Useful for monorepos and microservice architectures.",
-    schema: {
+    schema: lazySchema(() => ({
       query: z.string().describe("Symbol search query"),
       repo_pattern: z.string().optional().describe("Filter repos by name pattern (e.g. 'local/tgm')"),
       kind: z.string().optional().describe("Filter by symbol kind"),
       top_k: zNum().describe("Max results per repo (default: 10)"),
       include_source: zBool().describe("Include source code"),
-    },
+    })),
     handler: (args) => crossRepoSearchSymbols(args.query as string, {
       repo_pattern: args.repo_pattern as string | undefined,
       kind: args.kind as SymbolKind | undefined,
@@ -1760,11 +1847,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "cross-repo",
     searchHint: "cross-repo references symbol across all repositories",
     description: "Find references to a symbol across ALL indexed repositories.",
-    schema: {
+    schema: lazySchema(() => ({
       symbol_name: z.string().describe("Symbol name to find references for"),
       repo_pattern: z.string().optional().describe("Filter repos by name pattern"),
       file_pattern: z.string().optional().describe("Filter files by glob pattern"),
-    },
+    })),
     handler: (args) => crossRepoFindReferences(args.symbol_name as string, {
       repo_pattern: args.repo_pattern as string | undefined,
       file_pattern: args.file_pattern as string | undefined,
@@ -1777,13 +1864,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "patterns",
     searchHint: "search patterns anti-patterns CQ violations useEffect empty-catch console-log",
     description: "Search structural patterns/anti-patterns. Built-in or custom regex.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       pattern: z.string().describe("Built-in pattern name or custom regex"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       max_results: zNum().describe("Max results (default: 50)"),
-    },
+    })),
     handler: async (args) => {
       const result = await searchPatterns(args.repo as string, args.pattern as string, {
         file_pattern: args.file_pattern as string | undefined,
@@ -1798,7 +1885,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "patterns",
     searchHint: "list available built-in patterns anti-patterns",
     description: "List all available built-in structural code patterns for search_patterns.",
-    schema: {},
+    schema: lazySchema(() => ({})),
     handler: async () => listPatterns(),
   },
 
@@ -1808,9 +1895,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "reporting",
     searchHint: "generate HTML report complexity dead code hotspots architecture browser",
     description: "Generate a standalone HTML report with complexity, dead code, hotspots, and architecture. Opens in any browser.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: (args) => generateReport(args.repo as string),
   },
 
@@ -1820,10 +1907,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "conversations",
     searchHint: "index conversations Claude Code history JSONL",
     description: "Index Claude Code conversation history for search. Scans JSONL files in ~/.claude/projects/ for the given project path.",
-    schema: {
+    schema: lazySchema(() => ({
       project_path: z.string().optional().describe("Path to the Claude project conversations directory. Auto-detects from cwd if omitted."),
       quiet: zBool().describe("Suppress output (used by session-end hook)"),
-    },
+    })),
     handler: async (args) => indexConversations(args.project_path as string | undefined),
   },
   {
@@ -1831,11 +1918,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "conversations",
     searchHint: "search conversations past sessions history BM25 semantic",
     description: "Search conversations in one project (BM25+semantic). For all projects: search_all_conversations.",
-    schema: {
+    schema: lazySchema(() => ({
       query: z.string().describe("Search query — keywords or natural language"),
       project: z.string().optional().describe("Project path to search (default: current project)"),
       limit: zNum().optional().describe("Maximum results to return (default: 10, max: 50)"),
-    },
+    })),
     handler: async (args) => {
       const result = await searchConversations(args.query as string, args.project as string | undefined, args.limit as number | undefined);
       return formatConversations(result as never);
@@ -1846,11 +1933,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "conversations",
     searchHint: "find conversations symbol discussion cross-reference code",
     description: "Find conversations that discussed a code symbol. Cross-refs code + history.",
-    schema: {
+    schema: lazySchema(() => ({
       symbol_name: z.string().describe("Name of the code symbol to search for in conversations"),
       repo: z.string().describe("Code repository to resolve the symbol from (e.g., 'local/my-project')"),
       limit: zNum().optional().describe("Maximum conversation results (default: 5)"),
-    },
+    })),
     handler: async (args) => {
       const result = await findConversationsForSymbol(args.symbol_name as string, args.repo as string, args.limit as number | undefined);
       return formatConversations(result as never);
@@ -1862,10 +1949,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "conversations",
     searchHint: "search all conversations every project cross-project",
     description: "Search ALL conversation projects at once, ranked by relevance.",
-    schema: {
+    schema: lazySchema(() => ({
       query: z.string().describe("Search query — keywords, natural language, or concept"),
       limit: zNum().optional().describe("Maximum results across all projects (default: 10)"),
-    },
+    })),
     handler: async (args) => {
       const result = await searchAllConversations(args.query as string, args.limit as number | undefined);
       return formatConversations(result as never);
@@ -1879,13 +1966,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "scan secrets API keys tokens passwords credentials security",
     outputSchema: OutputSchemas.secrets,
     description: "Scan for hardcoded secrets (API keys, tokens, passwords). ~1,100 rules.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter scanned files"),
       min_confidence: z.enum(["high", "medium", "low"]).optional().describe("Minimum confidence level (default: medium)"),
       exclude_tests: zBool().describe("Exclude test file findings (default: true)"),
       severity: z.enum(["critical", "high", "medium", "low"]).optional().describe("Minimum severity level"),
-    },
+    })),
     handler: async (args) => {
       const result = await scanSecrets(args.repo as string, {
         file_pattern: args.file_pattern as string | undefined,
@@ -1904,11 +1991,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "kotlin",
     searchHint: "kotlin extension function receiver type method discovery",
     description: "Find all Kotlin extension functions for a given receiver type. Scans indexed symbols for signatures matching 'ReceiverType.' prefix.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       receiver_type: z.string().describe("Receiver type name, e.g. 'String', 'List', 'User'"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
-    },
+    })),
     handler: async (args) => {
       const opts: { file_pattern?: string } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
@@ -1921,10 +2008,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "kotlin",
     searchHint: "kotlin sealed class interface subtype when exhaustive branch missing hierarchy",
     description: "Analyze a Kotlin sealed class/interface: find all subtypes and check when() blocks for exhaustiveness (missing branches).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       sealed_class: z.string().describe("Name of the sealed class or interface to analyze"),
-    },
+    })),
     handler: async (args) => {
       return await analyzeSealedHierarchy(args.repo as string, args.sealed_class as string);
     },
@@ -1934,11 +2021,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hilt dagger DI dependency injection viewmodel inject module provides binds android kotlin graph",
     description: "Trace a Hilt DI dependency tree rooted at a class annotated with @HiltViewModel / @AndroidEntryPoint / @HiltAndroidApp. Returns constructor dependencies with matching @Provides/@Binds providers and their module. Unresolved deps are flagged.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       class_name: z.string().describe("Name of the Hilt-annotated class (e.g. 'UserViewModel')"),
       depth: z.number().optional().describe("Max traversal depth (default: 1)"),
-    },
+    })),
     handler: async (args) => {
       const opts: { depth?: number } = {};
       if (typeof args.depth === "number") opts.depth = args.depth;
@@ -1950,11 +2037,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin coroutine suspend dispatcher withContext runBlocking Thread.sleep blocking chain trace anti-pattern",
     description: "Trace the call chain of a Kotlin suspend function, emitting dispatcher transitions (withContext(Dispatchers.X)) and warnings for coroutine anti-patterns: runBlocking inside suspend, Thread.sleep, non-cancellable while(true) loops. Lexical walk — follows callee names found in the source, filtered to suspend-only functions.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       function_name: z.string().describe("Name of the suspend function to trace"),
       depth: z.number().optional().describe("Max chain depth (default: 3)"),
-    },
+    })),
     handler: async (args) => {
       const opts: { depth?: number } = {};
       if (typeof args.depth === "number") opts.depth = args.depth;
@@ -1966,9 +2053,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin multiplatform kmp expect actual source set common main android ios jvm js missing orphan",
     description: "Validate Kotlin Multiplatform expect/actual declarations across source sets. For each `expect` in commonMain, check every platform source set (androidMain/iosMain/jvmMain/jsMain/etc. discovered from the repo layout) for a matching `actual`. Reports fully matched pairs, expects missing on a platform, and orphan actuals with no corresponding expect.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       return await analyzeKmpDeclarations(args.repo as string);
     },
@@ -1980,11 +2067,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin compose composable component tree hierarchy ui call graph jetpack preview",
     description: "Build a Jetpack Compose component hierarchy rooted at a @Composable function. Traces PascalCase calls matching indexed composables, excludes @Preview. Reports tree depth, leaf components, and total component count.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       root_name: z.string().describe("Name of the root @Composable function (e.g. 'HomeScreen')"),
       depth: z.number().optional().describe("Max tree depth (default: 10)"),
-    },
+    })),
     handler: async (args) => {
       const opts: { depth?: number } = {};
       if (typeof args.depth === "number") opts.depth = args.depth;
@@ -1996,10 +2083,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin compose recomposition unstable remember mutableStateOf performance skip lambda collection",
     description: "Detect recomposition hazards in @Composable functions: mutableStateOf without remember (critical), unstable collection parameters (List/Map/Set), excessive function-type params. Scans all indexed composables, skipping @Preview.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
-    },
+    })),
     handler: async (args) => {
       const opts: { file_pattern?: string } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
@@ -2011,9 +2098,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin room database entity dao query insert update delete schema sqlite persistence android",
     description: "Build a Room persistence schema graph: @Entity classes (with table names, primary keys), @Dao interfaces (with @Query SQL extraction), @Database declarations (with entity refs and version). Index-only.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       return await traceRoomSchema(args.repo as string);
     },
@@ -2023,11 +2110,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin serialization serializable json schema serialname field type api contract data class",
     description: "Derive JSON field schema from @Serializable data classes. Extracts field names, types, @SerialName remapping, nullable flags, and defaults.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       class_name: z.string().optional().describe("Filter to a single class by name"),
-    },
+    })),
     handler: async (args) => {
       const opts: { file_pattern?: string; class_name?: string } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
@@ -2040,10 +2127,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "kotlin flow coroutine operator map filter collect stateIn shareIn catch chain pipeline reactive",
     description: "Analyze a Kotlin Flow<T> operator chain: detects 50+ operators, reports ordered list, warns about .collect without .catch and .stateIn without lifecycle scope.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Name of the function or property containing the Flow chain"),
-    },
+    })),
     handler: async (args) => {
       return await traceFlowChain(args.repo as string, args.symbol_name as string);
     },
@@ -2056,11 +2143,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python django sqlalchemy orm model relationship foreignkey manytomany entity graph mermaid",
     description: "Extract ORM model relationships (Django ForeignKey/M2M/O2O, SQLAlchemy relationship). JSON or mermaid erDiagram.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output as structured JSON or mermaid erDiagram"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof getModelGraph>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2074,10 +2161,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python pytest fixture conftest scope autouse dependency graph session function",
     description: "Extract pytest fixture dependency graph: conftest hierarchy, scope, autouse, fixture-to-fixture deps.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof getTestFixtures>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2090,10 +2177,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python django signal receiver celery task middleware management command flask fastapi event wiring",
     description: "Discover implicit control flow: Django signals, Celery tasks/.delay() calls, middleware, management commands, Flask init_app, FastAPI events.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof findFrameworkWiring>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2106,12 +2193,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python ruff lint check bugbear performance simplify security async unused argument",
     description: "Run ruff linter with symbol graph correlation. Configurable rule categories (B, PERF, SIM, UP, S, ASYNC, RET, ARG).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       categories: z.array(z.string()).optional().describe("Rule categories to enable (default: B,PERF,SIM,UP,S,ASYNC,RET,ARG)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       max_results: zFiniteNumber.optional().describe("Max findings to return (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof runRuff>[1] = {};
       if (args.categories != null) opts!.categories = args.categories as string[];
@@ -2126,7 +2213,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python pyproject toml dependencies version build system entry points scripts tools ruff pytest mypy",
     description: "Parse pyproject.toml: name, version, Python version, build system, dependencies, optional groups, entry points, configured tools.",
-    schema: { repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") },
+    schema: lazySchema(() => ({ repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)") })),
     handler: async (args) => { return await parsePyproject(args.repo as string); },
   },
   {
@@ -2134,13 +2221,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "python typescript nestjs resolve constant value literal alias import default parameter propagation",
     description: "Resolve Python or TypeScript constants and function default values through simple aliases and import chains. Returns literals or explicit unresolved reasons.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Constant, function, or method name to resolve"),
       file_pattern: z.string().optional().describe("Filter candidate symbols by file path substring"),
       language: z.enum(["python", "typescript"]).optional().describe("Force resolver language instead of auto-inference"),
       max_depth: zFiniteNumber.optional().describe("Maximum alias/import resolution depth (default: 8)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof resolveConstantValue>[2] & {
         language?: "python" | "typescript";
@@ -2157,13 +2244,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python django view auth csrf login_required middleware mixin route security posture",
     description: "Assess effective Django view security from decorators, mixins, settings middleware, and optional route resolution.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path: z.string().optional().describe("Django route path to resolve first, e.g. /settings/"),
       symbol_name: z.string().optional().describe("View function/class/method name when you already know the symbol"),
       file_pattern: z.string().optional().describe("Filter candidate symbols by file path substring"),
       settings_file: z.string().optional().describe("Explicit Django settings file path (auto-detects if omitted)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof effectiveDjangoViewSecurity>[1] = {};
       if (args.path != null) opts.path = args.path as string;
@@ -2179,7 +2266,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python django taint data flow source sink request get post redirect mark_safe cursor execute subprocess session trace",
     description: "Trace Python/Django user-controlled data from request sources to security sinks like redirect, mark_safe, cursor.execute, subprocess, requests/httpx, open, or session writes.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       framework: z.enum(["python-django"]).optional().describe("Currently only python-django is implemented"),
       file_pattern: z.string().optional().describe("Restrict analysis to matching Python files"),
@@ -2187,7 +2274,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       sink_patterns: z.array(z.string()).optional().describe("Optional sink pattern allowlist (defaults to built-in security sinks)"),
       max_depth: zFiniteNumber.optional().describe("Maximum interprocedural helper depth (default: 4)"),
       max_traces: zFiniteNumber.optional().describe("Maximum traces to return before truncation (default: 50)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof taintTrace>[1] = {};
       if (args.framework != null) opts.framework = args.framework as "python-django";
@@ -2205,13 +2292,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python callers call site usage trace cross module import delay apply_async constructor",
     description: "Find all call sites of a Python symbol: direct calls, method calls, Celery .delay()/.apply_async(), constructor, references.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       target_name: z.string().describe("Name of the target function/class/method"),
       target_file: z.string().optional().describe("Disambiguate target by file path substring"),
       file_pattern: z.string().optional().describe("Restrict caller search scope"),
       max_results: zFiniteNumber.optional().describe("Max callers to return (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof findPythonCallers>[2] = {};
       if (args.target_file != null) opts!.target_file = args.target_file as string;
@@ -2226,10 +2313,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python django settings security debug secret key allowed hosts csrf middleware cookie hsts cors",
     description: "Audit Django settings.py: 15 security/config checks (DEBUG, SECRET_KEY, CSRF, CORS, HSTS, cookies, sqlite, middleware).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       settings_file: z.string().optional().describe("Explicit settings file path (auto-detects if omitted)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof analyzeDjangoSettings>[1] = {};
       if (args.settings_file != null) opts!.settings_file = args.settings_file as string;
@@ -2242,12 +2329,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python mypy type check error strict return incompatible argument missing",
     description: "Run mypy type checker with symbol correlation. Parses error codes, maps to containing symbols.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       strict: zBool().describe("Enable mypy --strict mode"),
       max_results: zFiniteNumber.optional().describe("Max findings (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof runMypy>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2262,12 +2349,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python pyright type check reportMissingImports reportGeneralTypeIssues",
     description: "Run pyright type checker with symbol correlation. Parses JSON diagnostics, maps to containing symbols.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       strict: zBool().describe("Enable strict level"),
       max_results: zFiniteNumber.optional().describe("Max findings (default: 100)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof runPyright>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2282,11 +2369,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python dependency version outdated vulnerable CVE pypi osv requirements pyproject",
     description: "Python dependency analysis: parse pyproject.toml/requirements.txt, detect unpinned deps, optional PyPI freshness, optional OSV.dev CVE scan.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       check_pypi: zBool().describe("Check PyPI for latest versions (network, opt-in)"),
       check_vulns: zBool().describe("Check OSV.dev for CVEs (network, opt-in)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof analyzePythonDeps>[1] = {};
       if (args.check_pypi != null) opts!.check_pypi = args.check_pypi as boolean;
@@ -2300,12 +2387,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python fastapi depends dependency injection security scopes oauth2 authentication auth endpoint",
     description: "Trace FastAPI Depends()/Security() dependency injection chains recursively from route handlers. Detects yield deps (resource cleanup), Security() with scopes, shared deps across endpoints, endpoints without auth.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       endpoint: z.string().optional().describe("Focus on a specific endpoint function name"),
       max_depth: zFiniteNumber.optional().describe("Max dependency tree depth (default: 5)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof traceFastAPIDepends>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2320,12 +2407,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python async await asyncio blocking sync requests sleep subprocess django sqlalchemy ORM coroutine fastapi",
     description: "Detect 8 asyncio pitfalls in async def: blocking requests/sleep/IO/subprocess, sync SQLAlchemy/Django ORM in async views, async without await, asyncio.create_task without ref storage.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       rules: z.array(z.string()).optional().describe("Subset of rules to run"),
       max_results: zFiniteNumber.optional().describe("Max findings (default: 200)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof analyzeAsyncCorrectness>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2340,11 +2427,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python pydantic basemodel fastapi schema request response contract validator field constraint type classdiagram",
     description: "Extract Pydantic models: fields with types, validators, Field() constraints, model_config, cross-model references (list[X], Optional[Y]), inheritance. JSON or mermaid classDiagram.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output as structured JSON or mermaid classDiagram"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof getPydanticModels>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2358,11 +2445,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "python",
     searchHint: "python audit health score compound project review django security circular patterns celery dependencies dead code task shared_task delay apply_async chain group chord canvas retry orphan queue import cycle ImportError TYPE_CHECKING DFS",
     description: "Compound Python project health audit: circular imports + Django settings + anti-patterns (17) + framework wiring + Celery orphans + pytest fixtures + deps + dead code. Runs in parallel, returns unified health score (0-100) + severity counts + prioritized top_risks list.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter by file path substring"),
       checks: z.array(z.string()).optional().describe("Subset of checks: circular_imports, django_settings, anti_patterns, framework_wiring, celery, pytest_fixtures, dependencies, dead_code"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof pythonAudit>[1] = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
@@ -2378,10 +2465,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "php",
     searchHint: "php namespace resolve PSR-4 autoload composer class file path yii2 laravel symfony",
     description: "Resolve a PHP FQCN to file path via composer.json PSR-4 autoload mapping.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       class_name: z.string().describe("Fully-qualified class name, e.g. 'App\\\\Models\\\\User'"),
-    },
+    })),
     handler: async (args) => {
       return await resolvePhpNamespace(args.repo as string, args.class_name as string);
     },
@@ -2392,10 +2479,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "php",
     searchHint: "php event listener trigger handler chain yii2 laravel observer dispatch",
     description: "Trace PHP event → listener chains: find trigger() calls and matching on() handlers.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       event_name: z.string().optional().describe("Filter by specific event name"),
-    },
+    })),
     handler: async (args) => {
       const opts: { event_name?: string } = {};
       if (typeof args.event_name === "string") opts.event_name = args.event_name;
@@ -2408,10 +2495,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "php",
     searchHint: "php view render template controller widget yii2 laravel blade",
     description: "Map PHP controller render() calls to view files. Yii2/Laravel convention-aware.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       controller: z.string().optional().describe("Filter by controller class name"),
-    },
+    })),
     handler: async (args) => {
       const opts: { controller?: string } = {};
       if (typeof args.controller === "string") opts.controller = args.controller;
@@ -2424,10 +2511,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "php",
     searchHint: "php service locator DI container component resolve yii2 laravel facade provider",
     description: "Resolve PHP service locator references (Yii::$app->X, Laravel facades) to concrete classes via config parsing.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       service_name: z.string().optional().describe("Filter by specific service name (e.g. 'db', 'user', 'cache')"),
-    },
+    })),
     handler: async (args) => {
       const opts: { service_name?: string } = {};
       if (typeof args.service_name === "string") opts.service_name = args.service_name;
@@ -2440,11 +2527,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "php",
     searchHint: "php security scan audit vulnerability injection XSS CSRF SQL eval exec unserialize",
     description: "Scan PHP code for security vulnerabilities: SQL injection, XSS, eval, exec, unserialize, file inclusion. Parallel pattern checks.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter scanned files (default: '*.php')"),
       checks: z.array(z.string()).optional().describe("Subset of checks to run: sql-injection-php, xss-php, eval-php, exec-php, unserialize-php, file-include-var, unescaped-yii-view, raw-query-yii"),
-    },
+    })),
     handler: async (args) => {
       const opts: { file_pattern?: string; checks?: string[] } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
@@ -2458,11 +2545,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     requiresLanguage: "php",
     searchHint: "php project audit health quality technical debt code review comprehensive yii2 laravel activerecord eloquent model schema relations rules behaviors table orm n+1 query foreach eager loading relation god class anti-pattern too many methods oversized",
     description: "Compound PHP project audit: security scan + ActiveRecord analysis + N+1 detection + god model detection + health score. Runs checks in parallel.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter analyzed files"),
       checks: z.string().optional().describe("Comma-separated checks: n_plus_one, god_model, activerecord, security, events, views, services, namespace. Default: all"),
-    },
+    })),
     handler: async (args) => {
       const opts: { file_pattern?: string; checks?: string[] } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
@@ -2479,11 +2566,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "conversations",
     searchHint: "consolidate memories dream knowledge MEMORY.md decisions solutions patterns",
     description: "Consolidate conversations into MEMORY.md — decisions, solutions, patterns.",
-    schema: {
+    schema: lazySchema(() => ({
       project_path: z.string().optional().describe("Project path (auto-detects from cwd if omitted)"),
       output_path: z.string().optional().describe("Custom output file path (default: MEMORY.md in project root)"),
       min_confidence: z.enum(["high", "medium", "low"]).optional().describe("Minimum confidence level for extracted memories (default: low)"),
-    },
+    })),
     handler: async (args) => {
       const opts: { output_path?: string; min_confidence?: "high" | "medium" | "low" } = {};
       if (typeof args.output_path === "string") opts.output_path = args.output_path;
@@ -2497,9 +2584,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "conversations",
     searchHint: "read memory MEMORY.md institutional knowledge past decisions",
     description: "Read MEMORY.md knowledge file with past decisions and patterns.",
-    schema: {
+    schema: lazySchema(() => ({
       project_path: z.string().optional().describe("Project path (default: current directory)"),
-    },
+    })),
     handler: async (args) => {
       const result = await readMemory(args.project_path as string | undefined);
       if (!result) return { error: "No MEMORY.md found. Run consolidate_memories first." };
@@ -2513,7 +2600,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "create plan multi-step analysis workflow coordinator scratchpad",
     description: "Create multi-step analysis plan with shared scratchpad and dependencies.",
-    schema: {
+    schema: lazySchema(() => ({
       title: z.string().describe("Plan title describing the analysis goal"),
       steps: z.union([
         z.array(z.object({
@@ -2525,7 +2612,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         })),
         z.string().transform((s) => JSON.parse(s) as Array<{ description: string; tool: string; args: Record<string, unknown>; result_key?: string; depends_on?: string[] }>),
       ]).describe("Steps array: {description, tool, args, result_key?, depends_on?}. JSON string OK."),
-    },
+    })),
     handler: async (args) => {
       const result = await createAnalysisPlan(
         args.title as string,
@@ -2539,11 +2626,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "scratchpad write store knowledge cross-step data persist",
     description: "Write key-value to plan scratchpad for cross-step knowledge sharing.",
-    schema: {
+    schema: lazySchema(() => ({
       plan_id: z.string().describe("Analysis plan identifier"),
       key: z.string().describe("Key name for the entry"),
       value: z.string().describe("Value to store"),
-    },
+    })),
     handler: async (args) => writeScratchpad(args.plan_id as string, args.key as string, args.value as string),
   },
   {
@@ -2551,10 +2638,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "scratchpad read retrieve knowledge entry",
     description: "Read a key from a plan's scratchpad. Returns the stored value or null if not found.",
-    schema: {
+    schema: lazySchema(() => ({
       plan_id: z.string().describe("Analysis plan identifier"),
       key: z.string().describe("Key name to read"),
-    },
+    })),
     handler: async (args) => {
       const result = await readScratchpad(args.plan_id as string, args.key as string);
       return result ?? { error: "Key not found in scratchpad" };
@@ -2565,9 +2652,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "scratchpad list entries keys",
     description: "List all entries in a plan's scratchpad with their sizes.",
-    schema: {
+    schema: lazySchema(() => ({
       plan_id: z.string().describe("Analysis plan identifier"),
-    },
+    })),
     handler: (args) => listScratchpad(args.plan_id as string),
   },
   {
@@ -2575,12 +2662,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "update step status plan progress completed failed",
     description: "Update step status in plan. Auto-updates plan status on completion.",
-    schema: {
+    schema: lazySchema(() => ({
       plan_id: z.string().describe("Analysis plan identifier"),
       step_id: z.string().describe("Step identifier (e.g. step_1)"),
       status: z.enum(["pending", "in_progress", "completed", "failed", "skipped"]).describe("New status for the step"),
       error: z.string().optional().describe("Error message if status is 'failed'"),
-    },
+    })),
     handler: async (args) => {
       const result = await updateStepStatus(
         args.plan_id as string,
@@ -2596,9 +2683,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "get plan status steps progress",
     description: "Get the current state of an analysis plan including all step statuses.",
-    schema: {
+    schema: lazySchema(() => ({
       plan_id: z.string().describe("Analysis plan identifier"),
-    },
+    })),
     handler: async (args) => {
       const plan = getPlan(args.plan_id as string);
       return plan ?? { error: "Plan not found" };
@@ -2609,7 +2696,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "list plans active analysis workflows",
     description: "List all active analysis plans with their completion status.",
-    schema: {},
+    schema: lazySchema(() => ({})),
     handler: async () => listPlans(),
   },
 
@@ -2619,7 +2706,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "diff",
     searchHint: "review diff static analysis git changes secrets breaking-changes complexity dead-code blast-radius",
     description: "Run 9 parallel static analysis checks on a git diff: secrets, breaking changes, coupling gaps, complexity, dead-code, blast-radius, bug-patterns, test-gaps, hotspots. Returns a scored verdict (pass/warn/fail) with tiered findings.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().optional().describe("Base git ref (default: HEAD~1)"),
       until: z.string().optional().describe("Target ref. Default: HEAD. Special: WORKING, STAGED"),
@@ -2628,7 +2715,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       token_budget: zNum().describe("Max tokens (default: 15000)"),
       max_files: zNum().describe("Warn above N files (default: 50)"),
       check_timeout_ms: zNum().describe("Per-check timeout ms (default: 8000)"),
-    },
+    })),
     handler: async (args) => {
       const checksArr = args.checks
         ? (args.checks as string).split(",").map((c) => c.trim()).filter(Boolean)
@@ -2658,7 +2745,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "usage statistics tool calls tokens timing metrics",
     outputSchema: OutputSchemas.usageStats,
     description: "Show usage statistics for all CodeSift tool calls (call counts, tokens, timing, repos)",
-    schema: {},
+    schema: lazySchema(() => ({})),
     handler: async () => {
       const stats = await getUsageStats();
       const { createRequire } = await import("node:module");
@@ -2674,9 +2761,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "session",
     searchHint: "session context snapshot compaction summary explored symbols files queries",
     description: "Get a compact ~200 token snapshot of what was explored in this session. Designed to survive context compaction. Call proactively before long tasks.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Filter to specific repo. Default: most recent repo."),
-    },
+    })),
     handler: async (args: { repo?: string }) => {
       return formatSnapshot(getSessionState(), args.repo);
     },
@@ -2686,10 +2773,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "session",
     searchHint: "session context full explored symbols files queries negative evidence",
     description: "Get full session context: explored symbols, files, queries, and negative evidence (searched but not found). Use get_session_snapshot for a compact version.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Filter to specific repo"),
       include_stale: zBool().describe("Include stale negative evidence entries (default: false)"),
-    },
+    })),
     handler: async (args: { repo?: string; include_stale?: boolean | string }) => {
       const includeStale = args.include_stale === true || args.include_stale === "true";
       return getContext(args.repo, includeStale);
@@ -2702,10 +2789,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "project profile stack conventions middleware routes rate-limits auth detection",
     description: "Analyze a repository to extract stack, file classifications, and framework-specific conventions. Returns a structured project profile (schema v1.0) with file:line evidence for convention-level facts.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       force: zBool().describe("Ignore cached results and re-analyze"),
-    },
+    })),
     handler: async (args) => {
       const result = await analyzeProject(args.repo as string, {
         force: args.force as boolean | undefined,
@@ -2718,7 +2805,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "extractor version cache invalidation profile parser languages",
     description: "Return parser_languages (tree-sitter symbol extractors) and profile_frameworks (analyze_project detectors). Text tools (search_text, get_file_tree) work on ALL files regardless — use this only for cache invalidation or to check symbol support for a specific language.",
-    schema: {},
+    schema: lazySchema(() => ({})),
     handler: async () => getExtractorVersions(),
   },
   // --- Composite tools ---
@@ -2727,12 +2814,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "audit scan code quality CQ gates dead code clones complexity patterns",
     description: "Run 5 analysis tools in parallel, return findings keyed by CQ gate. One call replaces sequential find_dead_code + search_patterns + find_clones + analyze_complexity + analyze_hotspots. Returns: CQ8 (empty catch), CQ11 (complexity), CQ13 (dead code), CQ14 (clones), CQ17 (perf anti-patterns).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       checks: z.string().optional().describe("Comma-separated CQ gates to check (default: all). E.g. 'CQ8,CQ11,CQ14'"),
-    },
+    })),
     handler: async (args) => {
       const checks = args.checks ? (args.checks as string).split(",").map(s => s.trim()) : undefined;
       const opts: AuditScanOptions = {};
@@ -2750,9 +2837,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "index status indexed repo check files symbols languages",
     description: "Check whether a repository is indexed and return index metadata: file count, symbol count, language breakdown, text_stub languages (no parser). Use this before calling symbol-based tools on unfamiliar repos.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const result = await indexStatus(args.repo as string);
       if (!result.indexed) return "index_status: NOT INDEXED — run index_folder first";
@@ -2776,13 +2863,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "performance perf hotspot N+1 unbounded query sync handler pagination findMany pLimit",
     description: "Scan for 6 performance anti-patterns: unbounded DB queries, sync I/O in handlers, N+1 loops, unbounded Promise.all, missing pagination, expensive recompute. Returns findings grouped by severity (high/medium/low) with fix hints.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       patterns: z.string().optional().describe("Comma-separated pattern names to check (default: all). Options: unbounded-query, sync-in-handler, n-plus-one, unbounded-parallel, missing-pagination, expensive-recompute"),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
       include_tests: zBool().describe("Include test files (default: false)"),
       max_results: zNum().describe("Max findings to return (default: 50)"),
-    },
+    })),
     handler: async (args) => {
       const patterns = args.patterns
         ? (args.patterns as string).split(",").map((s) => s.trim()).filter(Boolean)
@@ -2801,13 +2888,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "fan-in fan-out coupling dependencies imports hub afferent efferent instability threshold",
     description: "Analyze import graph to find most-imported files (fan-in), most-dependent files (fan-out), and hub files (high both — instability risk). Returns coupling score 0-100. Use min_fan_in/min_fan_out for threshold-based audits ('all files with fan_in > 50') instead of top_n cap.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path: z.string().optional().describe("Focus on files in this directory"),
       top_n: zNum().describe("How many entries per list (default: 20)"),
       min_fan_in: zNum().describe("Only return files with fan_in >= this value (default: 0). Use for audits."),
       min_fan_out: zNum().describe("Only return files with fan_out >= this value (default: 0). Use for audits."),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof fanInFanOut>[1] = {};
       if (args.path != null) opts!.path = args.path as string;
@@ -2823,14 +2910,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "co-change temporal coupling git history Jaccard co-commit correlation cluster",
     description: "Analyze git history to find files that frequently change together (temporal coupling). Returns file pairs ranked by Jaccard similarity, plus clusters of always-co-changed files. Useful for detecting hidden dependencies.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since_days: zNum().describe("Analyze last N days of history (default: 180)"),
       min_support: zNum().describe("Minimum co-commits to include a pair (default: 3)"),
       min_jaccard: zNum().describe("Minimum Jaccard similarity threshold (default: 0.3)"),
       path: z.string().optional().describe("Focus on files in this directory"),
       top_n: zNum().describe("Max pairs to return (default: 30)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof coChangeAnalysis>[1] = {};
       if (args.since_days != null) opts!.since_days = args.since_days as number;
@@ -2847,12 +2934,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "architecture",
     searchHint: "architecture summary overview structure stack framework communities coupling circular dependencies entry points",
     description: "One-call architecture profile: stack detection, module communities, coupling hotspots, circular dependencies, LOC distribution, and entry points. Runs 5 analyses in parallel. Supports Mermaid diagram output.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Focus on this directory path"),
       output_format: z.enum(["text", "mermaid"]).optional().describe("Output format (default: text)"),
       token_budget: zNum().describe("Max tokens for output"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof architectureSummary>[1] = {};
       if (args.focus != null) opts!.focus = args.focus as string;
@@ -2867,10 +2954,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "explain query SQL Prisma ORM database performance EXPLAIN ANALYZE findMany pagination index",
     description: "Parse a Prisma call and generate approximate SQL with EXPLAIN ANALYZE. Detects: unbounded queries, N+1 risks from includes, missing indexes. MVP: Prisma only. Supports postgresql/mysql/sqlite dialects.",
-    schema: {
+    schema: lazySchema(() => ({
       code: z.string().describe("Prisma code snippet (e.g. prisma.user.findMany({...}))"),
       dialect: z.enum(["postgresql", "mysql", "sqlite"]).optional().describe("SQL dialect (default: postgresql)"),
-    },
+    })),
     handler: async (args) => {
       const eqOpts: Parameters<typeof explainQuery>[1] = {};
       if (args.dialect != null) eqOpts!.dialect = args.dialect as "postgresql" | "mysql" | "sqlite";
@@ -2899,10 +2986,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "nestjs",
     searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice hook onModuleInit onApplicationBootstrap shutdown dependency graph circular import boundary injection provider constructor inject cycle interceptor pipe filter middleware chain security endpoint api map inventory list all params resolver query mutation subscription apollo gateway subscribemessage socketio realtime event cron interval timeout scheduled job task onevent listener entity relation onetomany manytoone database schema messagepattern eventpattern kafka rabbitmq nats transport request pipeline handler execution flow visualization bull bullmq queue processor process background worker scope transient singleton performance escalation swagger openapi documentation apiproperty apioperation apiresponse contract extract",
     description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, patterns, GraphQL, WebSocket, schedule, TypeORM, microservices.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       checks: z.string().optional().describe("Comma-separated checks (default: all). Options: modules,routes,di,guards,lifecycle,patterns,graphql,websocket,schedule,typeorm,microservice"),
-    },
+    })),
     handler: async (args: { repo?: string; checks?: string }) => {
       const checks = args.checks?.split(",").map((s) => s.trim()).filter(Boolean);
       return nestAudit(args.repo ?? "", checks ? { checks } : undefined);
@@ -2915,11 +3002,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "audit agent config CLAUDE.md cursorrules stale symbols dead paths token waste redundancy",
     description: "Scan a config file (CLAUDE.md, .cursorrules) for stale symbol references, dead file paths, token cost, and redundancy. Cross-references against the CodeSift index. Optionally compares two config files for redundant content blocks.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       config_path: z.string().optional().describe("Path to config file (default: CLAUDE.md in repo root)"),
       compare_with: z.string().optional().describe("Path to second config file for redundancy detection"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof auditAgentConfig>[1] = {};
       if (args.config_path != null) opts!.config_path = args.config_path as string;
@@ -2955,11 +3042,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "test impact analysis affected tests changed files CI confidence which tests to run",
     description: "Determine which tests to run based on changed files. Uses impact analysis, co-change correlation, and naming convention matching. Returns prioritized test list with confidence scores and a suggested test command.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().optional().describe("Git ref to compare from (default: HEAD~1)"),
       until: z.string().optional().describe("Git ref to compare to (default: HEAD)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof testImpactAnalysis>[1] = {};
       if (args.since != null) opts!.since = args.since as string;
@@ -2985,12 +3072,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "dependency audit npm vulnerabilities CVE licenses outdated freshness lockfile drift supply chain",
     description: "Composite dependency health check: vulnerabilities (npm/pnpm/yarn audit), licenses (problematic copyleft detection), freshness (outdated count + major gaps), lockfile integrity (drift, duplicates). Runs 4 sub-checks in parallel. Replaces ~40 manual bash calls for D1-D5 audit dimensions.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       workspace_path: z.string().optional().describe("Workspace path (default: index root)"),
       skip_licenses: zBool().describe("Skip license check (faster, default: false)"),
       min_severity: z.enum(["low", "moderate", "high", "critical"]).optional().describe("Filter vulnerabilities by minimum severity"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof dependencyAudit>[1] = {};
       if (args.workspace_path != null) opts!.workspace_path = args.workspace_path as string;
@@ -3031,12 +3118,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "migration lint squawk SQL postgresql safety linter unsafe-migration not-null drop-column alter-column-type concurrently",
     description: "PostgreSQL migration safety linter via squawk wrapper. Detects 30+ anti-patterns: NOT NULL without default, DROP COLUMN, ALTER COLUMN TYPE, CREATE INDEX without CONCURRENTLY, etc. Requires squawk CLI installed (brew install squawk OR cargo install squawk-cli). Auto-discovers prisma/migrations, migrations/, db/migrate, drizzle/.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       migration_glob: z.string().optional().describe("Custom migration file glob pattern"),
       excluded_rules: z.union([z.array(z.string()), z.string().transform((s) => s.split(",").map((x) => x.trim()))]).optional().describe("Squawk rules to exclude (comma-sep or array)"),
       pg_version: z.string().optional().describe("PostgreSQL version for version-aware rules (e.g. '13')"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof migrationLint>[1] = {};
       if (args.migration_glob != null) opts!.migration_glob = args.migration_glob as string;
@@ -3068,10 +3155,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "prisma schema analyze ast model field index foreign-key relation soft-delete enum coverage",
     description: "Parse schema.prisma into structured AST. Returns model coverage: fields, indexes, FKs, relations, soft-delete detection, FK index coverage %, unindexed FKs (audit warning), status-as-String suggestions. Uses @mrleebo/prisma-ast for proper AST parsing (vs regex-only extractor).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       schema_path: z.string().optional().describe("Path to schema.prisma (default: auto-detected)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof analyzePrismaSchema>[1] = {};
       if (args.schema_path != null) opts!.schema_path = args.schema_path as string;
@@ -3110,11 +3197,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "astro islands client hydration directives framework",
     description: "Analyze Astro islands (client:* directives) in a repo. Finds all interactive components with hydration directives, lists server islands with fallback status, and optionally generates optimization recommendations.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path_prefix: z.string().optional().describe("Only scan files under this path prefix"),
       include_recommendations: z.boolean().default(true).describe("Include optimization recommendations (default: true)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof astroAnalyzeIslands>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
@@ -3128,12 +3215,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "astro hydration audit anti-patterns client load",
     description: "Audit Astro hydration usage for anti-patterns such as client:load on heavy components, missing client directives, or suboptimal hydration strategies. Returns issues grouped by severity with a letter grade.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       severity: z.enum(["all", "warnings", "errors"]).default("all").describe("Filter issues by severity (default: all)"),
       path_prefix: z.string().optional().describe("Only scan files under this path prefix"),
       fail_on: z.enum(["error", "warning", "info"]).optional().describe("Set exit_code gate: 'error' exits 1 on any errors; 'warning' exits 2 on warnings; 'info' exits 2 on info or warnings"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof astroHydrationAudit>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
@@ -3148,11 +3235,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "navigation",
     searchHint: "astro routes pages endpoints file-based routing",
     description: "Map all Astro routes (pages + API endpoints) discovered from the file-based routing structure. Returns routes with type, dynamic params, and handler symbols. Supports json/tree/table output formats.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       include_endpoints: z.boolean().default(true).describe("Include API endpoint routes (default: true)"),
       output_format: z.enum(["json", "tree", "table"]).default("json").describe("Output format: json | tree | table (default: json)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof astroRouteMap>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
@@ -3166,9 +3253,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "astro config integrations adapter output mode",
     description: "Analyze an Astro project's configuration file (astro.config.mjs/ts/js). Extracts output mode (static/server/hybrid), adapter, integrations, site URL, and base path. Identifies dynamic/unresolved config.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const index = await getCodeIndex(args.repo as string ?? "");
       if (!index) throw new Error("Repository not found — run index_folder first");
@@ -3180,10 +3267,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "astro actions defineAction zod refine passthrough multipart file enctype audit",
     description: "Audit Astro Actions (src/actions/index.ts) for 6 known anti-patterns (AA01-AA06): missing handler return, top-level .refine() (Astro issue #11641), .passthrough() usage (issue #11693), File schema without multipart form, server-side invocation via actions.xxx(), and client calls to unknown actions. Returns issues grouped by severity with an A/B/C/D score.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       severity: z.enum(["all", "warnings", "errors"]).default("all").describe("Filter issues by severity (default: all)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof astroActionsAudit>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
@@ -3196,10 +3283,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "astro content collections defineCollection zod schema reference glob loader frontmatter",
     description: "Parse an Astro content collections config (src/content.config.ts or legacy src/content/config.ts), extract each collection's loader + Zod schema fields, build a reference() graph, and optionally validate entry frontmatter against required fields.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       validate_entries: z.boolean().default(true).describe("Validate entry frontmatter against required schema fields (default: true)"),
-    },
+    })),
     handler: async (args) => {
       const index = await getCodeIndex(args.repo as string ?? "");
       if (!index) throw new Error("Repository not found — run index_folder first");
@@ -3213,10 +3300,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "astro meta audit full health check score gates recommendations islands hydration routes config actions content migration patterns",
     description: "One-call Astro project health check: runs all 7 Astro tools + 13 Astro patterns in parallel, returns unified {score, gates, sections, recommendations}. Mirrors react_quickstart pattern.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       skip: z.array(z.string()).optional().describe("Sections to skip: config, hydration, routes, actions, content, migration, patterns"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof astroAudit>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
@@ -3231,13 +3318,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "graph",
     searchHint: "hono middleware chain trace order scope auth use conditional applied_when if method header path basicAuth gated",
     description: "Hono middleware introspection. Three query modes: (1) route mode — pass path (+optional method) to get the chain effective for that route; (2) scope mode — pass scope literal (e.g. '/posts/*') to get that specific app.use chain; (3) app-wide mode — omit path and scope to get every chain flattened. Any mode supports only_conditional=true to filter to entries with applied_when populated, so the blog-API pattern (basicAuth wrapped in `if (method !== 'GET')`) is surfaced as gated rather than missed. Absorbs the former trace_conditional_middleware tool.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path: z.string().optional().describe("Route path to look up (e.g. '/api/users/:id'). Omit for scope or app-wide query."),
       method: z.string().optional().describe("HTTP method filter (GET, POST, etc.). Only used in route mode."),
       scope: z.string().optional().describe("Exact middleware scope literal (e.g. '/posts/*'). Mutually exclusive with path."),
       only_conditional: z.boolean().optional().describe("Filter entries to those whose applied_when field is populated (conditional middleware)."),
-    },
+    })),
     handler: async (args) => {
       const { traceMiddlewareChain } = await import("./tools/hono-middleware-chain.js");
       const opts: Record<string, unknown> = {};
@@ -3256,11 +3343,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono overview analyze app routes middleware runtime env bindings rpc",
     description: "Complete Hono application overview: routes grouped by method/scope, middleware map, context vars, OpenAPI status, RPC exports (flags Issue #3869 slow pattern), runtime, env bindings. One call for full project analysis.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       entry_file: z.string().optional().describe("Hono entry file (auto-detected if omitted)"),
       force_refresh: z.boolean().optional().describe("Clear cache and rebuild"),
-    },
+    })),
     handler: async (args) => {
       const { analyzeHonoApp } = await import("./tools/hono-analyze-app.js");
       return await analyzeHonoApp(
@@ -3275,10 +3362,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono context flow c.set c.get c.var c.env middleware variable unguarded",
     description: "Trace Hono context variable flow (c.set/c.get/c.var/c.env). Detects MISSING_CONTEXT_VARIABLE findings where routes access variables that no middleware in their scope sets.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       variable: z.string().optional().describe("Specific variable name to trace (default: all)"),
-    },
+    })),
     handler: async (args) => {
       const { traceContextFlow } = await import("./tools/hono-context-flow.js");
       return await traceContextFlow(
@@ -3292,11 +3379,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono openapi contract api schema createRoute zValidator",
     description: "Extract OpenAPI-style API contract from a Hono app. Uses explicit createRoute() definitions when available, infers from regular routes otherwise. Format: 'openapi' (paths object) or 'summary' (table).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       entry_file: z.string().optional().describe("Hono entry file (auto-detected if omitted)"),
       format: z.enum(["openapi", "summary"]).optional().describe("Output format (default: openapi)"),
-    },
+    })),
     handler: async (args) => {
       const { extractApiContract } = await import("./tools/hono-api-contract.js");
       return await extractApiContract(
@@ -3311,9 +3398,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono rpc client type export typeof slow pattern Issue 3869 compile time",
     description: "Analyze Hono RPC type exports. Detects the slow `export type X = typeof app` pattern from Issue #3869 (8-min CI compile time) and recommends splitting into per-route-group types.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const { traceRpcTypes } = await import("./tools/hono-rpc-types.js");
       return await traceRpcTypes(args.repo as string);
@@ -3324,9 +3411,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "security",
     searchHint: "hono security audit rate limit secure headers auth order csrf env regression createMiddleware BlankEnv Issue 3587",
     description: "Security + type-safety audit of a Hono app. Rules: missing-secure-headers (global), missing-rate-limit + missing-auth (mutation routes, conditional-middleware aware via applied_when), auth-ordering (auth after non-auth in chain), env-regression (plain createMiddleware in 3+ chains — Hono Issue #3587, absorbed from the former detect_middleware_env_regression tool). Returns prioritized findings plus heuristic disclaimers via `notes` field for best-effort rules.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const { auditHonoSecurity } = await import("./tools/hono-security.js");
       return await auditHonoSecurity(args.repo as string);
@@ -3337,10 +3424,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "reporting",
     searchHint: "hono routes visualize mermaid tree diagram documentation",
     description: "Produce a visualization of Hono routing topology. Supports 'mermaid' (diagram) and 'tree' (ASCII) formats.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       format: z.enum(["mermaid", "tree"]).optional().describe("Output format (default: tree)"),
-    },
+    })),
     handler: async (args) => {
       const { visualizeHonoRoutes } = await import("./tools/hono-visualize.js");
       return await visualizeHonoRoutes(
@@ -3356,11 +3443,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono inline handler analyze c.json c.text status response error db fetch context",
     description: "Structured body analysis for each Hono inline handler: responses (c.json/text/html/redirect/newResponse with status + shape_hint), errors (throw new HTTPException/Error), db calls (prisma/db/knex/drizzle/mongoose/supabase), fetch calls, c.set/get/var/env access, inline validators, has_try_catch. Optional method + path filter. Named-handler routes return empty.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       method: z.string().optional().describe("HTTP method filter (case-insensitive)"),
       path: z.string().optional().describe("Route path filter (exact match, e.g. '/users/:id')"),
-    },
+    })),
     handler: async (args) => {
       const { analyzeInlineHandler } = await import("./tools/hono-inline-analyze.js");
       return await analyzeInlineHandler(
@@ -3375,9 +3462,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono response types status codes error paths RPC client InferResponseType Issue 4270",
     description: "Aggregate statically-knowable response types per route: c.json/text/html/body/redirect/newResponse emissions + throw new HTTPException/Error entries with status codes. Closes Hono Issue #4270 — RPC clients can generate types that include error paths. Returns routes[] plus total_statuses across the app.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const { extractResponseTypes } = await import("./tools/hono-response-types.js");
       return await extractResponseTypes(args.repo as string);
@@ -3388,9 +3475,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono modules architecture cluster path prefix middleware bindings enterprise Issue 4121",
     description: "Cluster Hono routes into logical modules by 2-segment path prefix, rolling up middleware chains, env bindings (from inline_analysis context_access), and source files per module. Closes Hono Issue #4121 — surfaces the implicit module structure for architecture review of enterprise apps. No new AST walking; post-processes the existing HonoAppModel.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const { detectHonoModules } = await import("./tools/hono-modules.js");
       return await detectHonoModules(args.repo as string);
@@ -3401,9 +3488,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "hono dead routes unused RPC client caller refactor monorepo cleanup",
     description: "Heuristically flag Hono server routes whose path segments do not appear in any non-server .ts/.tsx/.js/.jsx source file in the repo. Useful in monorepos to identify server endpoints that no Hono RPC client calls after refactors. Fully-dynamic routes (`/:id` only) are skipped. Documented as best-effort via the result note field.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
+    })),
     handler: async (args) => {
       const { findDeadHonoRoutes } = await import("./tools/hono-dead-routes.js");
       return await findDeadHonoRoutes(args.repo as string);
@@ -3416,13 +3503,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis",
     searchHint: "nextjs next.js route map app router pages router rendering strategy SSG SSR ISR edge middleware",
     description: "Complete Next.js route map with rendering strategy per route. Enumerates App Router and Pages Router conventions, reads route segment config exports (dynamic/revalidate/runtime), classifies each route as static/ssr/isr/edge/client, detects metadata exports, computes layout chain, and flags hybrid conflicts where the same URL is served by both routers.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
       router: z.enum(["app", "pages", "both"]).optional().describe("Which routers to scan (default 'both')"),
       include_metadata: z.boolean().optional().describe("Include metadata export detection (default true)"),
       max_routes: z.number().int().positive().optional().describe("Max routes to process (default 1000)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof nextjsRouteMap>[1] = {};
       if (args.workspace != null) opts.workspace = args.workspace as string;
@@ -3438,11 +3525,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "nextjs seo metadata title description og image audit canonical twitter json-ld",
     description: "Audit Next.js page metadata for SEO completeness with per-route scoring. Walks app/page.tsx files, extracts title/description/openGraph/canonical/twitter/JSON-LD via tree-sitter, scores each route 0-100 with a weighted formula, and aggregates a per-grade distribution + top issue list.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
       max_routes: z.number().int().positive().optional().describe("Max routes to process (default 1000)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof nextjsMetadataAudit>[1] = {};
       if (args.workspace != null) opts.workspace = args.workspace as string;
@@ -3456,13 +3543,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "nextjs next.js framework audit meta-tool overall score security metadata routes components classifier use client use server hooks server actions auth validation rate limit zod api contract route handler openapi method body schema response client boundary bundle imports loc link integrity broken navigation href router push 404 data flow fetch waterfall cache cookies headers ssr revalidate middleware coverage protected admin matcher",
     description: "Run all Next.js sub-audits (components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage) and aggregate into a unified weighted overall score with grade. Use as a single first-call for any Next.js project.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       workspace: z.string().optional().describe("Monorepo workspace path, e.g. 'apps/web'"),
       tools: z.array(z.string()).optional().describe("Subset of tools to run (default: all 9). Names: components, routes, metadata, security, api_contract, boundary, links, data_flow, middleware_coverage"),
       mode: z.enum(["full", "priority"]).optional().describe("Output mode: 'full' returns per-tool results + aggregated summary; 'priority' returns a single unified top-N actionable findings list sorted by severity × cross-tool occurrences"),
       priority_limit: z.number().int().positive().optional().describe("Max findings in priority mode (default: 20)"),
-    },
+    })),
     handler: async (args) => {
       const opts: Parameters<typeof frameworkAudit>[1] = {};
       if (args.workspace != null) opts.workspace = args.workspace as string;
@@ -3480,12 +3567,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "SQL schema ERD entity relationship tables views columns foreign key database migration",
     description: "Analyze SQL schema: tables, views, columns, foreign keys, relationships. Output as JSON or Mermaid ERD.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter SQL files by pattern (e.g. 'migrations/')"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format (default: json)"),
       include_columns: zBool().describe("Include column details in output (default: true)"),
-    },
+    })),
     handler: async (args: Record<string, unknown>) => {
       const { analyzeSchema } = await import("./tools/sql-tools.js");
       const opts: Parameters<typeof analyzeSchema>[1] = {};
@@ -3522,13 +3609,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "SQL table query trace references cross-language ORM Prisma Drizzle migration",
     description: "Trace SQL table references across the codebase: DDL, DML, FK, and ORM models (Prisma, Drizzle).",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       table: z.string().describe("Table name to trace (required)"),
       include_orm: zBool().describe("Check Prisma/Drizzle ORM models (default: true)"),
       file_pattern: z.string().optional().describe("Scope search to files matching pattern"),
       max_references: zNum().describe("Maximum references to return (default: 500)"),
-    },
+    })),
     handler: async (args: Record<string, unknown>) => {
       const { traceQuery } = await import("./tools/sql-tools.js");
       const opts: Parameters<typeof traceQuery>[1] = {
@@ -3565,12 +3652,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "SQL audit composite drift orphan lint DML safety complexity god table schema diagnostic",
     description: "Composite SQL audit — runs 5 diagnostic gates (drift, orphan, lint, dml, complexity) in one call. Use this instead of calling the individual gate functions separately.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       checks: z.array(z.enum(["drift", "orphan", "lint", "dml", "complexity"])).optional().describe("Subset of gates to run (default: all 5)"),
       file_pattern: z.string().optional().describe("Scope to files matching pattern"),
       max_results: zNum().describe("Max DML findings per pattern (default: 200)"),
-    },
+    })),
     handler: async (args: Record<string, unknown>) => {
       const { sqlAudit } = await import("./tools/sql-tools.js");
       const opts: Parameters<typeof sqlAudit>[1] = {};
@@ -3600,10 +3687,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "migration diff SQL destructive DROP ALTER ADD schema change deploy risk",
     description: "Scan SQL migration files and classify operations as additive (CREATE TABLE), modifying (ALTER ADD), or destructive (DROP TABLE, DROP COLUMN, TRUNCATE). Flags deploy risks.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Scope to migration files matching pattern"),
-    },
+    })),
     handler: async (args: Record<string, unknown>) => {
       const { diffMigrations } = await import("./tools/sql-tools.js");
       const opts: Parameters<typeof diffMigrations>[1] = {};
@@ -3634,14 +3721,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "search" as ToolCategory,
     searchHint: "search column SQL table field name type database schema find",
     description: "Search SQL columns across all tables by name (substring), type (int/string/float/...), or parent table. Returns column name, type, table, file, and line. Like search_symbols but scoped to SQL fields.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Column name substring to match (case-insensitive). Empty = no name filter."),
       type: z.string().optional().describe("Filter by normalized type: int, string, float, bool, datetime, json, uuid, bytes"),
       table: z.string().optional().describe("Filter by table name substring"),
       file_pattern: z.string().optional().describe("Scope to files matching pattern"),
       max_results: zNum().describe("Max columns to return (default: 100)"),
-    },
+    })),
     handler: async (args: Record<string, unknown>) => {
       const { searchColumns } = await import("./tools/sql-tools.js");
       const opts: Parameters<typeof searchColumns>[1] = {
@@ -3666,10 +3753,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "analysis" as ToolCategory,
     searchHint: "astro v6 migration upgrade breaking changes compatibility check AM01 AM10 content collections ViewTransitions",
     description: "Scan an Astro project for v5→v6 breaking changes. Detects 10 issues (AM01–AM10): removed APIs (Astro.glob, emitESMImage), component renames (ViewTransitions→ClientRouter), content collection config changes, Node.js version requirements, Zod 4 deprecations, hybrid output mode, and removed integrations (@astrojs/lit). Returns a migration report with per-issue effort estimates.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       target_version: z.enum(["6"]).optional().describe("Target Astro version (default: '6')"),
-    },
+    })),
     handler: async (args) => {
       const mcArgs: Parameters<typeof astroMigrationCheck>[0] = {};
       if (args.repo != null) mcArgs.repo = args.repo as string;
@@ -3705,12 +3792,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "discovery",
     searchHint: "plan turn routing recommend tools symbols files gap analysis session aware concierge",
     description: "Routes a natural-language query to the most relevant CodeSift tools, symbols, and files. Uses hybrid BM25+semantic ranking with session-aware dedup. Call at the start of a task to get a prioritized action list.",
-    schema: {
+    schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Natural-language description of what you want to do"),
       max_results: z.number().optional().describe("Max tools to return (default 10)"),
       skip_session: z.boolean().optional().describe("Skip session state checks (default false)"),
-    },
+    })),
     handler: async (args) => {
       const { query, max_results, skip_session } = args as { query: string; max_results?: number; skip_session?: boolean };
       const opts: { max_results?: number; skip_session?: boolean } = {};
@@ -3718,10 +3805,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (skip_session !== undefined) opts.skip_session = skip_session;
       const result = await planTurn(args.repo as string, query, opts);
       for (const name of result.reveal_required) {
-        const handle = toolHandles.get(name);
-        if (handle && typeof handle.enable === "function") {
-          handle.enable();
-        }
+        enableToolByName(name);
       }
       return formatPlanTurnResult(result);
     },
@@ -3907,26 +3991,17 @@ export function registerTools(
 
   // Clear handles from any previous registration (e.g. tests calling registerTools multiple times)
   toolHandles.clear();
+  enabledFrameworkBundles.clear();
+  registrationContext = { server, languages };
 
-  // Register ALL tools with full schema; store returned handles
+  // Register either the full catalog or only core tools. In deferred mode the
+  // remaining tools are registered lazily via describe_tools(reveal=true),
+  // plan_turn auto-reveal, or framework auto-load.
   for (const tool of TOOL_DEFINITIONS) {
-    const handle = server.tool(
-      tool.name,
-      tool.description,
-      tool.schema,
-      async (args) => wrapTool(tool.name, args as Record<string, unknown>, () => tool.handler(args as Record<string, unknown>))(),
-    );
-    toolHandles.set(tool.name, handle);
-  }
-
-  // Language-gated disabling — tools requiring a language absent from the
-  // project are disabled (still registered but hidden from ListTools).
-  // Users can re-enable via describe_tools(reveal=true) if needed.
-  for (const tool of TOOL_DEFINITIONS) {
-    if (!tool.requiresLanguage) continue;
-    if (languages[tool.requiresLanguage]) continue;
-    const handle = toolHandles.get(tool.name);
-    if (handle) handle.disable();
+    if (deferNonCore && !CORE_TOOL_NAMES.has(tool.name)) {
+      continue;
+    }
+    registerToolDefinition(server, tool, languages);
   }
 
   // Always register discover_tools meta-tool
@@ -3955,8 +4030,7 @@ export function registerTools(
       const result = describeTools(args.names as string[]);
       if (args.reveal === true) {
         for (const t of result.tools) {
-          const h = toolHandles.get(t.name);
-          if (h) h.enable();
+          enableToolByName(t.name);
         }
       }
       return result;
@@ -3964,22 +4038,13 @@ export function registerTools(
   );
   toolHandles.set("describe_tools", describeHandle);
 
-  // In deferred mode, disable non-core tools (they remain registered but hidden from ListTools).
-  // LLM discovers them via discover_tools, then reveals with describe_tools(reveal: true).
   if (deferNonCore) {
-    for (const [name, handle] of toolHandles) {
-      if (!CORE_TOOL_NAMES.has(name) && name !== "discover_tools" && name !== "describe_tools") {
-        handle.disable();
-      }
-    }
-
     // Auto-enable framework-specific tools when project type is detected at CWD.
     // E.g. composer.json → enable PHP/Yii2 tools automatically.
     detectAutoLoadToolsCached(process.cwd())
       .then((toEnable) => {
         for (const name of toEnable) {
-          const h = toolHandles.get(name);
-          if (h) h.enable();
+          enableToolByName(name);
         }
         if (toEnable.length > 0) {
           console.error(`[codesift] Auto-loaded ${toEnable.length} framework tools for detected project type: ${toEnable.join(", ")}`);

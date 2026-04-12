@@ -92,36 +92,23 @@ describe("describeTools", () => {
 // ---------------------------------------------------------------------------
 
 describe("registerTools with deferNonCore", () => {
-  it("stores tool handles and calls disable() on non-core tools", () => {
+  it("registers only core tools up front in deferred mode", () => {
     const mock = createMockServer();
     registerTools(mock as any, { deferNonCore: true });
 
-    // All tools should be registered (core + non-core + meta tools)
     const allDefs = getToolDefinitions();
-    expect(mock.registeredTools.size).toBeGreaterThanOrEqual(allDefs.length);
+    expect(mock.registeredTools.size).toBeLessThan(allDefs.length);
 
-    // Non-core tools should have disable() called
-    for (const def of allDefs) {
-      const handle = mock.registeredTools.get(def.name);
-      expect(handle).toBeDefined();
-      if (handle && !handle.name.startsWith("discover_") && !handle.name.startsWith("describe_")) {
-        // Check via getToolHandle that handles are stored
-        const storedHandle = getToolHandle(def.name);
-        expect(storedHandle).toBeDefined();
-      }
-    }
-
-    // Specifically check a known non-core tool was disabled
-    const deadCodeHandle = mock.registeredTools.get("find_dead_code");
-    expect(deadCodeHandle).toBeDefined();
-    expect(deadCodeHandle!.disable).toHaveBeenCalled();
-    expect(deadCodeHandle!.enabled).toBe(false);
-
-    // A core tool should NOT have disable() called
     const searchTextHandle = mock.registeredTools.get("search_text");
     expect(searchTextHandle).toBeDefined();
-    expect(searchTextHandle!.disable).not.toHaveBeenCalled();
     expect(searchTextHandle!.enabled).toBe(true);
+
+    const storedCoreHandle = getToolHandle("search_text");
+    expect(storedCoreHandle).toBeDefined();
+
+    const deadCodeHandle = mock.registeredTools.get("find_dead_code");
+    expect(deadCodeHandle).toBeUndefined();
+    expect(getToolHandle("find_dead_code")).toBeUndefined();
   });
 
   it("registers describe_tools MCP tool with correct schema", () => {
@@ -158,9 +145,7 @@ describe("registerTools with deferNonCore", () => {
     const mock = createMockServer();
     registerTools(mock as any, { deferNonCore: true });
 
-    const deadCodeHandle = mock.registeredTools.get("find_dead_code");
-    expect(deadCodeHandle).toBeDefined();
-    expect(deadCodeHandle!.disable).toHaveBeenCalled();
+    expect(mock.registeredTools.get("find_dead_code")).toBeUndefined();
 
     const describeHandle = mock.registeredTools.get("describe_tools");
     const handler = describeHandle!.handler as (args: Record<string, unknown>) => Promise<unknown>;
@@ -168,7 +153,9 @@ describe("registerTools with deferNonCore", () => {
     // Call with reveal: true
     await handler({ names: ["find_dead_code"], reveal: true });
 
-    // enable() should have been called on find_dead_code
+    const deadCodeHandle = mock.registeredTools.get("find_dead_code");
+    expect(deadCodeHandle).toBeDefined();
     expect(deadCodeHandle!.enable).toHaveBeenCalled();
+    expect(deadCodeHandle!.enabled).toBe(true);
   });
 });

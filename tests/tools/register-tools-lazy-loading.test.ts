@@ -94,13 +94,14 @@ describe("registerTools lazy loading", () => {
     const server = createMockServer();
     registerTools(server as any, { deferNonCore: true });
 
-    const hiddenHandle = server.registeredTools.get("find_dead_code")!;
-    expect(hiddenHandle.enabled).toBe(false);
+    expect(server.registeredTools.get("find_dead_code")).toBeUndefined();
 
     const handler = server.registeredTools.get("plan_turn")!.handler as (args: Record<string, unknown>) => Promise<any>;
     const result = await handler({ repo: "local/test", query: "find dead code" });
 
+    const hiddenHandle = server.registeredTools.get("find_dead_code")!;
     expect(planTurn).toHaveBeenCalledWith("local/test", "find dead code", {});
+    expect(hiddenHandle).toBeDefined();
     expect(hiddenHandle.enable).toHaveBeenCalledTimes(1);
     expect(hiddenHandle.enabled).toBe(true);
     expect(result.content[0]?.text).toContain("plan_turn: find dead code");
