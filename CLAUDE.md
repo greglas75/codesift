@@ -91,14 +91,13 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 
 | Category | Count | Examples |
 |----------|------:|----------|
-| analysis | 57 | find_dead_code, find_perf_hotspots, audit_scan, dependency_audit, analyze_prisma_schema, migration_lint, Python/SQL/React/Hono/Astro/Kotlin tools |
-| nestjs | 1 | nest_audit (14 sub-tools consolidated into single meta-tool) |
+| analysis | 70 | find_dead_code, find_perf_hotspots, audit_scan, dependency_audit, analyze_prisma_schema, migration_lint, Python/SQL/React/Hono/Next.js/Astro/Kotlin tools |
 | meta | 11 | index_status, analyze_project, get_extractor_versions, discover_tools, describe_tools, usage_stats, session tools |
-| security | 8 | scan_secrets, taint_trace, php_security_scan, nextjs_audit_server_actions |
 | architecture | 7 | detect_communities, check_boundaries, fan_in_fan_out, co_change_analysis, architecture_summary, classify_roles, ast_query |
-| graph | 6 | trace_call_chain, impact_analysis, trace_route, find_references, find_circular_deps, get_call_hierarchy |
 | search | 6 | search_text, search_symbols, codebase_retrieval, semantic_search, suggest_queries, find_and_show |
+| graph | 6 | trace_call_chain, impact_analysis, trace_route, find_references, find_circular_deps, get_call_hierarchy |
 | conversations | 6 | index_conversations, search_conversations, search_all_conversations, find_conversations_for_symbol |
+| security | 6 | scan_secrets, taint_trace, php_security_scan, audit_hono_security |
 | indexing | 5 | index_folder, index_file, index_repo, list_repos, invalidate_cache |
 | outline | 4 | get_file_outline, get_file_tree, get_repo_outline, get_symbols_overview |
 | symbols | 4 | get_symbol, get_symbols, get_context_bundle, get_type_info |
@@ -106,11 +105,11 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 | diff | 3 | diff_outline, changed_symbols, review_diff |
 | reporting | 3 | generate_report, generate_claude_md, usage_stats |
 | context | 2 | assemble_context, get_knowledge_map |
-| cross-repo | 2 | cross_repo_search, cross_repo_refs |
 | patterns | 2 | search_patterns, list_patterns |
 | session | 2 | get_session_snapshot, get_session_context |
+| nestjs | 1 | nest_audit (14 sub-tools consolidated into single meta-tool with `checks=` param) |
 | navigation | 1 | go_to_definition |
-| **discovery** | **1** | **`plan_turn` — hybrid data+tool routing concierge (NEW)** |
+| **discovery** | **1** | **`plan_turn` — hybrid data+tool routing concierge** |
 
 ## Source layout
 
