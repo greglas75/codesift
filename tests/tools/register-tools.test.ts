@@ -189,7 +189,10 @@ describe("register-tools — React tools registration & auto-load", () => {
       return dir;
     }
 
-    it("enables all 11 hidden Hono tools when package.json has hono dep", async () => {
+    it("enables all 9 hidden Hono tools when package.json has hono dep", async () => {
+      // After polish consolidation (13 → 11 tools):
+      // - trace_conditional_middleware absorbed into trace_middleware_chain (core)
+      // - detect_middleware_env_regression absorbed into audit_hono_security
       const { detectAutoLoadTools } = await import("../../src/register-tools.js");
       const dir = await createProject({
         "package.json": JSON.stringify({ dependencies: { hono: "^4.7.0" } }),
@@ -202,27 +205,26 @@ describe("register-tools — React tools registration & auto-load", () => {
         expect(tools).toContain("trace_rpc_types");
         expect(tools).toContain("audit_hono_security");
         expect(tools).toContain("visualize_hono_routes");
-        // Phase 2 additions (6)
-        expect(tools).toContain("trace_conditional_middleware");
+        // Phase 2 additions that remained standalone (4)
         expect(tools).toContain("analyze_inline_handler");
         expect(tools).toContain("extract_response_types");
-        expect(tools).toContain("detect_middleware_env_regression");
         expect(tools).toContain("detect_hono_modules");
         expect(tools).toContain("find_dead_hono_routes");
+        // Merged tools should NOT appear anymore
+        expect(tools).not.toContain("trace_conditional_middleware");
+        expect(tools).not.toContain("detect_middleware_env_regression");
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
     });
 
-    it("Phase 2 tools are defined in TOOL_DEFINITIONS and handler-resolvable", async () => {
+    it("Phase 2 remaining tools are defined in TOOL_DEFINITIONS and handler-resolvable", async () => {
       const { getToolDefinitions } = await import("../../src/register-tools.js");
       const defs = getToolDefinitions();
       const names = defs.map((d) => d.name);
       for (const phase2 of [
-        "trace_conditional_middleware",
         "analyze_inline_handler",
         "extract_response_types",
-        "detect_middleware_env_regression",
         "detect_hono_modules",
         "find_dead_hono_routes",
       ]) {
@@ -231,6 +233,13 @@ describe("register-tools — React tools registration & auto-load", () => {
         expect(def.description.length).toBeGreaterThan(50);
         expect(typeof def.handler).toBe("function");
       }
+    });
+
+    it("merged tools are gone from TOOL_DEFINITIONS", async () => {
+      const { getToolDefinitions } = await import("../../src/register-tools.js");
+      const names = getToolDefinitions().map((d) => d.name);
+      expect(names).not.toContain("trace_conditional_middleware");
+      expect(names).not.toContain("detect_middleware_env_regression");
     });
 
     it("enables for @hono/zod-openapi dep", async () => {

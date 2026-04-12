@@ -154,6 +154,77 @@ export default app;`,
   });
 });
 
+describe("auditHonoSecurity — env-regression rule (absorbed from detect_middleware_env_regression)", () => {
+  it("flags intermediate plain createMiddleware in a 3+ chain", async () => {
+    const repo = await createIndexedFixture({
+      "src/middleware.ts": `import { createMiddleware } from "hono/factory";
+// BAD: no generic — resets Env to BlankEnv for downstream middleware
+export const tenantMw = createMiddleware(async (c, next) => {
+  await next();
+});
+export const authMw = createMiddleware<{ Variables: { user: string } }>(async (c, next) => {
+  await next();
+});
+export const loggerMw = createMiddleware<{ Variables: { reqId: string } }>(async (c, next) => {
+  await next();
+});`,
+      "src/index.ts": `import { Hono } from "hono";
+import { tenantMw, authMw, loggerMw } from "./middleware";
+const app = new Hono();
+app.use("*", authMw);
+app.use("*", tenantMw);
+app.use("*", loggerMw);
+app.get("/", (c) => c.json({}));
+export default app;`,
+    });
+    const r = await auditHonoSecurity(repo);
+    const envFinding = r.findings?.find(
+      (f) => f.rule === "env-regression" && f.message.includes("tenantMw"),
+    );
+    expect(envFinding).toBeDefined();
+    expect(envFinding?.severity).toBe("MEDIUM");
+    expect(r.notes?.["env-regression"]).toContain("heuristic");
+  });
+
+  it("does NOT flag when all intermediates are typed", async () => {
+    const repo = await createIndexedFixture({
+      "src/middleware.ts": `import { createMiddleware } from "hono/factory";
+export const a = createMiddleware<{ Variables: { x: string } }>(async (c, next) => { await next(); });
+export const b = createMiddleware<{ Variables: { y: string } }>(async (c, next) => { await next(); });
+export const c2 = createMiddleware<{ Variables: { z: string } }>(async (c, next) => { await next(); });`,
+      "src/index.ts": `import { Hono } from "hono";
+import { a, b, c2 } from "./middleware";
+const app = new Hono();
+app.use("*", a);
+app.use("*", b);
+app.use("*", c2);
+app.get("/", (c) => c.json({}));
+export default app;`,
+    });
+    const r = await auditHonoSecurity(repo);
+    const envFindings = r.findings?.filter((f) => f.rule === "env-regression");
+    expect(envFindings?.length ?? 0).toBe(0);
+    // notes.env-regression only present when at least one finding fires
+    expect(r.notes?.["env-regression"]).toBeUndefined();
+  });
+
+  it("does NOT flag chains of fewer than 3 entries", async () => {
+    const repo = await createIndexedFixture({
+      "src/middleware.ts": `import { createMiddleware } from "hono/factory";
+export const plain = createMiddleware(async (c, next) => { await next(); });`,
+      "src/index.ts": `import { Hono } from "hono";
+import { plain } from "./middleware";
+const app = new Hono();
+app.use("*", plain);
+app.get("/", (c) => c.json({}));
+export default app;`,
+    });
+    const r = await auditHonoSecurity(repo);
+    const envFindings = r.findings?.filter((f) => f.rule === "env-regression");
+    expect(envFindings?.length ?? 0).toBe(0);
+  });
+});
+
 describe("auditHonoSecurity — error paths", () => {
   it("returns error for non-Hono repo", async () => {
     const repo = await createIndexedFixture({

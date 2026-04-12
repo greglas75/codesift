@@ -91,3 +91,140 @@ export default app;`,
     expect(postResult.route?.method).toBe("POST");
   });
 });
+
+describe("traceMiddlewareChain — scope mode (absorbed trace_conditional_middleware)", () => {
+  it("scope filter returns only entries from that chain", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+import { logger } from "hono/logger";
+import { cors } from "hono/cors";
+const app = new Hono();
+app.use("*", logger());
+app.use("/api/*", cors());
+app.get("/api/users", (c) => c.json([]));
+export default app;`,
+    });
+    const result = await traceMiddlewareChain(repo, undefined, undefined, {
+      scope: "/api/*",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.route).toBeUndefined();
+    expect(result.scopes).toEqual(["/api/*"]);
+    expect(result.chain.map((e) => e.name)).toContain("cors");
+    expect(result.chain.map((e) => e.name)).not.toContain("logger");
+  });
+
+  it("app-wide mode (no path, no scope) returns all chains flattened", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+import { logger } from "hono/logger";
+import { cors } from "hono/cors";
+const app = new Hono();
+app.use("*", logger());
+app.use("/api/*", cors());
+app.get("/", (c) => c.json({}));
+export default app;`,
+    });
+    const result = await traceMiddlewareChain(repo);
+    expect(result.error).toBeUndefined();
+    expect(result.scopes?.length).toBeGreaterThanOrEqual(2);
+    const names = result.chain.map((e) => e.name);
+    expect(names).toContain("logger");
+    expect(names).toContain("cors");
+  });
+});
+
+describe("traceMiddlewareChain — only_conditional filter", () => {
+  it("returns only entries with applied_when populated (blog-API pattern)", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
+const app = new Hono();
+app.use("/posts/*", async (c, next) => {
+  if (c.req.method !== "GET") {
+    const auth = basicAuth({ username: "u", password: "p" });
+    return auth(c, next);
+  }
+  await next();
+});
+app.get("/posts/:id", (c) => c.json({}));
+export default app;`,
+    });
+    const result = await traceMiddlewareChain(repo, undefined, undefined, {
+      only_conditional: true,
+    });
+    expect(result.error).toBeUndefined();
+    const basic = result.chain.find((e) => e.name === "basicAuth");
+    expect(basic).toBeDefined();
+    expect(basic?.applied_when?.condition_type).toBe("method");
+    expect(basic?.applied_when?.condition_text).toContain("method");
+    // Plain <inline> wrapper entry should NOT be included
+    expect(result.chain.some((e) => e.name === "<inline>")).toBe(false);
+  });
+
+  it("only_conditional combines with scope filter", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
+import { bearerAuth } from "hono/bearer-auth";
+const app = new Hono();
+app.use("/a/*", async (c, next) => {
+  if (c.req.method !== "GET") return basicAuth({ username: "u", password: "p" })(c, next);
+  await next();
+});
+app.use("/b/*", async (c, next) => {
+  if (!c.req.header("x-key")) return bearerAuth({ token: "t" })(c, next);
+  await next();
+});
+app.get("/a/x", (c) => c.json({}));
+app.get("/b/x", (c) => c.json({}));
+export default app;`,
+    });
+    const all = await traceMiddlewareChain(repo, undefined, undefined, {
+      only_conditional: true,
+    });
+    expect(all.total).toBeGreaterThanOrEqual(2);
+    const filtered = await traceMiddlewareChain(repo, undefined, undefined, {
+      scope: "/a/*",
+      only_conditional: true,
+    });
+    expect(filtered.total).toBe(1);
+    expect(filtered.chain[0]?.name).toBe("basicAuth");
+  });
+
+  it("only_conditional returns empty when no conditional middleware exists", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+import { logger } from "hono/logger";
+const app = new Hono();
+app.use("*", logger());
+app.get("/", (c) => c.json({}));
+export default app;`,
+    });
+    const result = await traceMiddlewareChain(repo, undefined, undefined, {
+      only_conditional: true,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.total).toBe(0);
+    expect(result.chain).toEqual([]);
+  });
+
+  it("only_conditional works in route mode too", async () => {
+    const repo = await createIndexedFixture({
+      "src/index.ts": `import { Hono } from "hono";
+import { basicAuth } from "hono/basic-auth";
+const app = new Hono();
+app.use("/posts/*", async (c, next) => {
+  if (c.req.method !== "GET") return basicAuth({ username: "u", password: "p" })(c, next);
+  await next();
+});
+app.get("/posts/:id", (c) => c.json({}));
+export default app;`,
+    });
+    const result = await traceMiddlewareChain(repo, "/posts/:id", "GET", {
+      only_conditional: true,
+    });
+    expect(result.route?.path).toBe("/posts/:id");
+    expect(result.chain.some((e) => e.name === "basicAuth")).toBe(true);
+  });
+});
