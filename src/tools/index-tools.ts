@@ -966,14 +966,28 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
  * Get the code index for a repo from disk. Auto-refreshes if git HEAD moved.
  */
 export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> {
-  await ensureIndexFresh(repoName);
-
-  const cached = codeIndexes.get(repoName);
-  if (cached) return cached;
-
+  // Resolve empty/missing repo name: try CWD-based name, then single-repo fallback
+  let resolved = repoName;
+  if (!resolved) {
+    resolved = getRepoName(process.cwd());
+  }
   const config = loadConfig();
-  const meta = await getRepo(config.registryPath, repoName);
+  let meta = await getRepo(config.registryPath, resolved);
+  if (!meta && resolved !== repoName) {
+    // CWD-based name didn't match — if there's exactly 1 repo, use it
+    const allRepos = await listRegistryRepos(config.registryPath);
+    if (allRepos.length === 1) {
+      const only = allRepos[0]!;
+      resolved = only.name;
+      meta = only;
+    }
+  }
   if (!meta) return null;
+
+  await ensureIndexFresh(resolved);
+
+  const cached = codeIndexes.get(resolved);
+  if (cached) return cached;
 
   // Pass EXTRACTOR_VERSIONS so a schema bump forces a cache miss instead of
   // serving a stale index. Callers that hit the miss path should reindex.
