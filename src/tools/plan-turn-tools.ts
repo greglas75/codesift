@@ -571,3 +571,95 @@ export async function planTurn(
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Output formatter (Task 9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Format a PlanTurnResult as a human-readable markdown-style string.
+ * Edge-case: if no tools, injects a discover_tools fallback.
+ */
+export function formatPlanTurnResult(result: PlanTurnResult): string {
+  // Edge-case: no tools → inject fallback
+  const tools = result.tools.length > 0
+    ? result.tools.slice(0, 10)
+    : [
+        {
+          name: "discover_tools",
+          confidence: 0.3,
+          reasoning: "No direct matches, try explicit search",
+          is_hidden: false,
+        } satisfies ToolRecommendation,
+      ];
+
+  // Cap arrays at spec limits
+  const symbols = result.symbols.slice(0, 10);
+  const files = result.files.slice(0, 5);
+
+  const lines: string[] = [];
+
+  // --- Header ---
+  lines.push(`plan_turn: ${result.query}`);
+  lines.push(`confidence: ${result.confidence.toFixed(3)} | duration: ${result.metadata.duration_ms}ms`);
+
+  // --- Gap Analysis (early exit) ---
+  if (result.gap_analysis) {
+    lines.push(`\n⛔ STOP_AND_REPORT_GAP`);
+    lines.push(`prior_query: ${result.gap_analysis.prior_query}`);
+    lines.push(`prior_result_count: ${result.gap_analysis.prior_result_count}`);
+    lines.push(`suggestion: ${result.gap_analysis.suggestion}`);
+    return lines.join("\n");
+  }
+
+  // --- Tools section (primary) ---
+  lines.push(`\n─── Tools (${tools.length}) ───`);
+  for (const t of tools) {
+    const conf = t.confidence.toFixed(3);
+    const hidden = t.is_hidden ? " [hidden]" : "";
+    lines.push(`  ${t.name}${hidden}  confidence: ${conf}`);
+    lines.push(`    ${t.reasoning}`);
+  }
+
+  // --- Already Used ---
+  if (result.already_used.length > 0) {
+    lines.push(`\n─── Already Used (${result.already_used.length}) ───`);
+    lines.push(`  ${result.already_used.join(", ")}`);
+  }
+
+  // --- Reveal Required ---
+  if (result.reveal_required.length > 0) {
+    lines.push(`\n─── Reveal Required (${result.reveal_required.length}) ───`);
+    lines.push(`  These tools are hidden — call describe_tools(names=[...]) to reveal:`);
+    lines.push(`  ${result.reveal_required.join(", ")}`);
+  }
+
+  // --- Symbols ---
+  if (symbols.length > 0) {
+    lines.push(`\n─── Symbols (${symbols.length}) ───`);
+    for (const s of symbols) {
+      lines.push(`  ${s.kind} ${s.name}  ${s.file}:${s.line}`);
+    }
+  }
+
+  // --- Files ---
+  if (files.length > 0) {
+    lines.push(`\n─── Files (${files.length}) ───`);
+    for (const f of files) {
+      lines.push(`  ${f.path}  score: ${f.score.toFixed(2)}  (${f.reason})`);
+    }
+  }
+
+  // --- Metadata footer (key flags only) ---
+  const flags: string[] = [];
+  if (result.metadata.vague_query) flags.push("vague_query");
+  if (result.metadata.stale_index) flags.push("stale_index");
+  if (result.metadata.framework_mismatch) flags.push("framework_mismatch");
+  if (result.metadata.cold_start) flags.push("cold_start");
+  if (flags.length > 0) {
+    lines.push(`\n─── Flags ───`);
+    lines.push(`  ${flags.join(", ")}`);
+  }
+
+  return lines.join("\n");
+}

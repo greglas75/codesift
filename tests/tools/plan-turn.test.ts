@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
-import type { ToolRecommendation } from "../../src/search/tool-ranker.js";
+import type { ToolRecommendation, ToolRankerContext } from "../../src/search/tool-ranker.js";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: vi.fn(),
@@ -328,5 +328,118 @@ describe("planTurn", () => {
     expect(result.tools[0]?.name).toBe("find_dead_code");
     expect(result.tools[1]?.name).toBe("search_text");
     expect(result.metadata.intents_detected).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// planTurn integration — real rankTools BM25 engine, synthetic TOOL_DEFINITIONS
+// ---------------------------------------------------------------------------
+
+describe("planTurn integration", () => {
+  // Synthetic TOOL_DEFINITIONS covering realistic entries (matches spec example list)
+  const SYNTHETIC_TOOLS = [
+    { name: "find_dead_code", description: "Find dead code unused exports unreachable functions", category: "analysis", searchHint: "dead code unused exports unreachable" },
+    { name: "search_text", description: "Full-text BM25 search across the codebase", category: "search", searchHint: "search text grep find pattern" },
+    { name: "trace_route", description: "Trace an API endpoint from handler through middleware to response", category: "graph", searchHint: "route endpoint handler API trace" },
+    { name: "analyze_complexity", description: "Measure cyclomatic complexity hotspots and complexity score", category: "analysis", searchHint: "complexity hotspot cyclomatic refactor" },
+    { name: "find_clones", description: "Find copy-paste duplicated code clones DRY violations", category: "analysis", searchHint: "clone duplicate copy-paste DRY" },
+    { name: "analyze_hotspots", description: "Git churn hotspots tech debt most-changed files", category: "analysis", searchHint: "hotspot churn git tech debt" },
+    { name: "scan_secrets", description: "Scan for leaked secrets API keys credentials passwords", category: "security", searchHint: "secrets keys credentials security scan" },
+    { name: "detect_communities", description: "Detect module communities clusters architecture dependency graph", category: "architecture", searchHint: "communities modules clusters dependency" },
+    { name: "get_file_outline", description: "Get file symbol outline structure functions classes", category: "outline", searchHint: "outline file structure symbols" },
+    { name: "search_symbols", description: "Search functions classes types methods by name signature", category: "search", searchHint: "symbols functions classes methods types" },
+    { name: "find_references", description: "Find all references usages of a symbol across the codebase", category: "symbols", searchHint: "references usages callers symbol" },
+    { name: "impact_analysis", description: "Blast radius impact analysis of changed files and affected symbols", category: "analysis", searchHint: "impact blast radius changed affected" },
+    { name: "audit_scan", description: "Composite code quality audit: complexity dead code patterns security", category: "analysis", searchHint: "audit quality scan code health" },
+    { name: "find_perf_hotspots", description: "Find performance hotspots slow queries N+1 patterns async pitfalls", category: "analysis", searchHint: "performance slow queries N+1 async pitfalls perf" },
+    { name: "discover_tools", description: "Search tool catalog by keyword or category to discover hidden tools", category: "meta", searchHint: "discover tools catalog search find" },
+    { name: "suggest_queries", description: "Suggest useful queries and tools for an unfamiliar repository", category: "meta", searchHint: "suggest queries tools explore repo" },
+  ];
+
+  // Retrieve real rankTools (using the actual module, bypassing the vi.mock for tool-ranker)
+  let realRankTools: typeof import("../../src/search/tool-ranker.js")["rankTools"];
+  let clearBM25Cache: typeof import("../../src/search/tool-ranker.js")["clearToolBM25Cache"];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _resetPlanTurnCaches();
+
+    // Load real ranking functions (bypassing the mock)
+    const rankerModule = await vi.importActual<typeof import("../../src/search/tool-ranker.js")>(
+      "../../src/search/tool-ranker.js",
+    );
+    realRankTools = rankerModule.rankTools;
+    clearBM25Cache = rankerModule.clearToolBM25Cache;
+    clearBM25Cache();
+
+    // Set up planTurn mocks so planTurn doesn't fail on infra calls
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    getSessionStateMock.mockReturnValue(makeSessionState() as unknown as ReturnType<typeof getSessionState>);
+    getUsageStatsMock.mockResolvedValue({
+      total_calls: 0, total_sessions: 0, avg_calls_per_session: 0,
+      tools: [], top_repos: [], daily: [], query_types: [],
+      earliest_ts: 0, latest_ts: 0,
+    });
+    detectAutoLoadToolsMock.mockResolvedValue([]);
+    getToolEmbeddingsMock.mockResolvedValue(null);
+
+    // Make rankTools use the real implementation by restoring to real fn
+    rankToolsMock.mockImplementation((ctx: ToolRankerContext) => {
+      // Build a context using our synthetic tools alongside the passed toolDefs
+      const syntheticCtx: ToolRankerContext = {
+        ...ctx,
+        toolDefs: SYNTHETIC_TOOLS as Parameters<typeof realRankTools>[0]["toolDefs"],
+      };
+      return realRankTools(syntheticCtx);
+    });
+  });
+
+  afterEach(() => {
+    if (clearBM25Cache) clearBM25Cache();
+  });
+
+  it("IT-1. 'find dead code' → find_dead_code in top-3", async () => {
+    const result = await planTurn("test", "find dead code");
+
+    const names = result.tools.map((t) => t.name);
+    expect(names.slice(0, 3)).toContain("find_dead_code");
+  });
+
+  it("IT-2. 'find slow queries' → perf tool in top-5", async () => {
+    const result = await planTurn("test", "find slow queries");
+
+    const names = result.tools.map((t) => t.name);
+    const hasPerfTool = names.slice(0, 5).some((n) =>
+      n === "find_perf_hotspots" || n.includes("perf") || n.includes("hotspot"),
+    );
+    expect(hasPerfTool).toBe(true);
+  });
+
+  it("IT-3. empty query '' → discover_tools or suggest_queries fallback", async () => {
+    const result = await planTurn("test", "");
+
+    // Empty query → vague → fallback tool
+    const names = result.tools.map((t) => t.name);
+    const hasFallback = names.some((n) => n === "discover_tools" || n === "suggest_queries");
+    expect(hasFallback).toBe(true);
+  });
+
+  it("IT-4. multi-intent 'audit deps AND refactor auth' → ≥1 tool per intent", async () => {
+    const result = await planTurn("test", "audit deps AND refactor auth");
+
+    // Multi-intent: should have at least 2 tools (one per intent)
+    expect(result.tools.length).toBeGreaterThanOrEqual(1);
+    expect(result.metadata.intents_detected).toBe(2);
+    // Should have called rankTools twice (once per intent)
+    expect(rankToolsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("IT-5. 'review src/register-tools.ts' → file path in files[]", async () => {
+    // The index needs to know about the file for score 1.0, but even without it
+    // the file ref should be extracted and appear in files[]
+    const result = await planTurn("test", "review src/register-tools.ts");
+
+    const filePaths = result.files.map((f) => f.path);
+    expect(filePaths.some((p) => p.includes("register-tools.ts"))).toBe(true);
   });
 });

@@ -65,14 +65,13 @@ import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
 import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import { astroConfigAnalyze } from "./tools/astro-config.js";
 import { astroContentCollections } from "./tools/astro-content-collections.js";
-import { astroAudit } from "./tools/astro-audit.js";
 import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
 import { getModelGraph } from "./tools/model-tools.js";
 import { getTestFixtures } from "./tools/pytest-tools.js";
 import { findFrameworkWiring } from "./tools/wiring-tools.js";
 import { runRuff } from "./tools/ruff-tools.js";
 import { parsePyproject } from "./tools/pyproject-tools.js";
-import { resolveConstantValue } from "./tools/constant-resolution-tools.js";
+import { resolveConstantValue } from "./tools/python-constants-tools.js";
 import { effectiveDjangoViewSecurity } from "./tools/django-view-security-tools.js";
 import { findPythonCallers } from "./tools/python-callers.js";
 import { taintTrace } from "./tools/taint-tools.js";
@@ -93,6 +92,7 @@ import { auditAgentConfig } from "./tools/agent-config-tools.js";
 import { testImpactAnalysis } from "./tools/test-impact-tools.js";
 import { dependencyAudit } from "./tools/dependency-audit-tools.js";
 import { migrationLint } from "./tools/migration-lint-tools.js";
+import { planTurn, formatPlanTurnResult } from "./tools/plan-turn-tools.js";
 import { astroMigrationCheck } from "./tools/astro-migration.js";
 import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
 import { findPerfHotspots } from "./tools/perf-tools.js";
@@ -601,7 +601,8 @@ export type ToolCategory =
   | "nestjs"
   | "navigation"
   | "session"
-  | "meta";
+  | "meta"
+  | "discovery";
 
 /** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
 export const CORE_TOOL_NAMES = new Set([
@@ -643,6 +644,7 @@ export const CORE_TOOL_NAMES = new Set([
   "index_folder",            // repo onboarding
   "discover_tools",          // meta: discovers remaining hidden tools
   "describe_tools",          // meta: full schema for hidden tools
+  "plan_turn",               // meta: route query to best tools/symbols/files
   "get_session_snapshot",    // session: compaction survival
   "analyze_project",         // project profile
   "get_extractor_versions",  // cache invalidation
@@ -4076,6 +4078,28 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         }
       }
       return lines.join("\n");
+    },
+  },
+
+  // --- Discovery / concierge ---
+  {
+    name: "plan_turn",
+    category: "discovery",
+    searchHint: "plan turn routing recommend tools symbols files gap analysis session aware concierge",
+    description: "Routes a natural-language query to the most relevant CodeSift tools, symbols, and files. Uses hybrid BM25+semantic ranking with session-aware dedup. Call at the start of a task to get a prioritized action list.",
+    schema: {
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      query: z.string().describe("Natural-language description of what you want to do"),
+      max_results: z.number().optional().describe("Max tools to return (default 10)"),
+      skip_session: z.boolean().optional().describe("Skip session state checks (default false)"),
+    },
+    handler: async (args) => {
+      const { query, max_results, skip_session } = args as { query: string; max_results?: number; skip_session?: boolean };
+      const opts: { max_results?: number; skip_session?: boolean } = {};
+      if (max_results !== undefined) opts.max_results = max_results;
+      if (skip_session !== undefined) opts.skip_session = skip_session;
+      const result = await planTurn(args.repo as string, query, opts);
+      return formatPlanTurnResult(result);
     },
   },
 ];
