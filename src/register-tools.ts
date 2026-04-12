@@ -2842,7 +2842,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     })),
     handler: async (args) => {
       const result = await indexStatus(args.repo as string);
-      if (!result.indexed) return "index_status: NOT INDEXED — run index_folder first";
+      if (!result.indexed) {
+        // If no repo specified, list available repos so the agent can pick one
+        if (!args.repo) {
+          const { listAllRepos } = await import("./tools/index-tools.js");
+          const repos = await listAllRepos();
+          const localRepos = repos.filter((r) => (typeof r === "string" ? r : r.name).startsWith("local/")).map((r) => typeof r === "string" ? r : r.name);
+          if (localRepos.length > 0) {
+            return `index_status: repo not auto-detected (CWD mismatch). ${localRepos.length} repos available. Pass repo= explicitly. Available: ${localRepos.join(", ")}`;
+          }
+        }
+        return "index_status: NOT INDEXED — run index_folder first";
+      }
       const langs = Object.entries(result.language_breakdown ?? {})
         .sort(([, a], [, b]) => b - a)
         .map(([lang, count]) => `${lang}(${count})`)
