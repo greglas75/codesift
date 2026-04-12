@@ -8,9 +8,9 @@ describe("CODESIFT_INSTRUCTIONS", () => {
   });
 
   it("is under 6000 chars (~1500 tokens)", () => {
-    // Budget grew from ~4000 to 6000 as more framework aliases were added
-    // (React, Astro, Next.js tool shortcuts). Still well within the MCP
-    // instructions envelope and acceptable for the system-prompt cost.
+    // Budget grew to 6000 as more framework aliases were added (React,
+    // Astro, Next.js, Hono Phase 2 tool shortcuts). Still well within
+    // the MCP instructions envelope.
     expect(CODESIFT_INSTRUCTIONS.length).toBeLessThan(6000);
   });
 
@@ -41,10 +41,20 @@ describe("CODESIFT_INSTRUCTIONS", () => {
   });
 
   it("reports the merged MCP tool count", () => {
-    // Auto-adapts as tools grow — matches any 100-199 range so each
-    // tool-count bump doesn't require a test update. Narrower than
-    // /1\d\d/ would be (160-199 only), taking the main side of the
-    // merge since 160+ is the practical current range.
+    // Auto-adapts as tools grow — matches any 160-199 range so each
+    // tool-count bump doesn't require a test update.
     expect(CODESIFT_INSTRUCTIONS).toMatch(/1[6-9]\d MCP tools/);
+  });
+
+  it("mentions Hono Phase 2 tools in TOOL MAPPING", () => {
+    expect(CODESIFT_INSTRUCTIONS).toContain("analyze_hono_app");
+    expect(CODESIFT_INSTRUCTIONS).toContain("trace_middleware_chain");
+    expect(CODESIFT_INSTRUCTIONS).toContain("only_conditional");
+    expect(CODESIFT_INSTRUCTIONS).toContain("analyze_inline_handler");
+  });
+
+  it("does not reference tools merged out in consolidation", () => {
+    expect(CODESIFT_INSTRUCTIONS).not.toContain("trace_conditional_middleware");
+    expect(CODESIFT_INSTRUCTIONS).not.toContain("detect_middleware_env_regression");
   });
 });

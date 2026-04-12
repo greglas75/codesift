@@ -374,10 +374,8 @@ const HONO_TOOLS = [
   "audit_hono_security",
   "visualize_hono_routes",
   // Phase 2 additions — closes blog-API demo gaps + GitHub issues #3587/#4121/#4270
-  "trace_conditional_middleware",
   "analyze_inline_handler",
   "extract_response_types",
-  "detect_middleware_env_regression",
   "detect_hono_modules",
   "find_dead_hono_routes",
 ];
@@ -3459,19 +3457,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "trace_middleware_chain",
     category: "graph",
-    searchHint: "hono middleware chain trace order scope auth use",
-    description: "Trace the ordered middleware chain for a Hono route. Returns full middleware stack in registration order for a given path+method.",
+    searchHint: "hono middleware chain trace order scope auth use conditional applied_when if method header path basicAuth gated",
+    description: "Hono middleware introspection. Three query modes: (1) route mode — pass path (+optional method) to get the chain effective for that route; (2) scope mode — pass scope literal (e.g. '/posts/*') to get that specific app.use chain; (3) app-wide mode — omit path and scope to get every chain flattened. Any mode supports only_conditional=true to filter to entries with applied_when populated, so the blog-API pattern (basicAuth wrapped in `if (method !== 'GET')`) is surfaced as gated rather than missed. Absorbs the former trace_conditional_middleware tool.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      path: z.string().describe("URL path to trace (e.g. '/api/users/:id')"),
-      method: z.string().optional().describe("HTTP method filter (GET, POST, etc.)"),
+      path: z.string().optional().describe("Route path to look up (e.g. '/api/users/:id'). Omit for scope or app-wide query."),
+      method: z.string().optional().describe("HTTP method filter (GET, POST, etc.). Only used in route mode."),
+      scope: z.string().optional().describe("Exact middleware scope literal (e.g. '/posts/*'). Mutually exclusive with path."),
+      only_conditional: z.boolean().optional().describe("Filter entries to those whose applied_when field is populated (conditional middleware)."),
     },
     handler: async (args) => {
       const { traceMiddlewareChain } = await import("./tools/hono-middleware-chain.js");
+      const opts: Record<string, unknown> = {};
+      if (args.scope !== undefined) opts.scope = args.scope;
+      if (args.only_conditional !== undefined) opts.only_conditional = args.only_conditional;
       return await traceMiddlewareChain(
         args.repo as string,
-        args.path as string,
+        args.path as string | undefined,
         args.method as string | undefined,
+        Object.keys(opts).length > 0 ? opts : undefined,
       );
     },
   },
@@ -3546,8 +3550,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "audit_hono_security",
     category: "security",
-    searchHint: "hono security audit rate limit secure headers auth order csrf",
-    description: "Security audit of a Hono app: missing rate limiting on mutation routes, missing secure-headers middleware globally, auth middleware ordering violations. Returns prioritized findings.",
+    searchHint: "hono security audit rate limit secure headers auth order csrf env regression createMiddleware BlankEnv Issue 3587",
+    description: "Security + type-safety audit of a Hono app. Rules: missing-secure-headers (global), missing-rate-limit + missing-auth (mutation routes, conditional-middleware aware via applied_when), auth-ordering (auth after non-auth in chain), env-regression (plain createMiddleware in 3+ chains — Hono Issue #3587, absorbed from the former detect_middleware_env_regression tool). Returns prioritized findings plus heuristic disclaimers via `notes` field for best-effort rules.",
     schema: {
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     },
@@ -3575,23 +3579,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 
   // --- Hono Phase 2 tools (T13) ---
-  {
-    name: "trace_conditional_middleware",
-    category: "analysis",
-    searchHint: "hono conditional middleware applied_when if method header path basicAuth auth gated",
-    description: "List Hono middleware entries that are applied under a runtime condition (e.g., basicAuth only for non-GET methods). Each entry carries condition_type (method|header|path|custom) + condition_text. Closes blog-API false positive where audit_hono_security flagged inline-arrow conditional auth as missing.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      scope: z.string().optional().describe("Filter to a specific middleware scope (e.g. '/posts/*')"),
-    },
-    handler: async (args) => {
-      const { traceConditionalMiddleware } = await import("./tools/hono-conditional-middleware.js");
-      return await traceConditionalMiddleware(
-        args.repo as string,
-        args.scope as string | undefined,
-      );
-    },
-  },
   {
     name: "analyze_inline_handler",
     category: "analysis",
@@ -3622,19 +3609,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args) => {
       const { extractResponseTypes } = await import("./tools/hono-response-types.js");
       return await extractResponseTypes(args.repo as string);
-    },
-  },
-  {
-    name: "detect_middleware_env_regression",
-    category: "analysis",
-    searchHint: "hono middleware env regression createMiddleware generic BlankEnv type Issue 3587",
-    description: "Heuristic static check for Hono Issue #3587: flags middleware chains of 3+ entries where an intermediate member is declared with plain createMiddleware(...) (no Env generic), which resets the accumulated Env type to BlankEnv for downstream middleware. Reports chain_scope + chain_length + middleware_name + definition file:line. Includes a heuristic disclaimer in the result note.",
-    schema: {
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    },
-    handler: async (args) => {
-      const { detectMiddlewareEnvRegression } = await import("./tools/hono-env-regression.js");
-      return await detectMiddlewareEnvRegression(args.repo as string);
     },
   },
   {

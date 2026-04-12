@@ -4,11 +4,30 @@
 **spec_id:** none
 **planning_mode:** inline
 **plan_revision:** 1
-**status:** Approved
+**status:** Completed
 **Created:** 2026-04-11
 **Approved:** 2026-04-11T08:53:00Z
-**Tasks:** 14
+**Completed:** 2026-04-11T19:20:00Z
+**Polished:** 2026-04-12 (feat/hono-polish — 4 commits: shared resolver, API contract enhancement, docs, 13→11 consolidation)
+**Tasks:** 14 — all shipped; polish pass consolidated tool count 13 → 11
 **Estimated complexity:** 5 standard, 9 complex
+
+## Polish pass consolidation (2026-04-12)
+
+Two merges reduced tool count from 13 to 11 without losing functionality:
+
+1. `trace_conditional_middleware` → `trace_middleware_chain` as
+   `only_conditional: boolean` + `scope: string` options. Route mode
+   (existing) still works identically; new scope and app-wide modes
+   add the former standalone tool's coverage.
+
+2. `detect_middleware_env_regression` → `audit_hono_security` as a new
+   `env-regression` rule in the findings list. Reuses the existing
+   middleware chain walk; heuristic disclaimer surfaced via new
+   `notes` field on the result.
+
+Final tool surface: 2 core (`analyze_hono_app`, `trace_middleware_chain`) +
+9 hidden auto-enabled = **11 tools total**.
 
 ## Background
 

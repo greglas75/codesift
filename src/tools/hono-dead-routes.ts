@@ -14,8 +14,9 @@
 import { getCodeIndex } from "./index-tools.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
+import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
 import { detectFrameworks } from "../utils/framework-detect.js";
-import { join, relative } from "node:path";
+import { relative } from "node:path";
 import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { walkDirectory } from "../utils/walk.js";
@@ -120,16 +121,4 @@ export async function findDeadHonoRoutes(
     total: findings.length,
     note: HEURISTIC_NOTE,
   };
-}
-
-function resolveHonoEntryFile(index: {
-  symbols: Array<{ source?: string | undefined; file: string }>;
-  root: string;
-}): string | null {
-  for (const sym of index.symbols) {
-    if (sym.source && /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(sym.source)) {
-      return join(index.root, sym.file);
-    }
-  }
-  return null;
 }
