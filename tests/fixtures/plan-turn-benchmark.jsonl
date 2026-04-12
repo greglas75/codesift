@@ -1,0 +1,30 @@
+{"query": "find dead code", "expected_tools": ["find_dead_code", "find_unused_imports"], "category": "direct"}
+{"query": "analyze complexity", "expected_tools": ["analyze_complexity"], "category": "direct"}
+{"query": "detect secrets", "expected_tools": ["scan_secrets"], "category": "direct"}
+{"query": "trace route", "expected_tools": ["trace_route"], "category": "direct"}
+{"query": "impact analysis", "expected_tools": ["impact_analysis"], "category": "direct"}
+{"query": "find slow queries", "expected_tools": ["find_perf_hotspots", "explain_query", "analyze_complexity"], "category": "concept"}
+{"query": "find duplicate code", "expected_tools": ["find_clones"], "category": "concept"}
+{"query": "understand the architecture", "expected_tools": ["detect_communities", "architecture_summary", "get_knowledge_map"], "category": "concept"}
+{"query": "who calls this function", "expected_tools": ["find_references", "trace_call_chain", "get_call_hierarchy"], "category": "concept"}
+{"query": "what files have been changing", "expected_tools": ["analyze_hotspots", "changed_symbols"], "category": "concept"}
+{"query": "find unused exports", "expected_tools": ["find_dead_code", "find_unused_imports"], "category": "concept"}
+{"query": "detect performance issues", "expected_tools": ["find_perf_hotspots", "analyze_complexity", "analyze_hotspots"], "category": "concept"}
+{"query": "review security", "expected_tools": ["scan_secrets", "audit_scan", "search_patterns"], "category": "concept"}
+{"query": "audit deps AND refactor auth", "expected_tools": ["analyze_complexity", "find_dead_code", "audit_scan"], "category": "multi-intent"}
+{"query": "find dead code OR unused imports", "expected_tools": ["find_dead_code", "find_unused_imports"], "category": "multi-intent"}
+{"query": "trace route; analyze_complexity", "expected_tools": ["trace_route", "analyze_complexity"], "category": "multi-intent"}
+{"query": "review src/register-tools.ts", "expected_tools": ["get_file_outline", "search_text", "find_and_show"], "category": "file-ref"}
+{"query": "what's in src/tools/plan-turn-tools.ts", "expected_tools": ["get_file_outline", "get_symbol", "search_symbols"], "category": "file-ref"}
+{"query": "test src/search/bm25.ts", "expected_tools": ["get_file_outline", "search_text", "search_symbols"], "category": "file-ref"}
+{"query": "help", "expected_tools": ["discover_tools", "suggest_queries", "plan_turn"], "category": "vague"}
+{"query": "what should i do", "expected_tools": ["discover_tools", "suggest_queries", "plan_turn"], "category": "vague"}
+{"query": "show me something", "expected_tools": ["discover_tools", "suggest_queries"], "category": "vague"}
+{"query": "audit my react components", "expected_tools": ["trace_component_tree", "analyze_hooks", "analyze_renders"], "category": "framework"}
+{"query": "check for N+1 in prisma", "expected_tools": ["explain_query", "find_perf_hotspots", "search_patterns"], "category": "framework"}
+{"query": "trace my Next.js middleware", "expected_tools": ["nextjs_middleware_coverage", "trace_route", "nextjs_route_map"], "category": "framework"}
+{"query": "find more performance issues", "expected_tools": ["find_perf_hotspots", "analyze_complexity", "analyze_hotspots"], "category": "session-aware"}
+{"query": "what else should I check", "expected_tools": ["discover_tools", "audit_scan", "suggest_queries"], "category": "session-aware"}
+{"query": "find Rust code", "expected_tools": [], "category": "gap"}
+{"query": "plan my next task", "expected_tools": ["plan_turn", "discover_tools", "suggest_queries"], "category": "direct"}
+{"query": "show me hot files with tech debt", "expected_tools": ["analyze_hotspots", "analyze_complexity", "audit_scan"], "category": "concept"}
