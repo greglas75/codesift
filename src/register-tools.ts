@@ -2580,7 +2580,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     schema: {},
     handler: async () => {
       const stats = await getUsageStats();
-      return { report: formatUsageReport(stats) };
+      const { createRequire } = await import("node:module");
+      const req = createRequire(import.meta.url);
+      const pkgVersion: string = (req("../package.json") as { version: string }).version;
+      return { version: pkgVersion, report: formatUsageReport(stats) };
     },
   },
 

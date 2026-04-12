@@ -8,11 +8,15 @@ import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
+import { createRequire } from "node:module";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
 export { resetSession } from "./storage/session-state.js";
 import { cleanupSidecar, cleanupOrphanSidecars } from "./storage/session-state.js";
+
+const require = createRequire(import.meta.url);
+const PKG_VERSION: string = (require("../package.json") as { version: string }).version;
 
 // Clean up orphan sidecar files from previous sessions
 cleanupOrphanSidecars();
@@ -25,7 +29,7 @@ process.on("exit", () => {
 loadConfig();
 
 const server = new McpServer(
-  { name: "codesift-mcp", version: "0.1.0" },
+  { name: "codesift-mcp", version: PKG_VERSION },
   { instructions: CODESIFT_INSTRUCTIONS }
 );
 
