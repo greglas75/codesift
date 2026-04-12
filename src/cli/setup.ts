@@ -35,15 +35,29 @@ export interface InstallRulesResult {
 // Platform configs
 // ---------------------------------------------------------------------------
 
-const CODEX_TOML_BLOCK = `
+// Lazy — resolved at runtime so resolveNpxCommand() is called after module init
+function getCodexTomlBlock(): string {
+  return `
 [mcp_servers.codesift]
-command = "npx"
+command = "${resolveNpxCommand()}"
 args = ["-y", "codesift-mcp"]
 tool_timeout_sec = 120
 `;
+}
+
+// Resolve full path to npx — GUI apps (Antigravity, Claude Desktop) often
+// don't inherit shell PATH so bare "npx" fails with "executable not found".
+function resolveNpxCommand(): string {
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    const full = execSync("which npx", { encoding: "utf-8" }).trim();
+    if (full) return full;
+  } catch { /* fallback */ }
+  return "npx";
+}
 
 const MCP_SERVER_ENTRY = {
-  command: "npx",
+  command: resolveNpxCommand(),
   args: ["-y", "codesift-mcp"],
 };
 
@@ -283,13 +297,13 @@ async function setupCodex(): Promise<SetupResult> {
       return { platform: "codex", config_path: configPath, status: "already_configured" };
     }
     // Append to existing file
-    const newContent = content.trimEnd() + "\n" + CODEX_TOML_BLOCK;
+    const newContent = content.trimEnd() + "\n" + getCodexTomlBlock();
     await writeFile(configPath, newContent, "utf-8");
     return { platform: "codex", config_path: configPath, status: "updated" };
   }
 
   // Create new file
-  await writeFile(configPath, CODEX_TOML_BLOCK.trimStart(), "utf-8");
+  await writeFile(configPath, getCodexTomlBlock().trimStart(), "utf-8");
   return { platform: "codex", config_path: configPath, status: "created" };
 }
 
