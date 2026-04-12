@@ -1,0 +1,8 @@
+{
+  "name": "test/php-services-fixture",
+  "autoload": {
+    "psr-4": {
+      "app\\": "./"
+    }
+  }
+}
