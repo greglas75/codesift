@@ -7,7 +7,7 @@ import { loadConfig } from "../config.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { detectFrameworks, isFrameworkEntryPoint } from "../utils/framework-detect.js";
 import { getCodeIndex, getBM25Index } from "./index-tools.js";
-import { REACT_STDLIB_HOOKS } from "./react-tools.js";
+import { REACT_STDLIB_HOOKS, extractHookNames } from "./react-tools.js";
 import type { CodeIndex, CodeSymbol, Reference, SymbolKind } from "../types.js";
 
 const MAX_REFERENCES = 100;
@@ -632,19 +632,16 @@ function buildReactContext(
 ): ReactContext {
   const source = component.source ?? "";
 
-  // Extract hooks used
-  const hooksMap = new Map<string, boolean>();
-  const hookPattern = /\b(use[A-Z]\w*)\s*\(/g;
-  let m: RegExpExecArray | null;
-  while ((m = hookPattern.exec(source)) !== null) {
-    const name = m[1]!;
-    hooksMap.set(name, REACT_STDLIB_HOOKS.has(name));
-  }
-  const hooks_used = [...hooksMap.entries()].map(([name, is_stdlib]) => ({ name, is_stdlib }));
+  // Extract hooks used (uses shared extractHookNames from react-tools.ts — CQ14)
+  const hooks_used = [...extractHookNames(source)].map((name) => ({
+    name,
+    is_stdlib: REACT_STDLIB_HOOKS.has(name),
+  }));
 
   // Extract child components from JSX (<PascalCase>)
   const childSet = new Set<string>();
   const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
+  let m: RegExpExecArray | null;
   while ((m = jsxPattern.exec(source)) !== null) {
     const name = m[1]!;
     if (name !== component.name) childSet.add(name);

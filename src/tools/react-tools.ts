@@ -11,7 +11,7 @@ import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { resolveAlias } from "../utils/react-alias.js";
 import type { CodeSymbol, CallNode } from "../types.js";
 
-export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, findRuleOfHooksViolations, findRenderRisks };
+export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, extractHookNames, findRuleOfHooksViolations, findRenderRisks };
 // formatRendersMarkdown and buildContextGraph are exported inline at definition site below
 
 // ── Limits (mirror graph-tools.ts) ──────────────────────────
@@ -324,6 +324,20 @@ function findRuleOfHooksViolations(source: string): string[] {
   }
 
   return violations;
+}
+
+/**
+ * Extract unique hook names from source (no line numbers, no cap).
+ * Use when you only need the set of hooks — e.g. React context bundle.
+ */
+function extractHookNames(source: string): Set<string> {
+  const names = new Set<string>();
+  const pattern = /\b(use[A-Z]\w*)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(source)) !== null) {
+    names.add(m[1]!);
+  }
+  return names;
 }
 
 /**
