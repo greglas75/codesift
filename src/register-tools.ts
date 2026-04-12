@@ -2383,8 +2383,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       checks: z.string().optional().describe("Comma-separated checks: n_plus_one, god_model, activerecord, security, events, views, services, namespace. Default: all"),
     },
     handler: async (args) => {
-      const opts: { file_pattern?: string } = {};
+      const opts: { file_pattern?: string; checks?: string[] } = {};
       if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.checks === "string" && args.checks.trim()) {
+        opts.checks = args.checks.split(",").map((c) => c.trim()).filter(Boolean);
+      }
       return await phpProjectAudit(args.repo as string, opts);
     },
   },
