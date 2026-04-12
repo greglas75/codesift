@@ -1,6 +1,7 @@
 import Parser from "web-tree-sitter";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { STUB_LANGUAGES } from "./stub-languages.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,10 +124,7 @@ export function getLanguageForPath(filePath: string): string | null {
  * language string must be removed from here so H11 stops firing for those
  * files.
  */
-export const STUB_LANGUAGES: ReadonlySet<string> = new Set([
-  "text_stub",
-  "config",
-]);
+export { STUB_LANGUAGES } from "./stub-languages.js";
 
 /**
  * Returns true when the given `FileEntry.language` value is known to produce

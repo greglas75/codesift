@@ -5,89 +5,141 @@ import { z } from "zod";
 const zBool = () => z.union([z.boolean(), z.string().transform((s) => s === "true")]).optional();
 import { wrapTool, registerShortener } from "./server-helpers.js";
 import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/language-detect.js";
-import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, getCodeIndex } from "./tools/index-tools.js";
-import { STUB_LANGUAGES } from "./parser/parser-manager.js";
-import { searchSymbols, searchText, semanticSearch } from "./tools/search-tools.js";
-import { getFileTree, getFileOutline, getRepoOutline, suggestQueries } from "./tools/outline-tools.js";
-import { getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, findDeadCode, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact } from "./tools/symbol-tools.js";
-import { traceCallChain } from "./tools/graph-tools.js";
-import { traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph, auditCompilerReadiness, reactQuickstart } from "./tools/react-tools.js";
-import { impactAnalysis } from "./tools/impact-tools.js";
-import { traceRoute } from "./tools/route-tools.js";
-import { detectCommunities } from "./tools/community-tools.js";
-import { assembleContext, getKnowledgeMap } from "./tools/context-tools.js";
-import { diffOutline, changedSymbols } from "./tools/diff-tools.js";
-import { generateClaudeMd } from "./tools/generate-tools.js";
-import { codebaseRetrieval } from "./retrieval/codebase-retrieval.js";
-import { analyzeComplexity } from "./tools/complexity-tools.js";
-import { findClones } from "./tools/clone-tools.js";
-import { analyzeHotspots } from "./tools/hotspot-tools.js";
-import { crossRepoSearchSymbols, crossRepoFindReferences } from "./tools/cross-repo-tools.js";
-import { searchPatterns, listPatterns } from "./tools/pattern-tools.js";
-import { generateReport } from "./tools/report-tools.js";
+import { STUB_LANGUAGES } from "./parser/stub-languages.js";
 import { getUsageStats, formatUsageReport } from "./storage/usage-stats.js";
-import { goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy } from "./lsp/lsp-tools.js";
-import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol } from "./tools/conversation-tools.js";
-import { scanSecrets } from "./tools/secret-tools.js";
+import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
 import {
+  indexFolder,
+  indexFile,
+  indexRepo,
+  listAllRepos,
+  invalidateCache,
+  getCodeIndex,
+  searchSymbols,
+  searchText,
+  semanticSearch,
+  getFileTree,
+  getFileOutline,
+  getRepoOutline,
+  suggestQueries,
+  getSymbol,
+  getSymbols,
+  findAndShow,
+  findReferences,
+  findReferencesBatch,
+  findDeadCode,
+  getContextBundle,
+  formatRefsCompact,
+  formatSymbolCompact,
+  formatSymbolsCompact,
+  formatBundleCompact,
+  traceCallChain,
+  traceComponentTree,
+  analyzeHooks,
+  analyzeRenders,
+  buildContextGraph,
+  auditCompilerReadiness,
+  reactQuickstart,
+  impactAnalysis,
+  traceRoute,
+  detectCommunities,
+  assembleContext,
+  getKnowledgeMap,
+  diffOutline,
+  changedSymbols,
+  generateClaudeMd,
+  codebaseRetrieval,
+  analyzeComplexity,
+  findClones,
+  analyzeHotspots,
+  crossRepoSearchSymbols,
+  crossRepoFindReferences,
+  searchPatterns,
+  listPatterns,
+  generateReport,
+  goToDefinition,
+  getTypeInfo,
+  renameSymbol,
+  getCallHierarchy,
+  indexConversations,
+  searchConversations,
+  searchAllConversations,
+  findConversationsForSymbol,
+  scanSecrets,
   resolvePhpNamespace,
   tracePhpEvent,
   findPhpViews,
   resolvePhpService,
   phpSecurityScan,
   phpProjectAudit,
-} from "./tools/php-tools.js";
-import { consolidateMemories, readMemory } from "./tools/memory-tools.js";
-import { createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans } from "./tools/coordinator-tools.js";
-import { frequencyAnalysis } from "./tools/frequency-tools.js";
-import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations, traceFlowChain } from "./tools/kotlin-tools.js";
-import { traceHiltGraph } from "./tools/hilt-tools.js";
-import { traceComposeTree, analyzeComposeRecomposition } from "./tools/compose-tools.js";
-import { traceRoomSchema } from "./tools/room-tools.js";
-import { extractKotlinSerializationContract } from "./tools/serialization-tools.js";
-import { astroAnalyzeIslands, astroHydrationAudit } from "./tools/astro-islands.js";
-import { astroRouteMap } from "./tools/astro-routes.js";
-import { astroActionsAudit } from "./tools/astro-actions.js";
-import { astroAudit } from "./tools/astro-audit.js";
-import { nextjsRouteMap } from "./tools/nextjs-route-tools.js";
-import { nextjsMetadataAudit } from "./tools/nextjs-metadata-tools.js";
-import { frameworkAudit } from "./tools/nextjs-framework-audit-tools.js";
-import type { AuditDimension } from "./tools/nextjs-framework-audit-tools.js";
-import { astroConfigAnalyze } from "./tools/astro-config.js";
-import { astroContentCollections } from "./tools/astro-content-collections.js";
-import { analyzeProject, getExtractorVersions } from "./tools/project-tools.js";
-import { getModelGraph } from "./tools/model-tools.js";
-import { getTestFixtures } from "./tools/pytest-tools.js";
-import { findFrameworkWiring } from "./tools/wiring-tools.js";
-import { runRuff } from "./tools/ruff-tools.js";
-import { parsePyproject } from "./tools/pyproject-tools.js";
-import { resolveConstantValue } from "./tools/python-constants-tools.js";
-import { effectiveDjangoViewSecurity } from "./tools/django-view-security-tools.js";
-import { findPythonCallers } from "./tools/python-callers.js";
-import { taintTrace } from "./tools/taint-tools.js";
-import { analyzeDjangoSettings } from "./tools/django-settings.js";
-import { runMypy, runPyright } from "./tools/typecheck-tools.js";
-import { analyzePythonDeps } from "./tools/python-deps-analyzer.js";
-import { pythonAudit } from "./tools/python-audit.js";
-import { traceFastAPIDepends } from "./tools/fastapi-depends.js";
-import { analyzeAsyncCorrectness } from "./tools/async-correctness.js";
-import { getPydanticModels } from "./tools/pydantic-models.js";
-import { reviewDiff } from "./tools/review-diff-tools.js";
-import { auditScan } from "./tools/audit-tools.js";
+  consolidateMemories,
+  readMemory,
+  createAnalysisPlan,
+  writeScratchpad,
+  readScratchpad,
+  listScratchpad,
+  updateStepStatus,
+  getPlan,
+  listPlans,
+  frequencyAnalysis,
+  findExtensionFunctions,
+  analyzeSealedHierarchy,
+  traceSuspendChain,
+  analyzeKmpDeclarations,
+  traceFlowChain,
+  traceHiltGraph,
+  traceComposeTree,
+  analyzeComposeRecomposition,
+  traceRoomSchema,
+  extractKotlinSerializationContract,
+  astroAnalyzeIslands,
+  astroHydrationAudit,
+  astroRouteMap,
+  astroActionsAudit,
+  astroAudit,
+  nextjsRouteMap,
+  nextjsMetadataAudit,
+  frameworkAudit,
+  astroConfigAnalyze,
+  astroContentCollections,
+  analyzeProject,
+  getExtractorVersions,
+  getModelGraph,
+  getTestFixtures,
+  findFrameworkWiring,
+  runRuff,
+  parsePyproject,
+  resolveConstantValue,
+  effectiveDjangoViewSecurity,
+  findPythonCallers,
+  taintTrace,
+  analyzeDjangoSettings,
+  runMypy,
+  runPyright,
+  analyzePythonDeps,
+  pythonAudit,
+  traceFastAPIDepends,
+  analyzeAsyncCorrectness,
+  getPydanticModels,
+  reviewDiff,
+  auditScan,
+  indexStatus,
+  auditAgentConfig,
+  testImpactAnalysis,
+  dependencyAudit,
+  migrationLint,
+  planTurn,
+  formatPlanTurnResult,
+  astroMigrationCheck,
+  analyzePrismaSchema,
+  findPerfHotspots,
+  fanInFanOut,
+  coChangeAnalysis,
+  architectureSummary,
+  nestAudit,
+  explainQuery,
+} from "./register-tool-loaders.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
-import { indexStatus } from "./tools/status-tools.js";
-import { auditAgentConfig } from "./tools/agent-config-tools.js";
-import { testImpactAnalysis } from "./tools/test-impact-tools.js";
-import { dependencyAudit } from "./tools/dependency-audit-tools.js";
-import { migrationLint } from "./tools/migration-lint-tools.js";
-import { planTurn, formatPlanTurnResult } from "./tools/plan-turn-tools.js";
-import { astroMigrationCheck } from "./tools/astro-migration.js";
-import { analyzePrismaSchema } from "./tools/prisma-schema-tools.js";
-import { findPerfHotspots } from "./tools/perf-tools.js";
-import { fanInFanOut, coChangeAnalysis } from "./tools/coupling-tools.js";
-import { architectureSummary } from "./tools/architecture-tools.js";
-import { nestAudit } from "./tools/nest-tools.js";
-import { explainQuery } from "./tools/query-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import type { SecretSeverity } from "./tools/secret-tools.js";
@@ -892,7 +944,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         const hint = await checkTextStubHint(args.repo as string, "get_symbol", true);
         return hint ?? null;
       }
-      let text = formatSymbolCompact(result.symbol);
+      let text = await formatSymbolCompact(result.symbol);
       if (result.related && result.related.length > 0) {
         text += "\n\n--- children ---\n" + result.related.map((s) => `${s.kind} ${s.name}${s.signature ? s.signature : ""} [${s.file}:${s.start_line}]`).join("\n");
       }
@@ -913,7 +965,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     handler: async (args) => {
       const syms = await getSymbols(args.repo as string, args.symbol_ids as string[]);
-      const output = formatSymbolsCompact(syms);
+      const output = await formatSymbolsCompact(syms);
       const hint = await checkTextStubHint(args.repo as string, "get_symbols", syms.length === 0);
       return hint ? hint + output : output;
     },
@@ -931,9 +983,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args) => {
       const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
       if (!result) return null;
-      let text = formatSymbolCompact(result.symbol);
+      let text = await formatSymbolCompact(result.symbol);
       if (result.references) {
-        text += `\n\n--- references ---\n${formatRefsCompact(result.references)}`;
+        text += `\n\n--- references ---\n${await formatRefsCompact(result.references)}`;
       }
       return text;
     },
@@ -974,7 +1026,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
       }
       const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
-      const output = formatRefsCompact(refs);
+      const output = await formatRefsCompact(refs);
       const hint = await checkTextStubHint(args.repo as string, "find_references", refs.length === 0);
       return hint ? hint + output : output;
     },
@@ -1113,7 +1165,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args) => {
       const index = await getCodeIndex(args.repo as string);
       if (!index) throw new Error(`Repository not found: ${args.repo}`);
-      const result = buildContextGraph(index.symbols);
+      const result = await buildContextGraph(index.symbols);
       return JSON.stringify(result, null, 2);
     },
   },
@@ -2063,7 +2115,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       max_depth: zFiniteNumber.optional().describe("Maximum alias/import resolution depth (default: 8)"),
     },
     handler: async (args) => {
-      const opts: Parameters<typeof resolveConstantValue>[2] = {};
+      const opts: Parameters<typeof resolveConstantValue>[2] & {
+        language?: "python" | "typescript";
+      } = {};
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
       if (args.language != null) opts!.language = args.language as "python" | "typescript";
       if (args.max_depth != null) opts!.max_depth = args.max_depth as number;
@@ -3636,6 +3690,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (max_results !== undefined) opts.max_results = max_results;
       if (skip_session !== undefined) opts.skip_session = skip_session;
       const result = await planTurn(args.repo as string, query, opts);
+      for (const name of result.reveal_required) {
+        const handle = toolHandles.get(name);
+        if (handle && typeof handle.enable === "function") {
+          handle.enable();
+        }
+      }
       return formatPlanTurnResult(result);
     },
   },
