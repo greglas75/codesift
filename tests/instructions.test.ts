@@ -19,9 +19,12 @@ describe("CODESIFT_INSTRUCTIONS", () => {
     expect(CODESIFT_INSTRUCTIONS).toContain("describe_tools");
   });
 
-  it("contains hint code legend", () => {
+  it("contains hint code legend including H12, H13, H14", () => {
     expect(CODESIFT_INSTRUCTIONS).toContain("H1");
     expect(CODESIFT_INSTRUCTIONS).toContain("H9");
+    expect(CODESIFT_INSTRUCTIONS).toContain("H12");
+    expect(CODESIFT_INSTRUCTIONS).toContain("H13");
+    expect(CODESIFT_INSTRUCTIONS).toContain("H14");
   });
 
   it("contains ALWAYS and NEVER rules", () => {
