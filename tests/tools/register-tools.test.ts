@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getToolDefinitions, CORE_TOOL_NAMES } from "../../src/register-tools.js";
+import { getToolDefinitions, CORE_TOOL_NAMES, enableToolByName, extractToolParams, getToolDefinition } from "../../src/register-tools.js";
 
 // All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
@@ -331,6 +331,42 @@ describe("register-tools — React tools registration & auto-load", () => {
       } finally {
         await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
+    });
+  });
+
+  describe("exported accessors", () => {
+    it("enableToolByName returns false for unknown tool", () => {
+      expect(enableToolByName("__not_a_tool__")).toBe(false);
+    });
+
+    it("getToolDefinition returns definition for known tool", () => {
+      const def = getToolDefinition("search_text");
+      expect(def).toBeDefined();
+      expect(def!.name).toBe("search_text");
+    });
+
+    it("getToolDefinition returns undefined for unknown tool", () => {
+      expect(getToolDefinition("__nonexistent__")).toBeUndefined();
+    });
+
+    it("extractToolParams returns param array with name/required/description", () => {
+      const def = getToolDefinition("search_text");
+      expect(def).toBeDefined();
+      const params = extractToolParams(def!);
+      expect(Array.isArray(params)).toBe(true);
+      expect(params.length).toBeGreaterThan(0);
+      for (const p of params) {
+        expect(p).toHaveProperty("name");
+        expect(p).toHaveProperty("required");
+        expect(p).toHaveProperty("description");
+      }
+    });
+
+    it("extractToolParams returns cached result on second call", () => {
+      const def = getToolDefinition("search_text")!;
+      const first = extractToolParams(def);
+      const second = extractToolParams(def);
+      expect(first).toBe(second); // same reference
     });
   });
 });

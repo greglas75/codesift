@@ -337,7 +337,7 @@ function ensureToolRegistered(name: string) {
   return registerToolDefinition(context.server, tool, context.languages);
 }
 
-function enableToolByName(name: string): boolean {
+export function enableToolByName(name: string): boolean {
   const handle = ensureToolRegistered(name);
   if (!handle) return false;
   if (typeof handle.enable === "function") {
@@ -3858,7 +3858,7 @@ function buildToolSummaries(): ToolSummary[] {
 /**
  * Extract structured param info from a ToolDefinition's Zod schema.
  */
-function extractToolParams(def: ToolDefinition): Array<{ name: string; required: boolean; description: string }> {
+export function extractToolParams(def: ToolDefinition): Array<{ name: string; required: boolean; description: string }> {
   const cached = TOOL_PARAMS_CACHE.get(def.name);
   if (cached) return cached;
 
@@ -3873,6 +3873,10 @@ function extractToolParams(def: ToolDefinition): Array<{ name: string; required:
   });
   TOOL_PARAMS_CACHE.set(def.name, params);
   return params;
+}
+
+export function getToolDefinition(name: string): ToolDefinition | undefined {
+  return TOOL_DEFINITION_MAP.get(name);
 }
 
 interface DescribeToolsResult {
