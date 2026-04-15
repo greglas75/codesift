@@ -401,6 +401,18 @@ describe("H14 — secrets nudge", () => {
   });
 });
 
+describe("H9 auto-reveal semantic_search", () => {
+  beforeEach(() => resetSessionState());
+
+  it("H9 fires and does not throw from dynamic enableToolByName import", () => {
+    // The dynamic import of register-tools.js inside buildResponseHint is fire-and-forget.
+    // In test context, the import resolves but enableToolByName may no-op (no MCP server context).
+    // This test verifies the hint is emitted without errors.
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "how does auth work" }, []);
+    expect(hint).toContain("H9");
+  });
+});
+
 describe("H13/H14 cross-hint isolation", () => {
   beforeEach(() => resetSessionState());
 

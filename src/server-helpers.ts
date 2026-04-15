@@ -253,6 +253,8 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
 
   if (toolName === "search_text" && typeof args["query"] === "string" && QUESTION_PATTERN.test(args["query"])) {
     hints.push(`⚡H9`);
+    // Auto-reveal semantic_search so agents can use it immediately
+    import("./register-tools.js").then(m => m.enableToolByName("semantic_search")).catch(() => {});
   }
 
   // H10: Session snapshot reminder after 50 calls (read-only check; flag set by wrapTool)
