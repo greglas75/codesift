@@ -68,7 +68,7 @@ interface SignalBreakdown {
 const W_LEXICAL = 1.0;
 const W_IDENTITY = 2.0;
 const W_SEMANTIC = 0.8;
-const W_STRUCTURAL = 0.4;
+const W_STRUCTURAL = 0.1;
 const W_FRAMEWORK = 0.6;
 
 const BM25_TOP_K = 50;
