@@ -180,6 +180,8 @@ export function errorResult(message: string): ToolResponse {
 }
 
 const QUESTION_PATTERN = /^(how|where|why|what|when|which)\b/i;
+const ROUTE_PATTERN = /\/api\/|endpoint|handler|router\.|middleware|app\.(get|post|put|delete)/i;
+const SECRET_PATTERN = /api[._-]?key|AWS_|OPENAI_|SECRET_KEY|password|credential/i;
 
 // ---------------------------------------------------------------------------
 // Hint codes — compact symbols decoded via CLAUDE.md legend.
@@ -256,6 +258,16 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
   // H10: Session snapshot reminder after 50 calls (read-only check; flag set by wrapTool)
   if (getCallCount() >= 50 && !getSessionState().h10Emitted) {
     hints.push(`⚡H10 50+ tool calls this session → call get_session_snapshot to preserve context`);
+  }
+
+  // H13: Route-shaped query → suggest trace_route
+  if (toolName === "search_text" && typeof args["query"] === "string" && ROUTE_PATTERN.test(args["query"])) {
+    hints.push(`⚡H13 route query → try trace_route(path=) for full endpoint tracing`);
+  }
+
+  // H14: Secret/credential pattern → suggest scan_secrets
+  if (toolName === "search_text" && typeof args["query"] === "string" && SECRET_PATTERN.test(args["query"])) {
+    hints.push(`⚡H14 secret pattern → try scan_secrets(min_confidence="high")`);
   }
 
   // H12: Repeated search_text with different file_patterns → suggest codebase_retrieval batch

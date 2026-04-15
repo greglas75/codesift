@@ -329,3 +329,84 @@ describe("Existing hints: search_symbols without file_pattern", () => {
     expect(hint).toContain("H4");
   });
 });
+
+describe("H13 — route nudge", () => {
+  beforeEach(() => resetSessionState());
+
+  it("fires for search_text with /api/ path", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "GET /api/users" }, []);
+    expect(hint).toContain("H13");
+  });
+
+  it("fires for search_text with router. pattern", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "router.get handler" }, []);
+    expect(hint).toContain("H13");
+  });
+
+  it("fires for search_text with middleware", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "middleware auth" }, []);
+    expect(hint).toContain("H13");
+  });
+
+  it("fires for search_text with endpoint", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "endpoint configuration" }, []);
+    expect(hint).toContain("H13");
+  });
+
+  it("does NOT fire for generic search_text query", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "getUser" }, []);
+    expect(hint === null || !hint.includes("H13")).toBe(true);
+  });
+
+  it("does NOT fire for non-search_text tool", () => {
+    const hint = buildResponseHint("search_symbols", { repo: "local/proj", query: "GET /api/users" }, []);
+    expect(hint === null || !hint.includes("H13")).toBe(true);
+  });
+});
+
+describe("H14 — secrets nudge", () => {
+  beforeEach(() => resetSessionState());
+
+  it("fires for search_text with api_key", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "api_key configuration" }, []);
+    expect(hint).toContain("H14");
+  });
+
+  it("fires for search_text with AWS_SECRET_ACCESS_KEY", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "AWS_SECRET_ACCESS_KEY" }, []);
+    expect(hint).toContain("H14");
+  });
+
+  it("fires for search_text with OPENAI_API_KEY", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "OPENAI_API_KEY" }, []);
+    expect(hint).toContain("H14");
+  });
+
+  it("fires for search_text with password", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "password validation" }, []);
+    expect(hint).toContain("H14");
+  });
+
+  it("does NOT fire for normal query", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "normal search query" }, []);
+    expect(hint === null || !hint.includes("H14")).toBe(true);
+  });
+
+  it("does NOT fire for 'secret santa' (bare secret excluded)", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "secret santa feature" }, []);
+    // "secret" alone should NOT match — SECRET_PATTERN requires compound patterns
+    // However, our regex is /api[._-]?key|AWS_|OPENAI_|SECRET_KEY|password|credential/i
+    // "secret" alone does NOT match any of these patterns
+    expect(hint === null || !hint.includes("H14")).toBe(true);
+  });
+});
+
+describe("H13/H14 cross-hint isolation", () => {
+  beforeEach(() => resetSessionState());
+
+  it("question-word query triggers H9 but not H13", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/proj", query: "how does auth work" }, []);
+    expect(hint).toContain("H9");
+    expect(hint).not.toContain("H13");
+  });
+});
