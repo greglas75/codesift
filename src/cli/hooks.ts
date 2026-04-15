@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { dirname, extname, join, relative } from "node:path";
 import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
@@ -136,6 +136,83 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
 
 const DEFAULT_MIN_LINES = 200;
 
+const WIKI_MANIFEST_REL = join(".codesift", "wiki", "wiki-manifest.json");
+const WIKI_SUMMARY_MAX_CHARS = 2000;
+
+/**
+ * Walk up from `filePath` looking for `.codesift/wiki/wiki-manifest.json`.
+ * Returns the repo root directory if found, otherwise null.
+ */
+function findRepoRoot(filePath: string): string | null {
+  let dir = dirname(filePath);
+  while (true) {
+    try {
+      readFileSync(join(dir, WIKI_MANIFEST_REL));
+      return dir;
+    } catch {
+      // manifest not found at this level
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
+  }
+  return null;
+}
+
+/**
+ * Try to load the wiki community summary for `filePath`.
+ * Returns the summary string (truncated to WIKI_SUMMARY_MAX_CHARS) if found,
+ * or null if any step fails (missing manifest, file not mapped, missing .md, etc.).
+ *
+ * ALL reads are synchronous — the hook must exit fast.
+ * ALL errors are caught — never crash the hook (CQ8).
+ */
+function tryLoadWikiSummary(filePath: string): string | null {
+  try {
+    const repoRoot = findRepoRoot(filePath);
+    if (!repoRoot) return null;
+
+    const manifestPath = join(repoRoot, WIKI_MANIFEST_REL);
+    let manifestRaw: string;
+    try {
+      manifestRaw = readFileSync(manifestPath, "utf-8");
+    } catch {
+      return null;
+    }
+
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(manifestRaw) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+
+    const fileToComm = manifest["file_to_community"];
+    if (!fileToComm || typeof fileToComm !== "object") return null;
+    const map = fileToComm as Record<string, unknown>;
+
+    // Resolve the file path relative to the repo root for lookup
+    const relPath = relative(repoRoot, filePath);
+    const communitySlug = map[relPath];
+    if (typeof communitySlug !== "string") return null;
+
+    const summaryPath = join(repoRoot, ".codesift", "wiki", `${communitySlug}.summary.md`);
+    let summary: string;
+    try {
+      summary = readFileSync(summaryPath, "utf-8");
+    } catch {
+      return null;
+    }
+
+    return summary.length > WIKI_SUMMARY_MAX_CHARS
+      ? summary.slice(0, WIKI_SUMMARY_MAX_CHARS)
+      : summary;
+  } catch {
+    // CQ8: never crash the hook
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // handlePrecheckRead
 //
@@ -193,6 +270,11 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
+    // Wiki context injection — only fires for small files (not redirected above)
+    const wikiSummary = tryLoadWikiSummary(filePath);
+    if (wikiSummary) {
+      process.stdout.write(wikiSummary);
+    }
     process.exit(0);
   } catch {
     // CQ8: never crash — always fall back to allow so the agent is not blocked

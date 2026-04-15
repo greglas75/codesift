@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -139,6 +139,229 @@ describe("handlePrecheckRead", () => {
     await handlePrecheckRead();
 
     expect(exitCode).toBe(0); // 150 < 200 default
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // Wiki context injection tests (Task 11)
+  // -------------------------------------------------------------------------
+
+  it("wiki inject: injects community summary when manifest maps file", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "example.ts");
+    writeFileSync(filePath, "line\n".repeat(50)); // small file
+
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    const manifest = {
+      index_hash: "abc123",
+      file_to_community: { "src/example.ts": "auth-module" },
+    };
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), JSON.stringify(manifest));
+    const summaryContent = "## Auth Module\nHandles authentication logic.";
+    writeFileSync(join(wikiDir, "auth-module.summary.md"), summaryContent);
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain("Auth Module");
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: exits 0 silently when manifest is missing", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "example.ts");
+    writeFileSync(filePath, "line\n".repeat(50));
+
+    // No .codesift/wiki directory at all
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: exits 0 silently when manifest JSON is malformed", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "example.ts");
+    writeFileSync(filePath, "line\n".repeat(50));
+
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), "{ not valid json {{{}}}");
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: exits 0 silently when file not in file_to_community map", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "example.ts");
+    writeFileSync(filePath, "line\n".repeat(50));
+
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    const manifest = {
+      index_hash: "abc123",
+      file_to_community: { "src/other.ts": "some-module" },
+    };
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), JSON.stringify(manifest));
+    writeFileSync(join(wikiDir, "some-module.summary.md"), "## Some Module");
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: exits 0 silently when summary .md file is missing", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "example.ts");
+    writeFileSync(filePath, "line\n".repeat(50));
+
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    const manifest = {
+      index_hash: "abc123",
+      file_to_community: { "src/example.ts": "missing-module" },
+    };
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), JSON.stringify(manifest));
+    // No missing-module.summary.md written
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: large file still exits 2 with redirect (regression)", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "big.ts");
+    writeFileSync(filePath, "line\n".repeat(250)); // large — triggers redirect
+
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    const manifest = {
+      index_hash: "abc123",
+      file_to_community: { "src/big.ts": "auth-module" },
+    };
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), JSON.stringify(manifest));
+    writeFileSync(join(wikiDir, "auth-module.summary.md"), "## Auth Module summary");
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    // Must still exit 2 — wiki inject does NOT fire for large files
+    expect(exitCode).toBe(2);
+    expect(stdoutOutput).toContain("CodeSift tools");
+    expect(stdoutOutput).not.toContain("Auth Module summary");
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: injected content is under 2000 char budget", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const srcDir = join(tmpDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, "example.ts");
+    writeFileSync(filePath, "line\n".repeat(50));
+
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    const manifest = {
+      index_hash: "abc123",
+      file_to_community: { "src/example.ts": "big-community" },
+    };
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), JSON.stringify(manifest));
+    // Write a summary that is over 2000 chars
+    const longSummary = "## Big Community\n" + "x".repeat(3000);
+    writeFileSync(join(wikiDir, "big-community.summary.md"), longSummary);
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput.length).toBeLessThanOrEqual(2000);
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("wiki inject: resolves manifest by walking up from file path, not hardcoded", async () => {
+    // File is nested 2 levels deep under the repo root
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-wiki-"));
+    const deepDir = join(tmpDir, "src", "nested", "deep");
+    mkdirSync(deepDir, { recursive: true });
+    const filePath = join(deepDir, "util.ts");
+    writeFileSync(filePath, "line\n".repeat(50));
+
+    // Manifest lives at repo root, NOT adjacent to the file
+    const wikiDir = join(tmpDir, ".codesift", "wiki");
+    mkdirSync(wikiDir, { recursive: true });
+    const manifest = {
+      index_hash: "abc123",
+      file_to_community: { "src/nested/deep/util.ts": "utils-module" },
+    };
+    writeFileSync(join(wikiDir, "wiki-manifest.json"), JSON.stringify(manifest));
+    writeFileSync(join(wikiDir, "utils-module.summary.md"), "## Utils Module\nShared utilities.");
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain("Utils Module");
     rmSync(tmpDir, { recursive: true });
   });
 });
