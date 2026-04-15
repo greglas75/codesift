@@ -138,6 +138,7 @@ import {
   architectureSummary,
   nestAudit,
   explainQuery,
+  generateWiki,
 } from "./register-tool-loaders.js";
 import type { AuditScanOptions } from "./tools/audit-tools.js";
 import { formatSnapshot, getContext, getSessionState } from "./storage/session-state.js";
@@ -1909,6 +1910,26 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     })),
     handler: (args) => generateReport(args.repo as string),
+  },
+
+  {
+    name: "generate_wiki",
+    category: "reporting",
+    searchHint: "generate wiki markdown community hub architecture documentation",
+    description: "Generate wiki pages and optional Lens HTML dashboard from code topology (communities, hubs, surprises, hotspots).",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      focus: z.string().optional().describe("Scope to directory (e.g., 'src/tools')"),
+      output_dir: z.string().optional().describe("Output directory (default: {repo_root}/.codesift/wiki)"),
+      include_lens: z.boolean().optional().describe("Also generate codesift-lens.html (default: true)"),
+    })),
+    handler: async (args) => {
+      const opts: { focus?: string; output_dir?: string } = {};
+      if (args.focus !== undefined) opts.focus = args.focus as string;
+      if (args.output_dir !== undefined) opts.output_dir = args.output_dir as string;
+      const result = await generateWiki(args.repo as string, opts);
+      return JSON.stringify(result, null, 2);
+    },
   },
 
   // --- Conversations ---

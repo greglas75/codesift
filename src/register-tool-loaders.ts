@@ -88,6 +88,7 @@ const loadCouplingTools = memoizeModule(() => import("./tools/coupling-tools.js"
 const loadArchitectureTools = memoizeModule(() => import("./tools/architecture-tools.js"));
 const loadNestTools = memoizeModule(() => import("./tools/nest-tools.js"));
 const loadQueryTools = memoizeModule(() => import("./tools/query-tools.js"));
+const loadWikiTools = memoizeModule(() => import("./tools/wiki-tools.js"));
 
 export const indexFolder = lazyExport<typeof import("./tools/index-tools.js").indexFolder>(loadIndexTools, "indexFolder");
 export const indexFile = lazyExport<typeof import("./tools/index-tools.js").indexFile>(loadIndexTools, "indexFile");
@@ -232,3 +233,4 @@ export const coChangeAnalysis = lazyExport<typeof import("./tools/coupling-tools
 export const architectureSummary = lazyExport<typeof import("./tools/architecture-tools.js").architectureSummary>(loadArchitectureTools, "architectureSummary");
 export const nestAudit = lazyExport<typeof import("./tools/nest-tools.js").nestAudit>(loadNestTools, "nestAudit");
 export const explainQuery = lazyExport<typeof import("./tools/query-tools.js").explainQuery>(loadQueryTools, "explainQuery");
+export const generateWiki = lazyExport<typeof import("./tools/wiki-tools.js").generateWiki>(loadWikiTools, "generateWiki");

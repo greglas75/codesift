@@ -412,3 +412,51 @@ describe("register-tools — React tools registration & auto-load", () => {
     });
   });
 });
+
+describe("register-tools — generate_wiki tool registration", () => {
+  const defs = getToolDefinitions();
+
+  it("tool definitions include generate_wiki", () => {
+    const names = defs.map((d) => d.name);
+    expect(names).toContain("generate_wiki");
+  });
+
+  it("generate_wiki has category 'reporting'", () => {
+    const def = defs.find((d) => d.name === "generate_wiki");
+    expect(def).toBeDefined();
+    expect(def!.category).toBe("reporting");
+  });
+
+  it("generate_wiki schema has repo, focus, output_dir, include_lens", () => {
+    const def = defs.find((d) => d.name === "generate_wiki");
+    expect(def).toBeDefined();
+    const schema = def!.schema;
+    // repo — optional string
+    expect(typeof (schema["repo"] as any).safeParse).toBe("function");
+    expect((schema["repo"] as any).safeParse(undefined).success).toBe(true);
+    expect((schema["repo"] as any).safeParse("my-repo").success).toBe(true);
+    // focus — optional string
+    expect(typeof (schema["focus"] as any).safeParse).toBe("function");
+    expect((schema["focus"] as any).safeParse(undefined).success).toBe(true);
+    // output_dir — optional string
+    expect(typeof (schema["output_dir"] as any).safeParse).toBe("function");
+    expect((schema["output_dir"] as any).safeParse(undefined).success).toBe(true);
+    // include_lens — optional boolean
+    expect(typeof (schema["include_lens"] as any).safeParse).toBe("function");
+    expect((schema["include_lens"] as any).safeParse(undefined).success).toBe(true);
+    expect((schema["include_lens"] as any).safeParse(true).success).toBe(true);
+  });
+
+  it("generate_wiki handler is a function", () => {
+    const def = defs.find((d) => d.name === "generate_wiki");
+    expect(def).toBeDefined();
+    expect(typeof def!.handler).toBe("function");
+  });
+
+  it("generate_wiki description is non-empty and > 10 chars", () => {
+    const def = defs.find((d) => d.name === "generate_wiki");
+    expect(def).toBeDefined();
+    expect(typeof def!.description).toBe("string");
+    expect(def!.description.length).toBeGreaterThan(10);
+  });
+});
