@@ -229,6 +229,7 @@ async function classifyAndDetect(
     event_handlers: [],
     browser_globals: [],
     dynamic_ssr_false: false,
+    signal_locations: [],
   };
 
   const directive = await scanDirective(filePath);

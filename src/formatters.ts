@@ -1100,18 +1100,19 @@ export function formatFrameworkAudit(result: FrameworkAuditResult | PrioritizedA
     return lines.join("\n");
   }
 
-  // Full mode (default)
+  // Full mode (default) — after priority mode returns, result is FrameworkAuditResult
+  const fullResult = result as FrameworkAuditResult;
   const lines: string[] = [];
   lines.push("NEXT.JS FRAMEWORK AUDIT");
   lines.push("");
   lines.push(
-    `Overall: ${result.summary.overall_score}/100 (${result.summary.grade}) | Duration: ${result.duration_ms}ms`,
+    `Overall: ${fullResult.summary.overall_score}/100 (${fullResult.summary.grade}) | Duration: ${fullResult.duration_ms}ms`,
   );
   lines.push("");
 
   lines.push("Dimension          Score Weight Contribution");
   lines.push("─────────────────── ───── ────── ────────────");
-  for (const [dim, info] of Object.entries(result.summary.dimensions)) {
+  for (const [dim, info] of Object.entries(fullResult.summary.dimensions)) {
     if (!info) continue;
     const dimText = dim.padEnd(19).slice(0, 19);
     const score = String(info.score).padStart(5);
@@ -1121,15 +1122,15 @@ export function formatFrameworkAudit(result: FrameworkAuditResult | PrioritizedA
   }
   lines.push("");
 
-  if (result.summary.top_issues.length > 0) {
+  if (fullResult.summary.top_issues.length > 0) {
     lines.push(`Top issues:`);
-    for (const issue of result.summary.top_issues.slice(0, 10)) {
+    for (const issue of fullResult.summary.top_issues.slice(0, 10)) {
       lines.push(`  - ${issue}`);
     }
   }
-  if (result.tool_errors.length > 0) {
-    lines.push(`Tool errors: ${result.tool_errors.length}`);
-    for (const e of result.tool_errors.slice(0, 5)) {
+  if (fullResult.tool_errors.length > 0) {
+    lines.push(`Tool errors: ${fullResult.tool_errors.length}`);
+    for (const e of fullResult.tool_errors.slice(0, 5)) {
       lines.push(`  - ${e.tool}: ${e.error}`);
     }
   }

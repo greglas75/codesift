@@ -59,9 +59,9 @@ export interface PrioritizedFinding {
   severity: "high" | "medium" | "low";
   tool: AuditDimension;
   file: string;
-  line?: number;
+  line?: number | undefined;
   issue: string;
-  suggested_fix?: string;
+  suggested_fix?: string | undefined;
   weight: number;
 }
 

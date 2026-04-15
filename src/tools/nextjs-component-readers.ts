@@ -320,6 +320,7 @@ export async function classifyFile(
     event_handlers: [],
     browser_globals: [],
     dynamic_ssr_false: false,
+    signal_locations: [],
   };
 
   // Stage 1: fast-reject via 512-byte window
