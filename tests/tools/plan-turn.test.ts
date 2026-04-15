@@ -36,6 +36,20 @@ vi.mock("../../src/register-tools.js", () => ({
     { name: "get_file_outline", description: "outline", category: "nav" },
     { name: "hidden_tool", description: "hidden demo", category: "demo" },
   ]),
+  extractToolParams: vi.fn((def: { name: string }) => {
+    if (def.name === "search_text") return [{ name: "query", required: true, description: "Search query" }, { name: "file_pattern", required: false, description: "Glob" }];
+    if (def.name === "find_dead_code") return [{ name: "repo", required: false, description: "Repo" }];
+    return [];
+  }),
+  getToolDefinition: vi.fn((name: string) => {
+    const defs: Record<string, { name: string; description: string; category: string }> = {
+      search_text: { name: "search_text", description: "text search", category: "search" },
+      find_dead_code: { name: "find_dead_code", description: "dead code", category: "analysis" },
+      discover_tools: { name: "discover_tools", description: "meta", category: "meta" },
+    };
+    return defs[name] ?? undefined;
+  }),
+  enableToolByName: vi.fn(() => true),
 }));
 
 import {
@@ -442,5 +456,112 @@ describe("planTurn integration", () => {
 
     const filePaths = result.files.map((f) => f.path);
     expect(filePaths.some((p) => p.includes("register-tools.ts"))).toBe(true);
+  });
+});
+
+describe("formatPlanTurnResult", () => {
+  let formatPlanTurnResult: typeof import("../../src/tools/plan-turn-tools.js").formatPlanTurnResult;
+
+  beforeEach(async () => {
+    const mod = await import("../../src/tools/plan-turn-tools.js");
+    formatPlanTurnResult = mod.formatPlanTurnResult;
+  });
+
+  const baseMeta = {
+    intents_detected: 1,
+    bm25_candidates: 1,
+    embedding_available: false,
+    session_queries_seen: 0,
+    duration_ms: 5,
+  };
+
+  it("includes params line for each tool", () => {
+    const out = formatPlanTurnResult({
+      query: "find dead code",
+      truncated: false,
+      confidence: 0.9,
+      tools: [{ name: "search_text", confidence: 0.9, reasoning: "match", is_hidden: false }],
+      symbols: [], files: [], reveal_required: [], already_used: [],
+      metadata: baseMeta,
+    });
+    expect(out).toContain("params: query, file_pattern?");
+  });
+
+  it("does NOT contain 'call describe_tools' or 'Reveal Required'", () => {
+    const out = formatPlanTurnResult({
+      query: "test",
+      truncated: false,
+      confidence: 0.8,
+      tools: [{ name: "find_dead_code", confidence: 0.8, reasoning: "match", is_hidden: true }],
+      symbols: [], files: [], reveal_required: ["find_dead_code"], already_used: [],
+      metadata: baseMeta,
+    });
+    expect(out).not.toContain("call describe_tools");
+    expect(out).not.toContain("Reveal Required");
+    expect(out).toContain("[hidden]");
+  });
+
+  it("shows gap_analysis early exit", () => {
+    const out = formatPlanTurnResult({
+      query: "test",
+      truncated: false,
+      confidence: 0.1,
+      tools: [],
+      symbols: [], files: [], reveal_required: [], already_used: [],
+      gap_analysis: { prior_query: "x", prior_result_count: 0, suggestion: "try different query" },
+      metadata: baseMeta,
+    });
+    expect(out).toContain("STOP_AND_REPORT_GAP");
+    expect(out).not.toContain("─── Tools");
+  });
+
+  it("injects discover_tools fallback for empty tools", () => {
+    const out = formatPlanTurnResult({
+      query: "test",
+      truncated: false,
+      confidence: 0.3,
+      tools: [],
+      symbols: [], files: [], reveal_required: [], already_used: [],
+      metadata: baseMeta,
+    });
+    expect(out).toContain("discover_tools");
+  });
+
+  it("shows params: (none required) for tools with no params", () => {
+    const out = formatPlanTurnResult({
+      query: "test",
+      truncated: false,
+      confidence: 0.8,
+      tools: [{ name: "discover_tools", confidence: 0.8, reasoning: "match", is_hidden: false }],
+      symbols: [], files: [], reveal_required: [], already_used: [],
+      metadata: baseMeta,
+    });
+    expect(out).toContain("params: (none required)");
+  });
+
+  it("shows already_used section", () => {
+    const out = formatPlanTurnResult({
+      query: "test",
+      truncated: false,
+      confidence: 0.8,
+      tools: [{ name: "search_text", confidence: 0.8, reasoning: "match", is_hidden: false }],
+      symbols: [], files: [], reveal_required: [], already_used: ["search_text"],
+      metadata: baseMeta,
+    });
+    expect(out).toContain("Already Used (1)");
+    expect(out).toContain("search_text");
+  });
+
+  it("shows flags section when vague_query is true", () => {
+    const out = formatPlanTurnResult({
+      query: "test",
+      truncated: false,
+      confidence: 0.5,
+      tools: [{ name: "search_text", confidence: 0.5, reasoning: "match", is_hidden: false }],
+      symbols: [], files: [], reveal_required: [], already_used: [],
+      metadata: { ...baseMeta, vague_query: true },
+    });
+    expect(out).toContain("─── Flags ───");
+    expect(out).toContain("vague_query");
   });
 });

@@ -24,6 +24,8 @@ import {
   getToolDefinitions,
   CORE_TOOL_NAMES,
   detectAutoLoadToolsCached,
+  extractToolParams,
+  getToolDefinition,
 } from "../register-tools.js";
 import {
   rankTools,
@@ -619,19 +621,21 @@ export function formatPlanTurnResult(result: PlanTurnResult): string {
     const hidden = t.is_hidden ? " [hidden]" : "";
     lines.push(`  ${t.name}${hidden}  confidence: ${conf}`);
     lines.push(`    ${t.reasoning}`);
+    // Inline params — eliminates need for describe_tools roundtrip
+    const def = getToolDefinition(t.name);
+    if (def) {
+      const params = extractToolParams(def);
+      const paramStr = params.length > 0
+        ? params.map(p => `${p.name}${p.required ? "" : "?"}`).join(", ")
+        : "(none required)";
+      lines.push(`    params: ${paramStr}`);
+    }
   }
 
   // --- Already Used ---
   if (result.already_used.length > 0) {
     lines.push(`\n─── Already Used (${result.already_used.length}) ───`);
     lines.push(`  ${result.already_used.join(", ")}`);
-  }
-
-  // --- Reveal Required ---
-  if (result.reveal_required.length > 0) {
-    lines.push(`\n─── Reveal Required (${result.reveal_required.length}) ───`);
-    lines.push(`  These tools are hidden — call describe_tools(names=[...]) to reveal:`);
-    lines.push(`  ${result.reveal_required.join(", ")}`);
   }
 
   // --- Symbols ---
