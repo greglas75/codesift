@@ -436,6 +436,10 @@ This command is designed to be installed as a Claude Code PostToolUse hook via:
 Env vars:
   HOOK_TOOL_INPUT    JSON with tool_input.file_path (set by Claude Code)`,
 
+  "wiki-generate": "Generate wiki pages from code topology.\nUsage: codesift wiki-generate [repo] [--focus <path>] [--output <dir>] [--no-lens] [--trim]",
+
+  "wiki-lint": "Check wiki for broken links and stale references.\nUsage: codesift wiki-lint <wiki-dir> [--current-hash <hash>]",
+
   setup: `codesift setup <platform>
 
 Configure codesift-mcp as an MCP server in an AI coding tool.

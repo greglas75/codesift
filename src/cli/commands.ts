@@ -523,6 +523,14 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "patterns": handlePatterns,
   "find-clones": handleFindClones,
   "setup": handleSetup,
+  "wiki-generate": async (args: string[], flags: Flags) => {
+    const { handleWikiGenerate } = await import("./wiki-commands.js");
+    await handleWikiGenerate(args, flags);
+  },
+  "wiki-lint": async (args: string[], flags: Flags) => {
+    const { handleWikiLint } = await import("./wiki-commands.js");
+    await handleWikiLint(args, flags);
+  },
   "precheck-read": async () => {
     const { handlePrecheckRead } = await import("./hooks.js");
     await handlePrecheckRead();
