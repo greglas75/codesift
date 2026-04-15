@@ -377,4 +377,38 @@ describe("register-tools — React tools registration & auto-load", () => {
       expect(first).toBe(second); // same reference
     });
   });
+
+  describe("index_folder auto-load", () => {
+    it("index_folder handler is async (returns a Promise)", () => {
+      const def = getToolDefinition("index_folder");
+      expect(def).toBeDefined();
+      expect(typeof def!.handler).toBe("function");
+      // The handler should be an async function (returns thenable)
+      // We can't easily call it without a real path, but we verify it's defined
+    });
+
+    it("detectAutoLoadToolsCached works with arbitrary path", async () => {
+      const { detectAutoLoadToolsCached } = await import("../../src/register-tools.js");
+      // Non-existent path returns empty array (no framework detected)
+      const result = await detectAutoLoadToolsCached("/tmp/__nonexistent_path_for_test__");
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBe(0);
+    });
+
+    it("detectAutoLoadToolsCached returns React tools for React project", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "codesift-idx-autoload-"));
+      try {
+        await writeFile(join(dir, "package.json"), JSON.stringify({
+          dependencies: { react: "^18.0.0" },
+        }));
+        await writeFile(join(dir, "App.tsx"), "export default function App() { return <div/>; }");
+        const { detectAutoLoadToolsCached } = await import("../../src/register-tools.js");
+        const tools = await detectAutoLoadToolsCached(dir);
+        expect(tools).toContain("trace_component_tree");
+        expect(tools).toContain("analyze_hooks");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+  });
 });

@@ -801,10 +801,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       incremental: zBool().describe("Only re-index changed files"),
       include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
     })),
-    handler: (args) => indexFolder(args.path as string, {
-      incremental: args.incremental as boolean | undefined,
-      include_paths: args.include_paths as string[] | undefined,
-    }),
+    handler: async (args) => {
+      const result = await indexFolder(args.path as string, {
+        incremental: args.incremental as boolean | undefined,
+        include_paths: args.include_paths as string[] | undefined,
+      });
+      // Auto-enable framework tools based on indexed path (not CWD)
+      try {
+        const toEnable = await detectAutoLoadToolsCached(args.path as string);
+        for (const name of toEnable) enableToolByName(name);
+      } catch { /* best-effort — non-fatal */ }
+      return result;
+    },
   },
   {
     name: "index_repo",
