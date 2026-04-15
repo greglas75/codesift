@@ -48,6 +48,7 @@ TOOL MAPPING (quick ref)
   dead code         → find_dead_code | complexity → analyze_complexity
   duplication       → find_clones(min_similarity=0.7) | anti-patterns → search_patterns
   architecture/deps → detect_communities(focus=) | git churn → analyze_hotspots(since_days=90)
+  wiki + lens       → generate_wiki(repo, focus?, output_dir?) | CLI: codesift wiki-generate
   mermaid diagram   → trace_call_chain(output_format="mermaid")
   API endpoint      → trace_route (FIRST) | secrets → scan_secrets
   source → sink     → taint_trace(file_pattern=, framework="python-django")
