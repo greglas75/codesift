@@ -1,5 +1,5 @@
-import { writeFile, mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { writeFile, mkdir, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { detectCommunities } from "./community-tools.js";
 import { classifySymbolRoles } from "./graph-tools.js";
@@ -102,7 +102,27 @@ export async function generateWiki(
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const outputDir = options?.output_dir ?? join(index.root, ".codesift", "wiki");
+
+  // Path traversal guard
+  if (options?.output_dir) {
+    const resolved = resolve(options.output_dir);
+    const root = resolve(index.root);
+    if (!resolved.startsWith(root + "/") && resolved !== root) {
+      throw new Error(`output_dir "${options.output_dir}" is outside the repository root — path traversal not allowed`);
+    }
+  }
+
   await mkdir(outputDir, { recursive: true });
+
+  // Lockfile: prevent concurrent wiki generation
+  const lockPath = join(outputDir, ".wiki-lock");
+  try {
+    await writeFile(lockPath, `${process.pid}\n${new Date().toISOString()}`, { flag: "wx" });
+  } catch {
+    throw new Error("Wiki generation already in progress (lockfile exists)");
+  }
+
+  try {
 
   // Fan out all analyses in parallel with per-analysis timeout
   const [commResult, rolesResult, fanResult, coChangeResult, hotspotsResult] =
@@ -308,12 +328,23 @@ export async function generateWiki(
     await writeFile(join(outputDir, page.file), page.content, "utf-8");
   }
 
-  // Write manifest
-  await writeFile(
-    join(outputDir, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-    "utf-8",
-  );
+  // Stale page cleanup: delete .md files from a previous run that are no longer generated
+  const existingFiles = await readdir(outputDir);
+  const newFiles = new Set(resolvedPageInfos.map((p) => p.file));
+  newFiles.add("wiki-manifest.json");
+  newFiles.add("wiki-manifest.json.tmp");
+  newFiles.add(".wiki-lock");
+  for (const f of existingFiles) {
+    if (f.endsWith(".md") && !newFiles.has(f)) {
+      await unlink(join(outputDir, f));
+    }
+  }
+
+  // Atomic manifest write: write to .tmp then rename
+  const manifestPath = join(outputDir, "wiki-manifest.json");
+  const tmpPath = manifestPath + ".tmp";
+  await writeFile(tmpPath, JSON.stringify(manifest, null, 2));
+  await rename(tmpPath, manifestPath);
 
   return {
     wiki_dir: outputDir,
@@ -324,4 +355,8 @@ export async function generateWiki(
     degraded: degradedReasons.length > 0,
     ...(degradedReasons.length > 0 ? { degraded_reasons: degradedReasons } : {}),
   };
+
+  } finally {
+    await unlink(lockPath).catch(() => {});
+  }
 }
