@@ -1,0 +1,74 @@
+{
+  "runner": "vitest",
+  "config": "vitest.config.ts",
+  "runs": 2,
+  "wallClockTimes": [
+    15.774477294921875,
+    15.017621826171874
+  ],
+  "sumOfFileDurations": [
+    117.09070483398438,
+    116.68438696289063
+  ],
+  "medianWallClock": 15.396049560546874,
+  "minWallClock": 15.017621826171874,
+  "maxWallClock": 15.774477294921875,
+  "stddev": 0.3784277343750002,
+  "stable": true,
+  "testCount": 2971,
+  "fileCount": 193,
+  "perTestAvg": 5.182110252624327,
+  "topSlowest": [
+    {
+      "file": "tests/tools/php-project-audit.test.ts",
+      "duration": 10.022621826171875,
+      "tests": 8
+    },
+    {
+      "file": "tests/integration/tools.test.ts",
+      "duration": 8.91290478515625,
+      "tests": 81
+    },
+    {
+      "file": "tests/integration/usage-optimizations.test.ts",
+      "duration": 7.982967041015625,
+      "tests": 20
+    },
+    {
+      "file": "tests/tools/auto-refresh.test.ts",
+      "duration": 7.508376708984375,
+      "tests": 8
+    },
+    {
+      "file": "tests/parser/nextjs-scripts.test.ts",
+      "duration": 5.480607421875,
+      "tests": 3
+    },
+    {
+      "file": "tests/integration/index-repo.test.ts",
+      "duration": 5.07637548828125,
+      "tests": 6
+    },
+    {
+      "file": "tests/tools/sql-audit.test.ts",
+      "duration": 4.31979736328125,
+      "tests": 9
+    },
+    {
+      "file": "tests/tools/sql-search-columns.test.ts",
+      "duration": 3.781281005859375,
+      "tests": 10
+    },
+    {
+      "file": "tests/integration/index-folder.test.ts",
+      "duration": 3.767480224609375,
+      "tests": 9
+    },
+    {
+      "file": "tests/integration/config-files.test.ts",
+      "duration": 3.594796875,
+      "tests": 4
+    }
+  ],
+  "timestamp": "2026-04-12T03:38:47.593Z"
+}

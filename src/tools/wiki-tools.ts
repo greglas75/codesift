@@ -89,7 +89,8 @@ function unwrapSettled<T, R>(
     try {
       return extractor(result.value as T);
     } catch (e) {
-      degradedReasons.push(`${label}_parse_error: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      degradedReasons.push(`${label}_parse_error: ${msg}`);
       return fallback;
     }
   }
