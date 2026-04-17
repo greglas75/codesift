@@ -1921,7 +1921,6 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Scope to directory (e.g., 'src/tools')"),
       output_dir: z.string().optional().describe("Output directory (default: {repo_root}/.codesift/wiki)"),
-      include_lens: z.boolean().optional().describe("Also generate codesift-lens.html (default: true)"),
     })),
     handler: async (args) => {
       const opts: { focus?: string; output_dir?: string } = {};

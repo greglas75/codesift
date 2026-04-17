@@ -29,7 +29,7 @@ export interface PageInfo {
 const CHARS_PER_TOKEN = 4;
 
 /** Converts a community name to a URL-safe kebab-case slug. */
-function toSlug(name: string): string {
+export function toSlug(name: string): string {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

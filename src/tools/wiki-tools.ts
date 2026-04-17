@@ -15,6 +15,7 @@ import {
 } from "./wiki-surprise.js";
 import {
   generateCommunityPage,
+  generateCommunitySummary,
   generateHubsPage,
   generateSurprisePage,
   generateHotspotsPage,
@@ -26,7 +27,7 @@ import {
   type CommunityPageData,
 } from "./wiki-page-generators.js";
 import { resolveWikiLinks } from "./wiki-links.js";
-import { buildWikiManifest, type WikiManifest, type PageInfo } from "./wiki-manifest.js";
+import { buildWikiManifest, toSlug, type WikiManifest, type PageInfo } from "./wiki-manifest.js";
 
 // ---------------------------------------------------------------------------
 // Timeout sentinel
@@ -67,14 +68,28 @@ export interface WikiResult {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: slug conversion
+// Helpers: settled-result unwrapping
 // ---------------------------------------------------------------------------
 
-function toSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
+function formatDegradedReason(label: string, result: PromiseSettledResult<unknown>): string {
+  if (result.status === "rejected") {
+    return `${label}_error: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
+  }
+  return `${label}_timeout`;
+}
+
+function unwrapSettled<T, R>(
+  result: PromiseSettledResult<T | TimeoutSentinel>,
+  label: string,
+  extractor: (value: T) => R,
+  fallback: R,
+  degradedReasons: string[],
+): R {
+  if (result.status === "fulfilled" && !isTimeout(result.value)) {
+    return extractor(result.value as T);
+  }
+  degradedReasons.push(formatDegradedReason(label, result));
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,97 +156,37 @@ export async function generateWiki(
 
   const degradedReasons: string[] = [];
 
-  // Unwrap communities
-  let communities: CommunityInfo[] = [];
-  let crossEdges: CrossEdge[] = [];
-  if (commResult.status === "fulfilled" && !isTimeout(commResult.value)) {
-    const cr = commResult.value;
+  const communities = unwrapSettled(commResult, "community_detection", (cr) => {
     if ("communities" in cr) {
-      communities = cr.communities.map((c) => ({
-        name: c.name,
-        files: c.files,
-        size: c.files.length,
-      }));
+      return cr.communities.map((c) => ({ name: c.name, files: c.files, size: c.files.length }));
     }
-  } else {
-    degradedReasons.push(
-      commResult.status === "rejected"
-        ? `community_detection_error: ${commResult.reason instanceof Error ? commResult.reason.message : String(commResult.reason)}`
-        : "community_detection_timeout",
-    );
-  }
+    return [] as CommunityInfo[];
+  }, [] as CommunityInfo[], degradedReasons);
 
-  // Unwrap roles (hub symbols)
-  let hubSymbols: HubSymbol[] = [];
-  if (rolesResult.status === "fulfilled" && !isTimeout(rolesResult.value)) {
-    const roles = rolesResult.value;
-    hubSymbols = roles
+  const crossEdges: CrossEdge[] = [];
+
+  const hubSymbols = unwrapSettled(rolesResult, "classify_roles", (roles) =>
+    roles
       .filter((r) => r.role === "core" || r.role === "utility" || r.callers >= 3)
       .slice(0, 30)
-      .map((r) => ({ name: r.name, file: r.file, role: r.role, callers: r.callers, callees: r.callees }));
-  } else {
-    degradedReasons.push(
-      rolesResult.status === "rejected"
-        ? `classify_roles_error: ${rolesResult.reason instanceof Error ? rolesResult.reason.message : String(rolesResult.reason)}`
-        : "classify_roles_timeout",
-    );
-  }
+      .map((r) => ({ name: r.name, file: r.file, role: r.role, callers: r.callers, callees: r.callees })),
+  [] as HubSymbol[], degradedReasons);
 
-  // Unwrap co-change pairs
-  let coChangePairs: CoChangePair[] = [];
-  if (coChangeResult.status === "fulfilled" && !isTimeout(coChangeResult.value)) {
-    coChangePairs = coChangeResult.value.pairs.map((p) => ({
-      file_a: p.file_a,
-      file_b: p.file_b,
-      jaccard: p.jaccard,
-    }));
-  } else {
-    degradedReasons.push(
-      coChangeResult.status === "rejected"
-        ? `cochange_error: ${coChangeResult.reason instanceof Error ? coChangeResult.reason.message : String(coChangeResult.reason)}`
-        : "cochange_timeout",
-    );
-  }
+  const coChangePairs = unwrapSettled(coChangeResult, "cochange", (v) =>
+    v.pairs.map((p) => ({ file_a: p.file_a, file_b: p.file_b, jaccard: p.jaccard })),
+  [] as CoChangePair[], degradedReasons);
 
-  // Unwrap fan-in/fan-out (used for cross-edge extraction)
-  if (fanResult.status === "rejected" || isTimeout(fanResult.value)) {
-    degradedReasons.push(
-      fanResult.status === "rejected"
-        ? `fanin_error: ${fanResult.reason instanceof Error ? fanResult.reason.message : String(fanResult.reason)}`
-        : "fanin_timeout",
-    );
-  }
+  // Fan-in/fan-out: only record degraded reason, no data extracted
+  unwrapSettled(fanResult, "fanin", () => null, null, degradedReasons);
 
-  // Unwrap hotspots
-  let fileHotspots: FileHotspot[] = [];
-  if (hotspotsResult.status === "fulfilled" && !isTimeout(hotspotsResult.value)) {
-    fileHotspots = hotspotsResult.value.hotspots.slice(0, 20).map((h) => ({
-      file: h.file,
-      commits: h.commits,
-      hotspot_score: h.hotspot_score,
-    }));
-  } else {
-    degradedReasons.push(
-      hotspotsResult.status === "rejected"
-        ? `hotspots_error: ${hotspotsResult.reason instanceof Error ? hotspotsResult.reason.message : String(hotspotsResult.reason)}`
-        : "hotspots_timeout",
-    );
-  }
+  const fileHotspots = unwrapSettled(hotspotsResult, "hotspots", (v) =>
+    v.hotspots.slice(0, 20).map((h) => ({ file: h.file, commits: h.commits, hotspot_score: h.hotspot_score })),
+  [] as FileHotspot[], degradedReasons);
 
-  // Unwrap project (framework info)
-  let frameworkInfo: FrameworkInfo | null = null;
-  if (projectResult.status === "fulfilled" && !isTimeout(projectResult.value)) {
-    const fw = projectResult.value.stack?.framework;
-    if (fw) {
-      frameworkInfo = { name: fw, details: `Primary framework detected: ${fw}.` };
-    }
-  } else {
-    degradedReasons.push(
-      projectResult.status === "rejected"
-        ? `project_error: ${projectResult.reason instanceof Error ? projectResult.reason.message : String(projectResult.reason)}`
-        : "project_timeout",
-    );
-  }
+  const frameworkInfo = unwrapSettled(projectResult, "project", (v) => {
+    const fw = v.stack?.framework;
+    return fw ? { name: fw, details: `Primary framework detected: ${fw}.` } as FrameworkInfo : null;
+  }, null as FrameworkInfo | null, degradedReasons);
 
   // Compute surprise scores
   const globalDensity = index.files.length > 0 ? crossEdges.length / (index.files.length * index.files.length) : 0;
@@ -256,6 +211,27 @@ export async function generateWiki(
     const content = generateCommunityPage(data);
     return { slug, title: comm.name, type: "community" as const, file: `${slug}.md`, content };
   });
+
+  // Write community summary files for hook injection
+  for (const comm of communityPages) {
+    const data = communities.find((c) => toSlug(c.name) === comm.slug);
+    if (!data) continue;
+    const commHotspots = fileHotspots.filter((h) => data.files.includes(h.file));
+    const commHubs = hubSymbols.filter((h) => data.files.includes(h.file));
+    const rawComm = commResult.status === "fulfilled" && !isTimeout(commResult.value) && "communities" in commResult.value
+      ? commResult.value.communities.find((c) => c.name === data.name)
+      : undefined;
+    const summaryData: CommunityPageData = {
+      community: data,
+      cohesion: rawComm?.cohesion ?? 0,
+      internal_edges: rawComm?.internal_edges ?? 0,
+      external_edges: rawComm?.external_edges ?? 0,
+      hotspots: commHotspots,
+      hub_symbols: commHubs,
+    };
+    const summary = generateCommunitySummary(summaryData);
+    await writeFile(join(outputDir, `${comm.slug}.summary.md`), summary, "utf-8");
+  }
 
   // Hubs page
   const hubsContent = generateHubsPage(hubSymbols);
@@ -334,6 +310,10 @@ export async function generateWiki(
   newFiles.add("wiki-manifest.json");
   newFiles.add("wiki-manifest.json.tmp");
   newFiles.add(".wiki-lock");
+  // Add summary files to known set so they aren't cleaned up
+  for (const comm of communityPages) {
+    newFiles.add(`${comm.slug}.summary.md`);
+  }
   for (const f of existingFiles) {
     if (f.endsWith(".md") && !newFiles.has(f)) {
       await unlink(join(outputDir, f));

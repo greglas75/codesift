@@ -192,9 +192,13 @@ function tryLoadWikiSummary(filePath: string): string | null {
     const map = fileToComm as Record<string, unknown>;
 
     // Resolve the file path relative to the repo root for lookup
-    const relPath = relative(repoRoot, filePath);
+    // Normalize to forward slashes for cross-platform compatibility (manifest uses POSIX paths)
+    const relPath = relative(repoRoot, filePath).split("\\").join("/");
     const communitySlug = map[relPath];
     if (typeof communitySlug !== "string") return null;
+
+    // Validate slug format (defense-in-depth: prevent path traversal via crafted manifest)
+    if (!/^[a-z0-9-]+$/.test(communitySlug)) return null;
 
     const summaryPath = join(repoRoot, ".codesift", "wiki", `${communitySlug}.summary.md`);
     let summary: string;

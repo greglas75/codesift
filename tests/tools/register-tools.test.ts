@@ -427,7 +427,7 @@ describe("register-tools — generate_wiki tool registration", () => {
     expect(def!.category).toBe("reporting");
   });
 
-  it("generate_wiki schema has repo, focus, output_dir, include_lens", () => {
+  it("generate_wiki schema has repo, focus, output_dir", () => {
     const def = defs.find((d) => d.name === "generate_wiki");
     expect(def).toBeDefined();
     const schema = def!.schema;
@@ -441,10 +441,8 @@ describe("register-tools — generate_wiki tool registration", () => {
     // output_dir — optional string
     expect(typeof (schema["output_dir"] as any).safeParse).toBe("function");
     expect((schema["output_dir"] as any).safeParse(undefined).success).toBe(true);
-    // include_lens — optional boolean
-    expect(typeof (schema["include_lens"] as any).safeParse).toBe("function");
-    expect((schema["include_lens"] as any).safeParse(undefined).success).toBe(true);
-    expect((schema["include_lens"] as any).safeParse(true).success).toBe(true);
+    // include_lens removed (not yet implemented)
+    expect(schema["include_lens"]).toBeUndefined();
   });
 
   it("generate_wiki handler is a function", () => {

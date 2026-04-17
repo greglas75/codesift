@@ -97,7 +97,7 @@ describe("wiki CLI commands", () => {
     await handleWikiLint(["/repo/.codesift/wiki"], {});
     writeSpy.mockRestore();
 
-    expect(lintWiki).toHaveBeenCalledWith("/repo/.codesift/wiki");
+    expect(lintWiki).toHaveBeenCalledWith("/repo/.codesift/wiki", undefined);
   });
 
   // Test 8: COMMAND_HELP["wiki-generate"] exists

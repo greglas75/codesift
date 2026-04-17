@@ -215,7 +215,13 @@ function buildWikiScript(): string {
     function showPage(slug) {
       var page = DATA.wiki_pages.find(function(p) { return p.slug === slug; });
       if (!page || !rendered) return;
-      rendered.innerHTML = (typeof marked !== 'undefined') ? marked.parse(page.content) : '<pre>' + page.content + '</pre>';
+      var html = (typeof marked !== 'undefined') ? marked.parse(page.content) : page.content;
+      rendered.textContent = '';
+      if (typeof marked !== 'undefined') {
+        var tmp = document.createElement('div'); tmp.innerHTML = html;
+        tmp.querySelectorAll('script,iframe,object,embed,form').forEach(function(el) { el.remove(); });
+        rendered.innerHTML = tmp.innerHTML;
+      } else { rendered.textContent = page.content; }
     }
     links.forEach(function(link) {
       link.addEventListener('click', function(e) {
@@ -375,8 +381,8 @@ export function buildLensHtml(data: LensData): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CodeSift Lens &mdash; ${safeRepo}</title>
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js" crossorigin="anonymous"></script>
 <style>${buildCss()}</style>
 </head>
 <body>

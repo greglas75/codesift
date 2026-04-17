@@ -227,16 +227,18 @@ describe("generateWiki", () => {
     const result = await generateWiki("test-repo", { output_dir: "/repo/.codesift/wiki-out" });
 
     expect(result.wiki_dir).toBe("/repo/.codesift/wiki-out");
-    expect(result.pages).toBeGreaterThan(0);
+    // 2 communities + index + hubs + surprises + hotspots = 6 pages
+    expect(result.pages).toBe(6);
     expect(result.communities).toBe(2);
-    expect(result.hubs).toBeGreaterThanOrEqual(0);
-    expect(result.surprises).toBeGreaterThanOrEqual(0);
+    // 1 hub from makeRoles (login: callers=5, role=core)
+    expect(result.hubs).toBe(1);
+    // 0 surprises (no cross-edges in fixture)
+    expect(result.surprises).toBe(0);
     expect(result.degraded).toBe(false);
 
-    // writeFile should have been called for each page + manifest
+    // writeFile: 6 pages + 2 summary files + manifest tmp = 9 calls minimum
     expect(mockWriteFile).toHaveBeenCalled();
-    // At minimum: index page + 2 community pages + hubs page + hotspots page + manifest
-    expect(mockWriteFile.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(mockWriteFile.mock.calls.length).toBeGreaterThanOrEqual(9);
 
     // mkdir called for output directory
     expect(mockMkdir).toHaveBeenCalledWith("/repo/.codesift/wiki-out", { recursive: true });

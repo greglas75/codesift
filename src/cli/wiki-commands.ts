@@ -38,19 +38,20 @@ export async function handleWikiGenerate(args: string[], flags: Flags): Promise<
   process.stdout.write(lines.join("\n") + "\n");
 }
 
-export async function handleWikiLint(args: string[], _flags: Flags): Promise<void> {
+export async function handleWikiLint(args: string[], flags: Flags): Promise<void> {
   const wikiDir = args[0] ?? "";
+  const currentHash = getFlag(flags, "current-hash") ?? undefined;
   const { lintWiki } = await import("../tools/wiki-lint.js");
-  const result = await lintWiki(wikiDir);
+  const result = await lintWiki(wikiDir, currentHash);
 
   if (result.issues.length === 0 && result.warnings.length === 0) {
     process.stdout.write("Wiki lint: no issues found\n");
   } else {
     for (const issue of result.issues) {
-      process.stderr.write(`ERROR: ${(issue as { message: string }).message}\n`);
+      process.stderr.write(`ERROR: ${issue.message}\n`);
     }
     for (const warning of result.warnings) {
-      process.stderr.write(`WARN: ${(warning as { message: string }).message}\n`);
+      process.stderr.write(`WARN: ${warning.message}\n`);
     }
     process.exitCode = result.issues.length > 0 ? 1 : 0;
   }
