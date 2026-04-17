@@ -215,13 +215,28 @@ function buildWikiScript(): string {
     function showPage(slug) {
       var page = DATA.wiki_pages.find(function(p) { return p.slug === slug; });
       if (!page || !rendered) return;
-      var html = (typeof marked !== 'undefined') ? marked.parse(page.content) : page.content;
-      rendered.textContent = '';
-      if (typeof marked !== 'undefined') {
-        var tmp = document.createElement('div'); tmp.innerHTML = html;
-        tmp.querySelectorAll('script,iframe,object,embed,form').forEach(function(el) { el.remove(); });
-        rendered.innerHTML = tmp.innerHTML;
-      } else { rendered.textContent = page.content; }
+      if (typeof marked === 'undefined') {
+        rendered.textContent = page.content;
+        return;
+      }
+      var tmp = document.createElement('div');
+      tmp.innerHTML = marked.parse(page.content);
+      var BAD_TAGS = /^(script|iframe|object|embed|form|svg|math|link|meta|base|style)$/;
+      // Walk every descendant: drop dangerous tags, strip event handlers and javascript:-URLs.
+      // querySelectorAll('*') is live-snapshot; safe to mutate during iteration.
+      Array.prototype.slice.call(tmp.querySelectorAll('*')).forEach(function(el) {
+        if (BAD_TAGS.test(el.tagName.toLowerCase())) { el.remove(); return; }
+        Array.prototype.slice.call(el.attributes).forEach(function(attr) {
+          var an = attr.name.toLowerCase();
+          var av = String(attr.value).trim().toLowerCase();
+          if (an.indexOf('on') === 0) { el.removeAttribute(attr.name); return; }
+          if ((an === 'href' || an === 'src' || an === 'xlink:href' || an === 'formaction' || an === 'action') &&
+              (av.indexOf('javascript:') === 0 || av.indexOf('data:text/html') === 0 || av.indexOf('vbscript:') === 0)) {
+            el.removeAttribute(attr.name);
+          }
+        });
+      });
+      rendered.innerHTML = tmp.innerHTML;
     }
     links.forEach(function(link) {
       link.addEventListener('click', function(e) {
@@ -381,8 +396,8 @@ export function buildLensHtml(data: LensData): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CodeSift Lens &mdash; ${safeRepo}</title>
-<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js" integrity="sha384-odPBjvtXVM/5hOYIr3A1dB+flh0c3wAT3bSesIOqEGmyUA4JoKf/YTWy0XKOYAY7" crossorigin="anonymous"></script>
 <style>${buildCss()}</style>
 </head>
 <body>

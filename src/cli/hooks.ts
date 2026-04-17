@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from "node:fs";
-import { dirname, extname, join, relative } from "node:path";
+import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
 import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
@@ -191,9 +191,10 @@ function tryLoadWikiSummary(filePath: string): string | null {
     if (!fileToComm || typeof fileToComm !== "object") return null;
     const map = fileToComm as Record<string, unknown>;
 
-    // Resolve the file path relative to the repo root for lookup
-    // Normalize to forward slashes for cross-platform compatibility (manifest uses POSIX paths)
-    const relPath = relative(repoRoot, filePath).split("\\").join("/");
+    // Resolve the file path relative to the repo root for lookup.
+    // Manifest keys are POSIX-style; normalize separators and collapse `./`, `//`
+    // so that Windows backslashes and mixed slashes resolve to a single canonical key.
+    const relPath = pathPosix.normalize(relative(repoRoot, filePath).split("\\").join("/"));
     const communitySlug = map[relPath];
     if (typeof communitySlug !== "string") return null;
 

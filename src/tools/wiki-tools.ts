@@ -27,7 +27,7 @@ import {
   type CommunityPageData,
 } from "./wiki-page-generators.js";
 import { resolveWikiLinks } from "./wiki-links.js";
-import { buildWikiManifest, toSlug, type WikiManifest, type PageInfo } from "./wiki-manifest.js";
+import { buildWikiManifest, buildUniqueSlugs, type WikiManifest, type PageInfo } from "./wiki-manifest.js";
 
 // ---------------------------------------------------------------------------
 // Timeout sentinel
@@ -86,7 +86,12 @@ function unwrapSettled<T, R>(
   degradedReasons: string[],
 ): R {
   if (result.status === "fulfilled" && !isTimeout(result.value)) {
-    return extractor(result.value as T);
+    try {
+      return extractor(result.value as T);
+    } catch (e) {
+      degradedReasons.push(`${label}_parse_error: ${e instanceof Error ? e.message : String(e)}`);
+      return fallback;
+    }
   }
   degradedReasons.push(formatDegradedReason(label, result));
   return fallback;
@@ -192,9 +197,13 @@ export async function generateWiki(
   const globalDensity = index.files.length > 0 ? crossEdges.length / (index.files.length * index.files.length) : 0;
   const surprises = computeSurpriseScores(communities, crossEdges, coChangePairs, globalDensity);
 
+  // Build unique slugs (collision-safe) before page generation.
+  // Shared with buildWikiManifest below to keep manifest + summary file slugs aligned.
+  const slugMap = buildUniqueSlugs(communities);
+
   // Build community page data
   const communityPages: PageInfo[] = communities.map((comm) => {
-    const slug = toSlug(comm.name);
+    const slug = slugMap.get(comm.name) ?? comm.name;
     const commHotspots = fileHotspots.filter((h) => comm.files.includes(h.file));
     const commHubs = hubSymbols.filter((h) => comm.files.includes(h.file));
     const rawComm = commResult.status === "fulfilled" && !isTimeout(commResult.value) && "communities" in commResult.value
@@ -213,8 +222,13 @@ export async function generateWiki(
   });
 
   // Write community summary files for hook injection
+  const slugToCommunity = new Map<string, CommunityInfo>();
+  for (const comm of communities) {
+    const slug = slugMap.get(comm.name);
+    if (slug) slugToCommunity.set(slug, comm);
+  }
   for (const comm of communityPages) {
-    const data = communities.find((c) => toSlug(c.name) === comm.slug);
+    const data = slugToCommunity.get(comm.slug);
     if (!data) continue;
     const commHotspots = fileHotspots.filter((h) => data.files.includes(h.file));
     const commHubs = hubSymbols.filter((h) => data.files.includes(h.file));

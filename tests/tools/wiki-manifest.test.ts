@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildWikiManifest,
   buildFileToCommunityMap,
+  buildUniqueSlugs,
   type WikiManifest,
   type PageInfo,
 } from "../../src/tools/wiki-manifest.js";
@@ -36,6 +37,37 @@ const pages: PageInfo[] = [
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe("buildUniqueSlugs", () => {
+  it("assigns a unique slug per community name without collisions", () => {
+    const slugs = buildUniqueSlugs([
+      { name: "Auth/API" },
+      { name: "Auth API" },
+      { name: "Auth  API" },
+    ]);
+    expect(slugs.get("Auth/API")).toBe("auth-api");
+    expect(slugs.get("Auth API")).toBe("auth-api-2");
+    expect(slugs.get("Auth  API")).toBe("auth-api-3");
+  });
+
+  it("falls back to 'community' base when toSlug produces empty string", () => {
+    const slugs = buildUniqueSlugs([{ name: "!!!" }, { name: "   " }]);
+    expect(slugs.get("!!!")).toBe("community");
+    expect(slugs.get("   ")).toBe("community-2");
+  });
+});
+
+describe("buildFileToCommunityMap with collisions", () => {
+  it("preserves both communities' files when names collide at toSlug level", () => {
+    const colliding: CommunityInfo[] = [
+      { name: "Auth/API", files: ["src/a/one.ts"], size: 1 },
+      { name: "Auth API", files: ["src/b/two.ts"], size: 1 },
+    ];
+    const map = buildFileToCommunityMap(colliding);
+    expect(map["src/a/one.ts"]).toBe("auth-api");
+    expect(map["src/b/two.ts"]).toBe("auth-api-2");
+  });
+});
 
 describe("buildFileToCommunityMap", () => {
   it("maps every file from every community to its community slug (6 entries for 2x3)", () => {

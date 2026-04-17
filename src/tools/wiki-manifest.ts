@@ -37,14 +37,36 @@ export function toSlug(name: string): string {
 }
 
 /**
- * Maps every file from every community to the community's kebab-case slug.
+ * Builds a collision-free `name -> slug` map. Duplicates are disambiguated with
+ * a numeric suffix (`-2`, `-3`, …) in iteration order. Empty-slug names fall
+ * back to the literal `community` base.
+ */
+export function buildUniqueSlugs(
+  communities: readonly { name: string }[],
+): Map<string, string> {
+  const nameToSlug = new Map<string, string>();
+  const seen = new Map<string, number>();
+  for (const c of communities) {
+    const base = toSlug(c.name) || "community";
+    const count = seen.get(base) ?? 0;
+    const slug = count === 0 ? base : `${base}-${count + 1}`;
+    seen.set(base, count + 1);
+    nameToSlug.set(c.name, slug);
+  }
+  return nameToSlug;
+}
+
+/**
+ * Maps every file from every community to the community's kebab-case slug
+ * using a collision-free slug map.
  */
 export function buildFileToCommunityMap(
   communities: CommunityInfo[],
+  slugMap: Map<string, string> = buildUniqueSlugs(communities),
 ): Record<string, string> {
   const map: Record<string, string> = {};
   for (const c of communities) {
-    const slug = toSlug(c.name);
+    const slug = slugMap.get(c.name) ?? toSlug(c.name);
     for (const f of c.files) {
       map[f] = slug;
     }
