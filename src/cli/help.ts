@@ -48,6 +48,8 @@ Commands:
                                   Platforms: codex, claude, cursor, gemini, all
   precheck-read                   PreToolUse hook: deny large file reads (hook handler)
   precheck-bash                   PreToolUse hook: redirect find/grep to CodeSift (hook handler)
+  precheck-glob                   PreToolUse hook: redirect Glob to CodeSift (hook handler)
+  precheck-grep                   PreToolUse hook: redirect Grep to CodeSift (hook handler)
   postindex-file                  PostToolUse hook: re-index edited files (hook handler)
 
 Flags:

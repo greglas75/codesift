@@ -362,6 +362,62 @@ export async function handlePrecheckBash(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// handlePrecheckGlob
+//
+// PreToolUse hook for the Glob tool. Redirects file-finding operations to
+// CodeSift's get_file_tree which uses the pre-built index.
+//
+// Env vars:
+//   HOOK_TOOL_INPUT  — JSON string with tool_input.pattern
+// ---------------------------------------------------------------------------
+
+export async function handlePrecheckGlob(): Promise<void> {
+  try {
+    const raw = readRawInput();
+    if (!raw) { process.exit(0); return; }
+
+    // Glob is always a file-finding operation — redirect to CodeSift
+    process.stdout.write(
+      `CodeSift is available and repos are pre-indexed. Use CodeSift MCP tools instead of Glob:\n` +
+        `  get_file_tree(compact=true, name_pattern="*.ts") — find files by pattern\n` +
+        `  search_symbols(query="name", kind="function") — find symbols by name\n` +
+        `Repo auto-resolves from CWD — no need to call list_repos first.\n`,
+    );
+    process.exit(2);
+  } catch {
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// handlePrecheckGrep
+//
+// PreToolUse hook for the Grep tool. Redirects content-searching operations
+// to CodeSift's search_text which uses the pre-built BM25 index.
+//
+// Env vars:
+//   HOOK_TOOL_INPUT  — JSON string with tool_input.pattern
+// ---------------------------------------------------------------------------
+
+export async function handlePrecheckGrep(): Promise<void> {
+  try {
+    const raw = readRawInput();
+    if (!raw) { process.exit(0); return; }
+
+    // Grep is always a content-search operation — redirect to CodeSift
+    process.stdout.write(
+      `CodeSift is available and repos are pre-indexed. Use CodeSift MCP tools instead of Grep:\n` +
+        `  search_text(query="pattern", file_pattern="*.ts") — full-text search with BM25 ranking\n` +
+        `  search_symbols(query="name", include_source=true) — find functions/classes by name\n` +
+        `Repo auto-resolves from CWD — no need to call list_repos first.\n`,
+    );
+    process.exit(2);
+  } catch {
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // handlePostindexFile
 //
 // PostToolUse hook for Write/Edit tools. When the agent writes or edits a

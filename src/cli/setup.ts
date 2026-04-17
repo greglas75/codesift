@@ -395,6 +395,8 @@ const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
   PreToolUse: [
     { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read" }] },
     { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash" }] },
+    { matcher: "Glob", hooks: [{ type: "command", command: "codesift precheck-glob" }] },
+    { matcher: "Grep", hooks: [{ type: "command", command: "codesift precheck-grep" }] },
   ],
   PostToolUse: [
     { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file" }] },
