@@ -105,6 +105,9 @@ codesift retrieve local/my-project \
 | **PreToolUse hooks** | Redirect large-file Read to CodeSift outline/search | Prevents 5K+ token file dumps |
 | **PostToolUse hooks** | Auto-reindex after Edit/Write | Always-fresh index |
 | **Sequential hints** | Prepended hints (H1-H9) suggest batching after 3+ consecutive calls | Guides agents toward efficient usage |
+| **Wiki generation** | `generate_wiki` produces markdown wiki from code topology | Architecture docs from Louvain communities + hubs + surprises |
+| **Lens HTML** | Self-contained HTML dashboard with D3 chord diagram | Visual architecture overview in one file |
+| **Wiki hook inject** | PreToolUse injects community context on file Read | Agent gets architectural context automatically |
 
 ## CLI commands
 
@@ -163,6 +166,17 @@ codesift retrieve local/my-project \
 | `codesift hotspots <repo>` | Git churn x complexity = risk-ranked file list |
 | `codesift patterns <repo> <pattern>` | Structural anti-pattern search (33 built-in + custom regex) |
 
+### Wiki & Lens
+
+| Command | Description |
+|---------|-------------|
+| `codesift wiki-generate` | Generate wiki pages + Lens HTML from code topology (communities, hubs, surprises, hotspots) |
+| `codesift wiki-generate --focus src/tools` | Scope wiki to a specific directory |
+| `codesift wiki-generate --no-lens` | Skip Lens HTML generation |
+| `codesift wiki-lint <wiki-dir>` | Check wiki for broken links, orphan pages, stale content |
+
+Output goes to `.codesift/wiki/` in the repo root. Includes markdown pages with `[[wikilinks]]`, backlinks, community summaries, and a self-contained `codesift-lens.html` with D3 chord diagram and force-directed graph.
+
 ### Cross-repo
 
 | Command | Description |
@@ -208,7 +222,7 @@ When running as an MCP server, CodeSift exposes 51 core tools directly. The rema
 | **Analysis** | `find_dead_code` (framework-aware incl. React/Next.js route entry points), `analyze_complexity` (React: hook_count, state_count, effect_count, jsx_depth), `find_clones`, `analyze_hotspots`, `search_patterns` (33 built-in: JS/TS ×9, React ×20, Kotlin ×6, PHP ×4), `list_patterns`, `frequency_analysis` (AST subtree clustering), `find_perf_hotspots` (6 perf anti-patterns: unbounded queries, sync I/O, N+1 loops, unbounded parallel, missing pagination, expensive recompute), `explain_query` (Prisma→SQL with EXPLAIN ANALYZE), `audit_scan` (5-gate composite: dead code + clones + patterns + complexity + hotspots) |
 | **Architecture** | `classify_roles` (symbol role classification via call graph), `check_boundaries` (architecture boundary enforcement), `ast_query` (structural grep via tree-sitter), `fan_in_fan_out` (import graph coupling: most-imported, most-dependent, hub files, coupling score 0-100), `co_change_analysis` (temporal coupling from git history: Jaccard similarity, cluster detection), `architecture_summary` (one-call composite: stack + communities + coupling + circular deps + LOC + entry points, Mermaid output) |
 | **Cross-repo** | `cross_repo_search`, `cross_repo_refs` |
-| **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities) |
+| **Report** | `generate_report` (standalone HTML with complexity, dead code, hotspots, communities), `generate_wiki` (markdown wiki pages + Lens HTML from code topology — communities, hubs, surprises, hotspots, framework pages) |
 | **Tool discovery** | `discover_tools` (keyword search across hidden tools), `describe_tools` (full schema on demand, optional `reveal`) |
 | **Discovery** | `plan_turn(query=...)` — route natural-language task description to best-fit tools, symbols, and files; returns ranked recommendations with confidence scores, reveal_required hints, and gap analysis |
 | **Meta** | `index_status` (check if repo is indexed: file/symbol counts, language breakdown, text_stub languages), `analyze_project` (stack + conventions detection), `get_extractor_versions` (parser language support) |
@@ -272,6 +286,47 @@ scan_secrets(repo="local/my-project", file_pattern="src/config/**")
 - Config files indexed — `.env`, `.yaml`, `.toml`, `.json`, `.ini`, `.properties` scanned
 - Severity mapping: cloud keys (AWS, GCP) = critical, API keys (OpenAI, GitHub) = high
 - Inline warnings in `index_file` responses when secrets detected
+
+### Wiki & Lens — auto-generated architecture documentation
+
+Generate browsable wiki pages and an interactive HTML dashboard from your codebase's topology — zero manual writing.
+
+```bash
+# Generate wiki for current repo
+codesift wiki-generate
+
+# Scope to a directory
+codesift wiki-generate --focus src/tools
+
+# Check wiki integrity
+codesift wiki-lint .codesift/wiki
+```
+
+**What it generates (in `.codesift/wiki/`):**
+- **Community pages** — one per Louvain community (module), with members, cohesion score, cross-boundary edges
+- **Hubs page** — top symbols by fan-in (load-bearing code)
+- **Surprises page** — unexpected cross-community connections (structural + temporal coupling)
+- **Hotspots page** — files ranked by git churn × complexity
+- **Framework pages** — conditional pages for Next.js routes, Hono middleware, Astro islands (when detected)
+- **Index page** — links to all pages with `[[wikilinks]]` and auto-generated backlinks
+- **Summaries** — compact `*.summary.md` files (~400 tokens) for AI agent context injection
+
+**Lens HTML dashboard** (`codesift-lens.html`):
+- Self-contained single HTML file — open in any browser, no server needed
+- D3 chord diagram showing cross-community connections
+- D3 force-directed graph with community nodes
+- 5 tabs: Overview, Communities, Hubs, Surprises, Wiki browser
+- Dark/light theme, responsive
+
+**AI agent integration:**
+- Hook inject via `handlePrecheckRead` — when an agent reads a file, it automatically receives the file's community wiki summary as context
+- Configurable token budget (2000 chars default)
+- Staleness detection — warns when wiki is outdated vs current index
+
+**MCP tool:**
+```bash
+generate_wiki(repo, focus?, output_dir?, include_lens?)
+```
 
 ### PHP / Yii2 support
 
@@ -343,6 +398,8 @@ Deep Next.js static analysis — 3 core tools covering routing, rendering, secur
 | Ranked text search | `search_text(ranked=true)` | Classifies hits by function, saves follow-up get_symbol calls |
 | Find hidden tools | `discover_tools` + `describe_tools` | 95 tools hidden by default — search by keyword, get full schema |
 | Route task → tools | `plan_turn(query="...")` | Natural-language router: ranked tool/symbol/file recommendations with auto-reveal |
+| Architecture wiki | `codesift wiki-generate` | Auto-generated markdown wiki from Louvain communities, hubs, surprises |
+| Visual architecture | Open `codesift-lens.html` | D3 chord diagram + force graph in one self-contained HTML file |
 | Find ALL occurrences | `grep -rn` | Exhaustive, no top_k cap |
 | Count matches | `grep -c` | Simple exact count |
 
