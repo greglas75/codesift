@@ -192,9 +192,40 @@ function nameCommunity(files: string[], id: number): string {
     if (topDir) return topDir[0];
   }
 
-  return common > 0
-    ? parts[0]!.slice(0, common).join("/")
-    : `community-${id}`;
+  if (common > 0) {
+    return parts[0]!.slice(0, common).join("/");
+  }
+
+  // Fallback: find the most distinctive shared keyword in filenames
+  // Extract the most common significant word from filenames to distinguish
+  // subcommunities within the same directory (e.g., "hono" tools vs "python" tools in src/tools/)
+  const keywords = new Map<string, number>();
+  for (const f of files) {
+    const name = f.split("/").pop()?.replace(/\.(ts|js|tsx|jsx|py|go|rs|php|kt)$/, "") ?? "";
+    for (const kw of name.split(/[-_.]/)) {
+      if (kw.length > 2 && kw !== "tools" && kw !== "test" && kw !== "spec" && kw !== "index" && kw !== "utils") {
+        keywords.set(kw, (keywords.get(kw) ?? 0) + 1);
+      }
+    }
+  }
+  const topKeywords = [...keywords.entries()].sort((a, b) => b[1] - a[1]);
+
+  // Use the top directory (depth 2) as a base
+  const dirCounts = new Map<string, number>();
+  for (const p of parts) {
+    const dir = p.slice(0, Math.min(2, p.length - 1)).join("/");
+    if (dir) dirCounts.set(dir, (dirCounts.get(dir) ?? 0) + 1);
+  }
+  const topDir = [...dirCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const baseName = topDir ? topDir[0] : "";
+
+  // Combine directory + top keyword for a unique, readable name
+  if (topKeywords.length > 0 && topKeywords[0]![1] >= 2) {
+    const kw = topKeywords[0]![0];
+    return baseName ? `${baseName}/${kw}` : kw;
+  }
+
+  return baseName || `module-${id}`;
 }
 
 const MAX_MERMAID_COMMUNITIES = 15;
