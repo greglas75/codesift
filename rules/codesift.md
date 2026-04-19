@@ -8,17 +8,18 @@ The `repo` parameter auto-resolves from the current working directory — no nee
 If the repo is not yet indexed, run `index_folder(path=<root>)` once.
 For multi-repo sessions, call `list_repos()` to discover available repos.
 
-## MANDATORY: Use CodeSift — NEVER use Glob/Grep/Explore for code search
+## PREFER CodeSift over Bash/Glob/Grep
 
-**CRITICAL:** When CodeSift MCP tools are available (mcp__codesift__* in tool list):
-- **NEVER** use Glob for file search → use `get_file_tree(compact=true, name_pattern="*.ts")`
-- **NEVER** use Grep for code search → use `search_text(query, file_pattern=)`
-- **NEVER** use `Bash(find)` → use `get_file_tree`
-- **NEVER** use `Bash(grep -r)` or `Bash(rg)` → use `search_text`
-- **NEVER** delegate code search to the Explore subagent — Explore does NOT have CodeSift MCP tools. Perform ALL code searches yourself using CodeSift tools directly.
-- **NEVER** use the Agent tool with subagent_type="Explore" for finding files, searching code, or reading code. Do it yourself with CodeSift.
+When CodeSift MCP tools are available, ALWAYS prefer them over shell commands:
+- `Bash(find ... -name)` → use `get_file_tree(repo, compact=true, name_pattern="*.ts")`
+- `Bash(grep -r ...)` or `Bash(rg ...)` → use `search_text(repo, query, file_pattern=)`
+- `Glob(pattern)` for code discovery → use `get_file_tree(repo, name_pattern=)`
+- `Grep(pattern)` for code search → use `search_text(repo, query)`
 
+This applies to ALL agents including sub-agents spawned via the Agent tool.
 The `repo` param is optional — it auto-resolves from CWD. Just call CodeSift tools directly.
+
+Note: The Explore subagent does NOT have access to CodeSift MCP tools. For code search tasks, use CodeSift tools directly instead of delegating to Explore.
 
 ## Tool Discovery
 
