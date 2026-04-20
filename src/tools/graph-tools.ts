@@ -31,15 +31,48 @@ export interface AdjacencyIndex {
   callers: Map<string, CodeSymbol[]>;
 }
 
+export interface CallSite {
+  name: string;
+  is_method_call: boolean;
+}
+
 /**
  * Extract identifiers that look like function/method calls from source code.
- * Matches patterns like: `functionName(`, `obj.methodName(`, `this.method(`
- * Also matches JSX component usage: `<ComponentName`, which captures React
- * component rendering as a call-graph edge (PascalCase filter skips HTML tags).
- * Returns a Set of the called/used identifier names.
+ * Matches patterns like: `functionName(`, `obj.methodName(`, `this.method(`.
+ * Also matches JSX component usage: `<ComponentName`.
+ *
+ * Returns an array of CallSite entries with an `is_method_call` flag so
+ * downstream graph consumers can exclude method calls from bare-function
+ * caller edges (root cause fix for builtin hub contamination, spec D4).
+ *
+ * Method-call detection: the match position is preceded by `.` or `?.`
+ * (including surrounding whitespace). Bracket notation `obj["map"]()` is
+ * NOT detected (documented residual noise per spec).
  */
-function extractCallSites(source: string): Set<string> {
-  const calls = new Set<string>();
+function extractCallSites(source: string): CallSite[] {
+  const calls: CallSite[] = [];
+  const seen = new Set<string>();
+
+  function push(name: string, is_method_call: boolean): void {
+    const key = `${name}\0${is_method_call ? "1" : "0"}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    calls.push({ name, is_method_call });
+  }
+
+  // Method-call detection — look back one or two chars for `.` or `?.`
+  function isMethodCallAt(index: number): boolean {
+    let i = index - 1;
+    // skip whitespace between dot and identifier (rare but valid: `obj . map(`)
+    while (i >= 0 && (source[i] === " " || source[i] === "\t")) i--;
+    if (i < 0) return false;
+    if (source[i] === ".") {
+      // `?.map(` — optional chaining
+      if (i - 1 >= 0 && source[i - 1] === "?") return true;
+      return true;
+    }
+    return false;
+  }
 
   // Match: word followed by ( — captures function calls and method calls
   // Also handles: this.method(, obj.method(, await func(, new Class(
@@ -47,30 +80,26 @@ function extractCallSites(source: string): Set<string> {
   let match: RegExpExecArray | null;
   while ((match = callPattern.exec(source)) !== null) {
     const name = match[1]!;
-    // Skip language keywords that look like calls
-    if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
-      calls.add(name);
-    }
+    if (KEYWORD_SET.has(name) || name.length < MIN_CALL_NAME_LENGTH) continue;
+    push(name, isMethodCallAt(match.index));
   }
 
   // JSX component usage: <PascalCaseComponent ...> or <PascalCaseComponent/>
-  // PascalCase filter (<[A-Z]) skips HTML elements like <div>, <span>, <button>.
-  // This makes trace_call_chain, impact_analysis, find_dead_code etc. React-aware.
   const jsxPattern = /<([A-Z][a-zA-Z0-9_$]*)\b/g;
   while ((match = jsxPattern.exec(source)) !== null) {
     const name = match[1]!;
     if (name.length >= MIN_CALL_NAME_LENGTH) {
-      calls.add(name);
+      push(name, false);
     }
   }
 
   // PHP method and static calls: ->method(, ::method(
-  // e.g. $this->render(, Yii::$app->db->createCommand(, User::find(
   const phpCallPattern = /(?:->|::)([a-zA-Z_][\w]*)\s*\(/g;
   while ((match = phpCallPattern.exec(source)) !== null) {
     const name = match[1]!;
     if (!KEYWORD_SET.has(name) && name.length >= MIN_CALL_NAME_LENGTH) {
-      calls.add(name);
+      // -> and :: are accessor operators — these are method/static calls
+      push(name, true);
     }
   }
 
@@ -142,7 +171,14 @@ function buildAdjacencyIndex(
     const callSites = extractCallSites(sym.source);
     const symCallees: CodeSymbol[] = [];
 
-    for (const calledName of callSites) {
+    for (const site of callSites) {
+      // Root-cause fix for builtin hub contamination (D4 Layer 1):
+      // `arr.map(...)` is a method call on the receiver's type, not a
+      // call to a bare function named `map`. Drop method calls from
+      // caller-edge construction so `map`/`filter`/`slice`/etc defined
+      // locally don't accumulate fake callers.
+      if (site.is_method_call) continue;
+      const calledName = site.name;
       // Filter out React stdlib hooks when requested (reduces graph noise)
       if (filterReactHooks && REACT_STDLIB_HOOKS.has(calledName)) continue;
 

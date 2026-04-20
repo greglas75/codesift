@@ -3,7 +3,10 @@ import {
   extractCallSites,
   buildAdjacencyIndex,
   buildCallTree,
+  type CallSite,
 } from "../../src/tools/graph-tools.js";
+
+const names = (sites: CallSite[]) => sites.map((s) => s.name);
 import type { CodeSymbol, Direction } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -30,56 +33,98 @@ function sym(
 describe("extractCallSites", () => {
   it("should extract simple function calls", () => {
     const calls = extractCallSites("const x = foo(); bar(1, 2);");
-    expect(calls).toContain("foo");
-    expect(calls).toContain("bar");
+    expect(names(calls)).toContain("foo");
+    expect(names(calls)).toContain("bar");
   });
 
-  it("should extract method calls", () => {
+  it("should extract method calls flagged is_method_call: true", () => {
     const calls = extractCallSites("this.doWork(); obj.process(data);");
-    expect(calls).toContain("doWork");
-    expect(calls).toContain("process");
+    const doWork = calls.find((c) => c.name === "doWork");
+    const process_ = calls.find((c) => c.name === "process");
+    expect(doWork?.is_method_call).toBe(true);
+    expect(process_?.is_method_call).toBe(true);
+  });
+
+  it("flags `arr.map(...)` as method call", () => {
+    const sites = extractCallSites("arr.map(x => x + 1);");
+    expect(sites.find((s) => s.name === "map")?.is_method_call).toBe(true);
+  });
+
+  it("flags optional-chain `arr?.map(...)` as method call", () => {
+    const sites = extractCallSites("arr?.map(x => x);");
+    expect(sites.find((s) => s.name === "map")?.is_method_call).toBe(true);
+  });
+
+  it("leaves plain `map(...)` as bare function call (is_method_call: false)", () => {
+    const sites = extractCallSites("const y = map(xs, f);");
+    expect(sites.find((s) => s.name === "map")?.is_method_call).toBe(false);
+  });
+
+  it("documents `arr[\"map\"](...)` as out-of-scope bare detection", () => {
+    const sites = extractCallSites(`arr["map"](f);`);
+    // bracket notation isn't reliably detectable via regex — accept either,
+    // but document current behavior so regressions are visible.
+    const m = sites.find((s) => s.name === "map");
+    if (m) expect(m.is_method_call).toBe(false);
+  });
+
+  it("buildAdjacencyIndex: `.map()` produces ZERO caller edges for project `map`", () => {
+    const mapFn = sym({
+      id: "test:u.ts:map:1",
+      name: "map",
+      file: "src/u.ts",
+      source: "function map(xs, f) { return xs.map(f); }",
+    });
+    const callerFn = sym({
+      id: "test:c.ts:caller:1",
+      name: "caller",
+      file: "src/c.ts",
+      source: "function caller() { arr.map(x => x); }",
+    });
+    const adj = buildAdjacencyIndex([mapFn, callerFn]);
+    expect(adj.callers.get(mapFn.id)).toBeUndefined();
   });
 
   it("should extract generic function calls", () => {
     const calls = extractCallSites("createMap<string, number>(entries);");
-    expect(calls).toContain("createMap");
+    expect(names(calls)).toContain("createMap");
   });
 
   it("should skip JS/TS keywords that look like calls", () => {
     const calls = extractCallSites(
       "if (x) { for (const i of arr) { while (true) { switch (v) {} } } }",
     );
-    expect(calls).not.toContain("if");
-    expect(calls).not.toContain("for");
-    expect(calls).not.toContain("while");
-    expect(calls).not.toContain("switch");
+    expect(names(calls)).not.toContain("if");
+    expect(names(calls)).not.toContain("for");
+    expect(names(calls)).not.toContain("while");
+    expect(names(calls)).not.toContain("switch");
   });
 
   it("should skip identifiers shorter than 3 characters", () => {
     const calls = extractCallSites("fn(); ab(); abc();");
-    expect(calls).not.toContain("fn");
-    expect(calls).not.toContain("ab");
-    expect(calls).toContain("abc");
+    expect(names(calls)).not.toContain("fn");
+    expect(names(calls)).not.toContain("ab");
+    expect(names(calls)).toContain("abc");
   });
 
-  it("should return empty set for source with no calls", () => {
+  it("should return empty array for source with no calls", () => {
     const calls = extractCallSites("const x = 42; const y = 'hello';");
-    expect(calls.size).toBe(0);
+    expect(calls.length).toBe(0);
   });
 
   it("should deduplicate repeated calls to the same function", () => {
     const calls = extractCallSites("foo(); foo(); foo();");
-    expect(calls.size).toBe(1);
-    expect(calls).toContain("foo");
+    expect(calls.length).toBe(1);
+    expect(names(calls)).toContain("foo");
   });
 
   it("should handle await and new expressions", () => {
     const calls = extractCallSites(
       "const r = await fetchData(); const c = new MyClass();",
     );
-    expect(calls).toContain("fetchData");
+    expect(names(calls)).toContain("fetchData");
     // "new" is a keyword and filtered; MyClass is the call
-    expect(calls).toContain("MyClass");
+    expect(names(calls)).toContain("MyClass");
   });
 });
 
