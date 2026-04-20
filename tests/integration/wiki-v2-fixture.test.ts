@@ -59,4 +59,29 @@ describe("Wiki v2 integration — ts-monorepo fixture", () => {
       rmSync(workdir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("CODESIFT_WIKI_V1=1 produces a v1 manifest (no schema_version/project/modules)", async () => {
+    const fixture = resolve(__dirname, "../fixtures/wiki-v2/ts-monorepo");
+    const workdir = mkdtempSync(join(tmpdir(), "wiki-v1-rollback-"));
+    cpSync(fixture, workdir, { recursive: true });
+    const prior = process.env.CODESIFT_WIKI_V1;
+    process.env.CODESIFT_WIKI_V1 = "1";
+
+    try {
+      const { indexFolder } = await import("../../src/tools/index-tools.js");
+      const idxResult = await indexFolder(workdir);
+      const { generateWiki } = await import("../../src/tools/wiki-tools.js");
+      await generateWiki(idxResult.repo);
+
+      const manifestPath = join(workdir, ".codesift", "wiki", "wiki-manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+      expect(manifest.schema_version).toBeUndefined();
+      expect(manifest.project).toBeUndefined();
+      expect(manifest.modules).toBeUndefined();
+    } finally {
+      if (prior === undefined) delete process.env.CODESIFT_WIKI_V1;
+      else process.env.CODESIFT_WIKI_V1 = prior;
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
