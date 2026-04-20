@@ -21,13 +21,18 @@ import {
   generateHotspotsPage,
   generateFrameworkPage,
   generateIndexPage,
+  generateOverviewPage,
+  generateArchitecturePage,
   type HubSymbol,
   type FileHotspot,
   type FrameworkInfo,
   type CommunityPageData,
 } from "./wiki-page-generators.js";
 import { resolveWikiLinks } from "./wiki-links.js";
-import { buildWikiManifest, buildUniqueSlugs, type WikiManifest, type PageInfo } from "./wiki-manifest.js";
+import { buildUniqueSlugs, type WikiManifest, type WikiManifestV2, type PageInfo, type ModuleMetadata, type ProjectOverview } from "./wiki-manifest.js";
+import { buildWikiManifestV1, buildWikiManifestV2, buildProjectOverview, buildModuleMetadata } from "./wiki-module-builder.js";
+import { rankHubsByPageRank } from "./wiki-hub-ranker.js";
+import { collectImportEdges } from "../utils/import-graph.js";
 
 // ---------------------------------------------------------------------------
 // Timeout sentinel
@@ -271,9 +276,65 @@ export async function generateWiki(
   const globalDensity = index.files.length > 0 ? crossEdges.length / (index.files.length * index.files.length) : 0;
   const surprises = computeSurpriseScores(communities, crossEdges, coChangePairs, globalDensity);
 
+  // --- V2 data pipeline (Task 21) ---------------------------------------
+  const v1Mode = process.env.CODESIFT_WIKI_V1 === "1";
+
+  // Load the full ProjectProfile from disk — analyzeProject returns a summary,
+  // but module-builder + overview need the full shape (identity, stack details,
+  // dependency_health, git_health, known_gotchas).
+  let fullProfile: import("./project-tools.js").ProjectProfile | null = null;
+  if (projectResult.status === "fulfilled" && !isTimeout(projectResult.value)) {
+    try {
+      const profilePath = projectResult.value.profile_path;
+      const raw = await readFile(profilePath, "utf-8");
+      fullProfile = JSON.parse(raw) as import("./project-tools.js").ProjectProfile;
+    } catch (err) {
+      degradedReasons.push(`project_profile_read_error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Build unique slugs (collision-safe) before page generation.
-  // Shared with buildWikiManifest below to keep manifest + summary file slugs aligned.
-  const slugMap = buildUniqueSlugs(communities);
+  const isMonorepo = fullProfile?.identity?.project_type === "monorepo";
+  const workspaces = fullProfile?.stack?.monorepo?.workspaces ?? [];
+  const slugMap = buildUniqueSlugs(communities, { monorepo: isMonorepo, workspaces });
+
+  let importEdges: Awaited<ReturnType<typeof collectImportEdges>> = [];
+  try {
+    importEdges = await collectImportEdges(index);
+  } catch (err) {
+    degradedReasons.push(`import_edges_error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // PageRank-ranked hubs with builtin blocklist. Falls back gracefully to the
+  // classifySymbolRoles-sorted hubs when the graph is empty.
+  const rankedResult = rankHubsByPageRank(importEdges, hubSymbols, { topK: 30 });
+  const rankedHubs = rankedResult.hubs;
+  if (rankedResult.degraded_reason) {
+    degradedReasons.push(`hub_ranker_${rankedResult.degraded_reason}`);
+  }
+  const effectiveHubs: HubSymbol[] = rankedHubs.length > 0 ? rankedHubs : hubSymbols;
+
+  // Project overview + structured module metadata.
+  let projectOverview: ProjectOverview | null = null;
+  let modules: ModuleMetadata[] = [];
+  if (!v1Mode && fullProfile) {
+    try {
+      const overview = buildProjectOverview(fullProfile, index);
+      const { _degraded, ...clean } = overview;
+      if (_degraded) degradedReasons.push(_degraded);
+      projectOverview = clean as ProjectOverview;
+    } catch (err) {
+      degradedReasons.push(`project_overview_error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      modules = buildModuleMetadata(
+        communities, fullProfile, index, importEdges, fileHotspots, rankedHubs,
+      );
+    } catch (err) {
+      degradedReasons.push(`module_metadata_error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const slugToModule = new Map<string, ModuleMetadata>(modules.map((m) => [m.slug, m]));
 
   // Build community page data
   const communityPages: PageInfo[] = communities.map((comm) => {
@@ -291,7 +352,7 @@ export async function generateWiki(
       hotspots: commHotspots,
       hub_symbols: commHubs,
     };
-    const content = generateCommunityPage(data);
+    const content = generateCommunityPage(data, slugToModule.get(slug));
     return { slug, title: comm.name, type: "community" as const, file: `${slug}.md`, content };
   });
 
@@ -317,12 +378,12 @@ export async function generateWiki(
       hotspots: commHotspots,
       hub_symbols: commHubs,
     };
-    const summary = generateCommunitySummary(summaryData);
+    const summary = generateCommunitySummary(summaryData, slugToModule.get(comm.slug));
     await writeFile(join(outputDir, `${comm.slug}.summary.md`), summary, "utf-8");
   }
 
-  // Hubs page
-  const hubsContent = generateHubsPage(hubSymbols);
+  // Hubs page — prefer PageRank-ranked hubs when available
+  const hubsContent = generateHubsPage(effectiveHubs);
   const hubsPage: PageInfo = { slug: "hubs", title: "Hub Symbols", type: "hubs", file: "hubs.md", content: hubsContent };
 
   // Surprises page
@@ -342,8 +403,30 @@ export async function generateWiki(
     }
   }
 
+  // Overview + architecture pages (v2 only, when overview is available)
+  const overviewPages: PageInfo[] = [];
+  if (projectOverview) {
+    overviewPages.push({
+      slug: "overview",
+      title: projectOverview.name,
+      type: "overview" as never,
+      file: "overview.md",
+      content: generateOverviewPage(projectOverview, modules),
+    });
+  }
+  if (modules.length >= 3) {
+    overviewPages.push({
+      slug: "architecture",
+      title: "Architecture",
+      type: "architecture" as never,
+      file: "architecture.md",
+      content: generateArchitecturePage(modules),
+    });
+  }
+
   // Collect all content pages (excluding index) for index generation
   const contentPages: PageInfo[] = [
+    ...overviewPages,
     ...communityPages,
     hubsPage,
     surprisesPage,
@@ -351,9 +434,10 @@ export async function generateWiki(
     ...frameworkPages,
   ];
 
-  // Index page
+  // Index page (v2 uses project overview for tailored heading when available)
   const indexContent = generateIndexPage(
     contentPages.map((p) => ({ slug: p.slug, title: p.title, type: p.type })),
+    projectOverview ?? undefined,
   );
   const indexPage: PageInfo = { slug: "index", title: "Wiki Index", type: "index", file: "index.md", content: indexContent };
 
@@ -373,19 +457,28 @@ export async function generateWiki(
   // Load old manifest for slug_redirects preservation
   const oldManifest = await loadOldManifest(outputDir);
 
-  // Build manifest
+  // Build manifest — v2 by default, v1 when CODESIFT_WIKI_V1=1 or no overview
   const indexHash = computeIndexHash(index.files);
-  const manifestOptions: Parameters<typeof buildWikiManifest>[0] = {
-    index_hash: indexHash,
-    git_commit: "unknown",
-    pages: resolvedPageInfos,
-    communities,
-    degradedReasons,
-  };
-  if (oldManifest !== undefined) {
-    manifestOptions.oldManifest = oldManifest as WikiManifest;
-  }
-  const manifest = buildWikiManifest(manifestOptions);
+  const useV2 = !v1Mode && projectOverview !== null;
+  const manifest: WikiManifest | WikiManifestV2 = useV2
+    ? buildWikiManifestV2({
+        index_hash: indexHash,
+        git_commit: "unknown",
+        pages: resolvedPageInfos,
+        communities,
+        project: projectOverview as ProjectOverview,
+        modules,
+        degradedReasons,
+        ...(oldManifest !== undefined ? { oldManifest: oldManifest as WikiManifest | WikiManifestV2 } : {}),
+      })
+    : buildWikiManifestV1({
+        index_hash: indexHash,
+        git_commit: "unknown",
+        pages: resolvedPageInfos,
+        communities,
+        degradedReasons,
+        ...(oldManifest !== undefined ? { oldManifest: oldManifest as WikiManifest } : {}),
+      });
 
   // Add lens_data to manifest for dashboard visualization
   if (communities.length >= 2) {
