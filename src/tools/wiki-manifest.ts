@@ -16,6 +16,10 @@ export interface WikiManifest {
   file_to_community: Record<string, string>;
   degraded: boolean;
   degraded_reasons?: string[];
+  lens_data?: {
+    communities: Array<{ name: string; slug: string; fileCount: number; cohesion: number }>;
+    edges: Array<{ from: number; to: number; weight: number }>;
+  };
 }
 
 export interface PageInfo {

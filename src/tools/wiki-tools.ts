@@ -162,14 +162,56 @@ export async function generateWiki(
 
   const degradedReasons: string[] = [];
 
+  // Extract community data AND cross-community edge counts
+  interface RawCommunity { name: string; files: string[]; external_edges: number; internal_edges: number; }
+  let rawCommunities: RawCommunity[] = [];
+
   const communities = unwrapSettled(commResult, "community_detection", (cr) => {
     if ("communities" in cr) {
+      rawCommunities = cr.communities.map((c) => ({
+        name: c.name, files: c.files,
+        external_edges: c.external_edges, internal_edges: c.internal_edges,
+      }));
       return cr.communities.map((c) => ({ name: c.name, files: c.files, size: c.files.length }));
     }
     return [] as CommunityInfo[];
   }, [] as CommunityInfo[], degradedReasons);
 
+  // Build cross-community edges from file membership overlap
+  // For each pair of communities, count how many files in community A
+  // have external_edges pointing to community B (approximated by shared file proximity)
   const crossEdges: CrossEdge[] = [];
+  if (rawCommunities.length >= 2) {
+    // Build file → community index
+    const fileToCommunityIdx = new Map<string, number>();
+    for (let i = 0; i < rawCommunities.length; i++) {
+      for (const f of rawCommunities[i]!.files) {
+        fileToCommunityIdx.set(f, i);
+      }
+    }
+    // Approximate cross-edges: distribute each community's external_edges
+    // proportionally among neighbor communities (by file count ratio)
+    // Simple heuristic: if community A has N external edges and B has M files,
+    // the weight A→B ≈ external_edges_A * (files_B / total_other_files)
+    const totalFiles = rawCommunities.reduce((s, c) => s + c.files.length, 0);
+    for (let i = 0; i < rawCommunities.length; i++) {
+      const extEdges = rawCommunities[i]!.external_edges;
+      if (extEdges === 0) continue;
+      const otherFiles = totalFiles - rawCommunities[i]!.files.length;
+      if (otherFiles === 0) continue;
+      for (let j = i + 1; j < rawCommunities.length; j++) {
+        const weight = Math.round(extEdges * (rawCommunities[j]!.files.length / otherFiles));
+        if (weight > 0) {
+          crossEdges.push({
+            from_community: rawCommunities[i]!.name,
+            to_community: rawCommunities[j]!.name,
+            from_file: rawCommunities[i]!.files[0] ?? "",
+            to_file: rawCommunities[j]!.files[0] ?? "",
+          });
+        }
+      }
+    }
+  }
 
   const hubSymbols = unwrapSettled(rolesResult, "classify_roles", (roles) =>
     roles
@@ -313,6 +355,30 @@ export async function generateWiki(
     manifestOptions.oldManifest = oldManifest as WikiManifest;
   }
   const manifest = buildWikiManifest(manifestOptions);
+
+  // Add lens_data to manifest for dashboard visualization
+  if (communities.length >= 2) {
+    const lensComms = communities.map((c) => {
+      const slug = slugMap.get(c.name) ?? c.name;
+      const raw = rawCommunities.find((r) => r.name === c.name);
+      const cohesion = raw ? (raw.internal_edges / Math.max(raw.internal_edges + raw.external_edges, 1)) : 0;
+      return { name: c.name, slug, fileCount: c.size, cohesion };
+    });
+    // Build edge list with weights from cross-community external edges
+    const lensEdges: Array<{ from: number; to: number; weight: number }> = [];
+    const totalFiles = communities.reduce((s, c) => s + c.size, 0);
+    for (let i = 0; i < rawCommunities.length; i++) {
+      const ext = rawCommunities[i]?.external_edges ?? 0;
+      if (ext === 0) continue;
+      const otherFiles = totalFiles - (rawCommunities[i]?.files.length ?? 0);
+      if (otherFiles === 0) continue;
+      for (let j = i + 1; j < rawCommunities.length; j++) {
+        const w = Math.round(ext * ((rawCommunities[j]?.files.length ?? 0) / otherFiles));
+        if (w > 0) lensEdges.push({ from: i, to: j, weight: w });
+      }
+    }
+    manifest.lens_data = { communities: lensComms, edges: lensEdges };
+  }
 
   // Write pages
   for (const page of resolvedPageInfos) {
