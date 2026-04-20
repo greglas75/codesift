@@ -162,17 +162,48 @@ export async function generateWiki(
 
   const degradedReasons: string[] = [];
 
+  // Paths that indicate build artifacts, not source code
+  const EXCLUDED_PATH_PATTERNS = [
+    /[\\/]node_modules[\\/]/,
+    /[\\/]\.next[\\/]/,
+    /[\\/]_next[\\/]/,
+    /[\\/]dist[\\/]/,
+    /[\\/]build[\\/]/,
+    /[\\/]output[\\/]/,
+    /[\\/]\.output[\\/]/,
+    /[\\/]coverage[\\/]/,
+    /[\\/]\.cache[\\/]/,
+    /[\\/]prisma[\\/]migrations[\\/]/,
+    /\.chunk\.[a-f0-9]+\./,
+    /\.min\.(js|css)$/,
+  ];
+
+  function isSourceFile(path: string): boolean {
+    return !EXCLUDED_PATH_PATTERNS.some((re) => re.test(path));
+  }
+
   // Extract community data AND cross-community edge counts
   interface RawCommunity { name: string; files: string[]; external_edges: number; internal_edges: number; }
   let rawCommunities: RawCommunity[] = [];
 
   const communities = unwrapSettled(commResult, "community_detection", (cr) => {
     if ("communities" in cr) {
-      rawCommunities = cr.communities.map((c) => ({
-        name: c.name, files: c.files,
-        external_edges: c.external_edges, internal_edges: c.internal_edges,
-      }));
-      return cr.communities.map((c) => ({ name: c.name, files: c.files, size: c.files.length }));
+      // Filter out communities that are mostly build artifacts
+      const filtered = cr.communities.filter((c) => {
+        const sourceFiles = c.files.filter(isSourceFile);
+        return sourceFiles.length >= 2; // at least 2 real source files
+      });
+      rawCommunities = filtered.map((c) => {
+        const sourceFiles = c.files.filter(isSourceFile);
+        return {
+          name: c.name, files: sourceFiles,
+          external_edges: c.external_edges, internal_edges: c.internal_edges,
+        };
+      });
+      return filtered.map((c) => {
+        const sourceFiles = c.files.filter(isSourceFile);
+        return { name: c.name, files: sourceFiles, size: sourceFiles.length };
+      });
     }
     return [] as CommunityInfo[];
   }, [] as CommunityInfo[], degradedReasons);
