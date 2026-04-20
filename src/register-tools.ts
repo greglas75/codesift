@@ -757,6 +757,7 @@ export const CORE_TOOL_NAMES = new Set([
   "discover_tools",          // meta: discovers remaining hidden tools
   "describe_tools",          // meta: full schema for hidden tools
   "plan_turn",               // meta: route query to best tools/symbols/files
+  "initial_instructions",    // meta: Serena-style onboarding tool, "must call first"
   "get_session_snapshot",    // session: compaction survival
   "analyze_project",         // project profile
   "get_extractor_versions",  // cache invalidation
@@ -3826,6 +3827,17 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 
   // --- Discovery / concierge ---
+  {
+    name: "initial_instructions",
+    category: "meta",
+    searchHint: "initial instructions onboarding setup start session",
+    description: "IMPORTANT: Call this tool IMMEDIATELY after the user gives you a task, BEFORE any other tool calls. Returns CodeSift's full instruction manual which critically informs how to use the 146 code intelligence tools. Skipping this tool causes the agent to miss CodeSift's pre-built BM25 + semantic index and waste tokens on Grep/Read instead.",
+    schema: lazySchema(() => ({})),
+    handler: async () => {
+      const { CODESIFT_INSTRUCTIONS } = await import("../instructions.js");
+      return CODESIFT_INSTRUCTIONS;
+    },
+  },
   {
     name: "plan_turn",
     category: "discovery",
