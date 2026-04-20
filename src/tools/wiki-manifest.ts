@@ -124,13 +124,25 @@ export function toSlug(name: string): string {
  * a numeric suffix (`-2`, `-3`, …) in iteration order. Empty-slug names fall
  * back to the literal `community` base.
  */
+export interface BuildUniqueSlugsOptions {
+  monorepo?: boolean;
+  workspaces?: string[];
+}
+
 export function buildUniqueSlugs(
-  communities: readonly { name: string }[],
+  communities: readonly { name: string; files?: string[] }[],
+  options?: BuildUniqueSlugsOptions,
 ): Map<string, string> {
   const nameToSlug = new Map<string, string>();
   const seen = new Map<string, number>();
+  const useWorkspace = options?.monorepo === true && (options.workspaces?.length ?? 0) > 0;
+  const workspaces = options?.workspaces ?? [];
   for (const c of communities) {
-    const base = toSlug(c.name) || "community";
+    let base = toSlug(c.name) || "community";
+    if (useWorkspace && c.files && c.files.length > 0) {
+      const ws = workspaces.find((w) => c.files!.some((f) => f.startsWith(w + "/") || f === w));
+      if (ws) base = `${toSlug(ws)}-${base}`;
+    }
     const count = seen.get(base) ?? 0;
     const slug = count === 0 ? base : `${base}-${count + 1}`;
     seen.set(base, count + 1);
