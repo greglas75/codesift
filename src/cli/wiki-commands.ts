@@ -10,6 +10,11 @@ export async function handleWikiGenerate(args: string[], flags: Flags): Promise<
   const focus = getFlag(flags, "focus") ?? undefined;
   const outputDir = getFlag(flags, "output") ?? undefined;
   const noLens = getBoolFlag(flags, "no-lens");
+  const v1Flag = getBoolFlag(flags, "v1");
+
+  // --v1 flag maps to the CODESIFT_WIKI_V1 env var the orchestrator reads.
+  // Preserve any pre-existing env value set by the shell.
+  if (v1Flag) process.env.CODESIFT_WIKI_V1 = "1";
 
   const { generateWiki } = await import("../tools/wiki-tools.js");
   const wikiOptions: { focus?: string; output_dir?: string } = {};

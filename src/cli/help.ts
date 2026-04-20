@@ -438,7 +438,7 @@ This command is designed to be installed as a Claude Code PostToolUse hook via:
 Env vars:
   HOOK_TOOL_INPUT    JSON with tool_input.file_path (set by Claude Code)`,
 
-  "wiki-generate": "Generate wiki pages from code topology.\nUsage: codesift wiki-generate [repo] [--focus <path>] [--output <dir>] [--no-lens]",
+  "wiki-generate": "Generate wiki pages from code topology.\nUsage: codesift wiki-generate [repo] [--focus <path>] [--output <dir>] [--no-lens] [--v1]\n\n  --v1  Emit legacy v1 manifest (no schema_version/project/modules blocks).\n        Equivalent to CODESIFT_WIKI_V1=1. Rollback path for Wiki v2.",
 
   "wiki-lint": "Check wiki for broken links and stale references.\nUsage: codesift wiki-lint <wiki-dir> [--current-hash <hash>]",
 
