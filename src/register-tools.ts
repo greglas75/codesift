@@ -3834,7 +3834,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     description: "IMPORTANT: Call this tool IMMEDIATELY after the user gives you a task, BEFORE any other tool calls. Returns CodeSift's full instruction manual which critically informs how to use the 146 code intelligence tools. Skipping this tool causes the agent to miss CodeSift's pre-built BM25 + semantic index and waste tokens on Grep/Read instead.",
     schema: lazySchema(() => ({})),
     handler: async () => {
-      const { CODESIFT_INSTRUCTIONS } = await import("../instructions.js");
+      const { CODESIFT_INSTRUCTIONS } = await import("./instructions.js");
       return CODESIFT_INSTRUCTIONS;
     },
   },
