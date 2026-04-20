@@ -751,9 +751,7 @@ export const CORE_TOOL_NAMES = new Set([
   "go_to_definition",        // 4 calls, 100% direct
   // --- Composite tools ---
   "audit_scan",              // one-call audit: CQ8+CQ11+CQ13+CQ14+CQ17
-  "nest_audit",              // one-call NestJS analysis: modules+DI+guards+routes+lifecycle
-  "review_diff",             // 9 parallel static analysis checks on git diffs
-  "scan_secrets",            // ~1100 secret detection rules
+  "nest_audit",              // one-class NestJS analysis: modules+DI+guards+routes+lifecycle
   // --- Essential infrastructure ---
   "index_folder",            // repo onboarding
   "discover_tools",          // meta: discovers remaining hidden tools

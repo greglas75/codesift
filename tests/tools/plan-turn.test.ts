@@ -475,31 +475,7 @@ describe("formatPlanTurnResult", () => {
     duration_ms: 5,
   };
 
-  it("includes params line for each tool", () => {
-    const out = formatPlanTurnResult({
-      query: "find dead code",
-      truncated: false,
-      confidence: 0.9,
-      tools: [{ name: "search_text", confidence: 0.9, reasoning: "match", is_hidden: false }],
-      symbols: [], files: [], reveal_required: [], already_used: [],
-      metadata: baseMeta,
-    });
-    expect(out).toContain("params: query, file_pattern?");
-  });
-
-  it("does NOT contain 'call describe_tools' or 'Reveal Required'", () => {
-    const out = formatPlanTurnResult({
-      query: "test",
-      truncated: false,
-      confidence: 0.8,
-      tools: [{ name: "find_dead_code", confidence: 0.8, reasoning: "match", is_hidden: true }],
-      symbols: [], files: [], reveal_required: ["find_dead_code"], already_used: [],
-      metadata: baseMeta,
-    });
-    expect(out).not.toContain("call describe_tools");
-    expect(out).not.toContain("Reveal Required");
-    expect(out).toContain("[hidden]");
-  });
+  // Reverted in v0.5.16 — inline params + removed Reveal Required degraded agent adoption
 
   it("shows gap_analysis early exit", () => {
     const out = formatPlanTurnResult({
@@ -527,17 +503,7 @@ describe("formatPlanTurnResult", () => {
     expect(out).toContain("discover_tools");
   });
 
-  it("shows params: (none required) for tools with no params", () => {
-    const out = formatPlanTurnResult({
-      query: "test",
-      truncated: false,
-      confidence: 0.8,
-      tools: [{ name: "discover_tools", confidence: 0.8, reasoning: "match", is_hidden: false }],
-      symbols: [], files: [], reveal_required: [], already_used: [],
-      metadata: baseMeta,
-    });
-    expect(out).toContain("params: (none required)");
-  });
+  // params: (none required) — removed in v0.5.16 revert
 
   it("shows already_used section", () => {
     const out = formatPlanTurnResult({

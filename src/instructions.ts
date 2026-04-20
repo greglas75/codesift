@@ -18,8 +18,6 @@ HINT CODES (act on immediately when they appear in responses)
   H7     → use get_context_bundle    H8(n) → use assemble_context(level=L1)
   H9     → use semantic_search       H10 → call get_session_snapshot
   H11    → use search_text instead
-  H12    → batch search_text into codebase_retrieval
-  H13    → use trace_route for endpoints   H14 → use scan_secrets for credentials
 
 ALWAYS: repo auto-resolves, skip list_repos. file_pattern when scoped. get_symbols (batch)
   for 2+. Batch 3+ into codebase_retrieval. token_budget to cap. index_file after edits.
@@ -48,7 +46,6 @@ TOOL MAPPING (quick ref)
   dead code         → find_dead_code | complexity → analyze_complexity
   duplication       → find_clones(min_similarity=0.7) | anti-patterns → search_patterns
   architecture/deps → detect_communities(focus=) | git churn → analyze_hotspots(since_days=90)
-  wiki + lens       → generate_wiki(repo, focus?, output_dir?) | CLI: codesift wiki-generate
   mermaid diagram   → trace_call_chain(output_format="mermaid")
   API endpoint      → trace_route (FIRST) | secrets → scan_secrets
   source → sink     → taint_trace(file_pattern=, framework="python-django")

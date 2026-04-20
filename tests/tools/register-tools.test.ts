@@ -72,13 +72,7 @@ describe("register-tools — astro tools registration", () => {
     expect(CORE_TOOL_NAMES.has("astro_hydration_audit")).toBe(false);
   });
 
-  it("review_diff is in CORE_TOOL_NAMES", () => {
-    expect(CORE_TOOL_NAMES.has("review_diff")).toBe(true);
-  });
-
-  it("scan_secrets is in CORE_TOOL_NAMES", () => {
-    expect(CORE_TOOL_NAMES.has("scan_secrets")).toBe(true);
-  });
+  // review_diff/scan_secrets removed from CORE - more visible tools degraded agent adoption
 });
 
 describe("register-tools — React tools registration & auto-load", () => {
