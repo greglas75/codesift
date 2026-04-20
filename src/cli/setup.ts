@@ -157,6 +157,60 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// ---------------------------------------------------------------------------
+// installGlobalClaudeMd — inject a short CodeSift block into ~/.claude/CLAUDE.md
+// This file has higher priority than rules/ files (loaded into every session).
+// Idempotent via delimiters; respects user content outside the block.
+// ---------------------------------------------------------------------------
+
+const CLAUDE_MD_BLOCK = `## CodeSift MCP — code intelligence for this machine
+
+CodeSift MCP is installed (\`mcp__codesift__*\` tools). When working with code:
+
+- **Use CodeSift tools as default for code search and navigation** — they query a pre-built index (BM25 + tree-sitter symbols + semantic) and return ranked, deduplicated results far cheaper than reading files.
+- \`search_text\` instead of Grep for code search
+- \`get_file_tree\` instead of Glob for finding files
+- \`search_symbols\` / \`get_symbol\` for finding functions/classes
+- \`plan_turn(query=...)\` when you don't know which tool fits
+- The \`repo\` parameter auto-resolves from CWD — no need to list_repos first
+
+Full rules: \`~/.claude/rules/codesift.md\`. Detailed tool catalog via \`discover_tools\`.`;
+
+async function installGlobalClaudeMd(homeDir: string): Promise<InstallRulesResult> {
+  const targetPath = join(homeDir, ".claude", "CLAUDE.md");
+  const block = `${DELIMITER_START}\n${CLAUDE_MD_BLOCK}\n${DELIMITER_END}`;
+
+  try {
+    if (existsSync(targetPath)) {
+      const existing = await readFile(targetPath, "utf-8");
+      if (existing.includes(DELIMITER_START) && existing.includes(DELIMITER_END)) {
+        const match = existing.match(
+          new RegExp(`${escapeRegex(DELIMITER_START)}[\\s\\S]*?${escapeRegex(DELIMITER_END)}`),
+        );
+        if (match?.[0] === block) {
+          return { path: targetPath, action: "skipped" };
+        }
+        const replaced = existing.replace(
+          new RegExp(`${escapeRegex(DELIMITER_START)}[\\s\\S]*?${escapeRegex(DELIMITER_END)}`),
+          block,
+        );
+        await writeFile(targetPath, replaced, "utf-8");
+        return { path: targetPath, action: "updated" };
+      }
+      const newContent = existing.trimEnd() + "\n\n" + block + "\n";
+      await writeFile(targetPath, newContent, "utf-8");
+      return { path: targetPath, action: "updated" };
+    }
+
+    await ensureDir(join(homeDir, ".claude"));
+    await writeFile(targetPath, block + "\n", "utf-8");
+    return { path: targetPath, action: "created" };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { path: targetPath, action: "error", error: msg };
+  }
+}
+
 async function installRulesAppendMode(
   platform: string,
   _options?: SetupOptions,
@@ -393,13 +447,19 @@ function hasCodesiftHook(entries: HookEntry[]): boolean {
 
 const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
   PreToolUse: [
+    { matcher: "", hooks: [{ type: "command", command: "codesift session-gate" }] },
     { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read" }] },
     { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash" }] },
     { matcher: "Glob", hooks: [{ type: "command", command: "codesift precheck-glob" }] },
     { matcher: "Grep", hooks: [{ type: "command", command: "codesift precheck-grep" }] },
+    { matcher: "Agent", hooks: [{ type: "command", command: "codesift precheck-agent" }] },
+  ],
+  SessionStart: [
+    { matcher: "", hooks: [{ type: "command", command: "codesift session-start" }] },
   ],
   PostToolUse: [
     { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file" }] },
+    { matcher: "mcp__codesift__.*", hooks: [{ type: "command", command: "codesift sentinel-writer" }] },
   ],
   PreCompact: [
     { matcher: "", hooks: [{ type: "command", command: "codesift precompact-snapshot" }] },
@@ -567,10 +627,15 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
     if (platform === "claude") {
       // Auto-install rules with hooks — agents need rules to know the full tool mapping
       await installRules(platform, homedir(), options);
+      // Inject CodeSift block into ~/.claude/CLAUDE.md (loaded every session, higher priority than rules/)
+      await installGlobalClaudeMd(homedir());
     }
   }
   if (options?.rules && !(options?.hooks && platform === "claude")) {
     await installRules(platform, homedir(), options);
+    if (platform === "claude") {
+      await installGlobalClaudeMd(homedir());
+    }
   }
   return result;
 }

@@ -58,7 +58,7 @@ describe("handlePrecheckRead", () => {
   it("exits 0 for small .ts file", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "small.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Read",
@@ -125,10 +125,10 @@ describe("handlePrecheckRead", () => {
     rmSync(tmpDir, { recursive: true });
   });
 
-  it("uses default 200 for invalid CODESIFT_READ_HOOK_MIN_LINES", async () => {
+  it("uses default 50 for invalid CODESIFT_READ_HOOK_MIN_LINES", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "medium.ts");
-    writeFileSync(filePath, "line\n".repeat(150)); // 150 lines < 200 default
+    writeFileSync(filePath, "line\n".repeat(30)); // 30 lines < 50 default
 
     process.env["CODESIFT_READ_HOOK_MIN_LINES"] = "abc";
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
@@ -138,7 +138,7 @@ describe("handlePrecheckRead", () => {
 
     await handlePrecheckRead();
 
-    expect(exitCode).toBe(0); // 150 < 200 default
+    expect(exitCode).toBe(0); // 30 < 50 default
     rmSync(tmpDir, { recursive: true });
   });
 
@@ -151,7 +151,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "example.ts");
-    writeFileSync(filePath, "line\n".repeat(50)); // small file
+    writeFileSync(filePath, "line\n".repeat(20)); // small file (under 50 line threshold)
 
     const wikiDir = join(tmpDir, ".codesift", "wiki");
     mkdirSync(wikiDir, { recursive: true });
@@ -180,7 +180,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "example.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     // No .codesift/wiki directory at all
 
@@ -201,7 +201,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "example.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     const wikiDir = join(tmpDir, ".codesift", "wiki");
     mkdirSync(wikiDir, { recursive: true });
@@ -224,7 +224,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "example.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     const wikiDir = join(tmpDir, ".codesift", "wiki");
     mkdirSync(wikiDir, { recursive: true });
@@ -252,7 +252,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "example.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     const wikiDir = join(tmpDir, ".codesift", "wiki");
     mkdirSync(wikiDir, { recursive: true });
@@ -310,7 +310,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "example.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     const wikiDir = join(tmpDir, ".codesift", "wiki");
     mkdirSync(wikiDir, { recursive: true });
@@ -341,7 +341,7 @@ describe("handlePrecheckRead", () => {
     const deepDir = join(tmpDir, "src", "nested", "deep");
     mkdirSync(deepDir, { recursive: true });
     const filePath = join(deepDir, "util.ts");
-    writeFileSync(filePath, "line\n".repeat(50));
+    writeFileSync(filePath, "line\n".repeat(20));
 
     // Manifest lives at repo root, NOT adjacent to the file
     const wikiDir = join(tmpDir, ".codesift", "wiki");

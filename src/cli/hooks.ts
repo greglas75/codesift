@@ -10,9 +10,10 @@
 // Exit codes: 0 = allow, 2 = deny (with redirect message on stdout)
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Cross-platform input parsing
@@ -40,9 +41,10 @@ interface HookInput {
   filePath: string | null;
   sessionId: string | null;
   command: string | null;
+  toolName: string | null;
 }
 
-const EMPTY_INPUT: HookInput = Object.freeze({ filePath: null, sessionId: null, command: null });
+const EMPTY_INPUT: HookInput = Object.freeze({ filePath: null, sessionId: null, command: null, toolName: null });
 
 /**
  * Parse hook input JSON once, extracting all fields across all platforms.
@@ -106,7 +108,15 @@ function parseHookInput(raw: string): HookInput {
   if (typeof obj["session_id"] === "string") sessionId = obj["session_id"];
   else if (typeof obj["sessionId"] === "string") sessionId = obj["sessionId"];
 
-  return { filePath, sessionId, command };
+  // Tool name: top-level { tool_name } (Claude Code) or { tool: { name } } (Gemini)
+  let toolName: string | null = null;
+  if (typeof obj["tool_name"] === "string") toolName = obj["tool_name"];
+  else if (obj["tool"] && typeof obj["tool"] === "object") {
+    const t = obj["tool"] as Record<string, unknown>;
+    if (typeof t["name"] === "string") toolName = t["name"];
+  }
+
+  return { filePath, sessionId, command, toolName };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +144,7 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".svelte",
 ]);
 
-const DEFAULT_MIN_LINES = 200;
+const DEFAULT_MIN_LINES = 50;
 
 const WIKI_MANIFEST_REL = join(".codesift", "wiki", "wiki-manifest.json");
 const WIKI_SUMMARY_MAX_CHARS = 2000;
@@ -518,6 +528,205 @@ export async function handlePrecompactSnapshot(): Promise<void> {
     process.exit(0);
   } catch {
     // CQ8: never crash — never block compaction
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SessionStart / SessionGate / SentinelWriter / Agent gate hooks
+// Inspired by cmm-claude-code-setup (https://github.com/halindrome/cmm-claude-code-setup)
+// ---------------------------------------------------------------------------
+
+function getSessionSentinelPath(sessionId: string | null): string {
+  const id = sessionId ?? "default";
+  const hash = createHash("sha1").update(id).digest("hex").slice(0, 16);
+  return join(tmpdir(), `codesift-session-ready-${hash}`);
+}
+
+export async function handleSessionStart(): Promise<void> {
+  try {
+    const raw = readRawInput();
+    const { sessionId } = raw ? parseHookInput(raw) : EMPTY_INPUT;
+    const sentinel = getSessionSentinelPath(sessionId);
+    try { unlinkSync(sentinel); } catch { /* not exist */ }
+
+    // Inject context prompt
+    const additionalContext =
+      "CodeSift MCP is available (mcp__codesift__* tools). " +
+      "Before searching code with built-in Grep/Glob/Read, prefer CodeSift tools: " +
+      "search_text, get_file_tree, search_symbols, plan_turn. " +
+      "Repo auto-resolves from CWD — no need for list_repos.";
+
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext,
+      },
+    }));
+    process.exit(0);
+  } catch {
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// handleSessionGate
+//
+// PreToolUse hook with empty matcher (matches ALL tools). Blocks every tool
+// EXCEPT the allow-list until a CodeSift tool has been called once
+// (sentinel file). Inspired by cmm-claude-code-setup/session-gate.sh.
+//
+// Allow-list (always permitted):
+//   - All mcp__codesift__* (so the agent CAN call them to release the gate)
+//   - Agent (so subagents can spawn — they have their own gate)
+//   - Skill, ToolSearch, SendMessage, TaskCreate, TaskUpdate, TaskList
+//   - PushNotification, ScheduleWakeup
+//
+// Once any mcp__codesift__index_status / plan_turn / index_folder is called,
+// the sentinel is created (by handleSentinelWriter PostToolUse) and all tools
+// are unlocked for the rest of the session.
+// ---------------------------------------------------------------------------
+
+const SESSION_GATE_ALLOWLIST = new Set([
+  "Agent", "Skill", "ToolSearch", "SendMessage",
+  "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskOutput", "TaskStop",
+  "PushNotification", "ScheduleWakeup", "AskUserQuestion",
+  "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ExitWorktree",
+  "Monitor", "CronCreate", "CronList", "CronDelete", "RemoteTrigger",
+]);
+
+export async function handleSessionGate(): Promise<void> {
+  try {
+    const raw = readRawInput();
+    if (!raw) { process.exit(0); return; }
+
+    const { toolName, sessionId } = parseHookInput(raw);
+    if (!toolName) { process.exit(0); return; }
+
+    // Allow CodeSift tools (they release the gate)
+    if (toolName.startsWith("mcp__codesift__")) {
+      process.exit(0); return;
+    }
+
+    // Allow infrastructure tools
+    if (SESSION_GATE_ALLOWLIST.has(toolName)) {
+      process.exit(0); return;
+    }
+
+    // Allow other MCP tools (sentry, playwright, etc. — not our concern)
+    if (toolName.startsWith("mcp__") && !toolName.startsWith("mcp__codesift__")) {
+      process.exit(0); return;
+    }
+
+    // Check sentinel — has CodeSift been called yet?
+    const sentinel = getSessionSentinelPath(sessionId);
+    if (existsSync(sentinel)) {
+      process.exit(0); return;
+    }
+
+    // Block — agent must call CodeSift first
+    process.stdout.write(
+      `CodeSift session not initialized. Call one of these first:\n` +
+        `  mcp__codesift__index_status() — check if repo is indexed\n` +
+        `  mcp__codesift__plan_turn(query="...") — natural-language tool router\n` +
+        `  mcp__codesift__get_file_tree() — list repo files\n` +
+        `Then '${toolName}' will be allowed.\n`,
+    );
+    process.exit(2);
+  } catch {
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// handleSentinelWriter
+//
+// PostToolUse hook for mcp__codesift__* tools. Creates the session-ready
+// sentinel so subsequent tool calls pass the SessionGate.
+// ---------------------------------------------------------------------------
+
+export async function handleSentinelWriter(): Promise<void> {
+  try {
+    const raw = readRawInput();
+    if (!raw) { process.exit(0); return; }
+
+    const { sessionId } = parseHookInput(raw);
+    const sentinel = getSessionSentinelPath(sessionId);
+    try {
+      mkdirSync(dirname(sentinel), { recursive: true });
+      writeFileSync(sentinel, String(Date.now()), "utf-8");
+    } catch { /* best-effort */ }
+    process.exit(0);
+  } catch {
+    process.exit(0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// handlePrecheckAgent
+//
+// PreToolUse hook for the Agent tool. Blocks Task/Explore subagent spawns
+// whose prompt does NOT reference CodeSift tool names. Forces parent agent
+// to either do the work itself with CodeSift, or pass CodeSift tool names
+// in the subagent prompt. Inspired by cmm/agent-cmm-gate.sh.
+// ---------------------------------------------------------------------------
+
+const CODESIFT_TOOL_KEYWORDS = [
+  "search_text", "search_symbols", "get_file_tree", "get_file_outline",
+  "get_symbol", "get_symbols", "find_references", "trace_call_chain",
+  "trace_route", "codebase_retrieval", "assemble_context", "plan_turn",
+  "find_dead_code", "scan_secrets", "review_diff", "audit_scan",
+  "detect_communities", "analyze_complexity", "analyze_hotspots",
+  "impact_analysis", "find_and_show", "discover_tools", "describe_tools",
+  "codesift", "CodeSift",
+];
+
+export async function handlePrecheckAgent(): Promise<void> {
+  try {
+    const raw = readRawInput();
+    if (!raw) { process.exit(0); return; }
+
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { process.exit(0); return; }
+    if (!parsed || typeof parsed !== "object") { process.exit(0); return; }
+
+    const obj = parsed as Record<string, unknown>;
+    const ti = obj["tool_input"] as Record<string, unknown> | undefined;
+    if (!ti) { process.exit(0); return; }
+
+    const subagentType = typeof ti["subagent_type"] === "string" ? ti["subagent_type"] : "";
+    const prompt = typeof ti["prompt"] === "string" ? ti["prompt"] : "";
+
+    // Only gate code-exploration subagents
+    if (subagentType !== "Explore" && subagentType !== "general-purpose" && subagentType !== "Plan") {
+      process.exit(0); return;
+    }
+
+    // Allow if prompt mentions any CodeSift keyword
+    const lower = prompt.toLowerCase();
+    if (CODESIFT_TOOL_KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) {
+      process.exit(0); return;
+    }
+
+    // Detect code-search intent — block these
+    const CODE_SEARCH_INTENT = /\b(find|search|investigate|trace|explore|locate|grep|look\s+for|where\s+is|how\s+does|what\s+calls)\b.*\b(code|file|function|class|module|component|symbol|import|method|hook|route|endpoint|service|handler|in\s+the\s+(codebase|project|repo))\b/i;
+    if (CODE_SEARCH_INTENT.test(prompt)) {
+      // Code search detected without CodeSift keywords — block
+    } else if (prompt.length < 200) {
+      // Non-code-search short prompt — allow
+      process.exit(0); return;
+    }
+
+    // Block — subagent prompt should reference CodeSift tools
+    process.stdout.write(
+      `Subagent '${subagentType}' prompt does not mention any CodeSift tool.\n` +
+        `Explore subagent does NOT have access to mcp__codesift__* tools — it will use Grep/Glob/Read.\n` +
+        `Either:\n` +
+        `  1. Add CodeSift tool names to the subagent prompt (search_text, get_file_tree, etc.)\n` +
+        `  2. Do the work yourself using mcp__codesift__* tools — usually faster and cheaper\n`,
+    );
+    process.exit(2);
+  } catch {
     process.exit(0);
   }
 }
