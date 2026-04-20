@@ -165,8 +165,12 @@ function escapeRegex(str: string): string {
 
 const CLAUDE_MD_BLOCK = `## CodeSift MCP — code intelligence for this machine
 
-CodeSift MCP is installed (\`mcp__codesift__*\` tools). When working with code:
+CodeSift MCP is installed (\`mcp__codesift__*\` tools).
 
+**If CodeSift tools appear in "deferred tools" list:** call this FIRST to load schemas:
+\`ToolSearch(query="select:mcp__codesift__search_text,mcp__codesift__get_file_tree,mcp__codesift__search_symbols,mcp__codesift__get_symbol,mcp__codesift__plan_turn,mcp__codesift__index_status")\`
+
+When working with code:
 - **Use CodeSift tools as default for code search and navigation** — they query a pre-built index (BM25 + tree-sitter symbols + semantic) and return ranked, deduplicated results far cheaper than reading files.
 - \`search_text\` instead of Grep for code search
 - \`get_file_tree\` instead of Glob for finding files

@@ -4,6 +4,10 @@
  */
 export const CODESIFT_INSTRUCTIONS = `CodeSift — 146 MCP tools (51 core, 95 hidden via disable()).
 
+CRITICAL: If mcp__codesift__* tools appear under "deferred tools" in your context, call ToolSearch FIRST to load them — otherwise they fail with InputValidationError. Recommended preload at session start:
+  ToolSearch(query="select:mcp__codesift__search_text,mcp__codesift__get_file_tree,mcp__codesift__search_symbols,mcp__codesift__get_symbol,mcp__codesift__plan_turn,mcp__codesift__index_status")
+After preload: PREFER these over built-in Grep/Glob/Read for code search.
+
 DISCOVERY (for the 95 hidden/niche tools)
   plan_turn(query="find dead code in auth")  → natural-language router, ranked tools/symbols/files, auto-reveals hidden tools (preferred start-of-task entry)
   discover_tools(query="dead code")    → keyword search → returns tool names
