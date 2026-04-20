@@ -1,0 +1,12 @@
+[project]
+name = "py-fixture"
+version = "0.1.0"
+description = "FastAPI fixture for wiki-v2 integration tests"
+dependencies = [
+  "fastapi>=0.100",
+  "pydantic>=2",
+  "sqlalchemy>=2"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
