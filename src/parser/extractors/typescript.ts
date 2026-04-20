@@ -334,6 +334,14 @@ function getTestName(node: Parser.SyntaxNode): string | null {
 
 // --- Main extractor ---
 
+/** True if the declaration has an `export` keyword child (modifier-based export). */
+function hasExportModifier(node: Parser.SyntaxNode): boolean {
+  for (const child of node.children) {
+    if (child.type === "export") return true;
+  }
+  return false;
+}
+
 export function extractTypeScriptSymbols(
   tree: Parser.Tree,
   filePath: string,
@@ -341,8 +349,9 @@ export function extractTypeScriptSymbols(
   repo: string,
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
+  const localReExported = new Set<string>();
 
-  function walk(node: Parser.SyntaxNode, parentId?: string): void {
+  function walk(node: Parser.SyntaxNode, parentId?: string, isExported = false): void {
     switch (node.type) {
       case "function_declaration": {
         const name = getNodeName(node);
@@ -350,11 +359,13 @@ export function extractTypeScriptSymbols(
           // React detection: hook (useX) or component (PascalCase + JSX return)
           const kind = classifyReactKind(name, node);
           const decorators = getDecorators(node);
+          const exported = isExported || hasExportModifier(node);
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
+            is_exported: exported ? true : undefined,
           });
           symbols.push(sym);
         }
@@ -366,6 +377,7 @@ export function extractTypeScriptSymbols(
         const isConst = node.children.some(
           (c: Parser.SyntaxNode) => c.type === "const",
         );
+        const exported = isExported || hasExportModifier(node);
 
         for (const declarator of node.namedChildren) {
           if (declarator.type !== "variable_declarator") continue;
@@ -381,6 +393,7 @@ export function extractTypeScriptSymbols(
               parentId,
               docstring: getDocstring(node, source),
               signature: getSignature(value, source),
+              is_exported: exported ? true : undefined,
             });
             symbols.push(sym);
           } else if (value && value.type === "call_expression" && isReactWrapper(value)) {
@@ -400,6 +413,7 @@ export function extractTypeScriptSymbols(
               parentId,
               docstring: getDocstring(node, source),
               signature: innerFn ? getSignature(innerFn, source) : undefined,
+              is_exported: exported ? true : undefined,
             });
             symbols.push(sym);
           } else if (value) {
@@ -408,6 +422,7 @@ export function extractTypeScriptSymbols(
             const sym = makeSymbol(node, name, kind, filePath, source, repo, {
               parentId,
               docstring: getDocstring(node, source),
+              is_exported: exported ? true : undefined,
             });
             symbols.push(sym);
           }
@@ -422,10 +437,12 @@ export function extractTypeScriptSymbols(
         // React class component: class Foo extends Component / React.Component / PureComponent
         const kind = isReactClassComponent(node) ? "component" as SymbolKind : "class" as SymbolKind;
         const decorators = getDecorators(node);
+        const exported = isExported || hasExportModifier(node);
         const sym = makeSymbol(node, name, kind, filePath, source, repo, {
           parentId,
           docstring: getDocstring(node, source),
           decorators: decorators.length > 0 ? decorators : undefined,
+          is_exported: exported ? true : undefined,
         });
 
         // Walk class body with this class as parent (before trimming so children get full source)
@@ -487,9 +504,11 @@ export function extractTypeScriptSymbols(
       case "interface_declaration": {
         const name = getNodeName(node);
         if (name) {
+          const exported = isExported || hasExportModifier(node);
           const sym = makeSymbol(node, name, "interface", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            is_exported: exported ? true : undefined,
           });
           symbols.push(sym);
         }
@@ -499,9 +518,11 @@ export function extractTypeScriptSymbols(
       case "type_alias_declaration": {
         const name = getNodeName(node);
         if (name) {
+          const exported = isExported || hasExportModifier(node);
           const sym = makeSymbol(node, name, "type", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            is_exported: exported ? true : undefined,
           });
           symbols.push(sym);
         }
@@ -511,9 +532,11 @@ export function extractTypeScriptSymbols(
       case "enum_declaration": {
         const name = getNodeName(node);
         if (name) {
+          const exported = isExported || hasExportModifier(node);
           const sym = makeSymbol(node, name, "enum", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
+            is_exported: exported ? true : undefined,
           });
           symbols.push(sym);
         }
@@ -521,9 +544,52 @@ export function extractTypeScriptSymbols(
       }
 
       case "export_statement": {
-        // Unwrap: extract from the inner declaration
+        const source_field = node.childForFieldName("source");
+        if (source_field) {
+          // Re-export from module: `export { X as Y } from "./m"` or `export * as ns from "./m"`
+          for (const child of node.namedChildren) {
+            if (child.type === "export_clause") {
+              for (const spec of child.namedChildren) {
+                if (spec.type === "export_specifier") {
+                  const aliasNode = spec.childForFieldName("alias");
+                  const nameNode = spec.childForFieldName("name");
+                  const emitName = (aliasNode ?? nameNode)?.text;
+                  if (emitName) {
+                    symbols.push(makeSymbol(spec, emitName, "variable", filePath, source, repo, {
+                      parentId,
+                      is_exported: true,
+                    }));
+                  }
+                }
+              }
+            } else if (child.type === "namespace_export") {
+              // export * as ns from "./m"
+              for (const c of child.namedChildren) {
+                if (c.type === "identifier") {
+                  symbols.push(makeSymbol(child, c.text, "namespace", filePath, source, repo, {
+                    parentId,
+                    is_exported: true,
+                  }));
+                }
+              }
+            }
+          }
+          return;
+        }
+        // Local re-export `export { X }` — collect names for post-pass
         for (const child of node.namedChildren) {
-          walk(child, parentId);
+          if (child.type === "export_clause") {
+            for (const spec of child.namedChildren) {
+              if (spec.type === "export_specifier") {
+                const nameNode = spec.childForFieldName("name");
+                if (nameNode) localReExported.add(nameNode.text);
+              }
+            }
+          }
+        }
+        // Walk children with isExported=true so wrapped declarations get tagged
+        for (const child of node.namedChildren) {
+          walk(child, parentId, true);
         }
         return;
       }
@@ -596,10 +662,20 @@ export function extractTypeScriptSymbols(
 
     // Default: walk children
     for (const child of node.namedChildren) {
-      walk(child, parentId);
+      walk(child, parentId, isExported);
     }
   }
 
   walk(tree.rootNode);
+
+  // Post-pass: local re-exports `export { X }` mark prior-declared X as exported
+  if (localReExported.size > 0) {
+    for (const sym of symbols) {
+      if (!sym.is_exported && localReExported.has(sym.name)) {
+        sym.is_exported = true;
+      }
+    }
+  }
+
   return symbols;
 }

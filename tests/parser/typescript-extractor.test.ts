@@ -428,3 +428,75 @@ describe("extractTypeScriptSymbols — React hooks", () => {
     expect(sym!.kind).toBe("component");
   });
 });
+
+describe("extractTypeScriptSymbols — is_exported (Task 4)", () => {
+  async function parse(source: string, file = "m.ts") {
+    const parser = await getParser("typescript");
+    const tree = parser!.parse(source);
+    return extractTypeScriptSymbols(tree, file, source, "test-repo");
+  }
+
+  it("tags `export const x` as is_exported", async () => {
+    const syms = await parse(`export const x = 1;`);
+    const s = syms.find((s) => s.name === "x");
+    expect(s?.is_exported).toBe(true);
+  });
+
+  it("tags `export function f()` as is_exported", async () => {
+    const syms = await parse(`export function f() {}`);
+    expect(syms.find((s) => s.name === "f")?.is_exported).toBe(true);
+  });
+
+  it("tags `export class C` as is_exported", async () => {
+    const syms = await parse(`export class C {}`);
+    expect(syms.find((s) => s.name === "C")?.is_exported).toBe(true);
+  });
+
+  it("tags `export interface I` as is_exported", async () => {
+    const syms = await parse(`export interface I { a: number }`);
+    expect(syms.find((s) => s.name === "I")?.is_exported).toBe(true);
+  });
+
+  it("tags `export type T` as is_exported", async () => {
+    const syms = await parse(`export type T = string;`);
+    expect(syms.find((s) => s.name === "T")?.is_exported).toBe(true);
+  });
+
+  it("tags `export enum E` as is_exported", async () => {
+    const syms = await parse(`export enum E { A, B }`);
+    expect(syms.find((s) => s.name === "E")?.is_exported).toBe(true);
+  });
+
+  it("tags `export default function named()` as is_exported", async () => {
+    const syms = await parse(`export default function named() {}`);
+    expect(syms.find((s) => s.name === "named")?.is_exported).toBe(true);
+  });
+
+  it("tags `export default class Named` as is_exported", async () => {
+    const syms = await parse(`export default class Named {}`);
+    expect(syms.find((s) => s.name === "Named")?.is_exported).toBe(true);
+  });
+
+  it("tags local symbol re-exported via `export { X }` as is_exported", async () => {
+    const syms = await parse(`const X = 1;\nexport { X };`);
+    const x = syms.find((s) => s.name === "X" && s.kind !== "default_export");
+    expect(x?.is_exported).toBe(true);
+  });
+
+  it("tags alias from `export { X as Y } from './m'` as is_exported", async () => {
+    const syms = await parse(`export { X as Y } from "./m";`);
+    expect(syms.find((s) => s.name === "Y")?.is_exported).toBe(true);
+  });
+
+  it("tags namespace from `export * as ns from './m'` as is_exported", async () => {
+    const syms = await parse(`export * as ns from "./m";`);
+    expect(syms.find((s) => s.name === "ns")?.is_exported).toBe(true);
+  });
+
+  it("leaves plain `const x = 1` without is_exported", async () => {
+    const syms = await parse(`const x = 1;`);
+    const s = syms.find((sym) => sym.name === "x");
+    expect(s).toBeDefined();
+    expect(s!.is_exported).not.toBe(true);
+  });
+});
