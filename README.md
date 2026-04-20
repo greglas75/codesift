@@ -6,13 +6,13 @@ CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 
 
 ## Install
 
-**Bulletproof one-liner** (bypasses npm cache, auto-configures all platforms):
+**Bulletproof one-liner** (clears stale cache, installs latest, auto-configures all platforms):
 
 ```bash
-npm i -g codesift-mcp@latest --prefer-online
+npm cache clean --force && npm i -g codesift-mcp@latest
 ```
 
-`--prefer-online` forces npm to fetch fresh registry metadata, bypassing local cache (which can be stale and cause `ETARGET` errors). The `postinstall` script runs `codesift setup all` automatically.
+`npm cache clean --force` clears stale registry metadata that can cause `ETARGET` errors. The `postinstall` script then runs `codesift setup all` automatically.
 
 **Restart your AI client** (close + reopen) so the new MCP server is picked up. New terminal sessions in your IDE work fine — no need to quit the IDE itself.
 
@@ -27,10 +27,10 @@ codesift setup antigravity # Google Antigravity — config only
 codesift setup all       # All platforms at once
 ```
 
-**Troubleshooting** — if `codesift --version` shows old version after install:
+**Verify installed version:**
 
 ```bash
-npm cache clean --force && npm i -g codesift-mcp@latest --prefer-online
+codesift --version
 ```
 
 **What `setup` installs (all by default):**
