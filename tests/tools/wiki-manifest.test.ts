@@ -5,7 +5,17 @@ import {
   buildUniqueSlugs,
   type WikiManifest,
   type PageInfo,
+  type WikiManifestV2,
+  type ProjectOverview,
+  type ModuleMetadata,
+  type DependencySummary,
+  type KeyExport,
+  type ModuleRole,
 } from "../../src/tools/wiki-manifest.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import Ajv from "ajv";
 import type { CommunityInfo } from "../../src/tools/wiki-surprise.js";
 
 // ---------------------------------------------------------------------------
@@ -193,5 +203,123 @@ describe("buildWikiManifest", () => {
 
     expect(manifest.degraded).toBe(false);
     expect(manifest.degraded_reasons).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WikiManifestV2 shape + JSON Schema validation (Task 2)
+// ---------------------------------------------------------------------------
+
+function makeSampleV2(): WikiManifestV2 {
+  const project: ProjectOverview = {
+    name: "sample",
+    git_remote: "https://github.com/acme/sample.git",
+    project_type: "single",
+    stack: {
+      language: "typescript",
+      language_version: "5.4",
+      framework: null,
+      framework_version: null,
+      test_runner: "vitest",
+      package_manager: "pnpm",
+      build_tool: "tsc",
+    },
+    scripts: { test: "vitest run", build: "tsc" },
+    entry_points: ["src/index.ts"],
+    workspaces: [],
+    dependencies: {
+      prod_total: 3,
+      dev_total: 5,
+      key: [{ name: "vitest", version: "^1.0.0", kind: "dev" }],
+    },
+    known_gotchas: [{ gotcha: "uses monkey-patched globals", severity: "medium" }],
+    stats: { total_files: 42, total_commits: 100, contributors: 3 },
+  };
+  const mod: ModuleMetadata = {
+    slug: "core",
+    name: "Core",
+    description: "Shared core utilities.",
+    role: "core-library",
+    files: 5,
+    cohesion: 0.82,
+    key_exports: [
+      { name: "parse", kind: "function", file: "src/core/parse.ts", signature: "parse(s: string): Result" },
+    ],
+    depends_on: [],
+    depended_by: ["cli"],
+    has_hotspot: false,
+  };
+  return {
+    schema_version: 2,
+    generated_at: "2026-04-20T00:00:00Z",
+    index_hash: "abc",
+    git_commit: "def",
+    project,
+    modules: [mod],
+    pages: [],
+    slug_redirects: {},
+    token_estimates: {},
+    file_to_community: {},
+    degraded: false,
+  };
+}
+
+describe("WikiManifestV2 types", () => {
+  it("constructs a minimal v2 manifest with schema_version, project, modules", () => {
+    const m = makeSampleV2();
+    expect(m.schema_version).toBe(2);
+    expect(typeof m.project).toBe("object");
+    expect(m.project.name).toBe("sample");
+    expect(m.project.stack.language).toBe("typescript");
+    expect(m.project.dependencies.prod_total).toBe(3);
+    expect(Array.isArray(m.modules)).toBe(true);
+    expect(m.modules[0]!.role).toBe("core-library");
+    expect(m.modules[0]!.key_exports[0]!.kind).toBe("function");
+  });
+
+  it("accepts all ModuleRole union values", () => {
+    const roles: ModuleRole[] = [
+      "framework-tools", "framework-routes", "framework-components",
+      "core-library", "data-access", "utilities", "parsers",
+      "storage", "search", "cli", "tests", "scripts",
+      "micro-module", "unknown",
+    ];
+    expect(roles).toHaveLength(14);
+  });
+
+  it("allows optional key_exports_approximate and workspace fields", () => {
+    const m = makeSampleV2();
+    m.modules[0]!.key_exports_approximate = true;
+    m.modules[0]!.workspace = "apps/web";
+    expect(m.modules[0]!.key_exports_approximate).toBe(true);
+    expect(m.modules[0]!.workspace).toBe("apps/web");
+  });
+});
+
+describe("wiki-manifest-v2.schema.json", () => {
+  it("validates a minimal sample manifest", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const schemaPath = resolve(here, "../../schemas/wiki-manifest-v2.schema.json");
+    const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+    const sample = makeSampleV2();
+    const ok = validate(sample);
+    if (!ok) {
+      throw new Error("schema validation failed: " + JSON.stringify(validate.errors));
+    }
+    expect(ok).toBe(true);
+  });
+
+  it("rejects a manifest missing schema_version", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const schemaPath = resolve(here, "../../schemas/wiki-manifest-v2.schema.json");
+    const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+    const sample = makeSampleV2();
+    const broken = { ...sample } as Partial<WikiManifestV2>;
+    delete (broken as { schema_version?: number }).schema_version;
+    expect(validate(broken)).toBe(false);
   });
 });
