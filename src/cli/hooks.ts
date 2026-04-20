@@ -275,13 +275,19 @@ export async function handlePrecheckRead(): Promise<void> {
     const lineCount = content.split("\n").length;
     if (lineCount >= minLines) {
       const relPath = filePath.split("/").slice(-3).join("/");
-      process.stdout.write(
+      const reason =
         `File ${relPath} has ${lineCount} lines. Use CodeSift tools instead:\n` +
-          `  get_file_outline(repo, "${relPath}") for structure\n` +
-          `  search_text(repo, "query", file_pattern="${relPath}") for specific content\n` +
-          `  get_symbol(repo, "symbol_id") for a specific function\n`,
-      );
-      process.exit(2);
+        `  get_file_outline(repo, "${relPath}") for structure\n` +
+        `  search_text(repo, "query", file_pattern="${relPath}") for specific content\n` +
+        `  get_symbol(repo, "symbol_id") for a specific function`;
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: reason,
+        },
+      }));
+      process.exit(0);
       return;
     }
 
@@ -344,25 +350,19 @@ export async function handlePrecheckBash(): Promise<void> {
     }
 
     if (isFileFindCommand(command)) {
-      process.stdout.write(
+      denyTool(
         `CodeSift has repos pre-indexed. Use CodeSift MCP tools instead of find:\n` +
-          `  list_repos() — get repo identifier (call once)\n` +
-          `  get_file_tree(repo="local/<name>", compact=true, name_pattern="*.ts")\n` +
-          `  search_symbols(repo="local/<name>", query="test", kind="function")\n`,
+          `  get_file_tree(compact=true, name_pattern="*.ts")\n` +
+          `  search_symbols(query="test", kind="function")`,
       );
-      process.exit(2);
-      return;
     }
 
     if (isContentGrepCommand(command)) {
-      process.stdout.write(
+      denyTool(
         `CodeSift has repos pre-indexed. Use CodeSift MCP tools instead of grep/rg:\n` +
-          `  list_repos() — get repo identifier (call once)\n` +
-          `  search_text(repo="local/<name>", query="pattern", file_pattern="*.ts")\n` +
-          `  search_symbols(repo="local/<name>", query="name", include_source=true)\n`,
+          `  search_text(query="pattern", file_pattern="*.ts")\n` +
+          `  search_symbols(query="name", include_source=true)`,
       );
-      process.exit(2);
-      return;
     }
 
     process.exit(0);
@@ -386,15 +386,11 @@ export async function handlePrecheckGlob(): Promise<void> {
   try {
     const raw = readRawInput();
     if (!raw) { process.exit(0); return; }
-
-    // Glob is always a file-finding operation — redirect to CodeSift
-    process.stdout.write(
-      `CodeSift is available and repos are pre-indexed. Use CodeSift MCP tools instead of Glob:\n` +
-        `  get_file_tree(compact=true, name_pattern="*.ts") — find files by pattern\n` +
-        `  search_symbols(query="name", kind="function") — find symbols by name\n` +
-        `Repo auto-resolves from CWD — no need to call list_repos first.\n`,
+    denyTool(
+      `CodeSift is available. Use CodeSift instead of Glob:\n` +
+        `  get_file_tree(compact=true, name_pattern="*.ts") — find files\n` +
+        `  search_symbols(query="name", kind="function") — find symbols`,
     );
-    process.exit(2);
   } catch {
     process.exit(0);
   }
@@ -414,15 +410,11 @@ export async function handlePrecheckGrep(): Promise<void> {
   try {
     const raw = readRawInput();
     if (!raw) { process.exit(0); return; }
-
-    // Grep is always a content-search operation — redirect to CodeSift
-    process.stdout.write(
-      `CodeSift is available and repos are pre-indexed. Use CodeSift MCP tools instead of Grep:\n` +
-        `  search_text(query="pattern", file_pattern="*.ts") — full-text search with BM25 ranking\n` +
-        `  search_symbols(query="name", include_source=true) — find functions/classes by name\n` +
-        `Repo auto-resolves from CWD — no need to call list_repos first.\n`,
+    denyTool(
+      `CodeSift is available. Use CodeSift instead of Grep:\n` +
+        `  search_text(query="pattern", file_pattern="*.ts") — BM25-ranked full-text search\n` +
+        `  search_symbols(query="name", include_source=true) — find functions/classes`,
     );
-    process.exit(2);
   } catch {
     process.exit(0);
   }
@@ -537,6 +529,18 @@ export async function handlePrecompactSnapshot(): Promise<void> {
 // Inspired by cmm-claude-code-setup (https://github.com/halindrome/cmm-claude-code-setup)
 // ---------------------------------------------------------------------------
 
+/** Emit modern Claude Code "deny" decision via stdout JSON, then exit 0. */
+function denyTool(reason: string): never {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  }));
+  process.exit(0);
+}
+
 function getSessionSentinelPath(sessionId: string | null): string {
   const id = sessionId ?? "default";
   const hash = createHash("sha1").update(id).digest("hex").slice(0, 16);
@@ -625,14 +629,13 @@ export async function handleSessionGate(): Promise<void> {
     }
 
     // Block — agent must call CodeSift first
-    process.stdout.write(
+    denyTool(
       `CodeSift session not initialized. Call one of these first:\n` +
         `  mcp__codesift__index_status() — check if repo is indexed\n` +
         `  mcp__codesift__plan_turn(query="...") — natural-language tool router\n` +
         `  mcp__codesift__get_file_tree() — list repo files\n` +
-        `Then '${toolName}' will be allowed.\n`,
+        `Then '${toolName}' will be allowed.`,
     );
-    process.exit(2);
   } catch {
     process.exit(0);
   }
@@ -718,14 +721,13 @@ export async function handlePrecheckAgent(): Promise<void> {
     }
 
     // Block — subagent prompt should reference CodeSift tools
-    process.stdout.write(
+    denyTool(
       `Subagent '${subagentType}' prompt does not mention any CodeSift tool.\n` +
         `Explore subagent does NOT have access to mcp__codesift__* tools — it will use Grep/Glob/Read.\n` +
         `Either:\n` +
         `  1. Add CodeSift tool names to the subagent prompt (search_text, get_file_tree, etc.)\n` +
-        `  2. Do the work yourself using mcp__codesift__* tools — usually faster and cheaper\n`,
+        `  2. Do the work yourself using mcp__codesift__* tools — usually faster and cheaper`,
     );
-    process.exit(2);
   } catch {
     process.exit(0);
   }
