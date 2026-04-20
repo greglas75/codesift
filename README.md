@@ -6,19 +6,30 @@ CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 
 
 ## Install
 
+**Bulletproof one-liner** (always installs latest, auto-configures all platforms):
+
 ```bash
-npm install -g codesift-mcp
+npm i -g codesift-mcp@latest
 ```
 
-Then configure your AI coding tool (pick one, or use `all`):
+That's it. The `postinstall` script runs `codesift setup all` automatically.
+**Restart your AI client (Cmd+Q for Claude Code)** so the new MCP server is picked up.
+
+To configure individual platforms manually:
 
 ```bash
-codesift setup claude    # Claude Code — config + rules + hooks
+codesift setup claude    # Claude Code — config + rules + hooks + CLAUDE.md
 codesift setup codex     # Codex CLI — config + AGENTS.md rules
 codesift setup cursor    # Cursor IDE — config + .cursor/rules
 codesift setup gemini    # Gemini CLI — config + GEMINI.md rules
 codesift setup antigravity # Google Antigravity — config only
 codesift setup all       # All platforms at once
+```
+
+**Updating to latest version** (use `@latest` to bypass npm cache):
+
+```bash
+npm i -g codesift-mcp@latest && codesift --version
 ```
 
 **What `setup` installs (all by default):**
