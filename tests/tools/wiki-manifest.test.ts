@@ -65,6 +65,18 @@ describe("buildUniqueSlugs", () => {
     expect(slugs.get("!!!")).toBe("community");
     expect(slugs.get("   ")).toBe("community-2");
   });
+
+  it("monorepo: prepends workspace path to disambiguate communities under same directory", () => {
+    const slugs = buildUniqueSlugs(
+      [
+        { name: "Web Utils", files: ["apps/web/src/utils/a.ts"] },
+        { name: "Api Utils", files: ["apps/api/src/utils/b.ts"] },
+      ],
+      { monorepo: true, workspaces: ["apps/web", "apps/api"] },
+    );
+    expect(slugs.get("Web Utils")).toBe("apps-web-web-utils");
+    expect(slugs.get("Api Utils")).toBe("apps-api-api-utils");
+  });
 });
 
 describe("buildFileToCommunityMap with collisions", () => {
