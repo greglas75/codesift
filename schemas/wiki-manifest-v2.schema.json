@@ -1,0 +1,239 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://codesift.dev/schemas/wiki-manifest-v2.schema.json",
+  "title": "WikiManifestV2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "index_hash",
+    "git_commit",
+    "project",
+    "modules",
+    "pages",
+    "slug_redirects",
+    "token_estimates",
+    "file_to_community",
+    "degraded"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "const": 2 },
+    "generated_at": { "type": "string" },
+    "index_hash": { "type": "string" },
+    "git_commit": { "type": "string" },
+    "project": { "$ref": "#/definitions/ProjectOverview" },
+    "modules": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ModuleMetadata" }
+    },
+    "pages": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/PageEntry" }
+    },
+    "slug_redirects": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "token_estimates": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "file_to_community": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "lens_data": { "$ref": "#/definitions/LensData" },
+    "degraded": { "type": "boolean" },
+    "degraded_reasons": { "type": "array", "items": { "type": "string" } },
+    "modules_truncated": { "type": "boolean" },
+    "truncation_reason": { "enum": ["module_count_cap", "token_budget"] }
+  },
+  "definitions": {
+    "ProjectOverview": {
+      "type": "object",
+      "required": [
+        "name",
+        "git_remote",
+        "project_type",
+        "stack",
+        "scripts",
+        "entry_points",
+        "workspaces",
+        "dependencies",
+        "known_gotchas",
+        "stats"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string" },
+        "git_remote": { "type": ["string", "null"] },
+        "project_type": { "enum": ["monorepo", "single"] },
+        "stack": {
+          "type": "object",
+          "required": [
+            "language",
+            "language_version",
+            "framework",
+            "framework_version",
+            "test_runner",
+            "package_manager",
+            "build_tool"
+          ],
+          "properties": {
+            "language": { "type": "string" },
+            "language_version": { "type": ["string", "null"] },
+            "framework": { "type": ["string", "null"] },
+            "framework_version": { "type": ["string", "null"] },
+            "test_runner": { "type": ["string", "null"] },
+            "package_manager": { "type": ["string", "null"] },
+            "build_tool": { "type": ["string", "null"] }
+          }
+        },
+        "scripts": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "entry_points": { "type": "array", "items": { "type": "string" } },
+        "workspaces": { "type": "array", "items": { "type": "string" } },
+        "dependencies": { "$ref": "#/definitions/DependencySummary" },
+        "known_gotchas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["gotcha", "severity"],
+            "properties": {
+              "gotcha": { "type": "string" },
+              "severity": { "enum": ["high", "medium", "low"] }
+            }
+          }
+        },
+        "stats": {
+          "type": "object",
+          "required": ["total_files", "total_commits", "contributors"],
+          "properties": {
+            "total_files": { "type": "number" },
+            "total_commits": { "type": ["number", "null"] },
+            "contributors": { "type": ["number", "null"] }
+          }
+        }
+      }
+    },
+    "DependencySummary": {
+      "type": "object",
+      "required": ["prod_total", "dev_total", "key"],
+      "properties": {
+        "prod_total": { "type": "number" },
+        "dev_total": { "type": "number" },
+        "key": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "version", "kind"],
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" },
+              "kind": { "enum": ["prod", "dev"] }
+            }
+          }
+        }
+      }
+    },
+    "ModuleMetadata": {
+      "type": "object",
+      "required": [
+        "slug",
+        "name",
+        "description",
+        "role",
+        "files",
+        "cohesion",
+        "key_exports",
+        "depends_on",
+        "depended_by",
+        "has_hotspot"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "slug": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "role": {
+          "enum": [
+            "framework-tools", "framework-routes", "framework-components",
+            "core-library", "data-access", "utilities", "parsers",
+            "storage", "search", "cli", "tests", "scripts",
+            "micro-module", "unknown"
+          ]
+        },
+        "files": { "type": "number" },
+        "cohesion": { "type": "number" },
+        "key_exports": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/KeyExport" }
+        },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "depended_by": { "type": "array", "items": { "type": "string" } },
+        "has_hotspot": { "type": "boolean" },
+        "workspace": { "type": "string" },
+        "key_exports_approximate": { "type": "boolean" }
+      }
+    },
+    "KeyExport": {
+      "type": "object",
+      "required": ["name", "kind", "file"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": {
+          "enum": ["function", "class", "interface", "type", "component", "hook", "default_export"]
+        },
+        "file": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    },
+    "PageEntry": {
+      "type": "object",
+      "required": ["slug", "title", "type", "file", "outbound_links"],
+      "properties": {
+        "slug": { "type": "string" },
+        "title": { "type": "string" },
+        "type": {
+          "enum": ["index", "community", "hubs", "surprises", "hotspots", "framework", "overview", "architecture"]
+        },
+        "file": { "type": "string" },
+        "outbound_links": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "LensData": {
+      "type": "object",
+      "required": ["communities", "edges"],
+      "properties": {
+        "communities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "slug", "fileCount", "cohesion"],
+            "properties": {
+              "name": { "type": "string" },
+              "slug": { "type": "string" },
+              "fileCount": { "type": "number" },
+              "cohesion": { "type": "number" }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to", "weight"],
+            "properties": {
+              "from": { "type": "number" },
+              "to": { "type": "number" },
+              "weight": { "type": "number" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

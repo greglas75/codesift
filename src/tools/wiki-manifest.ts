@@ -1,5 +1,10 @@
 import type { CommunityInfo } from "./wiki-surprise.js";
 
+export interface LensData {
+  communities: Array<{ name: string; slug: string; fileCount: number; cohesion: number }>;
+  edges: Array<{ from: number; to: number; weight: number }>;
+}
+
 export interface WikiManifest {
   generated_at: string;
   index_hash: string;
@@ -16,10 +21,84 @@ export interface WikiManifest {
   file_to_community: Record<string, string>;
   degraded: boolean;
   degraded_reasons?: string[];
-  lens_data?: {
-    communities: Array<{ name: string; slug: string; fileCount: number; cohesion: number }>;
-    edges: Array<{ from: number; to: number; weight: number }>;
+  lens_data?: LensData;
+}
+
+export type ModuleRole =
+  | "framework-tools" | "framework-routes" | "framework-components"
+  | "core-library" | "data-access" | "utilities" | "parsers"
+  | "storage" | "search" | "cli" | "tests" | "scripts"
+  | "micro-module" | "unknown";
+
+export interface KeyExport {
+  name: string;
+  kind: "function" | "class" | "interface" | "type" | "component" | "hook" | "default_export";
+  file: string;
+  signature?: string;
+}
+
+export interface ModuleMetadata {
+  slug: string;
+  name: string;
+  description: string;
+  role: ModuleRole;
+  files: number;
+  cohesion: number;
+  key_exports: KeyExport[];
+  depends_on: string[];
+  depended_by: string[];
+  has_hotspot: boolean;
+  workspace?: string;
+  key_exports_approximate?: boolean;
+}
+
+export interface DependencySummary {
+  prod_total: number;
+  dev_total: number;
+  key: Array<{ name: string; version: string; kind: "prod" | "dev" }>;
+}
+
+export interface ProjectOverview {
+  name: string;
+  git_remote: string | null;
+  project_type: "monorepo" | "single";
+  stack: {
+    language: string;
+    language_version: string | null;
+    framework: string | null;
+    framework_version: string | null;
+    test_runner: string | null;
+    package_manager: string | null;
+    build_tool: string | null;
   };
+  scripts: Record<string, string>;
+  entry_points: string[];
+  workspaces: string[];
+  dependencies: DependencySummary;
+  known_gotchas: { gotcha: string; severity: "high" | "medium" | "low" }[];
+  stats: {
+    total_files: number;
+    total_commits: number | null;
+    contributors: number | null;
+  };
+}
+
+export interface WikiManifestV2 {
+  schema_version: 2;
+  generated_at: string;
+  index_hash: string;
+  git_commit: string;
+  project: ProjectOverview;
+  modules: ModuleMetadata[];
+  pages: WikiManifest["pages"];
+  slug_redirects: Record<string, string>;
+  token_estimates: Record<string, number>;
+  file_to_community: Record<string, string>;
+  lens_data?: LensData;
+  degraded: boolean;
+  degraded_reasons?: string[];
+  modules_truncated?: boolean;
+  truncation_reason?: "module_count_cap" | "token_budget";
 }
 
 export interface PageInfo {
