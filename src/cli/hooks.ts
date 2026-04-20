@@ -147,7 +147,18 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
 const DEFAULT_MIN_LINES = 50;
 
 const WIKI_MANIFEST_REL = join(".codesift", "wiki", "wiki-manifest.json");
-const WIKI_SUMMARY_MAX_CHARS = 2000;
+const WIKI_SUMMARY_DEFAULT_MAX_CHARS = 2500;
+
+/** Char budget for `.summary.md` hook injection. `CODESIFT_WIKI_SUMMARY_MAX_CHARS`
+ *  env var overrides when it parses to a positive integer; NaN or <=0 falls
+ *  back to the default (CQ8: defensive env parsing so the hook never crashes). */
+export function wikiSummaryMaxChars(): number {
+  const raw = process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS;
+  if (raw === undefined || raw === "") return WIKI_SUMMARY_DEFAULT_MAX_CHARS;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return WIKI_SUMMARY_DEFAULT_MAX_CHARS;
+  return n;
+}
 
 /**
  * Walk up from `filePath` looking for `.codesift/wiki/wiki-manifest.json`.
@@ -219,9 +230,8 @@ function tryLoadWikiSummary(filePath: string): string | null {
       return null;
     }
 
-    return summary.length > WIKI_SUMMARY_MAX_CHARS
-      ? summary.slice(0, WIKI_SUMMARY_MAX_CHARS)
-      : summary;
+    const maxChars = wikiSummaryMaxChars();
+    return summary.length > maxChars ? summary.slice(0, maxChars) : summary;
   } catch {
     // CQ8: never crash the hook
     return null;
