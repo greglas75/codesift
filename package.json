@@ -34,6 +34,8 @@
     "@mrleebo/prisma-ast": "^0.15.0",
     "@sanity-labs/secret-scan": "^1.1.0",
     "chokidar": "^4.0.0",
+    "graphology": "^0.26.0",
+    "graphology-metrics": "^2.4.0",
     "ignore": "^6.0.0",
     "picomatch": "^4.0.4",
     "web-tree-sitter": "^0.24.0",
