@@ -9,6 +9,9 @@ import { getCachedParse, setCachedParse } from "../parser/parse-cache.js";
 import { extractPythonImports } from "./python-imports.js";
 import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
 import { resolvePhpNamespace } from "../tools/php-tools.js";
+import { DirectedGraph } from "graphology";
+// @ts-expect-error — package has no "exports" field; deep path works at runtime
+import pagerank from "graphology-metrics/centrality/pagerank";
 
 export interface ImportEdge {
   from: string; // importer file path
@@ -381,6 +384,32 @@ export async function collectImportEdges(
   }
 
   return edges;
+}
+
+/**
+ * Compute file-level PageRank from import edges.
+ *
+ * Returns a Map of file path → PageRank score (sums to ~1). Isolated nodes
+ * (files with neither incoming nor outgoing edges) are pre-filtered. On
+ * empty input or a graphology/pagerank failure, returns an empty Map.
+ * Used by wiki-hub-ranker (spec D4 Layer 2).
+ */
+export function buildFilePageRank(edges: ImportEdge[]): Map<string, number> {
+  if (edges.length === 0) return new Map();
+  try {
+    const graph = new DirectedGraph();
+    for (const edge of edges) {
+      if (!graph.hasNode(edge.from)) graph.addNode(edge.from);
+      if (!graph.hasNode(edge.to)) graph.addNode(edge.to);
+      if (edge.from === edge.to) continue;
+      if (!graph.hasEdge(edge.from, edge.to)) graph.addEdge(edge.from, edge.to);
+    }
+    if (graph.order === 0) return new Map();
+    const scores = pagerank(graph) as Record<string, number>;
+    return new Map(Object.entries(scores));
+  } catch {
+    return new Map();
+  }
 }
 
 /**
