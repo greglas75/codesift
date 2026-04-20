@@ -628,3 +628,37 @@ describe("handlePostindexFile", () => {
     expect(exitCode).toBe(0);
   });
 });
+
+describe("wikiSummaryMaxChars (env var + NaN guard)", () => {
+  const ORIG = process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS;
+  afterEach(() => {
+    if (ORIG === undefined) delete process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS;
+    else process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS = ORIG;
+  });
+
+  it("defaults to 2500 when env var is unset", async () => {
+    delete process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS;
+    const { wikiSummaryMaxChars } = await import("../../src/cli/hooks.js");
+    expect(wikiSummaryMaxChars()).toBe(2500);
+  });
+
+  it("accepts positive integer override", async () => {
+    process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS = "4000";
+    const { wikiSummaryMaxChars } = await import("../../src/cli/hooks.js");
+    expect(wikiSummaryMaxChars()).toBe(4000);
+  });
+
+  it("falls back to default on NaN", async () => {
+    process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS = "not-a-number";
+    const { wikiSummaryMaxChars } = await import("../../src/cli/hooks.js");
+    expect(wikiSummaryMaxChars()).toBe(2500);
+  });
+
+  it("falls back to default on zero / negative", async () => {
+    process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS = "0";
+    const { wikiSummaryMaxChars } = await import("../../src/cli/hooks.js");
+    expect(wikiSummaryMaxChars()).toBe(2500);
+    process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS = "-5";
+    expect(wikiSummaryMaxChars()).toBe(2500);
+  });
+});
