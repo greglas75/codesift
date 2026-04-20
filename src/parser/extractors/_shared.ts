@@ -34,6 +34,7 @@ export function makeSymbol(
     decorators?: string[] | undefined;
     extends?: string[] | undefined;
     is_async?: boolean | undefined;
+    is_exported?: boolean | undefined;
     meta?: Record<string, unknown> | undefined;
   },
 ): CodeSymbol {
@@ -60,6 +61,7 @@ export function makeSymbol(
   if (opts?.decorators && opts.decorators.length > 0) sym.decorators = opts.decorators;
   if (opts?.extends && opts.extends.length > 0) sym.extends = opts.extends;
   if (opts?.is_async) sym.is_async = true;
+  if (opts?.is_exported !== undefined) sym.is_exported = opts.is_exported;
   if (opts?.meta && Object.keys(opts.meta).length > 0) sym.meta = opts.meta;
 
   return sym;
