@@ -27,6 +27,7 @@ export const EXTRACTOR_VERSIONS = {
   nextjs: "1.0.0",
   express: "1.0.0",
   react: "2.0.0",  // Wave 1-4 + Tier 1-4: component/hook kinds, classifyReactKind, isReactClassComponent — forces cache invalidation
+  typescript: "2.0.0", // v2: adds is_exported flag to CodeSymbol — forces full TS/TSX reindex
   python: "1.0.0",
   php: "1.0.0",
   astro: "1.0.0",

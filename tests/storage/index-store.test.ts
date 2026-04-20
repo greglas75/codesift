@@ -257,6 +257,16 @@ describe("index-store", () => {
       expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
     });
 
+    it("EXTRACTOR_VERSIONS registers typescript (forces reindex after wiki-v2 bump)", async () => {
+      const { EXTRACTOR_VERSIONS } = await import("../../src/tools/project-tools.js");
+      expect(EXTRACTOR_VERSIONS.typescript).toBe("2.0.0");
+      // Stored snapshot without typescript key must trigger cache miss
+      const index = makeIndex({
+        extractor_version: { kotlin: "2.0.0", python: "1.0.0" },
+      });
+      expect(isExtractorVersionCurrent(index, { ...EXTRACTOR_VERSIONS })).toBe(false);
+    });
+
     it("saveIncremental via loadIndex-without-check preserves extractor_version round-trip", async () => {
       const indexPath = join(tmpDir, "round-trip.index.json");
       const initial = makeIndex({
