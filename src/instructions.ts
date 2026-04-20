@@ -5,17 +5,8 @@
 export const CODESIFT_INSTRUCTIONS = `CodeSift — 146 MCP tools (51 core, 95 hidden via disable()).
 
 CRITICAL: If mcp__codesift__* tools appear under "deferred tools" in your context, call ToolSearch FIRST to load them — otherwise they fail with InputValidationError. Recommended preload at session start:
-  ToolSearch(query="select:mcp__codesift__search_text,mcp__codesift__get_file_tree,mcp__codesift__get_file_outline,mcp__codesift__search_symbols,mcp__codesift__get_symbol,mcp__codesift__find_and_show,mcp__codesift__plan_turn,mcp__codesift__index_status")
-
-After preload, ALWAYS PREFER CodeSift over built-ins for CODE files:
-- search_text instead of Grep — BM25 ranked, dedup by function
-- get_file_tree instead of Glob — pre-indexed
-- **get_file_outline instead of Read for ANY code file** — gives structure (exports/classes/functions) without full body, ~10x cheaper
-- get_symbol(symbol_id) — read ONE function/class body, not whole file
-- find_and_show — symbol + its references in 1 call
-- assemble_context(level=L1) — signatures of 5-10 symbols at once
-
-Use Read ONLY for: config files (package.json, tsconfig.json), docs (README.md), small files (<50 lines).
+  ToolSearch(query="select:mcp__codesift__search_text,mcp__codesift__get_file_tree,mcp__codesift__search_symbols,mcp__codesift__get_symbol,mcp__codesift__plan_turn,mcp__codesift__index_status")
+After preload: PREFER these over built-in Grep/Glob/Read for code search.
 
 DISCOVERY (for the 95 hidden/niche tools)
   plan_turn(query="find dead code in auth")  → natural-language router, ranked tools/symbols/files, auto-reveals hidden tools (preferred start-of-task entry)

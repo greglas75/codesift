@@ -168,19 +168,15 @@ const CLAUDE_MD_BLOCK = `## CodeSift MCP — code intelligence for this machine
 CodeSift MCP is installed (\`mcp__codesift__*\` tools).
 
 **If CodeSift tools appear in "deferred tools" list:** call this FIRST to load schemas:
-\`ToolSearch(query="select:mcp__codesift__search_text,mcp__codesift__get_file_tree,mcp__codesift__get_file_outline,mcp__codesift__search_symbols,mcp__codesift__get_symbol,mcp__codesift__find_and_show,mcp__codesift__plan_turn,mcp__codesift__index_status")\`
+\`ToolSearch(query="select:mcp__codesift__search_text,mcp__codesift__get_file_tree,mcp__codesift__search_symbols,mcp__codesift__get_symbol,mcp__codesift__plan_turn,mcp__codesift__index_status")\`
 
-When working with CODE files, prefer CodeSift over built-in Read/Grep/Glob:
-- \`search_text\` instead of Grep — BM25 ranked, deduplicated by function
-- \`get_file_tree\` instead of Glob — pre-indexed
-- **\`get_file_outline\` instead of Read for code files** — structure only (exports/classes/functions), ~10x cheaper than full file
-- \`get_symbol(symbol_id)\` — read ONE function/class, not whole file
-- \`find_and_show\` — symbol + its references in 1 call
-- \`assemble_context(level=L1)\` — signatures of multiple symbols at once
-- \`plan_turn(query=...)\` when unsure which tool fits
-
-Use Read ONLY for: config files (package.json, tsconfig.json), docs (README.md), small files (<50 lines).
-Repo auto-resolves from CWD — no need to list_repos.
+When working with code:
+- **Use CodeSift tools as default for code search and navigation** — they query a pre-built index (BM25 + tree-sitter symbols + semantic) and return ranked, deduplicated results far cheaper than reading files.
+- \`search_text\` instead of Grep for code search
+- \`get_file_tree\` instead of Glob for finding files
+- \`search_symbols\` / \`get_symbol\` for finding functions/classes
+- \`plan_turn(query=...)\` when you don't know which tool fits
+- The \`repo\` parameter auto-resolves from CWD — no need to list_repos first
 
 Full rules: \`~/.claude/rules/codesift.md\`. Detailed tool catalog via \`discover_tools\`.`;
 
