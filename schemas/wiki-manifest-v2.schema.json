@@ -5,6 +5,7 @@
   "type": "object",
   "required": [
     "schema_version",
+    "manifest_schema_version",
     "generated_at",
     "index_hash",
     "git_commit",
@@ -19,6 +20,7 @@
   "additionalProperties": true,
   "properties": {
     "schema_version": { "const": 2 },
+    "manifest_schema_version": { "const": "2.1.0" },
     "generated_at": { "type": "string" },
     "index_hash": { "type": "string" },
     "git_commit": { "type": "string" },
@@ -198,10 +200,19 @@
         "slug": { "type": "string" },
         "title": { "type": "string" },
         "type": {
-          "enum": ["index", "community", "hubs", "surprises", "hotspots", "framework", "overview", "architecture"]
+          "enum": [
+            "index", "community", "hubs", "surprises", "hotspots", "framework", "overview", "architecture",
+            "journal-overview", "journal-rollup", "journal-phase"
+          ]
         },
         "file": { "type": "string" },
-        "outbound_links": { "type": "array", "items": { "type": "string" } }
+        "outbound_links": { "type": "array", "items": { "type": "string" } },
+        "source": { "enum": ["generated", "ai-authored", "hand-written"] },
+        "journal_content_hashes": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "parent_slug": { "type": "string" }
       }
     },
     "LensData": {
