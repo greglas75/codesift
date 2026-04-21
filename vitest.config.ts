@@ -55,6 +55,7 @@ export default defineConfig({
             "tests/cli/**/*.test.ts",
             "tests/formatters/**/*.test.ts",
             "tests/lsp/**/*.test.ts",
+            "tests/scripts/**/*.test.ts",
             "tests/server-helpers/**/*.test.ts",
             "tests/storage/**/*.test.ts",
             "tests/search/**/*.test.ts",
