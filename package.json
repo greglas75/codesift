@@ -42,9 +42,11 @@
     "zod": "^4.3.6"
   },
   "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
     "@huggingface/transformers": "^3.0.0",
     "openai": "^6.0.0",
-    "voyageai": "^0.2.1"
+    "voyageai": "^0.2.1",
+    "yaml": "^2.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
