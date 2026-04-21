@@ -509,8 +509,9 @@ export async function generateWiki(
     await writeFile(join(outputDir, page.file), page.content, "utf-8");
   }
 
-  // Stale page cleanup: delete .md files from a previous run that are no longer generated
-  const existingFiles = await readdir(outputDir);
+  // Stale page cleanup: delete .md files from a previous run that are no longer generated.
+  // Protected prefixes are plain path-prefix strings (NOT globs) — see pruneStaleWikiFiles
+  // contract for exact semantics. "journal" protects the wiki journal (D1 safeguard).
   const newFiles = new Set(resolvedPageInfos.map((p) => p.file));
   newFiles.add("wiki-manifest.json");
   newFiles.add("wiki-manifest.json.tmp");
@@ -519,11 +520,7 @@ export async function generateWiki(
   for (const comm of communityPages) {
     newFiles.add(`${comm.slug}.summary.md`);
   }
-  for (const f of existingFiles) {
-    if (f.endsWith(".md") && !newFiles.has(f)) {
-      await unlink(join(outputDir, f));
-    }
-  }
+  await pruneStaleWikiFiles(outputDir, newFiles, ["journal"]);
 
   // Atomic manifest write: write to .tmp then rename
   const manifestPath = join(outputDir, "wiki-manifest.json");
@@ -544,4 +541,49 @@ export async function generateWiki(
   } finally {
     await unlink(lockPath).catch(() => {});
   }
+}
+
+/**
+ * Delete `.md` files under `outputDir` that are not part of the freshly generated
+ * page set, while skipping any entry protected by `protectedPrefixes`.
+ *
+ * Contract invariant — `protectedPrefixes` are plain path-prefix strings, NOT globs:
+ * - Skip `f` where `f === p` OR `f.startsWith(p + "/")` for any `p ∈ protectedPrefixes`.
+ * - Skip entries where `!f.endsWith(".md")` (directories and non-markdown files).
+ * - Skip entries present in `knownFiles`.
+ * - Everything else is `unlink()`-ed.
+ *
+ * Currently called with a non-recursive `readdir`, but the guard is defence-in-depth
+ * for any future refactor that surfaces nested paths such as `"journal/phases/x.md"`
+ * (see wiki-journal spec D1 failure mode).
+ *
+ * @returns absolute paths of the files that were deleted
+ */
+export async function pruneStaleWikiFiles(
+  outputDir: string,
+  knownFiles: Set<string>,
+  protectedPrefixes: string[],
+): Promise<string[]> {
+  const entries = await readdir(outputDir);
+  const deleted: string[] = [];
+  for (const f of entries) {
+    // Guard: plain path-prefix match (NOT glob). Exact match or "prefix/" descendant.
+    const isProtected = protectedPrefixes.some(
+      (p) => f === p || f.startsWith(p + "/"),
+    );
+    if (isProtected) continue;
+    if (!f.endsWith(".md")) continue;
+    if (knownFiles.has(f)) continue;
+    const full = join(outputDir, f);
+    try {
+      await unlink(full);
+      deleted.push(full);
+    } catch (err) {
+      console.warn(
+        `[wiki-cleanup] could not remove stale file ${full}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // continue — best-effort cleanup; see D1 failure mode in spec
+    }
+  }
+  return deleted;
 }
