@@ -451,6 +451,7 @@ export function buildWikiManifestV2(options: BuildWikiManifestV2Options): WikiMa
   const degraded = (degradedReasons?.length ?? 0) > 0;
   return {
     schema_version: 2,
+    manifest_schema_version: "2.1.0",
     generated_at: new Date().toISOString(),
     index_hash,
     git_commit,
@@ -497,6 +498,7 @@ export function buildWikiManifestV1(options: BuildWikiManifestV1Options): WikiMa
   });
   const degraded = (degradedReasons?.length ?? 0) > 0;
   return {
+    manifest_schema_version: "2.1.0",
     generated_at: new Date().toISOString(),
     index_hash,
     git_commit,

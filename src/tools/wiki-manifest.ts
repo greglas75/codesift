@@ -5,17 +5,56 @@ export interface LensData {
   edges: Array<{ from: number; to: number; weight: number }>;
 }
 
+/** Literal type-tags for the existing (pre-v2.1) page kinds. Kept aligned with
+ *  the `type` enum in `schemas/wiki-manifest-v2.schema.json` → `PageEntry`. */
+export type ExistingPageKind =
+  | "index"
+  | "community"
+  | "hubs"
+  | "surprises"
+  | "hotspots"
+  | "framework"
+  | "overview"
+  | "architecture";
+
+/** A standard (non-journal) page entry in the manifest's `pages` array. */
+export interface ExistingPageEntry {
+  slug: string;
+  title: string;
+  type: ExistingPageKind;
+  file: string;
+  outbound_links: string[];
+}
+
+/** Literal type-tags for the three journal-page kinds introduced in v2.1.
+ *  Each value is disjoint from `ExistingPageKind`, so `type` remains a valid
+ *  discriminant across the full `PageEntry` union. */
+export type JournalPageKind = "journal-overview" | "journal-rollup" | "journal-phase";
+
+/** A journal-oriented page entry (added in manifest schema v2.1). Cohesion
+ *  point: grouped with `ExistingPageEntry` above so the discriminated-union
+ *  shape is visible at a glance (CQ14). */
+export interface JournalPageEntry {
+  slug: string;
+  title: string;
+  type: JournalPageKind;
+  file: string;
+  outbound_links: string[];
+  source: "generated" | "ai-authored" | "hand-written";
+  journal_content_hashes?: Record<string, string>;
+  parent_slug?: string;
+}
+
+/** Discriminated union of every page kind the manifest can emit. The `type`
+ *  field is the discriminant — exhaustive switches on `type` still type-check. */
+export type PageEntry = ExistingPageEntry | JournalPageEntry;
+
 export interface WikiManifest {
+  manifest_schema_version: "2.1.0";
   generated_at: string;
   index_hash: string;
   git_commit: string;
-  pages: Array<{
-    slug: string;
-    title: string;
-    type: "index" | "community" | "hubs" | "surprises" | "hotspots" | "framework";
-    file: string;
-    outbound_links: string[];
-  }>;
+  pages: PageEntry[];
   slug_redirects: Record<string, string>;
   token_estimates: Record<string, number>;
   file_to_community: Record<string, string>;
@@ -85,6 +124,7 @@ export interface ProjectOverview {
 
 export interface WikiManifestV2 {
   schema_version: 2;
+  manifest_schema_version: "2.1.0";
   generated_at: string;
   index_hash: string;
   git_commit: string;
@@ -104,7 +144,7 @@ export interface WikiManifestV2 {
 export interface PageInfo {
   slug: string;
   title: string;
-  type: WikiManifest["pages"][number]["type"];
+  type: ExistingPageKind;
   file: string;
   content: string; // used for token estimation and link extraction
 }
@@ -180,8 +220,9 @@ export function buildWikiManifest(options: {
   communities: CommunityInfo[];
   oldManifest?: WikiManifest;
   degradedReasons?: string[];
+  journalPages?: JournalPageEntry[];
 }): WikiManifest {
-  const { index_hash, git_commit, pages, communities, oldManifest, degradedReasons } =
+  const { index_hash, git_commit, pages, communities, oldManifest, degradedReasons, journalPages } =
     options;
 
   // File → community map
@@ -201,7 +242,7 @@ export function buildWikiManifest(options: {
   // Extract [[slug]] outbound links from each page's content
   const linkRegex = /\[\[([^\]]+)\]\]/g;
 
-  const builtPages = pages.map((p) => {
+  const builtPages: ExistingPageEntry[] = pages.map((p) => {
     const outbound_links: string[] = [];
     linkRegex.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -220,13 +261,20 @@ export function buildWikiManifest(options: {
     };
   });
 
+  // v2.1: concat journal pages verbatim (they are already well-formed entries)
+  const allPages: PageEntry[] =
+    journalPages !== undefined && journalPages.length > 0
+      ? [...builtPages, ...journalPages]
+      : builtPages;
+
   const degraded = (degradedReasons?.length ?? 0) > 0;
 
   return {
+    manifest_schema_version: "2.1.0",
     generated_at: new Date().toISOString(),
     index_hash,
     git_commit,
-    pages: builtPages,
+    pages: allPages,
     slug_redirects,
     token_estimates,
     file_to_community,

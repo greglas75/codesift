@@ -11,6 +11,8 @@ import {
   type DependencySummary,
   type KeyExport,
   type ModuleRole,
+  type JournalPageEntry,
+  type JournalPageKind,
 } from "../../src/tools/wiki-manifest.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -263,6 +265,7 @@ function makeSampleV2(): WikiManifestV2 {
   };
   return {
     schema_version: 2,
+    manifest_schema_version: "2.1.0",
     generated_at: "2026-04-20T00:00:00Z",
     index_hash: "abc",
     git_commit: "def",
@@ -333,5 +336,216 @@ describe("wiki-manifest-v2.schema.json", () => {
     const broken = { ...sample } as Partial<WikiManifestV2>;
     delete (broken as { schema_version?: number }).schema_version;
     expect(validate(broken)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manifest v2.1: JournalPageEntry union + manifest_schema_version (Task 4)
+// ---------------------------------------------------------------------------
+
+describe("buildWikiManifest v2.1 journal pages", () => {
+  it("(a) accepts journalPages parameter and emits them alongside existing pages", () => {
+    const journalPages: JournalPageEntry[] = [
+      {
+        slug: "journal-index",
+        title: "Journal",
+        type: "journal-overview",
+        file: "journal/index.md",
+        outbound_links: ["phase-week-2026-03"],
+        source: "generated",
+      },
+    ];
+    const manifest = buildWikiManifest({
+      index_hash: "abc123",
+      git_commit: "def456",
+      pages,
+      communities,
+      journalPages,
+    });
+
+    // Regular pages still present
+    expect(manifest.pages).toHaveLength(3);
+    const slugs = manifest.pages.map((p) => p.slug);
+    expect(slugs).toContain("auth-service");
+    expect(slugs).toContain("data-layer");
+    expect(slugs).toContain("journal-index");
+
+    const journalEntry = manifest.pages.find((p) => p.slug === "journal-index");
+    expect(journalEntry).toBeDefined();
+    expect(journalEntry!.type).toBe("journal-overview");
+  });
+
+  it("(b) emits top-level manifest_schema_version = '2.1.0'", () => {
+    const manifest = buildWikiManifest({
+      index_hash: "abc123",
+      git_commit: "def456",
+      pages,
+      communities,
+    });
+    expect(manifest.manifest_schema_version).toBe("2.1.0");
+  });
+
+  it("(b) emits manifest_schema_version even when journalPages is omitted", () => {
+    const manifest = buildWikiManifest({
+      index_hash: "h",
+      git_commit: "g",
+      pages: [],
+      communities: [],
+    });
+    expect(manifest.manifest_schema_version).toBe("2.1.0");
+  });
+
+  it("(c) round-trips a journal-phase entry with all optional fields unchanged", () => {
+    const entry: JournalPageEntry = {
+      slug: "phase-week-2026-03",
+      title: "Week of March 2026",
+      type: "journal-phase",
+      file: "journal/phase-week-2026-03.md",
+      outbound_links: ["index", "phase-week-2026-04"],
+      source: "ai-authored",
+      journal_content_hashes: { "phase-summary": "abc123def456abc123def456abc123def456abc1" },
+    };
+
+    const manifest = buildWikiManifest({
+      index_hash: "h",
+      git_commit: "g",
+      pages: [],
+      communities: [],
+      journalPages: [entry],
+    });
+
+    expect(manifest.pages).toHaveLength(1);
+    const out = manifest.pages[0]!;
+    expect(out.slug).toBe("phase-week-2026-03");
+    expect(out.title).toBe("Week of March 2026");
+    expect(out.type).toBe("journal-phase");
+    expect(out.file).toBe("journal/phase-week-2026-03.md");
+    expect(out.outbound_links).toEqual(["index", "phase-week-2026-04"]);
+
+    // Narrow union via discriminant to access journal-only fields
+    if (
+      out.type === "journal-phase" ||
+      out.type === "journal-overview" ||
+      out.type === "journal-rollup"
+    ) {
+      expect(out.source).toBe("ai-authored");
+      expect(out.journal_content_hashes).toEqual({
+        "phase-summary": "abc123def456abc123def456abc123def456abc1",
+      });
+    } else {
+      throw new Error("expected journal-phase entry discriminant");
+    }
+  });
+
+  it("(d) preserves optional parent_slug on weekly child phases", () => {
+    const entry: JournalPageEntry = {
+      slug: "phase-week-2026-03-15",
+      title: "Week of 2026-03-15",
+      type: "journal-phase",
+      file: "journal/phase-week-2026-03-15.md",
+      outbound_links: [],
+      source: "ai-authored",
+      parent_slug: "phase-week-2026-03",
+    };
+
+    const manifest = buildWikiManifest({
+      index_hash: "h",
+      git_commit: "g",
+      pages: [],
+      communities: [],
+      journalPages: [entry],
+    });
+
+    const out = manifest.pages[0]!;
+    if (
+      out.type === "journal-phase" ||
+      out.type === "journal-overview" ||
+      out.type === "journal-rollup"
+    ) {
+      expect(out.parent_slug).toBe("phase-week-2026-03");
+    } else {
+      throw new Error("expected journal-phase entry discriminant");
+    }
+  });
+
+  it("exercises all 3 JournalPageKind literals (Q11)", () => {
+    const kinds: JournalPageKind[] = ["journal-overview", "journal-rollup", "journal-phase"];
+    expect(kinds).toHaveLength(3);
+    const journalPages: JournalPageEntry[] = kinds.map((k, i) => ({
+      slug: `j-${i}`,
+      title: `Journal ${i}`,
+      type: k,
+      file: `journal/j-${i}.md`,
+      outbound_links: [],
+      source: "generated",
+    }));
+    const manifest = buildWikiManifest({
+      index_hash: "h",
+      git_commit: "g",
+      pages: [],
+      communities: [],
+      journalPages,
+    });
+    const outKinds = manifest.pages.map((p) => p.type);
+    expect(outKinds).toEqual(["journal-overview", "journal-rollup", "journal-phase"]);
+  });
+});
+
+describe("wiki-manifest-v2.schema.json v2.1 extensions", () => {
+  function loadSchema(): unknown {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const schemaPath = resolve(here, "../../schemas/wiki-manifest-v2.schema.json");
+    return JSON.parse(readFileSync(schemaPath, "utf-8"));
+  }
+
+  it("(e) validates the hand-crafted v2.1 example fixture", () => {
+    const schema = loadSchema();
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixturePath = resolve(here, "../fixtures/wiki-manifest-v2.1-example.json");
+    const fixture = JSON.parse(readFileSync(fixturePath, "utf-8"));
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+    const ok = validate(fixture);
+    if (!ok) {
+      throw new Error("v2.1 fixture validation failed: " + JSON.stringify(validate.errors));
+    }
+    expect(ok).toBe(true);
+  });
+
+  it("rejects a manifest missing manifest_schema_version", () => {
+    const schema = loadSchema();
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+    const sample = makeSampleV2();
+    const broken = { ...sample } as Partial<WikiManifestV2>;
+    delete (broken as { manifest_schema_version?: string }).manifest_schema_version;
+    expect(validate(broken)).toBe(false);
+  });
+
+  it("accepts pages with new journal type literals and optional fields", () => {
+    const schema = loadSchema();
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+    const sample = makeSampleV2();
+    const withJournal = {
+      ...sample,
+      pages: [
+        {
+          slug: "phase-week-2026-03",
+          title: "Week of March 2026",
+          type: "journal-phase",
+          file: "journal/phase-week-2026-03.md",
+          outbound_links: [],
+          source: "ai-authored",
+          journal_content_hashes: { "phase-summary": "abc123" },
+          parent_slug: "journal-index",
+        },
+      ],
+    };
+    const ok = validate(withJournal);
+    if (!ok) {
+      throw new Error("journal page schema validation failed: " + JSON.stringify(validate.errors));
+    }
+    expect(ok).toBe(true);
   });
 });

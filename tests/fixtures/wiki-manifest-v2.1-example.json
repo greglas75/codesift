@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "manifest_schema_version": "2.1.0",
+  "generated_at": "2026-04-21T00:00:00Z",
+  "index_hash": "fixture-index-hash",
+  "git_commit": "fixture-commit-sha",
+  "project": {
+    "name": "fixture-project",
+    "git_remote": null,
+    "project_type": "single",
+    "stack": {
+      "language": "typescript",
+      "language_version": "5.4",
+      "framework": null,
+      "framework_version": null,
+      "test_runner": "vitest",
+      "package_manager": "npm",
+      "build_tool": "tsc"
+    },
+    "scripts": { "test": "vitest run" },
+    "entry_points": ["src/index.ts"],
+    "workspaces": [],
+    "dependencies": { "prod_total": 0, "dev_total": 1, "key": [] },
+    "known_gotchas": [],
+    "stats": { "total_files": 1, "total_commits": null, "contributors": null }
+  },
+  "modules": [
+    {
+      "slug": "core",
+      "name": "Core",
+      "description": "Fixture module.",
+      "role": "core-library",
+      "files": 1,
+      "cohesion": 1,
+      "key_exports": [],
+      "depends_on": [],
+      "depended_by": [],
+      "has_hotspot": false
+    }
+  ],
+  "pages": [
+    {
+      "slug": "index",
+      "title": "Index",
+      "type": "index",
+      "file": "wiki/index.md",
+      "outbound_links": ["phase-week-2026-03"]
+    },
+    {
+      "slug": "phase-week-2026-03",
+      "title": "Week of March 2026",
+      "type": "journal-phase",
+      "file": "journal/phase-week-2026-03.md",
+      "outbound_links": ["index"],
+      "source": "ai-authored",
+      "journal_content_hashes": {
+        "phase-summary": "abc123def456abc123def456abc123def456abc1"
+      },
+      "parent_slug": "journal-index"
+    }
+  ],
+  "slug_redirects": {},
+  "token_estimates": {},
+  "file_to_community": {},
+  "degraded": false
+}
