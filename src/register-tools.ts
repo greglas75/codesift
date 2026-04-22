@@ -1920,13 +1920,42 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       focus: z.string().optional().describe("Scope to directory (e.g., 'src/tools')"),
       output_dir: z.string().optional().describe("Output directory (default: {repo_root}/.codesift/wiki)"),
+      journal_mode: z.enum(["skip", "refresh-overview", "append", "full"]).optional().default("skip").describe("Journal integration mode (default: skip)"),
+      journal_since_ref: z.string().optional().describe("git-relative ref for journal_mode=append (e.g., '2 weeks ago' or ISO date)"),
+      journal_bulk_fill: z.boolean().optional().describe("Bulk-fill all phases when journal_mode=full"),
     })),
     handler: async (args) => {
-      const opts: { focus?: string; output_dir?: string } = {};
+      const opts: { focus?: string; output_dir?: string; journal_mode?: "skip" | "refresh-overview" | "append" | "full"; journal_since_ref?: string; journal_bulk_fill?: boolean } = {};
       if (args.focus !== undefined) opts.focus = args.focus as string;
       if (args.output_dir !== undefined) opts.output_dir = args.output_dir as string;
+      if (args.journal_mode !== undefined) opts.journal_mode = args.journal_mode as "skip" | "refresh-overview" | "append" | "full";
+      if (args.journal_since_ref !== undefined) opts.journal_since_ref = args.journal_since_ref as string;
+      if (args.journal_bulk_fill !== undefined) opts.journal_bulk_fill = args.journal_bulk_fill as boolean;
       const result = await generateWiki(args.repo as string, opts);
       return JSON.stringify(result, null, 2);
+    },
+  },
+
+  {
+    name: "journal_append",
+    category: "reporting",
+    searchHint: "journal append phases git commits since wiki journal",
+    description: "Append new journal phases for commits since the given git ref. Dispatches to runJournalAppend.",
+    schema: lazySchema(() => ({
+      since: z.string().describe("git-relative string like '2 weeks ago' or ISO date"),
+      max_cost_usd: z.number().optional().default(2.0).describe("Maximum LLM cost cap in USD (default: 2.0)"),
+      dry_run: z.boolean().optional().default(false).describe("Plan phases without writing files (default: false)"),
+    })),
+    handler: async (args) => {
+      const { runJournalAppend } = await import("./tools/journal-generator.js");
+      const opts: import("./tools/journal-generator.js").JournalRunOptions = {
+        cwd: process.cwd(),
+        outputDir: ".codesift/wiki",
+        since: args.since as string,
+      };
+      if (args.dry_run !== undefined) opts.dryRun = args.dry_run as boolean;
+      const r = await runJournalAppend(opts);
+      return JSON.stringify(r, null, 2);
     },
   },
 
