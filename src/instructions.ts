@@ -22,6 +22,7 @@ HINT CODES (act on immediately when they appear in responses)
   H7     → use get_context_bundle    H8(n) → use assemble_context(level=L1)
   H9     → use semantic_search       H10 → call get_session_snapshot
   H11    → use search_text instead
+  H15 — journal fetch: use search_text(query=<term>, glob='.codesift/wiki/journal/**') rather than reading whole phase files; phase files can be 30KB+.
 
 ALWAYS: repo auto-resolves, skip list_repos. file_pattern when scoped. get_symbols (batch)
   for 2+. Batch 3+ into codebase_retrieval. token_budget to cap. index_file after edits.

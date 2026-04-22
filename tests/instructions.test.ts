@@ -60,4 +60,9 @@ describe("CODESIFT_INSTRUCTIONS", () => {
     expect(CODESIFT_INSTRUCTIONS).not.toContain("trace_conditional_middleware");
     expect(CODESIFT_INSTRUCTIONS).not.toContain("detect_middleware_env_regression");
   });
+
+  it("includes H15 journal hint", () => {
+    expect(CODESIFT_INSTRUCTIONS).toContain("H15");
+    expect(CODESIFT_INSTRUCTIONS).toContain(".codesift/wiki/journal/");
+  });
 });
