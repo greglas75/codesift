@@ -122,7 +122,13 @@ async function loadOldManifest(outputDir: string): Promise<unknown> {
 
 export async function generateWiki(
   repo: string,
-  options?: { focus?: string; output_dir?: string },
+  options?: {
+    focus?: string;
+    output_dir?: string;
+    journal_mode?: "skip" | "refresh-overview" | "append" | "full";
+    journal_since_ref?: string;
+    journal_bulk_fill?: boolean;
+  },
 ): Promise<WikiResult> {
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
@@ -527,6 +533,31 @@ export async function generateWiki(
   const tmpPath = manifestPath + ".tmp";
   await writeFile(tmpPath, JSON.stringify(manifest, null, 2));
   await rename(tmpPath, manifestPath);
+
+  // Journal dispatch (lazy import — no penalty when mode=skip)
+  const mode = options?.journal_mode ?? "skip";
+  if (mode !== "skip") {
+    const { runJournalInit, runJournalAppend, refreshOverviewAndRollup } = await import("./journal-generator.js");
+    const baseOpts = { cwd: process.cwd(), outputDir };
+    try {
+      if (mode === "refresh-overview") {
+        await refreshOverviewAndRollup(baseOpts);
+      } else if (mode === "append") {
+        if (!options?.journal_since_ref) {
+          degradedReasons.push("journal_since_ref required when journal_mode=append");
+        } else {
+          await runJournalAppend({ ...baseOpts, since: options.journal_since_ref });
+        }
+      } else if (mode === "full") {
+        const r = await runJournalInit({ ...baseOpts, bulkFill: options?.journal_bulk_fill ?? false });
+        if (r.phases.every((p) => p.costUsd === 0)) {
+          degradedReasons.push("journal: no LLM API key, wrote scaffold");
+        }
+      }
+    } catch (err) {
+      degradedReasons.push(`journal dispatch: ${(err as Error).message}`);
+    }
+  }
 
   return {
     wiki_dir: outputDir,
