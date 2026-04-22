@@ -12,6 +12,7 @@ const CHUNK_CHARS = CHUNK_TOKENS * CHARS_PER_TOKEN;   // 1600
 const OVERLAP_CHARS = OVERLAP_TOKENS * CHARS_PER_TOKEN; // 320
 
 const MAX_FILE_BYTES = 50_000;      // skip files > 50KB
+const JOURNAL_MAX_FILE_BYTES = 60_000;  // journal .md files index up to 60KB
 
 // Extensions that carry no semantic code value for embedding
 const SKIP_EXTENSIONS = new Set([
@@ -19,7 +20,14 @@ const SKIP_EXTENSIONS = new Set([
   ".env", ".txt", ".svg", ".png", ".wasm",
 ]);
 
-function shouldSkipChunking(file: string, content: string): boolean {
+export function shouldSkipChunking(file: string, content: string): boolean {
+  // Journal files under .codesift/wiki/journal/ are indexable .md content;
+  // bypass the SKIP_EXTENSIONS rule and use the larger journal ceiling.
+  // Match both absolute (/a/b/.codesift/wiki/journal/) and relative (.codesift/wiki/journal/) paths.
+  if (/(?:^|\/)\.codesift\/wiki\/journal\//.test(file)) {
+    return content.length > JOURNAL_MAX_FILE_BYTES;
+  }
+
   const dotIdx = file.lastIndexOf(".");
   const ext = dotIdx !== -1 ? file.slice(dotIdx) : "";
 
