@@ -1,0 +1,139 @@
+- query: "when did scan_secrets land and why?"
+  expected_phase_slug: "2026-03-secret-detection"
+  expected_commit_shas: ["a1b2c3d", "e4f5g6h"]
+  forbidden_claims:
+    - "scan_secrets was renamed from secret_hunt"
+    - "initial landing date 2026-02-01"
+
+- query: "what happened in the framework wave?"
+  expected_phase_slug: "2026-03-framework-wave"
+  expected_commit_shas: ["b7c8d9e", "f0a1b2c"]
+  forbidden_claims:
+    - "framework wave only included React tools"
+    - "framework wave shipped in January 2026"
+
+- query: "why did we change from MIT to BSL-1.1?"
+  expected_phase_slug: "2026-02-license-change"
+  expected_commit_shas: ["c3d4e5f", "a6b7c8d"]
+  forbidden_claims:
+    - "license change was forced by a legal dispute"
+    - "MIT was kept for enterprise customers"
+
+- query: "when did the Hono tool set stabilize?"
+  expected_phase_slug: "2026-04-hono-phase2"
+  expected_commit_shas: ["d9e0f1a", "b2c3d4e"]
+  forbidden_claims:
+    - "Hono tools were removed in phase 2"
+    - "stabilization happened before Astro tools landed"
+
+- query: "what drove the shift to BM25F scoring?"
+  expected_phase_slug: "2026-02-bm25f-scoring"
+  expected_commit_shas: ["e5f6a7b", "c8d9e0f"]
+  forbidden_claims:
+    - "BM25F replaced semantic search entirely"
+    - "the shift was driven by cost reduction alone"
+
+- query: "why is nest_audit a composite tool?"
+  expected_phase_slug: "2026-03-nestjs-intelligence"
+  expected_commit_shas: ["f1a2b3c", "d4e5f6a"]
+  forbidden_claims:
+    - "nest_audit exposes 14 independent MCP tools"
+    - "composite design was abandoned in favor of sub-tools"
+
+- query: "when was the React + Next.js Tier-1 intelligence delivered?"
+  expected_phase_slug: "2026-03-react-nextjs-tier1"
+  expected_commit_shas: ["a7b8c9d", "e0f1a2b"]
+  forbidden_claims:
+    - "React tools shipped separately from Next.js tools by three months"
+    - "Tier-1 intelligence was never merged to main"
+
+- query: "what was the rationale for dashboard-v1.1?"
+  expected_phase_slug: "2026-03-dashboard-v1.1"
+  expected_commit_shas: ["b3c4d5e", "f6a7b8c"]
+  forbidden_claims:
+    - "dashboard-v1.1 was a complete rewrite from scratch"
+    - "dashboard was removed after v1.1"
+
+- query: "which week did Astro island audit ship?"
+  expected_phase_slug: "2026-03-astro-islands"
+  expected_commit_shas: ["c9d0e1f", "a2b3c4d"]
+  forbidden_claims:
+    - "Astro island audit was never released"
+    - "Astro tools only cover routing not hydration"
+
+- query: "when did SQL audit land and what does it cover?"
+  expected_phase_slug: "2026-04-sql-intelligence"
+  expected_commit_shas: ["d5e6f7a", "b8c9d0e"]
+  forbidden_claims:
+    - "SQL audit only checks for missing indexes"
+    - "SQL audit does not include migration linting"
+
+- query: "what triggered the plan_turn hybrid router design?"
+  expected_phase_slug: "2026-04-plan-turn-router"
+  expected_commit_shas: ["e1f2a3b", "c4d5e6f"]
+  forbidden_claims:
+    - "plan_turn replaced all other search tools"
+    - "hybrid router uses only BM25 with no semantic signal"
+
+- query: "when was Kotlin Wave 3 complete (Compose, Room, Flow)?"
+  expected_phase_slug: "2026-04-kotlin-wave3"
+  expected_commit_shas: ["f7a8b9c", "d0e1f2a"]
+  forbidden_claims:
+    - "Kotlin Wave 3 only added Compose support"
+    - "Room schema graph was dropped from Kotlin Wave 3"
+
+- query: "why did PHP/Yii2 support get prioritized?"
+  expected_phase_slug: "2026-04-php-yii2"
+  expected_commit_shas: ["a3b4c5d", "e6f7a8b"]
+  forbidden_claims:
+    - "PHP support was added due to a customer contract requirement"
+    - "Yii2 support was later removed"
+
+- query: "when did the session-aware context feature begin?"
+  expected_phase_slug: "2026-04-session-aware-context"
+  expected_commit_shas: ["b9c0d1e", "f2a3b4c"]
+  forbidden_claims:
+    - "session-aware context replaced conversation search"
+    - "feature was reverted after performance regressions"
+
+- query: "what week did the wiki dashboard ship?"
+  expected_phase_slug: "2026-03-wiki-dashboard-v1"
+  expected_commit_shas: ["c5d6e7f", "a8b9c0d"]
+  forbidden_claims:
+    - "wiki dashboard was built with Vue not Astro"
+    - "dashboard shipped after the session-aware context feature"
+
+- query: "when was the conversation search subsystem indexed?"
+  expected_phase_slug: "2026-03-conversation-search"
+  expected_commit_shas: ["d1e2f3a", "b4c5d6e"]
+  forbidden_claims:
+    - "conversation search only indexes the current project"
+    - "indexing happens manually via CLI with no automation"
+
+- query: "which commit introduced per-language extractor_version invalidation?"
+  expected_phase_slug: "2026-04-extractor-versioning"
+  expected_commit_shas: ["e7f8a9b", "c0d1e2f"]
+  forbidden_claims:
+    - "extractor_version invalidation was added to the BM25 scorer"
+    - "all languages share a single extractor version number"
+
+- query: "why did we add trace_rpc_types for Hono issue #3869?"
+  expected_phase_slug: "2026-04-hono-rpc-types"
+  expected_commit_shas: ["f3a4b5c", "d6e7f8a"]
+  forbidden_claims:
+    - "trace_rpc_types was added to fix a runtime crash"
+    - "issue #3869 was about missing middleware support"
+
+- query: "when did Python deep intelligence (11 tools) land?"
+  expected_phase_slug: "2026-04-python-deep-intelligence"
+  expected_commit_shas: ["a9b0c1d", "e2f3a4b"]
+  forbidden_claims:
+    - "Python deep intelligence only covers Django projects"
+    - "the 11 tools were merged as a single commit"
+
+- query: "what happened during the review queue catch-up week?"
+  expected_phase_slug: "2026-04-review-queue-catchup"
+  expected_commit_shas: ["b5c6d7e", "f8a9b0c"]
+  forbidden_claims:
+    - "review queue was permanently abandoned after the catch-up"
+    - "catch-up week introduced breaking changes to the public API"
