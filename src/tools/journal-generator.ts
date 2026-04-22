@@ -30,6 +30,12 @@ export interface JournalRunOptions {
   bulkFill?: boolean;
   checkpointPath?: string;
   lockPath?: string;
+  /** gitLog filter — git-relative string like "2 weeks ago" or ISO date. */
+  since?: string;
+  /** Regenerate only this entry date (YYYY-MM-DD); mutually exclusive with phase. */
+  entry?: string;
+  /** Regenerate only this phase slug; mutually exclusive with entry. */
+  phase?: string;
 }
 
 export interface JournalRunResult {

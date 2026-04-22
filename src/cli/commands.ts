@@ -531,6 +531,34 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
     const { handleWikiLint } = await import("./wiki-commands.js");
     await handleWikiLint(args, flags);
   },
+  "journal-init": async (args: string[], flags: Flags) => {
+    const { handleJournalInit } = await import("./journal-commands.js");
+    await handleJournalInit(args, flags);
+  },
+  "journal-append": async (args: string[], flags: Flags) => {
+    const { handleJournalAppend } = await import("./journal-commands.js");
+    await handleJournalAppend(args, flags);
+  },
+  "journal-refresh-overview": async (args: string[], flags: Flags) => {
+    const { handleJournalRefreshOverview } = await import("./journal-commands.js");
+    await handleJournalRefreshOverview(args, flags);
+  },
+  "journal-regenerate": async (args: string[], flags: Flags) => {
+    const { handleJournalRegenerate } = await import("./journal-commands.js");
+    await handleJournalRegenerate(args, flags);
+  },
+  "journal-lint": async (args: string[], flags: Flags) => {
+    const { handleJournalLint } = await import("./journal-commands.js");
+    await handleJournalLint(args, flags);
+  },
+  "journal-migrate": async (args: string[], flags: Flags) => {
+    const { handleJournalMigrate } = await import("./journal-commands.js");
+    await handleJournalMigrate(args, flags);
+  },
+  "journal-stats": async (args: string[], flags: Flags) => {
+    const { handleJournalStats } = await import("./journal-commands.js");
+    await handleJournalStats(args, flags);
+  },
   "precheck-read": async () => {
     const { handlePrecheckRead } = await import("./hooks.js");
     await handlePrecheckRead();
