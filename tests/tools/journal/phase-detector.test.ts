@@ -142,6 +142,44 @@ describe("detectPhases – tiebreaker", () => {
 // ---------------------------------------------------------------------------
 // (f) Unclassified fallback
 // ---------------------------------------------------------------------------
+describe("detectPhases – minUnclassifiedCommits option", () => {
+  it("drops auto unclassified phases below the minimum", () => {
+    // Two commits, no tag/merge/override, 1-day gap → single unclassified phase of 2 commits.
+    // With minUnclassifiedCommits=3 it should be dropped.
+    const commits: GitCommit[] = [
+      makeCommit("sha1", "2026-04-01T10:00:00Z", "misc thing"),
+      makeCommit("sha2", "2026-04-02T10:00:00Z", "another"),
+    ];
+    const withCap = detectPhases(commits, undefined, { minUnclassifiedCommits: 3 });
+    expect(withCap).toHaveLength(0);
+
+    const withoutCap = detectPhases(commits);
+    expect(withoutCap).toHaveLength(1);
+  });
+
+  it("keeps named auto phases (scope-derived title) regardless of count", () => {
+    const commits: GitCommit[] = [
+      makeCommit("sha1", "2026-04-01T10:00:00Z", "feat(foo): work"),
+    ];
+    const phases = detectPhases(commits, undefined, { minUnclassifiedCommits: 5 });
+    expect(phases).toHaveLength(1);
+    expect(phases[0]!.title).toBe("foo");
+  });
+
+  it("keeps manual phases regardless of count", () => {
+    const commits: GitCommit[] = [
+      makeCommit("sha1", "2026-04-01T10:00:00Z", "misc"),
+    ];
+    const phases = detectPhases(
+      commits,
+      [{ date: "2026-04-01", slug: "override-phase", title: "Override" }],
+      { minUnclassifiedCommits: 10 },
+    );
+    expect(phases).toHaveLength(1);
+    expect(phases[0]!.source).toBe("manual");
+  });
+});
+
 describe("detectPhases – unclassified fallback", () => {
   it("returns a single phase with slug 'unclassified' when no heuristic applies", () => {
     const commits: GitCommit[] = [
