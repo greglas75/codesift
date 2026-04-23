@@ -1,27 +1,17 @@
-import { readdir } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gitLog, type GitCommit } from "./journal-git-client.js";
 import { detectPhases, type PhasePlan } from "./journal-phase-detector.js";
 import { selectProvider, CostCapExceededError } from "./journal-llm-client.js";
-import {
-  buildScaffoldResponse,
-  renderPhaseSummaryPrompt,
-  validateLlmResponse,
-} from "./journal-templates.js";
+import { buildScaffoldResponse, renderPhaseSummaryPrompt, validateLlmResponse } from "./journal-templates.js";
 import { computeBlockHash } from "./journal-sentinel.js";
 import {
-  BlockChangedError,
-  acquireLock,
-  releaseLock,
-  readCheckpoint,
-  writeCheckpoint,
-  enforceBudgets,
-  anyFileHasTodo,
-  readPhaseBlockHash,
-  writePhaseAtomic,
-  assertSafeSlug,
-  filterPhasesBySince,
-  filterPhasesByScope,
+  BlockChangedError, acquireLock, releaseLock, readCheckpoint, writeCheckpoint,
+  enforceBudgets, anyFileHasTodo, readPhaseBlockHash, writePhaseAtomic, assertSafeSlug,
+  filterPhasesBySince, filterPhasesByScope,
+  buildJournalManifestEntries, mergeJournalIntoManifest, renderJournalSectionMd,
+  insertJournalSectionIntoIndex, readManifestIfExists, shouldSkipPhaseByHash,
+  type JournalPhaseWrite,
 } from "./journal-generator-helpers.js";
 
 type PhaseFilter =
@@ -139,21 +129,32 @@ async function runPipeline(opts: JournalRunOptions, cfg: RunConfig): Promise<Jou
     const maxCost = Number(process.env["CODESIFT_JOURNAL_MAX_USD"] ?? 2.0);
     const provider = selectProvider();
     const results: Array<{ slug: string; file: string; costUsd: number }> = [];
+    const phaseWrites: JournalPhaseWrite[] = [];
+    const manifestPath = join(opts.outputDir, "wiki-manifest.json");
+    const existingManifest = await readManifestIfExists(manifestPath);
 
     for (const phase of phases) {
       assertSafeSlug(phase.slug);
       if (completed.has(phase.slug)) continue;
+      const filePath = join(phasesDir, `${phase.slug}.md`);
+      const preHash = await readPhaseBlockHash(filePath, "phase-summary");
+      if (preHash !== undefined &&
+          shouldSkipPhaseByHash(phase.slug, preHash, { force: cfg.force, manifest: existingManifest })) {
+        continue;
+      }
       try {
         const r = await processPhase(phase, { provider, outputDir: opts.outputDir, force: cfg.force });
         runningCost += r.costUsd;
         if (runningCost > maxCost) throw new CostCapExceededError(runningCost, maxCost);
         enforceBudgets({ [`${phase.slug}.md`]: r.content });
-        const filePath = join(phasesDir, `${phase.slug}.md`);
-        const preHash = await readPhaseBlockHash(filePath, "phase-summary");
         await writePhaseAtomic(filePath, r.content, preHash, cfg.force);
         completed.add(phase.slug);
         await writeCheckpoint(checkpointPath, { startedAt, completed: [...completed], costUsd: runningCost });
         results.push({ slug: phase.slug, file: filePath, costUsd: r.costUsd });
+        phaseWrites.push({
+          slug: phase.slug, title: phase.title,
+          file: `journal/phases/${phase.slug}.md`, hash: r.hash,
+        });
       } catch (err) {
         if (err instanceof CostCapExceededError) {
           await writeCheckpoint(checkpointPath, { startedAt, completed: [...completed], costUsd: runningCost });
@@ -165,10 +166,31 @@ async function runPipeline(opts: JournalRunOptions, cfg: RunConfig): Promise<Jou
         throw err;
       }
     }
+    if (phaseWrites.length > 0) {
+      await updateManifestAndIndex(opts.outputDir, phaseWrites, journalDir);
+    }
     return { status: "ok", phases: results };
   } finally {
     await releaseLock(lockPath);
   }
+}
+
+/** Best-effort manifest + index register; failures WARN only (CQ8). */
+async function updateManifestAndIndex(
+  outputDir: string, phaseWrites: JournalPhaseWrite[], journalDir: string,
+): Promise<void> {
+  const manifestPath = join(outputDir, "wiki-manifest.json");
+  const indexPath = join(outputDir, "index.md");
+  const overviewPresent = await readFile(join(journalDir, "overview.md"), "utf-8").then(() => true).catch(() => false);
+  const entries = buildJournalManifestEntries(phaseWrites, overviewPresent);
+  try {
+    const merged = mergeJournalIntoManifest(await readManifestIfExists(manifestPath), entries);
+    await writeFile(manifestPath, JSON.stringify(merged, null, 2), "utf-8");
+  } catch (err) { console.warn(`WARN journal: could not update wiki-manifest.json (${(err as Error).message})`); return; }
+  try {
+    const existingIndex = await readFile(indexPath, "utf-8").catch(() => "");
+    await writeFile(indexPath, insertJournalSectionIntoIndex(existingIndex, renderJournalSectionMd(entries)), "utf-8");
+  } catch (err) { console.warn(`WARN journal: could not update index.md (${(err as Error).message})`); }
 }
 
 export async function runJournalInit(opts: JournalRunOptions): Promise<JournalRunResult> {
