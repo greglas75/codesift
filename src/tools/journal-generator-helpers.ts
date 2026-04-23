@@ -1,7 +1,9 @@
 import { readFile, writeFile, unlink, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { parseSentinelBlocks } from "./journal-sentinel.js";
+import type { PhasePlan } from "./journal-phase-detector.js";
 
 const SAFE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -81,6 +83,42 @@ export async function readPhaseBlockHash(filePath: string, kind: string): Promis
     return parseSentinelBlocks(content).find((b) => b.kind === kind)?.hash;
   } catch { return undefined; }
 }
+
+// ─── Delta filtering (Phase A) ──────────────────────────────────────────────
+
+function resolveSinceCutoff(since: string, cwd: string): number {
+  const direct = Date.parse(since);
+  if (!Number.isNaN(direct)) return direct;
+  try {
+    const raw = execFileSync("git", ["log", "-1", "--format=%aI", "--since", since],
+      { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+  } catch { /* fall through */ }
+  return Number.NEGATIVE_INFINITY;
+}
+
+export function filterPhasesBySince(phases: PhasePlan[], since: string, cwd = process.cwd()): PhasePlan[] {
+  const cutoff = resolveSinceCutoff(since, cwd);
+  if (cutoff === Number.NEGATIVE_INFINITY) return phases;
+  return phases.filter((p) => { const t = Date.parse(p.endDate); return !Number.isNaN(t) && t >= cutoff; });
+}
+
+export type PhaseScope = { entry?: string; phase?: string };
+
+export function filterPhasesByScope(phases: PhasePlan[], scope: PhaseScope): PhasePlan[] {
+  if (scope.phase) return phases.filter((p) => p.slug === scope.phase);
+  if (!scope.entry) throw new Error("filterPhasesByScope requires entry or phase");
+  const e = scope.entry;
+  return phases.filter((p) =>
+    p.commits.some((c) => c.date.startsWith(e)) || (e >= p.startDate && e <= p.endDate));
+}
+
+/** Phase A signature-only; full manifest read-back lands in Phase C. */
+// TODO(phase-c): wire manifest read-back
+export function shouldSkipPhaseByHash(
+  _slug: string, _currentHash: string, _opts: { force?: boolean } = {},
+): boolean { return false; }
 
 /** Atomic write with TOCTOU guard: re-read + hash-check before tmp→rename. */
 export async function writePhaseAtomic(

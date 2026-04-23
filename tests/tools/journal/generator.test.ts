@@ -205,7 +205,7 @@ describe("TOCTOU pass (b)", () => {
     computeBlockHash.mockReturnValue("same-hash");
     fsReaddir.mockResolvedValue(["phase-1.md"]);
 
-    const result = await runJournalRegenerate(defaultOpts());
+    const result = await runJournalRegenerate(defaultOpts({ phase: "phase-1" }));
     expect(result.status).toBe("ok");
     expect(fsRename).toHaveBeenCalled();
   });
@@ -232,7 +232,7 @@ describe("TOCTOU mismatch without force (c)", () => {
       ]);
     fsReaddir.mockResolvedValue(["phase-1.md"]);
 
-    const result = await runJournalRegenerate(defaultOpts({ force: false }));
+    const result = await runJournalRegenerate(defaultOpts({ force: false, phase: "phase-1" }));
     expect(result.status).toBe("aborted");
     expect(result.reason).toMatch(/changed/i);
     expect(fsRename).not.toHaveBeenCalled();
@@ -259,7 +259,7 @@ describe("--force on mismatch (d)", () => {
       ]);
     fsReaddir.mockResolvedValue(["phase-1.md"]);
 
-    const result = await runJournalRegenerate(defaultOpts({ force: true }));
+    const result = await runJournalRegenerate(defaultOpts({ force: true, phase: "phase-1" }));
     expect(result.status).toBe("ok");
     expect(fsRename).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("forced overwrite"));
@@ -512,5 +512,92 @@ describe("BlockChangedError type", () => {
     const err = new BlockChangedError("phase-summary");
     expect(err).toBeInstanceOf(Error);
     expect(err.blockKind).toBe("phase-summary");
+  });
+});
+
+// ─── Phase A: delta filtering ────────────────────────────────────────────────
+
+describe("runJournalAppend — requires since (A1)", () => {
+  it("aborts with reason mentioning since when opts.since is missing", async () => {
+    const result = await runJournalAppend(defaultOpts());
+    expect(result.status).toBe("aborted");
+    expect(result.reason).toMatch(/since/i);
+    expect(providerGenerate).not.toHaveBeenCalled();
+  });
+});
+
+describe("runJournalAppend — since filters phases (A1)", () => {
+  it("only processes phases whose endDate >= cutoff", async () => {
+    const makeDatedPhase = (slug: string, endDate: string): PhasePlan => ({
+      slug, title: slug,
+      startDate: endDate, endDate,
+      commits: [{ sha: "x".repeat(40), date: `${endDate}T00:00:00Z`, authorName: "Dev",
+        subject: `feat(${slug}): x`, parentShas: [], refs: [] }],
+      source: "auto",
+    });
+    detectPhases.mockReturnValue([
+      makeDatedPhase("old", "2026-04-10"),
+      makeDatedPhase("boundary", "2026-04-15"),
+      makeDatedPhase("fresh", "2026-04-20"),
+    ]);
+
+    const result = await runJournalAppend(defaultOpts({ since: "2026-04-15" }));
+    expect(result.status).toBe("ok");
+    expect(providerGenerate).toHaveBeenCalledTimes(2);
+    expect(result.phases.map((p) => p.slug)).toEqual(["boundary", "fresh"]);
+  });
+});
+
+describe("runJournalRegenerate — requires entry or phase (A2)", () => {
+  it("aborts when neither entry nor phase provided", async () => {
+    const result = await runJournalRegenerate(defaultOpts());
+    expect(result.status).toBe("aborted");
+    expect(result.reason).toMatch(/entry or phase/i);
+    expect(providerGenerate).not.toHaveBeenCalled();
+  });
+});
+
+describe("runJournalRegenerate — entry scope (A2)", () => {
+  it("processes only the phase containing the entry date", async () => {
+    const makeDated = (slug: string, d: string): PhasePlan => ({
+      slug, title: slug, startDate: d, endDate: d,
+      commits: [{ sha: "a".repeat(40), date: `${d}T12:00:00Z`, authorName: "Dev",
+        subject: `feat(${slug}): x`, parentShas: [], refs: [] }],
+      source: "auto",
+    });
+    detectPhases.mockReturnValue([
+      makeDated("phase-a", "2026-04-10"),
+      makeDated("phase-b", "2026-04-15"),
+      makeDated("phase-c", "2026-04-20"),
+    ]);
+
+    const result = await runJournalRegenerate(defaultOpts({ entry: "2026-04-15" }));
+    expect(result.status).toBe("ok");
+    expect(providerGenerate).toHaveBeenCalledTimes(1);
+    expect(result.phases[0]!.slug).toBe("phase-b");
+  });
+});
+
+describe("runJournalRegenerate — phase scope (A2)", () => {
+  it("processes only the phase whose slug matches", async () => {
+    detectPhases.mockReturnValue([
+      makePhase("phase-1"),
+      makePhase("phase-2"),
+      makePhase("phase-3"),
+    ]);
+
+    const result = await runJournalRegenerate(defaultOpts({ phase: "phase-2" }));
+    expect(result.status).toBe("ok");
+    expect(providerGenerate).toHaveBeenCalledTimes(1);
+    expect(result.phases[0]!.slug).toBe("phase-2");
+  });
+});
+
+describe("runJournalInit — no filter regression (A3)", () => {
+  it("processes all phases when no filter flags supplied", async () => {
+    detectPhases.mockReturnValue([makePhase("p1"), makePhase("p2"), makePhase("p3")]);
+    const result = await runJournalInit(defaultOpts());
+    expect(result.status).toBe("ok");
+    expect(providerGenerate).toHaveBeenCalledTimes(3);
   });
 });
