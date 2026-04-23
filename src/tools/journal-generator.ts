@@ -11,6 +11,7 @@ import {
   filterPhasesBySince, filterPhasesByScope,
   buildJournalManifestEntries, mergeJournalIntoManifest, renderJournalSectionMd,
   insertJournalSectionIntoIndex, readManifestIfExists, shouldSkipPhaseByHash,
+  extractPhaseTitle, rewriteOverviewPhasesList,
   type JournalPhaseWrite,
 } from "./journal-generator-helpers.js";
 
@@ -215,6 +216,36 @@ export async function runJournalRegenerate(opts: JournalRunOptions): Promise<Jou
   return runPipeline(opts, { force: !!opts.force, bulkFill: true, allowNonEmpty: true, filter });
 }
 
-export async function refreshOverviewAndRollup(_opts: JournalRunOptions): Promise<JournalRunResult> {
-  return { status: "ok", phases: [] };
+/** Rewrite overview.md / index.md journal section from the current phase files
+ *  on disk — no LLM, no credentials needed. Preserves the
+ *  `<!-- manual:begin migrated-overview -->` block in overview.md verbatim,
+ *  regenerates the Phases list below it from the files in phases/. */
+export async function refreshOverviewAndRollup(opts: JournalRunOptions): Promise<JournalRunResult> {
+  const journalDir = join(opts.outputDir, "journal");
+  const phasesDir = join(journalDir, "phases");
+  const overviewPath = join(journalDir, "overview.md");
+
+  let phaseFiles: string[] = [];
+  try { phaseFiles = (await readdir(phasesDir)).filter((f) => f.endsWith(".md")).sort(); }
+  catch { return { status: "aborted", phases: [], reason: "no phases/ directory" }; }
+
+  const phaseWrites: JournalPhaseWrite[] = [];
+  for (const f of phaseFiles) {
+    const slug = f.slice(0, -3);  // strip .md
+    assertSafeSlug(slug);
+    const filePath = join(phasesDir, f);
+    const hash = (await readPhaseBlockHash(filePath, "phase-summary")) ?? "";
+    const title = await extractPhaseTitle(filePath, slug);
+    phaseWrites.push({ slug, title, file: `journal/phases/${f}`, hash });
+  }
+
+  // Rewrite overview.md preserving the manual block; append/replace the Phases list.
+  const existingOverview = await readFile(overviewPath, "utf-8").catch(() => "");
+  const updatedOverview = rewriteOverviewPhasesList(existingOverview, phaseWrites);
+  try { await writeFile(overviewPath, updatedOverview, "utf-8"); }
+  catch (err) { console.warn(`WARN journal: could not write overview.md (${(err as Error).message})`); }
+
+  await updateManifestAndIndex(opts.outputDir, phaseWrites, journalDir);
+  return { status: "ok", phases: phaseWrites.map((p) => ({ slug: p.slug, file: join(phasesDir, `${p.slug}.md`), costUsd: 0 })) };
 }
+
