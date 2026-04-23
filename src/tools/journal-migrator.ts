@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, copyFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { computeBlockHash } from "./journal-sentinel.js";
+import {
+  buildJournalManifestEntries, mergeJournalIntoManifest, renderJournalSectionMd,
+  insertJournalSectionIntoIndex, readManifestIfExists, type JournalPhaseWrite,
+} from "./journal-generator-helpers.js";
 
 // Typed errors (CQ8)
 export class NoPhasesError extends Error {
@@ -19,17 +24,8 @@ export class SourceDriftError extends Error {
   }
 }
 
-export interface MigrateOptions {
-  source: string;
-  repoRoot: string;
-  outputDir: string;
-  dryRun: boolean;
-}
-export interface MigrateResult {
-  status: "planned" | "ok" | "aborted";
-  phaseCount: number;
-  reason?: string;
-}
+export interface MigrateOptions { source: string; repoRoot: string; outputDir: string; dryRun: boolean }
+export interface MigrateResult { status: "planned" | "ok" | "aborted"; phaseCount: number; reason?: string }
 
 // Constants + path helpers (CQ14 single-site path construction)
 const SCHEMA_VERSION = "1";
@@ -45,10 +41,10 @@ const statePath = (outputDir: string): string => join(journalDir(outputDir), ".m
 const gitignorePath = (repoRoot: string): string => join(repoRoot, ".gitignore");
 
 // AST
-interface EntryBlock { startDate: string; titleLine: string; bodyLines: string[]; }
-interface WeekBlock { headingLine: string; title: string; entries: EntryBlock[]; preamble: string[]; }
-interface OverviewSection { headingLine: string; bodyLines: string[]; }
-interface Parsed { weeks: WeekBlock[]; overviewSections: OverviewSection[]; }
+interface EntryBlock { startDate: string; titleLine: string; bodyLines: string[] }
+interface WeekBlock { headingLine: string; title: string; entries: EntryBlock[]; preamble: string[] }
+interface OverviewSection { headingLine: string; bodyLines: string[] }
+interface Parsed { weeks: WeekBlock[]; overviewSections: OverviewSection[] }
 
 const RE_H2 = /^## (.+)$/;
 const RE_TIMELINE = /^## Timeline\s*$/;
@@ -68,7 +64,6 @@ function parse(source: string): Parsed {
 
   for (const line of lines) {
     if (RE_TIMELINE.test(line)) { mode = { kind: "none" }; continue; }
-
     const weekMatch = RE_WEEK.exec(line);
     if (weekMatch) {
       const week: WeekBlock = { headingLine: line, title: weekMatch[2]!, entries: [], preamble: [] };
@@ -76,15 +71,12 @@ function parse(source: string): Parsed {
       mode = { kind: "week", week, currentEntry: null };
       continue;
     }
-
-    // Any ## heading ends week/overview mode and starts a new overview section.
-    if (RE_H2.test(line)) {
+    if (RE_H2.test(line)) {  // Any ## heading ends week/overview mode and starts a new overview section.
       const sec: OverviewSection = { headingLine: line, bodyLines: [] };
       overviewSections.push(sec);
       mode = { kind: "overview", sec };
       continue;
     }
-
     if (mode.kind === "week") {
       const rangeMatch = RE_ENTRY_RANGE.exec(line);
       const singleMatch = rangeMatch ? null : RE_ENTRY_SINGLE.exec(line);
@@ -114,27 +106,19 @@ const deriveSlug = (week: WeekBlock): string => {
 
 function renderPhaseFile(week: WeekBlock): string {
   const lines: string[] = [
-    `## ${week.title}`,
-    "",
+    `## ${week.title}`, "",
     "<!-- auto:begin phase-summary -->",
     "<!-- TODO: generate phase summary via `codesift journal init` -->",
     "<!-- auto:end phase-summary -->",
-    "",
-    "## My notes",
-    week.headingLine,
-    ...week.preamble,
+    "", "## My notes", week.headingLine, ...week.preamble,
   ];
-  for (const entry of week.entries) {
-    lines.push(entry.titleLine, ...entry.bodyLines);
-  }
+  for (const entry of week.entries) lines.push(entry.titleLine, ...entry.bodyLines);
   return lines.join("\n").replace(/\n+$/, "\n");
 }
 
 function renderOverviewFile(sections: OverviewSection[]): string {
   const lines: string[] = ["# Overview", "", "<!-- manual:begin migrated-overview -->"];
-  for (const sec of sections) {
-    lines.push(sec.headingLine, ...sec.bodyLines);
-  }
+  for (const sec of sections) lines.push(sec.headingLine, ...sec.bodyLines);
   lines.push("<!-- manual:end migrated-overview -->", "");
   return lines.join("\n");
 }
@@ -144,14 +128,12 @@ const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex
 async function ensureGitignoreEntry(repoRoot: string, entry: string): Promise<void> {
   const path = gitignorePath(repoRoot);
   try {
-    let existing = "";
-    try { existing = await readFile(path, "utf-8"); } catch { /* create */ }
+    const existing = await readFile(path, "utf-8").catch(() => "");
     if (existing.split("\n").includes(entry)) return;
     const suffix = existing && !existing.endsWith("\n") ? "\n" : "";
     await writeFile(path, existing + suffix + entry + "\n", "utf-8");
   } catch (err) {
-    const msg = (err as Error).message;
-    console.warn(`WARN journal: could not update .gitignore (${msg}); add ${entry} manually.`);
+    console.warn(`WARN journal: could not update .gitignore (${(err as Error).message}); add ${entry} manually.`);
   }
 }
 
@@ -191,10 +173,26 @@ export async function runMigrate(opts: MigrateOptions): Promise<MigrateResult> {
 
   await mkdir(phasesDir(outputDir), { recursive: true });
   const wx = { encoding: "utf-8" as const, flag: "wx" as const };  // no-clobber; hand-edits require .bak rollback
+  const phaseWrites: JournalPhaseWrite[] = [];
+  const scaffoldHash = computeBlockHash("\n<!-- TODO: generate phase summary via `codesift journal init` -->\n");
   for (let i = 0; i < parsed.weeks.length; i++) {
-    await writeFile(phasePath(outputDir, slugs[i]!), renderPhaseFile(parsed.weeks[i]!), wx);
+    const slug = slugs[i]!;
+    await writeFile(phasePath(outputDir, slug), renderPhaseFile(parsed.weeks[i]!), wx);
+    phaseWrites.push({ slug, title: parsed.weeks[i]!.title, file: `journal/phases/${slug}.md`, hash: scaffoldHash });
   }
   await writeFile(overviewPath(outputDir), renderOverviewFile(parsed.overviewSections), wx);
 
+  // Register journal pages in wiki-manifest.json + index.md (best-effort, CQ8).
+  const manifestPath = join(outputDir, "wiki-manifest.json");
+  const indexPath = join(outputDir, "index.md");
+  const entries = buildJournalManifestEntries(phaseWrites, true);  // migrator always writes overview.md
+  try {
+    const merged = mergeJournalIntoManifest(await readManifestIfExists(manifestPath), entries);
+    await writeFile(manifestPath, JSON.stringify(merged, null, 2), "utf-8");
+    try {
+      const existing = await readFile(indexPath, "utf-8").catch(() => "");
+      await writeFile(indexPath, insertJournalSectionIntoIndex(existing, renderJournalSectionMd(entries)), "utf-8");
+    } catch (err) { console.warn(`WARN journal: could not update index.md (${(err as Error).message})`); }
+  } catch (err) { console.warn(`WARN journal: could not update wiki-manifest.json (${(err as Error).message})`); }
   return { status: "ok", phaseCount: parsed.weeks.length };
 }
