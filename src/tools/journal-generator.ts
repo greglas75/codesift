@@ -112,7 +112,11 @@ async function runPipeline(opts: JournalRunOptions, cfg: RunConfig): Promise<Jou
 
   try {
     const commits = gitLog({ cwd: opts.cwd });
-    const allPhases = detectPhases(commits.length > 0 ? commits : [PLACEHOLDER_COMMIT]);
+    const allPhases = detectPhases(
+      commits.length > 0 ? commits : [PLACEHOLDER_COMMIT],
+      undefined,
+      { minUnclassifiedCommits: 3 },
+    );
     const phases = applyFilter(allPhases, cfg.filter, opts.cwd);
 
     if (opts.dryRun) {

@@ -51,7 +51,17 @@ function dedupSlugs(plans: PhasePlan[]): PhasePlan[] {
 
 // detectPhases
 
-export function detectPhases(commits: GitCommit[], overrides?: PhaseOverride[]): PhasePlan[] {
+export interface DetectPhasesOptions {
+  /** Drop auto-titled "unclassified" phases with fewer than N commits (default 0 = keep all).
+   *  Manual phases and named auto phases are never dropped. */
+  minUnclassifiedCommits?: number;
+}
+
+export function detectPhases(
+  commits: GitCommit[],
+  overrides?: PhaseOverride[],
+  options?: DetectPhasesOptions,
+): PhasePlan[] {
   if (commits.length === 0) return [];
 
   const sorted = [...commits].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
@@ -93,7 +103,12 @@ export function detectPhases(commits: GitCommit[], overrides?: PhaseOverride[]):
     return makePlan(grp, "auto");
   });
 
-  return dedupSlugs(plans);
+  const minUnclassified = options?.minUnclassifiedCommits ?? 0;
+  const filtered = minUnclassified > 0
+    ? plans.filter((p) => p.source !== "auto" || p.title !== "unclassified" || p.commits.length >= minUnclassified)
+    : plans;
+
+  return dedupSlugs(filtered);
 }
 
 // parsePhaseOverridesYAML — inline parser (no yaml dep required)
