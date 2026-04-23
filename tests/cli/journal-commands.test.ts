@@ -101,18 +101,32 @@ describe("journal CLI handlers", () => {
     expect(stderr).toContain("exactly one of --entry=<date> or --phase=<slug>");
   });
 
-  // (e) lint parses sentinels for each discovered md file
-  it("handleJournalLint invokes parseSentinelBlocks for each journal md file", async () => {
+  // (e) lint walks journal/ recursively and parses sentinels for each .md file
+  it("handleJournalLint recurses into phases/ and parses every .md", async () => {
     const fs = await import("node:fs/promises");
     const sentinel = await import("../../src/tools/journal-sentinel.js");
-    (fs.readdir as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
-      "2026-04-framework.md",
-      "2026-03-journal.md",
-    ]);
+    const dirent = (name: string, isDir: boolean) => ({
+      name,
+      isDirectory: () => isDir,
+      isFile: () => !isDir,
+    });
+    (fs.readdir as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (path: string, opts?: { withFileTypes?: boolean }) => {
+        if (!opts?.withFileTypes) return [];
+        const p = String(path);
+        if (p.endsWith("/journal") || p.endsWith("journal")) {
+          return [dirent("overview.md", false), dirent("phases", true)];
+        }
+        if (p.endsWith("/phases")) {
+          return [dirent("2026-04-framework.md", false), dirent("2026-03-journal.md", false)];
+        }
+        return [];
+      },
+    );
     (fs.readFile as unknown as ReturnType<typeof vi.fn>).mockResolvedValue("<!-- auto:begin meta -->\n<!-- auto:end meta -->\n");
     const { handleJournalLint } = await import("../../src/cli/journal-commands.js");
     await handleJournalLint([], {});
-    expect(sentinel.parseSentinelBlocks).toHaveBeenCalledTimes(2);
+    expect(sentinel.parseSentinelBlocks).toHaveBeenCalledTimes(3);
   });
 
   // (f) migrate --dry-run writes state (calls runMigrate with dryRun:true).

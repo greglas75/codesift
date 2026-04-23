@@ -85,17 +85,32 @@ export async function handleJournalRegenerate(_args: string[], flags: Flags): Pr
   process.stdout.write(`journal regenerate: ${r.status}\n`);
 }
 
+async function walkJournalMd(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try { entries = await readdir(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (e.isFile() && e.name.endsWith(".md")) out.push(p);
+    }
+  }
+  await walk(root);
+  return out;
+}
+
 export async function handleJournalLint(_args: string[], _flags: Flags): Promise<void> {
   if (killSwitchGated()) return;
   const { parseSentinelBlocks } = await import("../tools/journal-sentinel.js");
-  const phasesDir = join(WIKI_DIR, "journal");
-  let files: string[] = [];
-  try { files = (await readdir(phasesDir)).filter((f) => f.endsWith(".md")); }
-  catch { process.stdout.write("journal lint: no journal directory\n"); return; }
+  const journalDir = join(WIKI_DIR, "journal");
+  const files = await walkJournalMd(journalDir);
+  if (files.length === 0) { process.stdout.write("journal lint: no journal directory\n"); return; }
   let issues = 0;
   for (const f of files) {
     try {
-      const content = await readFile(join(phasesDir, f), "utf-8");
+      const content = await readFile(f, "utf-8");
       parseSentinelBlocks(content);
     } catch (err) {
       issues++;
