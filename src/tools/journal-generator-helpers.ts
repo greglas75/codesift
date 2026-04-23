@@ -202,3 +202,36 @@ export async function writePhaseAtomic(
   await writeFile(tmp, content, { encoding: "utf-8", flag: "wx" });
   await rename(tmp, filePath);
 }
+
+// ─── Phase E: overview refresh helpers (pure functions) ─────────────────────
+
+const FOUR_BEAT = new Set(["Intent", "Reality", "Significance", "Lessons"]);
+
+export async function extractPhaseTitle(filePath: string, fallback: string): Promise<string> {
+  try {
+    const content = await readFile(filePath, "utf-8");
+    for (const m of content.matchAll(/^## (.+)$/gm)) {
+      const title = m[1]!.trim();
+      if (!FOUR_BEAT.has(title)) return title;
+    }
+    return fallback;
+  } catch { return fallback; }
+}
+
+export function rewriteOverviewPhasesList(existing: string, phaseWrites: JournalPhaseWrite[]): string {
+  const listLines = phaseWrites.map((p) => `- [${p.title}](phases/${p.slug}.md)`);
+  const section = ["## Phases", "", ...listLines, "", "← back to [wiki index](../index.md)", ""].join("\n");
+  const phasesIdx = existing.search(/^## Phases$/m);
+  if (phasesIdx !== -1) {
+    // Strip from `## Phases` through end-of-file OR next `## ` (not ##Phases itself).
+    const after = existing.slice(phasesIdx + "## Phases".length);
+    const nextMatch = /\n## /m.exec(after);
+    const tailStart = nextMatch ? phasesIdx + "## Phases".length + nextMatch.index + 1 : existing.length;
+    return existing.slice(0, phasesIdx) + section + (tailStart < existing.length ? existing.slice(tailStart) : "");
+  }
+  if (existing.includes("<!-- manual:end migrated-overview -->")) {
+    return existing.replace("<!-- manual:end migrated-overview -->",
+      "<!-- manual:end migrated-overview -->\n\n" + section);
+  }
+  return existing + (existing.endsWith("\n") ? "" : "\n") + "\n" + section;
+}
