@@ -20,7 +20,14 @@ import {
   readPhaseBlockHash,
   writePhaseAtomic,
   assertSafeSlug,
+  filterPhasesBySince,
+  filterPhasesByScope,
 } from "./journal-generator-helpers.js";
+
+type PhaseFilter =
+  | { kind: "since"; value: string }
+  | { kind: "entry"; value: string }
+  | { kind: "phase"; value: string };
 
 export interface JournalRunOptions {
   cwd: string;
@@ -57,7 +64,14 @@ export interface PhaseWriteResult {
   costUsd: number;
 }
 
-interface RunConfig { force: boolean; bulkFill: boolean; allowNonEmpty: boolean }
+interface RunConfig { force: boolean; bulkFill: boolean; allowNonEmpty: boolean; filter?: PhaseFilter }
+
+function applyFilter(phases: PhasePlan[], filter: PhaseFilter | undefined, cwd: string): PhasePlan[] {
+  if (!filter) return phases;
+  if (filter.kind === "since") return filterPhasesBySince(phases, filter.value, cwd);
+  return filterPhasesByScope(phases,
+    filter.kind === "entry" ? { entry: filter.value } : { phase: filter.value });
+}
 
 /** Seam: per-phase LLM + validation (no fs). Exported for tests. */
 export async function processPhase(
@@ -98,7 +112,8 @@ async function runPipeline(opts: JournalRunOptions, cfg: RunConfig): Promise<Jou
 
   try {
     const commits = gitLog({ cwd: opts.cwd });
-    const phases = detectPhases(commits.length > 0 ? commits : [PLACEHOLDER_COMMIT]);
+    const allPhases = detectPhases(commits.length > 0 ? commits : [PLACEHOLDER_COMMIT]);
+    const phases = applyFilter(allPhases, cfg.filter, opts.cwd);
 
     if (opts.dryRun) {
       return {
@@ -157,11 +172,21 @@ export async function runJournalInit(opts: JournalRunOptions): Promise<JournalRu
 }
 
 export async function runJournalAppend(opts: JournalRunOptions): Promise<JournalRunResult> {
-  return runPipeline(opts, { force: !!opts.force, bulkFill: true, allowNonEmpty: true });
+  if (!opts.since) return { status: "aborted", phases: [], reason: "runJournalAppend requires options.since" };
+  return runPipeline(opts, {
+    force: !!opts.force, bulkFill: true, allowNonEmpty: true,
+    filter: { kind: "since", value: opts.since },
+  });
 }
 
 export async function runJournalRegenerate(opts: JournalRunOptions): Promise<JournalRunResult> {
-  return runPipeline(opts, { force: !!opts.force, bulkFill: true, allowNonEmpty: true });
+  if (!opts.entry && !opts.phase) {
+    return { status: "aborted", phases: [], reason: "runJournalRegenerate requires entry or phase" };
+  }
+  const filter: PhaseFilter = opts.entry
+    ? { kind: "entry", value: opts.entry }
+    : { kind: "phase", value: opts.phase! };
+  return runPipeline(opts, { force: !!opts.force, bulkFill: true, allowNonEmpty: true, filter });
 }
 
 export async function refreshOverviewAndRollup(_opts: JournalRunOptions): Promise<JournalRunResult> {
