@@ -54,6 +54,7 @@ vi.mock("node:fs/promises", () => ({
   readFile: h.fsReadFile,
   readdir: h.fsReaddir,
   unlink: h.fsUnlink,
+  mkdir: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../../src/tools/journal-sentinel.js", () => ({
