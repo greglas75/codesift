@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { gitLog, type GitCommit } from "./journal-git-client.js";
 import { detectPhases, type PhasePlan } from "./journal-phase-detector.js";
@@ -94,6 +94,7 @@ async function runPipeline(opts: JournalRunOptions, cfg: RunConfig): Promise<Jou
   const lockPath = opts.lockPath ?? join(journalDir, ".init-lock");
   const checkpointPath = opts.checkpointPath ?? join(journalDir, ".checkpoint.json");
 
+  await mkdir(phasesDir, { recursive: true });  // ensure dir exists before lockfile
   try { await acquireLock(lockPath); }
   catch (err) {
     const e = err as NodeJS.ErrnoException;
