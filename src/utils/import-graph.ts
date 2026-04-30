@@ -10,8 +10,11 @@ import { extractPythonImports } from "./python-imports.js";
 import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
 import { resolvePhpNamespace } from "../tools/php-tools.js";
 import { DirectedGraph } from "graphology";
-// @ts-expect-error — package has no "exports" field; deep path works at runtime
-import pagerank from "graphology-metrics/centrality/pagerank";
+import { createRequire } from "node:module";
+// graphology-metrics has no "exports" field; use createRequire so the deep
+// path resolves at runtime under both ESM and CJS consumers.
+const req = createRequire(import.meta.url);
+const pagerank = req("graphology-metrics/centrality/pagerank") as (g: unknown) => Record<string, number>;
 
 export interface ImportEdge {
   from: string; // importer file path
@@ -405,7 +408,7 @@ export function buildFilePageRank(edges: ImportEdge[]): Map<string, number> {
       if (!graph.hasEdge(edge.from, edge.to)) graph.addEdge(edge.from, edge.to);
     }
     if (graph.order === 0) return new Map();
-    const scores = pagerank(graph) as Record<string, number>;
+    const scores = pagerank(graph);
     return new Map(Object.entries(scores));
   } catch {
     return new Map();
