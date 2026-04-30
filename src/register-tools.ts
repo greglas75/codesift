@@ -433,6 +433,38 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "extract_kotlin_serialization_contract",
     "trace_flow_chain",
   ],
+  // Python — detected by pyproject.toml (poetry/pdm/uv/hatch) or requirements.txt
+  "pyproject.toml": [
+    "get_model_graph",
+    "get_test_fixtures",
+    "find_framework_wiring",
+    "run_ruff",
+    "parse_pyproject",
+    "find_python_callers",
+    "analyze_django_settings",
+    "run_mypy",
+    "run_pyright",
+    "analyze_python_deps",
+    "trace_fastapi_depends",
+    "analyze_async_correctness",
+    "get_pydantic_models",
+    "python_audit",
+  ],
+  "requirements.txt": [
+    "get_model_graph",
+    "get_test_fixtures",
+    "find_framework_wiring",
+    "run_ruff",
+    "find_python_callers",
+    "analyze_django_settings",
+    "run_mypy",
+    "run_pyright",
+    "analyze_python_deps",
+    "trace_fastapi_depends",
+    "analyze_async_correctness",
+    "get_pydantic_models",
+    "python_audit",
+  ],
 };
 
 /**
@@ -503,7 +535,7 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
 
       // React: dep + .tsx/.jsx files
-      const hasReact = !!(allDeps["react"] || allDeps["next"] || allDeps["@remix-run/react"]);
+      const hasReact = !!(allDeps["react"] || allDeps["next"] || allDeps["@remix-run/react"] || allDeps["@xyflow/react"] || allDeps["preact"]);
       if (hasReact && hasJsxFilesShallow(cwd, readdirSync)) {
         toEnable.push(...REACT_TOOLS);
       }
