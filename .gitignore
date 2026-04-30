@@ -22,3 +22,4 @@ benchmarks/codesift-vs-jcodemunch*.py
 benchmarks/_cs-batch-runner.ts
 benchmarks/results/codesift-vs-jcodemunch-*.json
 benchmarks/results/cs-vs-jcm-*.json
+.codesift/wiki/journal/.migrate-state.json
