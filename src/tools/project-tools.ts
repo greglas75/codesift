@@ -27,7 +27,8 @@ export const EXTRACTOR_VERSIONS = {
   nextjs: "1.0.0",
   express: "1.0.0",
   react: "2.0.0",  // Wave 1-4 + Tier 1-4: component/hook kinds, classifyReactKind, isReactClassComponent — forces cache invalidation
-  typescript: "2.0.0", // v2: adds is_exported flag to CodeSymbol — forces full TS/TSX reindex
+  typescript: "2.1.0", // v2.1: field_definition (JS), CommonJS exports, object-literal methods, class_static_block, generator_function_declaration — shared TS/JS extractor bump
+  javascript: "1.0.0", // independent JS version — bump for JS-only extractor changes (CJS, .jsx-specific) without forcing TS reindex
   python: "1.0.0",
   php: "1.0.0",
   astro: "1.0.0",

@@ -259,7 +259,8 @@ describe("index-store", () => {
 
     it("EXTRACTOR_VERSIONS registers typescript (forces reindex after wiki-v2 bump)", async () => {
       const { EXTRACTOR_VERSIONS } = await import("../../src/tools/project-tools.js");
-      expect(EXTRACTOR_VERSIONS.typescript).toBe("2.0.0");
+      expect(EXTRACTOR_VERSIONS.typescript).toBe("2.1.0");
+      expect(EXTRACTOR_VERSIONS.javascript).toBe("1.0.0");
       // Stored snapshot without typescript key must trigger cache miss
       const index = makeIndex({
         extractor_version: { kotlin: "2.0.0", python: "1.0.0" },

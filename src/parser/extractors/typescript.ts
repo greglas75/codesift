@@ -332,6 +332,199 @@ function getTestName(node: Parser.SyntaxNode): string | null {
   return firstArg.text;
 }
 
+/**
+ * Recognize the LHS of a CommonJS exports assignment.
+ *
+ * Returns:
+ *   { kind: "module_exports", property: null }            for `module.exports = ...`
+ *   { kind: "module_exports", property: "foo" }           for `module.exports.foo = ...`
+ *   { kind: "exports", property: "foo" }                  for `exports.foo = ...`
+ *   null                                                  for any other LHS
+ */
+function parseCjsLhs(
+  lhs: Parser.SyntaxNode,
+): { kind: "module_exports" | "exports"; property: string | null } | null {
+  if (lhs.type !== "member_expression") return null;
+  const obj = lhs.childForFieldName("object");
+  const prop = lhs.childForFieldName("property");
+  if (!obj || !prop) return null;
+
+  // exports.foo
+  if (obj.type === "identifier" && obj.text === "exports") {
+    return { kind: "exports", property: prop.text };
+  }
+
+  // module.exports = ...
+  if (obj.type === "identifier" && obj.text === "module" && prop.text === "exports") {
+    return { kind: "module_exports", property: null };
+  }
+
+  // module.exports.foo = ...
+  if (obj.type === "member_expression") {
+    const innerObj = obj.childForFieldName("object");
+    const innerProp = obj.childForFieldName("property");
+    if (
+      innerObj?.type === "identifier" && innerObj.text === "module" &&
+      innerProp?.text === "exports"
+    ) {
+      return { kind: "module_exports", property: prop.text };
+    }
+  }
+
+  return null;
+}
+
+/** Pick a SymbolKind for the RHS of a CJS property assignment. */
+function cjsValueKind(value: Parser.SyntaxNode, name: string): SymbolKind {
+  if (value.type === "arrow_function" || value.type === "function_expression") {
+    return classifyReactKind(name, value);
+  }
+  if (value.type === "class_expression") return "class";
+  if (SCREAMING_CASE_RE.test(name)) return "constant";
+  return "variable";
+}
+
+/**
+ * Handle a CommonJS exports assignment. Returns true when the assignment was
+ * recognized as a CJS export pattern (caller should `return` and skip default
+ * walking), false when the assignment is unrelated.
+ *
+ * Behavior:
+ *   - `module.exports = identifier`        → defer: tag matching symbol in post-pass
+ *   - `module.exports = { foo, bar }`      → defer shorthand keys; emit pair-with-fn keys
+ *   - `module.exports = arrow|function|class` → emit `default_export` symbol
+ *   - `module.exports.foo = expr`          → emit `foo` symbol with is_exported=true
+ *   - `exports.foo = expr`                 → emit `foo` symbol with is_exported=true
+ */
+function handleCjsExport(
+  assign: Parser.SyntaxNode,
+  stmt: Parser.SyntaxNode,
+  parentId: string | undefined,
+  source: string,
+  filePath: string,
+  repo: string,
+  out: CodeSymbol[],
+  cjsExported: Set<string>,
+): boolean {
+  const lhs = assign.childForFieldName("left");
+  const rhs = assign.childForFieldName("right");
+  if (!lhs || !rhs) return false;
+
+  const target = parseCjsLhs(lhs);
+  if (!target) return false;
+
+  // module.exports.<X> / exports.<X>  → emit a fresh exported symbol for X
+  if (target.property) {
+    const name = target.property;
+    const kind = cjsValueKind(rhs, name);
+    out.push(makeSymbol(stmt, name, kind, filePath, source, repo, {
+      parentId,
+      docstring: getDocstring(stmt, source),
+      signature: (rhs.type === "arrow_function" || rhs.type === "function_expression")
+        ? getSignature(rhs, source) : undefined,
+      is_exported: true,
+    }));
+    cjsExported.add(name);
+    return true;
+  }
+
+  // module.exports = ...
+  switch (rhs.type) {
+    case "identifier": {
+      // Defer to post-pass: tag the matching declaration.
+      cjsExported.add(rhs.text);
+      return true;
+    }
+    case "object": {
+      for (const member of rhs.namedChildren) {
+        if (member.type === "shorthand_property_identifier") {
+          cjsExported.add(member.text);
+        } else if (member.type === "pair") {
+          const keyNode = member.childForFieldName("key");
+          const valNode = member.childForFieldName("value");
+          if (!keyNode || !valNode) continue;
+          const keyName = keyNode.text.replace(/^['"`]|['"`]$/g, "");
+          if (valNode.type === "identifier") {
+            // { foo: someFn } — defer; tag someFn AND keyName both as exported.
+            cjsExported.add(valNode.text);
+            cjsExported.add(keyName);
+          } else if (valNode.type === "arrow_function" || valNode.type === "function_expression") {
+            // { handler: () => {} } — emit a fresh exported symbol under keyName
+            const kind = classifyReactKind(keyName, valNode);
+            out.push(makeSymbol(member, keyName, kind, filePath, source, repo, {
+              parentId,
+              signature: getSignature(valNode, source),
+              is_exported: true,
+            }));
+          }
+        }
+      }
+      return true;
+    }
+    case "arrow_function":
+    case "function_expression":
+    case "class_expression": {
+      // Anonymous default export: `module.exports = () => {}`
+      out.push(makeSymbol(stmt, "default", "default_export", filePath, source, repo, {
+        parentId,
+        signature: (rhs.type === "arrow_function" || rhs.type === "function_expression")
+          ? getSignature(rhs, source) : undefined,
+        is_exported: true,
+      }));
+      return true;
+    }
+    default:
+      // Unknown RHS shape (call_expression, member_expression, etc.) —
+      // not a recognized CJS pattern, fall through to default handling.
+      return false;
+  }
+}
+
+/**
+ * Extract method-shaped members from an object literal `{ foo() {}, bar: () => {} }`.
+ * Mutates `symbols` in place so the caller (lexical_declaration handler) can keep
+ * its short-circuit `return` without losing object-method visibility.
+ *
+ * Handles two shapes commonly used as JS controller / handler objects:
+ *   - method shorthand:  { create() { ... } }            → method_definition
+ *   - arrow assignment:  { onClick: () => {...} }        → pair(arrow_function)
+ *   - function value:    { handler: function(){...} }    → pair(function_expression)
+ */
+function extractObjectLiteralMethods(
+  objectNode: Parser.SyntaxNode,
+  parentId: string,
+  source: string,
+  filePath: string,
+  repo: string,
+  out: CodeSymbol[],
+): void {
+  for (const child of objectNode.namedChildren) {
+    if (child.type === "method_definition") {
+      const methodName = getNodeName(child);
+      if (!methodName) continue;
+      out.push(makeSymbol(child, methodName, "method", filePath, source, repo, {
+        parentId,
+        signature: getSignature(child, source),
+      }));
+      continue;
+    }
+    if (child.type === "pair") {
+      const keyNode = child.childForFieldName("key");
+      const valNode = child.childForFieldName("value");
+      if (!keyNode || !valNode) continue;
+      if (valNode.type !== "arrow_function" && valNode.type !== "function_expression") continue;
+      const methodName = keyNode.text.replace(/^['"`]|['"`]$/g, "");
+      // Honor React conventions even on object members (e.g. an exported
+      // hooks object): use[A-Z] → hook, PascalCase + JSX → component.
+      const kind = classifyReactKind(methodName, valNode);
+      out.push(makeSymbol(child, methodName, kind === "function" ? "method" : kind, filePath, source, repo, {
+        parentId,
+        signature: getSignature(valNode, source),
+      }));
+    }
+  }
+}
+
 // --- Main extractor ---
 
 /** True if the declaration has an `export` keyword child (modifier-based export). */
@@ -350,22 +543,30 @@ export function extractTypeScriptSymbols(
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
   const localReExported = new Set<string>();
+  // CommonJS exports — names referenced by `module.exports = X` or
+  // `module.exports = { foo, bar }`. Resolved in a post-pass against
+  // already-emitted symbols so a `function foo(){}` declared earlier in the
+  // file gets its `is_exported` flag set when the exports assignment is seen.
+  const cjsExported = new Set<string>();
 
   function walk(node: Parser.SyntaxNode, parentId?: string, isExported = false): void {
     switch (node.type) {
-      case "function_declaration": {
+      case "function_declaration":
+      case "generator_function_declaration": {
         const name = getNodeName(node);
         if (name) {
           // React detection: hook (useX) or component (PascalCase + JSX return)
           const kind = classifyReactKind(name, node);
           const decorators = getDecorators(node);
           const exported = isExported || hasExportModifier(node);
+          const isGenerator = node.type === "generator_function_declaration";
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
             is_exported: exported ? true : undefined,
+            meta: isGenerator ? { generator: true } : undefined,
           });
           symbols.push(sym);
         }
@@ -425,6 +626,13 @@ export function extractTypeScriptSymbols(
               is_exported: exported ? true : undefined,
             });
             symbols.push(sym);
+
+            // Object literal: extract methods so `const ctrl = { create() {} }`
+            // surfaces `create` as a method parented to `ctrl`. Common in
+            // older Node.js / Express controllers and config objects.
+            if (value.type === "object") {
+              extractObjectLiteralMethods(value, sym.id, source, filePath, repo, symbols);
+            }
           }
         }
         // Don't walk children — we already processed declarators
@@ -487,8 +695,15 @@ export function extractTypeScriptSymbols(
         break;
       }
 
-      case "public_field_definition": {
-        const name = getNodeName(node);
+      case "public_field_definition":
+      case "field_definition": {
+        // public_field_definition: TS class fields (with modifiers)
+        // field_definition: JS class fields (incl. private #name, static)
+        // The `name` field works for both; tree-sitter-javascript exposes the
+        // identifier (or private_property_identifier) under `property` for JS,
+        // but childForFieldName("name") falls back to "property" via getNodeName.
+        const nameNode = node.childForFieldName("name") ?? node.childForFieldName("property");
+        const name = nameNode?.text;
         if (name) {
           const decorators = getDecorators(node);
           const sym = makeSymbol(node, name, "field", filePath, source, repo, {
@@ -498,6 +713,18 @@ export function extractTypeScriptSymbols(
           });
           symbols.push(sym);
         }
+        break;
+      }
+
+      case "class_static_block": {
+        // class Foo { static { ... } } — JS 2022, no name. Emit as a method
+        // named "<static>" so it shows up under the class in outlines without
+        // colliding with user-named methods.
+        const sym = makeSymbol(node, "<static>", "method", filePath, source, repo, {
+          parentId,
+          docstring: getDocstring(node, source),
+        });
+        symbols.push(sym);
         break;
       }
 
@@ -595,6 +822,22 @@ export function extractTypeScriptSymbols(
       }
 
       case "expression_statement": {
+        // CommonJS export detection (JS-only in practice — TS files use ESM):
+        //   module.exports = X
+        //   module.exports = { foo, bar }
+        //   module.exports.foo = expr
+        //   exports.foo = expr
+        // Order matters: check CJS before test-call branch since both peek at
+        // namedChildren[0]; CJS is `assignment_expression` and tests are
+        // `call_expression` so they're disjoint and either can return early.
+        const firstChild = node.namedChildren[0];
+        if (firstChild?.type === "assignment_expression") {
+          const handled = handleCjsExport(
+            firstChild, node, parentId, source, filePath, repo, symbols, cjsExported,
+          );
+          if (handled) return;
+        }
+
         // Check for test calls: describe(...), it(...), test(...)
         // Also handles member forms: it.skip(...), it.each(...)(...), describe.only(...)
         const expr = node.namedChildren[0];
@@ -668,10 +911,13 @@ export function extractTypeScriptSymbols(
 
   walk(tree.rootNode);
 
-  // Post-pass: local re-exports `export { X }` mark prior-declared X as exported
-  if (localReExported.size > 0) {
+  // Post-pass: local re-exports `export { X }` and CommonJS exports both
+  // mark prior-declared symbols as exported. Merged into a single Set so we
+  // walk the symbol list at most once.
+  if (localReExported.size > 0 || cjsExported.size > 0) {
+    const exportedNames = new Set<string>([...localReExported, ...cjsExported]);
     for (const sym of symbols) {
-      if (!sym.is_exported && localReExported.has(sym.name)) {
+      if (!sym.is_exported && exportedNames.has(sym.name)) {
         sym.is_exported = true;
       }
     }
