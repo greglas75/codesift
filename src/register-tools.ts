@@ -997,15 +997,38 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       auto_group: zBool().describe("Auto group_by_file when >50 matches."),
       ranked: z.boolean().optional().describe("Classify hits by containing symbol and rank by centrality"),
     })),
-    handler: (args) => searchText(args.repo as string, args.query as string, {
-      regex: args.regex as boolean | undefined,
-      context_lines: args.context_lines as number | undefined,
-      file_pattern: args.file_pattern as string | undefined,
-      max_results: args.max_results as number | undefined,
-      group_by_file: args.group_by_file as boolean | undefined,
-      auto_group: args.auto_group as boolean | undefined,
-      ranked: args.ranked as boolean | undefined,
-    }),
+    handler: async (args) => {
+      const result: unknown = await searchText(args.repo as string, args.query as string, {
+        regex: args.regex as boolean | undefined,
+        context_lines: args.context_lines as number | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+        max_results: args.max_results as number | undefined,
+        group_by_file: args.group_by_file as boolean | undefined,
+        auto_group: args.auto_group as boolean | undefined,
+        ranked: args.ranked as boolean | undefined,
+      });
+      // Zero-result hint: 41% of search_text calls return nothing in telemetry.
+      // Suggest the most likely fix based on query shape so the agent doesn't
+      // burn 2-3 follow-up turns guessing.
+      const isEmpty =
+        (Array.isArray(result) && result.length === 0)
+        || (typeof result === "string" && (result as string).length === 0);
+      if (isEmpty) {
+        const q = args.query as string;
+        const fp = args.file_pattern as string | undefined;
+        const looksLikeSymbol =
+          /::|->|\.[a-z][a-zA-Z0-9_]*\(/.test(q)
+          || /^(class|function|def|fn|interface|type)\s+\w/.test(q)
+          || (/^[A-Z][a-zA-Z0-9_]+$|^[a-z][a-zA-Z0-9_]+$/.test(q.trim()) && !q.includes(" "));
+        const hints: string[] = ["No matches."];
+        if (looksLikeSymbol) hints.push("Query looks like a symbol — try search_symbols(query=...) instead.");
+        if (fp) hints.push(`Try without file_pattern="${fp}" to widen scope.`);
+        if (args.regex === true) hints.push("Try regex=false (literal) — escapes may be off.");
+        if (!fp && !looksLikeSymbol) hints.push("Try a shorter substring, or add file_pattern= to scope.");
+        return { matches: [], hint: hints.join(" ") };
+      }
+      return result;
+    },
   },
 
   // --- Outline ---
@@ -1095,10 +1118,19 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args) => {
       const opts: { include_related?: boolean } = {};
       if (args.include_related != null) opts.include_related = args.include_related as boolean;
-      const result = await getSymbol(args.repo as string, args.symbol_id as string, opts);
+      const symbolId = args.symbol_id as string;
+      const result = await getSymbol(args.repo as string, symbolId, opts);
       if (!result) {
+        // Telemetry: 24% of get_symbol calls return null (hallucinated IDs).
+        // Suggest closest matches by name so the agent doesn't burn turns guessing.
+        const { findSimilarSymbols } = await import("./tools/symbol-tools.js");
+        const similar = await findSimilarSymbols(args.repo as string, symbolId, 3);
+        if (similar.length > 0) {
+          const suggestions = similar.map((s) => `  ${s.id}  (${s.kind} ${s.name} @ ${s.file}:${s.start_line})`).join("\n");
+          return `Symbol "${symbolId}" not found. Did you mean:\n${suggestions}`;
+        }
         const hint = await checkTextStubHint(args.repo as string, "get_symbol", true);
-        return hint ?? null;
+        return hint ?? `Symbol "${symbolId}" not found. Use search_symbols(query=...) to discover available IDs.`;
       }
       let text = await formatSymbolCompact(result.symbol);
       if (result.related && result.related.length > 0) {
@@ -1120,10 +1152,30 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       ]).describe("Array of symbol identifiers. Can be passed as JSON string."),
     })),
     handler: async (args) => {
-      const syms = await getSymbols(args.repo as string, args.symbol_ids as string[]);
+      const ids = args.symbol_ids as string[];
+      const syms = await getSymbols(args.repo as string, ids);
       const output = await formatSymbolsCompact(syms);
+      // Surface fuzzy suggestions for missing IDs (telemetry: 26% zero rate).
+      let suggestions = "";
+      if (syms.length < ids.length) {
+        const foundIds = new Set(syms.map((s) => s.id));
+        const missing = ids.filter((id) => !foundIds.has(id));
+        if (missing.length > 0) {
+          const { findSimilarSymbols } = await import("./tools/symbol-tools.js");
+          const lines: string[] = [];
+          for (const m of missing.slice(0, 5)) {
+            const sims = await findSimilarSymbols(args.repo as string, m, 2);
+            if (sims.length > 0) {
+              lines.push(`  ${m} → ${sims.map((s) => s.id).join(", ")}`);
+            } else {
+              lines.push(`  ${m} → no similar symbols`);
+            }
+          }
+          suggestions = `\n\n--- not found (${missing.length}) — suggestions ---\n${lines.join("\n")}`;
+        }
+      }
       const hint = await checkTextStubHint(args.repo as string, "get_symbols", syms.length === 0);
-      return hint ? hint + output : output;
+      return (hint ? hint + output : output) + suggestions;
     },
   },
   {

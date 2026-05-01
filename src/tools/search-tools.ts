@@ -11,7 +11,8 @@ import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../typ
 const DEFAULT_MAX_TEXT_MATCHES = 200;
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
 const SEARCH_TIMEOUT_MS = 30_000; // Abort search after 30s to prevent 100s+ hangs
-const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count
+const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count (when auto_group=true)
+const SERVER_AUTO_GROUP_THRESHOLD = 30; // Server-side auto-group when caller omitted ALL grouping opts
 const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
 const MAX_FIRST_MATCH_CHARS = 300; // Cap first_match preview in grouped output
 const MAX_LINE_CHARS = 500; // Truncate individual match lines (minified JS/JSON can be 100K+)
@@ -487,7 +488,16 @@ export async function searchSymbols(
     results = await rerankResults(query, results);
   }
 
-  const detail = options?.detail_level ?? "standard";
+  // Server-side auto-compact: telemetry showed 100% of search_symbols calls
+  // omit detail_level/token_budget. When result count > 20 and caller didn't
+  // specify detail_level, switch to "compact" — cuts payload roughly in half
+  // without losing critical info (location is preserved; agent can fetch
+  // source via get_symbol if needed).
+  const SERVER_AUTO_COMPACT_THRESHOLD = 20;
+  const detail = options?.detail_level
+    ?? (results.length > SERVER_AUTO_COMPACT_THRESHOLD && !options?.token_budget
+        ? "compact"
+        : "standard");
   const shaped = shapeSearchResults(results, detail, includeSource, options);
 
   // Token budget: greedily pack results until budget exhausted
@@ -647,8 +657,19 @@ export async function searchText(
     return sum + chars;
   }, 0);
 
+  // Server-side default grouping: when caller didn't specify any grouping/ranking
+  // option AND result count exceeds SERVER_AUTO_GROUP_THRESHOLD, group by file.
+  // Telemetry showed 51% of search_text calls omitted these opts entirely;
+  // grouping cuts payload by ~50% (975 → 499 avg tokens per call).
+  const callerOmittedGroupOpts =
+    options?.group_by_file === undefined
+    && options?.auto_group === undefined
+    && options?.ranked === undefined
+    && options?.compact === undefined;
+
   const shouldGroup = options?.group_by_file
     || (options?.auto_group && matches.length > AUTO_GROUP_THRESHOLD)
+    || (callerOmittedGroupOpts && matches.length > SERVER_AUTO_GROUP_THRESHOLD)
     || estimatedChars > MAX_RESPONSE_CHARS;
 
   if (shouldGroup) {

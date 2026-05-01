@@ -25,6 +25,47 @@ function isNoisePath(filePath: string): boolean {
   return false;
 }
 
+/**
+ * Find symbols with names similar to the requested ID. Used to recover from
+ * hallucinated symbol IDs (telemetry shows 24-26% of get_symbol/get_symbols
+ * calls return zero results). Extracts a name candidate from the requested
+ * ID and returns up to `limit` symbols whose name matches case-insensitively.
+ */
+export async function findSimilarSymbols(
+  repo: string,
+  requestedId: string,
+  limit = 3,
+): Promise<Array<{ id: string; name: string; kind: string; file: string; start_line: number }>> {
+  const index = await getCodeIndex(repo, { skipFreshness: true });
+  if (!index) return [];
+
+  // Extract probable name from id: last segment after :: : # / .
+  const nameGuess = requestedId.split(/[:#/.]/).pop()?.trim() ?? requestedId;
+  if (!nameGuess) return [];
+  const lower = nameGuess.toLowerCase();
+
+  const exact: typeof index.symbols = [];
+  const prefix: typeof index.symbols = [];
+  const substr: typeof index.symbols = [];
+
+  for (const s of index.symbols) {
+    const sn = s.name.toLowerCase();
+    if (sn === lower) exact.push(s);
+    else if (sn.startsWith(lower) || lower.startsWith(sn)) prefix.push(s);
+    else if (sn.includes(lower) || lower.includes(sn)) substr.push(s);
+    if (exact.length >= limit) break;
+  }
+
+  const ranked = [...exact, ...prefix, ...substr].slice(0, limit);
+  return ranked.map((s) => ({
+    id: s.id,
+    name: s.name,
+    kind: s.kind,
+    file: s.file,
+    start_line: s.start_line,
+  }));
+}
+
 async function requireCodeIndex(repo: string): Promise<CodeIndex> {
   const index = await getCodeIndex(repo);
   if (!index) {

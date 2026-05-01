@@ -965,7 +965,10 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
 /**
  * Get the code index for a repo from disk. Auto-refreshes if git HEAD moved.
  */
-export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> {
+export async function getCodeIndex(
+  repoName: string,
+  options?: { skipFreshness?: boolean },
+): Promise<CodeIndex | null> {
   // Resolve empty/missing repo name: try CWD-based name, then single-repo fallback
   let resolved = repoName;
   if (!resolved) {
@@ -989,7 +992,11 @@ export async function getCodeIndex(repoName: string): Promise<CodeIndex | null> 
   }
   if (!meta) return null;
 
-  await ensureIndexFresh(resolved);
+  // skipFreshness=true bypasses git-diff + reindex of changed files.
+  // Use only for read-only status/metadata queries where stale data is OK.
+  if (!options?.skipFreshness) {
+    await ensureIndexFresh(resolved);
+  }
 
   const cached = codeIndexes.get(resolved);
   if (cached) return cached;

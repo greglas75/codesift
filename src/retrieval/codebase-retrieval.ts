@@ -161,6 +161,11 @@ export async function codebaseRetrieval(
   // Execute sub-queries with bounded concurrency (max 3 parallel)
   // to balance speed vs memory (full parallel on 600+ files = OOM)
   const MAX_CONCURRENCY = 3;
+  // Per-sub-query timeout: telemetry showed codebase_retrieval p99=62s where
+  // a single slow semantic/embedding call stalled the entire batch. Bound
+  // each sub-query at 25s and surface a typed timeout error so siblings
+  // still complete.
+  const SUBQUERY_TIMEOUT_MS = 25_000;
   const subResults: SubQueryResult[] = new Array(limited.length);
 
   const tasks = limited.map((raw, idx) => async () => {
@@ -175,7 +180,15 @@ export async function codebaseRetrieval(
       return;
     }
     try {
-      subResults[idx] = await executeSubQuery(repo, parsed.data);
+      subResults[idx] = await Promise.race([
+        executeSubQuery(repo, parsed.data),
+        new Promise<SubQueryResult>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`sub-query timed out after ${SUBQUERY_TIMEOUT_MS}ms`)),
+            SUBQUERY_TIMEOUT_MS,
+          ),
+        ),
+      ]);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       subResults[idx] = {

@@ -377,7 +377,10 @@ export async function planTurn(
   const skipSession = options?.skip_session === true;
 
   // --- 1. Guard: index present? -----------------------------------------
-  const index = await getCodeIndex(repo);
+  // Skip freshness check: plan_turn is the front-door routing tool and must
+  // be fast (telemetry showed p99=31s when git HEAD moved + reindex stalled).
+  // A slightly stale ranking is acceptable; agents can refresh via index_file.
+  const index = await getCodeIndex(repo, { skipFreshness: true });
   if (!index) {
     return buildUnindexedResult(query, startedAt);
   }

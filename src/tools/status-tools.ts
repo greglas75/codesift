@@ -23,7 +23,10 @@ const TEXT_STUB_LANGUAGES = new Set([
 ]);
 
 export async function indexStatus(repo: string): Promise<IndexStatusResult> {
-  const index = await getCodeIndex(repo);
+  // Status check should NOT block on freshness — telemetry showed p99=43s
+  // because ensureIndexFresh triggers git-diff + reindex of changed files.
+  // Stale-but-fast metadata is the right tradeoff for a status call.
+  const index = await getCodeIndex(repo, { skipFreshness: true });
   if (!index) return { indexed: false };
 
   const languageBreakdown: Record<string, number> = {};

@@ -155,8 +155,10 @@ describe("OPT-1: auto group_by_file", () => {
   it("BASELINE: search_text without group_by_file returns many matches with context", async () => {
     const repo = await indexLargeFixture();
 
-    // "export" appears in every file multiple times
-    const matches = await searchText(repo, "export");
+    // "export" appears in every file multiple times.
+    // Server-side auto-group now kicks in when caller omits all grouping opts;
+    // explicit `group_by_file: false` opts out so we can measure raw baseline.
+    const matches = await searchText(repo, "export", { group_by_file: false, auto_group: false });
 
     // Baseline metrics
     const matchCount = matches.length;
@@ -173,7 +175,7 @@ describe("OPT-1: auto group_by_file", () => {
   it("BASELINE: group_by_file=true produces much less output", async () => {
     const repo = await indexLargeFixture();
 
-    const ungrouped = await searchText(repo, "export");
+    const ungrouped = await searchText(repo, "export", { group_by_file: false, auto_group: false });
     const grouped = await searchText(repo, "export", { group_by_file: true });
 
     const ungroupedTokens = estimateTokens(ungrouped);
@@ -201,7 +203,7 @@ describe("OPT-1: auto group_by_file", () => {
     expect(result[0]).toHaveProperty("count");
 
     const tokens = estimateTokens(result);
-    const ungrouped = await searchText(repo, "export");
+    const ungrouped = await searchText(repo, "export", { group_by_file: false, auto_group: false });
     const ungroupedTokens = estimateTokens(ungrouped);
 
     console.log(`[OPT-1 OPTIMIZED] grouped_tokens=${tokens}, vs ungrouped=${ungroupedTokens}`);
@@ -394,8 +396,8 @@ describe("OPT-3: context reduction for high-cardinality results", () => {
   it("BASELINE: context_lines=2 (default) adds significant token overhead", async () => {
     const repo = await indexLargeFixture();
 
-    const withContext = await searchText(repo, "export", { context_lines: 2 });
-    const withoutContext = await searchText(repo, "export", { context_lines: 0 });
+    const withContext = await searchText(repo, "export", { context_lines: 2, group_by_file: false, auto_group: false });
+    const withoutContext = await searchText(repo, "export", { context_lines: 0, group_by_file: false, auto_group: false });
 
     const tokensWithContext = estimateTokens(withContext);
     const tokensWithout = estimateTokens(withoutContext);
@@ -413,7 +415,7 @@ describe("OPT-3: context reduction for high-cardinality results", () => {
   it("BASELINE: token cost breakdown per component", async () => {
     const repo = await indexLargeFixture();
 
-    const matches = await searchText(repo, "export", { context_lines: 2 });
+    const matches = await searchText(repo, "export", { context_lines: 2, group_by_file: false, auto_group: false });
 
     let contentTokens = 0;
     let contextBeforeTokens = 0;
