@@ -119,7 +119,11 @@ const OPUS_COST_PER_TOKEN = 30 / 1_000_000; // $30/1M input tokens
 
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
 const SEQUENTIAL_HINT_THRESHOLD = 3;
-const CACHE_TTL_MS = 30_000; // 30s default for search results
+// TTLs: response cache is invalidated automatically on index_file/index_folder
+// (see INDEX_MUTATING_TOOLS), so it's safe to use longer windows than agents
+// would otherwise tolerate. Telemetry showed 853 consecutive identical calls
+// within 60s in same session — the previous 30s default missed half of them.
+const CACHE_TTL_MS = 60_000; // 60s default for search results
 const CACHE_TTL_STATIC_MS = 300_000; // 5min for static data (file tree, outline)
 const CACHE_TTL_SYMBOL_MS = 120_000; // 2min for symbol reads (stable unless re-indexed)
 const CACHE_MAX_SIZE = 200;
@@ -209,6 +213,23 @@ function setCache(key: string, text: string): void {
     if (oldest !== undefined) responseCache.delete(oldest);
   }
   responseCache.set(key, { text, ts: Date.now() });
+}
+
+/**
+ * Tool calls that mutate the index — must invalidate the response cache so
+ * the next search/symbol read sees fresh data (otherwise the 30s-5min TTL
+ * serves stale results for up to several minutes after an edit).
+ */
+const INDEX_MUTATING_TOOLS = new Set([
+  "index_file",
+  "index_folder",
+  "index_repo",
+  "invalidate_cache",
+]);
+
+/** Drop every cached response. Called after an indexing tool runs. */
+function invalidateResponseCache(): void {
+  responseCache.clear();
 }
 
 /** Track sequential calls + session-level state. Exported for testing. */
@@ -464,7 +485,14 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         const ss = getSessionState();
         if (getCallCount() >= 50 && !ss.h10Emitted) ss.h10Emitted = true;
 
-        setCache(cacheKey, text);
+        // Invalidate response cache after index mutations so subsequent
+        // search/symbol reads see fresh data. Without this, the 30s-5min
+        // TTL would serve stale results after an edit.
+        if (INDEX_MUTATING_TOOLS.has(toolName)) {
+          invalidateResponseCache();
+        } else {
+          setCache(cacheKey, text);
+        }
         return formatResponse(text, toolName, args, data);
       } catch (err: unknown) {
         const elapsed = performance.now() - start;
