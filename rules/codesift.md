@@ -23,12 +23,12 @@ Note: The Explore subagent does NOT have access to CodeSift MCP tools. For code 
 
 ## Tool Discovery
 
-**146 MCP tools total** (51 core visible + 95 discoverable).
+**150 MCP tools total** (55 core visible + 95 discoverable).
 
 51 core tools appear in ListTools. The remaining 95 niche tools are discovered on demand:
 
 - `plan_turn(query="find dead code in auth")` — natural-language router: ranked tool/symbol/file recommendations with auto-reveal of hidden tools (preferred entry point at start of a task)
-- `discover_tools(query="dead code")` — keyword search across all 146 tools
+- `discover_tools(query="dead code")` — keyword search across all 150 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
@@ -266,3 +266,14 @@ Installs hooks in `.claude/settings.local.json` and rules in `~/.claude/rules/co
 - **PreCompact** (`precompact-snapshot`) — injects session snapshot before context compaction
 
 This ensures the index stays current and sub-agents use CodeSift tools automatically.
+
+## Monorepo (Turbo / pnpm-workspace / Nx) — workspace tools
+
+| Task | Tool |
+|------|------|
+| list workspace packages | `list_workspaces` |
+| workspace dependency DAG | `workspace_graph(format=mermaid)` |
+| affected packages on diff | `affected_workspaces(since="HEAD~1")` |
+| boundary rules | `workspace_boundaries(rules=[…])` |
+| package-level cycles | `find_circular_deps` (output gains `package_cycles[]` in monorepo mode) |
+| scope a framework audit | pass `workspace=<name|path>` to `framework_audit`, `nextjs_route_map`, `nextjs_metadata_audit`, `analyze_hono_app`, `nest_audit`, `astro_audit` |

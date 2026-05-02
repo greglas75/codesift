@@ -1,6 +1,6 @@
 # CodeSift -- Token-efficient code intelligence for AI agents
 
-CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 146 MCP tools (51 core + 95 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
+CodeSift indexes your codebase with tree-sitter AST parsing and gives AI agents 150 MCP tools (55 core + 95 discoverable) via CLI or MCP server. It uses 61-95% fewer tokens than raw grep/Read workflows on typical code navigation tasks.
 
 **Works with:** Claude Code, Cursor, Codex, Gemini CLI, Zed, Aider, Continue — any MCP client.
 
@@ -212,7 +212,7 @@ Output goes to `.codesift/wiki/` in the repo root. Includes markdown pages with 
 | `codesift generate-claude-md <repo>` | Generate CLAUDE.md project summary |
 | `codesift list-patterns` | List all built-in anti-pattern names |
 
-## MCP tools (146 total — 51 core + 95 discoverable)
+## MCP tools (146 total — 55 core + 95 discoverable)
 
 When running as an MCP server, CodeSift exposes 51 core tools directly. The remaining 95 niche tools are discoverable via `discover_tools` and `describe_tools`, or via `plan_turn` which routes a natural-language task to the best-fit tools and auto-reveals any hidden ones.
 
@@ -494,7 +494,7 @@ find_perf_hotspots(repo, file_pattern="src/api")
 
 ## MCP server setup
 
-CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 146 tools to AI agents (51 core + 95 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
+CodeSift runs as an [MCP](https://modelcontextprotocol.io) server, exposing 146 tools to AI agents (55 core + 95 discoverable). The fastest setup method is `codesift setup <platform>` which handles everything automatically. Manual configuration is also supported:
 
 ### OpenAI Codex
 

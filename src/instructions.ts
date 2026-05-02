@@ -2,7 +2,7 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 146 MCP tools (51 core, 95 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 150 MCP tools (51 core, 95 hidden via disable()).
 
 START HERE: For any non-trivial code task call mcp__codesift__plan_turn(query="<your task>") FIRST. plan_turn is always visible — no schema-loading required. It returns ranked tools+symbols+files and auto-reveals hidden tools in one call. Do NOT iterate ToolSearch to discover CodeSift tools — plan_turn replaces that path.
 
@@ -16,7 +16,7 @@ AUTO-LOAD: Framework-specific tools auto-enable when project type is detected at
 
 DISCOVERY (when plan_turn doesn't surface what you need)
   describe_tools(names=["find_dead_code"], reveal=true) → enables hidden tool in ListTools
-  discover_tools(query="dead code") → keyword search across all 146 tools
+  discover_tools(query="dead code") → keyword search across all 150 tools
   ToolSearch(query="select:mcp__codesift__<name>") → Claude Code primitive (last resort)
 
 HINT CODES (act on immediately when they appear in responses)
@@ -78,4 +78,8 @@ TOOL MAPPING (quick ref)
   Hono API contract → extract_api_contract | response types → extract_response_types
   Hono RPC types    → trace_rpc_types | security+env → audit_hono_security (rate-limit, auth, env-regression #3587)
   Hono modules      → detect_hono_modules | dead routes → find_dead_hono_routes | visualize → visualize_hono_routes
+  Monorepo packages → list_workspaces (FIRST for any Turbo / pnpm-workspace / Nx repo)
+  Workspace graph   → workspace_graph(format=mermaid) | affected packages → affected_workspaces(since="HEAD~1")
+  Boundary rules    → workspace_boundaries(rules=[{from_workspace, cannot_import_workspaces}])
+  Scoped audit      → framework_audit / nextjs_route_map / analyze_hono_app / nest_audit / astro_audit accept optional workspace=<name|path>
 `;
