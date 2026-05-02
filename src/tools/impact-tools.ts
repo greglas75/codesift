@@ -161,8 +161,15 @@ export async function impactAnalysis(
     changedFileSet.has(s.file),
   );
 
-  // Build adjacency index once, reuse for both affected + dependency graph
-  // Include test files for impact analysis (want to know which tests are affected)
+  // Build adjacency index once, reuse for both affected + dependency graph.
+  // Include test files for impact analysis (want to know which tests are affected).
+  //
+  // Monorepo note (Task 14 of monorepo workspace intelligence plan):
+  // buildAdjacencyIndex resolves callers/callees by symbol name across the
+  // ENTIRE indexed symbol set, so cross-package symbol references propagate
+  // automatically when both packages live in the same CodeIndex. Workspace
+  // metadata on `index.workspaces` (Task 7) is therefore NOT consulted here —
+  // it is already implicit in the symbol set.
   const adjacency = buildAdjacencyIndex(index.symbols, false);
 
   const allAffected = findAffectedSymbols(
