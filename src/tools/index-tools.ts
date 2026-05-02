@@ -442,6 +442,21 @@ export async function indexFolder(
     };
   }
 
+  // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges
+  // and other downstream consumers see the populated `workspaces` field.
+  // Gated behind CODESIFT_DISABLE_MONOREPO=1 kill switch (spec D-FB).
+  let workspaces: import("../types.js").Workspace[] | undefined;
+  if (process.env.CODESIFT_DISABLE_MONOREPO !== "1") {
+    try {
+      const { resolveWorkspaces } = await import("../storage/workspace-resolver.js");
+      const resolved = await resolveWorkspaces(rootPath);
+      if (resolved) workspaces = resolved.workspaces;
+    } catch {
+      // Resolver should never throw, but guard belt-and-braces — flat-repo
+      // mode is the safe fallback.
+    }
+  }
+
   // Build and save code index
   const codeIndex: CodeIndex = {
     repo: repoName,
@@ -453,6 +468,7 @@ export async function indexFolder(
     symbol_count: symbols.length,
     file_count: fileEntries.length,
     extractor_version: { ...EXTRACTOR_VERSIONS },
+    ...(workspaces ? { workspaces } : {}),
   };
   await saveIndex(indexPath, codeIndex);
 
