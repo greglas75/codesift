@@ -517,6 +517,8 @@ const autoLoadToolsCache = new Map<string, {
  * Exported for unit testing.
  */
 export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
+  // Kill switch: spec D-FB. Skip workspace walk entirely when set.
+  const killSwitchOff = process.env.CODESIFT_DISABLE_MONOREPO !== "1";
   const { existsSync, readFileSync, readdirSync } = await import("node:fs");
   const { join } = await import("node:path");
 
@@ -527,22 +529,23 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
     }
   }
 
-  // React + Hono detection: both need to read package.json for dep signals.
-  const pkgPath = join(cwd, "package.json");
-  if (existsSync(pkgPath)) {
+  const detectFromPackageJson = (pkgRoot: string): string[] => {
+    const enabled: string[] = [];
+    const pkgPath = join(pkgRoot, "package.json");
+    if (!existsSync(pkgPath)) return enabled;
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-
-      // React: dep + .tsx/.jsx files
-      const hasReact = !!(allDeps["react"] || allDeps["next"] || allDeps["@remix-run/react"] || allDeps["@xyflow/react"] || allDeps["preact"]);
-      if (hasReact && hasJsxFilesShallow(cwd, readdirSync)) {
-        toEnable.push(...REACT_TOOLS);
+      const hasReact = !!(
+        allDeps["react"] ||
+        allDeps["next"] ||
+        allDeps["@remix-run/react"] ||
+        allDeps["@xyflow/react"] ||
+        allDeps["preact"]
+      );
+      if (hasReact && hasJsxFilesShallow(pkgRoot, readdirSync)) {
+        enabled.push(...REACT_TOOLS);
       }
-
-      // Hono: any hono package is enough — the framework is only pulled in
-      // when used, and all 5 hidden tools degrade gracefully on non-Hono repos
-      // so false positives are harmless (return "no Hono detected" errors).
       const hasHono = !!(
         allDeps["hono"] ||
         allDeps["@hono/zod-openapi"] ||
@@ -550,10 +553,32 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
         allDeps["hono-openapi"] ||
         allDeps["chanfana"]
       );
-      if (hasHono) {
-        toEnable.push(...HONO_TOOLS);
+      if (hasHono) enabled.push(...HONO_TOOLS);
+    } catch {
+      /* malformed package.json */
+    }
+    return enabled;
+  };
+
+  // Root-level detection (existing behavior — unchanged for flat repos).
+  toEnable.push(...detectFromPackageJson(cwd));
+
+  // Monorepo workspace walk (Task 15). When monorepo detected at cwd, union
+  // each workspace's framework signals into the auto-load set. Reads are
+  // bounded by workspace count; deferred to lazy when > 50 workspaces (per
+  // gemini fix in plan rev 5 — static threshold instead of elapsed time).
+  if (killSwitchOff) {
+    try {
+      const { resolveWorkspaces } = await import("./storage/workspace-resolver.js");
+      const resolved = await resolveWorkspaces(cwd);
+      if (resolved && resolved.workspaces.length > 0 && resolved.workspaces.length <= 50) {
+        for (const ws of resolved.workspaces) {
+          toEnable.push(...detectFromPackageJson(ws.root));
+        }
       }
-    } catch { /* malformed package.json */ }
+    } catch {
+      /* monorepo resolver failure is non-fatal; flat-repo behavior preserved */
+    }
   }
 
   return toEnable;
@@ -2111,8 +2136,8 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     })),
     handler: async (args) => {
-      const { listWorkspacesHandler } = await import("./workspace-tools.js");
-      return listWorkspacesHandler({ repo: args.repo as string | undefined });
+      const { listWorkspacesHandler } = await import("./tools/workspace-tools.js");
+      return listWorkspacesHandler(args.repo ? { repo: args.repo as string } : {});
     },
   },
   {
@@ -2125,11 +2150,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       format: z.enum(["json", "mermaid", "dot"]).optional().describe("Output format (default: json)"),
     })),
     handler: async (args) => {
-      const { workspaceGraphHandler } = await import("./workspace-tools.js");
-      return workspaceGraphHandler({
-        repo: args.repo as string | undefined,
-        format: args.format as "json" | "mermaid" | "dot" | undefined,
-      });
+      const { workspaceGraphHandler } = await import("./tools/workspace-tools.js");
+      const opts: Parameters<typeof workspaceGraphHandler>[0] = {};
+      if (args.repo) opts.repo = args.repo as string;
+      if (args.format) opts.format = args.format as "json" | "mermaid" | "dot";
+      return workspaceGraphHandler(opts);
     },
   },
   {
@@ -2143,12 +2168,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       include_transitive: zBool().describe("Include transitive reverse-deps (default: true)"),
     })),
     handler: async (args) => {
-      const { affectedWorkspacesHandler } = await import("./workspace-tools.js");
-      return affectedWorkspacesHandler({
-        repo: args.repo as string | undefined,
+      const { affectedWorkspacesHandler } = await import("./tools/workspace-tools.js");
+      const opts: Parameters<typeof affectedWorkspacesHandler>[0] = {
         since: args.since as string,
-        include_transitive: args.include_transitive as boolean | undefined,
-      });
+      };
+      if (args.repo) opts.repo = args.repo as string;
+      if (args.include_transitive !== undefined) opts.include_transitive = args.include_transitive as boolean;
+      return affectedWorkspacesHandler(opts);
     },
   },
   {
@@ -2168,11 +2194,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         .describe("Workspace boundary rules"),
     })),
     handler: async (args) => {
-      const { workspaceBoundariesHandler } = await import("./workspace-tools.js");
-      return workspaceBoundariesHandler({
-        repo: args.repo as string | undefined,
+      const { workspaceBoundariesHandler } = await import("./tools/workspace-tools.js");
+      const opts: Parameters<typeof workspaceBoundariesHandler>[0] = {
         rules: args.rules as Array<{ from_workspace: string; cannot_import_workspaces: string[] }>,
-      });
+      };
+      if (args.repo) opts.repo = args.repo as string;
+      return workspaceBoundariesHandler(opts);
     },
   },
 
@@ -3212,15 +3239,27 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "nest_audit",
     category: "nestjs",
-    searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice hook onModuleInit onApplicationBootstrap shutdown dependency graph circular import boundary injection provider constructor inject cycle interceptor pipe filter middleware chain security endpoint api map inventory list all params resolver query mutation subscription apollo gateway subscribemessage socketio realtime event cron interval timeout scheduled job task onevent listener entity relation onetomany manytoone database schema messagepattern eventpattern kafka rabbitmq nats transport request pipeline handler execution flow visualization bull bullmq queue processor process background worker scope transient singleton performance escalation swagger openapi documentation apiproperty apioperation apiresponse contract extract",
-    description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, patterns, GraphQL, WebSocket, schedule, TypeORM, microservices.",
+    searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice hook onModuleInit onApplicationBootstrap shutdown dependency graph circular import boundary injection provider constructor inject cycle interceptor pipe filter middleware chain security endpoint api map inventory list all params resolver query mutation subscription apollo gateway subscribemessage socketio realtime event cron interval timeout scheduled job task onevent listener entity relation onetomany manytoone database schema messagepattern eventpattern kafka rabbitmq nats transport request pipeline handler execution flow visualization bull bullmq queue processor process background worker scope transient singleton performance escalation swagger openapi documentation apiproperty apioperation apiresponse contract extract workspace monorepo",
+    description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, patterns, GraphQL, WebSocket, schedule, TypeORM, microservices. Pass workspace=<name|path> in monorepos to scope to a single workspace.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace name or path. Scopes the audit to that workspace's files."),
       checks: z.string().optional().describe("Comma-separated checks (default: all). Options: modules,routes,di,guards,lifecycle,patterns,graphql,websocket,schedule,typeorm,microservice"),
     })),
-    handler: async (args: { repo?: string; checks?: string }) => {
+    handler: async (args: { repo?: string; workspace?: string; checks?: string }) => {
+      const { resolveWorkspaceScope } = await import("./tools/workspace-scope-helper.js");
       const checks = args.checks?.split(",").map((s) => s.trim()).filter(Boolean);
-      return nestAudit(args.repo ?? "", checks ? { checks } : undefined);
+      const scope = await resolveWorkspaceScope(args.repo ?? "", args.workspace, "nestjs");
+      if ("error" in scope) {
+        return { error: scope.error, input: scope.input, available: scope.available };
+      }
+      const opts: Parameters<typeof nestAudit>[1] = {};
+      if (checks) opts.checks = checks;
+      if (scope.rootPaths.length > 0) {
+        // Pass first matched workspace path through the existing file_pattern-style hook
+        (opts as Record<string, unknown>).file_pattern = `${scope.rootPaths[0]}/**`;
+      }
+      return nestAudit(args.repo ?? "", opts);
     },
   },
 
@@ -3526,16 +3565,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "astro_audit",
     category: "analysis",
-    searchHint: "astro meta audit full health check score gates recommendations islands hydration routes config actions content migration patterns",
-    description: "One-call Astro project health check: runs all 7 Astro tools + 13 Astro patterns in parallel, returns unified {score, gates, sections, recommendations}. Mirrors react_quickstart pattern.",
+    searchHint: "astro meta audit full health check score gates recommendations islands hydration routes config actions content migration patterns workspace monorepo",
+    description: "One-call Astro project health check: runs all 7 Astro tools + 13 Astro patterns in parallel, returns unified {score, gates, sections, recommendations}. Pass workspace=<name|path> in monorepos to scope to a single workspace.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      workspace: z.string().optional().describe("Monorepo workspace name or path. Scopes the audit to that workspace."),
       skip: z.array(z.string()).optional().describe("Sections to skip: config, hydration, routes, actions, content, migration, patterns"),
     })),
     handler: async (args) => {
+      const { resolveWorkspaceScope } = await import("./tools/workspace-scope-helper.js");
+      const scope = await resolveWorkspaceScope(args.repo as string ?? "", args.workspace as string | undefined, "astro");
+      if ("error" in scope) {
+        return { error: scope.error, input: scope.input, available: scope.available };
+      }
       const opts: Parameters<typeof astroAudit>[0] = {};
       if (args.repo != null) opts.repo = args.repo as string;
       if (args.skip != null) opts.skip = args.skip as string[];
+      if (scope.rootPaths.length > 0) {
+        (opts as Record<string, unknown>).file_pattern = `${scope.rootPaths[0]}/**`;
+      }
       return await astroAudit(opts);
     },
   },
@@ -3569,18 +3617,31 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "analyze_hono_app",
     category: "analysis",
-    searchHint: "hono overview analyze app routes middleware runtime env bindings rpc",
-    description: "Complete Hono application overview: routes grouped by method/scope, middleware map, context vars, OpenAPI status, RPC exports (flags Issue #3869 slow pattern), runtime, env bindings. One call for full project analysis.",
+    searchHint: "hono overview analyze app routes middleware runtime env bindings rpc workspace monorepo",
+    description: "Complete Hono application overview: routes grouped by method/scope, middleware map, context vars, OpenAPI status, RPC exports (flags Issue #3869 slow pattern), runtime, env bindings. Pass workspace=<name|path> in monorepos to scope to a single workspace.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       entry_file: z.string().optional().describe("Hono entry file (auto-detected if omitted)"),
+      workspace: z.string().optional().describe("Monorepo workspace name or path (e.g. '@org/api' or 'apps/api'). Scopes Hono entry resolution to that workspace."),
       force_refresh: z.boolean().optional().describe("Clear cache and rebuild"),
     })),
     handler: async (args) => {
       const { analyzeHonoApp } = await import("./tools/hono-analyze-app.js");
+      const { resolveWorkspaceScope } = await import("./tools/workspace-scope-helper.js");
+      const repo = args.repo as string;
+      const scope = await resolveWorkspaceScope(repo, args.workspace as string | undefined, "hono");
+      if ("error" in scope) {
+        return { error: scope.error, input: scope.input, available: scope.available };
+      }
+      // If workspace scoping resolved to a path, prefer it as entry_file root hint.
+      let entry = args.entry_file as string | undefined;
+      if (!entry && scope.rootPaths.length === 1) {
+        // Hono's entry resolver searches src/index.ts under the path provided
+        entry = scope.rootPaths[0];
+      }
       return await analyzeHonoApp(
-        args.repo as string,
-        args.entry_file as string | undefined,
+        repo,
+        entry,
         args.force_refresh as boolean | undefined,
       );
     },
