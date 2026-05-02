@@ -21,6 +21,12 @@ export interface HotspotResult {
   period: string;
   total_files: number;
   total_commits: number;
+  /**
+   * Diagnostic note populated only when the result is empty or degraded.
+   * Audit skills should surface this in their Tool Availability Block as
+   * `EMPTY-RESULT (<note>)` instead of silently treating it as "no hotspots".
+   */
+  note?: string;
 }
 
 /**
@@ -29,18 +35,23 @@ export interface HotspotResult {
  * Async to avoid blocking the MCP server's event loop while git produces output.
  * On a 2,376-commit repo with --numstat, the synchronous variant could block for
  * tens of seconds, exceeding the MCP client's connection timeout (-32000).
+ *
+ * Returns a tuple of [churn-map, error-note]. error-note is populated when the
+ * git invocation failed or produced empty output — caller should surface it
+ * rather than treating empty as "no hotspots."
  */
 async function getGitChurn(
   repoRoot: string,
   sinceDays: number,
-): Promise<Map<string, { commits: number; linesAdded: number; linesRemoved: number }>> {
+  useAllRefs = false,
+): Promise<{ churn: Map<string, { commits: number; linesAdded: number; linesRemoved: number }>; note?: string }> {
   const since = `${sinceDays} days ago`;
+  const args = ["log", "--numstat", "--format=%H", `--since=${since}`];
+  if (useAllRefs) args.push("--all");
 
   let output: string;
   try {
-    const result = await execFileAsync("git", [
-      "log", "--numstat", "--format=%H", `--since=${since}`,
-    ], {
+    const result = await execFileAsync("git", args, {
       cwd: repoRoot,
       encoding: "utf-8",
       timeout: 30_000,
@@ -50,7 +61,16 @@ async function getGitChurn(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[hotspot] git log failed for ${repoRoot}: ${message}`);
-    return new Map();
+    return { churn: new Map(), note: `git log failed: ${message.slice(0, 200)}` };
+  }
+
+  if (!output.trim()) {
+    return {
+      churn: new Map(),
+      note: useAllRefs
+        ? `git log returned empty output even with --all refs (no commits in last ${sinceDays}d)`
+        : `git log returned empty output (no commits in last ${sinceDays}d on current ref)`,
+    };
   }
 
   const churn = new Map<string, { commits: number; linesAdded: number; linesRemoved: number }>();
@@ -107,7 +127,7 @@ async function getGitChurn(
     if (entry) entry.commits++;
   }
 
-  return churn;
+  return { churn };
 }
 
 /**
@@ -131,7 +151,22 @@ export async function analyzeHotspots(
   const topN = options?.top_n ?? MAX_HOTSPOTS;
   const filePattern = options?.file_pattern;
 
-  const churn = await getGitChurn(index.root, sinceDays);
+  let { churn, note } = await getGitChurn(index.root, sinceDays);
+
+  // Empty-result fallback: structure-audit-2026-04-30 saw analyze_hotspots return
+  // empty on an active 2,376-commit repo. Cause was never identified (resolver
+  // bug + worktree state both possible). Try --all refs as a recovery before
+  // giving up — covers detached HEAD, unusual ref configs, and worktrees.
+  if (churn.size === 0 && !note?.includes("git log failed")) {
+    console.error(`[hotspot] empty churn for ${index.root} on default ref — retrying with --all`);
+    const fallback = await getGitChurn(index.root, sinceDays, /* useAllRefs */ true);
+    churn = fallback.churn;
+    if (churn.size > 0) {
+      note = `recovered via --all refs fallback (default ref returned empty)`;
+    } else {
+      note = fallback.note ?? `empty churn even after --all fallback`;
+    }
+  }
 
   // Build symbol count lookup
   const symbolCounts = new Map<string, number>();
@@ -172,5 +207,6 @@ export async function analyzeHotspots(
     period: `last ${sinceDays} days`,
     total_files: hotspots.length,
     total_commits: Math.round(totalCommits / Math.max(hotspots.length, 1)),
+    ...(note ? { note } : {}),
   };
 }
