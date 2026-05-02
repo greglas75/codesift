@@ -3,7 +3,8 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CodeIndex } from "../types.js";
+import { readFileSync } from "node:fs";
+import type { CodeIndex, Workspace } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { getCachedParse, setCachedParse } from "../parser/parse-cache.js";
 import { extractPythonImports } from "./python-imports.js";
@@ -74,6 +75,30 @@ export function extractImports(source: string): string[] {
     }
   }
 
+  return [...imports];
+}
+
+/**
+ * Extract bare-specifier imports (e.g. `@org/shared`, `@/utils`).
+ * Only used by the workspace-alias / tsconfig-paths resolvers when
+ * `index.workspaces` is present. Skips relative paths and skips imports
+ * that look like absolute file URLs.
+ *
+ * Task 6 of monorepo workspace intelligence plan.
+ */
+export function extractBareImports(source: string): string[] {
+  const imports = new Set<string>();
+  for (const pattern of IMPORT_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source)) !== null) {
+      const importPath = match[1];
+      if (!importPath) continue;
+      if (importPath.startsWith(".") || importPath.startsWith("/")) continue;
+      // Strip dynamic-import wrappers — we already handled them via pattern groups
+      imports.add(importPath);
+    }
+  }
   return [...imports];
 }
 
@@ -227,6 +252,204 @@ export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string
   return map;
 }
 
+// ---------------------------------------------------------------------------
+// Monorepo workspace-alias resolution (Task 6).
+// Activated only when `index.workspaces` is non-null. Adds cross-package edges
+// for bare imports like `@org/shared` (workspace-name match) and tsconfig
+// `paths` aliases. All resolution data is precomputed at edge-collection time
+// using workspace metadata that was already cached at index time (Task 4) —
+// zero new IO at query time.
+// ---------------------------------------------------------------------------
+
+interface WorkspaceAliasResolver {
+  resolve: (importPath: string, importerFile: string) => string | null;
+}
+
+const NULL_RESOLVER: WorkspaceAliasResolver = { resolve: () => null };
+
+/** Build a workspace-alias resolver for the given index. Reads each
+ *  workspace's package.json once at construction time to discover entry
+ *  points; never reads disk afterwards. Returns a no-op resolver on flat
+ *  repos. */
+export function buildWorkspaceAliasResolver(index: CodeIndex): WorkspaceAliasResolver {
+  const workspaces = index.workspaces;
+  if (!workspaces || workspaces.length === 0) return NULL_RESOLVER;
+
+  const fileSet = new Set(index.files.map((f) => f.path));
+  const normalizedPaths = buildNormalizedPathMap(index);
+
+  // Workspace name → relative root (relative to index.root)
+  const wsRelByName = new Map<string, string>();
+  // Workspace name → resolved entry file path (relative to index.root)
+  const wsEntryByName = new Map<string, string | null>();
+  // Sorted list of (relativeRoot, workspace) for longest-prefix file lookup
+  const wsByPath: Array<{ rel: string; ws: Workspace }> = [];
+
+  for (const ws of workspaces) {
+    const rel = relRoot(ws.root, index.root);
+    if (rel === null) continue;
+    wsByPath.push({ rel, ws });
+    if (ws.name) {
+      wsRelByName.set(ws.name, rel);
+      wsEntryByName.set(ws.name, resolveWorkspaceEntry(ws.root, rel, fileSet, normalizedPaths));
+    }
+  }
+  // Longest prefix first
+  wsByPath.sort((a, b) => b.rel.length - a.rel.length);
+
+  function findOriginatingWorkspace(importerFile: string): Workspace | null {
+    for (const { rel, ws } of wsByPath) {
+      if (rel === "" || importerFile === rel || importerFile.startsWith(rel + "/")) {
+        return ws;
+      }
+    }
+    return null;
+  }
+
+  function lookupFile(candidate: string): string | null {
+    if (fileSet.has(candidate)) return candidate;
+    const stripped = candidate.replace(/\.(astro|ts|tsx|js|jsx|mjs|cjs)$/, "");
+    const normalized = normalizedPaths.get(stripped);
+    if (normalized) return normalized;
+    // Try common entry-file suffixes
+    for (const suffix of ["/index.ts", "/index.tsx", "/index.js", "/index.jsx"]) {
+      const tryPath = candidate + suffix;
+      if (fileSet.has(tryPath)) return tryPath;
+    }
+    return null;
+  }
+
+  function resolveByWorkspaceName(importPath: string): string | null {
+    // Exact workspace-name match → entry file
+    const directEntry = wsEntryByName.get(importPath);
+    if (directEntry) return directEntry;
+
+    // Subpath import: `@org/shared/Button` → workspace `@org/shared` + subpath `Button`
+    for (const [wsName, wsRel] of wsRelByName) {
+      if (!importPath.startsWith(wsName + "/")) continue;
+      const subpath = importPath.slice(wsName.length + 1);
+      // Try `<wsRel>/<subpath>`, then `<wsRel>/src/<subpath>`
+      for (const candidate of [`${wsRel}/${subpath}`, `${wsRel}/src/${subpath}`]) {
+        const found = lookupFile(candidate);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function resolveByTsconfigPaths(importPath: string, importerFile: string): string | null {
+    const ws = findOriginatingWorkspace(importerFile);
+    if (!ws) return null;
+    for (const tsp of ws.tsconfig_paths) {
+      const pattern = tsp.from_pattern;
+      if (pattern.endsWith("/*")) {
+        const prefix = pattern.slice(0, -1); // "@org/" from "@org/*"
+        if (!importPath.startsWith(prefix)) continue;
+        const captured = importPath.slice(prefix.length);
+        for (const target of tsp.to_paths) {
+          const expanded = target.replace("*", captured);
+          // Try as repo-relative; also try relative to the originating workspace
+          const wsRel = relRoot(ws.root, index.root) ?? "";
+          const candidates = [expanded];
+          if (wsRel) candidates.push(`${wsRel}/${expanded}`);
+          for (const c of candidates) {
+            const found = lookupFile(c);
+            if (found) return found;
+          }
+        }
+      } else if (pattern === importPath) {
+        for (const target of tsp.to_paths) {
+          const wsRel = relRoot(ws.root, index.root) ?? "";
+          const candidates = [target, wsRel ? `${wsRel}/${target}` : target];
+          for (const c of candidates) {
+            const found = lookupFile(c);
+            if (found) return found;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  return {
+    resolve: (importPath, importerFile) => {
+      // Workspace-name match takes precedence over tsconfig paths
+      const byName = resolveByWorkspaceName(importPath);
+      if (byName) return byName;
+      return resolveByTsconfigPaths(importPath, importerFile);
+    },
+  };
+}
+
+function relRoot(absPath: string, indexRoot: string): string | null {
+  if (!absPath.startsWith(indexRoot)) return null;
+  const rel = absPath.slice(indexRoot.length).replace(/^[\\/]+/, "");
+  return rel;
+}
+
+function resolveWorkspaceEntry(
+  wsAbsRoot: string,
+  wsRel: string,
+  fileSet: Set<string>,
+  normalizedPaths: Map<string, string>,
+): string | null {
+  const pkg = readWorkspacePackageJson(wsAbsRoot);
+  const entryRel = pickEntry(pkg);
+  const candidates: string[] = [];
+  if (entryRel) {
+    const cleaned = entryRel.replace(/^\.?\/+/, "");
+    candidates.push(wsRel ? `${wsRel}/${cleaned}` : cleaned);
+  }
+  // Common defaults (in order)
+  for (const def of ["src/index.ts", "src/index.tsx", "src/index.js", "index.ts", "index.tsx", "index.js"]) {
+    candidates.push(wsRel ? `${wsRel}/${def}` : def);
+  }
+  for (const c of candidates) {
+    if (fileSet.has(c)) return c;
+    const stripped = c.replace(/\.(astro|ts|tsx|js|jsx|mjs|cjs)$/, "");
+    const normalized = normalizedPaths.get(stripped);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+interface ParsedPackageJson {
+  main?: string;
+  module?: string;
+  exports?: unknown;
+  source?: string;
+  types?: string;
+}
+
+function readWorkspacePackageJson(absRoot: string): ParsedPackageJson | null {
+  try {
+    return JSON.parse(readFileSync(`${absRoot}/package.json`, "utf-8")) as ParsedPackageJson;
+  } catch {
+    return null;
+  }
+}
+
+function pickEntry(pkg: ParsedPackageJson | null): string | null {
+  if (!pkg) return null;
+  // Prefer source > module > main; ignore complex exports
+  if (typeof pkg.source === "string") return pkg.source;
+  if (typeof pkg.module === "string") return pkg.module;
+  if (typeof pkg.main === "string") return pkg.main;
+  if (pkg.exports && typeof pkg.exports === "object") {
+    const exp = pkg.exports as Record<string, unknown>;
+    const root = exp["."];
+    if (typeof root === "string") return root;
+    if (root && typeof root === "object") {
+      const r = root as Record<string, unknown>;
+      for (const key of ["import", "default", "require"]) {
+        const v = r[key];
+        if (typeof v === "string") return v;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Build normalized path map for matching imports to indexed files.
  */
@@ -258,6 +481,8 @@ export async function collectImportEdges(
 ): Promise<ImportEdge[]> {
   const normalizedPaths = buildNormalizedPathMap(index);
   const kotlinFilesByBasename = buildKotlinFilesByBasename(index);
+  // Workspace-alias resolver (Task 6) — no-op when index.workspaces is absent.
+  const workspaceResolver = buildWorkspaceAliasResolver(index);
   const edgeSet = new Set<string>();
   const edges: ImportEdge[] = [];
 
@@ -313,6 +538,18 @@ export async function collectImportEdges(
       const resolved = resolveImportPath(file.path, importPath);
       const targetFile = normalizedPaths.get(resolved);
       if (targetFile) addEdge(file.path, targetFile);
+    }
+
+    // Workspace-alias / tsconfig-paths imports (JS/TS only when monorepo).
+    // Activated only when `index.workspaces` is non-null. Adds cross-package
+    // edges so find_references / impact_analysis / trace_call_chain see
+    // bare-name imports like `@org/shared`.
+    if (workspaceResolver !== NULL_RESOLVER && /\.(astro|ts|tsx|js|jsx|mjs|cjs)$/.test(file.path)) {
+      const bareImports = extractBareImports(source);
+      for (const importPath of bareImports) {
+        const targetFile = workspaceResolver.resolve(importPath, file.path);
+        if (targetFile) addEdge(file.path, targetFile);
+      }
     }
 
     // Kotlin fully-qualified imports (.kt/.kts files only)
