@@ -441,11 +441,21 @@ export async function planTurn(
   // --- 4. Build ranker context (parallel fetch) --------------------------
   const toolDefs = getToolDefinitions();
 
-  const [usageFreq, frameworkTools, embeddings] = await Promise.all([
+  const [usageFreq, baseFrameworkTools, embeddings] = await Promise.all([
     getUsageFrequency(),
     detectAutoLoadToolsCached(process.cwd()).catch(() => [] as string[]),
     getToolEmbeddings(toolDefs).catch(() => null),
   ]);
+
+  // Monorepo term boost (Task 13). Gated on the active index having
+  // `workspaces` populated (gemini fix in plan rev 5) so flat-repo searches
+  // for the word "package" don't suddenly rank workspace tools above
+  // search/symbol tools.
+  const frameworkTools = augmentFrameworkToolsForMonorepo(
+    baseFrameworkTools,
+    parsed.normalized,
+    index,
+  );
 
   const embeddingAvailable = embeddings !== null && embeddings.size > 0;
 
@@ -666,3 +676,38 @@ export function formatPlanTurnResult(result: PlanTurnResult): string {
 
   return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Monorepo term boost (Task 13 of monorepo workspace intelligence plan).
+// ---------------------------------------------------------------------------
+
+const MONOREPO_QUERY_TERMS = [
+  "monorepo",
+  "workspace",
+  "package",
+  "apps/",
+  "packages/",
+  "affected",
+  "turbo",
+];
+
+const MONOREPO_TOOL_NAMES = [
+  "list_workspaces",
+  "workspace_graph",
+  "affected_workspaces",
+  "workspace_boundaries",
+];
+
+function augmentFrameworkToolsForMonorepo(
+  base: string[],
+  query: string,
+  index: import("../types.js").CodeIndex,
+): string[] {
+  // Gate: only boost when the active index has workspaces populated.
+  if (!index.workspaces || index.workspaces.length === 0) return base;
+  const ql = query.toLowerCase();
+  const hasMonorepoTerm = MONOREPO_QUERY_TERMS.some((t) => ql.includes(t));
+  if (!hasMonorepoTerm) return base;
+  return [...base, ...MONOREPO_TOOL_NAMES];
+}
+
