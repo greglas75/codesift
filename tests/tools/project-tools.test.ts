@@ -186,6 +186,33 @@ describe("detectStack", () => {
     expect(stack.language).toBe("typescript");
     expect(stack.detected_from).toContain("tsconfig.base.json");
   });
+
+  it("AC7: monorepo profile surfaces workspace_details with framework hints (Task 5)", async () => {
+    const path = await import("node:path");
+    const fixtureRoot = path.join(__dirname, "..", "fixtures", "turbo-pnpm-monorepo");
+    const stack = await detectStack(fixtureRoot);
+    expect(stack.monorepo).not.toBeNull();
+    expect(stack.monorepo?.tool).toBe("turborepo");
+    // monorepo.workspaces preserves the manifest patterns (3 entries from pnpm-workspace.yaml)
+    expect(stack.monorepo?.workspaces.length).toBe(3);
+    // workspace_details (rich resolver output) is present and surfaces framework hints
+    const details = stack.monorepo?.workspace_details ?? [];
+    expect(details.length).toBeGreaterThanOrEqual(3);
+    const web = details.find((w) => w.name === "@org/web");
+    const api = details.find((w) => w.name === "@org/api");
+    expect(web?.detected_frameworks).toEqual(expect.arrayContaining(["nextjs"]));
+    expect(api?.detected_frameworks).toEqual(expect.arrayContaining(["hono"]));
+    // packages/internal excluded by negation
+    expect(details.find((w) => w.name === "@org/internal")).toBeUndefined();
+  });
+
+  it("flat repo: stack.monorepo === null (no regression)", async () => {
+    const root = await createFixture("flat-repo-monorepo-check", {
+      "package.json": JSON.stringify({ name: "single", version: "1.0.0" }),
+    });
+    const stack = await detectStack(root);
+    expect(stack.monorepo).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

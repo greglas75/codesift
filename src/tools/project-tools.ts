@@ -99,7 +99,13 @@ export interface StackInfo {
   test_runner: string | null;
   package_manager: string | null;
   build_tool: string | null;  // vite, cra, webpack, parcel, esbuild, rspack, rsbuild, turbopack
-  monorepo: { tool: string | null; workspaces: string[] } | null;
+  monorepo: {
+    tool: string | null;
+    workspaces: string[];
+    /** Rich per-workspace data populated by `resolveWorkspaces()` when
+     *  available; absent when only the regex fallback ran. */
+    workspace_details?: import("../types.js").Workspace[];
+  } | null;
   detected_from: string[];
 }
 
@@ -386,27 +392,61 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
     detected_from.push("bun.lockb");
   }
 
-  // Monorepo detection
+  // Monorepo detection — resolveWorkspaces() (Task 4) is the primary path.
+  // Falls back to the legacy regex YAML parser when resolveWorkspaces returns
+  // null (covers @manypkg's edge cases such as malformed configs).
   let monorepo: StackInfo["monorepo"] = null;
+
+  // Read raw workspace globs from manifest first — they are the canonical
+  // shape exposed by `monorepo.workspaces` (string[] of patterns).
+  let manifestWorkspaces: string[] | null = null;
   if (pkg?.workspaces) {
-    const workspaces = Array.isArray(pkg.workspaces)
+    manifestWorkspaces = Array.isArray(pkg.workspaces)
       ? pkg.workspaces
       : pkg.workspaces.packages ?? [];
-    const turboExists = await fileExists(join(projectRoot, "turbo.json"));
-    const nxExists = await fileExists(join(projectRoot, "nx.json"));
-    monorepo = {
-      tool: turboExists ? "turborepo" : nxExists ? "nx" : "workspaces",
-      workspaces,
-    };
     detected_from.push("package.json:workspaces");
   } else if (await fileExists(join(projectRoot, "pnpm-workspace.yaml"))) {
     try {
       const content = await readFile(join(projectRoot, "pnpm-workspace.yaml"), "utf-8");
-      const workspaces = content.match(/- ['"]?([^'"]+)['"]?/g)?.map(m => m.replace(/- ['"]?/, "").replace(/['"]$/, "")) ?? [];
-      const turboExists = await fileExists(join(projectRoot, "turbo.json"));
-      monorepo = { tool: turboExists ? "turborepo" : "pnpm-workspaces", workspaces };
+      manifestWorkspaces =
+        content.match(/- ['"]?([^'"]+)['"]?/g)?.map((m) =>
+          m.replace(/- ['"]?/, "").replace(/['"]$/, ""),
+        ) ?? [];
       detected_from.push("pnpm-workspace.yaml");
-    } catch { /* ignore parse errors */ }
+    } catch {
+      /* ignore parse errors */
+    }
+  }
+
+  if (manifestWorkspaces) {
+    const turboExists = await fileExists(join(projectRoot, "turbo.json"));
+    const nxExists = await fileExists(join(projectRoot, "nx.json"));
+    const tool = turboExists
+      ? "turborepo"
+      : nxExists
+        ? "nx"
+        : pkg?.workspaces
+          ? "workspaces"
+          : "pnpm-workspaces";
+
+    // Try the rich resolver (Task 4) — graceful degradation if it returns null
+    let workspace_details: import("../types.js").Workspace[] | undefined;
+    try {
+      const { resolveWorkspaces } = await import("../storage/workspace-resolver.js");
+      const resolved = await resolveWorkspaces(projectRoot);
+      if (resolved) {
+        workspace_details = resolved.workspaces;
+        detected_from.push("workspace-resolver");
+      }
+    } catch {
+      /* fall back to manifest-only data — graceful */
+    }
+
+    monorepo = {
+      tool,
+      workspaces: manifestWorkspaces,
+      ...(workspace_details ? { workspace_details } : {}),
+    };
   }
 
   // Monorepo workspace scanning — if root has no framework/test_runner, scan workspaces
