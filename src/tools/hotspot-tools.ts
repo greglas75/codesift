@@ -1,5 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { getCodeIndex } from "./index-tools.js";
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_SINCE_DAYS = 90;
 const MAX_HOTSPOTS = 30;
@@ -22,22 +25,28 @@ export interface HotspotResult {
 
 /**
  * Get git log numstat for a repo: file → { commits, linesChanged }.
+ *
+ * Async to avoid blocking the MCP server's event loop while git produces output.
+ * On a 2,376-commit repo with --numstat, the synchronous variant could block for
+ * tens of seconds, exceeding the MCP client's connection timeout (-32000).
  */
-function getGitChurn(
+async function getGitChurn(
   repoRoot: string,
   sinceDays: number,
-): Map<string, { commits: number; linesAdded: number; linesRemoved: number }> {
+): Promise<Map<string, { commits: number; linesAdded: number; linesRemoved: number }>> {
   const since = `${sinceDays} days ago`;
 
   let output: string;
   try {
-    output = execFileSync("git", [
+    const result = await execFileAsync("git", [
       "log", "--numstat", "--format=%H", `--since=${since}`,
     ], {
       cwd: repoRoot,
       encoding: "utf-8",
       timeout: 30_000,
+      maxBuffer: 50 * 1024 * 1024, // 50MB — --numstat on 2k+ commit repos
     });
+    output = result.stdout;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[hotspot] git log failed for ${repoRoot}: ${message}`);
@@ -122,7 +131,7 @@ export async function analyzeHotspots(
   const topN = options?.top_n ?? MAX_HOTSPOTS;
   const filePattern = options?.file_pattern;
 
-  const churn = getGitChurn(index.root, sinceDays);
+  const churn = await getGitChurn(index.root, sinceDays);
 
   // Build symbol count lookup
   const symbolCounts = new Map<string, number>();
@@ -133,7 +142,9 @@ export async function analyzeHotspots(
   const hotspots: FileHotspot[] = [];
   let totalCommits = 0;
 
+  let yieldCounter = 0;
   for (const [file, stats] of churn) {
+    if ((++yieldCounter & 511) === 0) await new Promise((r) => setImmediate(r));
     if (filePattern && !file.includes(filePattern)) continue;
     // Skip non-indexed files (node_modules, etc.)
     const symCount = symbolCounts.get(file) ?? 0;

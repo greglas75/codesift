@@ -60,7 +60,17 @@ async function autoEnableFrameworkToolsFromPackageJson(cwd: string): Promise<voi
 }
 
 async function main(): Promise<void> {
+  const startTs = Date.now();
   const transport = new StdioServerTransport();
+  // Diagnostic transport hooks. Primary fix for "-32000: Connection closed" is
+  // event-loop yielding inside heavy tools (perf-tools, hotspot-tools, project-tools);
+  // these handlers leave a stderr trace if any residual transport drop occurs.
+  transport.onclose = () => {
+    console.error(`[codesift] transport closed at uptime=${Date.now() - startTs}ms`);
+  };
+  transport.onerror = (err: Error) => {
+    console.error(`[codesift] transport error at uptime=${Date.now() - startTs}ms:`, err.message);
+  };
   const envPlatform = detectPlatform();
   let hooksInstalledFor: HookPlatform | null = null;
   const installHooks = (platform: HookPlatform, reason: string): void => {

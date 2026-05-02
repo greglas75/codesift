@@ -222,7 +222,13 @@ export async function findPerfHotspots(
     });
   };
 
+  let yieldCounter = 0;
   for (const sym of index.symbols) {
+    // Yield to event loop every 512 iterations so MCP transport stays responsive
+    // during long scans. Without this, 50k+ symbol indexes block the loop for
+    // seconds and MCP client closes the connection (-32000).
+    if ((++yieldCounter & 511) === 0) await new Promise((r) => setImmediate(r));
+
     if (findings.length >= maxResults) break;
     if (!sym.source) continue;
     if (!includeTests && isTestFile(sym.file)) continue;
