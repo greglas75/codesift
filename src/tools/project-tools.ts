@@ -9,7 +9,10 @@
 import { readFile, writeFile, access, readdir, mkdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { extractAstroConventions } from "./astro-config.js";
@@ -33,6 +36,7 @@ export const EXTRACTOR_VERSIONS = {
   php: "1.0.0",
   astro: "1.0.0",
   kotlin: "1.0.0",
+  monorepo: "1.0.0", // workspace resolver — bump forces reindex when workspace schema changes
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -1643,9 +1647,10 @@ async function extractIdentity(projectRoot: string): Promise<ProjectIdentity> {
   // Git remote
   let gitRemote: string | null = null;
   try {
-    gitRemote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+    const { stdout } = await execFileAsync("git", ["config", "--get", "remote.origin.url"], {
       cwd: projectRoot, timeout: 3000,
-    }).toString().trim().replace(/\.git$/, "").replace(/^git@github\.com:/, "github.com/") || null;
+    });
+    gitRemote = stdout.toString().trim().replace(/\.git$/, "").replace(/^git@github\.com:/, "github.com/") || null;
   } catch { /* not a git repo or no remote */ }
 
   return {
@@ -1904,24 +1909,29 @@ async function extractDependencyHealth(projectRoot: string): Promise<DependencyH
 // Git Health
 // ---------------------------------------------------------------------------
 
-function extractGitHealth(projectRoot: string): GitHealth | null {
+async function extractGitHealth(projectRoot: string): Promise<GitHealth | null> {
   try {
-    const totalStr = execFileSync("git", ["rev-list", "--count", "HEAD"], {
+    const totalRes = await execFileAsync("git", ["rev-list", "--count", "HEAD"], {
       cwd: projectRoot, timeout: 5000,
-    }).toString().trim();
+    });
+    const totalStr = totalRes.stdout.toString().trim();
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const recentStr = execFileSync("git", ["rev-list", "--count", `--since=${thirtyDaysAgo}`, "HEAD"], {
+    const recentRes = await execFileAsync("git", ["rev-list", "--count", `--since=${thirtyDaysAgo}`, "HEAD"], {
       cwd: projectRoot, timeout: 5000,
-    }).toString().trim();
+    });
+    const recentStr = recentRes.stdout.toString().trim();
 
-    const lastCommitDate = execFileSync("git", ["log", "-1", "--format=%aI"], {
+    const lastRes = await execFileAsync("git", ["log", "-1", "--format=%aI"], {
       cwd: projectRoot, timeout: 5000,
-    }).toString().trim();
+    });
+    const lastCommitDate = lastRes.stdout.toString().trim();
 
-    const contributorsStr = execFileSync("git", ["shortlog", "-sn", "--no-merges", "HEAD"], {
+    const contribRes = await execFileAsync("git", ["shortlog", "-sn", "--no-merges", "HEAD"], {
       cwd: projectRoot, timeout: 10000,
-    }).toString().trim();
+      maxBuffer: 5 * 1024 * 1024, // 5MB — many contributors on long-lived repos
+    });
+    const contributorsStr = contribRes.stdout.toString().trim();
     const contributors = contributorsStr.split("\n").filter(Boolean).length;
 
     return {
@@ -2088,7 +2098,7 @@ export async function analyzeProject(
     ...(phpConventions ? { php_conventions: phpConventions } : {}),
     ...(astroConventions ? { astro_conventions: astroConventions } : {}),
     dependency_health: await extractDependencyHealth(projectRoot) ?? undefined,
-    git_health: extractGitHealth(projectRoot) ?? undefined,
+    git_health: (await extractGitHealth(projectRoot)) ?? undefined,
     generation_metadata: {
       files_analyzed,
       files_skipped,

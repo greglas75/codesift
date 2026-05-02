@@ -77,6 +77,73 @@ export interface CodeIndex {
   /** Snapshot of EXTRACTOR_VERSIONS at index creation time — used to detect
    *  schema changes and trigger full reindex when any language version bumps. */
   extractor_version?: Record<string, string>;
+  /** Present iff a JS/TS monorepo was detected at index time. Populated by
+   *  the workspace resolver in `src/storage/workspace-resolver.ts`. */
+  workspaces?: Workspace[];
+}
+
+// ---------------------------------------------------------------------------
+// Monorepo workspace model — populated when a JS/TS monorepo is detected.
+// ---------------------------------------------------------------------------
+
+export interface WorkspaceTsconfigPath {
+  /** Pattern as written in tsconfig `paths`, e.g. "@org/*" or "@/*". */
+  from_pattern: string;
+  /** Resolved targets relative to the workspace root, e.g. ["packages/*"]. */
+  to_paths: string[];
+}
+
+export interface WorkspaceDependencies {
+  /** Names of internal workspace packages this workspace depends on. */
+  workspace: string[];
+  /** Names of npm-registry deps (versions live in the workspace package.json). */
+  external: string[];
+}
+
+export interface Workspace {
+  /** Stable id: package name when present, otherwise relative path. */
+  id: string;
+  /** package.json#name; null when the package has no name field. */
+  name: string | null;
+  /** Absolute path to the workspace root. */
+  root: string;
+  package_manager_role: "root" | "package";
+  /** Build-orchestrator / package-manager signal. */
+  manifest_tool: "turbo" | "pnpm" | "yarn" | "npm" | "bun" | "nx" | "lerna";
+  dependencies: WorkspaceDependencies;
+  tsconfig_paths: WorkspaceTsconfigPath[];
+  /** e.g. ["nextjs", "hono"]; populated from the workspace package.json deps. */
+  detected_frameworks: string[];
+  file_count?: number;
+  symbol_count?: number;
+}
+
+/** Boundary rule consumed by the new `workspace_boundaries` tool.
+ *  Existing path-based `BoundaryRule` (used by `check_boundaries`) is unchanged. */
+export interface WorkspaceBoundaryRule {
+  /** Workspace name OR glob (e.g. "apps/*"). */
+  from_workspace: string;
+  /** Names, globs, or negation entries (e.g. ["packages/*", "!packages/shared"]). */
+  cannot_import_workspaces: string[];
+}
+
+export interface AffectedWorkspaceEntry {
+  workspace_id: string;
+  workspace_name: string | null;
+  reason: "direct" | "transitive" | "deleted-workspace-rev-dep";
+  changed_files: string[];
+  /** Chain of workspace ids for transitive entries; populated from BFS path. */
+  via?: string[];
+}
+
+export interface AffectedResult {
+  since_ref: string;
+  changed_files: string[];
+  affected: AffectedWorkspaceEntry[];
+  /** Lockfile changes are surfaced separately and never fan out (per spec D5). */
+  excluded_lockfile_changes: string[];
+  /** Diagnostic field surfaced when called outside a git work tree, etc. */
+  error?: "not_a_git_repository" | "bad_ref";
 }
 
 export interface RepoMeta {
