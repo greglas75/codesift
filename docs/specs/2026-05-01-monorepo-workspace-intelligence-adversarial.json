@@ -1,0 +1,13 @@
+{
+  "spec_id": "2026-05-01-monorepo-workspace-intelligence-1542",
+  "run_at": "2026-05-01T15:54:29Z",
+  "providers_used": ["codex-5.3", "gemini", "cursor-agent"],
+  "verdict": "warnings",
+  "critical_count_initial": 6,
+  "critical_count_after_fix": 0,
+  "warning_count_initial": 9,
+  "warning_count_after_fix": 1,
+  "all_critical_resolved": true,
+  "fixes_applied_inline": true,
+  "see_spec_section": "Adversarial Review"
+}

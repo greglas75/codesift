@@ -1,0 +1,14 @@
+{
+  "spec_id": "2026-05-01-monorepo-workspace-intelligence-1542",
+  "plan_revision_final": 5,
+  "rounds": [
+    {"round": 1, "critical": 0, "warning": 1, "outcome": "rev2 file-paths fixed"},
+    {"round": 2, "critical": 4, "warning": 6, "outcome": "rev3 fixes applied"},
+    {"round": 3, "critical": 4, "warning": 7, "outcome": "rev4 fixes applied"},
+    {"round": 4, "critical": 2, "warning": 6, "outcome": "rev5 fixes applied + accepted with rationale"}
+  ],
+  "all_critical_resolved": true,
+  "outstanding_accepted_warnings": ["task20-risk-concentration", "task18b-doc-surfaces", "task18a-verify-redundancy"],
+  "approver": "user-blanket-auth-2026-05-01",
+  "status": "approved"
+}
