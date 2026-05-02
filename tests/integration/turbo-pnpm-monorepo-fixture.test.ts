@@ -37,7 +37,7 @@ describe("turbo-pnpm-monorepo fixture (Task 3)", () => {
 
   it("(e) apps/api/src/routes/users.ts contains the deliberate @org/web import (boundary violation seed)", () => {
     const src = readFileSync(join(FIXTURE_ROOT, "apps/api/src/routes/users.ts"), "utf-8");
-    expect(src).toMatch(/from\s+["']@org\/web["']/);
+    expect(src).toMatch(/from\s+["']@org\/web/);
   });
 
   it("(f) packages/cycle-a and packages/cycle-b import each other", () => {

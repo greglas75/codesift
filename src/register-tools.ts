@@ -2101,6 +2101,81 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
+  // --- Monorepo Workspaces (Tasks 8-11 of monorepo workspace intelligence plan) ---
+  {
+    name: "list_workspaces",
+    category: "analysis",
+    searchHint: "monorepo workspace list packages turbo pnpm yarn npm",
+    description: "List workspace packages for a JS/TS monorepo (Turbo / pnpm / yarn / npm / Nx). Returns shape-stable empty result on flat repos.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+    })),
+    handler: async (args) => {
+      const { listWorkspacesHandler } = await import("./workspace-tools.js");
+      return listWorkspacesHandler({ repo: args.repo as string | undefined });
+    },
+  },
+  {
+    name: "workspace_graph",
+    category: "analysis",
+    searchHint: "monorepo workspace dependency graph turbo nx mermaid dot",
+    description: "Build the workspace-to-workspace dependency DAG of a monorepo. Output formats: json (default), mermaid, dot.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      format: z.enum(["json", "mermaid", "dot"]).optional().describe("Output format (default: json)"),
+    })),
+    handler: async (args) => {
+      const { workspaceGraphHandler } = await import("./workspace-tools.js");
+      return workspaceGraphHandler({
+        repo: args.repo as string | undefined,
+        format: args.format as "json" | "mermaid" | "dot" | undefined,
+      });
+    },
+  },
+  {
+    name: "affected_workspaces",
+    category: "analysis",
+    searchHint: "monorepo affected workspaces git diff impact transitive turbo nx",
+    description: "Compute affected workspaces for a git diff. File changes -> containing workspace -> reverse-dep walk. Lockfile-only commits surface separately and never fan out.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      since: z.string().describe("Git ref to diff against (e.g. HEAD~1, main, <sha>)"),
+      include_transitive: zBool().describe("Include transitive reverse-deps (default: true)"),
+    })),
+    handler: async (args) => {
+      const { affectedWorkspacesHandler } = await import("./workspace-tools.js");
+      return affectedWorkspacesHandler({
+        repo: args.repo as string | undefined,
+        since: args.since as string,
+        include_transitive: args.include_transitive as boolean | undefined,
+      });
+    },
+  },
+  {
+    name: "workspace_boundaries",
+    category: "analysis",
+    searchHint: "monorepo boundary rules workspace import violations enforce",
+    description: "Enforce workspace-level import boundaries. Walks ALL cross-workspace import edges (relative + bare/tsconfig-alias) and reports rule violations.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      rules: z
+        .array(
+          z.object({
+            from_workspace: z.string().describe("Workspace name OR glob (e.g. 'apps/*')"),
+            cannot_import_workspaces: z.array(z.string()).describe("Names, globs, or negation entries"),
+          }),
+        )
+        .describe("Workspace boundary rules"),
+    })),
+    handler: async (args) => {
+      const { workspaceBoundariesHandler } = await import("./workspace-tools.js");
+      return workspaceBoundariesHandler({
+        repo: args.repo as string | undefined,
+        rules: args.rules as Array<{ from_workspace: string; cannot_import_workspaces: string[] }>,
+      });
+    },
+  },
+
   // --- Security ---
   {
     name: "scan_secrets",
