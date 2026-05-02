@@ -12,6 +12,7 @@ export const IGNORE_DIRS = new Set([
   ".venv", "venv", ".tox", ".mypy_cache", ".turbo",
   "generated", "audit-results", ".backup", "jscpd-report",
   "helpscout_export", ".output",
+  ".pnpm", // pnpm symlink forest — recursing here can blow up file count
 ]);
 
 /**

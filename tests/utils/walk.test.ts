@@ -144,4 +144,23 @@ describe("walkDirectory excludePatterns", () => {
     expect(files).not.toContain("build/out.js");  // IGNORE_DIRS
     expect(files).not.toContain("vendor/lib.js"); // excludePatterns
   });
+
+  it("skips .pnpm symlink forest (Task 2)", async () => {
+    const { IGNORE_DIRS } = await import("../../src/utils/walk.js");
+    expect(IGNORE_DIRS.has(".pnpm")).toBe(true);
+
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-pnpm-"));
+    await mkdir(join(tmpDir, "src"), { recursive: true });
+    await mkdir(join(tmpDir, ".pnpm/some-dep@1.0.0/node_modules/x"), { recursive: true });
+    await writeFile(join(tmpDir, "src/app.ts"), "code");
+    await writeFile(join(tmpDir, ".pnpm/some-dep@1.0.0/node_modules/x/index.ts"), "dep");
+
+    const files = await walkDirectory(tmpDir, {
+      excludePatterns: [],
+      relative: true,
+    });
+
+    expect(files).toContain("src/app.ts");
+    expect(files.some((f) => f.includes(".pnpm"))).toBe(false);
+  });
 });

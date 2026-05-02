@@ -30,6 +30,7 @@
     "postinstall": "node ./dist/cli.js setup all 2>/dev/null && echo '\n  ✨ CodeSift MCP installed and configured for all platforms.\n  ⚠️  Restart your AI client (Cmd+Q for Claude Code) to load new MCP server.\n' || echo '\n  ✨ CodeSift MCP installed. Run: codesift setup all\n'"
   },
   "dependencies": {
+    "@manypkg/get-packages": "^3.1.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@mrleebo/prisma-ast": "^0.15.0",
     "@sanity-labs/secret-scan": "^1.1.0",
