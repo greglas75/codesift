@@ -35,16 +35,18 @@ function matchWorkspaceSelector(selector: string, candidate: string): boolean {
   return new RegExp(`^${escaped}$`).test(candidate);
 }
 
-function selectorsMatch(selectors: string[], candidate: string): boolean {
+/** Apply a list of selectors against a workspace, considering BOTH its name
+ *  and its id candidates simultaneously. A selector matches if it matches
+ *  either candidate. Selectors are evaluated in order; later entries override
+ *  earlier ones (standard glob semantics). Negation entries (`!foo`) flip the
+ *  state to excluded when matching. */
+function selectorsMatchAny(selectors: string[], candidates: string[]): boolean {
   let included = false;
   for (const sel of selectors) {
-    if (sel.startsWith("!")) {
-      if (matchWorkspaceSelector(sel, candidate)) {
-        included = false;
-      }
-    } else if (matchWorkspaceSelector(sel, candidate)) {
-      included = true;
-    }
+    const isNegation = sel.startsWith("!");
+    const matchesAny = candidates.some((c) => matchWorkspaceSelector(sel, c));
+    if (!matchesAny) continue;
+    included = !isNegation;
   }
   return included;
 }
@@ -118,10 +120,21 @@ export async function workspaceGraphHandler(args: {
   }
   const result: WorkspaceGraphResult = { nodes, edges };
   if (fmt === "mermaid") {
-    result.mermaid = formatMermaid(nodes, edges);
-    if (result.mermaid.length > 100_000) result.truncated = true;
+    const full = formatMermaid(nodes, edges);
+    if (full.length > 100_000) {
+      result.mermaid = full.slice(0, 100_000) + "\n%% [truncated]";
+      result.truncated = true;
+    } else {
+      result.mermaid = full;
+    }
   } else if (fmt === "dot") {
-    result.dot = formatDot(nodes, edges);
+    const full = formatDot(nodes, edges);
+    if (full.length > 100_000) {
+      result.dot = full.slice(0, 100_000) + "\n// [truncated]";
+      result.truncated = true;
+    } else {
+      result.dot = full;
+    }
   }
   return result;
 }
@@ -176,6 +189,7 @@ export async function affectedWorkspacesHandler(args: {
     changed_files: [],
     affected: [],
     excluded_lockfile_changes: [],
+    root_changed_files: [],
   };
 
   const index = await getIndexOrEmpty(args.repo);
@@ -193,15 +207,17 @@ export async function affectedWorkspacesHandler(args: {
     return { ...empty, error: "not_a_git_repository" };
   }
 
-  // (2) Collect changed files (diff + deletions)
+  // (2) Collect changed files (diff + deletions). Use -z so paths with spaces,
+  // quotes, or unicode survive — splitting plain `--name-only` on \n corrupts
+  // git's quoted-path output.
   let allChanged: string[];
   try {
     const { stdout } = await execFileAsync(
       "git",
-      ["diff", "--name-only", `${args.since}...HEAD`],
+      ["diff", "-z", "--name-only", `${args.since}...HEAD`],
       { cwd: index.root, timeout: 10_000, maxBuffer: 10 * 1024 * 1024 },
     );
-    allChanged = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    allChanged = stdout.split("\0").filter(Boolean);
   } catch {
     return { ...empty, error: "bad_ref" };
   }
@@ -225,7 +241,7 @@ export async function affectedWorkspacesHandler(args: {
     .sort((a, b) => b.rel.length - a.rel.length);
 
   const directWorkspaces = new Map<string, string[]>(); // ws.id → list of changed files
-  const unmappedFiles: string[] = [];
+  const root_changed_files: string[] = [];
 
   for (const file of changed) {
     let matched = false;
@@ -238,7 +254,7 @@ export async function affectedWorkspacesHandler(args: {
         break;
       }
     }
-    if (!matched) unmappedFiles.push(file);
+    if (!matched) root_changed_files.push(file);
   }
 
   // (5) Reverse-dep walk over the workspace graph (BFS, dedupe)
@@ -298,6 +314,7 @@ export async function affectedWorkspacesHandler(args: {
     changed_files: changed,
     affected: [...affected.values()],
     excluded_lockfile_changes,
+    root_changed_files,
   };
 }
 
@@ -359,7 +376,12 @@ export async function workspaceBoundariesHandler(args: {
   const ruleSelectorWorkspaces = new Set<string>();
   for (const rule of args.rules) {
     if (rule.from_workspace.includes("*")) continue;
-    ruleSelectorWorkspaces.add(rule.from_workspace);
+    // Strip leading `!` so a valid negation selector doesn't trigger the
+    // unknown-selector warning when its positive form is a real workspace.
+    const positive = rule.from_workspace.startsWith("!")
+      ? rule.from_workspace.slice(1)
+      : rule.from_workspace;
+    ruleSelectorWorkspaces.add(positive);
   }
   // Warn for rules referencing workspaces that don't exist
   const knownIds = new Set(index.workspaces.map((w) => w.id));
@@ -389,10 +411,12 @@ export async function workspaceBoundariesHandler(args: {
         matchWorkspaceSelector(rule.from_workspace, fromIdCandidate);
       if (!fromMatch) continue;
 
-      // Evaluate cannot_import selectors with negation support
-      const matchedAgainstName = selectorsMatch(rule.cannot_import_workspaces, toCandidate);
-      const matchedAgainstId = selectorsMatch(rule.cannot_import_workspaces, toIdCandidate);
-      if (matchedAgainstName || matchedAgainstId) {
+      // Evaluate cannot_import selectors against name AND id candidates
+      // simultaneously so negations like `["*", "!shared"]` can whitelist by
+      // name even when the workspace's id is a path that doesn't match the
+      // negation entry. Selectors are evaluated in order; later entries
+      // override earlier ones (standard glob semantics — order matters).
+      if (selectorsMatchAny(rule.cannot_import_workspaces, [toCandidate, toIdCandidate])) {
         violations.push({
           from_file: edge.from,
           from_workspace: fromCandidate,

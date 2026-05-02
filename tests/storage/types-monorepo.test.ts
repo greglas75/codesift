@@ -82,6 +82,7 @@ describe("monorepo types (Task 1)", () => {
       changed_files: ["packages/shared/src/Button.tsx"],
       affected: [entry],
       excluded_lockfile_changes: [],
+      root_changed_files: [],
     };
     expect(result.affected[0]?.reason).toBe("transitive");
     expect(result.excluded_lockfile_changes).toEqual([]);
@@ -93,6 +94,7 @@ describe("monorepo types (Task 1)", () => {
       changed_files: [],
       affected: [],
       excluded_lockfile_changes: [],
+      root_changed_files: [],
       error: "not_a_git_repository",
     };
     expect(noGit.error).toBe("not_a_git_repository");

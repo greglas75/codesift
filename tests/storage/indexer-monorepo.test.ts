@@ -2,9 +2,9 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
 import { loadIndex, getIndexPath } from "../../src/storage/index-store.js";
-import { loadConfig } from "../../src/config.js";
+import { loadConfig, resetConfigCache } from "../../src/config.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "turbo-pnpm-monorepo");
 
@@ -19,13 +19,16 @@ describe("indexer monorepo wiring (Task 7)", () => {
 
   beforeAll(async () => {
     tmpHome = await mkdtemp(join(tmpdir(), "codesift-index-test-"));
-    process.env.CODESIFT_HOME = tmpHome;
+    process.env.CODESIFT_DATA_DIR = tmpHome;
+    resetConfigCache();
   });
 
   afterAll(async () => {
+    await stopAllWatchersForTesting();
     if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
-    delete process.env.CODESIFT_HOME;
+    delete process.env.CODESIFT_DATA_DIR;
     delete process.env.CODESIFT_DISABLE_MONOREPO;
+    resetConfigCache();
   });
 
   it("(a) indexing the turbo-pnpm-monorepo fixture populates index.workspaces", async () => {

@@ -2,20 +2,23 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
 import { loadIndex, getIndexPath } from "../../src/storage/index-store.js";
-import { loadConfig } from "../../src/config.js";
+import { loadConfig, resetConfigCache } from "../../src/config.js";
 
 let tmpHome: string | null = null;
 
 beforeAll(async () => {
   tmpHome = await mkdtemp(join(tmpdir(), "codesift-flat-regression-"));
-  process.env.CODESIFT_HOME = tmpHome;
+  process.env.CODESIFT_DATA_DIR = tmpHome;
+  resetConfigCache();
 });
 
 afterAll(async () => {
+  await stopAllWatchersForTesting();
   if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
-  delete process.env.CODESIFT_HOME;
+  delete process.env.CODESIFT_DATA_DIR;
+  resetConfigCache();
 });
 
 /** A flat single-package TypeScript project — covers AC10. */

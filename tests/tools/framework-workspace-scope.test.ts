@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { cpSync } from "node:fs";
 import { detectAutoLoadTools } from "../../src/register-tools.js";
 import { resolveWorkspaceScope } from "../../src/tools/workspace-scope-helper.js";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
+import { resetConfigCache } from "../../src/config.js";
 
 let tmpHome: string | null = null;
 let monoRoot: string | null = null;
@@ -13,7 +14,8 @@ let repoName: string | null = null;
 
 beforeAll(async () => {
   tmpHome = await mkdtemp(join(tmpdir(), "codesift-fw-ws-test-"));
-  process.env.CODESIFT_HOME = tmpHome;
+  process.env.CODESIFT_DATA_DIR = tmpHome;
+  resetConfigCache();
   monoRoot = await mkdtemp(join(tmpdir(), "codesift-fw-ws-mono-"));
   cpSync(join(__dirname, "..", "fixtures", "turbo-pnpm-monorepo"), monoRoot, { recursive: true });
   const r = await indexFolder(monoRoot);
@@ -21,10 +23,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await stopAllWatchersForTesting();
   if (monoRoot) await rm(monoRoot, { recursive: true, force: true });
   if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
-  delete process.env.CODESIFT_HOME;
+  delete process.env.CODESIFT_DATA_DIR;
   delete process.env.CODESIFT_DISABLE_MONOREPO;
+  resetConfigCache();
 });
 
 describe("detectAutoLoadTools workspace union (Task 15)", () => {

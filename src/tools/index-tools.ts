@@ -948,6 +948,21 @@ export function resetFreshnessCache(): void {
   freshnessChecked.clear();
 }
 
+/** Stop every active watcher and clear the in-memory index caches. Exported
+ *  for testing — afterAll teardown of integration tests that index temp dirs
+ *  must call this before `rm -rf`-ing the temp dir, otherwise the chokidar
+ *  watcher races the rm and emits ENOTEMPTY/ENOENT noise that shows up as
+ *  file-level test failures even when every test inside passed. */
+export async function stopAllWatchersForTesting(): Promise<void> {
+  const watchers = [...activeWatchers.values()];
+  activeWatchers.clear();
+  await Promise.all(watchers.map((w) => stopWatcher(w).catch(() => {})));
+  bm25Indexes.clear();
+  codeIndexes.clear();
+  embeddingCaches.clear();
+  freshnessChecked.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Index access — with auto-refresh
 // ---------------------------------------------------------------------------

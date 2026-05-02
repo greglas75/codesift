@@ -14,6 +14,8 @@ export interface GitFixture {
   lockfileSha: string;
   /** SHA after `git rm -r packages/cycle-a/`. */
   deleteCycleASha: string;
+  /** SHA after editing the root turbo.json (root-config scenario). */
+  rootConfigSha: string;
   cleanup(): void;
 }
 
@@ -65,12 +67,20 @@ export function setupGitFixture(): GitFixture {
   run("git commit -q -m \"remove cycle-a\"");
   const deleteCycleASha = run("git rev-parse HEAD");
 
+  // 4) edit ONLY turbo.json — root-config scenario (R-3 root_changed_files)
+  const turboPath = join(root, "turbo.json");
+  writeFileSync(turboPath, readFileSync(turboPath, "utf-8").replace(/}\s*$/, ", \"$schema\": \"https://turbo.build/schema.json\"}\n"));
+  run("git add turbo.json");
+  run("git commit -q -m \"tweak turbo.json\"");
+  const rootConfigSha = run("git rev-parse HEAD");
+
   return {
     root,
     baseSha,
     editSharedSha,
     lockfileSha,
     deleteCycleASha,
+    rootConfigSha,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }

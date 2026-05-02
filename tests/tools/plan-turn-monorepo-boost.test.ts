@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cpSync } from "node:fs";
 import { planTurn } from "../../src/tools/plan-turn-tools.js";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
+import { resetConfigCache } from "../../src/config.js";
 
 let tmpHome: string | null = null;
 let monoRepoName: string | null = null;
@@ -12,7 +13,8 @@ let monoRoot: string | null = null;
 
 beforeAll(async () => {
   tmpHome = await mkdtemp(join(tmpdir(), "codesift-pt-boost-test-"));
-  process.env.CODESIFT_HOME = tmpHome;
+  process.env.CODESIFT_DATA_DIR = tmpHome;
+  resetConfigCache();
 
   monoRoot = await mkdtemp(join(tmpdir(), "codesift-pt-mono-"));
   cpSync(join(__dirname, "..", "fixtures", "turbo-pnpm-monorepo"), monoRoot, { recursive: true });
@@ -21,9 +23,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await stopAllWatchersForTesting();
   if (monoRoot) await rm(monoRoot, { recursive: true, force: true });
   if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
-  delete process.env.CODESIFT_HOME;
+  delete process.env.CODESIFT_DATA_DIR;
+  resetConfigCache();
 });
 
 describe("plan_turn monorepo term boost (Task 13)", () => {

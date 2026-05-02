@@ -567,7 +567,10 @@ interface PackageCycleResult {
 /** Compute package-level cycles in a JS/TS monorepo workspace graph.
  *  Filters unresolved dependencies before SCC to avoid crashes (gemini fix
  *  in plan rev 5). Cycles are returned as arrays of workspace names; each
- *  closed cycle includes the wrap-around (e.g. ["a", "b", "a"]). */
+ *  closed cycle includes the wrap-around (e.g. ["a", "b", "a"]).
+ *  Limitation: DFS-with-color guarantees finding at least one elementary
+ *  cycle per strongly-connected component but does NOT enumerate all of
+ *  them. Sufficient for monorepo scale (<100 packages). */
 function computePackageLevelCycles(
   workspaces: import("../types.js").Workspace[],
 ): PackageCycleResult {

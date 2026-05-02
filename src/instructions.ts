@@ -25,8 +25,9 @@ HINT CODES (act on immediately when they appear in responses)
   H5     → use cached tree result    H6(n) → add detail_level=compact
   H7     → use get_context_bundle    H8(n) → use assemble_context(level=L1)
   H9     → codebase_retrieval(type:semantic)  H10 → call get_session_snapshot
-  H11    → use search_text instead
-  H15 — journal fetch: use search_text(query=<term>, glob='.codesift/wiki/journal/**') rather than reading whole phase files; phase files can be 30KB+.
+  H11    → use search_text instead   H12 → batch search_text into codebase_retrieval
+  H13    → route query → use trace_route  H14 → secret pattern → use scan_secrets
+  H15    → journal fetch: search_text(glob='.codesift/wiki/journal/**')
 
 ALWAYS: repo auto-resolves, skip list_repos. file_pattern when scoped. get_symbols (batch)
   for 2+. Batch 3+ into codebase_retrieval. token_budget to cap. index_file after edits.
@@ -44,42 +45,26 @@ KEY PARAMS
 CASCADE (auto): >52.5K→compact, >87.5K→counts, >105K→truncate. Skipped if detail_level/token_budget set.
 
 TOOL MAPPING (quick ref)
-  text pattern      → search_text(file_pattern=)
-  function/class    → search_symbols(include_source=true)
-  file structure    → get_file_outline | find files → get_file_tree(compact=true)
-  1 symbol          → get_symbol | 2+ symbols → get_symbols (batch)
-  symbol + refs     → find_and_show(include_refs=true) | usages → find_references
-  call chain        → trace_call_chain | blast radius → impact_analysis(since="HEAD~3")
-  concept question  → codebase_retrieval(type:semantic)
-  multi-search 3+   → codebase_retrieval(queries=[...])
-  dead code         → find_dead_code | complexity → analyze_complexity
-  duplication       → find_clones(min_similarity=0.7) | anti-patterns → search_patterns
-  architecture/deps → detect_communities(focus=) | git churn → analyze_hotspots(since_days=90)
-  mermaid diagram   → trace_call_chain(output_format="mermaid")
-  API endpoint      → trace_route (FIRST) | secrets → scan_secrets
-  source → sink     → taint_trace(file_pattern=, framework="python-django")
-  past sessions     → search_conversations | changed code → changed_symbols(since=)
-  plan next task    → plan_turn(query=...)
-  session snapshot  → get_session_snapshot | session → get_session_context
-  React components  → search_symbols(kind=component) | hooks → search_symbols(kind=hook)
-  component tree    → trace_component_tree | hook analysis → analyze_hooks
-  re-render risk    → analyze_renders | context flow → analyze_context_graph
-  React anti-pats   → search_patterns("hook-in-condition") | clean graph → trace_call_chain(filter_react_hooks=true)
-  Astro islands     → astro_analyze_islands | hydration audit → astro_hydration_audit
-  Astro routes      → astro_route_map | config → astro_config_analyze
-  Next.js audit     → framework_audit | route map → nextjs_route_map
-  SEO/metadata      → nextjs_metadata_audit | server actions → nextjs_audit_server_actions
-  API contract      → nextjs_api_contract | client boundary → nextjs_boundary_analyzer
-  broken links      → nextjs_link_integrity | data waterfalls → nextjs_data_flow
-  middleware gaps   → nextjs_middleware_coverage | server/client → analyze_nextjs_components
-  Hono overview     → analyze_hono_app (FIRST for any Hono project)
-  Hono middleware   → trace_middleware_chain (modes: route/scope/app-wide, only_conditional=true for applied_when)
-  Hono context flow → trace_context_flow | inline handler → analyze_inline_handler
-  Hono API contract → extract_api_contract | response types → extract_response_types
-  Hono RPC types    → trace_rpc_types | security+env → audit_hono_security (rate-limit, auth, env-regression #3587)
-  Hono modules      → detect_hono_modules | dead routes → find_dead_hono_routes | visualize → visualize_hono_routes
-  Monorepo packages → list_workspaces (FIRST for any Turbo / pnpm-workspace / Nx repo)
-  Workspace graph   → workspace_graph(format=mermaid) | affected packages → affected_workspaces(since="HEAD~1")
-  Boundary rules    → workspace_boundaries(rules=[{from_workspace, cannot_import_workspaces}])
-  Scoped audit      → framework_audit / nextjs_route_map / analyze_hono_app / nest_audit / astro_audit accept optional workspace=<name|path>
+  text → search_text(file_pattern=) | symbols → search_symbols(include_source=true)
+  file outline → get_file_outline | files → get_file_tree(compact=true)
+  1 sym → get_symbol | 2+ → get_symbols (batch) | sym+refs → find_and_show(include_refs=true)
+  usages → find_references | call chain → trace_call_chain | blast → impact_analysis(since=)
+  concept → codebase_retrieval(type:semantic) | multi-search 3+ → codebase_retrieval(queries=[])
+  dead code → find_dead_code | complexity → analyze_complexity | dup → find_clones(min_similarity=0.7)
+  anti-pat → search_patterns | arch → detect_communities(focus=) | churn → analyze_hotspots(since_days=)
+  diagram → trace_call_chain(output_format=mermaid) | endpoint → trace_route (FIRST)
+  secrets → scan_secrets | taint → taint_trace(framework=) | past → search_conversations
+  changed → changed_symbols(since=) | plan → plan_turn(query=) | session → get_session_snapshot
+  React: kind=component/hook | trace_component_tree | analyze_hooks/renders/context_graph
+  React anti-pat: search_patterns("hook-in-condition") | clean graph: filter_react_hooks=true
+  Astro: astro_analyze_islands / astro_hydration_audit / astro_route_map / astro_config_analyze
+  Next.js: framework_audit | nextjs_route_map | nextjs_metadata_audit
+    sub-checks via framework_audit(checks=server-actions/api-contract/boundary/link-integrity/data-flow/middleware/components)
+  Hono: analyze_hono_app (FIRST) | trace_middleware_chain (only_conditional=true for applied_when)
+    trace_context_flow | analyze_inline_handler | extract_api_contract | extract_response_types
+    trace_rpc_types | audit_hono_security (env-regression #3587) | detect_hono_modules
+    find_dead_hono_routes | visualize_hono_routes
+  Monorepo: list_workspaces (FIRST for Turbo/pnpm/Nx) | workspace_graph(format=mermaid)
+    affected_workspaces(since="HEAD~1") | workspace_boundaries(rules=[{from_workspace, cannot_import_workspaces}])
+  Workspace scoping: framework_audit / nextjs_route_map / analyze_hono_app / nest_audit / astro_audit accept workspace=<name|path>
 `;

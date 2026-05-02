@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  resolveWorkspaces,
-  extractWorkspaceGlobsFromManifest,
-} from "../../src/storage/workspace-resolver.js";
+import { resolveWorkspaces } from "../../src/storage/workspace-resolver.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "turbo-pnpm-monorepo");
 
@@ -110,30 +107,3 @@ describe("resolveWorkspaces (Task 4)", () => {
   });
 });
 
-describe("extractWorkspaceGlobsFromManifest (Task 4 helper for Task 10 deleted-file path)", () => {
-  it("parses pnpm-workspace.yaml entries including negation", () => {
-    const text = `packages:
-  - 'apps/*'
-  - 'packages/*'
-  - '!packages/internal'
-`;
-    const globs = extractWorkspaceGlobsFromManifest(text, "pnpm-workspace.yaml");
-    expect(globs).toEqual(["apps/*", "packages/*", "!packages/internal"]);
-  });
-
-  it("parses package.json#workspaces array form", () => {
-    const text = JSON.stringify({ name: "x", workspaces: ["apps/*", "packages/*"] });
-    const globs = extractWorkspaceGlobsFromManifest(text, "package.json");
-    expect(globs).toEqual(["apps/*", "packages/*"]);
-  });
-
-  it("parses package.json#workspaces object form", () => {
-    const text = JSON.stringify({ name: "x", workspaces: { packages: ["apps/*"] } });
-    const globs = extractWorkspaceGlobsFromManifest(text, "package.json");
-    expect(globs).toEqual(["apps/*"]);
-  });
-
-  it("returns [] on malformed JSON", () => {
-    expect(extractWorkspaceGlobsFromManifest("{unterminated", "package.json")).toEqual([]);
-  });
-});

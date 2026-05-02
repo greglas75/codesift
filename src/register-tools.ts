@@ -564,9 +564,11 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
   toEnable.push(...detectFromPackageJson(cwd));
 
   // Monorepo workspace walk (Task 15). When monorepo detected at cwd, union
-  // each workspace's framework signals into the auto-load set. Reads are
-  // bounded by workspace count; deferred to lazy when > 50 workspaces (per
-  // gemini fix in plan rev 5 — static threshold instead of elapsed time).
+  // each workspace's framework signals into the auto-load set. Hard cap at 50
+  // workspaces to bound startup cost (sync FS reads at module-init time);
+  // very large monorepos (>50 packages) fall back to root-only auto-load —
+  // discover_tools / describe_tools still work for any framework tool needed
+  // at query time.
   if (killSwitchOff) {
     try {
       const { resolveWorkspaces } = await import("./storage/workspace-resolver.js");

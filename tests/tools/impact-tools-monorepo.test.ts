@@ -3,8 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setupGitFixture, type GitFixture } from "../fixtures/turbo-pnpm-monorepo/setup-git.js";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
 import { impactAnalysis } from "../../src/tools/impact-tools.js";
+import { resetConfigCache } from "../../src/config.js";
 
 let tmpHome: string | null = null;
 let gitFixture: GitFixture | null = null;
@@ -12,16 +13,19 @@ let repoName: string | null = null;
 
 beforeAll(async () => {
   tmpHome = await mkdtemp(join(tmpdir(), "codesift-impact-mono-"));
-  process.env.CODESIFT_HOME = tmpHome;
+  process.env.CODESIFT_DATA_DIR = tmpHome;
+  resetConfigCache();
   gitFixture = setupGitFixture();
   const r = await indexFolder(gitFixture.root);
   repoName = r.repo;
 });
 
 afterAll(async () => {
+  await stopAllWatchersForTesting();
   gitFixture?.cleanup();
   if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
-  delete process.env.CODESIFT_HOME;
+  delete process.env.CODESIFT_DATA_DIR;
+  resetConfigCache();
 });
 
 describe("impact_analysis cross-package propagation (Task 14)", () => {

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cpSync } from "node:fs";
 import { findCircularDeps } from "../../src/tools/graph-tools.js";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
+import { resetConfigCache } from "../../src/config.js";
 
 let tmpHome: string | null = null;
 let monoRepoName: string | null = null;
@@ -14,7 +15,11 @@ let flatRoot: string | null = null;
 
 beforeAll(async () => {
   tmpHome = await mkdtemp(join(tmpdir(), "codesift-pkg-cycles-test-"));
-  process.env.CODESIFT_HOME = tmpHome;
+  // Direct env assignment + resetConfigCache() — required because the
+  // module-level cachedConfig in src/config.ts persists across test files in
+  // the same worker (vitest config: pool=vmForks, singleFork=true).
+  process.env.CODESIFT_DATA_DIR = tmpHome;
+  resetConfigCache();
 
   monoRoot = await mkdtemp(join(tmpdir(), "codesift-pkg-cycles-mono-"));
   cpSync(join(__dirname, "..", "fixtures", "turbo-pnpm-monorepo"), monoRoot, { recursive: true });
@@ -31,10 +36,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await stopAllWatchersForTesting();
   if (monoRoot) await rm(monoRoot, { recursive: true, force: true });
   if (flatRoot) await rm(flatRoot, { recursive: true, force: true });
   if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
-  delete process.env.CODESIFT_HOME;
+  delete process.env.CODESIFT_DATA_DIR;
+  resetConfigCache();
 });
 
 describe("findCircularDeps package-level cycles (Task 12)", () => {

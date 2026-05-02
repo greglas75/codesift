@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getTsconfig } from "get-tsconfig";
 import type {
@@ -48,15 +48,16 @@ export async function resolveWorkspaces(root: string): Promise<WorkspaceIndex | 
   try {
     const { getPackages } = await import("@manypkg/get-packages");
     const result = await getPackages(root);
+    const rootPackage = result.rootPackage
+      ? { dir: result.rootPackage.dir, packageJson: result.rootPackage.packageJson as RawPackageInfo["packageJson"] }
+      : undefined;
     raw = {
       tool: typeof result.tool === "string" ? result.tool : (result.tool as { type: string }).type,
       packages: result.packages.map((p) => ({
         dir: p.dir,
         packageJson: p.packageJson as RawPackageInfo["packageJson"],
       })),
-      rootPackage: result.rootPackage
-        ? { dir: result.rootPackage.dir, packageJson: result.rootPackage.packageJson as RawPackageInfo["packageJson"] }
-        : undefined,
+      ...(rootPackage ? { rootPackage } : {}),
     };
   } catch (err) {
     // @manypkg throws on non-monorepo or malformed config — caller treats null
@@ -155,41 +156,3 @@ function readTsconfigPaths(workspaceRoot: string): WorkspaceTsconfigPath[] {
   }
 }
 
-/** Minimal in-memory workspace-glob extractor — used by Task 10's
- *  affected_workspaces deleted-file resolution against pre-`since` git blob
- *  content (which cannot be passed to @manypkg, since it requires a real
- *  directory). Parses the workspace globs from `pnpm-workspace.yaml` text or
- *  the `workspaces` field in a `package.json` text snapshot.
- *  Returns the raw glob list (caller is responsible for matching against paths). */
-export function extractWorkspaceGlobsFromManifest(
-  manifestText: string,
-  manifestKind: "pnpm-workspace.yaml" | "package.json",
-): string[] {
-  if (manifestKind === "pnpm-workspace.yaml") {
-    const matches = manifestText.match(/-\s*['"]?([^'"\n]+)['"]?/g) ?? [];
-    return matches
-      .map((m) => m.replace(/^-\s*['"]?/, "").replace(/['"]?\s*$/, "").trim())
-      .filter((s) => s.length > 0);
-  }
-  // package.json — workspaces may be string[] or { packages: string[] }
-  try {
-    const parsed = JSON.parse(manifestText);
-    const ws = parsed.workspaces;
-    if (Array.isArray(ws)) return ws.filter((s): s is string => typeof s === "string");
-    if (ws && typeof ws === "object" && Array.isArray(ws.packages)) {
-      return ws.packages.filter((s: unknown): s is string => typeof s === "string");
-    }
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-/** Read a JSON file synchronously (workspace-resolver helper for tests). */
-export function readJsonSync<T = unknown>(path: string): T | null {
-  try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
-  } catch {
-    return null;
-  }
-}

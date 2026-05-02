@@ -130,7 +130,7 @@ export interface WorkspaceBoundaryRule {
 export interface AffectedWorkspaceEntry {
   workspace_id: string;
   workspace_name: string | null;
-  reason: "direct" | "transitive" | "deleted-workspace-rev-dep";
+  reason: "direct" | "transitive";
   changed_files: string[];
   /** Chain of workspace ids for transitive entries; populated from BFS path. */
   via?: string[];
@@ -142,6 +142,12 @@ export interface AffectedResult {
   affected: AffectedWorkspaceEntry[];
   /** Lockfile changes are surfaced separately and never fan out (per spec D5). */
   excluded_lockfile_changes: string[];
+  /** Files changed at or above the workspace boundary that don't belong to any
+   *  workspace (root configs like turbo.json, tsconfig.base.json, root
+   *  package.json, CI workflows). Callers should treat this as "everything
+   *  potentially affected" and fan out to all workspaces or trigger a full
+   *  rebuild. Empty when only workspace-scoped files changed. */
+  root_changed_files: string[];
   /** Diagnostic field surfaced when called outside a git work tree, etc. */
   error?: "not_a_git_repository" | "bad_ref";
 }
