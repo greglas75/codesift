@@ -476,6 +476,12 @@ export interface CircularDepsResult {
   cycles: CircularDep[];
   total_files: number;
   total_edges: number;
+  /** Package-level cycles in JS/TS monorepos. Present when index.workspaces
+   *  is non-null (Task 12 of monorepo workspace intelligence plan). */
+  package_cycles?: Array<{ cycle: string[]; length: number }>;
+  /** Workspace dependency targets that don't match any known workspace name.
+   *  Surfaced as a diagnostic; never crashes SCC. */
+  unresolved_workspace_refs?: Array<{ from_workspace: string; missing_dep: string }>;
 }
 
 export async function findCircularDeps(
@@ -537,11 +543,95 @@ export async function findCircularDeps(
     }
   }
 
-  return {
+  const result: CircularDepsResult = {
     cycles,
     total_files: new Set([...filteredEdges.map((e) => e.from), ...filteredEdges.map((e) => e.to)]).size,
     total_edges: filteredEdges.length,
   };
+
+  // Package-level cycles (Task 12) — only when index.workspaces is populated.
+  if (index.workspaces && index.workspaces.length > 0) {
+    const pkg = computePackageLevelCycles(index.workspaces);
+    if (pkg.package_cycles.length > 0) result.package_cycles = pkg.package_cycles;
+    if (pkg.unresolved.length > 0) result.unresolved_workspace_refs = pkg.unresolved;
+  }
+
+  return result;
+}
+
+interface PackageCycleResult {
+  package_cycles: Array<{ cycle: string[]; length: number }>;
+  unresolved: Array<{ from_workspace: string; missing_dep: string }>;
+}
+
+/** Compute package-level cycles in a JS/TS monorepo workspace graph.
+ *  Filters unresolved dependencies before SCC to avoid crashes (gemini fix
+ *  in plan rev 5). Cycles are returned as arrays of workspace names; each
+ *  closed cycle includes the wrap-around (e.g. ["a", "b", "a"]). */
+function computePackageLevelCycles(
+  workspaces: import("../types.js").Workspace[],
+): PackageCycleResult {
+  const knownNames = new Set<string>();
+  for (const ws of workspaces) {
+    if (ws.name) knownNames.add(ws.name);
+  }
+
+  const adj = new Map<string, string[]>();
+  const unresolved: PackageCycleResult["unresolved"] = [];
+  for (const ws of workspaces) {
+    if (!ws.name) continue;
+    const filtered: string[] = [];
+    for (const dep of ws.dependencies.workspace) {
+      if (knownNames.has(dep)) {
+        filtered.push(dep);
+      } else {
+        unresolved.push({ from_workspace: ws.name, missing_dep: dep });
+      }
+    }
+    if (filtered.length > 0) adj.set(ws.name, filtered);
+  }
+
+  // DFS-based cycle detection on the cleaned graph (mirrors file-level pattern)
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+  const stack: string[] = [];
+  const cycleSignatures = new Set<string>();
+  const package_cycles: PackageCycleResult["package_cycles"] = [];
+
+  function dfs(node: string): void {
+    if (inStack.has(node)) {
+      const idx = stack.indexOf(node);
+      if (idx >= 0) {
+        const cycle = [...stack.slice(idx), node];
+        // Canonicalize so [a,b,a] and [b,a,b] dedupe to one entry
+        const signature = canonicalCycleSignature(cycle.slice(0, -1));
+        if (!cycleSignatures.has(signature)) {
+          cycleSignatures.add(signature);
+          package_cycles.push({ cycle, length: cycle.length - 1 });
+        }
+      }
+      return;
+    }
+    if (visited.has(node)) return;
+    visited.add(node);
+    inStack.add(node);
+    stack.push(node);
+    for (const next of adj.get(node) ?? []) dfs(next);
+    stack.pop();
+    inStack.delete(node);
+  }
+
+  for (const node of adj.keys()) dfs(node);
+  return { package_cycles, unresolved };
+}
+
+function canonicalCycleSignature(nodes: string[]): string {
+  if (nodes.length === 0) return "";
+  let minIdx = 0;
+  for (let i = 1; i < nodes.length; i++) {
+    if (nodes[i]! < nodes[minIdx]!) minIdx = i;
+  }
+  return [...nodes.slice(minIdx), ...nodes.slice(0, minIdx)].join(">");
 }
 
 // Export shared utilities for impact-tools and testing
