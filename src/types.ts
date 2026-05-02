@@ -51,6 +51,7 @@ export interface CodeSymbol extends FileLocation {
   tokens?: string[];    // pre-computed BM25 tokens (name + signature split)
   decorators?: string[];                // e.g. ["@pytest.fixture", "@classmethod"]
   extends?: string[];                   // superclass / base types
+  implements?: string[];                // TypeScript: implemented interface names
   is_async?: boolean;                   // async def, async fn, etc.
   is_exported?: boolean;                // symbol is exported from its module
   meta?: Record<string, unknown>;       // language-specific metadata
