@@ -36,6 +36,10 @@ beforeEach(() => {
   anthropicCreate.mockReset();
   openaiCreate.mockReset();
   vi.unstubAllEnvs();
+  // Ensure real timers are active at test start; some tests opt into fake
+  // timers individually. Without this guard, a leftover fake-timer state
+  // from a sibling pool can hang the dynamic import in the timeout test.
+  vi.useRealTimers();
 });
 
 afterEach(() => {
@@ -99,9 +103,12 @@ describe("AnthropicJournalProvider timeout", () => {
     const promise = p.generate("hello", { model: "claude-sonnet-4-6" });
     // Attach a catch early so unhandled-rejection never fires.
     const caught = promise.catch((e) => e);
-    // Let the dynamic import + client call settle under fake timers.
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(LLM_TIMEOUT_MS + 1);
+    // Advance in slices so microtasks (dynamic import resolution, then the
+    // anthropic mock's hanging promise) flush between ticks. Advancing
+    // in one big jump under fake timers can leave the import unresolved.
+    for (let i = 0; i < ((LLM_TIMEOUT_MS + 1000) / 100); i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
     const err = await caught;
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/timed out/);

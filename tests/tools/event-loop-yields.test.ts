@@ -80,8 +80,11 @@ describe("event loop yields in heavy CodeSift tools", () => {
       findPerfHotspots("test", { max_results: 1000 }),
     );
 
-    // Sanity: the task did real work (not zero-cost short-circuit)
-    expect(taskMs).toBeGreaterThan(20);
+    // Sanity: the task did real work (not zero-cost short-circuit). On
+    // fast machines findPerfHotspots over 20k symbols can finish in ~15ms,
+    // so the floor is set generously low — the meaningful assertion is the
+    // event-loop responsiveness check below.
+    expect(taskMs).toBeGreaterThan(5);
 
     // Core assertion: event loop was responsive throughout the scan
     expect(maxGapMs).toBeLessThan(100);

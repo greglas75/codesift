@@ -51,7 +51,10 @@ describe("handlePrecheckRead", () => {
 
     await handlePrecheckRead();
 
-    expect(exitCode).toBe(2);
+    // Impl now uses Claude Code's hookSpecificOutput.permissionDecision="deny"
+    // (exit 0 + JSON to stdout) instead of the legacy exit-2 contract.
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     rmSync(tmpDir, { recursive: true });
   });
 
@@ -121,7 +124,8 @@ describe("handlePrecheckRead", () => {
 
     await handlePrecheckRead();
 
-    expect(exitCode).toBe(2); // 100 > 50 threshold
+    expect(exitCode).toBe(0); // 100 > 50 threshold → deny
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     rmSync(tmpDir, { recursive: true });
   });
 
@@ -298,8 +302,9 @@ describe("handlePrecheckRead", () => {
 
     await handlePrecheckRead();
 
-    // Must still exit 2 — wiki inject does NOT fire for large files
-    expect(exitCode).toBe(2);
+    // Must still deny — wiki inject does NOT fire for large files
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     expect(stdoutOutput).toContain("CodeSift tools");
     expect(stdoutOutput).not.toContain("Auth Module summary");
     rmSync(tmpDir, { recursive: true });
@@ -331,7 +336,8 @@ describe("handlePrecheckRead", () => {
     await handlePrecheckRead();
 
     expect(exitCode).toBe(0);
-    expect(stdoutOutput.length).toBeLessThanOrEqual(2000);
+    // Default budget bumped to 2500 (was 2000); env var CODESIFT_WIKI_SUMMARY_MAX_CHARS overrides.
+    expect(stdoutOutput.length).toBeLessThanOrEqual(2500);
     rmSync(tmpDir, { recursive: true });
   });
 
@@ -400,7 +406,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     expect(stdoutOutput).toContain("get_file_tree");
   });
 
@@ -412,7 +419,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
   });
 
   it("exits 0 for find with -exec (destructive)", async () => {
@@ -445,7 +453,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     expect(stdoutOutput).toContain("search_text");
   });
 
@@ -457,7 +466,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
   });
 
   it("exits 2 for rg (ripgrep)", async () => {
@@ -468,7 +478,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     expect(stdoutOutput).toContain("search_text");
   });
 
@@ -513,7 +524,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     expect(stdoutOutput).toContain("search_text");
   });
 
@@ -525,7 +537,8 @@ describe("handlePrecheckBash", () => {
 
     await handlePrecheckBash();
 
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
   });
 
   it("exits 0 for non-recursive grep (single file)", async () => {
