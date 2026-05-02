@@ -1,0 +1,5 @@
+{
+  "name": "@org/internal",
+  "version": "0.0.0",
+  "main": "src/private.ts"
+}

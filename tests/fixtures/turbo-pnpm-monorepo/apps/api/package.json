@@ -1,0 +1,9 @@
+{
+  "name": "@org/api",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "hono": "^4.0.0",
+    "@org/shared": "workspace:*"
+  }
+}
