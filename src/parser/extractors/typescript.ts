@@ -953,6 +953,35 @@ export function extractTypeScriptSymbols(
             }
           }
         }
+        // L11: Anonymous default export — `export default function() {}` /
+        //   `export default class {}` / `export default () => <div/>`. Such
+        //   children have no `name` field; without synth, the named-children
+        //   walk-through silently drops them. Detect via presence of `default`
+        //   keyword child + an unnamed function/class/arrow expression child.
+        const isDefaultExport = node.children.some((c) => c.type === "default");
+        if (isDefaultExport) {
+          for (const child of node.namedChildren) {
+            const isAnon =
+              (child.type === "function_expression" || child.type === "class" || child.type === "class_declaration" || child.type === "function_declaration" || child.type === "generator_function_declaration" || child.type === "arrow_function")
+              && !getNodeName(child);
+            if (isAnon) {
+              // For JSX-returning anonymous defaults, also flag is_react_component
+              // so React-aware tools can still find them. Spec AC #10 mandates
+              // kind:"default_export" regardless.
+              const meta: Record<string, unknown> = {};
+              if (returnsJSX(child)) meta.is_react_component = true;
+              const sym = makeSymbol(node, "default", "default_export", filePath, source, repo, {
+                parentId,
+                is_exported: true,
+                signature: child.type !== "class" && child.type !== "class_declaration"
+                  ? getSignature(child, source) : undefined,
+                meta: Object.keys(meta).length > 0 ? meta : undefined,
+              });
+              symbols.push(sym);
+              return;
+            }
+          }
+        }
         // Walk children with isExported=true so wrapped declarations get tagged
         for (const child of node.namedChildren) {
           walk(child, parentId, true);

@@ -247,3 +247,33 @@ describe("L8 modifiers + L9 accessor kind", () => {
     expect(mods).toContain("private");
   });
 });
+
+describe("L11 anonymous default export", () => {
+  it("synthesizes name=default for `export default function() {}`", () => {
+    const syms = ext(`export default function() { return 1; }`);
+    const def = syms.find((s) => s.name === "default");
+    expect(def?.kind).toBe("default_export");
+    expect(def?.is_exported).toBe(true);
+  });
+
+  it("synthesizes name=default for `export default class {}`", () => {
+    const syms = ext(`export default class { method() {} }`);
+    const def = syms.find((s) => s.name === "default");
+    expect(def?.kind).toBe("default_export");
+  });
+
+  it(".tsx: anonymous JSX default flagged as is_react_component", () => {
+    const syms = ext(`export default function() { return <div/>; }`, "tsx");
+    const def = syms.find((s) => s.name === "default");
+    expect(def?.kind).toBe("default_export");
+    expect(def?.meta?.["is_react_component"]).toBe(true);
+  });
+
+  it("named default export still uses its real name (not synthesized)", () => {
+    const syms = ext(`export default function MyFunc() {}`);
+    const fn = syms.find((s) => s.name === "MyFunc");
+    expect(fn).toBeDefined();
+    expect(fn?.is_exported).toBe(true);
+    expect(syms.find((s) => s.name === "default")).toBeUndefined();
+  });
+});
