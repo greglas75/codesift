@@ -105,27 +105,64 @@ const REACT_COMPONENT_BASES = new Set([
 ]);
 
 /**
- * Check if a class extends React.Component or React.PureComponent.
- * Handles: `extends Component`, `extends React.Component`, `extends PureComponent`.
+ * Strip type arguments, expand intersection/union, preserve qualified names.
+ * Returns string[] (not string|null) so intersection/union types expand to
+ * multiple elements via flatMap at the call site. AC #6 normalization rule:
+ *   - identifier → ["Foo"]   (extends Foo — runtime value position)
+ *   - type_identifier → ["I"]   (implements I — type position)
+ *   - member_expression / nested_type_identifier → ["ns.Base"] (qualified preserved)
+ *   - generic_type → recurse into name field, drop type_arguments → ["Box"]
+ *   - intersection_type / union_type → flatMap across members → ["A", "B"]
+ *
+ * IMPORTANT: tree-sitter-typescript parses `extends Foo` as `identifier` NOT
+ * `type_identifier`. Without the identifier case, all standard ES6 inheritance
+ * is silently dropped (gemini adversarial pre-execute finding).
  */
-function isReactClassComponent(node: Parser.SyntaxNode): boolean {
-  // Look for extends clause: class_heritage → extends_clause → type_identifier or member_expression
+function extractHeritageNames(node: Parser.SyntaxNode): string[] {
+  if (node.type === "identifier") return [node.text];
+  if (node.type === "type_identifier") return [node.text];
+  if (node.type === "member_expression" || node.type === "nested_type_identifier") return [node.text];
+  if (node.type === "generic_type") {
+    const innerType = node.childForFieldName("name") ?? node.namedChildren[0];
+    return innerType ? extractHeritageNames(innerType) : [];
+  }
+  if (node.type === "intersection_type" || node.type === "union_type") {
+    return node.namedChildren.flatMap((child) => extractHeritageNames(child));
+  }
+  return [];
+}
+
+/** Walk class_heritage and return separate extends/implements lists. */
+function getClassHeritage(node: Parser.SyntaxNode): { extends: string[]; implements: string[] } {
+  const extendsList: string[] = [];
+  const implementsList: string[] = [];
   for (const child of node.namedChildren) {
-    if (child.type === "class_heritage") {
-      for (const clause of child.namedChildren) {
-        if (clause.type === "extends_clause") {
-          const superclass = clause.namedChildren[0];
-          if (!superclass) continue;
-          // extends Component / extends PureComponent
-          if (superclass.type === "identifier" && REACT_COMPONENT_BASES.has(superclass.text)) return true;
-          // extends React.Component / extends React.PureComponent
-          if (superclass.type === "member_expression") {
-            const prop = superclass.childForFieldName("property");
-            if (prop && REACT_COMPONENT_BASES.has(prop.text)) return true;
-          }
-        }
+    if (child.type !== "class_heritage") continue;
+    for (const clause of child.namedChildren) {
+      const target =
+        clause.type === "extends_clause" ? extendsList :
+        clause.type === "implements_clause" ? implementsList : null;
+      if (!target) continue;
+      for (const typeNode of clause.namedChildren) {
+        target.push(...extractHeritageNames(typeNode));
       }
     }
+  }
+  return { extends: extendsList, implements: implementsList };
+}
+
+/**
+ * Check if a class extends React.Component or React.PureComponent.
+ * Uses getClassHeritage (shared helper) — NO duplicate AST walk (CQ14).
+ */
+function isReactClassComponent(node: Parser.SyntaxNode): boolean {
+  const { extends: extendsList } = getClassHeritage(node);
+  for (const name of extendsList) {
+    // "Component" / "PureComponent" — bare identifier match
+    if (REACT_COMPONENT_BASES.has(name)) return true;
+    // "React.Component" / "React.PureComponent" — qualified match
+    const lastDot = name.lastIndexOf(".");
+    if (lastDot >= 0 && REACT_COMPONENT_BASES.has(name.slice(lastDot + 1))) return true;
   }
   return false;
 }
@@ -646,10 +683,13 @@ export function extractTypeScriptSymbols(
         const kind = isReactClassComponent(node) ? "component" as SymbolKind : "class" as SymbolKind;
         const decorators = getDecorators(node);
         const exported = isExported || hasExportModifier(node);
+        const heritage = getClassHeritage(node);
         const sym = makeSymbol(node, name, kind, filePath, source, repo, {
           parentId,
           docstring: getDocstring(node, source),
           decorators: decorators.length > 0 ? decorators : undefined,
+          extends: heritage.extends.length > 0 ? heritage.extends : undefined,
+          implements: heritage.implements.length > 0 ? heritage.implements : undefined,
           is_exported: exported ? true : undefined,
         });
 
