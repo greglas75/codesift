@@ -644,7 +644,11 @@ export function extractTypeScriptSymbols(
   function walk(node: Parser.SyntaxNode, parentId?: string, isExported = false): void {
     switch (node.type) {
       case "function_declaration":
-      case "generator_function_declaration": {
+      case "generator_function_declaration":
+      case "function_signature": {
+        // function_signature: ambient declaration body — `declare function foo(): void`
+        // and `declare module "x" { export function bar(): void }`. Same shape as
+        // function_declaration for our purposes (name field + parameters + return_type).
         const name = getNodeName(node);
         if (name) {
           // React detection: hook (useX) or component (PascalCase + JSX return)
@@ -729,6 +733,16 @@ export function extractTypeScriptSymbols(
             if (value.type === "object") {
               extractObjectLiteralMethods(value, sym.id, source, filePath, repo, symbols);
             }
+          } else {
+            // No value (e.g., `declare const X: number;` inside ambient_declaration).
+            // Still emit a symbol so the declaration is searchable.
+            const kind = isConst && SCREAMING_CASE_RE.test(name) ? "constant" : "variable";
+            const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+              parentId,
+              docstring: getDocstring(node, source),
+              is_exported: exported ? true : undefined,
+            });
+            symbols.push(sym);
           }
         }
         // Don't walk children — we already processed declarators
@@ -874,6 +888,63 @@ export function extractTypeScriptSymbols(
           symbols.push(sym);
         }
         break;
+      }
+
+      case "internal_module":
+      case "module": {
+        // L2/L12: `namespace M {}`, `module M {}`, OR `module "x" {}` (when nested
+        // inside ambient_declaration → declare module "x" {}).
+        // Name field: identifier for namespace, string for ambient module.
+        const nameNode = node.childForFieldName("name");
+        let nsName: string | null = null;
+        if (nameNode) {
+          nsName = nameNode.type === "string"
+            ? nameNode.text.replace(/^['"`]|['"`]$/g, "")
+            : nameNode.text;
+        } else {
+          // Fallback: scan named children for identifier or string
+          for (const c of node.namedChildren) {
+            if (c.type === "identifier") { nsName = c.text; break; }
+            if (c.type === "string") {
+              nsName = c.text.replace(/^['"`]|['"`]$/g, "");
+              break;
+            }
+          }
+        }
+        if (nsName) {
+          const exported = isExported || hasExportModifier(node);
+          const sym = makeSymbol(node, nsName, "namespace", filePath, source, repo, {
+            parentId,
+            docstring: getDocstring(node, source),
+            is_exported: exported ? true : undefined,
+          });
+          symbols.push(sym);
+          // Walk body so nested function/class/interface declarations are parented
+          const body = node.childForFieldName("body")
+            ?? node.namedChildren.find((c) => c.type === "statement_block");
+          if (body) {
+            for (const child of body.namedChildren) {
+              walk(child, sym.id, exported);
+            }
+          }
+        }
+        return;
+      }
+
+      case "ambient_declaration": {
+        // L12: `declare const X`, `declare module "x" {}`, `declare class Y {}`, etc.
+        // Rule: ambient module declarations with STRING-literal name are intrinsically
+        // module-public; force is_exported=true via the special case below. For other
+        // `declare X` forms, propagate isExported || hasExportModifier(node).
+        const ambientExported = isExported || hasExportModifier(node);
+        for (const child of node.namedChildren) {
+          // Detect `declare module "x"` — child is `module` with a string-literal name
+          const isStringNamedModule = child.type === "module"
+            && (child.childForFieldName("name")?.type === "string"
+                || child.namedChildren.some((c) => c.type === "string"));
+          walk(child, parentId, ambientExported || isStringNamedModule);
+        }
+        return;
       }
 
       case "enum_declaration": {

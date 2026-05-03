@@ -277,3 +277,46 @@ describe("L11 anonymous default export", () => {
     expect(syms.find((s) => s.name === "default")).toBeUndefined();
   });
 });
+
+describe("L2 namespace + L12 ambient declaration", () => {
+  it("emits namespace M { class C } as namespace + parented class", () => {
+    const syms = ext(`namespace M { export class C {} }`);
+    const ns = syms.find((s) => s.name === "M" && s.kind === "namespace");
+    const cls = syms.find((s) => s.name === "C" && s.kind === "class");
+    expect(ns).toBeDefined();
+    expect(cls?.parent).toBe(ns?.id);
+  });
+
+  it("emits exported namespace as is_exported", () => {
+    const syms = ext(`export namespace N { const x = 1; }`);
+    const ns = syms.find((s) => s.name === "N");
+    expect(ns?.is_exported).toBe(true);
+  });
+
+  it("emits `declare module \"x\" { fn }` as namespace x with bar exported (L12)", () => {
+    const syms = ext(`declare module "x" { export function bar(): void; }`);
+    const ns = syms.find((s) => s.name === "x" && s.kind === "namespace");
+    expect(ns?.is_exported).toBe(true);
+    const bar = syms.find((s) => s.name === "bar");
+    expect(bar?.parent).toBe(ns?.id);
+    expect(bar?.is_exported).toBe(true);
+  });
+
+  it("emits `declare const X` as exported (declare ambient + export)", () => {
+    const syms = ext(`export declare const X: number;`);
+    const x = syms.find((s) => s.name === "X");
+    expect(x?.is_exported).toBe(true);
+  });
+
+  it("does NOT mark plain `declare const X` (no export) as exported", () => {
+    const syms = ext(`declare const X: number;`);
+    const x = syms.find((s) => s.name === "X");
+    expect(x?.is_exported).toBeUndefined();
+  });
+
+  it(".tsx parity: namespace extraction in TSX", () => {
+    const syms = ext(`namespace N { export const x = 1; }`, "tsx");
+    const ns = syms.find((s) => s.name === "N" && s.kind === "namespace");
+    expect(ns).toBeDefined();
+  });
+});
