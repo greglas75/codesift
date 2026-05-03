@@ -162,3 +162,37 @@ describe("L3 enum members", () => {
     expect(constants.map((c) => c.name)).toEqual(["Foo", "Bar"]);
   });
 });
+
+describe("L5 is_async flag", () => {
+  it("sets is_async on async function declaration", () => {
+    const syms = ext(`async function foo() {}`);
+    const fn = syms.find((s) => s.name === "foo");
+    expect(fn?.is_async).toBe(true);
+  });
+
+  it("does NOT set is_async on sync function", () => {
+    const syms = ext(`function foo() {}`);
+    const fn = syms.find((s) => s.name === "foo");
+    expect(fn?.is_async).toBeUndefined();
+  });
+
+  it("sets is_async on async arrow assigned to const", () => {
+    const syms = ext(`const fetch = async () => {};`);
+    const fn = syms.find((s) => s.name === "fetch");
+    expect(fn?.is_async).toBe(true);
+  });
+
+  it("sets is_async on async method inside class", () => {
+    const syms = ext(`class C { async run() {} sync() {} }`);
+    const asyncM = syms.find((s) => s.name === "run");
+    const syncM = syms.find((s) => s.name === "sync");
+    expect(asyncM?.is_async).toBe(true);
+    expect(syncM?.is_async).toBeUndefined();
+  });
+
+  it(".tsx parity: is_async on async functions in TSX", () => {
+    const syms = ext(`async function foo() { return 1; }`, "tsx");
+    const fn = syms.find((s) => s.name === "foo");
+    expect(fn?.is_async).toBe(true);
+  });
+});

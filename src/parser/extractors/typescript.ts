@@ -580,6 +580,14 @@ function hasExportModifier(node: Parser.SyntaxNode): boolean {
   return false;
 }
 
+/** True if the function/method/arrow has an `async` keyword child. */
+function hasAsyncModifier(node: Parser.SyntaxNode): boolean {
+  for (const child of node.children) {
+    if (child.type === "async") return true;
+  }
+  return false;
+}
+
 export function extractTypeScriptSymbols(
   tree: Parser.Tree,
   filePath: string,
@@ -604,12 +612,14 @@ export function extractTypeScriptSymbols(
           const kind = classifyReactKind(name, node);
           const decorators = getDecorators(node);
           const exported = isExported || hasExportModifier(node);
+          const isAsync = hasAsyncModifier(node);
           const isGenerator = node.type === "generator_function_declaration";
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
+            is_async: isAsync ? true : undefined,
             is_exported: exported ? true : undefined,
             meta: isGenerator ? { generator: true } : undefined,
           });
@@ -635,10 +645,12 @@ export function extractTypeScriptSymbols(
           if (value && value.type === "arrow_function") {
             // React detection: hook or component
             const kind = classifyReactKind(name, value);
+            const isAsync = hasAsyncModifier(value);
             const sym = makeSymbol(node, name, kind, filePath, source, repo, {
               parentId,
               docstring: getDocstring(node, source),
               signature: getSignature(value, source),
+              is_async: isAsync ? true : undefined,
               is_exported: exported ? true : undefined,
             });
             symbols.push(sym);
@@ -732,11 +744,13 @@ export function extractTypeScriptSymbols(
         const name = getNodeName(node);
         if (name) {
           const decorators = getDecorators(node);
+          const isAsync = hasAsyncModifier(node);
           const sym = makeSymbol(node, name, "method", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
+            is_async: isAsync ? true : undefined,
           });
           symbols.push(sym);
         }
