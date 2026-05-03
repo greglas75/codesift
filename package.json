@@ -35,6 +35,7 @@
     "@mrleebo/prisma-ast": "^0.15.0",
     "@parcel/watcher": "^2.5.6",
     "@sanity-labs/secret-scan": "^1.1.0",
+    "get-tsconfig": "^4.14.0",
     "graphology": "^0.26.0",
     "graphology-metrics": "^2.4.0",
     "ignore": "^6.0.0",
