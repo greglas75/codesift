@@ -1148,7 +1148,29 @@ export function extractTypeScriptSymbols(
     }
   }
 
-  walk(tree.rootNode);
+  // ERROR-node warning: emit a single warn line per file so silent grammar
+  // mismatches (e.g., a syntax the bundled WASM doesn't understand) are
+  // visible without crashing the index. Decorator metadata or other affected
+  // symbols may be incomplete; this is an observability hook, not a hard fail.
+  // Note: web-tree-sitter exposes `hasError` as a getter (boolean property),
+  // not a method — accessing as property is correct.
+  if ((tree.rootNode as Parser.SyntaxNode & { hasError: boolean }).hasError) {
+    console.warn(`[ts-extractor] grammar errors detected in ${filePath}; some symbols may be incomplete`);
+  }
+
+  // Top-level walk guard: catch RangeError ("Maximum call stack") on extremely
+  // deep ASTs (e.g., 50k+ node bundled .d.ts files). Returns the partial
+  // symbol list rather than crashing the entire index_folder run. Iterative
+  // walk is deferred to v2 — partial extraction is acceptable for v1.
+  try {
+    walk(tree.rootNode);
+  } catch (err) {
+    if (err instanceof RangeError && /Maximum call stack/i.test(err.message)) {
+      console.warn(`[ts-extractor] stack overflow on ${filePath}; returning ${symbols.length} partial symbols`);
+      return symbols;
+    }
+    throw err;
+  }
 
   // Post-pass: local re-exports `export { X }` and CommonJS exports both
   // mark prior-declared symbols as exported. Merged into a single Set so we

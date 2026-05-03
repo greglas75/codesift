@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import Parser from "web-tree-sitter";
 import { extractTypeScriptSymbols } from "../../src/parser/extractors/typescript.js";
 import { getParser } from "../../src/parser/parser-manager.js";
@@ -318,5 +318,24 @@ describe("L2 namespace + L12 ambient declaration", () => {
     const syms = ext(`namespace N { export const x = 1; }`, "tsx");
     const ns = syms.find((s) => s.name === "N" && s.kind === "namespace");
     expect(ns).toBeDefined();
+  });
+});
+
+describe("Edge cases — RangeError + grammar errors", () => {
+  it("logs a warning when source contains grammar errors but does not throw", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Source with a deliberate parse error — unmatched braces.
+    const broken = `class Foo { method() { @@@ broken `;
+    expect(() => ext(broken)).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/grammar errors detected/));
+    warnSpy.mockRestore();
+  });
+
+  it("normal source produces no grammar-error warning", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ext(`class Foo { method() {} }`);
+    const calls = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((c) => /grammar errors detected/.test(c))).toBe(false);
+    warnSpy.mockRestore();
   });
 });
