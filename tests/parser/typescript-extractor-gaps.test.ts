@@ -81,3 +81,45 @@ describe("L4 heritage — extends / implements", () => {
     expect(cls?.implements).toBeUndefined();
   });
 });
+
+describe("L7 generics in signature", () => {
+  it("captures function generics with constraints", () => {
+    const syms = ext(`function identity<T extends Foo>(x: T): T { return x; }`);
+    const fn = syms.find((s) => s.name === "identity");
+    expect(fn?.signature).toContain("<T extends Foo>");
+    expect(fn?.signature).toContain("(x: T)");
+    expect(fn?.signature).toContain(": T");
+  });
+
+  it("captures default-parameter generics", () => {
+    const syms = ext(`function box<T = string>(x: T) { return x; }`);
+    const fn = syms.find((s) => s.name === "box");
+    expect(fn?.signature).toContain("<T = string>");
+  });
+
+  it("captures multi-parameter generics", () => {
+    const syms = ext(`function map<K, V>(k: K, v: V): V { return v; }`);
+    const fn = syms.find((s) => s.name === "map");
+    expect(fn?.signature).toContain("<K, V>");
+  });
+
+  it("captures method generics inside a class", () => {
+    const syms = ext(`class C { id<T>(x: T): T { return x; } }`);
+    const m = syms.find((s) => s.name === "id");
+    expect(m?.signature).toContain("<T>");
+  });
+
+  it("function without generics still produces clean signature (no double-colon)", () => {
+    const syms = ext(`function plain(x: number): number { return x; }`);
+    const fn = syms.find((s) => s.name === "plain");
+    expect(fn?.signature).toBe("(x: number): number");
+    // Regression guard: no `: : ` from old buggy prepend.
+    expect(fn?.signature).not.toContain(": : ");
+  });
+
+  it(".tsx parity: generics extracted in TSX", () => {
+    const syms = ext(`function Wrap<T>(p: T) { return p; }`, "tsx");
+    const fn = syms.find((s) => s.name === "Wrap");
+    expect(fn?.signature).toContain("<T>");
+  });
+});

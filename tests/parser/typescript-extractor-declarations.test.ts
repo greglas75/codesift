@@ -35,8 +35,8 @@ describe("extractTypeScriptSymbols — function declarations", () => {
 }`;
     const symbols = await extract(source);
 
-    // getSignature adds ": " + return_type text (which includes leading ": ")
-    expect(symbols[0].signature).toBe("(a: number, b: number): : number");
+    // getSignature uses raw return_type slice (which already includes leading ": ")
+    expect(symbols[0].signature).toBe("(a: number, b: number): number");
   });
 
   it("captures function signature without return type", async () => {
@@ -190,7 +190,7 @@ describe("extractTypeScriptSymbols — export statements", () => {
     expect(symbols).toHaveLength(1);
     expect(symbols[0].name).toBe("doWork");
     expect(symbols[0].kind).toBe("function");
-    expect(symbols[0].signature).toBe("(input: string): : boolean");
+    expect(symbols[0].signature).toBe("(input: string): boolean");
   });
 
   it("unwraps exported class with methods", async () => {
@@ -448,6 +448,6 @@ enum Env { Dev, Prod }`;
     expect(symbols).toHaveLength(1);
     expect(symbols[0].name).toBe("transform");
     expect(symbols[0].kind).toBe("function");
-    expect(symbols[0].signature).toBe("(input: string[]): : number[]");
+    expect(symbols[0].signature).toBe("(input: string[]): number[]");
   });
 });

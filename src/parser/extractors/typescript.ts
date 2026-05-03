@@ -345,11 +345,19 @@ function getSignature(
   const params = node.childForFieldName("parameters");
   if (!params) return undefined;
 
-  let sig = source.slice(params.startIndex, params.endIndex);
+  let sig = "";
+  // Generics: `<T extends Foo, U = string>` — prepend before parameters when present.
+  const typeParams = node.childForFieldName("type_parameters");
+  if (typeParams) {
+    sig += source.slice(typeParams.startIndex, typeParams.endIndex);
+  }
+  sig += source.slice(params.startIndex, params.endIndex);
 
+  // return_type field already includes the leading `:` (it points to a
+  // type_annotation node containing colon + type) — no `: ` prefix here.
   const returnType = node.childForFieldName("return_type");
   if (returnType) {
-    sig += ": " + source.slice(returnType.startIndex, returnType.endIndex);
+    sig += source.slice(returnType.startIndex, returnType.endIndex);
   }
 
   return sig;
