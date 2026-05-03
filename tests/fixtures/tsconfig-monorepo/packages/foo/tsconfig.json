@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@shared/*": ["packages/shared/*"],
+      "@components/*": ["packages/components/*"],
+      "@app/exact": ["packages/foo/src/exact-target.ts"]
+    }
+  }
+}
