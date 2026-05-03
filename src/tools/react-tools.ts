@@ -11,7 +11,7 @@ import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { resolveAlias } from "../utils/react-alias.js";
 import type { CodeSymbol, CallNode } from "../types.js";
 
-export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, extractHookNames, findRuleOfHooksViolations, findRenderRisks };
+export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, extractHookNames, findRuleOfHooksViolations, findRenderRisks, buildReverseAdjacency, computePropChainDepth };
 // formatRendersMarkdown and buildContextGraph are exported inline at definition site below
 
 // ── Limits (mirror graph-tools.ts) ──────────────────────────
@@ -131,6 +131,82 @@ function buildJsxAdjacency(symbols: CodeSymbol[]): JsxAdjacency {
   }
 
   return { children };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tier 5 — prop_chain_depth metric helpers
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Invert JsxAdjacency to a reverse adjacency: child id → sorted list of parent ids.
+ *
+ * Used by computePropChainDepth to walk UP the render tree (from a leaf back toward
+ * roots) and measure render-tree depth. Sorts each parent list alphabetically for
+ * deterministic output on cyclic graphs.
+ */
+function buildReverseAdjacency(adjacency: JsxAdjacency): Map<string, string[]> {
+  const parents = new Map<string, string[]>();
+  for (const [parentId, children] of adjacency.children) {
+    for (const child of children) {
+      const list = parents.get(child.id) ?? [];
+      list.push(parentId);
+      parents.set(child.id, list);
+    }
+  }
+  // Sort each parent list alphabetically for determinism on cyclic graphs
+  for (const [k, v] of parents) parents.set(k, [...v].sort());
+  return parents;
+}
+
+/**
+ * Compute the longest path (in edges) from componentId UP to the deepest root in
+ * the reverse JSX adjacency. This is render-tree depth — NOT prop-flow depth.
+ *
+ * Iterative implementation using an explicit 2-phase ("enter"/"exit") stack to
+ * avoid recursive blowup on deep linear chains (V8 stack ~10-15K frames).
+ *
+ * Uses shared `memo` and `inProgress` across all calls in one analyzeRenders run
+ * to amortize cost to O(V+E) total.
+ */
+function computePropChainDepth(
+  componentId: string,
+  reverseAdjacency: Map<string, string[]>,
+  memo: Map<string, number>,
+  inProgress: Set<string>,
+): number {
+  if (memo.has(componentId)) return memo.get(componentId)!;
+  if (inProgress.has(componentId)) return 0;
+
+  type Frame = { node: string; phase: "enter" | "exit" };
+  const stack: Frame[] = [{ node: componentId, phase: "enter" }];
+
+  while (stack.length > 0) {
+    const f = stack[stack.length - 1]!;
+    if (f.phase === "enter") {
+      if (memo.has(f.node)) { stack.pop(); continue; }
+      if (inProgress.has(f.node)) { stack.pop(); continue; }
+      inProgress.add(f.node);
+      f.phase = "exit";
+      for (const p of reverseAdjacency.get(f.node) ?? []) {
+        if (!memo.has(p) && !inProgress.has(p)) {
+          stack.push({ node: p, phase: "enter" });
+        }
+      }
+    } else {
+      // exit phase — all parents either memoized or cyclically pruned
+      const parents = reverseAdjacency.get(f.node) ?? [];
+      let maxParentDepth = -1;
+      for (const p of parents) {
+        const d = memo.get(p) ?? 0; // cyclic parent contributes 0
+        if (d > maxParentDepth) maxParentDepth = d;
+      }
+      const depth = parents.length === 0 ? 0 : maxParentDepth + 1;
+      memo.set(f.node, depth);
+      inProgress.delete(f.node);
+      stack.pop();
+    }
+  }
+  return memo.get(componentId)!;
 }
 
 /**
@@ -482,6 +558,14 @@ export interface RenderAnalysisEntry {
   risks: RenderRisk[];        // up to 20 per component
   /** Components rendered as children (from JSX), useful to see impact */
   children_count: number;
+  /**
+   * Render-tree depth (Tier 5): longest path in edges from this component UP to
+   * a root in the reverse JSX adjacency. NOT prop-flow depth — does not analyze
+   * which props are consumed vs passed through. `null` only on extractor failure.
+   */
+  prop_chain_depth: number | null;
+  /** Suggestion text including "NOT prop-drilling depth" disclaimer when depth >= 3 */
+  suggestion?: string;
 }
 
 export interface AnalyzeRendersResult {
@@ -495,6 +579,8 @@ export interface AnalyzeRendersResult {
     unstable_defaults: number;
     missing_memo: number;
   };
+  /** Diagnostic metadata — fires only on extractor failure (zero component symbols), never on size */
+  metadata?: { skipped?: "extractor-failure" };
 }
 
 /** Patterns for inline prop creation in JSX — each creates a new reference every render */
@@ -598,11 +684,12 @@ export function formatRendersMarkdown(result: AnalyzeRendersResult): string {
   lines.push("");
   lines.push("## Entries");
   lines.push("");
-  lines.push("| Component | File | Risk | Issues | Children | Memo |");
-  lines.push("|-----------|------|------|--------|----------|------|");
+  lines.push("| Component | File | Risk | Issues | Children | Chain | Memo |");
+  lines.push("|-----------|------|------|--------|----------|-------|------|");
   for (const e of result.entries) {
     const file = e.file.length > 40 ? "…" + e.file.slice(-39) : e.file;
-    lines.push(`| ${e.name} | ${file}:${e.start_line} | ${e.risk_level} | ${e.risk_count} | ${e.children_count} | ${e.is_memoized ? "✓" : "✗"} |`);
+    const chain = e.prop_chain_depth === null ? "—" : String(e.prop_chain_depth);
+    lines.push(`| ${e.name} | ${file}:${e.start_line} | ${e.risk_level} | ${e.risk_count} | ${e.children_count} | ${chain} | ${e.is_memoized ? "✓" : "✗"} |`);
   }
   return lines.join("\n");
 }
@@ -632,11 +719,26 @@ export async function analyzeRenders(
   if (componentName) components = components.filter((s) => s.name === componentName);
   if (filePattern) components = components.filter((s) => s.file.includes(filePattern));
 
+  // Tier 5 — extractor-failure detection (only fires when zero component symbols
+  // were extracted, NOT on flat trees with components but no JSX nesting).
+  const extractorFailure = components.length === 0 && index.symbols.length > 0;
+
+  // Tier 5 — sort components alphabetically by id ?? name BEFORE building adjacency
+  // for deterministic cycle handling.
+  const sortedComponents = [...components].sort((a, b) =>
+    (a.id ?? a.name).localeCompare(b.id ?? b.name),
+  );
+  // Build reverse adjacency once, share memo across all per-component calls (O(V+E) total).
+  const adjacency = buildJsxAdjacency(sortedComponents);
+  const reverseAdj = buildReverseAdjacency(adjacency);
+  const memo = new Map<string, number>();
+  const inProgress = new Set<string>();
+
   const entries: RenderAnalysisEntry[] = [];
   const summary = { inline_objects: 0, inline_arrays: 0, inline_functions: 0, unstable_defaults: 0, missing_memo: 0 };
   let highRiskCount = 0;
 
-  for (const sym of components) {
+  for (const sym of sortedComponents) {
     if (entries.length >= maxEntries) break;
     if (!sym.source) continue;
 
@@ -678,6 +780,16 @@ export async function analyzeRenders(
 
     if (riskLevel === "high") highRiskCount++;
 
+    // Tier 5 — render-tree depth (longest acyclic path from this component up to a root)
+    const depth = computePropChainDepth(sym.id, reverseAdj, memo, inProgress);
+
+    // Tier 5 — suggestion text with explicit "NOT prop-drilling depth" disclaimer
+    // when depth >= 3 (AC 8: prevents the metric from being silently relabeled
+    // as semantic prop-flow depth, which is Tier 6 scope).
+    const suggestion = depth >= 3
+      ? `Component is rendered ${depth} edges deep in the JSX render tree. NOT prop-drilling depth — this metric measures render-tree depth only, without tracing which props are consumed vs passed through. Use as a hint to investigate; combine with manual review or trace_component_tree to confirm whether props are actually being drilled. Semantic prop-flow tracking is Tier 6 scope.`
+      : undefined;
+
     // Only include components with risks or if specifically queried
     if (risks.length > 0 || componentName) {
       entries.push({
@@ -689,6 +801,8 @@ export async function analyzeRenders(
         risk_level: riskLevel,
         risks,
         children_count: childrenSet.size,
+        prop_chain_depth: extractorFailure ? null : depth,
+        ...(suggestion ? { suggestion } : {}),
       });
     }
   }
@@ -706,6 +820,7 @@ export async function analyzeRenders(
     total_components: components.length,
     high_risk_count: highRiskCount,
     summary,
+    ...(extractorFailure ? { metadata: { skipped: "extractor-failure" as const } } : {}),
   };
 
   if (options?.format === "markdown") {
@@ -960,6 +1075,18 @@ export interface ReactQuickstartResult {
     count: number;
     severity: "critical" | "warning";
   }>;
+  /** Tier 5: warning-severity findings (derived-state, stale-closure, context value inline) */
+  warnings: Array<{
+    pattern: string;
+    count: number;
+    severity: "warning";
+  }>;
+  /** Tier 5: style-severity findings (button-no-type, jsx-no-target-blank) */
+  style_issues: Array<{
+    pattern: string;
+    count: number;
+    severity: "style";
+  }>;
   /** Top 5 most-used hooks across components */
   top_hooks: Array<{ name: string; count: number }>;
   /** Suggested next queries for the agent to run */
@@ -1022,17 +1149,25 @@ export async function reactQuickstart(
     // analyze_project may fail on non-React repos — fall through
   }
 
-  // Critical pattern scans — run in parallel
-  const criticalPatterns = [
-    { name: "dangerously-set-html", severity: "critical" as const },
-    { name: "hook-in-condition", severity: "critical" as const },
-    { name: "conditional-render-hook", severity: "critical" as const },
-    { name: "useEffect-missing-cleanup", severity: "warning" as const },
-    { name: "useEffect-setstate-loop", severity: "critical" as const },
-    { name: "rsc-non-serializable-prop", severity: "warning" as const },
+  // Critical pattern scans — run in parallel.
+  // Tier 5: scan list expanded with new patterns, results routed to severity-based buckets.
+  const scanList: Array<{ name: string; severity: "critical" | "warning" | "style" }> = [
+    { name: "dangerously-set-html", severity: "critical" },
+    { name: "hook-in-condition", severity: "critical" },
+    { name: "conditional-render-hook", severity: "critical" },
+    { name: "useEffect-missing-cleanup", severity: "warning" },
+    { name: "useEffect-setstate-loop", severity: "critical" },
+    { name: "rsc-non-serializable-prop", severity: "warning" },
+    // Tier 5 — warning bucket
+    { name: "derived-state", severity: "warning" },
+    { name: "stale-closure-setstate", severity: "warning" },
+    { name: "context-provider-value-inline", severity: "warning" },
+    // Tier 5 — style bucket
+    { name: "jsx-no-target-blank", severity: "style" },
+    { name: "button-no-type", severity: "style" },
   ];
   const scanResults = await Promise.all(
-    criticalPatterns.map(async ({ name, severity }) => {
+    scanList.map(async ({ name, severity }) => {
       try {
         const result = await searchPatterns(repo, name, { max_results: 20 });
         return { pattern: name, count: result.matches.length, severity };
@@ -1041,7 +1176,25 @@ export async function reactQuickstart(
       }
     }),
   );
-  const critical_issues = scanResults.filter((r) => r.count > 0);
+  // Severity-aware bucketing — cap each at 10 entries.
+  const hits = scanResults.filter((r) => r.count > 0);
+  const critical_issues = hits
+    .filter((r): r is typeof r & { severity: "critical" | "warning" } => r.severity === "critical")
+    .slice(0, 10);
+  // Legacy: pre-Tier-5 patterns marked "warning" stay in critical_issues for backward compat;
+  // Tier 5 warnings (derived-state, stale-closure, context-provider) go to dedicated bucket.
+  const tier5WarningPatterns = new Set(["derived-state", "stale-closure-setstate", "context-provider-value-inline"]);
+  for (const r of hits) {
+    if (r.severity === "warning" && !tier5WarningPatterns.has(r.pattern) && critical_issues.length < 10) {
+      critical_issues.push({ pattern: r.pattern, count: r.count, severity: "warning" });
+    }
+  }
+  const warnings = hits
+    .filter((r): r is typeof r & { severity: "warning" } => r.severity === "warning" && tier5WarningPatterns.has(r.pattern))
+    .slice(0, 10);
+  const style_issues = hits
+    .filter((r): r is typeof r & { severity: "style" } => r.severity === "style")
+    .slice(0, 10);
 
   // Top hooks used across components
   const hookCounts = new Map<string, number>();
@@ -1080,6 +1233,8 @@ export async function reactQuickstart(
       stack,
     },
     critical_issues,
+    warnings,
+    style_issues,
     top_hooks,
     suggested_queries,
   };
