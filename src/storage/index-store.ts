@@ -51,6 +51,64 @@ export async function loadIndex(
   }
 }
 
+/** Discriminated union returned by loadIndexOrStale: distinguishes a healthy
+ *  load from a version-mismatch stale-index case. Tools route through this
+ *  helper instead of calling loadIndex directly so stale indexes surface as
+ *  structured errors via staleToMcpError (src/tools/_helpers.ts) rather than
+ *  silent empty results. */
+export type IndexOrStaleResult =
+  | { status: "ok"; index: CodeIndex }
+  | {
+      status: "stale";
+      reason: "extractor_version_mismatch";
+      expected_version: string;
+      actual_version: string;
+    };
+
+/** Load an index with version-aware stale detection.
+ *
+ * Returns:
+ *   - `{ status: "ok", index }` when the index is present, valid, and matches
+ *     the provided `currentVersions` for the language under inspection.
+ *   - `{ status: "stale", reason: "extractor_version_mismatch", ... }` when
+ *     the file exists and is parseable but its TypeScript extractor version
+ *     differs from the current bundled version.
+ *
+ * Currently only the `typescript` language version is reported in the stale
+ * payload (this is the language whose schema bumps are most likely to invalidate
+ * existing indexes). The check is general — any mismatch in `currentVersions`
+ * yields a stale verdict — but the message names typescript for clarity.
+ *
+ * On file-not-found, parse error, or invalid shape, this function falls back
+ * to `loadIndex(...)` returning null. Callers must still handle null (no
+ * structured error) for those cases. */
+export async function loadIndexOrStale(
+  indexPath: string,
+  currentVersions: Record<string, string>,
+): Promise<IndexOrStaleResult | null> {
+  try {
+    const raw = await readFile(indexPath, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!isValidIndex(parsed)) return null;
+    if (!isExtractorVersionCurrent(parsed, currentVersions)) {
+      // Identify the first mismatching language; report typescript by name
+      // for clarity, since that's the most commonly-bumped key.
+      const stored = parsed.extractor_version ?? {};
+      const expected = currentVersions["typescript"] ?? "unknown";
+      const actual = stored["typescript"] ?? "missing";
+      return {
+        status: "stale",
+        reason: "extractor_version_mismatch",
+        expected_version: expected,
+        actual_version: actual,
+      };
+    }
+    return { status: "ok", index: parsed };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Check whether the stored `extractor_version` snapshot matches the current
  * set of extractor versions. Returns false if any language present in

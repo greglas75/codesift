@@ -8,7 +8,8 @@ import { extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extr
 import { runTreeSitterParse } from "../parser/parser-pool.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js";
 import { getLanguageForExtension, getLanguageForPath } from "../parser/parser-manager.js";
-import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
+import { saveIndex, loadIndex, loadIndexOrStale, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
+import { clearTsconfigCache } from "../utils/tsconfig-paths.js";
 import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
 import { buildBM25Index, type BM25Index } from "../search/bm25.js";
@@ -370,6 +371,12 @@ export async function indexFolder(
   if (!folderPath || typeof folderPath !== "string") {
     throw new Error("folderPath is required and must be a non-empty string");
   }
+
+  // Clear tsconfig path resolver cache so config edits between runs take effect.
+  // The two-level cache (configCache + dirToConfigCache) is module-level and
+  // would otherwise serve stale alias mappings if a user edited tsconfig.json
+  // between successive index_folder calls within the same MCP server process.
+  clearTsconfigCache();
 
   const config = loadConfig();
   const startTime = Date.now();
@@ -1133,13 +1140,24 @@ export async function getCodeIndex(
   const cached = codeIndexes.get(resolved);
   if (cached) return cached;
 
-  // Pass EXTRACTOR_VERSIONS so a schema bump forces a cache miss instead of
-  // serving a stale index. Callers that hit the miss path should reindex.
-  const index = await loadIndex(meta.index_path, { ...EXTRACTOR_VERSIONS });
-  if (!index) return null;
+  // Use loadIndexOrStale so version mismatches surface a structured signal
+  // instead of being silently coerced to null. Tool wrappers can pattern-match
+  // on `result.status === "stale"` and route to staleToMcpError. Existing
+  // callers that still receive a plain CodeIndex|null get null on stale and
+  // a logged warning so the silent regression is observable.
+  const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
+  if (!result) return null;
+  if (result.status === "stale") {
+    console.warn(
+      `[codesift] stale index for ${resolved}: extractor_version_mismatch ` +
+      `(expected ${result.expected_version}, got ${result.actual_version}). ` +
+      `Run index_folder to refresh.`,
+    );
+    return null;
+  }
 
-  codeIndexes.set(repoName, index);
-  return index;
+  codeIndexes.set(repoName, result.index);
+  return result.index;
 }
 
 /**
