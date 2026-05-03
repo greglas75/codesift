@@ -27,6 +27,8 @@ export const BUILTIN_PATTERNS: Record<string, {
   description: string;
   fileExcludePattern?: RegExp;
   fileIncludePattern?: RegExp;
+  severity?: "critical" | "warning" | "style";
+  postFilter?: (match: string) => boolean;
 }> = {
   "useEffect-no-cleanup": {
     regex: /useEffect\s*\(\s*(?:async\s*)?\(\)\s*=>\s*\{(?:(?!return\s*\(\s*\)\s*=>|return\s+\(\)\s*=>|return\s*\(\s*\)\s*\{|return\s+function)[\s\S])*\}\s*,/,
@@ -204,6 +206,48 @@ export const BUILTIN_PATTERNS: Record<string, {
     regex: /\buseMutation\s*\((?:(?!invalidateQueries|invalidateQuery)[\s\S]){0,800}\}\s*\)/,
     description: "useMutation without invalidateQueries in onSuccess/onSettled — stale data remains in cache after mutation. Add queryClient.invalidateQueries() on success.",
     fileIncludePattern: /\.(tsx|jsx|ts)$/,
+  },
+  // --- React Tier 5 (May 2026) — derived state, stale closures, context perf, security ---
+  "derived-state": {
+    regex: /const\s*\[\s*(\w+)\s*,\s*set\1\s*\]\s*=\s*useState\s*\(\s*props\.\1\s*\)[\s\S]{0,2000}?useEffect\s*\([\s\S]{0,500}?set\1\s*\(\s*props\.\1\s*\)/i,
+    description: "useState(props.X) + useEffect that syncs setX(props.X) — derived state anti-pattern. Lift state up or compute during render. NOTE: matches when state name follows setX for prop x. Custom-named setters (props.value → setDisplayValue) not detected.",
+    severity: "warning",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "stale-closure-setstate": {
+    regex: /const\s*\[\s*(\w+)\s*,\s*set([A-Z]\w*)\s*\]\s*=\s*useState[\s\S]{0,3000}?\bset\2\s*\(\s*\1\s*[+\-*/]/,
+    description: "setState called with non-functional update referencing current state value (setX(X + n)) — risks stale closure in event handlers, timers, or async callbacks. Use functional form: setX(prev => prev + n). NOTE: requires standard [x, setX] = useState() naming; boolean toggles (setOpen(!open)) and broken functional updaters not detected.",
+    severity: "warning",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "context-provider-value-inline": {
+    regex: /<\w+\.Provider\s+[^>]*\bvalue\s*=\s*\{\s*[\{\[]/,
+    description: "Context.Provider value is an inline object/array literal — new reference every render forces ALL consumers to re-render. Wrap in useMemo: value={useMemo(() => ({...}), [deps])}. NOTE: does not detect intermediate-variable form or destructured Provider.",
+    severity: "warning",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+  },
+  "jsx-no-target-blank": {
+    regex: /<a\s+(?:(?!>)[\s\S]){0,500}?target\s*=\s*(?:["']_blank["']|\{\s*["']_blank["']\s*\})(?:(?!>)[\s\S]){0,500}?>/,
+    description: "<a target=\"_blank\"> without rel=\"noopener noreferrer\" — tabnabbing/window.opener security risk. Add rel=\"noopener noreferrer\". NOTE: matches both string and JSX-brace forms; postFilter requires whitespace before rel= to avoid URL false-positive.",
+    severity: "style",
+    fileIncludePattern: /\.(tsx|jsx)$/,
+    // require leading whitespace before `rel` (real attribute, not `?rel=` in URL)
+    // AND require rel value to contain BOTH `noopener` AND `noreferrer` (not just any rel)
+    // — codex-5.3 adversarial Run 5 finding: rel="nofollow" was bypassing the check
+    // while leaving window.opener tabnabbing exploitable.
+    postFilter: (match) => {
+      const relMatch = /\srel\s*=\s*["']([^"']*)["']/.exec(match);
+      if (!relMatch) return true; // no rel attribute → real positive
+      const value = relMatch[1]!.toLowerCase();
+      // safe only if both tokens present
+      return !(value.includes("noopener") && value.includes("noreferrer"));
+    },
+  },
+  "button-no-type": {
+    regex: /<button(?=[\s>])(?![^>]{0,500}\stype\s*=)[^>]{0,500}>/,
+    description: "<button> without explicit type attribute — defaults to type=\"submit\" which can unintentionally submit a form. Add type=\"button\" for non-submit buttons. NOTE: word-boundary lookahead `(?=[\\s>])` ensures HTML <button> only — not <button-group> or <ButtonIcon>. Negative lookahead `(?![^>]{0,500}\\stype\\s*=)` requires whitespace before type= (so data-type= correctly does NOT block the match).",
+    severity: "style",
+    fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "empty-catch": {
     regex: /catch\s*\([^)]*\)\s*\{\s*\}/,
@@ -689,6 +733,7 @@ export async function searchPatterns(
   let patternName: string;
   let fileExcludePattern: RegExp | undefined;
   let fileIncludePattern: RegExp | undefined;
+  let postFilter: ((match: string) => boolean) | undefined;
 
   const builtin = BUILTIN_PATTERNS[pattern];
   if (builtin) {
@@ -696,6 +741,7 @@ export async function searchPatterns(
     patternName = `${pattern}: ${builtin.description}`;
     fileExcludePattern = builtin.fileExcludePattern;
     fileIncludePattern = builtin.fileIncludePattern;
+    postFilter = builtin.postFilter;
   } else {
     try {
       regex = new RegExp(pattern);
@@ -720,6 +766,15 @@ export async function searchPatterns(
     scanned++;
     const match = regex.exec(sym.source);
     if (match) {
+      // postFilter (Tier 5): drop match if validator returns false; consistent with
+      // the catch {} swallow pattern below — postFilter errors drop the match too.
+      if (postFilter) {
+        try {
+          if (!postFilter(match[0])) continue;
+        } catch {
+          continue;
+        }
+      }
       // Extract context: the matching line(s)
       const matchStart = match.index;
       const linesBefore = sym.source.slice(0, matchStart).split("\n").length;
@@ -761,6 +816,13 @@ export async function searchPatterns(
       scanned++;
       const match = regex.exec(content);
       if (match) {
+        if (postFilter) {
+          try {
+            if (!postFilter(match[0])) continue;
+          } catch {
+            continue;
+          }
+        }
         const linesBefore = content.slice(0, match.index).split("\n").length;
         const matchedText = match[0].split("\n")[0]!;
         matches.push({

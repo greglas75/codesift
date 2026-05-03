@@ -8,6 +8,8 @@ import {
   findRenderRisks,
   formatRendersMarkdown,
   buildContextGraph,
+  buildReverseAdjacency,
+  computePropChainDepth,
   REACT_STDLIB_HOOKS,
 } from "../../src/tools/react-tools.js";
 import { isFrameworkEntryPoint } from "../../src/utils/framework-detect.js";
@@ -542,5 +544,122 @@ const ThemeContext = createContext('light');`,
     const graph = buildContextGraph(symbols);
     expect(graph.contexts.length).toBe(1);
     expect(graph.contexts[0]?.name).toBe("ThemeContext");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Tier 5 — buildReverseAdjacency + computePropChainDepth
+// ─────────────────────────────────────────────────────────────
+
+describe("buildReverseAdjacency", () => {
+  it("inverts parent→children to child→parents map", () => {
+    const A = sym({ id: "A", name: "A", file: "a.tsx", source: `<B/><C/>` });
+    const B = sym({ id: "B", name: "B", file: "b.tsx", source: `<div/>` });
+    const C = sym({ id: "C", name: "C", file: "c.tsx", source: `<div/>` });
+    const adj = buildJsxAdjacency([A, B, C]);
+    const rev = buildReverseAdjacency(adj);
+    expect(rev.get("B")).toEqual(["A"]);
+    expect(rev.get("C")).toEqual(["A"]);
+    expect(rev.get("A")).toBeUndefined(); // A is root
+  });
+
+  it("sorts parent lists alphabetically for determinism", () => {
+    const Z = sym({ id: "Z", name: "Z", file: "z.tsx", source: `<Target/>` });
+    const A = sym({ id: "A", name: "A", file: "a.tsx", source: `<Target/>` });
+    const Target = sym({ id: "Target", name: "Target", file: "t.tsx", source: `<div/>` });
+    const adj = buildJsxAdjacency([Z, A, Target]);
+    const rev = buildReverseAdjacency(adj);
+    expect(rev.get("Target")).toEqual(["A", "Z"]);
+  });
+});
+
+describe("computePropChainDepth", () => {
+  function freshState() {
+    return { memo: new Map<string, number>(), inProgress: new Set<string>() };
+  }
+
+  it("returns 0 for orphan with no parents", () => {
+    const rev = new Map<string, string[]>();
+    const { memo, inProgress } = freshState();
+    expect(computePropChainDepth("Solo", rev, memo, inProgress)).toBe(0);
+  });
+
+  it("returns 2 for linear 3-node chain Root → Middle → Leaf", () => {
+    const Root = sym({ id: "Root", name: "Root", file: "r.tsx", source: `<Middle/>` });
+    const Middle = sym({ id: "Middle", name: "Middle", file: "m.tsx", source: `<Leaf/>` });
+    const Leaf = sym({ id: "Leaf", name: "Leaf", file: "l.tsx", source: `<div/>` });
+    const adj = buildJsxAdjacency([Root, Middle, Leaf]);
+    const rev = buildReverseAdjacency(adj);
+    const { memo, inProgress } = freshState();
+    expect(computePropChainDepth("Leaf", rev, memo, inProgress)).toBe(2);
+    expect(computePropChainDepth("Middle", rev, memo, inProgress)).toBe(1);
+    expect(computePropChainDepth("Root", rev, memo, inProgress)).toBe(0);
+  });
+
+  it("returns finite depth on cycle A→B→A and is deterministic across two runs", () => {
+    const A = sym({ id: "A", name: "A", file: "a.tsx", source: `<B/>` });
+    const B = sym({ id: "B", name: "B", file: "b.tsx", source: `<A/>` });
+    const adj = buildJsxAdjacency([A, B]);
+    const rev = buildReverseAdjacency(adj);
+    const r1a = computePropChainDepth("A", rev, new Map(), new Set());
+    const r1b = computePropChainDepth("B", rev, new Map(), new Set());
+    const r2a = computePropChainDepth("A", rev, new Map(), new Set());
+    const r2b = computePropChainDepth("B", rev, new Map(), new Set());
+    expect(r1a).toBe(r2a);
+    expect(r1b).toBe(r2b);
+    expect(Number.isFinite(r1a)).toBe(true);
+    expect(Number.isFinite(r1b)).toBe(true);
+  });
+
+  it("handles 20,000-deep linear chain without stack overflow", () => {
+    // Build 20K linear chain — would crash recursive form on V8 (~10-15K stack)
+    const N = 20000;
+    const symbols: CodeSymbol[] = [];
+    for (let i = 0; i < N; i++) {
+      const next = i < N - 1 ? `<C${i + 1}/>` : `<div/>`;
+      symbols.push(sym({ id: `C${i}`, name: `C${i}`, file: `c${i}.tsx`, source: next }));
+    }
+    const adj = buildJsxAdjacency(symbols);
+    const rev = buildReverseAdjacency(adj);
+    const memo = new Map<string, number>();
+    const inProgress = new Set<string>();
+    expect(() => computePropChainDepth(`C${N - 1}`, rev, memo, inProgress)).not.toThrow();
+    expect(computePropChainDepth(`C${N - 1}`, rev, memo, inProgress)).toBe(N - 1);
+  });
+
+  it("shared memo across multi-component call returns consistent depths", () => {
+    const Root = sym({ id: "Root", name: "Root", file: "r.tsx", source: `<Middle/><Side/>` });
+    const Middle = sym({ id: "Middle", name: "Middle", file: "m.tsx", source: `<Leaf/>` });
+    const Leaf = sym({ id: "Leaf", name: "Leaf", file: "l.tsx", source: `<div/>` });
+    const Side = sym({ id: "Side", name: "Side", file: "s.tsx", source: `<div/>` });
+    const adj = buildJsxAdjacency([Root, Middle, Leaf, Side]);
+    const rev = buildReverseAdjacency(adj);
+    const memo = new Map<string, number>();
+    const inProgress = new Set<string>();
+    // First call populates memo for entire ancestor chain
+    expect(computePropChainDepth("Leaf", rev, memo, inProgress)).toBe(2);
+    expect(memo.has("Root")).toBe(true);
+    expect(memo.has("Middle")).toBe(true);
+    // Second call on Side should not recompute Root (cached)
+    expect(computePropChainDepth("Side", rev, memo, inProgress)).toBe(1);
+  });
+
+  it("alphabetical iteration produces stable output across Map insertion order", () => {
+    // Build same logical graph two different ways
+    const buildVariant = (order: string[]) => {
+      const all = {
+        Root: sym({ id: "Root", name: "Root", file: "r.tsx", source: `<A/><B/>` }),
+        A: sym({ id: "A", name: "A", file: "a.tsx", source: `<Leaf/>` }),
+        B: sym({ id: "B", name: "B", file: "b.tsx", source: `<Leaf/>` }),
+        Leaf: sym({ id: "Leaf", name: "Leaf", file: "l.tsx", source: `<div/>` }),
+      } as Record<string, CodeSymbol>;
+      return buildJsxAdjacency(order.map((k) => all[k]!));
+    };
+    const adj1 = buildVariant(["Root", "A", "B", "Leaf"]);
+    const adj2 = buildVariant(["Leaf", "B", "A", "Root"]);
+    const rev1 = buildReverseAdjacency(adj1);
+    const rev2 = buildReverseAdjacency(adj2);
+    expect(computePropChainDepth("Leaf", rev1, new Map(), new Set()))
+      .toBe(computePropChainDepth("Leaf", rev2, new Map(), new Set()));
   });
 });

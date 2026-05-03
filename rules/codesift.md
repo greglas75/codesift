@@ -159,6 +159,12 @@ Use this table to pick the right tool for each task:
 | starting a task, want tool recommendations | `plan_turn(query=...)` |
 | React codebase | `trace_component_tree("App")` + `analyze_hooks` |
 | React anti-patterns | `search_patterns("hook-in-condition")` |
+| React derived state | `search_patterns("derived-state")` |
+| React stale closure | `search_patterns("stale-closure-setstate")` |
+| React context perf trap | `search_patterns("context-provider-value-inline")` |
+| React tabnabbing security | `search_patterns("jsx-no-target-blank")` |
+| React button submit foot-gun | `search_patterns("button-no-type")` |
+| React render-tree depth | `analyze_renders` → `entry.prop_chain_depth` (NOT prop-flow depth) |
 | React call graph (clean) | `trace_call_chain(filter_react_hooks=true)` |
 | new Next.js project (first look) | `framework_audit` |
 | SEO audit / metadata review | `nextjs_metadata_audit` |

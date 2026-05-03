@@ -1399,3 +1399,200 @@ describe("pattern-tools — useEffect-missing-deps heuristic", () => {
     expect(regex.test(source)).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 5 — derived-state, stale-closure-setstate, context-provider-value-inline,
+// jsx-no-target-blank, button-no-type
+// ─────────────────────────────────────────────────────────────
+
+describe("derived-state (Tier 5)", () => {
+  const regex = BUILTIN_PATTERNS["derived-state"]!.regex;
+
+  it("matches useState(props.X) with syncing useEffect", () => {
+    const source = `function Foo(props: { name: string }) {
+  const [name, setName] = useState(props.name);
+  useEffect(() => { setName(props.name); }, [props.name]);
+}`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("does not match useState(props.X) without syncing useEffect (seed-only)", () => {
+    const source = `function Foo(props: { initial: string }) {
+  const [value, setValue] = useState(props.initial);
+  return <input value={value} onChange={(e) => setValue(e.target.value)} />;
+}`;
+    expect(regex.test(source)).toBe(false);
+  });
+
+  it("ReDoS guard: completes within 50ms on adversarial input", () => {
+    const adversarial = "useState(props.x)\n".repeat(500);
+    const start = performance.now();
+    regex.test(adversarial);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
+describe("stale-closure-setstate (Tier 5)", () => {
+  const regex = BUILTIN_PATTERNS["stale-closure-setstate"]!.regex;
+
+  it("matches setCount(count + 1) non-functional update", () => {
+    const source = `function Counter() {
+  const [count, setCount] = useState(0);
+  const inc = () => setCount(count + 1);
+}`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("does not match setCount(c => c + 1) functional updater", () => {
+    const source = `function Counter() {
+  const [count, setCount] = useState(0);
+  const inc = () => setCount(c => c + 1);
+}`;
+    expect(regex.test(source)).toBe(false);
+  });
+
+  it("does not match boolean toggle setOpen(!open) (documented FN)", () => {
+    const source = `function Modal() {
+  const [open, setOpen] = useState(false);
+  const toggle = () => setOpen(!open);
+}`;
+    // This is a documented known FN — boolean toggles aren't caught by regex
+    // requiring [+\-*/]. Verifies no incorrect match.
+    expect(regex.test(source)).toBe(false);
+  });
+
+  it("ReDoS guard: completes within 50ms on adversarial input", () => {
+    const adversarial = "const [x, setX] = useState(0);\n".repeat(500);
+    const start = performance.now();
+    regex.test(adversarial);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
+describe("context-provider-value-inline (Tier 5)", () => {
+  const regex = BUILTIN_PATTERNS["context-provider-value-inline"]!.regex;
+
+  it("matches <Ctx.Provider value={{...}}> inline literal", () => {
+    const source = `<AuthContext.Provider value={{ user, login, logout }}>`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("does not match <Ctx.Provider value={memoizedValue}>", () => {
+    const source = `<ThemeContext.Provider value={memoizedValue}>`;
+    expect(regex.test(source)).toBe(false);
+  });
+
+  it("matches array-literal value as well", () => {
+    const source = `<DataContext.Provider value={[1, 2, 3]}>`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("ReDoS guard: completes within 50ms on adversarial input", () => {
+    const adversarial = "<X.Provider value={x}>".repeat(500);
+    const start = performance.now();
+    regex.test(adversarial);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
+describe("jsx-no-target-blank (Tier 5)", () => {
+  const regex = BUILTIN_PATTERNS["jsx-no-target-blank"]!.regex;
+  const postFilter = BUILTIN_PATTERNS["jsx-no-target-blank"]!.postFilter!;
+
+  it("regex matches <a target=\"_blank\"> form", () => {
+    const source = `<a href="x.com" target="_blank">link</a>`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("regex matches JSX brace form target={\"_blank\"}", () => {
+    const source = `<a href="x.com" target={"_blank"}>link</a>`;
+    expect(regex.test(source)).toBe(true);
+  });
+
+  it("postFilter drops match when rel contains BOTH noopener and noreferrer", () => {
+    const matched = `<a href="x.com" target="_blank" rel="noopener noreferrer">`;
+    expect(postFilter(matched)).toBe(false);
+  });
+
+  it("postFilter accepts match when rel=\"noopener\" only (missing noreferrer)", () => {
+    // codex-5.3 adversarial Run 5 finding: rel="noopener" alone is incomplete —
+    // older browsers still leak window.opener via referrer. Must include both.
+    const matched = `<a href="x.com" target="_blank" rel="noopener">`;
+    expect(postFilter(matched)).toBe(true);
+  });
+
+  it("postFilter accepts match when rel=\"nofollow\" (security bypass — must still flag)", () => {
+    const matched = `<a href="x.com" target="_blank" rel="nofollow">`;
+    expect(postFilter(matched)).toBe(true);
+  });
+
+  it("postFilter accepts match when no rel attribute (only ?rel= in URL)", () => {
+    const matched = `<a href="x.com?rel=foo" target="_blank">`;
+    expect(postFilter(matched)).toBe(true);
+  });
+
+  it("ReDoS guard: completes within 50ms on adversarial input", () => {
+    const adversarial = "<a target=\"_blank\">".repeat(500);
+    const start = performance.now();
+    regex.test(adversarial);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
+describe("button-no-type (Tier 5)", () => {
+  const regex = BUILTIN_PATTERNS["button-no-type"]!.regex;
+
+  it("matches bare <button>Submit</button>", () => {
+    expect(regex.test(`<button>Submit</button>`)).toBe(true);
+  });
+
+  it("matches <button onClick={handler}>", () => {
+    expect(regex.test(`<button onClick={handleClick}>Save</button>`)).toBe(true);
+  });
+
+  it("does not match <button type=\"button\">", () => {
+    expect(regex.test(`<button type="button" onClick={handleClick}>Save</button>`)).toBe(false);
+  });
+
+  it("matches <button data-type=\"primary\"> (data-type is NOT type)", () => {
+    expect(regex.test(`<button data-type="primary">Save</button>`)).toBe(true);
+  });
+
+  it("does not match custom element <button-group>", () => {
+    expect(regex.test(`<button-group>x</button-group>`)).toBe(false);
+  });
+
+  it("does not match React component <ButtonIcon>", () => {
+    // Case-sensitive `<button` won't match `<Button` anyway, but defense in depth
+    expect(regex.test(`<ButtonIcon onClick={x}/>`)).toBe(false);
+  });
+
+  it("ReDoS guard: completes within 50ms on adversarial input", () => {
+    const adversarial = "<button class=\"x\" data-foo=\"bar\">".repeat(500);
+    const start = performance.now();
+    regex.test(adversarial);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+});
+
+describe("postFilter runner integration (Tier 5)", () => {
+  it("BUILTIN_PATTERNS entry shape supports optional severity and postFilter", () => {
+    const entry = BUILTIN_PATTERNS["jsx-no-target-blank"]!;
+    expect(entry.severity).toBe("style");
+    expect(typeof entry.postFilter).toBe("function");
+  });
+
+  it("BUILTIN_PATTERNS contains all 5 Tier 5 entries", () => {
+    const tier5Names = [
+      "derived-state",
+      "stale-closure-setstate",
+      "context-provider-value-inline",
+      "jsx-no-target-blank",
+      "button-no-type",
+    ];
+    for (const name of tier5Names) {
+      expect(BUILTIN_PATTERNS[name]).toBeDefined();
+      expect(BUILTIN_PATTERNS[name]!.severity).toMatch(/^(critical|warning|style)$/);
+    }
+  });
+});
