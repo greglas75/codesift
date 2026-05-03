@@ -493,9 +493,14 @@ export async function findCircularDeps(
   if (!index) throw new Error(`Repository "${repo}" not found`);
 
   const edges = await collectImportEdges(index);
+  // Exclude type-only edges from cycle detection. `edge.type_only === true` is
+  // explicit type-only (Python TYPE_CHECKING / TS `import type`); `undefined`
+  // and `false` continue to participate so JS/JSX/PHP cycle detection works
+  // and TS-AST-failure regex-fallback edges are still considered.
+  const runtimeEdges = edges.filter((e) => e.type_only !== true);
   const filteredEdges = options?.file_pattern
-    ? edges.filter((e) => e.from.includes(options.file_pattern!) || e.to.includes(options.file_pattern!))
-    : edges;
+    ? runtimeEdges.filter((e) => e.from.includes(options.file_pattern!) || e.to.includes(options.file_pattern!))
+    : runtimeEdges;
 
   // Build directed adjacency (from → to only)
   const adj = new Map<string, string[]>();

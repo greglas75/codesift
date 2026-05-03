@@ -1,0 +1,13 @@
+{
+  "after_change": {
+    "cycle_count": 1,
+    "cycles": [
+      ["runtime-a.ts", "runtime-b.ts", "runtime-a.ts"]
+    ],
+    "comment": "Only the runtime cycle survives the edge.type_only===true filter."
+  },
+  "before_change": {
+    "cycle_count": 2,
+    "comment": "Pre-Task-12: regex extractor never set type_only on TS edges, so type-only cycle was a false positive."
+  }
+}

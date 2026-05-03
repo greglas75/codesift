@@ -10,6 +10,8 @@ import { getCachedParse, setCachedParse } from "../parser/parse-cache.js";
 import { extractPythonImports } from "./python-imports.js";
 import { resolvePythonImport, detectSrcLayout } from "./python-import-resolver.js";
 import { resolvePhpNamespace } from "../tools/php-tools.js";
+import { extractTypeScriptImports } from "./ts-imports.js";
+import { resolveTsAliasedImport } from "./tsconfig-paths.js";
 import { DirectedGraph } from "graphology";
 import { createRequire } from "node:module";
 // graphology-metrics has no "exports" field; use createRequire so the deep
@@ -532,12 +534,75 @@ export async function collectImportEdges(
       continue;
     }
 
-    // Relative-path imports (JS/TS/PHP)
-    const importPaths = extractImports(source);
-    for (const importPath of importPaths) {
-      const resolved = resolveImportPath(file.path, importPath);
-      const targetFile = normalizedPaths.get(resolved);
-      if (targetFile) addEdge(file.path, targetFile);
+    // TS/TSX AST-based extraction with type_only flagging + tsconfig alias
+    // resolution. Skip the regex path for these files; fall back to regex
+    // ONLY if AST extraction throws (parse failure).
+    const isTsFile = /\.tsx?$/.test(file.path);
+    let tsAstHandled = false;
+    if (isTsFile) {
+      try {
+        const lang = file.path.endsWith(".tsx") ? "tsx" : "typescript";
+        const parser = await getParser(lang);
+        if (parser) {
+          let tree = getCachedParse(lang, source);
+          if (!tree) {
+            tree = parser.parse(source);
+            setCachedParse(lang, source, tree);
+          }
+          const tsImports = extractTypeScriptImports(tree);
+          for (const imp of tsImports) {
+            let resolved: string | null = null;
+            if (imp.path.startsWith(".")) {
+              let norm = resolveImportPath(file.path, imp.path);
+              // resolveImportPath emits leading "./" when importer is at repo root.
+              // Strip it so the lookup matches normalizedPaths keys (which never
+              // have leading "./").
+              if (norm.startsWith("./")) norm = norm.slice(2);
+              if (normalizedPaths.has(norm)) resolved = normalizedPaths.get(norm) ?? null;
+            } else {
+              // Bare/aliased specifier: try tsconfig paths.
+              const aliased = resolveTsAliasedImport(
+                join(index.root, file.path),
+                imp.path,
+                index.root,
+              );
+              if (aliased) {
+                // Convert absolute to repo-relative
+                const rel = aliased.startsWith(index.root)
+                  ? aliased.slice(index.root.length).replace(/^\//, "")
+                  : aliased;
+                if (normalizedPaths.has(rel.replace(/\.[^./]+$/, ""))
+                    || index.files.some((f) => f.path === rel)) {
+                  resolved = rel;
+                }
+              }
+            }
+            if (resolved) {
+              addEdge(file.path, resolved, { type_only: imp.is_type_only });
+            }
+          }
+          tsAstHandled = true;
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[import-graph] TS AST extraction failed for ${file.path}; falling back to regex: ${message}`,
+        );
+        // Falls through to regex extractImports below.
+      }
+    }
+
+    // Regex path: JS/JSX/PHP files always; TS/TSX only on AST-failure fallback.
+    if (!tsAstHandled) {
+      const importPaths = extractImports(source);
+      for (const importPath of importPaths) {
+        const resolved = resolveImportPath(file.path, importPath);
+        const targetFile = normalizedPaths.get(resolved);
+        // type_only stays undefined on regex fallback — find_circular_deps
+        // treats undefined as runtime, which preserves cycle detection for
+        // JS/JSX/PHP and accepts a small false-positive risk on TS-fallback files.
+        if (targetFile) addEdge(file.path, targetFile);
+      }
     }
 
     // Workspace-alias / tsconfig-paths imports (JS/TS only when monorepo).
