@@ -196,3 +196,54 @@ describe("L5 is_async flag", () => {
     expect(fn?.is_async).toBe(true);
   });
 });
+
+describe("L8 modifiers + L9 accessor kind", () => {
+  it("captures static + readonly on class field", () => {
+    const syms = ext(`class C { static readonly x: number = 1; }`);
+    const f = syms.find((s) => s.name === "x");
+    const mods = (f?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("static");
+    expect(mods).toContain("readonly");
+  });
+
+  it("captures accessibility modifier (private)", () => {
+    const syms = ext(`class C { private foo() {} }`);
+    const m = syms.find((s) => s.name === "foo");
+    const mods = (m?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("private");
+  });
+
+  it("captures override + protected on method", () => {
+    const syms = ext(`class C extends B { protected override greet() {} }`);
+    const m = syms.find((s) => s.name === "greet");
+    const mods = (m?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("protected");
+    expect(mods).toContain("override");
+  });
+
+  it("records abstract on abstract_method_signature", () => {
+    const syms = ext(`abstract class C { abstract foo(): void; }`);
+    const m = syms.find((s) => s.name === "foo");
+    const mods = (m?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("abstract");
+  });
+
+  it("L9: getter is detected as accessor_kind=get", () => {
+    const syms = ext(`class C { get name() { return ""; } }`);
+    const m = syms.find((s) => s.name === "name");
+    expect(m?.meta?.["accessor_kind"]).toBe("get");
+  });
+
+  it("L9: setter is detected as accessor_kind=set", () => {
+    const syms = ext(`class C { set name(v: string) {} }`);
+    const m = syms.find((s) => s.name === "name");
+    expect(m?.meta?.["accessor_kind"]).toBe("set");
+  });
+
+  it(".tsx parity: modifiers captured in TSX", () => {
+    const syms = ext(`class C { private foo() {} }`, "tsx");
+    const m = syms.find((s) => s.name === "foo");
+    const mods = (m?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("private");
+  });
+});

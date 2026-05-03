@@ -588,6 +588,45 @@ function hasAsyncModifier(node: Parser.SyntaxNode): boolean {
   return false;
 }
 
+/** Modifier keyword tokens recognized for methods and fields, in two forms:
+ *   - bare keyword child (e.g., `static`, `readonly`, `abstract`, `declare`)
+ *   - wrapper named node (e.g., `override_modifier` containing the `override` keyword,
+ *     `accessibility_modifier` containing `public`/`private`/`protected`)
+ * Order in the resulting array follows source-token order for stability. */
+const MODIFIER_KEYWORD_TOKENS = new Set([
+  "static", "abstract", "readonly", "declare",
+]);
+
+/** Collect modifier keywords from a method_definition / field_definition node.
+ * Handles bare keyword tokens AND named wrapper nodes. Order: source order. */
+function getModifiers(node: Parser.SyntaxNode): string[] {
+  const mods: string[] = [];
+  for (const child of node.children) {
+    if (MODIFIER_KEYWORD_TOKENS.has(child.type)) {
+      mods.push(child.type);
+    } else if (child.type === "accessibility_modifier") {
+      mods.push(child.text); // "public" | "private" | "protected"
+    } else if (child.type === "override_modifier") {
+      mods.push("override");
+    }
+  }
+  return mods;
+}
+
+/** Detect getter/setter/auto-accessor kind on method_definition.
+ * Returns "get" | "set" | "accessor" | undefined. */
+function getAccessorKind(node: Parser.SyntaxNode): "get" | "set" | "accessor" | undefined {
+  // tree-sitter-typescript exposes `get`/`set` as keyword tokens directly under
+  // method_definition. TS 4.9 `accessor` keyword for auto-accessor fields lives
+  // similarly. Scan children for the first matching token.
+  for (const child of node.children) {
+    if (child.type === "get") return "get";
+    if (child.type === "set") return "set";
+    if (child.type === "accessor") return "accessor";
+  }
+  return undefined;
+}
+
 export function extractTypeScriptSymbols(
   tree: Parser.Tree,
   filePath: string,
@@ -729,11 +768,17 @@ export function extractTypeScriptSymbols(
         const name = getNodeName(node);
         if (name) {
           const decorators = getDecorators(node);
+          const modifiers = getModifiers(node);
+          // abstract methods always carry "abstract" by syntax — ensure it's recorded
+          if (!modifiers.includes("abstract")) modifiers.push("abstract");
+          const meta: Record<string, unknown> = {};
+          if (modifiers.length > 0) meta.modifiers = modifiers;
           const sym = makeSymbol(node, name, "method", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
+            meta: Object.keys(meta).length > 0 ? meta : undefined,
           });
           symbols.push(sym);
         }
@@ -745,12 +790,18 @@ export function extractTypeScriptSymbols(
         if (name) {
           const decorators = getDecorators(node);
           const isAsync = hasAsyncModifier(node);
+          const modifiers = getModifiers(node);
+          const accessorKind = getAccessorKind(node);
+          const meta: Record<string, unknown> = {};
+          if (modifiers.length > 0) meta.modifiers = modifiers;
+          if (accessorKind) meta.accessor_kind = accessorKind;
           const sym = makeSymbol(node, name, "method", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
             is_async: isAsync ? true : undefined,
+            meta: Object.keys(meta).length > 0 ? meta : undefined,
           });
           symbols.push(sym);
         }
@@ -759,7 +810,7 @@ export function extractTypeScriptSymbols(
 
       case "public_field_definition":
       case "field_definition": {
-        // public_field_definition: TS class fields (with modifiers)
+        // public_field_definition: TS class fields with modifiers
         // field_definition: JS class fields (incl. private #name, static)
         // The `name` field works for both; tree-sitter-javascript exposes the
         // identifier (or private_property_identifier) under `property` for JS,
@@ -768,10 +819,17 @@ export function extractTypeScriptSymbols(
         const name = nameNode?.text;
         if (name) {
           const decorators = getDecorators(node);
+          const modifiers = getModifiers(node);
+          // Auto-accessor field: TS 4.9 `accessor x = ...` parses as a field with `accessor` keyword
+          const accessorKind = getAccessorKind(node);
+          const meta: Record<string, unknown> = {};
+          if (modifiers.length > 0) meta.modifiers = modifiers;
+          if (accessorKind) meta.accessor_kind = accessorKind;
           const sym = makeSymbol(node, name, "field", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
+            meta: Object.keys(meta).length > 0 ? meta : undefined,
           });
           symbols.push(sym);
         }
