@@ -123,3 +123,42 @@ describe("L7 generics in signature", () => {
     expect(fn?.signature).toContain("<T>");
   });
 });
+
+describe("L3 enum members", () => {
+  it("emits enum container + named members as constants", () => {
+    const syms = ext(`enum Direction { North = 1, South }`);
+    const enumSym = syms.find((s) => s.name === "Direction" && s.kind === "enum");
+    const north = syms.find((s) => s.name === "North");
+    const south = syms.find((s) => s.name === "South");
+    expect(enumSym).toBeDefined();
+    expect(north?.kind).toBe("constant");
+    expect(south?.kind).toBe("constant");
+    expect(north?.parent).toBe(enumSym?.id);
+    expect(south?.parent).toBe(enumSym?.id);
+  });
+
+  it("handles bare property_identifier members (no value)", () => {
+    const syms = ext(`enum Color { Red, Green, Blue }`);
+    const members = syms.filter((s) => s.kind === "constant" && s.name !== "Color");
+    expect(members.map((m) => m.name)).toEqual(["Red", "Green", "Blue"]);
+  });
+
+  it("handles string-valued enum members", () => {
+    const syms = ext(`enum Status { Open = "open", Closed = "closed" }`);
+    const enumSym = syms.find((s) => s.kind === "enum");
+    const constants = syms.filter((s) => s.kind === "constant" && s.parent === enumSym?.id);
+    expect(constants.map((c) => c.name)).toEqual(["Open", "Closed"]);
+  });
+
+  it("respects exported enum (members inherit no is_exported but parent does)", () => {
+    const syms = ext(`export enum K { A, B }`);
+    const enumSym = syms.find((s) => s.kind === "enum");
+    expect(enumSym?.is_exported).toBe(true);
+  });
+
+  it(".tsx parity: enum members extracted in TSX", () => {
+    const syms = ext(`enum E { Foo, Bar }`, "tsx");
+    const constants = syms.filter((s) => s.kind === "constant");
+    expect(constants.map((c) => c.name)).toEqual(["Foo", "Bar"]);
+  });
+});

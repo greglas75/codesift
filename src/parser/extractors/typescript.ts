@@ -814,8 +814,27 @@ export function extractTypeScriptSymbols(
             is_exported: exported ? true : undefined,
           });
           symbols.push(sym);
+
+          // Walk enum_body to emit members as `constant` parented to the enum.
+          // children: enum_assignment (named member with value) | property_identifier
+          const body = node.childForFieldName("body");
+          if (body) {
+            for (const child of body.namedChildren) {
+              let memberName: string | null = null;
+              if (child.type === "enum_assignment") {
+                memberName = getNodeName(child);
+              } else if (child.type === "property_identifier") {
+                memberName = child.text;
+              }
+              if (memberName) {
+                symbols.push(makeSymbol(child, memberName, "constant", filePath, source, repo, {
+                  parentId: sym.id,
+                }));
+              }
+            }
+          }
         }
-        break;
+        return; // body already walked; do not let default child-walk re-enter
       }
 
       case "export_statement": {

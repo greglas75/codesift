@@ -172,9 +172,17 @@ describe("extractTypeScriptSymbols — type declarations", () => {
 }`;
     const symbols = await extract(source);
 
-    expect(symbols).toHaveLength(1);
+    // Post-Task-9a: enum_declaration emits 1 enum container + N constant members
+    expect(symbols).toHaveLength(5);
     expect(symbols[0].name).toBe("Direction");
     expect(symbols[0].kind).toBe("enum");
+    const members = symbols.slice(1).map((s) => ({ name: s.name, kind: s.kind, parent: s.parent }));
+    expect(members).toEqual([
+      { name: "Up", kind: "constant", parent: symbols[0].id },
+      { name: "Down", kind: "constant", parent: symbols[0].id },
+      { name: "Left", kind: "constant", parent: symbols[0].id },
+      { name: "Right", kind: "constant", parent: symbols[0].id },
+    ]);
   });
 });
 
@@ -426,7 +434,10 @@ enum Env { Dev, Prod }`;
     const symbols = await extract(source);
 
     const kinds = symbols.map((s) => s.kind).sort();
-    expect(kinds).toEqual(["class", "constant", "enum", "function", "interface", "method", "type"]);
+    // Post-Task-9a: enum members emit as `constant` parented to the enum.
+    // Env { Dev, Prod } → 1 enum + 2 constants. With pre-existing DEFAULT_PORT
+    // (1 constant), total: class + 3 constants + enum + function + interface + method + type.
+    expect(kinds).toEqual(["class", "constant", "constant", "constant", "enum", "function", "interface", "method", "type"]);
   });
 
   it("does not treat unknown callee as test construct", async () => {
