@@ -193,14 +193,19 @@ function computePropChainDepth(
         }
       }
     } else {
-      // exit phase — all parents either memoized or cyclically pruned
+      // exit phase — exclude back-edges (parents still in inProgress closing a
+      // cycle) so a strongly-connected component with no real root reports
+      // depth 0 instead of inflating linearly with cycle-traversal order.
       const parents = reverseAdjacency.get(f.node) ?? [];
       let maxParentDepth = -1;
+      let nonCyclicParents = 0;
       for (const p of parents) {
-        const d = memo.get(p) ?? 0; // cyclic parent contributes 0
+        if (inProgress.has(p)) continue; // back-edge — exclude from depth
+        nonCyclicParents++;
+        const d = memo.get(p) ?? 0;
         if (d > maxParentDepth) maxParentDepth = d;
       }
-      const depth = parents.length === 0 ? 0 : maxParentDepth + 1;
+      const depth = nonCyclicParents === 0 ? 0 : maxParentDepth + 1;
       memo.set(f.node, depth);
       inProgress.delete(f.node);
       stack.pop();

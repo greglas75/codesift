@@ -210,7 +210,7 @@ export const BUILTIN_PATTERNS: Record<string, {
   // --- React Tier 5 (May 2026) — derived state, stale closures, context perf, security ---
   "derived-state": {
     regex: /const\s*\[\s*(\w+)\s*,\s*set\1\s*\]\s*=\s*useState\s*\(\s*props\.\1\s*\)[\s\S]{0,2000}?useEffect\s*\([\s\S]{0,500}?set\1\s*\(\s*props\.\1\s*\)/i,
-    description: "useState(props.X) + useEffect that syncs setX(props.X) — derived state anti-pattern. Lift state up or compute during render. NOTE: matches when state name follows setX for prop x. Custom-named setters (props.value → setDisplayValue) not detected.",
+    description: "useState(props.X) + useEffect that syncs setX(props.X) — derived state anti-pattern. Lift state up or compute during render. NOTE: matches when state name follows setX for prop x. Custom-named setters (props.value → setDisplayValue) not detected. The /i flag is intentional — it catches cross-case variants like useState(props.Name) + setName(props.name).",
     severity: "warning",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
@@ -232,15 +232,19 @@ export const BUILTIN_PATTERNS: Record<string, {
     severity: "style",
     fileIncludePattern: /\.(tsx|jsx)$/,
     // require leading whitespace before `rel` (real attribute, not `?rel=` in URL)
-    // AND require rel value to contain BOTH `noopener` AND `noreferrer` (not just any rel)
-    // — codex-5.3 adversarial Run 5 finding: rel="nofollow" was bypassing the check
-    // while leaving window.opener tabnabbing exploitable.
+    // AND require rel value to contain BOTH `noopener` AND `noreferrer` as exact
+    // whitespace-separated tokens (so `noopenerx noreferrer` does NOT pass).
+    // Accepts string form `rel="..."` and JSX-brace-with-string-literal form
+    // `rel={"..."}` / `rel={'...'}`. Dynamic JSX expression form `rel={var}`
+    // remains a false-positive (cannot be resolved statically).
     postFilter: (match) => {
-      const relMatch = /\srel\s*=\s*["']([^"']*)["']/.exec(match);
+      const relMatch =
+        /\srel\s*=\s*\{\s*["']([^"']*)["']\s*\}/.exec(match)
+        ?? /\srel\s*=\s*["']([^"']*)["']/.exec(match);
       if (!relMatch) return true; // no rel attribute → real positive
-      const value = relMatch[1]!.toLowerCase();
-      // safe only if both tokens present
-      return !(value.includes("noopener") && value.includes("noreferrer"));
+      const tokens = new Set(relMatch[1]!.toLowerCase().split(/\s+/).filter(Boolean));
+      // safe only if both exact tokens present
+      return !(tokens.has("noopener") && tokens.has("noreferrer"));
     },
   },
   "button-no-type": {
@@ -766,12 +770,15 @@ export async function searchPatterns(
     scanned++;
     const match = regex.exec(sym.source);
     if (match) {
-      // postFilter (Tier 5): drop match if validator returns false; consistent with
-      // the catch {} swallow pattern below — postFilter errors drop the match too.
+      // postFilter (Tier 5): drop match if validator returns false. Errors are
+      // logged to stderr (with pattern name) so author bugs are diagnosable
+      // rather than silently producing false negatives.
       if (postFilter) {
         try {
           if (!postFilter(match[0])) continue;
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[search_patterns] postFilter for "${pattern}" threw: ${msg} — match dropped`);
           continue;
         }
       }
@@ -819,7 +826,9 @@ export async function searchPatterns(
         if (postFilter) {
           try {
             if (!postFilter(match[0])) continue;
-          } catch {
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[search_patterns] postFilter for "${pattern}" threw: ${msg} — match dropped`);
             continue;
           }
         }
