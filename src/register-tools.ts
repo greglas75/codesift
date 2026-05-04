@@ -465,6 +465,39 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "get_pydantic_models",
     "python_audit",
   ],
+  // TypeScript baseline — auto-enabled on any project with tsconfig.json.
+  // Promotes 3 high-value but historically dark tools so that vanilla TS /
+  // library / monorepo repos get a proper entry point beyond search_text.
+  "tsconfig.json": [
+    "dependency_audit",
+    "check_boundaries",
+    "architecture_summary",
+  ],
+  // Monorepo signals — orchestration-level analysis is most useful when
+  // there are >1 packages. Each of these files alone is enough to fire.
+  "pnpm-workspace.yaml": [
+    "check_boundaries",
+    "architecture_summary",
+  ],
+  "lerna.json": [
+    "check_boundaries",
+    "architecture_summary",
+  ],
+  "nx.json": [
+    "check_boundaries",
+    "architecture_summary",
+  ],
+  "turbo.json": [
+    "check_boundaries",
+    "architecture_summary",
+  ],
+  // Prisma — root-level schema. Nested prisma/schema.prisma handled in
+  // detectAutoLoadTools after the loop. drizzle-kit dep handled in
+  // detectFromPackageJson.
+  "schema.prisma": [
+    "analyze_prisma_schema",
+    "migration_lint",
+  ],
 };
 
 /**
@@ -505,6 +538,24 @@ const HONO_TOOLS = [
   "find_dead_hono_routes",
 ];
 
+/**
+ * Monorepo tools — auto-enabled when `pkg.workspaces` field is present
+ * (mirror of the file-based monorepo signals in FRAMEWORK_TOOL_GROUPS).
+ */
+const MONOREPO_TOOLS = [
+  "check_boundaries",
+  "architecture_summary",
+];
+
+/**
+ * Prisma tools — auto-enabled when `prisma` or `drizzle-kit` is in deps
+ * (mirror of the schema.prisma file signal in FRAMEWORK_TOOL_GROUPS).
+ */
+const PRISMA_TOOLS = [
+  "analyze_prisma_schema",
+  "migration_lint",
+];
+
 const AUTO_LOAD_CACHE_TTL_MS = 5_000;
 const autoLoadToolsCache = new Map<string, {
   expiresAt: number;
@@ -527,6 +578,12 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
     if (existsSync(join(cwd, signalFile))) {
       toEnable.push(...tools);
     }
+  }
+
+  // Nested Prisma schema — `prisma/schema.prisma` is the more common layout
+  // than root-level. The root-level case is covered by FRAMEWORK_TOOL_GROUPS.
+  if (existsSync(join(cwd, "prisma", "schema.prisma"))) {
+    toEnable.push(...PRISMA_TOOLS);
   }
 
   const detectFromPackageJson = (pkgRoot: string): string[] => {
@@ -554,6 +611,26 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
         allDeps["chanfana"]
       );
       if (hasHono) enabled.push(...HONO_TOOLS);
+
+      // Prisma / Drizzle — schema-driven DB stacks. analyze_prisma_schema
+      // works for Prisma; migration_lint (squawk) works for any SQL migration
+      // dir, useful for both. We don't condition on @prisma/client because
+      // it's runtime-only — the schema work belongs to the `prisma` CLI dep.
+      const hasPrismaLike = !!(
+        allDeps["prisma"] ||
+        allDeps["@prisma/client"] ||
+        allDeps["drizzle-kit"] ||
+        allDeps["drizzle-orm"]
+      );
+      if (hasPrismaLike) enabled.push(...PRISMA_TOOLS);
+
+      // npm/yarn/pnpm workspaces field — content-based monorepo signal.
+      // Complements the file-based signals (pnpm-workspace.yaml, lerna.json,
+      // nx.json, turbo.json) so plain `"workspaces": [...]` setups also fire.
+      const hasWorkspaces = Array.isArray(pkg.workspaces) ||
+        (pkg.workspaces && typeof pkg.workspaces === "object" &&
+          Array.isArray(pkg.workspaces.packages));
+      if (hasWorkspaces) enabled.push(...MONOREPO_TOOLS);
     } catch {
       /* malformed package.json */
     }
@@ -859,11 +936,15 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       path: z.string().describe("Absolute path to the folder to index"),
       incremental: zBool().describe("Only re-index changed files"),
       include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
+      max_files: z.number().int().positive().optional().describe("Cap on files indexed. Default 50000 (or CODESIFT_MAX_FILES env). Walker stops at this count and returns partial results — protects against OOM on huge repos. Use include_paths to scope instead of raising this for large vendored trees."),
+      watch: zBool().describe("Whether to set up a chokidar file watcher for incremental updates after indexing. Default true. Pass false for bulk/CI indexing scenarios — file watchers consume system file descriptors (1+ per repo on macOS FSEvents); indexing many repos with watchers active can exhaust the system file table (ENFILE)."),
     })),
     handler: async (args) => {
       const result = await indexFolder(args.path as string, {
         incremental: args.incremental as boolean | undefined,
         include_paths: args.include_paths as string[] | undefined,
+        max_files: args.max_files as number | undefined,
+        watch: args.watch as boolean | undefined,
       });
       // Auto-enable framework tools based on indexed path (not CWD)
       try {

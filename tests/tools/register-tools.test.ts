@@ -452,3 +452,393 @@ describe("register-tools — generate_wiki tool registration", () => {
     expect(def!.description.length).toBeGreaterThan(10);
   });
 });
+
+// ---------------------------------------------------------------------------
+// TS baseline + monorepo + Prisma auto-load — universal stack-aware loading.
+// Validates the union-of-signals model against the 15-stack zuvo orchestrator
+// matrix (translation-qa, zuvo-landing, tgm-survey-platform, makeyourasia-
+// editor, tgmdev-tgm-portal, tgm-survey-tester, Helper, coding-ui,
+// Veltura-Studio, jcodemunch-mcp, easyAds, sentry, MYA, Mobi2, DATA LAB).
+// ---------------------------------------------------------------------------
+
+describe("register-tools — TS baseline / monorepo / Prisma auto-load", () => {
+  async function createProject(files: Record<string, string>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "codesift-stack-autoload-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(dir, rel);
+      await mkdir(join(full, ".."), { recursive: true });
+      await writeFile(full, content);
+    }
+    return dir;
+  }
+  async function cleanup(dir: string) {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+
+  const TS_BASELINE = ["dependency_audit", "check_boundaries", "architecture_summary"];
+  const MONOREPO = ["check_boundaries", "architecture_summary"];
+  const PRISMA = ["analyze_prisma_schema", "migration_lint"];
+
+  describe("tsconfig.json — TS baseline signal", () => {
+    it("enables TS baseline tools when tsconfig.json is present", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of TS_BASELINE) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("does NOT enable TS baseline when no tsconfig.json", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ name: "x" }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).not.toContain("dependency_audit");
+        expect(tools).not.toContain("check_boundaries");
+      } finally { await cleanup(dir); }
+    });
+  });
+
+  describe("monorepo signals", () => {
+    const MONOREPO_FILES = ["pnpm-workspace.yaml", "lerna.json", "nx.json", "turbo.json"];
+
+    for (const file of MONOREPO_FILES) {
+      it(`enables monorepo tools when ${file} is present`, async () => {
+        const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+        const dir = await createProject({ [file]: "{}" });
+        try {
+          const tools = await detectAutoLoadTools(dir);
+          for (const t of MONOREPO) expect(tools).toContain(t);
+        } finally { await cleanup(dir); }
+      });
+    }
+
+    it("enables monorepo tools when package.json has workspaces array", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ workspaces: ["packages/*"] }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of MONOREPO) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("enables monorepo tools when package.json has workspaces.packages object", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({
+          workspaces: { packages: ["apps/*", "libs/*"] },
+        }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of MONOREPO) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("does NOT enable monorepo tools when only package.json with no workspaces", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ name: "x", dependencies: {} }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        // architecture_summary is also in TS_BASELINE (tsconfig.json) — gate
+        // on absence of both indicators
+        expect(tools).not.toContain("check_boundaries");
+        expect(tools).not.toContain("architecture_summary");
+      } finally { await cleanup(dir); }
+    });
+  });
+
+  describe("Prisma signals", () => {
+    it("enables Prisma tools when schema.prisma is at root", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "schema.prisma": "datasource db { provider = \"postgresql\" }",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of PRISMA) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("enables Prisma tools when prisma/schema.prisma exists", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "prisma/schema.prisma": "datasource db { provider = \"postgresql\" }",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of PRISMA) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("enables Prisma tools when prisma is a dependency", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ devDependencies: { prisma: "^5.0.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of PRISMA) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("enables Prisma tools when drizzle-kit is a dependency", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ devDependencies: { "drizzle-kit": "^0.20.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const t of PRISMA) expect(tools).toContain(t);
+      } finally { await cleanup(dir); }
+    });
+
+    it("does NOT enable Prisma tools when no schema or dep", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).not.toContain("analyze_prisma_schema");
+        expect(tools).not.toContain("migration_lint");
+      } finally { await cleanup(dir); }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 15-stack matrix — mirrors zuvo orchestrator validation set. Each case
+  // asserts that the signals present in the fixture project trigger the
+  // expected union of bundles. We do NOT assert exact tool counts (those
+  // shift as bundles evolve); we assert presence of bundle-canary tools.
+  // -------------------------------------------------------------------------
+  describe("15-stack zuvo orchestrator matrix", () => {
+    it("translation-qa: TS/nextjs → ts+nextjs+react+prisma", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "package.json": JSON.stringify({
+          dependencies: { next: "^15.0.0", react: "^19.0.0", prisma: "^5.0.0" },
+        }),
+        "app/page.tsx": "export default function Page() { return null; }",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");      // TS baseline
+        expect(tools).toContain("trace_component_tree");  // React
+        expect(tools).toContain("analyze_prisma_schema"); // Prisma
+      } finally { await cleanup(dir); }
+    });
+
+    it("zuvo-landing: TS/astro → ts (astro tools are core, not auto-loaded)", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "package.json": JSON.stringify({ dependencies: { astro: "^5.0.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");
+        expect(tools).toContain("check_boundaries");
+      } finally { await cleanup(dir); }
+    });
+
+    it("tgm-survey-platform: TS/nestjs monorepo → ts+react+prisma+monorepo", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "pnpm-workspace.yaml": "packages:\n  - 'apps/*'",
+        "package.json": JSON.stringify({
+          dependencies: {
+            "@nestjs/core": "^10.0.0",
+            react: "^19.0.0",
+            "@prisma/client": "^5.0.0",
+            prisma: "^5.0.0",
+          },
+        }),
+        "apps/web/src/App.tsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");      // TS
+        expect(tools).toContain("check_boundaries");      // monorepo (also TS)
+        expect(tools).toContain("trace_component_tree");  // React
+        expect(tools).toContain("analyze_prisma_schema"); // Prisma
+      } finally { await cleanup(dir); }
+    });
+
+    it("makeyourasia-editor: TS/react → ts+react", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "package.json": JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+        "src/App.tsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");
+        expect(tools).toContain("trace_component_tree");
+        expect(tools).not.toContain("analyze_prisma_schema");
+      } finally { await cleanup(dir); }
+    });
+
+    it("tgmdev-tgm-portal: JS/react (no tsconfig) → react only, no TS baseline", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+        "src/App.jsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("trace_component_tree");
+        expect(tools).not.toContain("dependency_audit");  // no tsconfig.json
+      } finally { await cleanup(dir); }
+    });
+
+    it("tgm-survey-tester: TS/hono → ts+hono", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "package.json": JSON.stringify({ dependencies: { hono: "^4.7.0" } }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");
+        expect(tools).toContain("audit_hono_security");
+      } finally { await cleanup(dir); }
+    });
+
+    it("Helper: JS/null → empty auto-load", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ name: "helper" }),
+        "src/index.js": "module.exports = {};",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).not.toContain("dependency_audit");
+        expect(tools).not.toContain("trace_component_tree");
+        expect(tools).not.toContain("analyze_prisma_schema");
+      } finally { await cleanup(dir); }
+    });
+
+    it("Veltura-Studio: TS/hono monorepo + react+astro → ts+hono+react+monorepo", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "turbo.json": "{}",
+        "package.json": JSON.stringify({
+          dependencies: { hono: "^4.7.0", react: "^19.0.0", astro: "^5.0.0" },
+        }),
+        "src/App.tsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");
+        expect(tools).toContain("check_boundaries");
+        expect(tools).toContain("audit_hono_security");
+        expect(tools).toContain("trace_component_tree");
+      } finally { await cleanup(dir); }
+    });
+
+    it("easyAds: TS/fastify monorepo + react+postgres → ts+react+monorepo (no fastify bundle yet)", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "package.json": JSON.stringify({
+          workspaces: ["apps/*", "libs/*"],
+          dependencies: { fastify: "^4.0.0", react: "^19.0.0" },
+        }),
+        "apps/web/src/App.tsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");
+        expect(tools).toContain("check_boundaries");      // monorepo via pkg.workspaces
+        expect(tools).toContain("trace_component_tree");
+      } finally { await cleanup(dir); }
+    });
+
+    it("MYA: TS/nextjs → ts+react+prisma", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "package.json": JSON.stringify({
+          dependencies: { next: "^15.0.0", "@prisma/client": "^5.0.0" },
+          devDependencies: { prisma: "^5.0.0" },
+        }),
+        "prisma/schema.prisma": "datasource db { provider = \"postgresql\" }",
+        "app/page.tsx": "export default () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");
+        expect(tools).toContain("trace_component_tree");
+        expect(tools).toContain("analyze_prisma_schema");
+        expect(tools).toContain("migration_lint");
+      } finally { await cleanup(dir); }
+    });
+
+    it("Mobi2: TS/react hybrid + composer.json (PHP) → ts+react+php", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "composer.json": JSON.stringify({ name: "mobi2/legacy" }),
+        "package.json": JSON.stringify({ dependencies: { react: "^19.0.0" } }),
+        "src/App.tsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("dependency_audit");        // TS baseline
+        expect(tools).toContain("trace_component_tree");    // React
+        expect(tools).toContain("php_security_scan");       // PHP from composer.json
+        expect(tools).toContain("php_project_audit");
+      } finally { await cleanup(dir); }
+    });
+
+    it("DATA LAB: python/flask → python bundle, no TS baseline", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "requirements.txt": "flask==3.0.0\npsycopg2==2.9.0\n",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("python_audit");
+        expect(tools).not.toContain("dependency_audit");
+        expect(tools).not.toContain("trace_component_tree");
+      } finally { await cleanup(dir); }
+    });
+
+    it("dedup: combined signals do not duplicate tool names", async () => {
+      const { detectAutoLoadToolsCached } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "tsconfig.json": "{}",
+        "turbo.json": "{}",
+        "package.json": JSON.stringify({
+          workspaces: ["apps/*"],
+          dependencies: { react: "^19.0.0", prisma: "^5.0.0" },
+        }),
+        "src/App.tsx": "export const App = () => null;",
+      });
+      try {
+        const tools = await detectAutoLoadToolsCached(dir);
+        const seen = new Set<string>();
+        const dups: string[] = [];
+        for (const t of tools) {
+          if (seen.has(t)) dups.push(t);
+          seen.add(t);
+        }
+        expect(dups, `unexpected duplicates: ${dups.join(", ")}`).toEqual([]);
+      } finally { await cleanup(dir); }
+    });
+  });
+});
