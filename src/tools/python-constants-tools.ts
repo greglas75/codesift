@@ -51,6 +51,12 @@ export interface ConstantResolutionMatch {
   file: string;
   line: number;
   resolved: boolean;
+  /**
+   * Source language of the matched symbol. Optional because the original
+   * Python-only resolver did not populate it; multi-language consumers
+   * (e.g. typescript-constants-tools) set it to disambiguate matches.
+   */
+  language?: string;
   value_kind?: PythonLiteralKind;
   value?: PythonLiteralValue;
   value_text?: string;

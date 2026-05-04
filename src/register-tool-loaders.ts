@@ -62,7 +62,7 @@ const loadPytestTools = memoizeModule(() => import("./tools/pytest-tools.js"));
 const loadWiringTools = memoizeModule(() => import("./tools/wiring-tools.js"));
 const loadRuffTools = memoizeModule(() => import("./tools/ruff-tools.js"));
 const loadPyprojectTools = memoizeModule(() => import("./tools/pyproject-tools.js"));
-const loadPythonConstantsTools = memoizeModule(() => import("./tools/python-constants-tools.js"));
+const loadConstantResolutionTools = memoizeModule(() => import("./tools/constant-resolution-tools.js"));
 const loadDjangoViewSecurityTools = memoizeModule(() => import("./tools/django-view-security-tools.js"));
 const loadPythonCallersTools = memoizeModule(() => import("./tools/python-callers.js"));
 const loadTaintTools = memoizeModule(() => import("./tools/taint-tools.js"));
@@ -204,7 +204,7 @@ export const getTestFixtures = lazyExport<typeof import("./tools/pytest-tools.js
 export const findFrameworkWiring = lazyExport<typeof import("./tools/wiring-tools.js").findFrameworkWiring>(loadWiringTools, "findFrameworkWiring");
 export const runRuff = lazyExport<typeof import("./tools/ruff-tools.js").runRuff>(loadRuffTools, "runRuff");
 export const parsePyproject = lazyExport<typeof import("./tools/pyproject-tools.js").parsePyproject>(loadPyprojectTools, "parsePyproject");
-export const resolveConstantValue = lazyExport<typeof import("./tools/python-constants-tools.js").resolveConstantValue>(loadPythonConstantsTools, "resolveConstantValue");
+export const resolveConstantValue = lazyExport<typeof import("./tools/constant-resolution-tools.js").resolveConstantValue>(loadConstantResolutionTools, "resolveConstantValue");
 export const effectiveDjangoViewSecurity = lazyExport<typeof import("./tools/django-view-security-tools.js").effectiveDjangoViewSecurity>(loadDjangoViewSecurityTools, "effectiveDjangoViewSecurity");
 export const findPythonCallers = lazyExport<typeof import("./tools/python-callers.js").findPythonCallers>(loadPythonCallersTools, "findPythonCallers");
 export const taintTrace = lazyExport<typeof import("./tools/taint-tools.js").taintTrace>(loadTaintTools, "taintTrace");
