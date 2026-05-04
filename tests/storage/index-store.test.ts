@@ -259,7 +259,10 @@ describe("index-store", () => {
 
     it("EXTRACTOR_VERSIONS registers typescript (forces reindex after wiki-v2 bump)", async () => {
       const { EXTRACTOR_VERSIONS } = await import("../../src/tools/project-tools.js");
-      expect(EXTRACTOR_VERSIONS.typescript).toBe("2.1.0");
+      // v3.0.0: Tasks 7-12 of TS extractor expansion — heritage, generics,
+      // enum members, is_async, modifiers, namespace/ambient, anon defaults,
+      // AST import-graph branch + tsconfig paths.
+      expect(EXTRACTOR_VERSIONS.typescript).toBe("3.0.0");
       expect(EXTRACTOR_VERSIONS.javascript).toBe("1.0.0");
       // Stored snapshot without typescript key must trigger cache miss
       const index = makeIndex({
