@@ -38,6 +38,12 @@ export interface AstroAuditResult {
     content: "pass" | "warn" | "fail";
     migration: "pass" | "warn" | "fail";
     patterns: "pass" | "warn" | "fail";
+    middleware: "pass" | "warn" | "fail" | "skipped";
+    sessions: "pass" | "warn" | "fail" | "skipped";
+    db: "pass" | "warn" | "fail" | "skipped";
+    env: "pass" | "warn" | "fail" | "skipped";
+    image: "pass" | "warn" | "fail" | "skipped";
+    svg: "pass" | "warn" | "fail" | "skipped";
   };
   sections: {
     config?: {
@@ -80,6 +86,12 @@ export interface AstroAuditResult {
       total_matches: number;
       patterns_fired: string[];
     };
+    middleware?: { handlers: string[]; routes_protected_count: number; issues_total: number };
+    sessions?: { adapter: string | null; sessions_enabled: boolean; usage_count: number; issues_total: number };
+    db?: { tables_total: number; n_plus_one_count: number; missing_indexes_count: number; issues_total: number };
+    env?: { declared: number; used: number; missing_count: number; unused_count: number; issues_total: number };
+    image?: { raw_img_count: number; image_component_count: number; issues_total: number };
+    svg?: { imports_total: number; unused_count: number; issues_total: number };
   };
   recommendations: string[];
 }
@@ -109,14 +121,21 @@ export const ASTRO_PATTERNS = [
 // ---------------------------------------------------------------------------
 
 export function deriveOverallScore(gates: AstroAuditResult["gates"]): OverallScore {
-  const gateValues = Object.values(gates) as GateStatus[];
-  const failCount = gateValues.filter((g) => g === "fail").length;
-  const warnCount = gateValues.filter((g) => g === "warn").length;
+  // 'skipped' gates do not contribute to scoring — they reflect missing input
+  // (e.g., no middleware.ts), not a quality signal. Active gates count as before.
+  const active = (Object.values(gates) as (GateStatus | "skipped")[]).filter((g) => g !== "skipped") as GateStatus[];
+  const failCount = active.filter((g) => g === "fail").length;
+  const warnCount = active.filter((g) => g === "warn").length;
+  const total = active.length;
+  // Scale warn thresholds by active gate count (~30% warn → C, ~10% warn → B)
+  // so that adding sub-gates doesn't artificially worsen the score.
+  const warnCThreshold = Math.max(3, Math.ceil(total * 0.3));
+  const warnBThreshold = 1;
 
   if (failCount >= 2) return "D";
   if (failCount === 1) return "C";
-  if (warnCount >= 3) return "C";
-  if (warnCount >= 1) return "B";
+  if (warnCount >= warnCThreshold) return "C";
+  if (warnCount >= warnBThreshold) return "B";
   return "A";
 }
 
@@ -414,6 +433,13 @@ export async function astroAuditFromIndex(
     content: contentGate,
     migration: migrationGate,
     patterns: patternsGate,
+    // New Astro 5 gates default to 'skipped' until Task 10 wires sub-tools.
+    middleware: "skipped",
+    sessions: "skipped",
+    db: "skipped",
+    env: "skipped",
+    image: "skipped",
+    svg: "skipped",
   };
 
   // Trim recommendations to top 5
@@ -451,6 +477,12 @@ export async function astroAudit(args: {
         content: "pass",
         migration: "pass",
         patterns: "fail",
+        middleware: "skipped",
+        sessions: "skipped",
+        db: "skipped",
+        env: "skipped",
+        image: "skipped",
+        svg: "skipped",
       },
       sections: {},
       recommendations: ["Run index_folder to index the repository first."],

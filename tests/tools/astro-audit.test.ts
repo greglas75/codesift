@@ -400,8 +400,37 @@ import Widget from './Widget.tsx';
     );
 
     expect(result.score).toBe("A");
-    expect(Object.values(result.gates).every((g) => g === "pass")).toBe(true);
+    // Original 7 gates pass; new 6 (middleware/sessions/db/env/image/svg) default to 'skipped'
+    expect(Object.values(result.gates).every((g) => g === "pass" || g === "skipped")).toBe(true);
     expect(Object.keys(result.sections)).toHaveLength(0);
     expect(result.recommendations).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 9: extended gates (Astro 5 sub-tools)
+  // -------------------------------------------------------------------------
+
+  it("13 gates exposed including new middleware/sessions/db/env/image/svg defaulting to 'skipped'", async () => {
+    const result = await astroAuditFromIndex(
+      makeIndex("/tmp", []),
+      new Set(["config", "islands", "hydration", "routes", "actions", "content", "migration", "patterns"]),
+      undefined,
+    );
+    expect(result.gates).toHaveProperty("middleware", "skipped");
+    expect(result.gates).toHaveProperty("sessions", "skipped");
+    expect(result.gates).toHaveProperty("db", "skipped");
+    expect(result.gates).toHaveProperty("env", "skipped");
+    expect(result.gates).toHaveProperty("image", "skipped");
+    expect(result.gates).toHaveProperty("svg", "skipped");
+    expect(Object.keys(result.gates)).toHaveLength(13);
+  });
+
+  it("score boundary: 0 fail / 0 warn → A regardless of skipped gates count", async () => {
+    const r = await astroAuditFromIndex(
+      makeIndex("/tmp", []),
+      new Set(["config", "islands", "hydration", "routes", "actions", "content", "migration", "patterns"]),
+      undefined,
+    );
+    expect(r.score).toBe("A");
   });
 });
