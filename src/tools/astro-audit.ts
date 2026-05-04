@@ -249,6 +249,17 @@ export async function astroAuditFromIndex(
         ),
   ]);
 
+  // Astro 5 sub-tools (Tasks 2-7). Each call is wrapped so a thrown error keeps
+  // the gate at 'skipped' rather than failing the whole audit.
+  const [middlewareResult, sessionsResult, dbResult, envResult, imageResult, svgResult] = await Promise.all([
+    skip.has("middleware") ? Promise.resolve(null) : tryImportOptionalTool("./astro-middleware", "astroMiddlewareAudit", { project_root: index.root }),
+    skip.has("sessions") ? Promise.resolve(null) : tryImportOptionalTool("./astro-sessions", "astroSessionsAudit", { project_root: index.root }),
+    skip.has("db") ? Promise.resolve(null) : tryImportOptionalTool("./astro-db-audit", "astroDbAudit", { project_root: index.root }),
+    skip.has("env") ? Promise.resolve(null) : tryImportOptionalTool("./astro-env-validator", "astroEnvValidator", { project_root: index.root }),
+    skip.has("image") ? Promise.resolve(null) : tryImportOptionalTool("./astro-image-audit", "astroImageAudit", { project_root: index.root }),
+    skip.has("svg") ? Promise.resolve(null) : tryImportOptionalTool("./astro-svg-components", "astroSvgComponents", { project_root: index.root }),
+  ]);
+
   // ---------------------------------------------------------------------------
   // Build sections
   // ---------------------------------------------------------------------------
@@ -425,6 +436,66 @@ export async function astroAuditFromIndex(
   // Assemble gates
   // ---------------------------------------------------------------------------
 
+  // Helper: translate sub-tool result with `issues` array into gate + section.
+  function gateFromIssues(result: unknown, errorThreshold = 1): "pass" | "warn" | "fail" {
+    if (!result || typeof result !== "object") return "skipped" as never; // narrowed below
+    const issues = (result as { issues?: { severity?: string }[] }).issues ?? [];
+    const errors = issues.filter((i) => i.severity === "error").length;
+    if (errors >= errorThreshold) return "fail";
+    if (issues.length > 0) return "warn";
+    return "pass";
+  }
+
+  let middlewareGate: AstroAuditResult["gates"]["middleware"] = "skipped";
+  let sessionsGate: AstroAuditResult["gates"]["sessions"] = "skipped";
+  let dbGate: AstroAuditResult["gates"]["db"] = "skipped";
+  let envGate: AstroAuditResult["gates"]["env"] = "skipped";
+  let imageGate: AstroAuditResult["gates"]["image"] = "skipped";
+  let svgGate: AstroAuditResult["gates"]["svg"] = "skipped";
+
+  if (middlewareResult && typeof middlewareResult === "object") {
+    const r = middlewareResult as { handlers: string[]; routes_protected_count: number; summary: { issues_total: number }; issues: { severity?: string }[] };
+    if (r.handlers.length > 0 || r.issues.length > 0) {
+      middlewareGate = gateFromIssues(r);
+      sections.middleware = { handlers: r.handlers, routes_protected_count: r.routes_protected_count, issues_total: r.summary.issues_total };
+    }
+  }
+  if (sessionsResult && typeof sessionsResult === "object") {
+    const r = sessionsResult as { adapter: string | null; sessions_enabled: boolean; usage_count: number; config_found: boolean; summary: { issues_total: number }; issues: { severity?: string }[] };
+    if (r.config_found || r.usage_count > 0) {
+      sessionsGate = gateFromIssues(r);
+      sections.sessions = { adapter: r.adapter, sessions_enabled: r.sessions_enabled, usage_count: r.usage_count, issues_total: r.summary.issues_total };
+    }
+  }
+  if (dbResult && typeof dbResult === "object") {
+    const r = dbResult as { tables: unknown[]; n_plus_one: unknown[]; missing_indexes: unknown[]; config_file: string | null; summary: { issues_total: number }; issues: { severity?: string }[] };
+    if (r.config_file || r.tables.length > 0) {
+      dbGate = gateFromIssues(r);
+      sections.db = { tables_total: r.tables.length, n_plus_one_count: r.n_plus_one.length, missing_indexes_count: r.missing_indexes.length, issues_total: r.summary.issues_total };
+    }
+  }
+  if (envResult && typeof envResult === "object") {
+    const r = envResult as { declared_vars: unknown[]; used_vars: unknown[]; missing: string[]; unused: string[]; config_found: boolean; summary: { issues: number }; issues: { severity?: string }[] };
+    if (r.config_found && r.declared_vars.length + r.used_vars.length > 0) {
+      envGate = gateFromIssues(r);
+      sections.env = { declared: r.declared_vars.length, used: r.used_vars.length, missing_count: r.missing.length, unused_count: r.unused.length, issues_total: r.summary.issues };
+    }
+  }
+  if (imageResult && typeof imageResult === "object") {
+    const r = imageResult as { raw_img_count: number; image_component_count: number; summary: { issues_total: number; files_scanned: number }; issues: { severity?: string }[] };
+    if (r.summary.files_scanned > 0 && (r.raw_img_count > 0 || r.image_component_count > 0 || r.issues.length > 0)) {
+      imageGate = gateFromIssues(r);
+      sections.image = { raw_img_count: r.raw_img_count, image_component_count: r.image_component_count, issues_total: r.summary.issues_total };
+    }
+  }
+  if (svgResult && typeof svgResult === "object") {
+    const r = svgResult as { imports: unknown[]; unused: string[]; summary: { issues_total: number }; issues: { severity?: string }[] };
+    if (r.imports.length > 0 || r.issues.length > 0) {
+      svgGate = gateFromIssues(r);
+      sections.svg = { imports_total: r.imports.length, unused_count: r.unused.length, issues_total: r.summary.issues_total };
+    }
+  }
+
   const gates: AstroAuditResult["gates"] = {
     config: configGate,
     hydration: hydrationGate,
@@ -433,13 +504,12 @@ export async function astroAuditFromIndex(
     content: contentGate,
     migration: migrationGate,
     patterns: patternsGate,
-    // New Astro 5 gates default to 'skipped' until Task 10 wires sub-tools.
-    middleware: "skipped",
-    sessions: "skipped",
-    db: "skipped",
-    env: "skipped",
-    image: "skipped",
-    svg: "skipped",
+    middleware: middlewareGate,
+    sessions: sessionsGate,
+    db: dbGate,
+    env: envGate,
+    image: imageGate,
+    svg: svgGate,
   };
 
   // Trim recommendations to top 5
