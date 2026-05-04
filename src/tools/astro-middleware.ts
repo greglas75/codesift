@@ -42,52 +42,61 @@ function findMiddlewareFile(root: string): { abs: string; rel: string } | null {
 function parseMiddleware(
   parser: Parser,
   source: string,
-): { handlers: string[]; sequence: string[]; guardsWithoutEffect: number; parseOk: boolean } {
+): { handlers: string[]; sequence: string[]; sequenceTied: boolean; guardsWithoutEffect: number; parseOk: boolean } {
   let tree: Parser.Tree;
-  try { tree = parser.parse(source); } catch { return { handlers: [], sequence: [], guardsWithoutEffect: 0, parseOk: false }; }
-  const root = tree.rootNode;
-  if (root.hasError) {
-    // tolerate partial parse but flag overall result
-  }
+  try { tree = parser.parse(source); } catch { return { handlers: [], sequence: [], sequenceTied: false, guardsWithoutEffect: 0, parseOk: false }; }
+  try {
+    const root = tree.rootNode;
+    const handlers: string[] = [];
+    const sequence: string[] = [];
+    let sequenceTied = false;
+    let guardsWithoutEffect = 0;
 
-  const handlers: string[] = [];
-  const sequence: string[] = [];
-  let guardsWithoutEffect = 0;
-
-  // 1. find `export const onRequest = ...`
-  for (const decl of root.descendantsOfType("export_statement")) {
-    const lex = decl.descendantsOfType("lexical_declaration")[0];
-    if (!lex) continue;
-    for (const v of lex.descendantsOfType("variable_declarator")) {
-      const name = v.childForFieldName("name");
-      if (name && name.text === "onRequest") {
-        handlers.push("onRequest");
-        const value = v.childForFieldName("value");
-        if (value && value.type === "call_expression") {
-          const fn = value.childForFieldName("function");
-          if (fn && fn.text === "sequence") {
-            const args = value.childForFieldName("arguments");
-            if (args) {
-              for (const arg of args.namedChildren) {
-                if (arg.type === "identifier") sequence.push(arg.text);
-              }
+    // Direct children only — avoid matching nested local `onRequest`.
+    for (const decl of root.namedChildren) {
+      if (decl.type !== "export_statement") continue;
+      // (a) export const onRequest = …
+      for (const lex of decl.namedChildren) {
+        if (lex.type !== "lexical_declaration") continue;
+        for (const v of lex.namedChildren) {
+          if (v.type !== "variable_declarator") continue;
+          const name = v.childForFieldName("name");
+          if (!name || name.text !== "onRequest") continue;
+          handlers.push("onRequest");
+          const value = v.childForFieldName("value");
+          if (value && value.type === "call_expression") {
+            const fn = value.childForFieldName("function");
+            if (fn && fn.text === "sequence") {
+              sequenceTied = true;
+              const args = value.childForFieldName("arguments");
+              if (args) for (const arg of args.namedChildren) if (arg.type === "identifier") sequence.push(arg.text);
             }
           }
         }
       }
+      // (b) export function onRequest / export async function onRequest
+      for (const fn of decl.namedChildren) {
+        if (fn.type !== "function_declaration") continue;
+        const name = fn.childForFieldName("name");
+        if (name && name.text === "onRequest" && !handlers.includes("onRequest")) handlers.push("onRequest");
+      }
     }
-  }
 
-  // 2. heuristic: count guard `if` blocks lacking redirect/throw/return Response
-  for (const ifStmt of root.descendantsOfType("if_statement")) {
-    const consequence = ifStmt.childForFieldName("consequence");
-    if (!consequence) continue;
-    const body = consequence.text;
-    const hasEffect = /\b(return\s+(?:new\s+Response|context\.redirect|Astro\.redirect|next\(\))|throw\b|redirect\(|context\.rewrite)/.test(body);
-    if (!hasEffect && /context\.|locals\.|user|auth|session|cookies/i.test(ifStmt.text)) guardsWithoutEffect++;
-  }
+    // Guard heuristic: only flag if-stmt with NO else branch AND consequence body has no effect.
+    const EFFECT_RE = /\b(return\s+(?:new\s+)?Response(?:\.\w+)?\(|return\s+(?:context|Astro)\.(?:redirect|rewrite)\(|return\s+next\(\)|throw\b|redirect\(|context\.rewrite)/;
+    const GUARD_RE = /\b(context\.|locals\.|user\b|auth|session|cookies\.)/i;
+    for (const ifStmt of root.descendantsOfType("if_statement")) {
+      if (ifStmt.childForFieldName("alternative")) continue; // skip if/else
+      const consequence = ifStmt.childForFieldName("consequence");
+      if (!consequence) continue;
+      const body = consequence.text;
+      if (!EFFECT_RE.test(body) && GUARD_RE.test(ifStmt.text)) guardsWithoutEffect++;
+    }
 
-  return { handlers, sequence, guardsWithoutEffect, parseOk: !root.hasError };
+    return { handlers, sequence, sequenceTied, guardsWithoutEffect, parseOk: !root.hasError };
+  } finally {
+    tree.delete();
+  }
 }
 
 export async function auditAstroMiddlewareFromRoot(
@@ -108,8 +117,8 @@ export async function auditAstroMiddlewareFromRoot(
   const issues: MiddlewareIssue[] = [];
   if (!parsed.parseOk) issues.push({ code: "MW00", severity: "error", message: `Parse error in ${found.rel}`, file: found.rel, line: 1 });
   if (parsed.handlers.length === 0) issues.push({ code: "MW01", severity: "error", message: `${found.rel} does not export onRequest`, file: found.rel, line: 1 });
-  if (parsed.sequence.length === 0 && /\bsequence\s*\(/.test(source) && parsed.handlers.length > 0) {
-    issues.push({ code: "MW02", severity: "warning", message: "sequence(...) called with non-identifier args — order is ambiguous", file: found.rel, line: 1 });
+  if (parsed.sequenceTied && parsed.sequence.length === 0) {
+    issues.push({ code: "MW02", severity: "warning", message: "onRequest = sequence(...) called with non-identifier args — order is ambiguous", file: found.rel, line: 1 });
   }
   for (let i = 0; i < parsed.guardsWithoutEffect; i++) {
     issues.push({ code: "MW03", severity: "warning", message: "Guarding if-block without redirect/throw/return — falls through", file: found.rel, line: 1 });
