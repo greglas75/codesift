@@ -1,12 +1,13 @@
 import {
   saveIndex,
   loadIndex,
+  loadIndexOrStale,
   saveIncremental,
   removeFileFromIndex,
   getIndexPath,
   isExtractorVersionCurrent,
 } from "../../src/storage/index-store.js";
-import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import type { CodeIndex, CodeSymbol, FileEntry } from "../../src/types.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,6 +23,17 @@ function makeIndex(overrides?: Partial<CodeIndex>): CodeIndex {
     symbol_count: 0,
     file_count: 0,
     ...overrides,
+  };
+}
+
+function makeFile(path: string, language: string): FileEntry {
+  const now = Date.now();
+  return {
+    path,
+    language,
+    symbol_count: 0,
+    last_modified: now,
+    mtime_ms: now,
   };
 }
 
@@ -245,11 +257,24 @@ describe("index-store", () => {
       expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
     });
 
-    it("isExtractorVersionCurrent returns false when a current language is missing from stored", () => {
+    it("isExtractorVersionCurrent flags missing language when files in that language exist", () => {
       const index = makeIndex({
         extractor_version: { python: "1.0.0" }, // kotlin missing
+        files: [makeFile("Foo.kt", "kotlin")], // but kotlin files are present
       });
       expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
+    });
+
+    it("isExtractorVersionCurrent tolerates missing language when no files in that language", () => {
+      // Regression: legacy indexes written before EXTRACTOR_VERSIONS gained a
+      // language must not be invalidated when they have no symbols in that
+      // language. Without this tolerance every fresh language addition turns
+      // every existing index into "NOT INDEXED" until manual reindex.
+      const index = makeIndex({
+        extractor_version: { python: "1.0.0" }, // kotlin missing
+        files: [makeFile("a.py", "python")], // no kotlin files
+      });
+      expect(isExtractorVersionCurrent(index, CURRENT)).toBe(true);
     });
 
     it("isExtractorVersionCurrent returns false when the stored snapshot is absent", () => {
@@ -264,11 +289,53 @@ describe("index-store", () => {
       // AST import-graph branch + tsconfig paths.
       expect(EXTRACTOR_VERSIONS.typescript).toBe("3.0.0");
       expect(EXTRACTOR_VERSIONS.javascript).toBe("1.0.0");
-      // Stored snapshot without typescript key must trigger cache miss
+      // Index written by older code (no typescript field) WITH typescript
+      // files must trigger cache miss — symbols were extracted by the old
+      // extractor and are genuinely stale.
       const index = makeIndex({
         extractor_version: { kotlin: "2.0.0", python: "1.0.0" },
+        files: [makeFile("src/a.ts", "typescript")],
       });
       expect(isExtractorVersionCurrent(index, { ...EXTRACTOR_VERSIONS })).toBe(false);
+    });
+
+    it("loadIndexOrStale flags stale when an indexed language drifts versions", async () => {
+      const indexPath = join(tmpDir, "stale-with-files.index.json");
+      const index = makeIndex({
+        extractor_version: { kotlin: "2.0.0", python: "1.0.0" },
+        files: [makeFile("src/a.ts", "typescript")],
+      });
+      await saveIndex(indexPath, index);
+
+      const result = await loadIndexOrStale(indexPath, {
+        kotlin: "2.0.0",
+        python: "1.0.0",
+        typescript: "3.0.0",
+      });
+      expect(result?.status).toBe("stale");
+      if (result?.status === "stale") {
+        expect(result.language).toBe("typescript");
+        expect(result.expected_version).toBe("3.0.0");
+        expect(result.actual_version).toBe("missing");
+      }
+    });
+
+    it("loadIndexOrStale returns ok when newly added language has no files in the index", async () => {
+      // Mirror of the translation-qa regression: legacy index lacks the
+      // typescript entry but contains zero TS files, so its data is correct.
+      const indexPath = join(tmpDir, "tolerated-legacy.index.json");
+      const index = makeIndex({
+        extractor_version: { kotlin: "2.0.0", python: "1.0.0" },
+        files: [makeFile("a.py", "python")],
+      });
+      await saveIndex(indexPath, index);
+
+      const result = await loadIndexOrStale(indexPath, {
+        kotlin: "2.0.0",
+        python: "1.0.0",
+        typescript: "3.0.0",
+      });
+      expect(result?.status).toBe("ok");
     });
 
     it("saveIncremental via loadIndex-without-check preserves extractor_version round-trip", async () => {

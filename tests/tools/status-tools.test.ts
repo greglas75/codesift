@@ -3,13 +3,35 @@ import { indexStatus } from "../../src/tools/status-tools.js";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
-// Mock getCodeIndex — I/O boundary (reads from storage)
+// Mocks — I/O boundaries
 // ---------------------------------------------------------------------------
 
 const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
+const mockGetRepo = vi.fn();
+const mockListRepos = vi.fn();
+const mockGetRepoName = vi.fn(() => "test-repo");
+const mockLoadIndexOrStale = vi.fn();
 
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
+}));
+
+vi.mock("../../src/storage/registry.js", () => ({
+  getRepo: (...args: unknown[]) => mockGetRepo(...args),
+  listRepos: (...args: unknown[]) => mockListRepos(...args),
+  getRepoName: (...args: unknown[]) => mockGetRepoName(...args),
+}));
+
+vi.mock("../../src/storage/index-store.js", () => ({
+  loadIndexOrStale: (...args: unknown[]) => mockLoadIndexOrStale(...args),
+}));
+
+vi.mock("../../src/config.js", () => ({
+  loadConfig: () => ({ registryPath: "/tmp/test-registry.json" }),
+}));
+
+vi.mock("../../src/tools/project-tools.js", () => ({
+  EXTRACTOR_VERSIONS: { typescript: "3.0.0", python: "1.0.0" },
 }));
 
 // ---------------------------------------------------------------------------
@@ -45,15 +67,53 @@ function makeIndex(files: FileEntry[]): CodeIndex {
 describe("indexStatus", () => {
   beforeEach(() => {
     mockGetCodeIndex.mockReset();
+    mockGetRepo.mockReset();
+    mockListRepos.mockReset();
+    mockLoadIndexOrStale.mockReset();
+    mockGetRepo.mockResolvedValue(null);
+    mockListRepos.mockResolvedValue([]);
+    mockLoadIndexOrStale.mockResolvedValue(null);
   });
 
-  it("returns {indexed: false} when getCodeIndex returns null", async () => {
+  it("returns {indexed: false} when getCodeIndex returns null and no registry entry exists", async () => {
     mockGetCodeIndex.mockResolvedValue(null);
 
     const result = await indexStatus("missing-repo");
 
     expect(result).toEqual({ indexed: false });
     expect(mockGetCodeIndex).toHaveBeenCalledWith("missing-repo");
+  });
+
+  it("surfaces structured stale info when extractor_version drifted", async () => {
+    // Mirrors the translation-qa regression: index file exists on disk but its
+    // extractor_version no longer matches current — agents must see "STALE",
+    // not "NOT INDEXED", so they understand a refresh fixes it.
+    mockGetCodeIndex.mockResolvedValue(null);
+    mockGetRepo.mockResolvedValue({
+      name: "local/translation-qa",
+      root: "/Users/test/translation-qa",
+      index_path: "/tmp/translation-qa.index.json",
+      symbol_count: 0,
+      file_count: 0,
+      updated_at: 0,
+    });
+    mockLoadIndexOrStale.mockResolvedValue({
+      status: "stale",
+      reason: "extractor_version_mismatch",
+      language: "typescript",
+      expected_version: "3.0.0",
+      actual_version: "missing",
+    });
+
+    const result = await indexStatus("local/translation-qa");
+
+    expect(result.indexed).toBe(false);
+    expect(result.stale).toEqual({
+      reason: "extractor_version_mismatch",
+      language: "typescript",
+      expected_version: "3.0.0",
+      actual_version: "missing",
+    });
   });
 
   it("returns full status with file_count, symbol_count, and language_breakdown", async () => {

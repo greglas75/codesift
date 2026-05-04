@@ -21,7 +21,7 @@
  */
 
 import { existsSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { getTsconfig, createPathsMatcher } from "get-tsconfig";
 
 interface ResolvedTsconfig {

@@ -3170,6 +3170,18 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     handler: async (args) => {
       const result = await indexStatus(args.repo as string);
       if (!result.indexed) {
+        // Stale: index file exists but extractor_version drifted. Distinct
+        // from "never indexed" — agents seeing "STALE" know that re-running
+        // index_folder will fix it without wondering whether earlier indexing
+        // attempts silently failed.
+        if (result.stale) {
+          return (
+            `index_status: STALE — extractor_version_mismatch ` +
+            `(${result.stale.language}: indexed at ${result.stale.actual_version}, ` +
+            `current ${result.stale.expected_version}). ` +
+            `Run index_folder to refresh.`
+          );
+        }
         // If no repo specified, list available repos so the agent can pick one
         if (!args.repo) {
           const { listAllRepos } = await import("./tools/index-tools.js");

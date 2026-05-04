@@ -70,22 +70,35 @@ export type IndexOrStaleResult =
 /** Find the first language whose stored extractor_version does not match the
  *  current bundled set. Returns null when every language matches. Used by
  *  loadIndexOrStale so the stale payload names the actual mismatching language
- *  instead of always reporting "typescript". */
+ *  instead of always reporting "typescript".
+ *
+ *  Languages absent from `stored` but ALSO absent from `index.files` are
+ *  tolerated — they were added to `EXTRACTOR_VERSIONS` after this index was
+ *  written, but the index has no symbols in that language, so its data is not
+ *  actually stale. Without this tolerance, every legacy index would be
+ *  rejected as soon as a new language is added to `EXTRACTOR_VERSIONS`,
+ *  producing a misleading "NOT INDEXED" signal until a manual reindex.
+ *
+ *  Languages present in `index.files` always require a matching version —
+ *  symbols extracted by an older extractor genuinely may be stale. */
 function findExtractorVersionMismatch(
   index: CodeIndex,
   currentVersions: Record<string, string>,
 ): { language: string; expected: string; actual: string } | null {
   const stored = index.extractor_version ?? {};
+  const indexedLanguages = new Set<string>();
+  for (const file of index.files) indexedLanguages.add(file.language);
+
   for (const lang of Object.keys(currentVersions)) {
     const expected = currentVersions[lang];
     const actual = stored[lang];
-    if (expected !== actual) {
-      return {
-        language: lang,
-        expected: expected ?? "unknown",
-        actual: actual ?? "missing",
-      };
-    }
+    if (expected === actual) continue;
+    if (actual === undefined && !indexedLanguages.has(lang)) continue;
+    return {
+      language: lang,
+      expected: expected ?? "unknown",
+      actual: actual ?? "missing",
+    };
   }
   return null;
 }
@@ -133,10 +146,13 @@ export async function loadIndexOrStale(
 
 /**
  * Check whether the stored `extractor_version` snapshot matches the current
- * set of extractor versions. Returns false if any language present in
- * `currentVersions` is missing from the stored snapshot or has a different
- * value. A missing `extractor_version` field on a legacy index is treated as
- * a version miss.
+ * set of extractor versions. Returns false when any language present in BOTH
+ * `currentVersions` and `index.files` is missing from the stored snapshot or
+ * has a different value. Languages added to `currentVersions` after this index
+ * was written are tolerated when the index has no files in that language —
+ * matches the tolerance applied by `findExtractorVersionMismatch`. A missing
+ * `extractor_version` field on a fully legacy index is still treated as a
+ * version miss.
  */
 export function isExtractorVersionCurrent(
   index: CodeIndex,
@@ -144,8 +160,13 @@ export function isExtractorVersionCurrent(
 ): boolean {
   const stored = index.extractor_version;
   if (!stored) return false;
+  const indexedLanguages = new Set<string>();
+  for (const file of index.files) indexedLanguages.add(file.language);
   for (const lang of Object.keys(currentVersions)) {
-    if (stored[lang] !== currentVersions[lang]) return false;
+    const actual = stored[lang];
+    if (actual === currentVersions[lang]) continue;
+    if (actual === undefined && !indexedLanguages.has(lang)) continue;
+    return false;
   }
   return true;
 }
