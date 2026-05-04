@@ -30,7 +30,7 @@ export const EXTRACTOR_VERSIONS = {
   nextjs: "1.0.0",
   express: "1.0.0",
   react: "2.0.0",  // Wave 1-4 + Tier 1-4: component/hook kinds, classifyReactKind, isReactClassComponent — forces cache invalidation
-  typescript: "2.1.0", // v2.1: field_definition (JS), CommonJS exports, object-literal methods, class_static_block, generator_function_declaration — shared TS/JS extractor bump
+  typescript: "3.0.0", // v3: extends/implements heritage, generics in signatures, enum members as constants, is_async flag, modifiers + accessor_kind in meta, namespace + ambient module declarations, anonymous default export synth, RangeError guard, AST-based import-graph branch with type_only flag + tsconfig paths resolution + find_circular_deps type-only filter (was v2.1: field_definition, CommonJS exports, object-literal methods, class_static_block, generator_function_declaration)
   javascript: "1.0.0", // independent JS version — bump for JS-only extractor changes (CJS, .jsx-specific) without forcing TS reindex
   python: "1.0.0",
   php: "1.0.0",
