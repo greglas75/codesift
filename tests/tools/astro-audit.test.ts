@@ -433,4 +433,57 @@ import Widget from './Widget.tsx';
     );
     expect(r.score).toBe("A");
   });
+
+  // -------------------------------------------------------------------------
+  // Task 11: deriveOverallScore boundaries with 13 gates
+  // -------------------------------------------------------------------------
+
+  it("deriveOverallScore: 2+ fails → D regardless of warns or skipped", () => {
+    const gates: Parameters<typeof deriveOverallScore>[0] = {
+      config: "fail", hydration: "fail", routes: "pass", actions: "pass",
+      content: "pass", migration: "pass", patterns: "pass",
+      middleware: "skipped", sessions: "skipped", db: "skipped",
+      env: "skipped", image: "skipped", svg: "skipped",
+    };
+    expect(deriveOverallScore(gates)).toBe("D");
+  });
+
+  it("deriveOverallScore: 1 fail → C", () => {
+    const gates: Parameters<typeof deriveOverallScore>[0] = {
+      config: "fail", hydration: "pass", routes: "pass", actions: "pass",
+      content: "pass", migration: "pass", patterns: "pass",
+      middleware: "skipped", sessions: "skipped", db: "skipped",
+      env: "skipped", image: "skipped", svg: "skipped",
+    };
+    expect(deriveOverallScore(gates)).toBe("C");
+  });
+
+  it("deriveOverallScore: 0 fail / 1 warn → B; warn-C threshold scales with active gates", () => {
+    const oneWarn: Parameters<typeof deriveOverallScore>[0] = {
+      config: "pass", hydration: "warn", routes: "pass", actions: "pass",
+      content: "pass", migration: "pass", patterns: "pass",
+      middleware: "skipped", sessions: "skipped", db: "skipped",
+      env: "skipped", image: "skipped", svg: "skipped",
+    };
+    expect(deriveOverallScore(oneWarn)).toBe("B");
+
+    // With all 13 gates active and 4+ warns, score is C (threshold = ceil(13*0.3) = 4)
+    const manyWarns: Parameters<typeof deriveOverallScore>[0] = {
+      config: "pass", hydration: "warn", routes: "warn", actions: "warn",
+      content: "warn", migration: "pass", patterns: "pass",
+      middleware: "pass", sessions: "pass", db: "pass",
+      env: "pass", image: "pass", svg: "pass",
+    };
+    expect(deriveOverallScore(manyWarns)).toBe("C");
+  });
+
+  it("deriveOverallScore: skipped gates don't influence score", () => {
+    const allSkipped: Parameters<typeof deriveOverallScore>[0] = {
+      config: "pass", hydration: "pass", routes: "pass", actions: "pass",
+      content: "pass", migration: "pass", patterns: "pass",
+      middleware: "skipped", sessions: "skipped", db: "skipped",
+      env: "skipped", image: "skipped", svg: "skipped",
+    };
+    expect(deriveOverallScore(allSkipped)).toBe("A");
+  });
 });
