@@ -336,6 +336,68 @@ function detectAM10(pkg: Record<string, unknown> | null): MigrationIssue | null 
   };
 }
 
+/**
+ * AM11 — Vite 6 deprecated `vite.optimizeDeps.entries` glob shape.
+ *        Vite 6 still accepts strings but the recommended shape changed; flag legacy {} form.
+ */
+function detectAM11(files: Array<{ path: string; content: string }>): MigrationIssue | null {
+  const cfg = files.filter((f) => /astro\.config\.(mjs|ts|cjs|js)$/.test(f.path));
+  const { files: hitFiles, count } = grepFiles(cfg, /optimizeDeps\s*:\s*\{[^}]*entries\s*:\s*\[/);
+  if (count === 0) return null;
+  return {
+    code: "AM11", category: "vite-6", severity: "info",
+    message: "Vite 6 prefers glob-string entries; verify your `vite.optimizeDeps.entries` shape against Vite 6 docs.",
+    files: hitFiles, count, effort: "trivial",
+    migration_guide: "https://vite.dev/guide/migration.html",
+  };
+}
+
+/**
+ * AM12 — Rollup 5: `output.preserveModules` moved to `output.preserveModules` boolean only
+ *        (object form removed). Flag any custom rollup output config.
+ */
+function detectAM12(files: Array<{ path: string; content: string }>): MigrationIssue | null {
+  const cfg = files.filter((f) => /astro\.config\.(mjs|ts|cjs|js)$/.test(f.path) || /vite\.config\.(mjs|ts|cjs|js)$/.test(f.path));
+  const { files: hitFiles, count } = grepFiles(cfg, /preserveModules\s*:\s*\{/);
+  if (count === 0) return null;
+  return {
+    code: "AM12", category: "rollup-5", severity: "warning",
+    message: "Rollup 5 removed the object form of `preserveModules`. Use the boolean form or `preserveModulesRoot`.",
+    files: hitFiles, count, effort: "low",
+    migration_guide: "https://rollupjs.org/migration/#changes",
+  };
+}
+
+/**
+ * AM13 — Vite 6 deprecated `vite:serverModuleExtensions` hook (replaced by resolvedConfig).
+ */
+function detectAM13(files: Array<{ path: string; content: string }>): MigrationIssue | null {
+  const cfg = files.filter((f) => /astro\.config\.(mjs|ts|cjs|js)$/.test(f.path));
+  const { files: hitFiles, count } = grepFiles(cfg, /vite:serverModuleExtensions/);
+  if (count === 0) return null;
+  return {
+    code: "AM13", category: "vite-6", severity: "error",
+    message: "`vite:serverModuleExtensions` hook was removed in Vite 6. Migrate to `resolvedConfig` or `transformIndexHtml`.",
+    files: hitFiles, count, effort: "medium",
+    migration_guide: "https://vite.dev/guide/migration.html",
+  };
+}
+
+/**
+ * AM14 — `vite.ssr.external` array form is deprecated in Vite 6 (use object with predicate).
+ */
+function detectAM14(files: Array<{ path: string; content: string }>): MigrationIssue | null {
+  const cfg = files.filter((f) => /astro\.config\.(mjs|ts|cjs|js)$/.test(f.path));
+  const { files: hitFiles, count } = grepFiles(cfg, /ssr\s*:\s*\{[^}]*external\s*:\s*\[/);
+  if (count === 0) return null;
+  return {
+    code: "AM14", category: "vite-6", severity: "info",
+    message: "`vite.ssr.external` as a plain array is deprecated in Vite 6. Prefer `noExternal: true` or predicate form for clarity.",
+    files: hitFiles, count, effort: "trivial",
+    migration_guide: "https://vite.dev/guide/ssr.html",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -395,6 +457,10 @@ export async function astroMigrationCheck(args: {
     detectAM08(sourceFiles),
     detectAM09(sourceFiles),
     detectAM10(pkg),
+    detectAM11(sourceFiles),
+    detectAM12(sourceFiles),
+    detectAM13(sourceFiles),
+    detectAM14(sourceFiles),
   ];
 
   const breakingChanges = detectors.filter((d): d is MigrationIssue => d !== null);

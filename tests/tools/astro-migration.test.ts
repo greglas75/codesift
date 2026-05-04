@@ -299,6 +299,71 @@ import { ViewTransitions } from "astro:transitions";
   });
 
   // -------------------------------------------------------------------------
+  // AM11–AM14 (Vite 6 / Rollup 5 breaking changes)
+  // -------------------------------------------------------------------------
+
+  it("AM11 — vite.optimizeDeps.entries with array shape is flagged", async () => {
+    const config = `
+import { defineConfig } from "astro/config";
+export default defineConfig({
+  vite: { optimizeDeps: { entries: ["src/**/*.ts"] } },
+});
+`;
+    await withFixture(
+      [{ path: "astro.config.mjs", content: config }, { path: "package.json", content: makePackageJson({}) }],
+      async () => {
+        const result = await checkFixture();
+        expect(result.breaking_changes.some((c) => c.code === "AM11")).toBe(true);
+      },
+    );
+  });
+
+  it("AM12 — Rollup 5 preserveModules object form is flagged", async () => {
+    const config = `
+export default {
+  vite: { build: { rollupOptions: { output: { preserveModules: { strict: true } } } } },
+};
+`;
+    await withFixture(
+      [{ path: "astro.config.mjs", content: config }, { path: "package.json", content: makePackageJson({}) }],
+      async () => {
+        const result = await checkFixture();
+        expect(result.breaking_changes.some((c) => c.code === "AM12")).toBe(true);
+      },
+    );
+  });
+
+  it("AM13 — vite:serverModuleExtensions hook flagged", async () => {
+    const config = `
+export default {
+  vite: { plugins: [{ name: "x", "vite:serverModuleExtensions"() { return [".x"]; } }] },
+};
+`;
+    await withFixture(
+      [{ path: "astro.config.mjs", content: config }, { path: "package.json", content: makePackageJson({}) }],
+      async () => {
+        const result = await checkFixture();
+        expect(result.breaking_changes.some((c) => c.code === "AM13")).toBe(true);
+      },
+    );
+  });
+
+  it("AM14 — vite.ssr.external array form is flagged", async () => {
+    const config = `
+export default {
+  vite: { ssr: { external: ["lodash"] } },
+};
+`;
+    await withFixture(
+      [{ path: "astro.config.mjs", content: config }, { path: "package.json", content: makePackageJson({}) }],
+      async () => {
+        const result = await checkFixture();
+        expect(result.breaking_changes.some((c) => c.code === "AM14")).toBe(true);
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // 8. Effort hours estimation
   // -------------------------------------------------------------------------
 
