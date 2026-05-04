@@ -121,7 +121,11 @@ const REACT_COMPONENT_BASES = new Set([
 function extractHeritageNames(node: Parser.SyntaxNode): string[] {
   if (node.type === "identifier") return [node.text];
   if (node.type === "type_identifier") return [node.text];
-  if (node.type === "member_expression" || node.type === "nested_type_identifier") return [node.text];
+  // member_expression / nested_type_identifier text is `ns.Base`. Strip any
+  // whitespace defensively — uncommon but legal in source like `extends ns . Base`.
+  if (node.type === "member_expression" || node.type === "nested_type_identifier") {
+    return [node.text.replace(/\s+/g, "")];
+  }
   if (node.type === "generic_type") {
     const innerType = node.childForFieldName("name") ?? node.namedChildren[0];
     return innerType ? extractHeritageNames(innerType) : [];

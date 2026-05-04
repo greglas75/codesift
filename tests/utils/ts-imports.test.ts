@@ -45,6 +45,17 @@ describe("extractTypeScriptImports", () => {
     expect(edges[0]).toMatchObject({ path: "./side-effect", is_type_only: false, specifiers: [] });
   });
 
+  // Empty named-imports clause is rare but legal — produced by tooling that
+  // strips type-only members. With no statement-level `type` and zero
+  // specifiers, the current contract treats `is_type_only` as true (no
+  // runtime specifier present). Lock it down so future refactors don't
+  // accidentally flip it.
+  it("treats empty named-imports clause `import { } from \"y\"` as type_only", () => {
+    const edges = extract(`import { } from "./y";`);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ path: "./y", is_type_only: true, specifiers: [] });
+  });
+
   it("captures default + named imports as runtime", () => {
     const edges = extract(`import Default, { Named } from "./y";`);
     expect(edges[0]?.is_type_only).toBe(false);

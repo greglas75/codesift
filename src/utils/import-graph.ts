@@ -2,7 +2,7 @@
  * Import graph utilities — shared by context-tools, route-tools, community-tools.
  */
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { readFileSync } from "node:fs";
 import type { CodeIndex, Workspace } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
@@ -567,10 +567,11 @@ export async function collectImportEdges(
                 index.root,
               );
               if (aliased) {
-                // Convert absolute to repo-relative
-                const rel = aliased.startsWith(index.root)
-                  ? aliased.slice(index.root.length).replace(/^\//, "")
-                  : aliased;
+                // Convert absolute to repo-relative using path.relative so
+                // platform separators are handled correctly. Then normalize
+                // to POSIX so the lookup matches normalizedPaths keys (built
+                // with forward-slash semantics).
+                const rel = relative(index.root, aliased).split(sep).join("/");
                 if (normalizedPaths.has(rel.replace(/\.[^./]+$/, ""))
                     || index.files.some((f) => f.path === rel)) {
                   resolved = rel;

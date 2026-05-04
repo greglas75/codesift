@@ -55,29 +55,37 @@ export function clearTsconfigCache(): void {
 }
 
 /** Walk up from `dir` to `repoRoot`, find nearest `tsconfig.json`.
- * Returns absolute path of the config file, or null if none found. */
+ * Returns absolute path of the config file, or null if none found.
+ * Caches every ancestor visited during the walk, not just the input dir,
+ * so sibling lookups under the same parent are O(1). */
 function findNearestTsconfig(dir: string, repoRoot: string): string | null {
   const cached = dirToConfigCache.get(dir);
   if (cached !== undefined) return cached;
 
   const repoRootAbs = resolve(repoRoot);
+  const visited: string[] = [];
   let cur = resolve(dir);
-  while (cur.startsWith(repoRootAbs) || cur === repoRootAbs) {
+  // `startsWith(repoRootAbs)` is true when cur === repoRootAbs, so the
+  // explicit equality check would be redundant.
+  while (cur.startsWith(repoRootAbs)) {
+    visited.push(cur);
     const candidate = join(cur, "tsconfig.json");
     if (existsSync(candidate)) {
-      dirToConfigCache.set(dir, candidate);
+      for (const v of visited) dirToConfigCache.set(v, candidate);
       return candidate;
     }
     const parent = dirname(cur);
     if (parent === cur) break;
     cur = parent;
   }
-  dirToConfigCache.set(dir, null);
+  for (const v of visited) dirToConfigCache.set(v, null);
   return null;
 }
 
 /** Parse a tsconfig.json (with `extends` chain) and build a paths matcher.
- * Returns null on parse error. Caches the result. */
+ * Returns null on parse error. Caches successful parses only — failures are
+ * NOT cached so a user fixing a malformed tsconfig.json mid-session does not
+ * stay broken until the next full index_folder. */
 function loadTsconfig(configPath: string): ResolvedTsconfig | null {
   const cached = configCache.get(configPath);
   if (cached !== undefined) return cached;
@@ -85,7 +93,7 @@ function loadTsconfig(configPath: string): ResolvedTsconfig | null {
   try {
     const result = getTsconfig(configPath);
     if (!result) {
-      configCache.set(configPath, null);
+      // Don't cache: the file might appear on a retry.
       return null;
     }
     const matcher = createPathsMatcher(result);
@@ -104,7 +112,8 @@ function loadTsconfig(configPath: string): ResolvedTsconfig | null {
     console.warn(
       `[tsconfig-paths] failed to parse ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    configCache.set(configPath, null);
+    // Don't cache parse failures — let the next call retry once the user
+    // fixes the malformed config.
     return null;
   }
 }

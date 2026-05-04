@@ -61,9 +61,34 @@ export type IndexOrStaleResult =
   | {
       status: "stale";
       reason: "extractor_version_mismatch";
+      /** Language whose extractor version drifted (e.g., "typescript", "python"). */
+      language: string;
       expected_version: string;
       actual_version: string;
     };
+
+/** Find the first language whose stored extractor_version does not match the
+ *  current bundled set. Returns null when every language matches. Used by
+ *  loadIndexOrStale so the stale payload names the actual mismatching language
+ *  instead of always reporting "typescript". */
+function findExtractorVersionMismatch(
+  index: CodeIndex,
+  currentVersions: Record<string, string>,
+): { language: string; expected: string; actual: string } | null {
+  const stored = index.extractor_version ?? {};
+  for (const lang of Object.keys(currentVersions)) {
+    const expected = currentVersions[lang];
+    const actual = stored[lang];
+    if (expected !== actual) {
+      return {
+        language: lang,
+        expected: expected ?? "unknown",
+        actual: actual ?? "missing",
+      };
+    }
+  }
+  return null;
+}
 
 /** Load an index with version-aware stale detection.
  *
@@ -74,10 +99,10 @@ export type IndexOrStaleResult =
  *     the file exists and is parseable but its TypeScript extractor version
  *     differs from the current bundled version.
  *
- * Currently only the `typescript` language version is reported in the stale
- * payload (this is the language whose schema bumps are most likely to invalidate
- * existing indexes). The check is general — any mismatch in `currentVersions`
- * yields a stale verdict — but the message names typescript for clarity.
+ * The stale payload names the actual mismatching language (typescript, python,
+ * php, etc.). Earlier versions hard-coded "typescript" in the message even
+ * when a different language drifted; that misled anyone reading the warning
+ * during a non-TS bump.
  *
  * On file-not-found, parse error, or invalid shape, this function falls back
  * to `loadIndex(...)` returning null. Callers must still handle null (no
@@ -90,17 +115,14 @@ export async function loadIndexOrStale(
     const raw = await readFile(indexPath, "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (!isValidIndex(parsed)) return null;
-    if (!isExtractorVersionCurrent(parsed, currentVersions)) {
-      // Identify the first mismatching language; report typescript by name
-      // for clarity, since that's the most commonly-bumped key.
-      const stored = parsed.extractor_version ?? {};
-      const expected = currentVersions["typescript"] ?? "unknown";
-      const actual = stored["typescript"] ?? "missing";
+    const mismatch = findExtractorVersionMismatch(parsed, currentVersions);
+    if (mismatch) {
       return {
         status: "stale",
         reason: "extractor_version_mismatch",
-        expected_version: expected,
-        actual_version: actual,
+        language: mismatch.language,
+        expected_version: mismatch.expected,
+        actual_version: mismatch.actual,
       };
     }
     return { status: "ok", index: parsed };

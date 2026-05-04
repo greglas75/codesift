@@ -912,6 +912,14 @@ export async function indexFile(filePath: string): Promise<{
   const startTime = Date.now();
   const relPath = relative(matchingRepo.root, absPath);
 
+  // If the changed file is a tsconfig.json, drop the path resolver cache so
+  // subsequent symbol/import extraction sees the new alias mappings. Without
+  // this, file-watcher-driven incremental indexing would keep using the cached
+  // matcher from the last index_folder run.
+  if (basename(absPath) === "tsconfig.json") {
+    clearTsconfigCache();
+  }
+
   // mtime check — skip if unchanged
   const existing = await loadIndex(matchingRepo.index_path);
   if (existing) {
@@ -1150,7 +1158,7 @@ export async function getCodeIndex(
   if (result.status === "stale") {
     console.warn(
       `[codesift] stale index for ${resolved}: extractor_version_mismatch ` +
-      `(expected ${result.expected_version}, got ${result.actual_version}). ` +
+      `(${result.language} expected ${result.expected_version}, got ${result.actual_version}). ` +
       `Run index_folder to refresh.`,
     );
     return null;

@@ -15,6 +15,10 @@ interface StaleIndexResult {
   reason: string;
   expected_version: string;
   actual_version: string;
+  /** Optional language identifier (e.g., "typescript"). When present, the
+   *  rendered error text names it explicitly. Older callers that omit this
+   *  still get a sensible message. */
+  language?: string;
 }
 
 interface McpErrorEnvelope {
@@ -29,12 +33,13 @@ interface McpErrorEnvelope {
  * wire format is the standard MCP error envelope so existing client code paths
  * handle it without changes. */
 export function staleToMcpError(stale: StaleIndexResult): McpErrorEnvelope {
+  const langPrefix = stale.language ? `${stale.language} ` : "";
   return {
     isError: true,
     content: [
       {
         type: "text",
-        text: `Index stale: ${stale.reason} (expected ${stale.expected_version}, got ${stale.actual_version}). Run index_folder to refresh.`,
+        text: `Index stale: ${stale.reason} (${langPrefix}expected ${stale.expected_version}, got ${stale.actual_version}). Run index_folder to refresh.`,
       },
     ],
   };

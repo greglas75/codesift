@@ -24,4 +24,15 @@ describe("staleToMcpError", () => {
     });
     expect(result.content[0]?.text).toContain("schema_corruption");
   });
+
+  it("names the mismatching language when provided", () => {
+    const result = staleToMcpError({
+      reason: "extractor_version_mismatch",
+      language: "python",
+      expected_version: "1.1.0",
+      actual_version: "1.0.0",
+    });
+    expect(result.content[0]?.text).toContain("python expected 1.1.0");
+    expect(result.content[0]?.text).toContain("got 1.0.0");
+  });
 });
