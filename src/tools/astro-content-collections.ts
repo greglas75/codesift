@@ -16,6 +16,12 @@ import { join, relative, dirname, resolve, isAbsolute } from "node:path";
 import type Parser from "web-tree-sitter";
 import { getParser, initParser } from "../parser/parser-manager.js";
 import { getCodeIndex } from "./index-tools.js";
+import {
+  stripQuotes,
+  getProperty,
+  isLiteral,
+  classifyZodField,
+} from "./astro-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -93,83 +99,7 @@ async function findConfig(root: string): Promise<DiscoveredConfig | null> {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// AST helpers (shared shape with astro-config.ts)
-// ---------------------------------------------------------------------------
-
-function stripQuotes(s: string): string {
-  if (s.length < 2) return s;
-  const first = s[0];
-  const last = s[s.length - 1];
-  if ((first === '"' || first === "'" || first === "`") && first === last) return s.slice(1, -1);
-  return s;
-}
-
-function getProperty(obj: Parser.SyntaxNode, name: string): Parser.SyntaxNode | null {
-  for (const p of obj.namedChildren) {
-    if (p.type !== "pair") continue;
-    const k = p.childForFieldName("key");
-    if (!k) continue;
-    const keyText = k.type === "string" ? stripQuotes(k.text) : k.text;
-    if (keyText === name) return p.childForFieldName("value") ?? null;
-  }
-  return null;
-}
-
-function isLiteral(n: Parser.SyntaxNode): boolean {
-  return n.type === "string" || n.type === "number" || n.type === "true"
-    || n.type === "false" || n.type === "null" || n.type === "undefined";
-}
-
-/** Find innermost callee of a chained call expression.
- *  Example: z.string().optional() → returns the `z.string()` call.             */
-function innermostCall(node: Parser.SyntaxNode): Parser.SyntaxNode {
-  let current = node;
-  while (current.type === "call_expression") {
-    const fn = current.childForFieldName("function");
-    if (!fn) break;
-    // member_expression like `z.string().optional` — the `.optional` call's
-    // inner function is a member_expression whose object is another call.
-    if (fn.type === "member_expression") {
-      const obj = fn.childForFieldName("object");
-      if (obj && obj.type === "call_expression") {
-        current = obj;
-        continue;
-      }
-    }
-    break;
-  }
-  return current;
-}
-
-/** Walks a method chain and returns the ordered list of method names.
- *  Example: z.string().min(1).optional() → ["string", "min", "optional"]      */
-function methodChain(node: Parser.SyntaxNode): string[] {
-  const chain: string[] = [];
-  let current: Parser.SyntaxNode | null = node;
-  while (current && current.type === "call_expression") {
-    const fn = current.childForFieldName("function");
-    if (!fn) break;
-    if (fn.type === "member_expression") {
-      const prop = fn.childForFieldName("property");
-      const obj = fn.childForFieldName("object");
-      if (prop) chain.unshift(prop.text);
-      if (obj && obj.type === "call_expression") {
-        current = obj;
-        continue;
-      }
-      // z.string() — object is an identifier, call done
-      if (obj && obj.type === "identifier" && chain.length > 0) break;
-      break;
-    }
-    if (fn.type === "identifier") {
-      chain.unshift(fn.text);
-      break;
-    }
-    break;
-  }
-  return chain;
-}
+// AST helpers extracted to ./astro-helpers (shared with astro-config, db-audit, env-validator).
 
 // ---------------------------------------------------------------------------
 // Loader extraction
@@ -228,70 +158,6 @@ interface ParsedField {
   type: string;
   required: boolean;
   references?: string;
-}
-
-function classifyZodField(valueNode: Parser.SyntaxNode): {
-  type: string;
-  required: boolean;
-  references?: string;
-} {
-  // Walk the entire chain (outermost first). `.optional()` / `.nullish()` / `.nullable()` on
-  // the outside means required=false.
-  let required = true;
-  let cursor: Parser.SyntaxNode | null = valueNode;
-  while (cursor && cursor.type === "call_expression") {
-    const fn = cursor.childForFieldName("function");
-    if (!fn) break;
-    if (fn.type === "member_expression") {
-      const prop = fn.childForFieldName("property");
-      if (prop && (prop.text === "optional" || prop.text === "nullish" || prop.text === "nullable" || prop.text === "default")) {
-        required = false;
-      }
-      const obj = fn.childForFieldName("object");
-      if (obj && obj.type === "call_expression") {
-        cursor = obj;
-        continue;
-      }
-      cursor = obj;
-      break;
-    }
-    // e.g. reference("authors") as the outermost call
-    if (fn.type === "identifier") break;
-    break;
-  }
-
-  // The innermost/base call tells us the type.
-  const base = innermostCall(valueNode);
-  if (base.type !== "call_expression") return { type: "unknown", required };
-
-  const baseFn = base.childForFieldName("function");
-  if (!baseFn) return { type: "unknown", required };
-
-  // reference("collectionName")
-  if (baseFn.type === "identifier" && baseFn.text === "reference") {
-    const args = base.childForFieldName("arguments");
-    const first = args?.namedChildren.find((n) => isLiteral(n));
-    const ref = first ? stripQuotes(first.text) : undefined;
-    const out: { type: string; required: boolean; references?: string } = {
-      type: "reference",
-      required,
-    };
-    if (ref) out.references = ref;
-    return out;
-  }
-
-  // z.<kind>() style: member_expression(object=z, property=<kind>)
-  if (baseFn.type === "member_expression") {
-    const prop = baseFn.childForFieldName("property");
-    if (prop) {
-      return { type: prop.text, required };
-    }
-  }
-
-  // Fallback: try the innermost chain head
-  const chain = methodChain(valueNode);
-  if (chain.length > 0) return { type: chain[0]!, required };
-  return { type: "unknown", required };
 }
 
 function extractSchemaFields(schemaNode: Parser.SyntaxNode): ParsedField[] {
