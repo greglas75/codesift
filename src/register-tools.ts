@@ -103,6 +103,12 @@ import {
   frameworkAudit,
   astroConfigAnalyze,
   astroContentCollections,
+  astroMiddlewareAudit,
+  astroSessionsAudit,
+  astroDbAudit,
+  astroEnvValidator,
+  astroImageAudit,
+  astroSvgComponents,
   analyzeProject,
   getExtractorVersions,
   getModelGraph,
@@ -3796,6 +3802,104 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         (opts as Record<string, unknown>).file_pattern = `${scope.rootPaths[0]}/**`;
       }
       return await astroAudit(opts);
+    },
+  },
+
+  // --- Astro 5 sub-tools (Task 12). Discoverable via describe_tools — NOT in CORE. ---
+  {
+    name: "astro_middleware",
+    category: "analysis",
+    searchHint: "astro middleware onRequest sequence guards routes protected auth flows",
+    description: "Parses src/middleware.ts (or .js) — detects onRequest exports, sequence(...) ordering, and guard if-blocks lacking redirect/throw/return Response. Issue codes MW00–MW03.",
+    schema: lazySchema(() => ({
+      project_root: z.string().optional().describe("Absolute path to project root (default: auto-detected)"),
+      repo: z.string().optional(),
+    })),
+    handler: async (args) => {
+      const opts: { project_root?: string; repo?: string } = {};
+      if (args.project_root != null) opts.project_root = args.project_root as string;
+      if (args.repo != null) opts.repo = args.repo as string;
+      return await astroMiddlewareAudit(opts);
+    },
+  },
+  {
+    name: "astro_sessions",
+    category: "analysis",
+    searchHint: "astro sessions experimental session adapter compatibility node vercel cloudflare",
+    description: "Astro 5 Sessions API audit. Detects Astro.session.* / context.session.* usage; cross-checks experimental.session config + adapter compatibility. Issue codes SE01–SE04.",
+    schema: lazySchema(() => ({
+      project_root: z.string().optional(),
+      repo: z.string().optional(),
+    })),
+    handler: async (args) => {
+      const opts: { project_root?: string; repo?: string } = {};
+      if (args.project_root != null) opts.project_root = args.project_root as string;
+      if (args.repo != null) opts.repo = args.repo as string;
+      return await astroSessionsAudit(opts);
+    },
+  },
+  {
+    name: "astro_db_audit",
+    category: "analysis",
+    searchHint: "astro db defineTable schema columns foreign key index n+1 query loop",
+    description: "Astro DB audit. Parses db/config.ts defineTable schemas; detects N+1 query patterns (db.select inside loops via AST), missing FK indexes (per-table scoped), reference cycles. Codes DB00–DB04.",
+    schema: lazySchema(() => ({
+      project_root: z.string().optional(),
+      repo: z.string().optional(),
+    })),
+    handler: async (args) => {
+      const opts: { project_root?: string; repo?: string } = {};
+      if (args.project_root != null) opts.project_root = args.project_root as string;
+      if (args.repo != null) opts.repo = args.repo as string;
+      return await astroDbAudit(opts);
+    },
+  },
+  {
+    name: "astro_env_validator",
+    category: "analysis",
+    searchHint: "astro env envField schema astro:env client server context import.meta.env",
+    description: "Astro 5 astro:env validator. Parses env.schema (envField) and cross-checks against import.meta.env + astro:env/{client,server} imports. Codes EV01–EV04.",
+    schema: lazySchema(() => ({
+      project_root: z.string().optional(),
+      repo: z.string().optional(),
+    })),
+    handler: async (args) => {
+      const opts: { project_root?: string; repo?: string } = {};
+      if (args.project_root != null) opts.project_root = args.project_root as string;
+      if (args.repo != null) opts.repo = args.repo as string;
+      return await astroEnvValidator(opts);
+    },
+  },
+  {
+    name: "astro_image_audit",
+    category: "analysis",
+    searchHint: "astro image img alt accessibility Picture astro:assets getImage optimization",
+    description: "Scans .astro pages for image usage: raw <img> vs <Image>/<Picture>, missing/empty alt attributes, getImage() without astro:assets import. Codes IM01–IM04.",
+    schema: lazySchema(() => ({
+      project_root: z.string().optional(),
+      repo: z.string().optional(),
+    })),
+    handler: async (args) => {
+      const opts: { project_root?: string; repo?: string } = {};
+      if (args.project_root != null) opts.project_root = args.project_root as string;
+      if (args.repo != null) opts.repo = args.repo as string;
+      return await astroImageAudit(opts);
+    },
+  },
+  {
+    name: "astro_svg_components",
+    category: "analysis",
+    searchHint: "astro svg component import legacy ?component native astro 5",
+    description: "Detects *.svg?component imports, tracks per-file usage, flags legacy ?component on Astro 5+, surfaces PascalCase tags used without imports. Codes SV01–SV03.",
+    schema: lazySchema(() => ({
+      project_root: z.string().optional(),
+      repo: z.string().optional(),
+    })),
+    handler: async (args) => {
+      const opts: { project_root?: string; repo?: string } = {};
+      if (args.project_root != null) opts.project_root = args.project_root as string;
+      if (args.repo != null) opts.repo = args.repo as string;
+      return await astroSvgComponents(opts);
     },
   },
 

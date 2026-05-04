@@ -56,6 +56,12 @@ const loadNextjsMetadataTools = memoizeModule(() => import("./tools/nextjs-metad
 const loadFrameworkAuditTools = memoizeModule(() => import("./tools/nextjs-framework-audit-tools.js"));
 const loadAstroConfigTools = memoizeModule(() => import("./tools/astro-config.js"));
 const loadAstroContentCollectionsTools = memoizeModule(() => import("./tools/astro-content-collections.js"));
+const loadAstroMiddlewareTools = memoizeModule(() => import("./tools/astro-middleware.js"));
+const loadAstroSessionsTools = memoizeModule(() => import("./tools/astro-sessions.js"));
+const loadAstroDbAuditTools = memoizeModule(() => import("./tools/astro-db-audit.js"));
+const loadAstroEnvValidatorTools = memoizeModule(() => import("./tools/astro-env-validator.js"));
+const loadAstroImageAuditTools = memoizeModule(() => import("./tools/astro-image-audit.js"));
+const loadAstroSvgComponentsTools = memoizeModule(() => import("./tools/astro-svg-components.js"));
 const loadProjectTools = memoizeModule(() => import("./tools/project-tools.js"));
 const loadModelTools = memoizeModule(() => import("./tools/model-tools.js"));
 const loadPytestTools = memoizeModule(() => import("./tools/pytest-tools.js"));
@@ -197,6 +203,12 @@ export const nextjsMetadataAudit = lazyExport<typeof import("./tools/nextjs-meta
 export const frameworkAudit = lazyExport<typeof import("./tools/nextjs-framework-audit-tools.js").frameworkAudit>(loadFrameworkAuditTools, "frameworkAudit");
 export const astroConfigAnalyze = lazyExport<typeof import("./tools/astro-config.js").astroConfigAnalyze>(loadAstroConfigTools, "astroConfigAnalyze");
 export const astroContentCollections = lazyExport<typeof import("./tools/astro-content-collections.js").astroContentCollections>(loadAstroContentCollectionsTools, "astroContentCollections");
+export const astroMiddlewareAudit = lazyExport<typeof import("./tools/astro-middleware.js").astroMiddlewareAudit>(loadAstroMiddlewareTools, "astroMiddlewareAudit");
+export const astroSessionsAudit = lazyExport<typeof import("./tools/astro-sessions.js").astroSessionsAudit>(loadAstroSessionsTools, "astroSessionsAudit");
+export const astroDbAudit = lazyExport<typeof import("./tools/astro-db-audit.js").astroDbAudit>(loadAstroDbAuditTools, "astroDbAudit");
+export const astroEnvValidator = lazyExport<typeof import("./tools/astro-env-validator.js").astroEnvValidator>(loadAstroEnvValidatorTools, "astroEnvValidator");
+export const astroImageAudit = lazyExport<typeof import("./tools/astro-image-audit.js").astroImageAudit>(loadAstroImageAuditTools, "astroImageAudit");
+export const astroSvgComponents = lazyExport<typeof import("./tools/astro-svg-components.js").astroSvgComponents>(loadAstroSvgComponentsTools, "astroSvgComponents");
 export const analyzeProject = lazyExport<typeof import("./tools/project-tools.js").analyzeProject>(loadProjectTools, "analyzeProject");
 export const getExtractorVersions = lazyExport<typeof import("./tools/project-tools.js").getExtractorVersions>(loadProjectTools, "getExtractorVersions");
 export const getModelGraph = lazyExport<typeof import("./tools/model-tools.js").getModelGraph>(loadModelTools, "getModelGraph");
