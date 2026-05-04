@@ -4,8 +4,8 @@ import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync } 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EXTRACTOR_VERSIONS } from "./project-tools.js";
-import { parseFile } from "../parser/parser-manager.js";
-import { extractSymbols, extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
+import { extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
+import { runTreeSitterParse } from "../parser/parser-pool.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js";
 import { getLanguageForExtension, getLanguageForPath } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
@@ -28,6 +28,28 @@ const CHUNK_EMBEDDING_BATCH_SIZE = 96;
 const GIT_CLONE_TIMEOUT_MS = 120_000;
 const GIT_CHECKOUT_TIMEOUT_MS = 30_000;
 const GIT_PULL_TIMEOUT_MS = 60_000;
+
+/**
+ * Default cap on files returned by walkDirectory during indexFolder. Without
+ * this, repos with hundreds of thousands of code files (large CMS, monorepos,
+ * vendored data sets) accumulate symbols in memory and OOM the Node process,
+ * which manifests to MCP clients as a "Connection closed" error mid-index.
+ *
+ * 50_000 covers every project we've seen in practice; the largest indexed
+ * monorepo (tgm-survey-platform) is around 5_000 files. Override via the
+ * MCP `max_files` argument or CODESIFT_MAX_FILES env var when a legitimately
+ * larger repo needs full coverage.
+ */
+const DEFAULT_MAX_FILES = 50_000;
+
+function getDefaultMaxFiles(): number {
+  const envVal = process.env.CODESIFT_MAX_FILES;
+  if (envVal) {
+    const parsed = Number.parseInt(envVal, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_MAX_FILES;
+}
 
 // Active watchers and in-memory indexes keyed by repo name
 const activeWatchers = new Map<string, FSWatcher>();
@@ -81,9 +103,17 @@ async function parseOneFile(
       // search_text (ripgrep path) and scan_secrets still work on these files.
       symbols = [];
     } else {
-      const tree = await parseFile(filePath, source);
-      if (!tree) return null;
-      symbols = extractSymbols(tree, relPath, source, repoName, language);
+      // Tree-sitter languages (TS/JS/Python/Go/Rust/Java/Ruby/PHP/CSS/Kotlin):
+      // dispatch to the worker pool. Synchronously-hung WASM parses kill the
+      // worker (terminated on timeout) instead of the MCP server itself.
+      // See src/parser/parser-pool.ts for details.
+      try {
+        symbols = await runTreeSitterParse({ filePath, source, language, relPath, repoName });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[codesift] worker parse failed for ${relPath}: ${message}`);
+        return null;
+      }
     }
 
     const entry: FileEntry = {
@@ -329,6 +359,12 @@ export async function indexFolder(
     incremental?: boolean | undefined;
     include_paths?: string[] | undefined;
     watch?: boolean | undefined;
+    /**
+     * Cap on files indexed in a single pass. When the walker hits this, it
+     * returns partial results with a warning rather than blowing through
+     * memory. Default: DEFAULT_MAX_FILES (or CODESIFT_MAX_FILES env var).
+     */
+    max_files?: number | undefined;
   },
 ): Promise<IndexFolderResult> {
   if (!folderPath || typeof folderPath !== "string") {
@@ -355,12 +391,23 @@ export async function indexFolder(
     // .codesiftignore not found — proceed without patterns
   }
 
-  // Walk directory and collect parseable files
+  // Walk directory and collect parseable files. maxFiles caps unbounded walks
+  // (huge monorepos, vendored data sets) before they OOM the process — see
+  // DEFAULT_MAX_FILES rationale above.
+  const maxFiles = options?.max_files ?? getDefaultMaxFiles();
   const files = await walkDirectory(rootPath, {
     includePaths: options?.include_paths,
     excludePatterns,
+    maxFiles,
     fileFilter: (ext, name) => !!getLanguageForExtension(ext) || (name?.startsWith(".env") ?? false),
   });
+  const hitFileLimit = files.length >= maxFiles;
+  if (hitFileLimit) {
+    console.error(
+      `[codesift] index_folder: ${rootPath} hit max_files=${maxFiles}; ` +
+      `partial index. Pass include_paths to scope the walk or raise max_files.`,
+    );
+  }
 
   // mtime-based incremental: skip files unchanged since last index
   const existing = await loadIndex(indexPath);
@@ -610,7 +657,38 @@ export async function indexRepo(
 }
 
 /**
+ * Maximum number of repos with active file watchers. Each chokidar watcher
+ * holds at minimum a native FSEvents/inotify handle plus an fd per recursive
+ * stream; in practice, bulk indexing dozens of repos with default watcher
+ * behavior has exhausted the macOS system file table (ENFILE). Capping the
+ * pool plus LRU eviction keeps fd usage bounded while still giving the
+ * user-active repo (last touched) live incremental updates.
+ *
+ * Override via CODESIFT_MAX_WATCHERS env var. Set to 0 to disable watchers
+ * entirely (suitable for CI / batch index runs).
+ */
+const DEFAULT_MAX_WATCHERS = 8;
+
+function getMaxWatchers(): number {
+  const env = process.env.CODESIFT_MAX_WATCHERS;
+  if (env !== undefined) {
+    const n = Number.parseInt(env, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return DEFAULT_MAX_WATCHERS;
+}
+
+// Insertion-ordered Map gives us free LRU semantics: re-inserting a key
+// moves it to the end, so the first key is the least-recently set up.
+const watcherInsertionOrder = new Set<string>();
+
+/**
  * Replace or create a file watcher for incremental index updates.
+ *
+ * Enforces a max-active-watchers cap with LRU eviction so that bulk indexing
+ * of many repos in one session cannot exhaust the system file table. When the
+ * cap is exceeded the oldest watcher is closed; that repo's index becomes
+ * stale-on-disk until the next explicit `index_folder` or `index_file`.
  */
 async function setupWatcher(
   rootPath: string,
@@ -620,9 +698,31 @@ async function setupWatcher(
   const existingWatcher = activeWatchers.get(repoName);
   if (existingWatcher) {
     await stopWatcher(existingWatcher);
+    watcherInsertionOrder.delete(repoName);
   }
 
-  const watcher = startWatcher(
+  // Evict oldest watchers until we fit under the cap (with room for the new one)
+  const maxWatchers = getMaxWatchers();
+  if (maxWatchers === 0) {
+    // Caller of indexFolder can also opt out via watch:false; this env is the
+    // global kill-switch (e.g. for CI bulk-index jobs).
+    return;
+  }
+  while (watcherInsertionOrder.size >= maxWatchers) {
+    const oldest = watcherInsertionOrder.values().next().value;
+    if (oldest === undefined) break;
+    const oldWatcher = activeWatchers.get(oldest);
+    if (oldWatcher) {
+      await stopWatcher(oldWatcher).catch(() => { /* best-effort */ });
+      activeWatchers.delete(oldest);
+    }
+    watcherInsertionOrder.delete(oldest);
+    console.error(
+      `[codesift] watcher cap reached (${maxWatchers}); evicted oldest watcher: ${oldest}`,
+    );
+  }
+
+  const watcher = await startWatcher(
     rootPath,
     (changedFile) => {
       handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
@@ -642,6 +742,7 @@ async function setupWatcher(
     },
   );
   activeWatchers.set(repoName, watcher);
+  watcherInsertionOrder.add(repoName);
 }
 
 /**

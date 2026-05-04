@@ -26,6 +26,33 @@ process.on("exit", () => {
   cleanupSidecar();
 });
 
+/**
+ * Last-line-of-defense crash guards. Tree-sitter parsing or symbol extraction
+ * can throw on pathological inputs; without these handlers a single bad file
+ * during index_folder kills the entire MCP server, which clients see as
+ * "Connection closed". We log the error and let the originating tool handler
+ * surface it normally, instead of taking down the whole process.
+ *
+ * These guards do NOT protect against native crashes inside web-tree-sitter
+ * WASM (segfaults bypass the JS error machinery). Those remain a known
+ * residual risk; mitigations are the per-file parse timeout in
+ * parser-manager.ts and the max_files cap in index-tools.ts, which together
+ * keep us out of the regions where WASM crashes have been observed.
+ */
+process.on("uncaughtException", (err: Error) => {
+  console.error(
+    `[codesift] uncaughtException (suppressed to keep MCP alive): ${err.message}\n${err.stack ?? ""}`,
+  );
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const stack = reason instanceof Error ? reason.stack : undefined;
+  console.error(
+    `[codesift] unhandledRejection (suppressed to keep MCP alive): ${message}${stack ? "\n" + stack : ""}`,
+  );
+});
+
 loadConfig();
 
 const server = new McpServer(

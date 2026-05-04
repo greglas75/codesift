@@ -136,9 +136,27 @@ export function languageHasParser(language: string): boolean {
   return !STUB_LANGUAGES.has(language);
 }
 
+/**
+ * Default per-file parse timeout. Tree-sitter is synchronous and can hang on
+ * pathological inputs (deeply nested AST, malformed source). 30s is generous
+ * for normal files; anything slower likely indicates a parser bug or a file
+ * that should be skipped. Override via CODESIFT_PARSE_TIMEOUT_MS env var.
+ */
+export const DEFAULT_PARSE_TIMEOUT_MS = 30_000;
+
+function getParseTimeoutMs(): number {
+  const envVal = process.env.CODESIFT_PARSE_TIMEOUT_MS;
+  if (envVal) {
+    const parsed = Number.parseInt(envVal, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_PARSE_TIMEOUT_MS;
+}
+
 export async function parseFile(
   filePath: string,
   source: string,
+  options?: { timeoutMs?: number },
 ): Promise<Parser.Tree | null> {
   // Gradle KTS files share the Kotlin tree-sitter grammar but route through
   // a dedicated symbol extractor. parseFile() only needs a parser, so fall
@@ -152,6 +170,8 @@ export async function parseFile(
   const parser = await getParser(language);
   if (!parser) return null;
 
+  const timeoutMs = options?.timeoutMs ?? getParseTimeoutMs();
+
   try {
     // Check parse cache first — Python files are parsed twice per index
     // (symbols + imports), so caching the tree saves a second tree-sitter
@@ -162,7 +182,30 @@ export async function parseFile(
     const cached = getCachedParse(language, source);
     if (cached) return cached;
 
-    const tree = parser.parse(source);
+    // tree-sitter parser.parse() is synchronous. Promise.race against a
+    // setTimeout protects against pathological inputs that hang the parser
+    // (e.g. deeply nested expressions, certain malformed sources). The actual
+    // parse still blocks the event loop while running — this only releases
+    // the awaiter so the indexer can move on. A genuinely hung parse leaks
+    // CPU until the process exits, but that beats the alternative of stalling
+    // the entire indexer indefinitely.
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<null>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`parse timeout after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+    const parsePromise = (async () => parser.parse(source))();
+
+    let tree: Parser.Tree;
+    try {
+      tree = (await Promise.race([parsePromise, timeoutPromise])) as Parser.Tree;
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+
+    if (!tree) return null;
     setCachedParse(language, source, tree);
     return tree;
   } catch (err: unknown) {
