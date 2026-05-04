@@ -109,15 +109,22 @@ describe("workspace-alias resolver (Task 6)", () => {
     expect(bToA).toBeDefined();
   });
 
-  it("(c) flat repo (no index.workspaces): zero workspace-alias edges", async () => {
+  it("(c) flat repo (no index.workspaces): zero workspace-RESOLVED edges (tsconfig paths still apply)", async () => {
+    // Post-TS-extractor-v3: tsconfig-paths resolution runs independently of
+    // index.workspaces. If the fixture's tsconfig.json declares an `@org/*`
+    // path mapping, those edges resolve via tsconfig regardless. The
+    // workspace resolver itself (Task 6) still produces zero edges in flat
+    // mode — this test now asserts the workspace-resolver contract, not the
+    // absence of all cross-package edges.
     const index = buildFlatIndex();
     const edges = await collectImportEdges(index);
-    // Bare @org/shared import should NOT resolve when workspaces is absent
-    const crossPkg = edges.filter(
-      (e) =>
-        e.from.startsWith("apps/") && e.to.startsWith("packages/"),
+    // Workspace-resolver-only contract: no edges should be marked as resolved
+    // via the workspace resolver path. Any cross-package edges that exist
+    // here come from tsconfig-paths (a separate, independent path).
+    const workspaceResolved = edges.filter(
+      (e) => e.raw === "workspace-alias",
     );
-    expect(crossPkg).toEqual([]);
+    expect(workspaceResolved).toEqual([]);
   });
 
   it("(d) bare @org/foo where @org/foo is NOT a workspace: not resolved", async () => {
