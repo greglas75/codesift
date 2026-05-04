@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import * as pathModule from "node:path";
 import { z } from "zod";
 
 /** Boolean that also accepts "true"/"false" strings (LLMs often send strings instead of booleans) */
@@ -693,7 +694,11 @@ function hasJsxFilesShallow(
   cwd: string,
   readdirSyncFn: typeof import("node:fs").readdirSync,
 ): boolean {
-  const { join } = require("node:path") as typeof import("node:path");
+  // ESM-safe path import. Earlier version used `require("node:path")` here which
+  // threw `ReferenceError: require is not defined` under ESM, was swallowed by
+  // the outer try/catch in detectFromPackageJson — silently dropped REACT_TOOLS
+  // for every monorepo workspace package (designer/runner/etc.).
+  const { join } = pathModule;
   const IGNORE = new Set([
     "node_modules", "dist", "build", ".next", ".astro", ".git",
     "out", "coverage", ".turbo", ".vercel", ".cache",
