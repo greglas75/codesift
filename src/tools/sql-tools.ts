@@ -9,10 +9,18 @@ import { searchText } from "./search-tools.js";
 
 // ── analyze_schema ────────────────────────────────────────
 
+export type SqlDialect = "mysql" | "postgres" | "sqlite" | "mssql" | "unknown";
+
 export interface AnalyzeSchemaOptions {
   file_pattern?: string;
   output_format?: "json" | "mermaid";
   include_columns?: boolean;
+  /**
+   * Force a specific dialect. When omitted (or set to "auto"), the dialect is
+   * inferred from schema source via {@link detectSqlDialect} — content fingerprints
+   * like ENGINE=InnoDB, AUTO_INCREMENT, SERIAL, JSONB, AUTOINCREMENT, IDENTITY.
+   */
+  dialect?: SqlDialect | "auto";
 }
 
 export interface TableInfo {
@@ -36,9 +44,66 @@ export interface SchemaAnalysisResult {
   relationships: Relationship[];
   warnings: string[];
   mermaid?: string;
+  /**
+   * Detected (or forced) SQL dialect. "unknown" when no fingerprint matched
+   * — typical for ORM-only repos where the canonical schema lives in TS/Prisma.
+   */
+  detected_dialect: SqlDialect;
 }
 
-const FK_RE = /REFERENCES\s+(?:(?:"([^"]+)"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))\s*\(\s*(?:"([^"]+)"|(\w+))\s*\)/gi;
+/**
+ * Infer SQL dialect from schema source fingerprints.
+ *
+ * Signals (in priority order):
+ *   - mysql:    ENGINE=InnoDB / ENGINE=MyISAM / AUTO_INCREMENT / utf8mb4 / backtick idents
+ *   - postgres: SERIAL / BIGSERIAL / JSONB / RETURNING / USING gist / CITEXT
+ *   - sqlite:   AUTOINCREMENT (one word) / WITHOUT ROWID / sqlite_master
+ *   - mssql:    NVARCHAR / IDENTITY(\d, \d) / GO\n batch separator / [bracket] idents
+ *
+ * Returns "unknown" if no signal fires (e.g. dialect-neutral CREATE TABLE).
+ * Exported for unit-test independence and for callers that want a quick check
+ * without going through {@link analyzeSchema}.
+ */
+export function detectSqlDialect(source: string): SqlDialect {
+  if (!source) return "unknown";
+  // MySQL signals are the most specific — score first.
+  if (
+    /\bENGINE\s*=\s*(?:InnoDB|MyISAM|MEMORY|Aria)\b/i.test(source) ||
+    /\bAUTO_INCREMENT\b/i.test(source) ||
+    /\butf8mb4\b/i.test(source)
+  ) return "mysql";
+
+  // Postgres: SERIAL / JSONB / RETURNING are unmistakable.
+  if (
+    /\b(?:BIG)?SERIAL\b/i.test(source) ||
+    /\bJSONB\b/i.test(source) ||
+    /\bCITEXT\b/i.test(source) ||
+    /\bRETURNING\b/i.test(source)
+  ) return "postgres";
+
+  // SQLite: AUTOINCREMENT (no underscore) / WITHOUT ROWID.
+  if (
+    /\bAUTOINCREMENT\b/i.test(source) ||
+    /\bWITHOUT\s+ROWID\b/i.test(source)
+  ) return "sqlite";
+
+  // MS SQL Server: NVARCHAR / IDENTITY(seed, step) / square-bracket idents.
+  if (
+    /\bNVARCHAR\b/i.test(source) ||
+    /\bIDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)/i.test(source)
+  ) return "mssql";
+
+  return "unknown";
+}
+
+// REFERENCES clause — supports unquoted, "double-quoted" (Postgres),
+// `backtick` (MySQL), and [bracket] (SQL Server) identifiers. Schema-qualified
+// names ("schema.table") are accepted; we keep only the table portion.
+// Capture layout:
+//   1: schema "..", 2: schema `..`, 3: schema [..], 4: schema unquoted
+//   5: table  "..", 6: table  `..`, 7: table  [..], 8: table  unquoted
+//   9: column "..",10: column `..`,11: column [..],12: column unquoted
+const FK_RE = /REFERENCES\s+(?:(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\.\s*)?(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\(\s*(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\)/gi;
 
 export async function analyzeSchema(
   repo: string,
@@ -64,7 +129,7 @@ export async function analyzeSchema(
 
   if (tableSymbols.length === 0) {
     warnings.push("No SQL files indexed in this repository.");
-    return { tables, views, relationships: [], warnings };
+    return { tables, views, relationships: [], warnings, detected_dialect: "unknown" };
   }
 
   // Check for duplicate table names
@@ -109,8 +174,9 @@ export async function analyzeSchema(
       FK_RE.lastIndex = 0;
       const m = FK_RE.exec(col.type);
       if (m) {
-        const toTable = m[3] ?? m[4] ?? m[1] ?? m[2] ?? "";
-        const toCol = m[5] ?? m[6] ?? "id";
+        // Prefer table groups (5..8); fall back to schema groups (1..4) on weird inputs.
+        const toTable = m[5] ?? m[6] ?? m[7] ?? m[8] ?? m[1] ?? m[2] ?? m[3] ?? m[4] ?? "";
+        const toCol = m[9] ?? m[10] ?? m[11] ?? m[12] ?? "id";
 
         let relType: "fk" | "self_reference" | "circular" = "fk";
         if (toTable === table.name) {
@@ -130,12 +196,18 @@ export async function analyzeSchema(
     // Table-level FOREIGN KEY constraints: scan full table source
     const tableSym = index.symbols.find((s) => s.kind === "table" && s.name === table.name);
     if (tableSym?.source) {
-      const tableFkRe = /FOREIGN\s+KEY\s*\(\s*(?:"([^"]+)"|(\w+))\s*\)\s*REFERENCES\s+(?:(?:"[^"]+"|(\w+))\s*\.\s*)?(?:"([^"]+)"|(\w+))\s*\(\s*(?:"([^"]+)"|(\w+))\s*\)/gi;
+      // Table-level FOREIGN KEY constraint — same identifier shapes as FK_RE.
+      // Capture layout:
+      //   1..4: from-column "..", `..`, [..], unquoted
+      //   5..8: schema-qualified prefix (any quoting) — discarded
+      //   9..12: target table
+      //   13..16: target column
+      const tableFkRe = /FOREIGN\s+KEY\s*\(\s*(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\)\s*REFERENCES\s+(?:(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\.\s*)?(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\(\s*(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*\)/gi;
       let fkm: RegExpExecArray | null;
       while ((fkm = tableFkRe.exec(tableSym.source)) !== null) {
-        const fromCol = fkm[1] ?? fkm[2] ?? "";
-        const toTable = fkm[4] ?? fkm[5] ?? fkm[3] ?? "";
-        const toCol = fkm[6] ?? fkm[7] ?? "id";
+        const fromCol = fkm[1] ?? fkm[2] ?? fkm[3] ?? fkm[4] ?? "";
+        const toTable = fkm[9] ?? fkm[10] ?? fkm[11] ?? fkm[12] ?? "";
+        const toCol = fkm[13] ?? fkm[14] ?? fkm[15] ?? fkm[16] ?? "id";
 
         // Avoid duplicates (column-level already caught this FK)
         if (relationships.some((r) =>
@@ -156,7 +228,29 @@ export async function analyzeSchema(
   // Detect circular references
   detectCircularRefs(relationships, warnings);
 
-  const result: SchemaAnalysisResult = { tables, views, relationships, warnings };
+  // Resolve dialect: explicit > auto-detect from concatenated table sources.
+  // Concatenation is bounded by tableSymbols (already filtered by file_pattern),
+  // so the cost stays linear in the analyzed schema.
+  let detected_dialect: SqlDialect;
+  const explicit = options?.dialect;
+  if (explicit && explicit !== "auto") {
+    detected_dialect = explicit;
+  } else {
+    let probe = "";
+    for (const sym of tableSymbols) {
+      if (sym.source) probe += sym.source + "\n";
+      if (probe.length > 32_000) break; // 32 KB cap — enough fingerprint surface
+    }
+    detected_dialect = detectSqlDialect(probe);
+  }
+
+  const result: SchemaAnalysisResult = {
+    tables,
+    views,
+    relationships,
+    warnings,
+    detected_dialect,
+  };
 
   if (options?.output_format === "mermaid") {
     result.mermaid = generateMermaid(tables, relationships);

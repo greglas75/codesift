@@ -395,6 +395,16 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "resolve_php_service",
     "php_security_scan",
     "php_project_audit",
+    // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
+    // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
+    // missing entry-point for schema/drift/lint/dml work — auto-revealing it
+    // here closes the gap that 0 SQL tools have ever been called from PHP repos.
+    "analyze_schema",
+    "trace_query",
+    "sql_audit",
+    "diff_migrations",
+    "search_columns",
+    "migration_lint",
   ],
   // Kotlin / Android / Gradle — detected by build.gradle.kts or settings.gradle.kts
   "build.gradle.kts": [
@@ -557,6 +567,21 @@ const PRISMA_TOOLS = [
   "migration_lint",
 ];
 
+/**
+ * Raw-SQL toolchain — auto-enabled when a project has loose `*.sql` files
+ * (migrations, seeds, mysqldump). Independent of any ORM. Targets the
+ * "PHP/Yii2 + MySQL legacy" segment that historically called 0 of these
+ * tools because they were hidden behind discover_tools.
+ */
+const SQL_TOOLS = [
+  "analyze_schema",
+  "trace_query",
+  "sql_audit",
+  "diff_migrations",
+  "search_columns",
+  "migration_lint",
+];
+
 const AUTO_LOAD_CACHE_TTL_MS = 5_000;
 const autoLoadToolsCache = new Map<string, {
   expiresAt: number;
@@ -587,13 +612,40 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
     toEnable.push(...PRISMA_TOOLS);
   }
 
+  // Raw SQL detection — fires on any project with loose `*.sql` files in
+  // common schema/migration dirs. Catches mysqldump/pg_dump artifacts and
+  // hand-written migrations across PHP/Python/Go/Java stacks regardless of
+  // ORM. Composer-based PHP repos already pull SQL_TOOLS via FRAMEWORK_TOOL_GROUPS;
+  // this branch covers everything else (e.g. Django + raw migrations,
+  // standalone schema repos).
+  if (hasSqlFilesShallow(cwd, readdirSync)) {
+    toEnable.push(...SQL_TOOLS);
+  }
+
   const detectFromPackageJson = (pkgRoot: string): string[] => {
     const enabled: string[] = [];
     const pkgPath = join(pkgRoot, "package.json");
     if (!existsSync(pkgPath)) return enabled;
+
+    let pkg: unknown;
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+      pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    } catch {
+      /* malformed or unreadable package.json — omit silently */
+      return enabled;
+    }
+    if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) return enabled;
+
+    try {
+      const manifest = pkg as {
+        dependencies?: Record<string, unknown>;
+        devDependencies?: Record<string, unknown>;
+        workspaces?: unknown;
+      };
+      const allDeps = {
+        ...manifest.dependencies,
+        ...manifest.devDependencies,
+      };
       const hasReact = !!(
         allDeps["react"] ||
         allDeps["next"] ||
@@ -628,12 +680,16 @@ export async function detectAutoLoadTools(cwd: string): Promise<string[]> {
       // npm/yarn/pnpm workspaces field — content-based monorepo signal.
       // Complements the file-based signals (pnpm-workspace.yaml, lerna.json,
       // nx.json, turbo.json) so plain `"workspaces": [...]` setups also fire.
-      const hasWorkspaces = Array.isArray(pkg.workspaces) ||
-        (pkg.workspaces && typeof pkg.workspaces === "object" &&
-          Array.isArray(pkg.workspaces.packages));
+      const ws = manifest.workspaces;
+      const hasWorkspaces = Array.isArray(ws) ||
+        (ws !== null &&
+          typeof ws === "object" &&
+          !Array.isArray(ws) &&
+          Array.isArray((ws as { packages?: unknown }).packages));
       if (hasWorkspaces) enabled.push(...MONOREPO_TOOLS);
-    } catch {
-      /* malformed package.json */
+    } catch (err) {
+      const detail = err instanceof Error ? err.stack ?? err.message : String(err);
+      console.warn(`[codesift-mcp] detectFromPackageJson(${pkgRoot}): ${detail}`);
     }
     return enabled;
   };
@@ -694,10 +750,7 @@ function hasJsxFilesShallow(
   cwd: string,
   readdirSyncFn: typeof import("node:fs").readdirSync,
 ): boolean {
-  // ESM-safe path import. Earlier version used `require("node:path")` here which
-  // threw `ReferenceError: require is not defined` under ESM, was swallowed by
-  // the outer try/catch in detectFromPackageJson — silently dropped REACT_TOOLS
-  // for every monorepo workspace package (designer/runner/etc.).
+  // ESM-safe path import (avoid `require("node:path")`, which throws under ESM).
   const { join } = pathModule;
   const IGNORE = new Set([
     "node_modules", "dist", "build", ".next", ".astro", ".git",
@@ -728,6 +781,64 @@ function hasJsxFilesShallow(
     const dir = root === "." ? cwd : join(cwd, root);
     try {
       if (scan(dir, 0)) return true;
+    } catch { /* skip */ }
+  }
+  return false;
+}
+
+/**
+ * Quick scan for *.sql files in conventional schema/migration directories.
+ * Used to auto-enable the SQL toolchain on any project that ships raw SQL
+ * regardless of language stack. Stops on first hit; depth capped at 3 so
+ * nested package dirs (e.g. monorepo apps/*) are still reachable.
+ */
+function hasSqlFilesShallow(
+  cwd: string,
+  readdirSyncFn: typeof import("node:fs").readdirSync,
+): boolean {
+  const { join } = pathModule;
+  const IGNORE = new Set([
+    "node_modules", "dist", "build", ".next", ".astro", ".git",
+    "out", "coverage", ".turbo", ".vercel", ".cache", "vendor",
+  ]);
+  // SQL conventionally lives in dedicated dirs — scanning every src/ tree
+  // would trigger false positives on test fixtures and string-literal SQL.
+  const DEEP_ROOTS = [
+    "migrations", "migration", "db", "database", "schema", "schemas",
+    "sql", "ddl", "seeds", "seed", "supabase",
+    "prisma/migrations", "drizzle/migrations",
+  ];
+
+  function scanDeep(dir: string, depth: number): boolean {
+    if (depth > 3) return false;
+    let entries;
+    try {
+      entries = readdirSyncFn(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (e.isFile() && /\.sql$/i.test(e.name)) return true;
+    }
+    for (const e of entries) {
+      if (e.isDirectory() && !IGNORE.has(e.name) && !e.name.startsWith(".")) {
+        if (scanDeep(join(dir, e.name), depth + 1)) return true;
+      }
+    }
+    return false;
+  }
+
+  // Top-level: dump files like `schema.sql` / `init.sql` / `database.sql`.
+  try {
+    const rootEntries = readdirSyncFn(cwd, { withFileTypes: true });
+    for (const e of rootEntries) {
+      if (e.isFile() && /\.sql$/i.test(e.name)) return true;
+    }
+  } catch { /* skip */ }
+
+  for (const root of DEEP_ROOTS) {
+    try {
+      if (scanDeep(join(cwd, root), 0)) return true;
     } catch { /* skip */ }
   }
   return false;
@@ -3954,13 +4065,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "analyze_schema",
     category: "analysis" as ToolCategory,
-    searchHint: "SQL schema ERD entity relationship tables views columns foreign key database migration",
-    description: "Analyze SQL schema: tables, views, columns, foreign keys, relationships. Output as JSON or Mermaid ERD.",
+    searchHint: "SQL schema ERD entity relationship tables views columns foreign key database migration MySQL Postgres SQLite dialect",
+    description: "Analyze SQL schema: tables, views, columns, foreign keys, relationships. Auto-detects dialect (mysql/postgres/sqlite/mssql) from schema fingerprints. Output as JSON or Mermaid ERD.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Filter SQL files by pattern (e.g. 'migrations/')"),
       output_format: z.enum(["json", "mermaid"]).optional().describe("Output format (default: json)"),
       include_columns: zBool().describe("Include column details in output (default: true)"),
+      dialect: z.enum(["auto", "mysql", "postgres", "sqlite", "mssql", "unknown"]).optional().describe("Force dialect, or 'auto' to detect from ENGINE=InnoDB / SERIAL / AUTOINCREMENT etc. (default: auto)"),
     })),
     handler: async (args: Record<string, unknown>) => {
       const { analyzeSchema } = await import("./tools/sql-tools.js");
@@ -3968,9 +4080,10 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (args.file_pattern != null) opts!.file_pattern = args.file_pattern as string;
       if (args.output_format != null) opts!.output_format = args.output_format as "json" | "mermaid";
       if (args.include_columns != null) opts!.include_columns = args.include_columns as boolean;
+      if (args.dialect != null) opts!.dialect = args.dialect as Parameters<typeof analyzeSchema>[1] extends infer T ? T extends { dialect?: infer D } ? D : never : never;
       const result = await analyzeSchema(args.repo as string, opts);
       const parts: string[] = [];
-      parts.push(`Tables: ${result.tables.length} | Views: ${result.views.length} | Relationships: ${result.relationships.length}`);
+      parts.push(`Tables: ${result.tables.length} | Views: ${result.views.length} | Relationships: ${result.relationships.length} | Dialect: ${result.detected_dialect}`);
       if (result.warnings.length > 0) parts.push(`Warnings: ${result.warnings.join("; ")}`);
       if (result.mermaid) {
         parts.push("");

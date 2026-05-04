@@ -841,4 +841,113 @@ describe("register-tools — TS baseline / monorepo / Prisma auto-load", () => {
       } finally { await cleanup(dir); }
     });
   });
+
+  describe("detectAutoLoadTools — SQL detection", () => {
+    async function createProject(files: Record<string, string>): Promise<string> {
+      const dir = await mkdtemp(join(tmpdir(), "codesift-sql-autoload-"));
+      for (const [rel, content] of Object.entries(files)) {
+        const full = join(dir, rel);
+        await mkdir(join(full, ".."), { recursive: true });
+        await writeFile(full, content);
+      }
+      return dir;
+    }
+
+    const SQL_TOOLS = [
+      "analyze_schema",
+      "trace_query",
+      "sql_audit",
+      "diff_migrations",
+      "search_columns",
+      "migration_lint",
+    ];
+
+    it("enables SQL tools when composer.json present (PHP/MySQL stack)", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "composer.json": JSON.stringify({ name: "vendor/mobi2" }),
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        for (const name of SQL_TOOLS) {
+          expect(tools, `composer.json should auto-load ${name}`).toContain(name);
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("enables SQL tools for raw migrations/ dir with .sql files", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "migrations/001_init.sql": "CREATE TABLE users (id INT PRIMARY KEY);",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("analyze_schema");
+        expect(tools).toContain("sql_audit");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("enables SQL tools for top-level schema.sql / mysqldump artifacts", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "schema.sql": "-- mysqldump\nCREATE TABLE t (id INT);",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("analyze_schema");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("enables for prisma/migrations/*.sql even without schema.prisma at root", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "prisma/migrations/20240101_init/migration.sql":
+          "CREATE TABLE \"User\" (id SERIAL);",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).toContain("analyze_schema");
+        expect(tools).toContain("diff_migrations");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("does NOT enable for repos without any .sql file or composer.json", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ dependencies: { express: "^4.0.0" } }),
+        "src/index.ts": "export const x = 1;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).not.toContain("analyze_schema");
+        expect(tools).not.toContain("sql_audit");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("ignores .sql files buried inside node_modules/dist/vendor", async () => {
+      const { detectAutoLoadTools } = await import("../../src/register-tools.js");
+      const dir = await createProject({
+        "package.json": JSON.stringify({ dependencies: { express: "^4.0.0" } }),
+        "node_modules/some-pkg/migrations/init.sql": "CREATE TABLE x (id INT);",
+        "vendor/legacy/db/schema.sql": "CREATE TABLE y (id INT);",
+        "src/index.ts": "export const x = 1;",
+      });
+      try {
+        const tools = await detectAutoLoadTools(dir);
+        expect(tools).not.toContain("analyze_schema");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+  });
 });

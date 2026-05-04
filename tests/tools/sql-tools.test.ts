@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { analyzeSchema, traceQuery } from "../../src/tools/sql-tools.js";
+import { analyzeSchema, traceQuery, detectSqlDialect } from "../../src/tools/sql-tools.js";
 import { indexFolder } from "../../src/tools/index-tools.js";
+import { resetConfigCache } from "../../src/config.js";
 
 const TMP = join(tmpdir(), "codesift-sql-tools-test-" + Date.now());
 let repoName: string;
@@ -17,6 +18,8 @@ function writeFixture(relPath: string, content: string) {
 describe("SQL tools", () => {
   beforeAll(async () => {
     mkdirSync(TMP, { recursive: true });
+    process.env["CODESIFT_DATA_DIR"] = join(TMP, ".codesift-data");
+    resetConfigCache();
 
     writeFixture("schema.sql", `
 CREATE TABLE users (
@@ -69,6 +72,8 @@ export function getOrders() { return query; }
   }, 30_000);
 
   afterAll(() => {
+    delete process.env["CODESIFT_DATA_DIR"];
+    resetConfigCache();
     try { rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
@@ -161,6 +166,108 @@ export function getOrders() { return query; }
         expect(result.truncated).toBe(true);
         expect(result.warnings.some((w) => w.includes("truncated"))).toBe(true);
       }
+    });
+  });
+
+  // Independent fixture — proves analyzeSchema works on a realistic
+  // mysqldump output with backtick identifiers, ENGINE=InnoDB, charset
+  // declarations, and table-level FOREIGN KEY constraints. Closes the
+  // pre-existing FK_RE backtick gap (sql-tools.ts FK_RE).
+  describe("analyzeSchema — raw mysqldump (MySQL backticks)", () => {
+    let mysqlRepo: string;
+    const MYSQL_TMP = join(tmpdir(), "codesift-sql-mysql-test-" + Date.now());
+
+    beforeAll(async () => {
+      mkdirSync(MYSQL_TMP, { recursive: true });
+      writeFileSync(join(MYSQL_TMP, "mysqldump.sql"), `
+-- MySQL dump 10.13
+-- Server version 8.0.34
+
+DROP TABLE IF EXISTS \`accounts\`;
+CREATE TABLE \`accounts\` (
+  \`id\` int(11) NOT NULL AUTO_INCREMENT,
+  \`email\` varchar(255) CHARACTER SET utf8mb4 NOT NULL,
+  PRIMARY KEY (\`id\`)
+) ENGINE=InnoDB AUTO_INCREMENT=42 DEFAULT CHARSET=utf8mb4;
+
+DROP TABLE IF EXISTS \`sessions\`;
+CREATE TABLE \`sessions\` (
+  \`id\` int(11) NOT NULL AUTO_INCREMENT,
+  \`account_id\` int(11) NOT NULL,
+  \`token\` varchar(64) NOT NULL,
+  PRIMARY KEY (\`id\`),
+  KEY \`fk_sessions_account\` (\`account_id\`),
+  CONSTRAINT \`fk_sessions_account\` FOREIGN KEY (\`account_id\`) REFERENCES \`accounts\` (\`id\`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+`, "utf-8");
+
+      const r = await indexFolder(MYSQL_TMP, { watch: false });
+      mysqlRepo = r.repo;
+    }, 30_000);
+
+    afterAll(() => {
+      try { rmSync(MYSQL_TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* ignore */ }
+    });
+
+    it("extracts both backticked tables", async () => {
+      const result = await analyzeSchema(mysqlRepo);
+      const names = result.tables.map((t) => t.name).sort();
+      expect(names).toEqual(["accounts", "sessions"]);
+    });
+
+    it("resolves table-level FOREIGN KEY with backtick identifiers", async () => {
+      const result = await analyzeSchema(mysqlRepo);
+      const fk = result.relationships.find(
+        (r) => r.from_table === "sessions" && r.to_table === "accounts",
+      );
+      expect(fk, "FK sessions.account_id → accounts.id should be detected from MySQL backtick syntax").toBeDefined();
+      expect(fk!.from_column).toBe("account_id");
+      expect(fk!.to_column).toBe("id");
+    });
+
+    it("auto-detects dialect=mysql from ENGINE=InnoDB / AUTO_INCREMENT", async () => {
+      const result = await analyzeSchema(mysqlRepo);
+      expect(result.detected_dialect).toBe("mysql");
+    });
+
+    it("respects forced dialect override", async () => {
+      const result = await analyzeSchema(mysqlRepo, { dialect: "postgres" });
+      expect(result.detected_dialect).toBe("postgres");
+    });
+  });
+
+  describe("detectSqlDialect (unit)", () => {
+    it("identifies MySQL via ENGINE=InnoDB", () => {
+      expect(detectSqlDialect("CREATE TABLE x (id INT) ENGINE=InnoDB")).toBe("mysql");
+    });
+    it("identifies MySQL via AUTO_INCREMENT", () => {
+      expect(detectSqlDialect("id INT NOT NULL AUTO_INCREMENT")).toBe("mysql");
+    });
+    it("identifies MySQL via utf8mb4 charset", () => {
+      expect(detectSqlDialect("DEFAULT CHARSET=utf8mb4")).toBe("mysql");
+    });
+    it("identifies Postgres via SERIAL", () => {
+      expect(detectSqlDialect("id SERIAL PRIMARY KEY")).toBe("postgres");
+    });
+    it("identifies Postgres via JSONB column type", () => {
+      expect(detectSqlDialect("data JSONB NOT NULL")).toBe("postgres");
+    });
+    it("identifies SQLite via AUTOINCREMENT (single token)", () => {
+      expect(detectSqlDialect("id INTEGER PRIMARY KEY AUTOINCREMENT")).toBe("sqlite");
+    });
+    it("identifies MS SQL via NVARCHAR + IDENTITY(seed, step)", () => {
+      expect(detectSqlDialect("name NVARCHAR(50), id INT IDENTITY(1, 1)")).toBe("mssql");
+    });
+    it("returns 'unknown' for dialect-neutral DDL", () => {
+      expect(detectSqlDialect("CREATE TABLE x (id INT, name VARCHAR(50))")).toBe("unknown");
+    });
+    it("returns 'unknown' for empty input", () => {
+      expect(detectSqlDialect("")).toBe("unknown");
+    });
+    it("MySQL signal beats Postgres when both present (dump-from-postgres-into-MySQL is rare)", () => {
+      // Mixed-content disambiguation — MySQL fingerprints take priority because
+      // ENGINE=InnoDB never appears in pure Postgres DDL.
+      expect(detectSqlDialect("id SERIAL, ENGINE=InnoDB")).toBe("mysql");
     });
   });
 });
