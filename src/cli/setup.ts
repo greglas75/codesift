@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { HookPlatform } from "./platform.js";
 import { setupClineHooks } from "./shell-templates.js";
+import { installGitHooks } from "./git-hooks-installer.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -605,6 +606,11 @@ export interface SetupOptions {
   hooks?: boolean;
   rules?: boolean;
   force?: boolean;
+  /** Install global git post-commit hook for editor-agnostic review-queue
+   *  automation. Defaults to true when `hooks: true` is set, since the hook
+   *  is editor-agnostic and benefits all platforms equally. Pass `false` to
+   *  opt out (e.g., users who manage git hooks via Husky / Lefthook). */
+  gitHooks?: boolean;
 }
 
 const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
@@ -634,6 +640,13 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
       // Inject CodeSift block into ~/.claude/CLAUDE.md (loaded every session, higher priority than rules/)
       await installGlobalClaudeMd(homedir());
     }
+    // Editor-agnostic git post-commit hook: auto-update docs/review-queue.md
+    // on every commit regardless of which editor/agent invoked it (Cursor,
+    // Codex, Antigravity, plain terminal, etc). Default ON unless explicitly
+    // disabled via `gitHooks: false` (e.g., for Husky/Lefthook users).
+    if (options.gitHooks !== false) {
+      await installGitHooks({ force: options.force ?? false });
+    }
   }
   if (options?.rules && !(options?.hooks && platform === "claude")) {
     await installRules(platform, homedir(), options);
@@ -646,9 +659,15 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
 
 export async function setupAll(options?: SetupOptions): Promise<SetupResult[]> {
   const results: SetupResult[] = [];
+  // Disable git-hooks per-platform during the loop so we install them ONCE at
+  // the end (idempotent but avoids redundant log lines).
+  const perPlatformOpts: SetupOptions = { ...options, gitHooks: false };
   for (const platform of SUPPORTED_PLATFORMS) {
-    const result = await setup(platform, options);
+    const result = await setup(platform, perPlatformOpts);
     results.push(result);
+  }
+  if (options?.hooks && options.gitHooks !== false) {
+    await installGitHooks({ force: options.force ?? false });
   }
   return results;
 }

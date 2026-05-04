@@ -461,7 +461,10 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
   const hooks = getBoolFlag(flags, "hooks") ?? true;
   const rules = getBoolFlag(flags, "rules") ?? true;
   const force = getBoolFlag(flags, "force") ?? false;
-  const options = { hooks, rules, force };
+  // git-hooks defaults to ON when --hooks is on (editor-agnostic by design).
+  // Power users can pass --no-git-hooks to opt out (e.g., Husky/Lefthook setups).
+  const gitHooks = getBoolFlag(flags, "git-hooks") ?? hooks;
+  const options = { hooks, rules, force, gitHooks };
 
   if (platform === "all") {
     for (const p of SUPPORTED_PLATFORMS) {

@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased] — Editor-agnostic git post-commit hook
+
+`codesift setup` now installs a global git post-commit hook (default ON when
+`--hooks` is on; opt out with `--no-git-hooks`). The hook auto-updates
+`docs/review-queue.md` and Claude memory `review-backlog.md` on every commit,
+**regardless of which tool created it** — Claude Code, Cursor, Codex,
+Antigravity, terminal, GUI clients, etc. all benefit equally.
+
+**Mechanism:**
+- Bundled scripts in `<package>/hooks/` get copied to `~/.claude/hooks/` and
+  `~/.claude/scripts/` on `codesift setup --hooks`.
+- `git config --global core.hooksPath ~/.claude/hooks` is set once globally.
+- Existing repos with `git config --local core.hooksPath` (e.g., Husky, Lefthook
+  setups) are not affected — local config wins.
+- Idempotent — re-running `codesift setup` skips already-installed scripts and
+  preserves user modifications unless `--force` is passed.
+
+**New CLI flags:**
+- `--git-hooks` — install editor-agnostic git hook (default ON with `--hooks`)
+- `--no-git-hooks` — opt out (Husky/Lefthook users, monorepo CI scenarios)
+
+Test: `tests/cli/git-hooks-installer.test.ts` (7 cases including idempotency,
+preservation of user mods, force overwrite, missing-git fallback, no-op when
+hooksPath already pointing at target).
+
 ## [Unreleased] — TS extractor v3.0.0 (P0+P1)
 
 Major TypeScript/TSX extractor expansion. Closes 11 gap items (L1, L2, L3, L4, L5, L7, L8, L9, L11, L12, L13) identified in the audit vs. competitors (Serena, lsmcp via tsserver; tree-sitter peers GitNexus, jCodeMunch, codebase-memory).

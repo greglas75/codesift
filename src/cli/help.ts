@@ -459,6 +459,11 @@ Options:
   --json        Output result as JSON instead of human-readable text
   --hooks       Install hooks where supported (default: on)
   --no-hooks    Skip hook installation
+  --git-hooks   Install editor-agnostic git post-commit hook globally —
+                auto-updates docs/review-queue.md on every commit (default: on
+                when --hooks is on). Works across Claude Code, Cursor, Codex,
+                Antigravity, plain terminal, etc.
+  --no-git-hooks  Skip git post-commit hook (Husky/Lefthook users)
   --rules       Install platform rules file (default: on)
   --no-rules    Skip rules file installation
   --force       Overwrite rules file even if it has been modified by the user

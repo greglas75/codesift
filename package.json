@@ -13,6 +13,7 @@
   "files": [
     "dist",
     "rules",
+    "hooks",
     "src/parser/languages",
     "README.md",
     "LICENSE"
