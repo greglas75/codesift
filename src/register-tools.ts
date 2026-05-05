@@ -79,6 +79,7 @@ import {
   analyzeYiiMigrations,
   analyzeYiiRbac,
   findPhp8MigrationCandidates,
+  analyzePhpStanBaseline,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -413,6 +414,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "analyze_yii_migrations",
     "analyze_yii_rbac",
     "find_php8_migration_candidates",
+    "analyze_phpstan_baseline",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3231,6 +3233,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/php8-migration-candidates-tools.js").Php8MigrationRuleId[];
       }
       return await findPhp8MigrationCandidates(args.repo as string, opts);
+    },
+  },
+  {
+    name: "analyze_phpstan_baseline",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "phpstan baseline neon parse error categorize quick wins debt ledger triage",
+    description:
+      "Parse a phpstan-baseline.neon file and triage ignored errors. Returns by_path (files ranked by error count), by_category (no-return-type, undefined-property, iterable-no-value-type, ...), quick_wins (files with ≤3 errors — fastest to clear), and full entries list. Universal PHP tool — works on any project that uses PHPStan, not Yii2-only.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      baseline_path: z.string().optional().describe("Override baseline file path (default: phpstan-baseline.neon)"),
+      max_paths: z.number().optional().describe("Cap on by_path entries (default 50)"),
+    })),
+    handler: async (args) => {
+      const opts: { baseline_path?: string; max_paths?: number } = {};
+      if (typeof args.baseline_path === "string") opts.baseline_path = args.baseline_path;
+      if (typeof args.max_paths === "number") opts.max_paths = args.max_paths;
+      return await analyzePhpStanBaseline(args.repo as string, opts);
     },
   },
 

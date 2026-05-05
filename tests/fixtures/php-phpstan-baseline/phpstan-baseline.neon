@@ -1,0 +1,41 @@
+parameters:
+	ignoreErrors:
+		-
+			message: "#^Method app\\\\assets\\\\PublicAsset\\:\\:init\\(\\) has no return type specified\\.$#"
+			count: 1
+			path: assets/PublicAsset.php
+
+		-
+			message: "#^Property app\\\\assets\\\\PublicAsset\\:\\:\\$css type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: assets/PublicAsset.php
+
+		-
+			message: "#^Property app\\\\assets\\\\PublicAsset\\:\\:\\$depends type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: assets/PublicAsset.php
+
+		-
+			message: "#^Method app\\\\commands\\\\BuildController\\:\\:actionIndex\\(\\) has no return type specified\\.$#"
+			count: 1
+			path: commands/BuildController.php
+
+		-
+			message: "#^Method app\\\\commands\\\\BuildController\\:\\:actionLog\\(\\) has no return type specified\\.$#"
+			count: 1
+			path: commands/BuildController.php
+
+		-
+			message: "#^Access to an undefined property yii\\\\console\\\\Application\\|yii\\\\web\\\\Application\\:\\:\\$db\\.$#"
+			count: 5
+			path: components/UserService.php
+
+		-
+			message: "#^Call to an undefined method yii\\\\db\\\\ActiveQuery\\:\\:doStuff\\(\\)\\.$#"
+			count: 2
+			path: components/UserService.php
+
+		-
+			message: "#^Method app\\\\models\\\\Survey\\:\\:rules\\(\\) has no return type specified\\.$#"
+			count: 1
+			path: models/Survey.php
