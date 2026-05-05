@@ -32,11 +32,26 @@ async function setupWithLines(
 }
 
 describe("setup", () => {
+  let originalGitConfigGlobal: string | undefined;
+
   beforeEach(async () => {
     tempHome = await mkdtemp(join(tmpdir(), "codesift-setup-"));
+    // Isolate `git config --global` from the real ~/.gitconfig.
+    // installGitHooks() spawns `git config --global core.hooksPath ...` via
+    // execSync; that subprocess does not see our `node:os` mock, so without
+    // GIT_CONFIG_GLOBAL it would write into the developer's real ~/.gitconfig
+    // and (since hooksDir is computed from the mocked homedir) leave a stale
+    // tmp path behind after the test cleans up tempHome.
+    originalGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = join(tempHome, ".gitconfig");
   });
 
   afterEach(async () => {
+    if (originalGitConfigGlobal === undefined) {
+      delete process.env.GIT_CONFIG_GLOBAL;
+    } else {
+      process.env.GIT_CONFIG_GLOBAL = originalGitConfigGlobal;
+    }
     await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
