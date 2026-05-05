@@ -74,6 +74,7 @@ import {
   phpSecurityScan,
   phpProjectAudit,
   yii3MigrationAudit,
+  php8CompatCheck,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -403,6 +404,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "php_security_scan",
     "php_project_audit",
     "yii3_migration_audit",
+    "php8_compat_check",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3099,6 +3101,38 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       }
       if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
       return await yii3MigrationAudit(args.repo as string, opts);
+    },
+  },
+  {
+    name: "php8_compat_check",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "php 8 upgrade compatibility breaking changes deprecation each create_function real cast money_format array_key_exists null string param utf8 spread operator dynamic property merge gate yii2 2.0.49",
+    description:
+      "PHP 7→8 upgrade compatibility check. Pre-merge gating tool: scans for breaking changes (8.0) and deprecations (8.1/8.2) and flags Yii < 2.0.49 (which has known PHP 8 bugs). Run before merging the PHP 8 upgrade branch into main. Returns blocker_for_merge=true when any breaking_8_0 finding is present.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Substring filter on file paths"),
+      max_samples_per_rule: z.number().optional().describe("Cap on sample evidence per rule (default 5)"),
+      include_vendor: z.boolean().optional().describe("Include vendor/ paths in scan (default false)"),
+      rules: z.string().optional().describe("Comma-separated rule IDs to run (default: all)"),
+    })),
+    handler: async (args) => {
+      const opts: {
+        file_pattern?: string;
+        max_samples_per_rule?: number;
+        include_vendor?: boolean;
+        rules?: import("./tools/php8-compat-tools.js").Php8RuleId[];
+      } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.max_samples_per_rule === "number") {
+        opts.max_samples_per_rule = args.max_samples_per_rule;
+      }
+      if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
+      if (typeof args.rules === "string" && args.rules.trim()) {
+        opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/php8-compat-tools.js").Php8RuleId[];
+      }
+      return await php8CompatCheck(args.repo as string, opts);
     },
   },
 
