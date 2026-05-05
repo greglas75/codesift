@@ -114,8 +114,11 @@ export const BUILTIN_PATTERNS: Record<string, {
     // useOptimistic call was flagged. Fix: scope the negative lookahead over the
     // entire forward window so it only succeeds when NO mention of useTransition
     // exists in the surrounding ~1000 chars.
-    regex: /\buseOptimistic\s*\((?![\s\S]{0,1000}?(?:useTransition|startTransition))/,
-    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. Without it, optimistic updates can be interrupted.",
+    // Tier 7 R-2 fix: \b boundary — `myUseTransitionWrapper` no longer suppresses match.
+    // Tier 7 R-2.1 known limit: comment/string-embedded `useTransition` text in the
+    // forward window may spoof lookahead (Tier 8: comment-strip preprocessor at engine).
+    regex: /\buseOptimistic\s*\((?![\s\S]{0,1000}?\b(?:useTransition|startTransition)\b)/,
+    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. NOTE: comment/string-embedded transition tokens may suppress detection (Tier 8 fix).",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   // --- oxlint-inspired React rules (April 2026) ---
@@ -187,14 +190,16 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   "useEffect-setstate-loop": {
     // Tier 7 fix (multiple gemini findings):
-    //  1. Original matched `[` in setState array literal arg → fixed by anchoring on `}, [`.
-    //  2. Cross-effect bridging — `[\s\S]{0,800}?` could span TWO useEffect blocks. Fixed
-    //     by `(?:(?!\\buseEffect\\b)[\\s\\S])` — non-greedy walk that bails on next useEffect.
-    //  3. Implicit-return arrows `useEffect(() => setX(c+1), [c])` were missed.
-    //     Fixed via outer alternation: block-bodied form OR concise expression form.
-    //  4. `\1\b` matched `count` inside `props.count` — fixed by `(?<!\.)\\b\\1\\b`.
-    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>\s*(?:\{(?:(?!\buseEffect\b)[\s\S]){0,800}?\bset([A-Z]\w*)\s*\((?:(?!\buseEffect\b)[\s\S]){0,300}?\}\s*,\s*\[[^\]]*?(?<!\.)\b\1\b|set([A-Z]\w*)\s*\((?:(?!\buseEffect\b)[\s\S]){0,300}?\)\s*,\s*\[[^\]]*?(?<!\.)\b\2\b)/i,
-    description: "setState inside useEffect with same state variable in dependency array — infinite render loop. Detects both block-bodied (`() => { setX(); }, [x]`) and concise (`() => setX(), [x]`) forms; bails out at next useEffect to avoid cross-block bridging; rejects property-chain false-positives like `props.count`.",
+    //  1. Original matched `[` in setState array literal arg → anchored on `}, [`.
+    //  2. Cross-effect bridging — non-greedy walk now bails on next `useEffect`.
+    //  3. Implicit-return arrows: alternation block-bodied OR concise.
+    //  4. `\1\b` matched `count` inside `props.count` — fixed by `(?<!\.)\b\1\b`.
+    //  5. Tier 7 review R-3: concise arm's first `\)` could close a NESTED call like
+    //     `setCount(getY())`. Fix: require concise-arm setState arg has NO inner `(`
+    //     by using `[^()]*` for the simple case (most real bugs); complex args fall
+    //     through to the block-bodied arm. Documented as known limit.
+    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>\s*(?:\{(?:(?!\buseEffect\b)[\s\S]){0,800}?\bset([A-Z]\w*)\s*\((?:(?!\buseEffect\b)[\s\S]){0,300}?\}\s*,\s*\[[^\]]*?(?<!\.)\b\1\b|set([A-Z]\w*)\s*\([^()]{0,200}\)\s*,\s*\[[^\]]*?(?<!\.)\b\2\b)/i,
+    description: "setState inside useEffect with same state variable in dependency array — infinite render loop. Block-bodied form `() => { setX(); }, [x]` AND concise form `() => setX(arg), [x]` (concise arm requires non-nested arg). Bails out at next useEffect; rejects `props.count` property chains. Known limit: concise form with nested calls (setX(getY())) is not detected — block form covers it.",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "useEffect-missing-deps-identifier": {

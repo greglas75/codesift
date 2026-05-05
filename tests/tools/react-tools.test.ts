@@ -780,3 +780,224 @@ describe("findLazyComponentsWithoutSuspense (Tier 7)", () => {
     expect(findLazyComponentsWithoutSuspense(symbols).length).toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 R-1 / R-4 — review fixes
+// ─────────────────────────────────────────────────────────────
+
+describe("findSuspenseAncestor (Tier 7 R-1 — comment/string spoofing)", () => {
+  function makeAdj(...edges: [parent: string, child: string][]): Map<string, string[]> {
+    const rev = new Map<string, string[]>();
+    for (const [parent, child] of edges) {
+      const list = rev.get(child) ?? [];
+      list.push(parent);
+      rev.set(child, list);
+    }
+    return rev;
+  }
+
+  it("does NOT count Suspense mention inside a /* block comment */", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        // R-1: comment spoof — was previously bypassing detection
+        source: "/* example: <Suspense> wrap goes here */ function Root() { return <Lazy/>; }",
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)).toBeNull();
+  });
+
+  it("does NOT count Suspense mention inside a // line comment", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: "function Root() { return <div/>; } // TODO: wrap in <Suspense>",
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)).toBeNull();
+  });
+
+  it("does NOT count Suspense mention inside a string literal", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: `function Root() { const docs = "use <Suspense> to wrap"; return <Lazy/>; }`,
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)).toBeNull();
+  });
+
+  it("STILL counts real <Suspense> JSX even with mention also in comment", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: "// description of <Suspense> usage\nfunction Root() { return <Suspense fallback={<X/>}><Lazy/></Suspense>; }",
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)?.name).toBe("Root");
+  });
+});
+
+describe("findLazyComponentsWithoutSuspense (Tier 7 R-4 — module-scope lazy)", () => {
+  it("flags module-scope `const X = lazy(...)` in a non-component symbol", () => {
+    // R-4: lazy() declared at module scope (not inside a component body)
+    // was previously skipped by the kind === "component" filter.
+    const symbols = [
+      sym({
+        id: "Heavy", name: "Heavy", file: "lazy.tsx",
+        kind: "function" as const, // NOT a component — module-scope const
+        source: "const Heavy = React.lazy(() => import('./HeavyImpl'));",
+      }),
+      sym({
+        id: "App", name: "App", file: "app.tsx",
+        source: "function App() { return <Heavy/>; }",
+      }),
+    ];
+    const issues = findLazyComponentsWithoutSuspense(symbols);
+    expect(issues.length).toBe(1);
+    // Issue attributed to lazy.tsx (the file containing the declaration)
+    expect(issues[0]?.file).toBe("lazy.tsx");
+  });
+
+  it("does NOT flag module-scope lazy when same-file component HAS Suspense", () => {
+    const symbols = [
+      sym({
+        id: "Heavy", name: "Heavy", file: "feature.tsx",
+        kind: "function" as const,
+        source: "const Heavy = lazy(() => import('./HeavyImpl'));",
+      }),
+      sym({
+        id: "Feature", name: "Feature", file: "feature.tsx",
+        source: "function Feature() { return <Suspense fallback={<X/>}><Heavy/></Suspense>; }",
+      }),
+    ];
+    expect(findLazyComponentsWithoutSuspense(symbols).length).toBe(0);
+  });
+
+  it("dedups multiple lazy declarations in same file to one issue", () => {
+    const symbols = [
+      sym({
+        id: "A", name: "A", file: "lazy.tsx", kind: "function" as const,
+        source: "const A = lazy(() => import('./A'));",
+      }),
+      sym({
+        id: "B", name: "B", file: "lazy.tsx", kind: "function" as const,
+        source: "const B = lazy(() => import('./B'));",
+      }),
+    ];
+    const issues = findLazyComponentsWithoutSuspense(symbols);
+    expect(issues.length).toBe(1); // dedup by file
+  });
+});
+
+describe("findSuspenseAncestor (Tier 7 R-1.1 — state machine stripper)", () => {
+  function makeAdj(...edges: [string, string][]): Map<string, string[]> {
+    const rev = new Map<string, string[]>();
+    for (const [p, c] of edges) {
+      const list = rev.get(c) ?? [];
+      list.push(p);
+      rev.set(c, list);
+    }
+    return rev;
+  }
+
+  it("does NOT match // inside a string literal as line comment", () => {
+    // Adversarial Run 4 finding: layered regex stripper would consume `//` inside
+    // strings as a comment. State machine handles this correctly.
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        // The string contains `// <Suspense>` which previously could be
+        // incorrectly stripped, leaving the JSX-like text behind for the regex.
+        source: 'function Root() { const url = "https://example.com//<Suspense>"; return <Lazy/>; }',
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)).toBeNull();
+  });
+
+  it("correctly handles escaped quotes in strings", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: `function Root() { const x = "she said \\"<Suspense>\\""; return <Lazy/>; }`,
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)).toBeNull();
+  });
+});
+
+describe("findLazyComponentsWithoutSuspense (Tier 7 R-4.1 — wrong owner attribution)", () => {
+  it("does NOT flag when ANY same-file component is wrapped in Suspense ancestor", () => {
+    // Adversarial Run 4 finding: arbitrary `components.find` could pick wrong owner.
+    // R-4.1 fix: require ALL same-file components to lack Suspense before flagging.
+    const symbols = [
+      sym({
+        id: "LazyDecl", name: "LazyDecl", file: "feature.tsx", kind: "function" as const,
+        source: "const Heavy = lazy(() => import('./H'));",
+      }),
+      sym({
+        id: "Wrapper", name: "Wrapper", file: "feature.tsx",
+        source: "function Wrapper() { return <Suspense><Heavy/></Suspense>; }",
+      }),
+      sym({
+        id: "OtherSibling", name: "OtherSibling", file: "feature.tsx",
+        source: "function OtherSibling() { return <div>nothing related</div>; }",
+      }),
+    ];
+    // Wrapper has Suspense — even if components.find() picks OtherSibling,
+    // R-4.1's anySafe check returns true → no flag.
+    expect(findLazyComponentsWithoutSuspense(symbols).length).toBe(0);
+  });
+});
+
+describe("findSuspenseAncestor (Tier 7 R-1.2 — regex literal stripping)", () => {
+  function makeAdj(...edges: [string, string][]): Map<string, string[]> {
+    const rev = new Map<string, string[]>();
+    for (const [p, c] of edges) {
+      const list = rev.get(c) ?? [];
+      list.push(p);
+      rev.set(c, list);
+    }
+    return rev;
+  }
+
+  it("does NOT mistake `//` inside a regex literal /https:\\/\\/x/ as line comment", () => {
+    // Adversarial Run 5 finding: regex literals contain `//` which the layered
+    // stripper would consume, blanking out the rest of the line. State machine
+    // detects regex context (after `=`) and treats `/.../` as a regex.
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: "function Root() { const r = /https:\\/\\/x/; return <Lazy/>; }",
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    // No Suspense anywhere → null. Test ensures stripper didn't break Root's source.
+    expect(findSuspenseAncestor("Lazy", rev, symbols)).toBeNull();
+  });
+
+  it("treats `/regex/` followed by real <Suspense> JSX correctly", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: "function Root() { const r = /a/b/; return <Suspense><Lazy/></Suspense>; }",
+      })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)?.name).toBe("Root");
+  });
+});

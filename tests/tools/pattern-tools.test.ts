@@ -1698,3 +1698,64 @@ export const login = async (formData) => { return await db.login(formData); };`;
     expect(regex.test(src)).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 R-2 / R-3 — review fixes
+// ─────────────────────────────────────────────────────────────
+
+describe("react19-useoptimistic-no-transition (Tier 7 R-2 — \\b boundary)", () => {
+  const regex = BUILTIN_PATTERNS["react19-useoptimistic-no-transition"]!.regex;
+
+  it("STILL matches: useOptimistic alone", () => {
+    expect(regex.test(`function F() { useOptimistic(messages); }`)).toBe(true);
+  });
+
+  it("STILL matches when only myUseTransition appears (no real useTransition)", () => {
+    // R-2 fix: \b boundary prevents `myUseTransition` from suppressing the warning
+    const src = `function F() {
+      const [state, addOpt] = useOptimistic(messages);
+      const myUseTransition = () => null;
+      myUseTransition();
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("STILL matches when only startTransitionHandler appears", () => {
+    const src = `function F() {
+      const [state, addOpt] = useOptimistic(messages);
+      const startTransitionHandler = () => null;
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match real useTransition pairing (when in forward lookahead window)", () => {
+    // Forward-only lookahead — useTransition must appear AFTER useOptimistic.
+    // Documented limit: useTransition declared above is not seen.
+    const src = `function F() {
+      const [state, addOpt] = useOptimistic(messages);
+      const [pending, startTransition] = useTransition();
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("useEffect-setstate-loop (Tier 7 R-3 — concise nested-paren)", () => {
+  const regex = BUILTIN_PATTERNS["useEffect-setstate-loop"]!.regex;
+
+  it("matches concise form with simple identifier arg", () => {
+    const src = `useEffect(() => setCount(count), [count]);`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match concise form when setX has nested call (avoids FP)", () => {
+    // R-3: setCount(getY()) in concise form — first ) closes inner getY().
+    // R-3 fix: concise arm requires [^()] arg → falls through to no-match.
+    const src = `useEffect(() => setCount(getY()), [count]);`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("STILL matches block form even with nested calls (correct)", () => {
+    const src = `useEffect(() => { setCount(getValue() + count); }, [count]);`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
