@@ -81,6 +81,7 @@ import {
   findPhp8MigrationCandidates,
   analyzePhpStanBaseline,
   analyzeYiiConsoleCommands,
+  findYii3AttributeCandidates,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -417,6 +418,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "find_php8_migration_candidates",
     "analyze_phpstan_baseline",
     "analyze_yii_console_commands",
+    "find_yii3_attribute_candidates",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3271,6 +3273,38 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { controller_id?: string } = {};
       if (typeof args.controller_id === "string") opts.controller_id = args.controller_id;
       return await analyzeYiiConsoleCommands(args.repo as string, opts);
+    },
+  },
+  {
+    name: "find_yii3_attribute_candidates",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "yii3 attribute candidates conversion behaviors rules urlManager route migration php8 attributes",
+    description:
+      "Find Yii2→Yii3 attribute conversion candidates. Three rule classes: behaviors-to-attributes (behaviors() with TimestampBehavior etc → #[Behavior(class)]), rules-to-attributes (rules() entries → #[Required], #[Email], etc on properties), urlmanager-rule-to-route (urlManager rules → #[Route(method, path)] on controller actions, with <id:\\d+> placeholders converted to {id}). Each candidate ships current_form, suggested_replacement, confidence, and blockers[] for cases that need manual review (closures in config, regex constraints, module-prefixed targets).",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Substring filter on file paths"),
+      max_samples_per_rule: z.number().optional().describe("Cap on sample evidence per rule (default 5)"),
+      include_vendor: z.boolean().optional().describe("Include vendor/ paths (default false)"),
+      rules: z.string().optional().describe("Comma-separated rule IDs to run (default: all)"),
+    })),
+    handler: async (args) => {
+      const opts: {
+        file_pattern?: string;
+        max_samples_per_rule?: number;
+        include_vendor?: boolean;
+        rules?: import("./tools/yii3-attribute-candidates-tools.js").Yii3AttributeRuleId[];
+      } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.max_samples_per_rule === "number") {
+        opts.max_samples_per_rule = args.max_samples_per_rule;
+      }
+      if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
+      if (typeof args.rules === "string" && args.rules.trim()) {
+        opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/yii3-attribute-candidates-tools.js").Yii3AttributeRuleId[];
+      }
+      return await findYii3AttributeCandidates(args.repo as string, opts);
     },
   },
 

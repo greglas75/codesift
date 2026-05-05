@@ -1,0 +1,4 @@
+{
+  "name": "test/php-m2-attributes-fixture",
+  "require": { "php": ">=7.2.0", "yiisoft/yii2": "2.0.49" }
+}
