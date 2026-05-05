@@ -1170,6 +1170,16 @@ export async function reactQuickstart(
     // Tier 5 — style bucket
     { name: "jsx-no-target-blank", severity: "style" },
     { name: "button-no-type", severity: "style" },
+    // Tier 6 — extending Tier 5 coverage
+    { name: "derived-state-reducer", severity: "warning" },
+    { name: "derived-state-custom-setter", severity: "warning" },
+    { name: "stale-closure-toggle", severity: "warning" },
+    { name: "stale-closure-broken-functional", severity: "warning" },
+    { name: "context-provider-value-via-variable", severity: "warning" },
+    { name: "context-provider-value-inline-destructured", severity: "warning" },
+    { name: "react-lazy-no-suspense-same-file", severity: "style" },
+    { name: "rsc-non-serializable-prop-deep", severity: "critical" },
+    { name: "error-boundary-incomplete", severity: "warning" },
   ];
   const scanResults = await Promise.all(
     scanList.map(async ({ name, severity }) => {
@@ -1188,7 +1198,15 @@ export async function reactQuickstart(
     .slice(0, 10);
   // Legacy: pre-Tier-5 patterns marked "warning" stay in critical_issues for backward compat;
   // Tier 5 warnings (derived-state, stale-closure, context-provider) go to dedicated bucket.
-  const tier5WarningPatterns = new Set(["derived-state", "stale-closure-setstate", "context-provider-value-inline"]);
+  const tier5WarningPatterns = new Set([
+    // Tier 5
+    "derived-state", "stale-closure-setstate", "context-provider-value-inline",
+    // Tier 6 — same warning bucket
+    "derived-state-reducer", "derived-state-custom-setter",
+    "stale-closure-toggle", "stale-closure-broken-functional",
+    "context-provider-value-via-variable", "context-provider-value-inline-destructured",
+    "error-boundary-incomplete",
+  ]);
   for (const r of hits) {
     if (r.severity === "warning" && !tier5WarningPatterns.has(r.pattern) && critical_issues.length < 10) {
       critical_issues.push({ pattern: r.pattern, count: r.count, severity: "warning" });

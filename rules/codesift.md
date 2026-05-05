@@ -159,11 +159,14 @@ Use this table to pick the right tool for each task:
 | starting a task, want tool recommendations | `plan_turn(query=...)` |
 | React codebase | `trace_component_tree("App")` + `analyze_hooks` |
 | React anti-patterns | `search_patterns("hook-in-condition")` |
-| React derived state | `search_patterns("derived-state")` |
-| React stale closure | `search_patterns("stale-closure-setstate")` |
-| React context perf trap | `search_patterns("context-provider-value-inline")` |
+| React derived state | `search_patterns("derived-state")` (T5) / `derived-state-reducer` / `derived-state-custom-setter` (T6) |
+| React stale closure | `search_patterns("stale-closure-setstate")` (T5) / `stale-closure-toggle` / `stale-closure-broken-functional` (T6) |
+| React context perf trap | `search_patterns("context-provider-value-inline")` (T5) / `context-provider-value-via-variable` / `context-provider-value-inline-destructured` (T6) |
 | React tabnabbing security | `search_patterns("jsx-no-target-blank")` |
 | React button submit foot-gun | `search_patterns("button-no-type")` |
+| React lazy without Suspense | `search_patterns("react-lazy-no-suspense-same-file")` (T6 single-file) |
+| React RSC non-serializable | `search_patterns("rsc-non-serializable-prop")` / `rsc-non-serializable-prop-deep` (T6 — Map/Set/Class) |
+| React ErrorBoundary incomplete | `search_patterns("error-boundary-incomplete")` (T6) |
 | React render-tree depth | `analyze_renders` → `entry.prop_chain_depth` (NOT prop-flow depth) |
 | React call graph (clean) | `trace_call_chain(filter_react_hooks=true)` |
 | new Next.js project (first look) | `framework_audit` |

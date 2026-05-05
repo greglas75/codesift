@@ -1596,3 +1596,170 @@ describe("postFilter runner integration (Tier 5)", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 6 — derived-state-reducer, derived-state-custom-setter,
+// stale-closure-toggle, stale-closure-broken-functional,
+// context-provider-value-via-variable, context-provider-value-inline-destructured,
+// react-lazy-no-suspense-same-file, rsc-non-serializable-prop-deep,
+// error-boundary-incomplete
+// ─────────────────────────────────────────────────────────────
+
+describe("derived-state-reducer (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["derived-state-reducer"]!.regex;
+  it("matches useReducer + useEffect dispatching sync action", () => {
+    const src = `function Foo(props) {
+      const [state, dispatch] = useReducer(reducer, props.initial);
+      useEffect(() => { dispatch({type: 'sync', payload: props.x}); }, [props.x]);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match useReducer with non-sync dispatch type", () => {
+    const src = `function Foo() {
+      const [state, dispatch] = useReducer(reducer, init);
+      useEffect(() => { dispatch({type: 'increment'}); }, []);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("derived-state-custom-setter (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["derived-state-custom-setter"]!.regex;
+  it("matches useState(props.value) + useEffect with custom setter setDisplayValue", () => {
+    const src = `function Foo(props) {
+      const [displayValue, setDisplayValue] = useState(props.value);
+      useEffect(() => { setDisplayValue(props.value); }, [props.value]);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match seed-only useState(props.value)", () => {
+    const src = `function Foo(props) {
+      const [v, setV] = useState(props.initial);
+      return v;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("stale-closure-toggle (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["stale-closure-toggle"]!.regex;
+  it("matches setOpen(!open) boolean toggle", () => {
+    const src = `function Modal() {
+      const [open, setOpen] = useState(false);
+      const toggle = () => setOpen(!open);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match functional setOpen(prev => !prev)", () => {
+    const src = `function Modal() {
+      const [open, setOpen] = useState(false);
+      const toggle = () => setOpen(prev => !prev);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("stale-closure-broken-functional (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["stale-closure-broken-functional"]!.regex;
+  it("matches setCount(prev => count + 1) — wrong reference to outer var", () => {
+    const src = `function Counter() {
+      const [count, setCount] = useState(0);
+      const inc = () => setCount(prev => count + 1);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match setCount(prev => prev + 1) — correct functional updater", () => {
+    const src = `function Counter() {
+      const [count, setCount] = useState(0);
+      const inc = () => setCount(prev => prev + 1);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("context-provider-value-via-variable (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["context-provider-value-via-variable"]!.regex;
+  it("matches inline-object var passed to Provider value", () => {
+    const src = `function App() {
+      const ctx = { user, login };
+      return <AuthCtx.Provider value={ctx}>{children}</AuthCtx.Provider>;
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match useMemo-wrapped variable", () => {
+    const src = `function App() {
+      const ctx = useMemo(() => ({ user, login }), [user]);
+      return <AuthCtx.Provider value={ctx}>{children}</AuthCtx.Provider>;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("context-provider-value-inline-destructured (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["context-provider-value-inline-destructured"]!.regex;
+  it("matches destructured Provider with inline object", () => {
+    const src = `const { Provider } = ThemeContext;
+function App() { return <Provider value={{ mode: 'dark' }}>x</Provider>; }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("matches destructured ThemeProvider variant", () => {
+    const src = `const { ThemeProvider } = ThemeContext;
+function App() { return <ThemeProvider value={{x: 1}}>x</ThemeProvider>; }`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
+
+describe("rsc-non-serializable-prop-deep (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["rsc-non-serializable-prop-deep"]!.regex;
+  it("matches Map passed as data prop", () => {
+    expect(regex.test(`<Component data={new Map()}>`)).toBe(true);
+  });
+  it("matches Set passed as value prop", () => {
+    expect(regex.test(`<Component value={new Set([1,2])}>`)).toBe(true);
+  });
+  it("matches Class instance passed as state", () => {
+    expect(regex.test(`<Component state={new UserModel()}>`)).toBe(true);
+  });
+  it("does not match plain object value", () => {
+    expect(regex.test(`<Component value={{a:1}}>`)).toBe(false);
+  });
+});
+
+describe("error-boundary-incomplete (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["error-boundary-incomplete"]!.regex;
+  it("matches class with componentDidCatch but no getDerivedStateFromError", () => {
+    const src = `class MyBoundary extends React.Component {
+      componentDidCatch(err, info) { console.log(err); }
+      render() { return this.props.children; }
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("matches class with getDerivedStateFromError but no componentDidCatch", () => {
+    const src = `class MyBoundary extends Component {
+      static getDerivedStateFromError(err) { return {hasError: true}; }
+      render() { return this.props.children; }
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
+
+describe("Tier 6 — severity migration", () => {
+  it("all React patterns now have severity field", () => {
+    const reactPatterns = [
+      "hook-in-condition", "useEffect-async", "useEffect-object-dep", "missing-display-name",
+      "index-as-key", "inline-handler", "conditional-render-hook", "dangerously-set-html",
+      "direct-dom-access", "unstable-default-value", "jsx-falsy-and", "nested-component-def",
+      "usecallback-no-deps", "react19-use-without-suspense", "react19-server-action-not-async",
+      "react19-form-action-non-function", "react19-useoptimistic-no-transition",
+      "hook-usestate-destructure", "prefer-function-component",
+      "compiler-side-effect-in-render", "compiler-ref-read-in-render", "compiler-prop-mutation",
+      "compiler-state-mutation", "compiler-try-catch-bailout", "compiler-redundant-memo",
+      "compiler-redundant-usecallback", "rsc-non-serializable-prop", "rsc-date-prop",
+    ];
+    for (const name of reactPatterns) {
+      const entry = BUILTIN_PATTERNS[name];
+      expect(entry, `pattern ${name} not found`).toBeDefined();
+      expect(entry!.severity, `pattern ${name} missing severity`).toMatch(/^(critical|warning|style)$/);
+    }
+  });
+});
