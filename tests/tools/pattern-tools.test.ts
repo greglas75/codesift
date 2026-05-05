@@ -1596,3 +1596,105 @@ describe("postFilter runner integration (Tier 5)", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 — pre-existing CRITICAL bugfixes (regex correctness)
+// All 3 fixes surfaced by adversarial review of Tier 6 commits.
+// ─────────────────────────────────────────────────────────────
+
+describe("react19-useoptimistic-no-transition (Tier 7 fix)", () => {
+  const regex = BUILTIN_PATTERNS["react19-useoptimistic-no-transition"]!.regex;
+
+  it("matches useOptimistic without nearby useTransition (real bug)", () => {
+    const src = `function Form() {
+      const [state, addOpt] = useOptimistic(messages);
+      return <div>{state}</div>;
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match useOptimistic paired with useTransition (correct usage)", () => {
+    const src = `function Form() {
+      const [isPending, startTransition] = useTransition();
+      const [state, addOpt] = useOptimistic(messages);
+      return <button onClick={() => startTransition(() => addOpt(x))}>x</button>;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("does NOT match useOptimistic when startTransition appears AFTER call (forward-1000-char window)", () => {
+    // KNOWN LIMITATION: regex uses forward-only lookahead. If startTransition
+    // appears ONLY in the import line ABOVE useOptimistic, it's not detected
+    // (JS regex lacks efficient bidirectional lookbehind here). This test covers
+    // the practical case where startTransition is declared/used near the call.
+    const src = `function Form() {
+      const [state, addOpt] = useOptimistic(messages);
+      const [pending, startTransition] = useTransition();
+      return <div onClick={() => startTransition(() => addOpt(x))}/>;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("useEffect-setstate-loop (Tier 7 fix)", () => {
+  const regex = BUILTIN_PATTERNS["useEffect-setstate-loop"]!.regex;
+
+  it("matches real loop: setX in useEffect with X in deps array", () => {
+    const src = `function Foo() {
+      useEffect(() => { setCount(count + 1); }, [count]);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match setItems([...items, x]) — array literal as setState arg", () => {
+    // gemini Run 6 CRITICAL: the array literal `[...items, x]` was wrongly
+    // detected as the deps array. Fix anchors on the closing `}, [` of useEffect.
+    const src = `function Foo() {
+      useEffect(() => { setItems([...items, newItem]); }, [newItem]);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("does NOT match setX with valid different deps", () => {
+    const src = `function Foo() {
+      useEffect(() => { setCount(c => c + 1); }, [trigger]);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("react19-server-action-not-async (Tier 7 fix)", () => {
+  const regex = BUILTIN_PATTERNS["react19-server-action-not-async"]!.regex;
+
+  it("matches sync `export function` after 'use server'", () => {
+    const src = `"use server";
+export function login(formData) { return db.login(formData); }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("matches sync arrow `export const X = () =>` after 'use server'", () => {
+    // gemini Run 6 CRITICAL: arrow functions were missed.
+    const src = `"use server";
+export const login = (formData) => { return db.login(formData); };`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match async function (correct)", () => {
+    const src = `"use server";
+export async function login(formData) { return await db.login(formData); }`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("does NOT match async arrow (correct)", () => {
+    const src = `"use server";
+export const login = async (formData) => { return await db.login(formData); };`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("matches sync arrow far from directive (>500 chars)", () => {
+    // gemini fix: extended search window to 2000 chars.
+    const filler = "// ".repeat(200) + "\n// banner comment block\n";
+    const src = `"use server";\n${filler}export const action = (data) => { return process(data); };`;
+    expect(regex.test(src)).toBe(true);
+  });
+});

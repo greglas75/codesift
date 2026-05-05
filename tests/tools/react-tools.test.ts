@@ -663,3 +663,120 @@ describe("computePropChainDepth", () => {
       .toBe(computePropChainDepth("Leaf", rev2, new Map(), new Set()));
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 — Cross-file Suspense ancestor detection
+// ─────────────────────────────────────────────────────────────
+import {
+  findSuspenseAncestor,
+  findLazyComponentsWithoutSuspense,
+} from "../../src/tools/react-tools.js";
+
+describe("findSuspenseAncestor (Tier 7)", () => {
+  function makeAdj(...edges: [parent: string, child: string][]): Map<string, string[]> {
+    const rev = new Map<string, string[]>();
+    for (const [parent, child] of edges) {
+      const list = rev.get(child) ?? [];
+      list.push(parent);
+      rev.set(child, list);
+    }
+    return rev;
+  }
+
+  it("returns null when no parents have Suspense", () => {
+    const rev = makeAdj(["Root", "Child"]);
+    const symbols = new Map([
+      ["Root", sym({ id: "Root", name: "Root", file: "r.tsx", source: "<Child/>" })],
+      ["Child", sym({ id: "Child", name: "Child", file: "c.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Child", rev, symbols)).toBeNull();
+  });
+
+  it("finds Suspense in immediate parent", () => {
+    const rev = makeAdj(["Root", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({ id: "Root", name: "Root", file: "r.tsx", source: "<Suspense fallback={<div/>}><Lazy/></Suspense>" })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    const result = findSuspenseAncestor("Lazy", rev, symbols);
+    expect(result?.name).toBe("Root");
+  });
+
+  it("finds <React.Suspense> form (with React. prefix)", () => {
+    const rev = makeAdj(["Root", "Leaf"]);
+    const symbols = new Map([
+      ["Root", sym({ id: "Root", name: "Root", file: "r.tsx", source: "<React.Suspense><Leaf/></React.Suspense>" })],
+      ["Leaf", sym({ id: "Leaf", name: "Leaf", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Leaf", rev, symbols)?.name).toBe("Root");
+  });
+
+  it("walks 3-level chain: Lazy → Middle → Root(with Suspense)", () => {
+    const rev = makeAdj(["Root", "Middle"], ["Middle", "Lazy"]);
+    const symbols = new Map([
+      ["Root", sym({ id: "Root", name: "Root", file: "r.tsx", source: "<Suspense><Middle/></Suspense>" })],
+      ["Middle", sym({ id: "Middle", name: "Middle", file: "m.tsx", source: "<Lazy/>" })],
+      ["Lazy", sym({ id: "Lazy", name: "Lazy", file: "l.tsx", source: "<div/>" })],
+    ]);
+    expect(findSuspenseAncestor("Lazy", rev, symbols)?.name).toBe("Root");
+  });
+
+  it("handles cyclic graph without infinite loop", () => {
+    const rev = makeAdj(["A", "B"], ["B", "A"]);
+    const symbols = new Map([
+      ["A", sym({ id: "A", name: "A", file: "a.tsx", source: "<B/>" })],
+      ["B", sym({ id: "B", name: "B", file: "b.tsx", source: "<A/>" })],
+    ]);
+    expect(() => findSuspenseAncestor("A", rev, symbols)).not.toThrow();
+    expect(findSuspenseAncestor("A", rev, symbols)).toBeNull();
+  });
+});
+
+describe("findLazyComponentsWithoutSuspense (Tier 7)", () => {
+  it("flags lazy() in component with no Suspense in chain", () => {
+    const symbols = [
+      sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: "function Root() { return <Lazy/>; }",
+      }),
+      sym({
+        id: "Lazy", name: "Lazy", file: "l.tsx",
+        source: "const Heavy = React.lazy(() => import('./Heavy')); function Lazy() { return <Heavy/>; }",
+      }),
+    ];
+    const issues = findLazyComponentsWithoutSuspense(symbols);
+    expect(issues.length).toBe(1);
+    expect(issues[0]?.name).toBe("Lazy");
+  });
+
+  it("does NOT flag lazy() when ancestor has Suspense", () => {
+    const symbols = [
+      sym({
+        id: "Root", name: "Root", file: "r.tsx",
+        source: "function Root() { return <Suspense fallback={<Loading/>}><Lazy/></Suspense>; }",
+      }),
+      sym({
+        id: "Lazy", name: "Lazy", file: "l.tsx",
+        source: "const Heavy = React.lazy(() => import('./Heavy')); function Lazy() { return <Heavy/>; }",
+      }),
+    ];
+    expect(findLazyComponentsWithoutSuspense(symbols).length).toBe(0);
+  });
+
+  it("does NOT flag when component itself has Suspense", () => {
+    const symbols = [
+      sym({
+        id: "Self", name: "Self", file: "s.tsx",
+        source: "const Heavy = lazy(() => import('./Heavy')); function Self() { return <Suspense><Heavy/></Suspense>; }",
+      }),
+    ];
+    expect(findLazyComponentsWithoutSuspense(symbols).length).toBe(0);
+  });
+
+  it("returns empty list when no lazy() usage anywhere", () => {
+    const symbols = [
+      sym({ id: "A", name: "A", file: "a.tsx", source: "function A() { return <div/>; }" }),
+    ];
+    expect(findLazyComponentsWithoutSuspense(symbols).length).toBe(0);
+  });
+});

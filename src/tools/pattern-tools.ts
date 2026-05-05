@@ -95,8 +95,11 @@ export const BUILTIN_PATTERNS: Record<string, {
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "react19-server-action-not-async": {
-    regex: /^[\s\S]{0,200}["']use server["'][\s\S]{0,500}?\bexport\s+(?!async)function\s+\w+\s*\(/m,
-    description: "React 19 Server Action: function in 'use server' file must be async (returns Promise). Synchronous functions break the action contract.",
+    // Tier 7 fix: matches `export function X`, `export const X = (...) =>`,
+    // AND `export default function X` (gemini finding — default exports were missed).
+    // 2000-char window for actions defined far from the directive.
+    regex: /^[\s\S]{0,200}["']use server["'][\s\S]{0,2000}?\bexport\s+(?:(?:const|let|var)\s+\w+\s*=\s+(?!async\b)(?:\([^)]*\)|\w+)\s*=>|default\s+(?!async\b)function(?:\s+\w+)?\s*\(|(?!async\b)function\s+\w+\s*\()/m,
+    description: "React 19 Server Action: function in 'use server' file must be async (returns Promise). Pattern detects `export function X`, `export const X = (...) =>` arrow, AND `export default function X` (default exports).",
     fileIncludePattern: /\.(tsx|jsx|ts|js)$/,
   },
   "react19-form-action-non-function": {
@@ -105,7 +108,13 @@ export const BUILTIN_PATTERNS: Record<string, {
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "react19-useoptimistic-no-transition": {
-    regex: /\buseOptimistic\s*\([\s\S]{0,300}?(?!useTransition|startTransition)/,
+    // Tier 7 fix (gemini Run 6 CRITICAL): negative lookahead trivially succeeded
+    // because [\s\S]{0,300}? matched 0 chars before the lookahead, then any text
+    // that wasn't `useTransition` immediately satisfied the negation. Result: every
+    // useOptimistic call was flagged. Fix: scope the negative lookahead over the
+    // entire forward window so it only succeeds when NO mention of useTransition
+    // exists in the surrounding ~1000 chars.
+    regex: /\buseOptimistic\s*\((?![\s\S]{0,1000}?(?:useTransition|startTransition))/,
     description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. Without it, optimistic updates can be interrupted.",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
@@ -177,8 +186,15 @@ export const BUILTIN_PATTERNS: Record<string, {
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "useEffect-setstate-loop": {
-    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>[\s\S]{0,500}?set([A-Z]\w*)\s*\([\s\S]{0,300}?\[\s*[\s\S]*?\b\1\b/i,
-    description: "setState inside useEffect with same state variable in dependency array — causes infinite render loop. Either remove from deps or use functional updater: setState(prev => ...).",
+    // Tier 7 fix (multiple gemini findings):
+    //  1. Original matched `[` in setState array literal arg → fixed by anchoring on `}, [`.
+    //  2. Cross-effect bridging — `[\s\S]{0,800}?` could span TWO useEffect blocks. Fixed
+    //     by `(?:(?!\\buseEffect\\b)[\\s\\S])` — non-greedy walk that bails on next useEffect.
+    //  3. Implicit-return arrows `useEffect(() => setX(c+1), [c])` were missed.
+    //     Fixed via outer alternation: block-bodied form OR concise expression form.
+    //  4. `\1\b` matched `count` inside `props.count` — fixed by `(?<!\.)\\b\\1\\b`.
+    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>\s*(?:\{(?:(?!\buseEffect\b)[\s\S]){0,800}?\bset([A-Z]\w*)\s*\((?:(?!\buseEffect\b)[\s\S]){0,300}?\}\s*,\s*\[[^\]]*?(?<!\.)\b\1\b|set([A-Z]\w*)\s*\((?:(?!\buseEffect\b)[\s\S]){0,300}?\)\s*,\s*\[[^\]]*?(?<!\.)\b\2\b)/i,
+    description: "setState inside useEffect with same state variable in dependency array — infinite render loop. Detects both block-bodied (`() => { setX(); }, [x]`) and concise (`() => setX(), [x]`) forms; bails out at next useEffect to avoid cross-block bridging; rejects property-chain false-positives like `props.count`.",
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "useEffect-missing-deps-identifier": {

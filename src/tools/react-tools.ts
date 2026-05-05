@@ -12,6 +12,7 @@ import { resolveAlias } from "../utils/react-alias.js";
 import type { CodeSymbol, CallNode } from "../types.js";
 
 export { buildJsxAdjacency, buildComponentTree, extractJsxComponents, extractHookCalls, extractHookNames, findRuleOfHooksViolations, findRenderRisks, buildReverseAdjacency, computePropChainDepth };
+// Tier 7 helpers exported above at definition site (findSuspenseAncestor, findLazyComponentsWithoutSuspense)
 // formatRendersMarkdown and buildContextGraph are exported inline at definition site below
 
 // ── Limits (mirror graph-tools.ts) ──────────────────────────
@@ -212,6 +213,92 @@ function computePropChainDepth(
     }
   }
   return memo.get(componentId)!;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 — Cross-file Suspense ancestor detection
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Check whether source contains `<Suspense>` or `<React.Suspense>` JSX.
+ * Returns true if Suspense element is present (open or self-closing form).
+ */
+function hasSuspenseInSource(source: string): boolean {
+  return /<(?:React\.)?Suspense\b/.test(source);
+}
+
+/**
+ * Walk UP the JSX render tree from a component, looking for any ancestor whose
+ * source contains a Suspense boundary. Returns the first ancestor found, or
+ * null if no Suspense exists anywhere in the upward chain.
+ *
+ * Tier 7 — closes the cross-file FP in `react-lazy-no-suspense-same-file` regex
+ * (Tier 6 limitation). Reuses `buildReverseAdjacency` infrastructure from Tier 5.
+ * Cycle-safe via visited set (BFS on potentially cyclic graph).
+ */
+export function findSuspenseAncestor(
+  componentId: string,
+  reverseAdjacency: Map<string, string[]>,
+  symbolsById: Map<string, CodeSymbol>,
+): { name: string; file: string } | null {
+  // Tier 7 fix (gemini Run finding): visited.add() at push-time (not pop-time)
+  // prevents O(E) duplicate queue pushes on densely-connected component graphs.
+  const visited = new Set<string>([componentId]);
+  const queue: string[] = [];
+  for (const p of reverseAdjacency.get(componentId) ?? []) {
+    if (!visited.has(p)) { visited.add(p); queue.push(p); }
+  }
+
+  let head = 0;
+  while (head < queue.length) {
+    const parentId = queue[head++]!;
+    const sym = symbolsById.get(parentId);
+    if (sym?.source && hasSuspenseInSource(sym.source)) {
+      return { name: sym.name, file: sym.file };
+    }
+    for (const gp of reverseAdjacency.get(parentId) ?? []) {
+      if (!visited.has(gp)) { visited.add(gp); queue.push(gp); }
+    }
+  }
+  return null;
+}
+
+/**
+ * Find all React.lazy() / lazy() usages whose containing component lacks a
+ * Suspense boundary anywhere in its ancestor chain. Cross-file proper detection.
+ * Tier 7 — complements the single-file regex `react-lazy-no-suspense-same-file`.
+ */
+export interface LazyWithoutSuspense {
+  name: string;
+  file: string;
+  start_line: number;
+}
+
+export function findLazyComponentsWithoutSuspense(
+  symbols: CodeSymbol[],
+): LazyWithoutSuspense[] {
+  const components = symbols.filter((s) => s.kind === "component");
+  const adjacency = buildJsxAdjacency(components);
+  const reverseAdj = buildReverseAdjacency(adjacency);
+  const symbolsById = new Map<string, CodeSymbol>();
+  for (const s of components) symbolsById.set(s.id, s);
+
+  // Tier 7 fix (cursor-agent finding): word-boundary before `lazy` to avoid matching
+  // arbitrary `.lazy(` callable chains (e.g., `obj.lazy(`). Match either `React.lazy(`
+  // OR bare `lazy(` (named-import form), with `\b` to anchor identifier start.
+  const lazyRe = /\b(?:React\.lazy|lazy)\s*\(/;
+  const issues: LazyWithoutSuspense[] = [];
+
+  for (const sym of components) {
+    if (!sym.source || !lazyRe.test(sym.source)) continue;
+    // Same-file check first: does this component have Suspense itself?
+    if (hasSuspenseInSource(sym.source)) continue;
+    // Walk ancestors via reverse adjacency
+    if (findSuspenseAncestor(sym.id, reverseAdj, symbolsById) === null) {
+      issues.push({ name: sym.name, file: sym.file, start_line: sym.start_line });
+    }
+  }
+  return issues;
 }
 
 /**
