@@ -18,11 +18,15 @@ describe("phpSecurityScan", () => {
     await indexFolder(FIXTURE_ROOT);
   });
 
-  it("runs all 8 PHP security patterns in parallel and returns a result shape", async () => {
+  it("runs all PHP/Yii2 security patterns in parallel and returns a result shape", async () => {
     const r = await phpSecurityScan(REPO);
-    expect(r.checks_run).toHaveLength(8);
+    // Sprint 2 expanded the catalog from 8 to 20 patterns. The original 8
+    // are kept first; assert their presence rather than total count, so
+    // future additions don't break this contract test.
+    expect(r.checks_run.length).toBeGreaterThanOrEqual(20);
     expect(r.checks_run).toEqual(
       expect.arrayContaining([
+        // Original 8
         "sql-injection-php",
         "xss-php",
         "eval-php",
@@ -31,6 +35,19 @@ describe("phpSecurityScan", () => {
         "file-include-var",
         "unescaped-yii-view",
         "raw-query-yii",
+        // Sprint 2 additions
+        "yii-csrf-disabled",
+        "yii-debug-mode-prod",
+        "yii-cookie-no-validation",
+        "yii-mass-assignment-unsafe",
+        "yii-raw-sql-where",
+        "php-md5-password",
+        "php-rand-token",
+        "php-loose-comparison-secret",
+        "yii-rbac-cached-permission",
+        "yii-no-row-level-locking",
+        "yii-config-hardcoded-secret",
+        "yii-unbounded-all",
       ]),
     );
     expect(r.summary).toEqual(
@@ -42,6 +59,95 @@ describe("phpSecurityScan", () => {
         total: expect.any(Number),
       }),
     );
+  });
+
+  describe("Sprint 2 — new Yii2/PHP security patterns", () => {
+    it("flags CSRF disabled in controller", async () => {
+      const r = await phpSecurityScan(REPO);
+      const csrf = r.findings.filter((f) => f.pattern === "yii-csrf-disabled");
+      expect(csrf.length).toBeGreaterThanOrEqual(1);
+      expect(csrf[0].severity).toBe("high");
+    });
+
+    it("flags YII_DEBUG enabled in entry-point file", async () => {
+      const r = await phpSecurityScan(REPO);
+      const debug = r.findings.filter((f) => f.pattern === "yii-debug-mode-prod");
+      expect(debug.length).toBeGreaterThanOrEqual(1);
+      expect(debug[0].severity).toBe("critical");
+    });
+
+    it("flags placeholder cookieValidationKey", async () => {
+      const r = await phpSecurityScan(REPO);
+      const cookie = r.findings.filter(
+        (f) => f.pattern === "yii-cookie-no-validation",
+      );
+      expect(cookie.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags setAttributes() with raw $_POST", async () => {
+      const r = await phpSecurityScan(REPO);
+      const ma = r.findings.filter(
+        (f) => f.pattern === "yii-mass-assignment-unsafe",
+      );
+      expect(ma.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags ->where() with string interpolation", async () => {
+      const r = await phpSecurityScan(REPO);
+      const sql = r.findings.filter((f) => f.pattern === "yii-raw-sql-where");
+      expect(sql.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags md5/sha1 on password variables", async () => {
+      const r = await phpSecurityScan(REPO);
+      const md5 = r.findings.filter((f) => f.pattern === "php-md5-password");
+      expect(md5.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("flags rand/uniqid for token-named variables", async () => {
+      const r = await phpSecurityScan(REPO);
+      const tok = r.findings.filter((f) => f.pattern === "php-rand-token");
+      expect(tok.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("flags loose == comparison on hash-named variable", async () => {
+      const r = await phpSecurityScan(REPO);
+      const cmp = r.findings.filter(
+        (f) => f.pattern === "php-loose-comparison-secret",
+      );
+      expect(cmp.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags ->can() inside foreach (RBAC perf)", async () => {
+      const r = await phpSecurityScan(REPO);
+      const rbac = r.findings.filter(
+        (f) => f.pattern === "yii-rbac-cached-permission",
+      );
+      expect(rbac.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags transaction without forUpdate row-locking", async () => {
+      const r = await phpSecurityScan(REPO);
+      const lock = r.findings.filter(
+        (f) => f.pattern === "yii-no-row-level-locking",
+      );
+      expect(lock.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags hardcoded secret literal in config", async () => {
+      const r = await phpSecurityScan(REPO);
+      const sec = r.findings.filter(
+        (f) => f.pattern === "yii-config-hardcoded-secret",
+      );
+      expect(sec.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("flags unbounded ->all() in commands/*Controller", async () => {
+      const r = await phpSecurityScan(REPO);
+      const all = r.findings.filter((f) => f.pattern === "yii-unbounded-all");
+      expect(all.length).toBeGreaterThanOrEqual(1);
+      expect(all[0].file).toContain("commands/");
+    });
   });
 
   it("detects eval() in VulnerableController as critical", async () => {
