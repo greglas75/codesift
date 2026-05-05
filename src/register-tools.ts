@@ -77,6 +77,7 @@ import {
   php8CompatCheck,
   analyzeYiiModules,
   analyzeYiiMigrations,
+  analyzeYiiRbac,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -409,6 +410,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "php8_compat_check",
     "analyze_yii_modules",
     "analyze_yii_migrations",
+    "analyze_yii_rbac",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3178,6 +3180,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/yii-migrations-tools.js").YiiMigrationAuditFinding["rule_id"][];
       }
       return await analyzeYiiMigrations(args.repo as string, opts);
+    },
+  },
+  {
+    name: "analyze_yii_rbac",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "yii2 rbac authManager createPermission createRole addChild can() AccessControl behaviors orphan unused permission audit dektrium dbmanager phpmanager",
+    description:
+      "Yii2 RBAC permission graph audit. Cross-references permission/role definitions in seed migrations + RBAC seeders against runtime checks (Yii::$app->user->can() + AccessControl behaviors). Returns orphan_checks (checked but never defined — typo / dead code), unused_definitions (defined but never checked — dead seed), controllers_without_access_control (classes named *Controller without AccessControl in behaviors() and no can() calls), and dynamic_creates (createPermission(\\$var) sites that need manual review).",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      include_vendor: z.boolean().optional().describe("Include vendor/ paths (default false)"),
+    })),
+    handler: async (args) => {
+      const opts: { include_vendor?: boolean } = {};
+      if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
+      return await analyzeYiiRbac(args.repo as string, opts);
     },
   },
 
