@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
+import { stripCommentsAndStrings } from "../utils/source-stripper.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
@@ -29,6 +30,13 @@ export const BUILTIN_PATTERNS: Record<string, {
   fileIncludePattern?: RegExp;
   severity?: "critical" | "warning" | "style";
   postFilter?: (match: string) => boolean;
+  /**
+   * Tier 8 — preprocess source before regex match. "strip-comments-strings"
+   * replaces all comment/string/template/regex literal content with whitespace
+   * (preserves character positions). Prevents comment- or string-embedded code
+   * from spoofing pattern detection. Opt-in per pattern (perf cost: ~O(N) scan).
+   */
+  preprocess?: "strip-comments-strings";
 }> = {
   "useEffect-no-cleanup": {
     regex: /useEffect\s*\(\s*(?:async\s*)?\(\)\s*=>\s*\{(?:(?!return\s*\(\s*\)\s*=>|return\s+\(\)\s*=>|return\s*\(\s*\)\s*\{|return\s+function)[\s\S])*\}\s*,/,
@@ -66,11 +74,13 @@ export const BUILTIN_PATTERNS: Record<string, {
   // --- React anti-patterns (Wave 4b — additional) ---
   "dangerously-set-html": {
     regex: /dangerouslySetInnerHTML\s*=\s*\{/,
-    description: "dangerouslySetInnerHTML used — XSS risk unless content is sanitized (CQ24)",
+    description: "dangerouslySetInnerHTML used — XSS risk unless content is sanitized (CQ24). Comment/string-embedded mentions are stripped before matching.",
+    preprocess: "strip-comments-strings",
   },
   "direct-dom-access": {
     regex: /\bdocument\.(getElementById|querySelector|querySelectorAll|getElementsBy)\s*\(/,
-    description: "Direct DOM access in React component — use useRef instead (breaks SSR, bypasses virtual DOM)",
+    description: "Direct DOM access in React component — use useRef instead (breaks SSR, bypasses virtual DOM). Comment/string-embedded mentions stripped before matching.",
+    preprocess: "strip-comments-strings",
   },
   "unstable-default-value": {
     regex: /(?:function\s+[A-Z]\w*|const\s+[A-Z]\w*\s*=\s*(?:\([^)]*\)|[^=]*)\s*=>)\s*[\s\S]{0,100}(?:\{\s*[^}]*=\s*\[\s*\]|\{\s*[^}]*=\s*\{\s*\})/,
@@ -105,9 +115,13 @@ export const BUILTIN_PATTERNS: Record<string, {
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "react19-useoptimistic-no-transition": {
-    regex: /\buseOptimistic\s*\([\s\S]{0,300}?(?!useTransition|startTransition)/,
-    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. Without it, optimistic updates can be interrupted.",
+    // Tier 8 — preprocess strips comment/string content before lookahead, so
+    // useTransition mentions in JSDoc/comments/strings no longer suppress
+    // detection (Tier 7 R-2.1 known limit closed).
+    regex: /\buseOptimistic\s*\((?![\s\S]{0,1000}?\b(?:useTransition|startTransition)\b)/,
+    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. Comment/string-embedded mentions stripped before matching.",
     fileIncludePattern: /\.(tsx|jsx)$/,
+    preprocess: "strip-comments-strings",
   },
   // --- oxlint-inspired React rules (April 2026) ---
   "hook-usestate-destructure": {
@@ -255,15 +269,18 @@ export const BUILTIN_PATTERNS: Record<string, {
   },
   "empty-catch": {
     regex: /catch\s*\([^)]*\)\s*\{\s*\}/,
-    description: "Empty catch block — swallowed error (CQ8)",
+    description: "Empty catch block — swallowed error (CQ8). Comment/string-embedded mentions stripped before matching.",
+    preprocess: "strip-comments-strings",
   },
   "any-type": {
     regex: /:\s*any\b|as\s+any\b/,
-    description: "Usage of 'any' type — lose type safety",
+    description: "Usage of 'any' type — lose type safety. Comment/string-embedded mentions stripped before matching.",
+    preprocess: "strip-comments-strings",
   },
   "console-log": {
     regex: /console\.(log|debug|info)\s*\(/,
-    description: "console.log in production code — use structured logger (CQ13)",
+    description: "console.log in production code — use structured logger (CQ13). Comment/string-embedded mentions stripped before matching.",
+    preprocess: "strip-comments-strings",
   },
   "await-in-loop": {
     regex: /for\s*\([\s\S]*?\)\s*\{[\s\S]*?await\s/,
@@ -760,6 +777,7 @@ export async function searchPatterns(
   let fileExcludePattern: RegExp | undefined;
   let fileIncludePattern: RegExp | undefined;
   let postFilter: ((match: string) => boolean) | undefined;
+  let preprocess: "strip-comments-strings" | undefined;
 
   const builtin = BUILTIN_PATTERNS[pattern];
   if (builtin) {
@@ -768,6 +786,7 @@ export async function searchPatterns(
     fileExcludePattern = builtin.fileExcludePattern;
     fileIncludePattern = builtin.fileIncludePattern;
     postFilter = builtin.postFilter;
+    preprocess = builtin.preprocess;
   } else {
     try {
       regex = new RegExp(pattern);
@@ -790,13 +809,20 @@ export async function searchPatterns(
     if (fileIncludePattern && !fileIncludePattern.test(sym.file)) continue;
 
     scanned++;
-    const match = regex.exec(sym.source);
+    // Tier 8 — preprocess source if pattern opts in. Strip preserves positions
+    // so line/column math below remains accurate.
+    const scanSource = preprocess === "strip-comments-strings"
+      ? stripCommentsAndStrings(sym.source)
+      : sym.source;
+    const match = regex.exec(scanSource);
     if (match) {
       if (!shouldKeepPostFilterMatch(pattern, match[0], postFilter)) continue;
       // Extract context: the matching line(s)
       const matchStart = match.index;
       const linesBefore = sym.source.slice(0, matchStart).split("\n").length;
-      const matchedText = match[0].split("\n")[0]!; // First line of match
+      // Use ORIGINAL source for the displayed context line, not stripped.
+      const origLine = sym.source.slice(matchStart, sym.source.indexOf("\n", matchStart) === -1 ? sym.source.length : sym.source.indexOf("\n", matchStart));
+      const matchedText = origLine.length > 0 ? origLine : match[0].split("\n")[0]!;
 
       matches.push({
         name: sym.name,
@@ -832,11 +858,18 @@ export async function searchPatterns(
       }
 
       scanned++;
-      const match = regex.exec(content);
+      // Tier 8 — preprocess source if pattern opts in.
+      const scanContent = preprocess === "strip-comments-strings"
+        ? stripCommentsAndStrings(content)
+        : content;
+      const match = regex.exec(scanContent);
       if (match) {
         if (!shouldKeepPostFilterMatch(pattern, match[0], postFilter)) continue;
         const linesBefore = content.slice(0, match.index).split("\n").length;
-        const matchedText = match[0].split("\n")[0]!;
+        // Display original line, not stripped
+        const lineEnd = content.indexOf("\n", match.index);
+        const origLine = content.slice(match.index, lineEnd === -1 ? content.length : lineEnd);
+        const matchedText = origLine.length > 0 ? origLine : match[0].split("\n")[0]!;
         matches.push({
           name: fileEntry.path.split("/").pop() ?? fileEntry.path,
           kind: "function" as SymbolKind, // file-level match has no symbol kind
