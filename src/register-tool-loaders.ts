@@ -44,6 +44,7 @@ const loadPhp8CompatTools = memoizeModule(() => import("./tools/php8-compat-tool
 const loadYiiModulesTools = memoizeModule(() => import("./tools/yii-modules-tools.js"));
 const loadYiiMigrationsTools = memoizeModule(() => import("./tools/yii-migrations-tools.js"));
 const loadYiiRbacTools = memoizeModule(() => import("./tools/yii-rbac-tools.js"));
+const loadPhp8MigrationCandidatesTools = memoizeModule(() => import("./tools/php8-migration-candidates-tools.js"));
 const loadMemoryTools = memoizeModule(() => import("./tools/memory-tools.js"));
 const loadCoordinatorTools = memoizeModule(() => import("./tools/coordinator-tools.js"));
 const loadFrequencyTools = memoizeModule(() => import("./tools/frequency-tools.js"));
@@ -179,6 +180,7 @@ export const php8CompatCheck = lazyExport<typeof import("./tools/php8-compat-too
 export const analyzeYiiModules = lazyExport<typeof import("./tools/yii-modules-tools.js").analyzeYiiModules>(loadYiiModulesTools, "analyzeYiiModules");
 export const analyzeYiiMigrations = lazyExport<typeof import("./tools/yii-migrations-tools.js").analyzeYiiMigrations>(loadYiiMigrationsTools, "analyzeYiiMigrations");
 export const analyzeYiiRbac = lazyExport<typeof import("./tools/yii-rbac-tools.js").analyzeYiiRbac>(loadYiiRbacTools, "analyzeYiiRbac");
+export const findPhp8MigrationCandidates = lazyExport<typeof import("./tools/php8-migration-candidates-tools.js").findPhp8MigrationCandidates>(loadPhp8MigrationCandidatesTools, "findPhp8MigrationCandidates");
 
 export const consolidateMemories = lazyExport<typeof import("./tools/memory-tools.js").consolidateMemories>(loadMemoryTools, "consolidateMemories");
 export const readMemory = lazyExport<typeof import("./tools/memory-tools.js").readMemory>(loadMemoryTools, "readMemory");

@@ -78,6 +78,7 @@ import {
   analyzeYiiModules,
   analyzeYiiMigrations,
   analyzeYiiRbac,
+  findPhp8MigrationCandidates,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -411,6 +412,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "analyze_yii_modules",
     "analyze_yii_migrations",
     "analyze_yii_rbac",
+    "find_php8_migration_candidates",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3197,6 +3199,38 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { include_vendor?: boolean } = {};
       if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
       return await analyzeYiiRbac(args.repo as string, opts);
+    },
+  },
+  {
+    name: "find_php8_migration_candidates",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "php 8 modernization candidates promoted constructor typed properties readonly enum match docblock @var migration upgrade modernize",
+    description:
+      "Find PHP 8 modernization candidates after a 7→8 upgrade. Surfaces 6 rule classes: promotable-ctor (collapse self-assignment ctor to promoted form), docblock-to-typed-property (convert /** @var T */ to inline `public T $x`), nullable-flag-to-syntax (`@var T|null` → `?T`), readonly-candidate (ctor-only assigned property → add readonly), enum-from-class-consts (pre-enum bag-of-constants → backed enum), match-from-switch (all-return switch → match expression). Each finding includes a suggested_replacement string and confidence rating; the tool never auto-applies changes.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Substring filter on file paths"),
+      max_samples_per_rule: z.number().optional().describe("Cap on sample evidence per rule (default 5)"),
+      include_vendor: z.boolean().optional().describe("Include vendor/ paths (default false)"),
+      rules: z.string().optional().describe("Comma-separated rule IDs to run (default: all)"),
+    })),
+    handler: async (args) => {
+      const opts: {
+        file_pattern?: string;
+        max_samples_per_rule?: number;
+        include_vendor?: boolean;
+        rules?: import("./tools/php8-migration-candidates-tools.js").Php8MigrationRuleId[];
+      } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.max_samples_per_rule === "number") {
+        opts.max_samples_per_rule = args.max_samples_per_rule;
+      }
+      if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
+      if (typeof args.rules === "string" && args.rules.trim()) {
+        opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/php8-migration-candidates-tools.js").Php8MigrationRuleId[];
+      }
+      return await findPhp8MigrationCandidates(args.repo as string, opts);
     },
   },
 
