@@ -1,6 +1,6 @@
 import { getCodeIndex } from "./index-tools.js";
 import { loadConfig } from "../config.js";
-import { getRepo, listRepos as listRegistryRepos, getRepoName } from "../storage/registry.js";
+import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { loadIndexOrStale } from "../storage/index-store.js";
 import { EXTRACTOR_VERSIONS } from "./project-tools.js";
 
@@ -24,6 +24,7 @@ export interface IndexStatusResult {
     language: string;
     expected_version: string;
     actual_version: string;
+    mismatch_detail?: string;
   };
 }
 
@@ -76,32 +77,28 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
 }
 
 /** Probe the on-disk index for a repo and return stale info if the file exists
- *  but its extractor_version snapshot drifted. Returns null when no index file
- *  is registered for the repo (the genuine "never indexed" case). Mirrors the
- *  CWD/single-repo fallback in `getCodeIndex` so callers see consistent
- *  resolution behavior. */
+ *  but its `extractor_version` snapshot drifted. Returns null when no index file
+ *  is registered for the repo (the genuine "never indexed" case). Uses
+ *  `resolveRegisteredRepoMeta` so registry resolution stays aligned with `getCodeIndex`. */
 async function detectStale(
   repo: string,
 ): Promise<IndexStatusResult["stale"] | null> {
-  let resolved = repo;
-  if (!resolved) resolved = getRepoName(process.cwd());
   const config = loadConfig();
-  let meta = await getRepo(config.registryPath, resolved);
-  if (!meta && !repo) {
-    const cwd = process.cwd();
-    const allRepos = await listRegistryRepos(config.registryPath);
-    const byRoot = allRepos.find((r) => r.root === cwd);
-    if (byRoot) meta = byRoot;
-    else if (allRepos.length === 1) meta = allRepos[0]!;
+  let result: Awaited<ReturnType<typeof loadIndexOrStale>>;
+  try {
+    const resolved = await resolveRegisteredRepoMeta(config.registryPath, repo);
+    if (!resolved) return null;
+    result = await loadIndexOrStale(resolved.meta.index_path, { ...EXTRACTOR_VERSIONS });
+  } catch {
+    return null;
   }
-  if (!meta) return null;
-  const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (result?.status === "stale") {
     return {
       reason: "extractor_version_mismatch",
       language: result.language,
       expected_version: result.expected_version,
       actual_version: result.actual_version,
+      ...(result.mismatch_detail ? { mismatch_detail: result.mismatch_detail } : {}),
     };
   }
   return null;

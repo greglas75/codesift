@@ -13,6 +13,12 @@ const mockFindClones = vi.fn().mockResolvedValue({ clones: [], summary: {} });
 const mockSetup = vi.fn().mockResolvedValue({ platform: "claude", config_path: "/test", status: "created" });
 const mockSetupAll = vi.fn().mockResolvedValue([]);
 const mockFormatSetupLines = vi.fn().mockResolvedValue(["✓ created /test"]);
+const mockInstallGitHooks = vi.fn().mockResolvedValue({
+  installed: [],
+  preserved: [],
+  skipped: [],
+  hooksPath: `${process.env.HOME ?? "/Users/test"}/.claude/hooks`,
+});
 
 vi.mock("../../src/tools/complexity-tools.js", () => ({
   analyzeComplexity: mockAnalyzeComplexity,
@@ -36,6 +42,9 @@ vi.mock("../../src/tools/pattern-tools.js", () => ({
 }));
 vi.mock("../../src/tools/clone-tools.js", () => ({
   findClones: mockFindClones,
+}));
+vi.mock("../../src/cli/git-hooks-installer.js", () => ({
+  installGitHooks: (...args: unknown[]) => mockInstallGitHooks(...args),
 }));
 vi.mock("../../src/cli/setup.js", () => ({
   setup: mockSetup,
@@ -340,11 +349,44 @@ describe("handleSetup", () => {
   beforeEach(() => {
     mockFormatSetupLines.mockReset();
     mockFormatSetupLines.mockResolvedValue(["✓ created /test"]);
+    mockInstallGitHooks.mockReset();
+    mockInstallGitHooks.mockResolvedValue({
+      installed: [],
+      preserved: [],
+      skipped: [],
+      hooksPath: `${process.env.HOME ?? "/Users/test"}/.claude/hooks`,
+    });
   });
 
   it("defaults hooks and rules to true", async () => {
     await COMMAND_MAP["setup"]!(["claude"], {});
     expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ hooks: true, rules: true }));
+  });
+
+  it("calls installGitHooks after editor setup when hooks are enabled", async () => {
+    await COMMAND_MAP["setup"]!(["claude"], {});
+    expect(mockInstallGitHooks).toHaveBeenCalledWith({ force: false });
+    expect(stdoutSpy.mock.calls.some((c) => String(c[0]).includes("git post-commit hook"))).toBe(true);
+  });
+
+  it("calls installGitHooks once after setup all", async () => {
+    await COMMAND_MAP["setup"]!(["all"], {});
+    expect(mockInstallGitHooks).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips installGitHooks when --hooks false", async () => {
+    await COMMAND_MAP["setup"]!(["claude"], { hooks: "false" });
+    expect(mockInstallGitHooks).not.toHaveBeenCalled();
+  });
+
+  it("runs installGitHooks when only --git-hooks is set with hooks false", async () => {
+    await COMMAND_MAP["setup"]!(["claude"], { hooks: "false", "git-hooks": true });
+    expect(mockInstallGitHooks).toHaveBeenCalledWith({ force: false });
+  });
+
+  it("skips installGitHooks with --no-git-hooks", async () => {
+    await COMMAND_MAP["setup"]!(["claude"], { "no-git-hooks": true });
+    expect(mockInstallGitHooks).not.toHaveBeenCalled();
   });
 
   it("respects --hooks false", async () => {

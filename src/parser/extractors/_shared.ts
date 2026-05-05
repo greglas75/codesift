@@ -60,8 +60,8 @@ export function makeSymbol(
   if (opts?.parentId) sym.parent = opts.parentId;
   if (opts?.signature) sym.signature = opts.signature;
   if (opts?.decorators && opts.decorators.length > 0) sym.decorators = opts.decorators;
-  if (opts?.extends && opts.extends.length > 0) sym.extends = opts.extends;
-  if (opts?.implements && opts.implements.length > 0) sym.implements = opts.implements;
+  if (opts?.extends && opts.extends.length > 0) sym.extends = [...opts.extends];
+  if (opts?.implements && opts.implements.length > 0) sym.implements = [...opts.implements];
   if (opts?.is_async) sym.is_async = true;
   if (opts?.is_exported !== undefined) sym.is_exported = opts.is_exported;
   if (opts?.meta && Object.keys(opts.meta).length > 0) sym.meta = opts.meta;

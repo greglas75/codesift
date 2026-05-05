@@ -2,6 +2,7 @@ import { getBM25Index, getCodeIndex } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { collectImportEdges } from "../utils/import-graph.js";
+import { collectHeritageFileEdges } from "../utils/heritage-edges.js";
 import { getGraphPath, loadGraph, saveGraph, computeIndexHash } from "../storage/graph-store.js";
 import { getRepo } from "../storage/registry.js";
 import type { CodeSymbol, CodeIndex } from "../types.js";
@@ -312,7 +313,7 @@ export async function getKnowledgeMap(
 
   // Persist graph with circular deps if freshly computed
   if (collected._graphMeta && !collected.cachedCircularDeps) {
-    const { graphPath, indexHash, importEdges } = collected._graphMeta;
+    const { graphPath, indexHash, importEdges, heritageEdges } = collected._graphMeta;
     const inDeg = new Map<string, number>();
     const outDeg = new Map<string, number>();
     for (const e of edges) {
@@ -322,7 +323,14 @@ export async function getKnowledgeMap(
     const graph: PersistentGraph = {
       index_hash: indexHash,
       computed_at: Date.now(),
-      edges: importEdges.map((e) => ({ from: e.from, to: e.to, kind: "imports" as const })),
+      edges: [
+        ...importEdges.map((e) => ({ from: e.from, to: e.to, kind: "imports" as const })),
+        ...heritageEdges.map((e) => ({
+          from: e.from,
+          to: e.to,
+          kind: e.kind,
+        })),
+      ],
       modules: index.files.map((f) => ({
         path: f.path,
         symbol_count: f.symbol_count,
@@ -376,7 +384,26 @@ interface CollectedEdges {
   /** Circular deps from cache — null if freshly computed (caller must compute) */
   cachedCircularDeps: CircularDep[] | null;
   /** Graph path + hash for deferred save (null if no registry meta) */
-  _graphMeta: { graphPath: string; indexHash: string; importEdges: Array<{ from: string; to: string }> } | null;
+  _graphMeta: {
+    graphPath: string;
+    indexHash: string;
+    importEdges: Array<{ from: string; to: string }>;
+    heritageEdges: Array<{ from: string; to: string; kind: "extends" | "implements" }>;
+  } | null;
+}
+
+function dedupeKnowledgeEdges(...groups: KnowledgeMapEdge[][]): KnowledgeMapEdge[] {
+  const seen = new Set<string>();
+  const out: KnowledgeMapEdge[] = [];
+  for (const group of groups) {
+    for (const e of group) {
+      const key = `${e.from}|${e.to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(e);
+    }
+  }
+  return out;
 }
 
 async function collectEdges(
@@ -391,9 +418,18 @@ async function collectEdges(
     const indexHash = computeIndexHash(index.files);
     const cached = await loadGraph(graphPath, indexHash);
     if (cached) {
-      const edges = cached.edges
-        .filter((e) => e.kind === "imports" && moduleMap.has(e.from) && moduleMap.has(e.to))
+      const importKm = cached.edges
+        .filter(
+          (e) =>
+            (e.kind === "imports" || e.kind === "extends" || e.kind === "implements") &&
+            moduleMap.has(e.from) &&
+            moduleMap.has(e.to),
+        )
         .map((e) => ({ from: e.from, to: e.to }));
+      const heritageKm = collectHeritageFileEdges(index)
+        .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
+        .map((e) => ({ from: e.from, to: e.to }));
+      const edges = dedupeKnowledgeEdges(importKm, heritageKm);
       const cachedCircularDeps = cached.circular_deps.length > 0
         ? cached.circular_deps.map((cycle) => ({ cycle, length: cycle.length - 1 }))
         : null;
@@ -402,18 +438,32 @@ async function collectEdges(
 
     // Compute fresh
     const importEdges = await collectImportEdges(index);
-    const edges = importEdges
+    const importKm = importEdges
       .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
       .map((e) => ({ from: e.from, to: e.to }));
+    const heritageEdges = collectHeritageFileEdges(index).filter(
+      (e) => moduleMap.has(e.from) && moduleMap.has(e.to),
+    );
+    const heritageKm = heritageEdges.map((e) => ({ from: e.from, to: e.to }));
+    const edges = dedupeKnowledgeEdges(importKm, heritageKm);
 
-    return { edges, cachedCircularDeps: null, _graphMeta: { graphPath, indexHash, importEdges } };
+    return {
+      edges,
+      cachedCircularDeps: null,
+      _graphMeta: { graphPath, indexHash, importEdges, heritageEdges },
+    };
   }
 
   // Fallback: no meta available
   const importEdges = await collectImportEdges(index);
-  const edges = importEdges
+  const importKm = importEdges
     .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
     .map((e) => ({ from: e.from, to: e.to }));
+  const heritageEdges = collectHeritageFileEdges(index).filter(
+    (e) => moduleMap.has(e.from) && moduleMap.has(e.to),
+  );
+  const heritageKm = heritageEdges.map((e) => ({ from: e.from, to: e.to }));
+  const edges = dedupeKnowledgeEdges(importKm, heritageKm);
   return { edges, cachedCircularDeps: null, _graphMeta: null };
 }
 

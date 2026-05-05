@@ -65,42 +65,56 @@ export type IndexOrStaleResult =
       language: string;
       expected_version: string;
       actual_version: string;
+      /** Present when multiple `currentVersions` keys drift at once — operators
+       *  should not assume fixing the primary `language` alone refreshes everything. */
+      mismatch_detail?: string;
     };
 
-/** Find the first language whose stored extractor_version does not match the
- *  current bundled set. Returns null when every language matches. Used by
- *  loadIndexOrStale so the stale payload names the actual mismatching language
- *  instead of always reporting "typescript".
- *
- *  Languages absent from `stored` but ALSO absent from `index.files` are
- *  tolerated — they were added to `EXTRACTOR_VERSIONS` after this index was
- *  written, but the index has no symbols in that language, so its data is not
- *  actually stale. Without this tolerance, every legacy index would be
- *  rejected as soon as a new language is added to `EXTRACTOR_VERSIONS`,
- *  producing a misleading "NOT INDEXED" signal until a manual reindex.
- *
- *  Languages present in `index.files` always require a matching version —
- *  symbols extracted by an older extractor genuinely may be stale. */
-function findExtractorVersionMismatch(
+export type ExtractorVersionMismatchRow = {
+  language: string;
+  expected: string;
+  actual: string;
+};
+
+/** All languages whose stored `extractor_version` entry does not match
+ *  `currentVersions`, applying the same tolerances as `loadIndexOrStale`
+ *  (newly added keys with no files in that language are skipped). */
+export function collectExtractorVersionMismatches(
   index: CodeIndex,
   currentVersions: Record<string, string>,
-): { language: string; expected: string; actual: string } | null {
+): ExtractorVersionMismatchRow[] {
   const stored = index.extractor_version ?? {};
+  const storedKeys = Object.keys(stored);
   const indexedLanguages = new Set<string>();
   for (const file of index.files) indexedLanguages.add(file.language);
+
+  const out: ExtractorVersionMismatchRow[] = [];
+
+  // Degenerate index: no files and no version keys cannot be treated as current.
+  if (index.files.length === 0 && storedKeys.length === 0) {
+    const langKeys = Object.keys(currentVersions);
+    if (langKeys.length === 0) return [];
+    const lang = langKeys[0]!;
+    out.push({
+      language: lang,
+      expected: currentVersions[lang] ?? "unknown",
+      actual: "missing",
+    });
+    return out;
+  }
 
   for (const lang of Object.keys(currentVersions)) {
     const expected = currentVersions[lang];
     const actual = stored[lang];
     if (expected === actual) continue;
     if (actual === undefined && !indexedLanguages.has(lang)) continue;
-    return {
+    out.push({
       language: lang,
       expected: expected ?? "unknown",
       actual: actual ?? "missing",
-    };
+    });
   }
-  return null;
+  return out;
 }
 
 /** Load an index with version-aware stale detection.
@@ -128,14 +142,25 @@ export async function loadIndexOrStale(
     const raw = await readFile(indexPath, "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (!isValidIndex(parsed)) return null;
-    const mismatch = findExtractorVersionMismatch(parsed, currentVersions);
-    if (mismatch) {
+    const mismatches = collectExtractorVersionMismatches(parsed, currentVersions);
+    if (mismatches.length > 0) {
+      const first = mismatches[0]!;
       return {
         status: "stale",
         reason: "extractor_version_mismatch",
-        language: mismatch.language,
-        expected_version: mismatch.expected,
-        actual_version: mismatch.actual,
+        language: first.language,
+        expected_version: first.expected,
+        actual_version: first.actual,
+        ...(mismatches.length > 1
+          ? {
+              mismatch_detail: mismatches
+                .map(
+                  (m) =>
+                    `${m.language}: expected ${m.expected}, got ${m.actual}`,
+                )
+                .join("; "),
+            }
+          : {}),
       };
     }
     return { status: "ok", index: parsed };
@@ -150,7 +175,7 @@ export async function loadIndexOrStale(
  * `currentVersions` and `index.files` is missing from the stored snapshot or
  * has a different value. Languages added to `currentVersions` after this index
  * was written are tolerated when the index has no files in that language —
- * matches the tolerance applied by `findExtractorVersionMismatch`. A missing
+ * matches the tolerance applied by `collectExtractorVersionMismatches`. A missing
  * `extractor_version` field on a fully legacy index is still treated as a
  * version miss.
  */
@@ -158,17 +183,8 @@ export function isExtractorVersionCurrent(
   index: CodeIndex,
   currentVersions: Record<string, string>,
 ): boolean {
-  const stored = index.extractor_version;
-  if (!stored) return false;
-  const indexedLanguages = new Set<string>();
-  for (const file of index.files) indexedLanguages.add(file.language);
-  for (const lang of Object.keys(currentVersions)) {
-    const actual = stored[lang];
-    if (actual === currentVersions[lang]) continue;
-    if (actual === undefined && !indexedLanguages.has(lang)) continue;
-    return false;
-  }
-  return true;
+  if (!index.extractor_version) return false;
+  return collectExtractorVersionMismatches(index, currentVersions).length === 0;
 }
 
 /**

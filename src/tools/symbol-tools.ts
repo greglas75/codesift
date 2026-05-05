@@ -798,9 +798,100 @@ function collectExportedSymbols(
   });
 }
 
+// Bumped from 2000 → 5000 (F14: prior cap silently dropped references in
+// medium-large repos, producing false-positive dead-code candidates whose
+// real callers lived in unscanned files). Memory cost: roughly one file
+// content string per entry — at 5K average-sized source files this is on
+// the order of 50–200 MB peak, well within limits for analysis flows.
+const MAX_SCAN_FILES = 5000;
+
+/**
+ * Resolve a relative import path against a source file's directory. Handles
+ * the standard TS/Node extensions plus barrel-style `index` resolution.
+ * Returns the candidate file path that exists in `allFiles`, or null.
+ *
+ * Intentionally narrow: only resolves `./` and `../` paths. Aliased imports
+ * (tsconfig paths, package-json `imports`) are out of scope here — they show
+ * up textually in scanned content anyway, so they don't drive false positives.
+ */
+function resolveRelativeImport(
+  fromFile: string,
+  importPath: string,
+  allFiles: Set<string>,
+): string | null {
+  if (!importPath.startsWith(".")) return null;
+  const lastSlash = fromFile.lastIndexOf("/");
+  const fromDir = lastSlash >= 0 ? fromFile.slice(0, lastSlash) : "";
+  const segments = (fromDir + "/" + importPath).split("/");
+  const stack: string[] = [];
+  for (const seg of segments) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") stack.pop();
+    else stack.push(seg);
+  }
+  const base = stack.join("/");
+  if (allFiles.has(base)) return base;
+  // TS allows `import './x.js'` to resolve to `x.ts` — strip then re-extend.
+  const stripped = base.replace(/\.(m?js|jsx)$/, "");
+  const candidates = [
+    stripped + ".ts",
+    stripped + ".tsx",
+    stripped + ".mjs",
+    stripped + ".js",
+    stripped + ".jsx",
+    stripped + "/index.ts",
+    stripped + "/index.tsx",
+    stripped + "/index.js",
+    stripped + "/index.jsx",
+  ];
+  for (const c of candidates) {
+    if (allFiles.has(c)) return c;
+  }
+  return null;
+}
+
+/**
+ * Pre-scan content for re-export edges. A symbol re-exported from another
+ * file isn't textually referenced in the barrel — without this pass barrel
+ * patterns like `export * from './foo'` cause every symbol in `./foo` to be
+ * misclassified as dead.
+ *
+ * Returns a set of file paths that are reached via at least one re-export
+ * (named or star). Callers treat any candidate whose defining file lands in
+ * this set as live.
+ */
+function collectReExportedFiles(
+  fileContents: Map<string, string>,
+  allFiles: Set<string>,
+): Set<string> {
+  const reExported = new Set<string>();
+  // Matches:  export * from "./x";   export { A, B } from "./x";   export type { T } from "./x";
+  const RE = /^\s*export\s+(?:\*|type\s+\*|\{[^}]*\}|type\s+\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gm;
+  for (const [filePath, content] of fileContents) {
+    RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = RE.exec(content)) !== null) {
+      const target = resolveRelativeImport(filePath, m[1]!, allFiles);
+      if (target) reExported.add(target);
+    }
+  }
+  return reExported;
+}
+
 /**
  * Find potentially dead code: exported symbols with 0 references outside their own file.
  * Scans all indexed files for word-boundary matches of each exported symbol name.
+ *
+ * F14 fixes (2026-05-05):
+ *   - Test files are now ALWAYS scanned for references regardless of
+ *     `include_tests`. The flag now gates only candidate selection (whether
+ *     test-internal exports can themselves be flagged dead). Symbols used
+ *     only in tests are no longer false-positive dead.
+ *   - Re-exports via `export * from './x'` and `export { Y } from './x'`
+ *     now mark `./x` as live; previously the lack of textual mention in the
+ *     barrel made every barrel-forwarded symbol look dead.
+ *   - MAX_SCAN_FILES raised 2000 → 5000; truncation now surfaces in the
+ *     `truncated` field so callers can react.
  */
 export async function findDeadCode(
   repo: string,
@@ -816,12 +907,17 @@ export async function findDeadCode(
   const exportedSymbols = collectExportedSymbols(index.symbols, { includeTests, filePattern });
   const frameworks = detectFrameworks(index);
 
-  // Read non-test files into memory for scanning (capped to prevent OOM on large repos)
-  const MAX_SCAN_FILES = 2000;
+  // Read EVERY indexed file (incl. tests) for reference scanning. The previous
+  // version honored `includeTests` here, which meant a symbol referenced only
+  // from tests was misclassified as dead. Candidate selection still uses
+  // `includeTests` (above) so test-only helpers don't appear in the result list.
   const fileContents = new Map<string, string>();
+  let scanTruncated = false;
   for (const file of index.files) {
-    if (fileContents.size >= MAX_SCAN_FILES) break;
-    if (!includeTests && isTestFile(file.path)) continue;
+    if (fileContents.size >= MAX_SCAN_FILES) {
+      scanTruncated = true;
+      break;
+    }
     try {
       fileContents.set(file.path, await readFile(join(index.root, file.path), "utf-8"));
     } catch {
@@ -829,11 +925,18 @@ export async function findDeadCode(
     }
   }
 
+  // Build set of files that are forwarded via re-exports (barrel chains).
+  // Symbols defined in such files are reachable even without textual mention.
+  const allFilePaths = new Set(fileContents.keys());
+  const reExportedFiles = collectReExportedFiles(fileContents, allFilePaths);
+
   const candidates: DeadCodeCandidate[] = [];
 
   for (const sym of exportedSymbols) {
     if (candidates.length >= MAX_DEAD_CODE_RESULTS) break;
     if (isFrameworkEntryPoint(sym, frameworks)) continue;
+    // Re-export reachability — barrel forwards skip the textual-mention check.
+    if (reExportedFiles.has(sym.file)) continue;
 
     const pattern = wordBoundaryPattern(sym.name);
 
@@ -862,7 +965,7 @@ export async function findDeadCode(
     candidates,
     scanned_symbols: exportedSymbols.length,
     scanned_files: fileContents.size,
-    ...(candidates.length >= MAX_DEAD_CODE_RESULTS ? { truncated: true } : {}),
+    ...(candidates.length >= MAX_DEAD_CODE_RESULTS || scanTruncated ? { truncated: true } : {}),
   };
 }
 

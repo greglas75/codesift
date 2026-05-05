@@ -228,6 +228,30 @@ describe("L8 modifiers + L9 accessor kind", () => {
     expect(mods).toContain("abstract");
   });
 
+  it("abstract_method_signature sets is_async for abstract async method", () => {
+    const syms = ext(`abstract class C { abstract async fetch(): Promise<void>; }`);
+    const m = syms.find((s) => s.name === "fetch");
+    expect(m?.is_async).toBe(true);
+    const mods = (m?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("abstract");
+  });
+
+  it("abstract_method_signature sets accessor_kind for abstract getter", () => {
+    const syms = ext(`abstract class C { abstract get label(): string; }`);
+    const m = syms.find((s) => s.name === "label");
+    expect(m?.meta?.["accessor_kind"]).toBe("get");
+    const mods = (m?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("abstract");
+  });
+
+  it("auto-accessor field includes accessor in modifiers (not only accessor_kind)", () => {
+    const syms = ext(`class C { accessor title = ""; }`);
+    const f = syms.find((s) => s.name === "title");
+    expect(f?.meta?.["accessor_kind"]).toBe("accessor");
+    const mods = (f?.meta?.["modifiers"] as string[] | undefined) ?? [];
+    expect(mods).toContain("accessor");
+  });
+
   it("L9: getter is detected as accessor_kind=get", () => {
     const syms = ext(`class C { get name() { return ""; } }`);
     const m = syms.find((s) => s.name === "name");
@@ -258,6 +282,37 @@ describe("L11 anonymous default export", () => {
 
   it("synthesizes name=default for `export default class {}`", () => {
     const syms = ext(`export default class { method() {} }`);
+    const def = syms.find((s) => s.name === "default");
+    expect(def?.kind).toBe("default_export");
+  });
+
+  it("walks nested members under anonymous default class (parent chain)", () => {
+    const syms = ext(`export default class { method() {} }`);
+    const def = syms.find((s) => s.name === "default" && s.kind === "default_export");
+    const anonCls = syms.find((s) => s.name === "<anonymous>" && s.kind === "class");
+    const method = syms.find((s) => s.name === "method" && s.kind === "method");
+    expect(def).toBeDefined();
+    expect(method).toBeDefined();
+    expect(anonCls?.parent).toBe(def?.id);
+    expect(method?.parent).toBe(anonCls?.id);
+  });
+
+  it("walks body under anonymous default function", () => {
+    const syms = ext(`export default function() { function inner() { return 1; } }`);
+    const def = syms.find((s) => s.name === "default");
+    const inner = syms.find((s) => s.name === "inner");
+    expect(def?.kind).toBe("default_export");
+    expect(inner?.parent).toBe(def?.id);
+  });
+
+  it("anonymous default: parenthesized function_expression", () => {
+    const syms = ext(`export default (function() { return 2; })`);
+    const def = syms.find((s) => s.name === "default");
+    expect(def?.kind).toBe("default_export");
+  });
+
+  it("anonymous default: async function", () => {
+    const syms = ext(`export default async function() { return 1; }`);
     const def = syms.find((s) => s.name === "default");
     expect(def?.kind).toBe("default_export");
   });
@@ -300,6 +355,24 @@ describe("L2 namespace + L12 ambient declaration", () => {
     const bar = syms.find((s) => s.name === "bar");
     expect(bar?.parent).toBe(ns?.id);
     expect(bar?.is_exported).toBe(true);
+  });
+
+  it("indexes declare module with empty string specifier", () => {
+    const syms = ext(`declare module "" { export const z: number; }`);
+    const ns = syms.find((s) => s.name === "" && s.kind === "namespace");
+    expect(ns).toBeDefined();
+    expect(ns?.is_exported).toBe(true);
+    expect(syms.find((s) => s.name === "z")?.parent).toBe(ns?.id);
+  });
+
+  it("tags ambient overload signatures with overload_index on second+ declaration", () => {
+    const syms = ext(`declare function dupe(): void; declare function dupe(a: number): void;`);
+    const fsigs = syms.filter((s) => s.name === "dupe");
+    expect(fsigs.length).toBe(2);
+    const meta0 = fsigs[0]?.meta as Record<string, unknown> | undefined;
+    const meta1 = fsigs[1]?.meta as Record<string, unknown> | undefined;
+    expect(meta0?.["overload_index"]).toBeUndefined();
+    expect(meta1?.["overload_index"]).toBe(1);
   });
 
   it("emits `declare const X` as exported (declare ambient + export)", () => {

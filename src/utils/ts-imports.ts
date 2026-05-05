@@ -12,9 +12,16 @@
  *   - per-specifier `import { type X, Y } from "y"` → type_only:false (any
  *     runtime specifier present makes the entire edge runtime; the import is
  *     loaded at runtime regardless of which subset is used as types only)
+ *   - `import { } from "y"` (empty named clause) → runtime (module still evaluated)
  *   - `import * as ns from "y"` / default / side-effect → runtime
  *   - `export { X } from "y"` → runtime; `export type { X } from "y"` → type_only:true
+ *   - per-specifier `export { type X, Y } from "y"` → runtime if any runtime export (same rule as imports)
  *   - `export * from "y"` → runtime; `export type * from "y"` → type_only:true
+ *   - `import x = require("y")` → runtime edge to `y` (handled via `import_require_clause`)
+ *
+ * Limitation: `import { type X } from "m"` is modeled type-only when all named bindings are
+ * `type`-only; with `verbatimModuleSyntax`, TS may still emit a runtime module dependency —
+ * we do not read compilerOptions here, so graphs may under-report runtime edges in that mode.
  */
 
 import type Parser from "web-tree-sitter";
@@ -22,7 +29,7 @@ import type Parser from "web-tree-sitter";
 export interface TsImportEdge {
   /** raw specifier text from the import source (relative or bare/aliased) */
   path: string;
-  /** true when entire statement is type-only OR all named specifiers carry `type` */
+  /** true when statement-level `import type` / `export type`, all per-specifier `type` bindings in a named clause, or `export type *`; see file header for edge cases */
   is_type_only: boolean;
   /** imported/re-exported names (for future use; empty for side-effect imports) */
   specifiers: string[];
@@ -77,9 +84,11 @@ function walkImportClause(
 
   for (const child of clause.namedChildren) {
     if (child.type === "named_imports") {
+      let namedSpecifierCount = 0;
       // import_specifier nodes; check each for leading `type` keyword
       for (const spec of child.namedChildren) {
         if (spec.type !== "import_specifier") continue;
+        namedSpecifierCount += 1;
         const nameNode = spec.childForFieldName("name");
         const aliasNode = spec.childForFieldName("alias");
         const emitName = (aliasNode ?? nameNode)?.text;
@@ -91,6 +100,10 @@ function walkImportClause(
         );
         if (!isTyped) anyRuntimeSpecifier = true;
       }
+      // `import { } from "m"` still instantiates the target module (runtime).
+      // Without this, `anyRuntimeSpecifier` stays false → misclassified as
+      // type-only and dropped from runtime circular-deps / graph edges.
+      if (namedSpecifierCount === 0) anyRuntimeSpecifier = true;
     } else if (child.type === "namespace_import") {
       // import * as ns — runtime
       anyRuntimeSpecifier = true;
@@ -105,20 +118,29 @@ function walkImportClause(
   return { specifiers, anyRuntimeSpecifier };
 }
 
-/** Walk an `export_clause` (named re-exports) to collect names.
- * Returns specifiers list. Type-only-ness is derived from the parent
- * export_statement, not per-specifier here (TS does not distinguish at the
- * specifier level inside `export {X} from "y"` to the same extent as imports). */
-function walkExportClause(clause: Parser.SyntaxNode): string[] {
+/** Walk an `export_clause` (named re-exports) to collect names and whether any
+ * specifier is not `type`-only (mirrors `import_specifier` rules). */
+function walkExportClause(clause: Parser.SyntaxNode): {
+  specifiers: string[];
+  anyRuntimeSpecifier: boolean;
+} {
   const specifiers: string[] = [];
+  let anyRuntimeSpecifier = false;
+  let namedCount = 0;
   for (const spec of clause.namedChildren) {
     if (spec.type !== "export_specifier") continue;
+    namedCount += 1;
     const nameNode = spec.childForFieldName("name");
     const aliasNode = spec.childForFieldName("alias");
     const emitName = (aliasNode ?? nameNode)?.text;
     if (emitName) specifiers.push(emitName);
+    const isTyped = spec.children.some(
+      (c) => c.type === "type" && c.text === "type",
+    );
+    if (!isTyped) anyRuntimeSpecifier = true;
   }
-  return specifiers;
+  if (namedCount === 0) anyRuntimeSpecifier = true;
+  return { specifiers, anyRuntimeSpecifier };
 }
 
 /** Walk the tree and return all import + re-export edges. */
@@ -127,6 +149,22 @@ export function extractTypeScriptImports(tree: Parser.Tree): TsImportEdge[] {
 
   function visit(node: Parser.SyntaxNode): void {
     if (node.type === "import_statement") {
+      const requireClause = node.namedChildren.find(
+        (c) => c.type === "import_require_clause",
+      );
+      if (requireClause) {
+        const src = requireClause.childForFieldName("source");
+        if (!src) return;
+        const path = src.text.replace(/^['"`]|['"`]$/g, "");
+        const id = requireClause.namedChildren.find((c) => c.type === "identifier");
+        edges.push({
+          path,
+          is_type_only: false,
+          specifiers: id ? [id.text] : [],
+        });
+        return;
+      }
+
       const path = getSourcePath(node);
       if (!path) return; // malformed; skip
       const stmtTypeOnly = statementIsTypeOnly(node);
@@ -152,11 +190,17 @@ export function extractTypeScriptImports(tree: Parser.Tree): TsImportEdge[] {
         for (const c of node.namedChildren) visit(c);
         return;
       }
-      const is_type_only = statementIsTypeOnly(node);
+      const stmtTypeOnly = statementIsTypeOnly(node);
       let specifiers: string[] = [];
+      let sawNamedExportClause = false;
+      let anyRuntimeExportSpecifier = true;
+
       for (const child of node.namedChildren) {
         if (child.type === "export_clause") {
-          specifiers = walkExportClause(child);
+          sawNamedExportClause = true;
+          const w = walkExportClause(child);
+          specifiers = w.specifiers;
+          anyRuntimeExportSpecifier = w.anyRuntimeSpecifier;
         }
         // namespace_export `export * as ns from "y"` → record `ns` as specifier
         if (child.type === "namespace_export") {
@@ -164,6 +208,10 @@ export function extractTypeScriptImports(tree: Parser.Tree): TsImportEdge[] {
           if (id) specifiers.push(id.text);
         }
       }
+
+      const is_type_only =
+        stmtTypeOnly ||
+        (sawNamedExportClause && !anyRuntimeExportSpecifier);
       edges.push({ path, is_type_only, specifiers });
       return;
     }

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { join, resolve } from "node:path";
-import { writeFileSync, mkdtempSync, existsSync } from "node:fs";
+import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   resolveTsAliasedImport,
@@ -49,6 +49,60 @@ describe("resolveTsAliasedImport — monorepo fixture", () => {
   });
 });
 
+describe("resolveTsAliasedImport — security + cache", () => {
+  beforeEach(() => clearTsconfigCache());
+
+  it("returns null for absolute import specifiers", () => {
+    const importer = join(FIXTURE, "packages/foo/src/x.ts");
+    expect(resolveTsAliasedImport(importer, "/etc/passwd", FIXTURE)).toBeNull();
+  });
+
+  it("does not reuse nearest-tsconfig cache across different repoRoot boundaries", () => {
+    const base = mkdtempSync(join(tmpdir(), "tsconfig-root-cache-"));
+    mkdirSync(join(base, "repo/sub/deep"), { recursive: true });
+    writeFileSync(
+      join(base, "repo/tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@app/*": ["./*.ts"] },
+        },
+      }),
+    );
+    writeFileSync(join(base, "repo/root-hit.ts"), "export const x = 1;");
+    writeFileSync(join(base, "repo/sub/deep/x.ts"), "");
+    const importer = join(base, "repo/sub/deep/x.ts");
+    const wideRoot = join(base, "repo");
+    const narrowRoot = join(base, "repo/sub");
+
+    expect(
+      resolveTsAliasedImport(importer, "@app/root-hit", wideRoot),
+    ).toBe(join(base, "repo/root-hit.ts"));
+
+    expect(
+      resolveTsAliasedImport(importer, "@app/root-hit", narrowRoot),
+    ).toBeNull();
+  });
+
+  it("resolves paths targets that use .mts extension", () => {
+    const base = mkdtempSync(join(tmpdir(), "tsconfig-mts-"));
+    writeFileSync(
+      join(base, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@mod": ["./lib"] },
+        },
+      }),
+    );
+    writeFileSync(join(base, "lib.mts"), "export {}");
+    writeFileSync(join(base, "importer.ts"), "");
+    expect(resolveTsAliasedImport(join(base, "importer.ts"), "@mod", base)).toBe(
+      join(base, "lib.mts"),
+    );
+  });
+});
+
 describe("resolveTsAliasedImport — error handling", () => {
   let tmp: string;
 
@@ -57,10 +111,15 @@ describe("resolveTsAliasedImport — error handling", () => {
     tmp = mkdtempSync(join(tmpdir(), "tsconfig-test-"));
   });
 
-  it("returns null + warns when tsconfig.json is malformed", () => {
+  it("returns null and logs when tsconfig.json is malformed", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     writeFileSync(
       join(tmp, "tsconfig.json"),
-      `{ "compilerOptions": { "paths": INVALID }, }`,
+      JSON.stringify({
+        compilerOptions: {
+          paths: { "*": 123 },
+        },
+      }),
     );
     writeFileSync(join(tmp, "x.ts"), "");
     const result = resolveTsAliasedImport(
@@ -69,6 +128,9 @@ describe("resolveTsAliasedImport — error handling", () => {
       tmp,
     );
     expect(result).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    expect(String(warn.mock.calls[0]?.[0])).toContain("tsconfig-paths");
+    warn.mockRestore();
   });
 
   it("returns null when no tsconfig.json found in walk-up", () => {

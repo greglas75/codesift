@@ -4,6 +4,10 @@
  *   MW01 no-onRequest-export  — file exists but does not export onRequest
  *   MW02 sequence-ambiguous   — sequence(...) called but args are non-identifiers
  *   MW03 guard-without-effect — a guarding `if` body that does not redirect/throw/return Response
+ *
+ * Export detection is intentionally narrow: `export const onRequest`, `export function onRequest`
+ * / `export async function onRequest`. Does not yet handle re-exports (`export { onRequest }`),
+ * default exports, or factory wrappers — extend the walker when those appear in fixtures.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -42,15 +46,18 @@ function findMiddlewareFile(root: string): { abs: string; rel: string } | null {
 function parseMiddleware(
   parser: Parser,
   source: string,
-): { handlers: string[]; sequence: string[]; sequenceTied: boolean; guardsWithoutEffect: number; parseOk: boolean } {
+): { handlers: string[]; sequence: string[]; sequenceTied: boolean; guardFallthroughLines: number[]; parseOk: boolean } {
   let tree: Parser.Tree;
-  try { tree = parser.parse(source); } catch { return { handlers: [], sequence: [], sequenceTied: false, guardsWithoutEffect: 0, parseOk: false }; }
+  try { tree = parser.parse(source); } catch { return { handlers: [], sequence: [], sequenceTied: false, guardFallthroughLines: [], parseOk: false }; }
   try {
     const root = tree.rootNode;
+    if (root.hasError) {
+      return { handlers: [], sequence: [], sequenceTied: false, guardFallthroughLines: [], parseOk: false };
+    }
     const handlers: string[] = [];
     const sequence: string[] = [];
     let sequenceTied = false;
-    let guardsWithoutEffect = 0;
+    const guardFallthroughLines: number[] = [];
 
     // Direct children only — avoid matching nested local `onRequest`.
     for (const decl of root.namedChildren) {
@@ -83,17 +90,21 @@ function parseMiddleware(
     }
 
     // Guard heuristic: only flag if-stmt with NO else branch AND consequence body has no effect.
-    const EFFECT_RE = /\b(return\s+(?:new\s+)?Response(?:\.\w+)?\(|return\s+(?:context|Astro)\.(?:redirect|rewrite)\(|return\s+next\(\)|throw\b|redirect\(|context\.rewrite)/;
+    // Requires `return` before context/Astro redirect|rewrite — bare `context.rewrite(...)` without
+    // return is a no-op in Astro and must not suppress MW03.
+    const EFFECT_RE = /\b(return\s+(?:new\s+)?Response(?:\.\w+)?\(|return\s+(?:context|Astro)\.(?:redirect|rewrite)\(|return\s+next\(\)|throw\b|redirect\()/;
     const GUARD_RE = /\b(context\.|locals\.|user\b|auth|session|cookies\.)/i;
     for (const ifStmt of root.descendantsOfType("if_statement")) {
       if (ifStmt.childForFieldName("alternative")) continue; // skip if/else
       const consequence = ifStmt.childForFieldName("consequence");
       if (!consequence) continue;
       const body = consequence.text;
-      if (!EFFECT_RE.test(body) && GUARD_RE.test(ifStmt.text)) guardsWithoutEffect++;
+      if (!EFFECT_RE.test(body) && GUARD_RE.test(ifStmt.text)) {
+        guardFallthroughLines.push(ifStmt.startPosition.row + 1);
+      }
     }
 
-    return { handlers, sequence, sequenceTied, guardsWithoutEffect, parseOk: !root.hasError };
+    return { handlers, sequence, sequenceTied, guardFallthroughLines, parseOk: true };
   } finally {
     tree.delete();
   }
@@ -110,8 +121,18 @@ export async function auditAstroMiddlewareFromRoot(
   try { source = readFileSync(found.abs, "utf-8"); } catch {
     return { middleware_file: found.rel, handlers: [], sequence: [], routes_protected_count: 0, issues: [{ code: "MW00", severity: "error", message: `Cannot read ${found.rel}`, file: found.rel, line: 1 }], summary: { handlers_total: 0, issues_total: 1 } };
   }
-  const parser = await getParser("typescript");
-  if (!parser) return { middleware_file: found.rel, handlers: [], sequence: [], routes_protected_count: 0, issues: [{ code: "MW00", severity: "error", message: "TypeScript parser unavailable", file: found.rel, line: 1 }], summary: { handlers_total: 0, issues_total: 1 } };
+  const lang = found.rel.endsWith(".ts") ? "typescript" : "javascript";
+  const parser = await getParser(lang);
+  if (!parser) {
+    return {
+      middleware_file: found.rel,
+      handlers: [],
+      sequence: [],
+      routes_protected_count: 0,
+      issues: [{ code: "MW00", severity: "error", message: `${lang === "typescript" ? "TypeScript" : "JavaScript"} parser unavailable`, file: found.rel, line: 1 }],
+      summary: { handlers_total: 0, issues_total: 1 },
+    };
+  }
 
   const parsed = parseMiddleware(parser, source);
   const issues: MiddlewareIssue[] = [];
@@ -120,8 +141,14 @@ export async function auditAstroMiddlewareFromRoot(
   if (parsed.sequenceTied && parsed.sequence.length === 0) {
     issues.push({ code: "MW02", severity: "warning", message: "onRequest = sequence(...) called with non-identifier args — order is ambiguous", file: found.rel, line: 1 });
   }
-  for (let i = 0; i < parsed.guardsWithoutEffect; i++) {
-    issues.push({ code: "MW03", severity: "warning", message: "Guarding if-block without redirect/throw/return — falls through", file: found.rel, line: 1 });
+  for (const line of parsed.guardFallthroughLines) {
+    issues.push({
+      code: "MW03",
+      severity: "warning",
+      message: "Guarding if-block without redirect/throw/return — falls through",
+      file: found.rel,
+      line,
+    });
   }
 
   return {

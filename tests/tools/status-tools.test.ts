@@ -7,9 +7,7 @@ import type { CodeIndex, FileEntry } from "../../src/types.js";
 // ---------------------------------------------------------------------------
 
 const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
-const mockGetRepo = vi.fn();
-const mockListRepos = vi.fn();
-const mockGetRepoName = vi.fn(() => "test-repo");
+const mockResolveRegisteredRepoMeta = vi.fn();
 const mockLoadIndexOrStale = vi.fn();
 
 vi.mock("../../src/tools/index-tools.js", () => ({
@@ -17,9 +15,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 vi.mock("../../src/storage/registry.js", () => ({
-  getRepo: (...args: unknown[]) => mockGetRepo(...args),
-  listRepos: (...args: unknown[]) => mockListRepos(...args),
-  getRepoName: (...args: unknown[]) => mockGetRepoName(...args),
+  resolveRegisteredRepoMeta: (...args: unknown[]) => mockResolveRegisteredRepoMeta(...args),
 }));
 
 vi.mock("../../src/storage/index-store.js", () => ({
@@ -67,11 +63,9 @@ function makeIndex(files: FileEntry[]): CodeIndex {
 describe("indexStatus", () => {
   beforeEach(() => {
     mockGetCodeIndex.mockReset();
-    mockGetRepo.mockReset();
-    mockListRepos.mockReset();
+    mockResolveRegisteredRepoMeta.mockReset();
     mockLoadIndexOrStale.mockReset();
-    mockGetRepo.mockResolvedValue(null);
-    mockListRepos.mockResolvedValue([]);
+    mockResolveRegisteredRepoMeta.mockResolvedValue(null);
     mockLoadIndexOrStale.mockResolvedValue(null);
   });
 
@@ -82,20 +76,21 @@ describe("indexStatus", () => {
 
     expect(result).toEqual({ indexed: false });
     expect(mockGetCodeIndex).toHaveBeenCalledWith("missing-repo");
+    expect(mockResolveRegisteredRepoMeta).toHaveBeenCalled();
   });
 
   it("surfaces structured stale info when extractor_version drifted", async () => {
-    // Mirrors the translation-qa regression: index file exists on disk but its
-    // extractor_version no longer matches current — agents must see "STALE",
-    // not "NOT INDEXED", so they understand a refresh fixes it.
     mockGetCodeIndex.mockResolvedValue(null);
-    mockGetRepo.mockResolvedValue({
-      name: "local/translation-qa",
-      root: "/Users/test/translation-qa",
-      index_path: "/tmp/translation-qa.index.json",
-      symbol_count: 0,
-      file_count: 0,
-      updated_at: 0,
+    mockResolveRegisteredRepoMeta.mockResolvedValue({
+      resolvedName: "local/translation-qa",
+      meta: {
+        name: "local/translation-qa",
+        root: "/Users/test/translation-qa",
+        index_path: "/tmp/translation-qa.index.json",
+        symbol_count: 0,
+        file_count: 0,
+        updated_at: 0,
+      },
     });
     mockLoadIndexOrStale.mockResolvedValue({
       status: "stale",

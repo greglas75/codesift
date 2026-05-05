@@ -10,7 +10,7 @@ import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js
 import { getLanguageForExtension, getLanguageForPath } from "../parser/parser-manager.js";
 import { saveIndex, loadIndex, loadIndexOrStale, getIndexPath, saveIncremental, removeFileFromIndex } from "../storage/index-store.js";
 import { clearTsconfigCache } from "../utils/tsconfig-paths.js";
-import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta } from "../storage/registry.js";
+import { registerRepo, listRepos as listRegistryRepos, getRepo, removeRepo, getRepoName, updateRepoMeta, resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { startWatcher, stopWatcher, type FSWatcher } from "../storage/watcher.js";
 import { buildBM25Index, type BM25Index } from "../search/bm25.js";
 import { buildSymbolText, createEmbeddingProvider } from "../search/semantic.js";
@@ -912,12 +912,16 @@ export async function indexFile(filePath: string): Promise<{
   const startTime = Date.now();
   const relPath = relative(matchingRepo.root, absPath);
 
-  // If the changed file is a tsconfig.json, drop the path resolver cache so
-  // subsequent symbol/import extraction sees the new alias mappings. Without
-  // this, file-watcher-driven incremental indexing would keep using the cached
-  // matcher from the last index_folder run.
-  if (basename(absPath) === "tsconfig.json") {
-    clearTsconfigCache();
+  // If the changed file is a TS/JS config that drives path resolution, drop
+  // caches so incremental indexing picks up new `paths` / `extends`.
+  {
+    const cfg = basename(absPath).toLowerCase();
+    if (
+      (cfg.startsWith("tsconfig") || cfg.startsWith("jsconfig")) &&
+      cfg.endsWith(".json")
+    ) {
+      clearTsconfigCache();
+    }
   }
 
   // mtime check — skip if unchanged
@@ -1116,55 +1120,31 @@ export async function getCodeIndex(
   repoName: string,
   options?: { skipFreshness?: boolean },
 ): Promise<CodeIndex | null> {
-  // Resolve empty/missing repo name: try CWD-based name, then single-repo fallback
-  let resolved = repoName;
-  if (!resolved) {
-    resolved = getRepoName(process.cwd());
-  }
   const config = loadConfig();
-  let meta = await getRepo(config.registryPath, resolved);
-  if (!meta && !repoName) {
-    // CWD-based name didn't match — search all repos by root path
-    const cwd = process.cwd();
-    const allRepos = await listRegistryRepos(config.registryPath);
-    const byRoot = allRepos.find((r) => r.root === cwd);
-    if (byRoot) {
-      resolved = byRoot.name;
-      meta = byRoot;
-    } else if (allRepos.length === 1) {
-      // Single-repo fallback
-      resolved = allRepos[0]!.name;
-      meta = allRepos[0]!;
-    }
-  }
-  if (!meta) return null;
+  const resolved = await resolveRegisteredRepoMeta(config.registryPath, repoName);
+  if (!resolved) return null;
+  const { resolvedName, meta } = resolved;
 
-  // skipFreshness=true bypasses git-diff + reindex of changed files.
-  // Use only for read-only status/metadata queries where stale data is OK.
   if (!options?.skipFreshness) {
-    await ensureIndexFresh(resolved);
+    await ensureIndexFresh(resolvedName);
   }
 
-  const cached = codeIndexes.get(resolved);
+  const cached = codeIndexes.get(resolvedName);
   if (cached) return cached;
 
-  // Use loadIndexOrStale so version mismatches surface a structured signal
-  // instead of being silently coerced to null. Tool wrappers can pattern-match
-  // on `result.status === "stale"` and route to staleToMcpError. Existing
-  // callers that still receive a plain CodeIndex|null get null on stale and
-  // a logged warning so the silent regression is observable.
   const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (!result) return null;
   if (result.status === "stale") {
+    const extra = result.mismatch_detail ? ` — ${result.mismatch_detail}` : "";
     console.warn(
-      `[codesift] stale index for ${resolved}: extractor_version_mismatch ` +
-      `(${result.language} expected ${result.expected_version}, got ${result.actual_version}). ` +
+      `[codesift] stale index for ${resolvedName}: extractor_version_mismatch ` +
+      `(${result.language} expected ${result.expected_version}, got ${result.actual_version})${extra}. ` +
       `Run index_folder to refresh.`,
     );
     return null;
   }
 
-  codeIndexes.set(repoName, result.index);
+  codeIndexes.set(resolvedName, result.index);
   return result.index;
 }
 

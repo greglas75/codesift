@@ -45,13 +45,15 @@ describe("extractTypeScriptImports", () => {
     expect(edges[0]).toMatchObject({ path: "./side-effect", is_type_only: false, specifiers: [] });
   });
 
-  // Empty named-imports clause is rare but legal — produced by tooling that
-  // strips type-only members. With no statement-level `type` and zero
-  // specifiers, the current contract treats `is_type_only` as true (no
-  // runtime specifier present). Lock it down so future refactors don't
-  // accidentally flip it.
-  it("treats empty named-imports clause `import { } from \"y\"` as type_only", () => {
+  // Empty named-imports clause still loads the target module at runtime.
+  it("treats empty named-imports clause `import { } from \"y\"` as runtime", () => {
     const edges = extract(`import { } from "./y";`);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ path: "./y", is_type_only: false, specifiers: [] });
+  });
+
+  it("flags `import type { } from \"y\"` as type_only despite empty clause", () => {
+    const edges = extract(`import type { } from "./y";`);
     expect(edges).toHaveLength(1);
     expect(edges[0]).toMatchObject({ path: "./y", is_type_only: true, specifiers: [] });
   });
@@ -63,12 +65,39 @@ describe("extractTypeScriptImports", () => {
     expect(edges[0]?.specifiers).toContain("Named");
   });
 
-  it("flags `export type { X } from \"y\"` re-export as type_only", () => {
+  it("captures `import x = require(\"./y\")` as runtime", () => {
+    const edges = extract(`import x = require("./y");`);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      path: "./y",
+      is_type_only: false,
+      specifiers: ["x"],
+    });
+  });
+
+  it("flags `export { type Foo } from \"y\"` as type_only when every specifier is typed", () => {
+    const edges = extract(`export { type Foo } from "./y";`);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({
+      path: "./y",
+      is_type_only: true,
+      specifiers: ["Foo"],
+    });
+  });
+
+  it("flags statement-level `export type { Foo } from \"y\"` as type_only", () => {
     const edges = extract(`export type { Foo } from "./y";`);
     expect(edges[0]).toMatchObject({ path: "./y", is_type_only: true });
   });
 
-  it("treats plain `export { X } from \"y\"` re-export as runtime", () => {
+  it("treats mixed `export { type A, B } from \"y\"` as runtime", () => {
+    const edges = extract(`export { type A, B } from "./y";`);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.is_type_only).toBe(false);
+    expect(edges[0]?.specifiers).toEqual(["A", "B"]);
+  });
+
+  it("treats plain `export { Foo } from \"y\"` re-export as runtime", () => {
     const edges = extract(`export { Foo } from "./y";`);
     expect(edges[0]?.is_type_only).toBe(false);
   });

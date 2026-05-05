@@ -71,6 +71,9 @@ describe("astro-helpers / isLiteral", () => {
     expect(isLiteral(await parseExpression(`{}`))).toBe(false);
     expect(isLiteral(await parseExpression(`foo()`))).toBe(false);
   });
+  it("treats bigint literals as literal", async () => {
+    expect(isLiteral(await parseExpression(`123n`))).toBe(true);
+  });
 });
 
 describe("astro-helpers / classifyZodField", () => {
@@ -93,6 +96,11 @@ describe("astro-helpers / classifyZodField", () => {
     expect(out.type).toBe("reference");
     expect(out.references).toBe("authors");
     expect(out.required).toBe(true);
+  });
+  it("classifies reference(123n) with references from bigint literal", async () => {
+    const out = classifyZodField(await parseExpression(`reference(123n)`));
+    expect(out.type).toBe("reference");
+    expect(out.references).toBe("123n");
   });
   it("marks .nullable() and .nullish() and .default() as not required", async () => {
     expect(classifyZodField(await parseExpression(`z.string().nullable()`)).required).toBe(false);

@@ -3,8 +3,10 @@
  * `tsconfig.json`, using `get-tsconfig` for `extends`-chain + paths handling.
  *
  * Two-level cache keeps long-running MCP server processes happy:
- *   - `dirToConfigCache`: directory absolute path → nearest tsconfig.json path
- *     (or null when none found up to repoRoot).
+ *   - `dirToConfigCache`: `${repoRoot}::${importerDir}` → nearest tsconfig.json path
+ *     (or null when none found up to repoRoot). Includes repoRoot so the same
+ *     importer directory analyzed under different root boundaries does not reuse
+ *     a stale tsconfig from another indexing scope.
  *   - `configCache`: tsconfig.json absolute path → parsed { matcher, baseUrl }.
  *
  * Both caches are cleared on `clearTsconfigCache()`. The graph builder calls
@@ -21,7 +23,7 @@
  */
 
 import { existsSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getTsconfig, createPathsMatcher } from "get-tsconfig";
 
 interface ResolvedTsconfig {
@@ -42,10 +44,18 @@ const TS_EXTENSIONS = [
   ".d.ts",
   ".js",
   ".jsx",
+  ".mts",
+  ".cts",
+  ".mjs",
+  ".cjs",
   "/index.ts",
   "/index.tsx",
   "/index.d.ts",
   "/index.js",
+  "/index.mts",
+  "/index.cts",
+  "/index.mjs",
+  "/index.cjs",
 ];
 
 /** Clear both caches. Called at the start of `index_folder`. */
@@ -54,31 +64,52 @@ export function clearTsconfigCache(): void {
   dirToConfigCache.clear();
 }
 
+/** True when `dir` resolves to `repoRoot` or a subdirectory of it. */
+function isDirInsideRepo(repoRootAbs: string, dir: string): boolean {
+  const abs = resolve(dir);
+  if (abs === repoRootAbs) return true;
+  const rel = relative(repoRootAbs, abs);
+  return rel !== "" && !isAbsolute(rel) && !rel.startsWith(`..${sep}`) && !rel.startsWith("..");
+}
+
+/** True when `resolvedFileAbs` is a file path inside `repoRootAbs` (no `..` escape). */
+function isResolvedFileInsideRepo(repoRootAbs: string, resolvedFileAbs: string): boolean {
+  const abs = resolve(resolvedFileAbs);
+  const rel = relative(repoRootAbs, abs);
+  return (
+    rel !== "" &&
+    !isAbsolute(rel) &&
+    !rel.startsWith(`..${sep}`) &&
+    !rel.startsWith("..")
+  );
+}
+
+function dirToConfigCacheKey(importerDir: string, repoRoot: string): string {
+  return `${resolve(repoRoot)}::${resolve(importerDir)}`;
+}
+
 /** Walk up from `dir` to `repoRoot`, find nearest `tsconfig.json`.
  * Returns absolute path of the config file, or null if none found.
- * Caches every ancestor visited during the walk, not just the input dir,
- * so sibling lookups under the same parent are O(1). */
+ * Caches per `(repoRoot, dir)` pair so late-added or removed tsconfig files are
+ * visible on the next lookup after cache clear. */
 function findNearestTsconfig(dir: string, repoRoot: string): string | null {
-  const cached = dirToConfigCache.get(dir);
+  const cacheKey = dirToConfigCacheKey(dir, repoRoot);
+  const cached = dirToConfigCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   const repoRootAbs = resolve(repoRoot);
-  const visited: string[] = [];
   let cur = resolve(dir);
-  // `startsWith(repoRootAbs)` is true when cur === repoRootAbs, so the
-  // explicit equality check would be redundant.
-  while (cur.startsWith(repoRootAbs)) {
-    visited.push(cur);
+  while (isDirInsideRepo(repoRootAbs, cur)) {
     const candidate = join(cur, "tsconfig.json");
     if (existsSync(candidate)) {
-      for (const v of visited) dirToConfigCache.set(v, candidate);
+      dirToConfigCache.set(cacheKey, candidate);
       return candidate;
     }
     const parent = dirname(cur);
     if (parent === cur) break;
     cur = parent;
   }
-  for (const v of visited) dirToConfigCache.set(v, null);
+  dirToConfigCache.set(cacheKey, null);
   return null;
 }
 
@@ -150,7 +181,11 @@ export function resolveTsAliasedImport(
 ): string | null {
   // Relative paths are not aliases — short-circuit.
   if (importPath.startsWith(".")) return null;
+  // Absolute POSIX/Windows specifiers must not join against baseUrl/paths targets
+  // (would escape intended repo scope).
+  if (isAbsolute(importPath)) return null;
 
+  const repoRootAbs = resolve(repoRoot);
   const importerDir = dirname(resolve(importerFile));
   const configPath = findNearestTsconfig(importerDir, repoRoot);
   if (!configPath) return null;
@@ -158,20 +193,25 @@ export function resolveTsAliasedImport(
   const config = loadTsconfig(configPath);
   if (!config) return null;
 
+  const acceptResolved = (hit: string | null): string | null => {
+    if (!hit) return null;
+    return isResolvedFileInsideRepo(repoRootAbs, hit) ? hit : null;
+  };
+
   // Try paths matcher first (alias mappings).
   if (config.pathsMatcher) {
     const candidates = config.pathsMatcher(importPath);
     for (const candidate of candidates) {
-      const hit = probeFile(candidate);
-      if (hit) return hit;
+      const accepted = acceptResolved(probeFile(candidate));
+      if (accepted) return accepted;
     }
   }
 
   // Fallback: bare specifier resolved against baseUrl.
   if (config.baseUrl) {
     const candidate = join(config.baseUrl, importPath);
-    const hit = probeFile(candidate);
-    if (hit) return hit;
+    const accepted = acceptResolved(probeFile(candidate));
+    if (accepted) return accepted;
   }
 
   return null;

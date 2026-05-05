@@ -1578,7 +1578,7 @@ describe("button-no-type (Tier 5)", () => {
 describe("postFilter runner integration (Tier 5)", () => {
   it("BUILTIN_PATTERNS entry shape supports optional severity and postFilter", () => {
     const entry = BUILTIN_PATTERNS["jsx-no-target-blank"]!;
-    expect(entry.severity).toBe("style");
+    expect(entry.severity).toBe("warning");
     expect(typeof entry.postFilter).toBe("function");
   });
 

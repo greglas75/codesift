@@ -229,7 +229,7 @@ export const BUILTIN_PATTERNS: Record<string, {
   "jsx-no-target-blank": {
     regex: /<a\s+(?:(?!>)[\s\S]){0,500}?target\s*=\s*(?:["']_blank["']|\{\s*["']_blank["']\s*\})(?:(?!>)[\s\S]){0,500}?>/,
     description: "<a target=\"_blank\"> without rel=\"noopener noreferrer\" — tabnabbing/window.opener security risk. Add rel=\"noopener noreferrer\". NOTE: matches both string and JSX-brace forms; postFilter requires whitespace before rel= to avoid URL false-positive.",
-    severity: "style",
+    severity: "warning",
     fileIncludePattern: /\.(tsx|jsx)$/,
     // require leading whitespace before `rel` (real attribute, not `?rel=` in URL)
     // AND require rel value to contain BOTH `noopener` AND `noreferrer` as exact
@@ -711,6 +711,28 @@ export const BUILTIN_PATTERNS: Record<string, {
 };
 
 /**
+ * Run optional postFilter on a regex match slice. Returns false if the match
+ * should be dropped. If the filter throws, logs a warning and keeps the match
+ * (fail-open) so transient postFilter bugs do not hide security findings.
+ */
+function shouldKeepPostFilterMatch(
+  patternKey: string,
+  matchText: string,
+  postFilter: ((match: string) => boolean) | undefined,
+): boolean {
+  if (!postFilter) return true;
+  try {
+    return postFilter(matchText);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[search_patterns] postFilter for "${patternKey}" threw: ${msg} — keeping match (fail-open)`,
+    );
+    return true;
+  }
+}
+
+/**
  * Search for structural code patterns across indexed symbols.
  * Supports built-in patterns (by name) or custom regex.
  */
@@ -770,18 +792,7 @@ export async function searchPatterns(
     scanned++;
     const match = regex.exec(sym.source);
     if (match) {
-      // postFilter (Tier 5): drop match if validator returns false. Errors are
-      // logged to stderr (with pattern name) so author bugs are diagnosable
-      // rather than silently producing false negatives.
-      if (postFilter) {
-        try {
-          if (!postFilter(match[0])) continue;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`[search_patterns] postFilter for "${pattern}" threw: ${msg} — match dropped`);
-          continue;
-        }
-      }
+      if (!shouldKeepPostFilterMatch(pattern, match[0], postFilter)) continue;
       // Extract context: the matching line(s)
       const matchStart = match.index;
       const linesBefore = sym.source.slice(0, matchStart).split("\n").length;
@@ -823,15 +834,7 @@ export async function searchPatterns(
       scanned++;
       const match = regex.exec(content);
       if (match) {
-        if (postFilter) {
-          try {
-            if (!postFilter(match[0])) continue;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn(`[search_patterns] postFilter for "${pattern}" threw: ${msg} — match dropped`);
-            continue;
-          }
-        }
+        if (!shouldKeepPostFilterMatch(pattern, match[0], postFilter)) continue;
         const linesBefore = content.slice(0, match.index).split("\n").length;
         const matchedText = match[0].split("\n")[0]!;
         matches.push({

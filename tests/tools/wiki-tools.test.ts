@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterAll } from "vitest";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
 import type { CommunityResult, Community } from "../../src/tools/community-tools.js";
 import type { SymbolRoleInfo } from "../../src/tools/graph-tools.js";
@@ -417,4 +417,18 @@ describe("generateWiki", () => {
     const lockfileRemoved = unlinkCalls.some((p) => p.endsWith(".wiki-lock"));
     expect(lockfileRemoved).toBe(true);
   });
+});
+
+// vmForks singleFork shares one module graph with later test files — unmocks
+// so integration suites (e.g. generateWiki + real index-tools) see real deps.
+afterAll(() => {
+  vi.doUnmock("../../src/tools/index-tools.js");
+  vi.doUnmock("../../src/tools/community-tools.js");
+  vi.doUnmock("../../src/tools/graph-tools.js");
+  vi.doUnmock("../../src/tools/coupling-tools.js");
+  vi.doUnmock("../../src/tools/hotspot-tools.js");
+  vi.doUnmock("../../src/tools/project-tools.js");
+  vi.doUnmock("../../src/storage/graph-store.js");
+  vi.doUnmock("node:fs/promises");
+  vi.resetModules();
 });

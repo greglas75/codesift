@@ -425,11 +425,11 @@ export function extractPythonSymbols(
     );
   }
 
-  // Tag partial results so callers can detect incomplete extraction
+  // Tag partial results on every symbol so metadata is not arbitrary (first-row only)
   if (partial && symbols.length > 0) {
-    const first = symbols[0]!;
-    if (!first.meta) (first as unknown as Record<string, unknown>).meta = {};
-    (first.meta as Record<string, unknown>).partial_extraction = true;
+    for (const sym of symbols) {
+      sym.meta = { ...(sym.meta ?? {}), partial_extraction: true };
+    }
   }
   return symbols;
 }

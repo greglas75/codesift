@@ -48,4 +48,18 @@ describe("makeSymbol — implements field plumbing", () => {
     expect(sym.extends).toEqual(["Base"]);
     expect(sym.implements).toEqual(["I"]);
   });
+
+  it("copies extends and implements so caller mutations do not affect the symbol", () => {
+    const node = buildNode("class Foo {}");
+    const ext = ["Base"];
+    const impl = ["I"];
+    const sym = makeSymbol(node, "Foo", "class", "f.ts", "class Foo {}", "r", {
+      extends: ext,
+      implements: impl,
+    });
+    ext.push("Other");
+    impl.push("J");
+    expect(sym.extends).toEqual(["Base"]);
+    expect(sym.implements).toEqual(["I"]);
+  });
 });

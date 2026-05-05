@@ -19,6 +19,8 @@ interface StaleIndexResult {
    *  rendered error text names it explicitly. Older callers that omit this
    *  still get a sensible message. */
   language?: string;
+  /** When multiple extractor languages drifted, a human-readable summary. */
+  mismatch_detail?: string;
 }
 
 interface McpErrorEnvelope {
@@ -34,12 +36,14 @@ interface McpErrorEnvelope {
  * handle it without changes. */
 export function staleToMcpError(stale: StaleIndexResult): McpErrorEnvelope {
   const langPrefix = stale.language ? `${stale.language} ` : "";
+  const extra = stale.mismatch_detail ? ` Also: ${stale.mismatch_detail}.` : "";
   return {
     isError: true,
     content: [
       {
         type: "text",
-        text: `Index stale: ${stale.reason} (${langPrefix}expected ${stale.expected_version}, got ${stale.actual_version}). Run index_folder to refresh.`,
+        text:
+          `Index stale: ${stale.reason} (${langPrefix}expected ${stale.expected_version}, got ${stale.actual_version}).${extra} Run index_folder to refresh.`,
       },
     ],
   };

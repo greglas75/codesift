@@ -2,7 +2,7 @@
  * Import graph utilities — shared by context-tools, route-tools, community-tools.
  */
 import { readFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readFileSync } from "node:fs";
 import type { CodeIndex, Workspace } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
@@ -567,14 +567,21 @@ export async function collectImportEdges(
                 index.root,
               );
               if (aliased) {
-                // Convert absolute to repo-relative using path.relative so
-                // platform separators are handled correctly. Then normalize
-                // to POSIX so the lookup matches normalizedPaths keys (built
-                // with forward-slash semantics).
-                const rel = relative(index.root, aliased).split(sep).join("/");
-                if (normalizedPaths.has(rel.replace(/\.[^./]+$/, ""))
-                    || index.files.some((f) => f.path === rel)) {
-                  resolved = rel;
+                // Only treat as in-repo when resolved path is under index.root
+                // (relative() alone can escape with ".." for outside paths).
+                const rootAbs = resolve(index.root);
+                const aliasAbs = resolve(aliased);
+                const relRaw = relative(rootAbs, aliasAbs);
+                const inside =
+                  relRaw !== "" &&
+                  !isAbsolute(relRaw) &&
+                  !relRaw.startsWith("..");
+                if (inside) {
+                  const rel = relRaw.split(sep).join("/");
+                  if (normalizedPaths.has(rel.replace(/\.[^./]+$/, ""))
+                      || index.files.some((f) => f.path === rel)) {
+                    resolved = rel;
+                  }
                 }
               }
             }

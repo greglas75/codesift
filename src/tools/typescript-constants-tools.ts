@@ -5,6 +5,7 @@ import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { buildNormalizedPathMap, resolveImportPath } from "../utils/import-graph.js";
 import { getCodeIndex } from "./index-tools.js";
+import { matchesConstantFilePattern } from "../utils/constant-file-pattern.js";
 import type {
   ConstantResolutionMatch,
   ConstantResolutionResult,
@@ -54,11 +55,21 @@ interface ResolutionState {
   index: CodeIndex;
   parser: Parser;
   fileCache: Map<string, TypeScriptFileContext | null>;
+  normalizedPathMap: Map<string, string>;
   visited: Set<string>;
   maxDepth: number;
 }
 
 const MAX_DEFAULT_DEPTH = 8;
+const MAX_TS_RESOLVER_FILE_CACHE = 128;
+
+function trimResolverFileCache(cache: Map<string, TypeScriptFileContext | null>): void {
+  while (cache.size > MAX_TS_RESOLVER_FILE_CACHE) {
+    const first = cache.keys().next().value as string | undefined;
+    if (first === undefined) break;
+    cache.delete(first);
+  }
+}
 
 function isTypeScriptFile(filePath: string): boolean {
   return filePath.endsWith(".ts") || filePath.endsWith(".tsx");
@@ -214,11 +225,10 @@ function extractDefaultExport(node: Parser.SyntaxNode): DefaultExportBinding | u
 }
 
 async function loadTypeScriptFileContext(
-  index: CodeIndex,
-  parser: Parser,
+  state: ResolutionState,
   filePath: string,
-  cache: Map<string, TypeScriptFileContext | null>,
 ): Promise<TypeScriptFileContext | null> {
+  const cache = state.fileCache;
   const cached = cache.get(filePath);
   if (cached !== undefined) return cached;
 
@@ -229,16 +239,20 @@ async function loadTypeScriptFileContext(
 
   let source: string;
   try {
-    source = await readFile(join(index.root, filePath), "utf-8");
-  } catch {
+    source = await readFile(join(state.index.root, filePath), "utf-8");
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err
+      ? String((err as NodeJS.ErrnoException).code)
+      : "";
+    if (code !== "ENOENT") throw err;
     cache.set(filePath, null);
     return null;
   }
 
-  const tree = parser.parse(source);
+  const tree = state.parser.parse(source);
   const assignments = new Map<string, AssignmentBinding>();
   const imports = new Map<string, ImportBinding>();
-  const normalizedPaths = buildNormalizedPathMap(index);
+  const normalizedPaths = state.normalizedPathMap;
   let defaultExport: DefaultExportBinding | undefined;
 
   for (const node of tree.rootNode.namedChildren) {
@@ -271,6 +285,7 @@ async function loadTypeScriptFileContext(
   if (defaultExport) context.default_export = defaultExport;
 
   cache.set(filePath, context);
+  trimResolverFileCache(cache);
   return context;
 }
 
@@ -302,15 +317,37 @@ async function evaluateValueNode(
       }
       return unsupportedNode(node, [], false);
     }
-    case "number":
+    case "number": {
+      const raw = node.text;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        return {
+          resolved: false,
+          value_text: raw,
+          alias_chain: [],
+          used_import: false,
+          reason: `Unsupported numeric literal: ${raw}`,
+        };
+      }
+      const isFloat = raw.includes(".") || raw.includes("e") || raw.includes("E");
+      if (!isFloat && !Number.isSafeInteger(n)) {
+        return {
+          resolved: false,
+          value_text: raw,
+          alias_chain: [],
+          used_import: false,
+          reason: "Integer literal outside safe Number range",
+        };
+      }
       return {
         resolved: true,
-        value_kind: node.text.includes(".") ? "float" : "integer",
-        value: Number(node.text),
-        value_text: node.text,
+        value_kind: isFloat ? "float" : "integer",
+        value: n,
+        value_text: raw,
         alias_chain: [],
         used_import: false,
       };
+    }
     case "true":
       return {
         resolved: true,
@@ -466,7 +503,7 @@ async function evaluateMemberExpression(
   if (!objectNode || !propertyNode) return unsupportedNode(node, [], false);
 
   if (objectNode.type === "identifier" && propertyNode.type === "property_identifier") {
-    const context = await loadTypeScriptFileContext(state.index, state.parser, filePath, state.fileCache);
+    const context = await loadTypeScriptFileContext(state, filePath);
     const imported = context?.imports.get(objectNode.text);
     if (imported?.kind === "namespace") {
       const result = await resolveNamedValue(imported.source_file, propertyNode.text, state, 1);
@@ -552,7 +589,7 @@ async function resolveNamedValue(
 
   state.visited.add(visitKey);
   try {
-    const context = await loadTypeScriptFileContext(state.index, state.parser, filePath, state.fileCache);
+    const context = await loadTypeScriptFileContext(state, filePath);
     if (!context) {
       return {
         resolved: false,
@@ -770,9 +807,11 @@ export async function resolveTypeScriptConstantValue(
   options?: {
     file_pattern?: string;
     max_depth?: number;
+    /** When set, skips a second getCodeIndex (multi-language orchestrator). */
+    index?: CodeIndex;
   },
 ): Promise<ConstantResolutionResult> {
-  const index = await getCodeIndex(repo);
+  const index = options?.index ?? await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found.`);
   }
@@ -785,7 +824,7 @@ export async function resolveTypeScriptConstantValue(
   const candidates = index.symbols
     .filter((symbol) => isTypeScriptFile(symbol.file))
     .filter((symbol) => symbol.name === symbolName)
-    .filter((symbol) => !options?.file_pattern || symbol.file.includes(options.file_pattern))
+    .filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern))
     .filter((symbol) => ["constant", "variable", "function", "method", "hook", "component"].includes(symbol.kind))
     .sort((a, b) => a.file.localeCompare(b.file) || a.start_line - b.start_line);
 
@@ -793,6 +832,7 @@ export async function resolveTypeScriptConstantValue(
     index,
     parser,
     fileCache: new Map(),
+    normalizedPathMap: buildNormalizedPathMap(index),
     visited: new Set(),
     maxDepth: options?.max_depth ?? MAX_DEFAULT_DEPTH,
   };

@@ -11,12 +11,12 @@ For multi-repo sessions, call `list_repos()` to discover available repos.
 
 ## Tool Discovery
 
-**146 MCP tools total** (51 core visible + 95 discoverable).
+**150 MCP tools total** (55 core visible + 95 discoverable).
 
 51 core tools appear in ListTools. The remaining 95 niche tools are discovered on demand:
 
 - `plan_turn(query="...")` — natural-language router with auto-reveal (preferred start-of-task entry point)
-- `discover_tools(query="dead code")` — keyword search across all 146 tools
+- `discover_tools(query="dead code")` — keyword search across all 150 tools
 - `describe_tools(names=["find_dead_code"])` — get full parameter schema
 - `describe_tools(names=["find_dead_code"], reveal=true)` — also reveal in ListTools
 
@@ -252,4 +252,15 @@ Installs two hooks in `.claude/settings.local.json`:
 - **PostToolUse** (`postindex-file`) — auto-runs `index_file` after `Edit` or `Write`
 
 This ensures the index stays current without manual `index_file` calls after every edit.
+
+## Monorepo (Turbo / pnpm-workspace / Nx) — workspace tools
+
+| Task | Tool |
+|------|------|
+| list workspace packages | `list_workspaces` |
+| workspace dependency DAG | `workspace_graph(format=mermaid)` |
+| affected packages on diff | `affected_workspaces(since="HEAD~1")` |
+| boundary rules | `workspace_boundaries(rules=[…])` |
+| package-level cycles | `find_circular_deps` (output gains `package_cycles[]` in monorepo mode) |
+| scope a framework audit | pass `workspace=<name|path>` to `framework_audit`, `nextjs_route_map`, `nextjs_metadata_audit`, `analyze_hono_app`, `nest_audit`, `astro_audit` |
 <!-- codesift-rules-end -->

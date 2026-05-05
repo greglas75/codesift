@@ -461,21 +461,43 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
   const hooks = getBoolFlag(flags, "hooks") ?? true;
   const rules = getBoolFlag(flags, "rules") ?? true;
   const force = getBoolFlag(flags, "force") ?? false;
-  // git-hooks defaults to ON when --hooks is on (editor-agnostic by design).
-  // Power users can pass --no-git-hooks to opt out (e.g., Husky/Lefthook setups).
-  const gitHooks = getBoolFlag(flags, "git-hooks") ?? hooks;
+  // `--no-git-hooks` is a standalone boolean flag (parseArgs stores "no-git-hooks", not "git-hooks": false).
+  const gitHooks = getBoolFlag(flags, "no-git-hooks")
+    ? false
+    : (getBoolFlag(flags, "git-hooks") ?? hooks);
   const options = { hooks, rules, force, gitHooks };
+
+  /** Global post-commit backlog hook — wired here because `formatSetupLines` stays editor-setup only (see setup/setupAll for programmatic installs). */
+  async function emitGlobalGitHooksIfRequested(): Promise<void> {
+    if (options.gitHooks === false) return;
+    // Match setup(): git hooks accompany editor hooks by default; allow `--git-hooks` without `--hooks`.
+    const wantGitHooks = options.hooks || getBoolFlag(flags, "git-hooks") === true;
+    if (!wantGitHooks) return;
+
+    const { installGitHooks } = await import("./git-hooks-installer.js");
+    const result = await installGitHooks({ force });
+    if (result.reason) {
+      process.stdout.write(`⚠️ git hooks: ${result.reason}\n`);
+      return;
+    }
+    process.stdout.write(`✓ git post-commit hook → ${result.hooksPath}\n`);
+    if (result.hooksPathSkippedReason) {
+      process.stdout.write(`  (${result.hooksPathSkippedReason})\n`);
+    }
+  }
 
   if (platform === "all") {
     for (const p of SUPPORTED_PLATFORMS) {
       const lines = await formatSetupLines(p, options);
       for (const line of lines) process.stdout.write(line + "\n");
     }
+    await emitGlobalGitHooksIfRequested();
     return;
   }
 
   const lines = await formatSetupLines(platform, options);
   for (const line of lines) process.stdout.write(line + "\n");
+  await emitGlobalGitHooksIfRequested();
 }
 
 async function handleFindClones(args: string[], flags: Flags): Promise<void> {

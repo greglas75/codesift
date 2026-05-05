@@ -265,6 +265,14 @@ describe("index-store", () => {
       expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
     });
 
+    it("isExtractorVersionCurrent returns false for empty extractor_version object with no files", () => {
+      const index = makeIndex({
+        extractor_version: {},
+        files: [],
+      });
+      expect(isExtractorVersionCurrent(index, CURRENT)).toBe(false);
+    });
+
     it("isExtractorVersionCurrent tolerates missing language when no files in that language", () => {
       // Regression: legacy indexes written before EXTRACTOR_VERSIONS gained a
       // language must not be invalidated when they have no symbols in that
@@ -317,6 +325,30 @@ describe("index-store", () => {
         expect(result.language).toBe("typescript");
         expect(result.expected_version).toBe("3.0.0");
         expect(result.actual_version).toBe("missing");
+      }
+    });
+
+    it("loadIndexOrStale adds mismatch_detail when multiple indexed languages drift", async () => {
+      const indexPath = join(tmpDir, "multi-lang-stale.index.json");
+      const index = makeIndex({
+        extractor_version: { kotlin: "2.0.0", python: "0.8.0", typescript: "2.0.0" },
+        files: [
+          makeFile("src/a.ts", "typescript"),
+          makeFile("b.py", "python"),
+        ],
+      });
+      await saveIndex(indexPath, index);
+
+      const result = await loadIndexOrStale(indexPath, {
+        kotlin: "2.0.0",
+        python: "1.0.0",
+        typescript: "3.0.0",
+      });
+      expect(result?.status).toBe("stale");
+      if (result?.status === "stale") {
+        expect(result.mismatch_detail).toBeDefined();
+        expect(result.mismatch_detail).toContain("typescript");
+        expect(result.mismatch_detail).toContain("python");
       }
     });
 

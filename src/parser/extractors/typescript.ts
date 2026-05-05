@@ -99,6 +99,17 @@ function getWrappedFunction(callExpr: Parser.SyntaxNode): Parser.SyntaxNode | nu
   return null;
 }
 
+/** Strip `export default ((...))` wrappers — one or more parenthesized_expression layers. */
+function unwrapParentheses(node: Parser.SyntaxNode): Parser.SyntaxNode {
+  let cur = node;
+  while (cur.type === "parenthesized_expression" && cur.namedChildren.length > 0) {
+    const inner = cur.namedChildren[0];
+    if (!inner) break;
+    cur = inner;
+  }
+  return cur;
+}
+
 /** React base class names that indicate a class component */
 const REACT_COMPONENT_BASES = new Set([
   "Component", "PureComponent",
@@ -156,15 +167,12 @@ function getClassHeritage(node: Parser.SyntaxNode): { extends: string[]; impleme
 }
 
 /**
- * Check if a class extends React.Component or React.PureComponent.
- * Uses getClassHeritage (shared helper) — NO duplicate AST walk (CQ14).
+ * True when `extendsList` (from one `getClassHeritage` pass) names React.Component
+ * or React.PureComponent — bare identifier or qualified (e.g. React.Component).
  */
-function isReactClassComponent(node: Parser.SyntaxNode): boolean {
-  const { extends: extendsList } = getClassHeritage(node);
+function extendsListIndicatesReactComponent(extendsList: string[]): boolean {
   for (const name of extendsList) {
-    // "Component" / "PureComponent" — bare identifier match
     if (REACT_COMPONENT_BASES.has(name)) return true;
-    // "React.Component" / "React.PureComponent" — qualified match
     const lastDot = name.lastIndexOf(".");
     if (lastDot >= 0 && REACT_COMPONENT_BASES.has(name.slice(lastDot + 1))) return true;
   }
@@ -588,6 +596,9 @@ function hasExportModifier(node: Parser.SyntaxNode): boolean {
 function hasAsyncModifier(node: Parser.SyntaxNode): boolean {
   for (const child of node.children) {
     if (child.type === "async") return true;
+    // tree-sitter-typescript can mis-parse `abstract async name()` (grammar error node)
+    // while still recovering the method — treat leading `async` in ERROR as async.
+    if (child.type === "ERROR" && /^\s*async\b/.test(child.text)) return true;
   }
   return false;
 }
@@ -598,7 +609,7 @@ function hasAsyncModifier(node: Parser.SyntaxNode): boolean {
  *     `accessibility_modifier` containing `public`/`private`/`protected`)
  * Order in the resulting array follows source-token order for stability. */
 const MODIFIER_KEYWORD_TOKENS = new Set([
-  "static", "abstract", "readonly", "declare",
+  "static", "abstract", "readonly", "declare", "accessor",
 ]);
 
 /** Collect modifier keywords from a method_definition / field_definition node.
@@ -631,6 +642,14 @@ function getAccessorKind(node: Parser.SyntaxNode): "get" | "set" | "accessor" | 
   return undefined;
 }
 
+/** Record `abstract` when the grammar omitted a bare `abstract` child but the node is abstract. */
+function ensureAbstractRecorded(modifiers: string[]): void {
+  if (modifiers.includes("abstract")) return;
+  // Source order: `abstract foo()` → sole synthetic modifier first; `protected abstract foo()` → after prior modifiers.
+  if (modifiers.length === 0) modifiers.unshift("abstract");
+  else modifiers.push("abstract");
+}
+
 export function extractTypeScriptSymbols(
   tree: Parser.Tree,
   filePath: string,
@@ -644,6 +663,8 @@ export function extractTypeScriptSymbols(
   // already-emitted symbols so a `function foo(){}` declared earlier in the
   // file gets its `is_exported` flag set when the exports assignment is seen.
   const cjsExported = new Set<string>();
+  /** Count `function_signature` emissions per (parentId,name) for ambient overload dedup metadata. */
+  const ambientFnSigOverloadCount = new Map<string, number>();
 
   function walk(node: Parser.SyntaxNode, parentId?: string, isExported = false): void {
     switch (node.type) {
@@ -661,6 +682,14 @@ export function extractTypeScriptSymbols(
           const exported = isExported || hasExportModifier(node);
           const isAsync = hasAsyncModifier(node);
           const isGenerator = node.type === "generator_function_declaration";
+          const meta: Record<string, unknown> = {};
+          if (isGenerator) meta.generator = true;
+          if (node.type === "function_signature") {
+            const okey = `${parentId ?? ""}:${name}`;
+            const next = (ambientFnSigOverloadCount.get(okey) ?? 0) + 1;
+            ambientFnSigOverloadCount.set(okey, next);
+            if (next > 1) meta.overload_index = next - 1;
+          }
           const sym = makeSymbol(node, name, kind, filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
@@ -668,7 +697,7 @@ export function extractTypeScriptSymbols(
             decorators: decorators.length > 0 ? decorators : undefined,
             is_async: isAsync ? true : undefined,
             is_exported: exported ? true : undefined,
-            meta: isGenerator ? { generator: true } : undefined,
+            meta: Object.keys(meta).length > 0 ? meta : undefined,
           });
           symbols.push(sym);
         }
@@ -754,13 +783,18 @@ export function extractTypeScriptSymbols(
       }
 
       case "class_declaration":
-      case "abstract_class_declaration": {
-        const name = getNodeName(node) ?? "<anonymous>";
-        // React class component: class Foo extends Component / React.Component / PureComponent
-        const kind = isReactClassComponent(node) ? "component" as SymbolKind : "class" as SymbolKind;
+      case "abstract_class_declaration":
+      case "class_expression":
+      case "class": {
+        const resolvedName = getNodeName(node);
+        const name = resolvedName && resolvedName.length > 0 ? resolvedName : "<anonymous>";
         const decorators = getDecorators(node);
         const exported = isExported || hasExportModifier(node);
         const heritage = getClassHeritage(node);
+        // React class component: extends Component / React.Component / PureComponent
+        const kind = extendsListIndicatesReactComponent(heritage.extends)
+          ? ("component" as SymbolKind)
+          : ("class" as SymbolKind);
         const sym = makeSymbol(node, name, kind, filePath, source, repo, {
           parentId,
           docstring: getDocstring(node, source),
@@ -787,15 +821,18 @@ export function extractTypeScriptSymbols(
         if (name) {
           const decorators = getDecorators(node);
           const modifiers = getModifiers(node);
-          // abstract methods always carry "abstract" by syntax — ensure it's recorded
-          if (!modifiers.includes("abstract")) modifiers.push("abstract");
+          ensureAbstractRecorded(modifiers);
+          const isAsync = hasAsyncModifier(node);
+          const accessorKind = getAccessorKind(node);
           const meta: Record<string, unknown> = {};
           if (modifiers.length > 0) meta.modifiers = modifiers;
+          if (accessorKind) meta.accessor_kind = accessorKind;
           const sym = makeSymbol(node, name, "method", filePath, source, repo, {
             parentId,
             docstring: getDocstring(node, source),
             signature: getSignature(node, source),
             decorators: decorators.length > 0 ? decorators : undefined,
+            is_async: isAsync ? true : undefined,
             meta: Object.keys(meta).length > 0 ? meta : undefined,
           });
           symbols.push(sym);
@@ -915,7 +952,8 @@ export function extractTypeScriptSymbols(
             }
           }
         }
-        if (nsName) {
+        // Use != null so empty module specifier `""` is still indexed (truthy check dropped it).
+        if (nsName !== null) {
           const exported = isExported || hasExportModifier(node);
           const sym = makeSymbol(node, nsName, "namespace", filePath, source, repo, {
             parentId,
@@ -1036,23 +1074,28 @@ export function extractTypeScriptSymbols(
         const isDefaultExport = node.children.some((c) => c.type === "default");
         if (isDefaultExport) {
           for (const child of node.namedChildren) {
+            const inner = unwrapParentheses(child);
             const isAnon =
-              (child.type === "function_expression" || child.type === "class" || child.type === "class_declaration" || child.type === "function_declaration" || child.type === "generator_function_declaration" || child.type === "arrow_function")
-              && !getNodeName(child);
+              (inner.type === "function_expression" || inner.type === "class" || inner.type === "class_declaration" || inner.type === "class_expression" || inner.type === "function_declaration" || inner.type === "generator_function_declaration" || inner.type === "arrow_function")
+              && !getNodeName(inner);
             if (isAnon) {
               // For JSX-returning anonymous defaults, also flag is_react_component
               // so React-aware tools can still find them. Spec AC #10 mandates
               // kind:"default_export" regardless.
               const meta: Record<string, unknown> = {};
-              if (returnsJSX(child)) meta.is_react_component = true;
-              const sym = makeSymbol(node, "default", "default_export", filePath, source, repo, {
+              if (returnsJSX(inner)) meta.is_react_component = true;
+              // Anchor spans on the declaration node (not the export_statement).
+              const sym = makeSymbol(inner, "default", "default_export", filePath, source, repo, {
                 parentId,
                 is_exported: true,
-                signature: child.type !== "class" && child.type !== "class_declaration"
-                  ? getSignature(child, source) : undefined,
+                signature: inner.type !== "class" && inner.type !== "class_declaration" && inner.type !== "class_expression"
+                  ? getSignature(inner, source) : undefined,
                 meta: Object.keys(meta).length > 0 ? meta : undefined,
               });
               symbols.push(sym);
+              // Walk the anonymous declaration so nested methods/bodies are indexed
+              // (named default exports already get this via the export_statement child walk).
+              walk(inner, sym.id, true);
               return;
             }
           }

@@ -95,7 +95,11 @@ export class HonoExtractor {
     model: HonoAppModel,
   ): Promise<void> {
     // Cycle detection: break if this file is already being parsed up the call stack
-    if (inFlight.has(file)) return;
+    if (inFlight.has(file)) {
+      model.skip_reasons.parse_cycle_skipped =
+        (model.skip_reasons.parse_cycle_skipped ?? 0) + 1;
+      return;
+    }
 
     // Record file as used
     if (!model.files_used.includes(file)) {
@@ -105,13 +109,47 @@ export class HonoExtractor {
     // Check memoization cache for previously parsed child
     const cached = parsedCache.get(file);
     if (cached) {
-      // Re-use parsed routes with fresh prefix
-      // route.path already has basePath applied — apply mount prefix on top
+      // Re-use local HTTP routes with fresh mount prefix (path already includes basePath)
       for (const route of cached.routes) {
         model.routes.push({
           ...route,
           path: joinPaths(prefix, route.path),
         });
+      }
+      // Still re-run mount expansion: nested app.route() lives outside localRoutes;
+      // a prior bug skipped this on cache hit so the 2nd+ mount missed grandchild routes.
+      let replaySrc: string;
+      try {
+        replaySrc = await readFile(file, "utf-8");
+      } catch {
+        model.skip_reasons.file_read_failed =
+          (model.skip_reasons.file_read_failed ?? 0) + 1;
+        return;
+      }
+      const replayLang = pickLanguage(file);
+      const replayParser = await getParser(replayLang);
+      if (!replayParser) {
+        model.skip_reasons.parser_unavailable =
+          (model.skip_reasons.parser_unavailable ?? 0) + 1;
+        return;
+      }
+      const replayTree = replayParser.parse(replaySrc);
+      if (!replayTree) {
+        model.skip_reasons.parse_failed =
+          (model.skip_reasons.parse_failed ?? 0) + 1;
+        return;
+      }
+      try {
+        const importMap = this.extractImportMap(replayTree.rootNode, file);
+        const localMounts: HonoMount[] = [];
+        inFlight.add(file);
+        await this.walkRouteMounts(
+          replayTree.rootNode, file, prefix, cached.app_variables, importMap,
+          inFlight, parsedCache, model, localMounts,
+        );
+        inFlight.delete(file);
+      } finally {
+        replayTree.delete();
       }
       return;
     }
@@ -192,14 +230,6 @@ export class HonoExtractor {
         this.extractEnvBindings(tree.rootNode, source, model);
       }
 
-      // Cache local parse result (routes stored with raw_path, prefix applied on read)
-      parsedCache.set(file, {
-        app_variables: localAppVars,
-        routes: localRoutes,
-        mounts: localMounts,
-        files_used: [file],
-      });
-
       // Walk for app.route() mounts — recursive into child files
       inFlight.add(file);
       await this.walkRouteMounts(
@@ -207,6 +237,14 @@ export class HonoExtractor {
         inFlight, parsedCache, model, localMounts,
       );
       inFlight.delete(file);
+
+      // Cache after mounts so localMounts is complete; routes are mount-prefix-agnostic locals
+      parsedCache.set(file, {
+        app_variables: localAppVars,
+        routes: localRoutes,
+        mounts: localMounts,
+        files_used: [file],
+      });
     } finally {
       tree.delete();
     }
@@ -1050,7 +1088,12 @@ export class HonoExtractor {
     model: HonoAppModel,
     localMounts: HonoMount[],
   ): Promise<void> {
-    const mounts: Array<{ mountPath: string; childVar: string; line: number }> = [];
+    const mounts: Array<{
+      mountPath: string;
+      childVar: string;
+      line: number;
+      parentVar: string;
+    }> = [];
     const cursor = root.walk();
     walk(cursor, (node) => {
       if (node.type !== "call_expression") return;
@@ -1107,11 +1150,12 @@ export class HonoExtractor {
         mountPath,
         childVar,
         line: node.startPosition.row + 1,
+        parentVar: ownerVar,
       });
     });
 
     // Process mounts — async because recursive parse needs file I/O
-    for (const { mountPath, childVar } of mounts) {
+    for (const { mountPath, childVar, parentVar } of mounts) {
       // T6: Fallback for LOCAL sub-apps (declared in the same file, not
       // imported). If the import map doesn't know this var but appVars does,
       // the child lives in the parent file — use that path instead of "".
@@ -1126,7 +1170,7 @@ export class HonoExtractor {
       const fullMountPath = joinPaths(parentPrefix, mountPath);
 
       const mount: HonoMount = {
-        parent_var: Object.keys(appVars)[0] ?? "app",
+        parent_var: parentVar,
         mount_path: fullMountPath,
         child_var: childVar,
         child_file: childFile ?? "",

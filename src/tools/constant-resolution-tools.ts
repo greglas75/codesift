@@ -3,6 +3,7 @@ import { getCodeIndex } from "./index-tools.js";
 import type { ConstantResolutionResult, ConstantResolutionMatch } from "./python-constants-tools.js";
 import { resolveConstantValue as resolvePythonConstantValue } from "./python-constants-tools.js";
 import { resolveTypeScriptConstantValue } from "./typescript-constants-tools.js";
+import { matchesConstantFilePattern } from "../utils/constant-file-pattern.js";
 
 export type ConstantResolutionLanguage = "python" | "typescript";
 
@@ -23,7 +24,7 @@ function inferLanguages(
 
   const candidates = index.symbols
     .filter((symbol) => symbol.name === symbolName)
-    .filter((symbol) => !options?.file_pattern || symbol.file.includes(options.file_pattern));
+    .filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern));
 
   const hasPython = candidates.some((symbol) => symbol.file.endsWith(".py"));
   const hasTypeScript = candidates.some((symbol) => isTypeScriptFile(symbol.file));
@@ -38,7 +39,7 @@ function inferLanguages(
   if (repoHasPython && repoHasTypeScript) return ["python", "typescript"];
   if (repoHasPython) return ["python"];
   if (repoHasTypeScript) return ["typescript"];
-  return ["python"];
+  return [];
 }
 
 function normalizeMatches(
@@ -66,17 +67,21 @@ export async function resolveConstantValue(
   }
 
   const languages = inferLanguages(index, symbolName, options);
+  if (languages.length === 0) {
+    return { query: symbolName, matches: [] };
+  }
+
   const matches: ConstantResolutionMatch[] = [];
 
   for (const language of languages) {
     if (language === "python") {
-      const result = await resolvePythonConstantValue(repo, symbolName, options);
+      const result = await resolvePythonConstantValue(repo, symbolName, { ...options, index });
       matches.push(...normalizeMatches(result.matches, "python"));
       continue;
     }
 
     if (language === "typescript") {
-      const result = await resolveTypeScriptConstantValue(repo, symbolName, options);
+      const result = await resolveTypeScriptConstantValue(repo, symbolName, { ...options, index });
       matches.push(...normalizeMatches(result.matches, "typescript"));
     }
   }

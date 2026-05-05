@@ -94,6 +94,46 @@ describe("HonoExtractor — subapp-app", () => {
   });
 });
 
+describe("HonoExtractor — double-mount nested sub-app", () => {
+  const entry = path.join(FIXTURES, "double-mount-app", "src", "index.ts");
+  let extractor: HonoExtractor;
+
+  beforeAll(() => {
+    extractor = new HonoExtractor();
+  });
+
+  it("re-expands nested app.route when the same child is mounted twice", async () => {
+    const model = await extractor.parse(entry);
+    const paths = model.routes.map((r) => `${r.method} ${r.path}`).sort();
+    expect(paths).toContain("GET /api/v1/list");
+    expect(paths).toContain("GET /api/v2/list");
+    expect(paths).toContain("GET /api/v1/nested-mount/hello");
+    expect(paths).toContain("GET /api/v2/nested-mount/hello");
+    expect(paths.filter((p) => p.includes("nested-mount/hello")).length).toBe(
+      2,
+    );
+  });
+
+  it("records one mount row per app.route on the child for each entry mount", async () => {
+    const model = await extractor.parse(entry);
+    const childMounts = model.mounts.filter((m) =>
+      m.child_file.includes("nested"),
+    );
+    expect(childMounts.length).toBeGreaterThanOrEqual(2);
+    const nestedPaths = childMounts.map((m) => m.mount_path).sort();
+    expect(nestedPaths).toContain("/api/v1/nested-mount");
+    expect(nestedPaths).toContain("/api/v2/nested-mount");
+  });
+
+  it("sets parent_var to the variable that owns app.route on nested mounts", async () => {
+    const model = await extractor.parse(entry);
+    const fromUsers = model.mounts.filter((m) => m.child_var === "nested");
+    for (const m of fromUsers) {
+      expect(m.parent_var).toBe("users");
+    }
+  });
+});
+
 describe("HonoExtractor — openapi-app", () => {
   const openapiEntry = path.join(FIXTURES, "openapi-app", "src", "index.ts");
   let extractor: HonoExtractor;

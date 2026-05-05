@@ -12,6 +12,7 @@ import { mkdtempSync, cpSync, rmSync, existsSync } from "node:fs";
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { resetConfigCache } from "../../src/config.js";
 
 describe("Wiki cleanup — journal guard (D1)", () => {
   describe("Path A: real generateWiki leaves journal/ untouched", () => {
@@ -20,10 +21,14 @@ describe("Wiki cleanup — journal guard (D1)", () => {
     beforeEach(() => {
       const fixture = resolve(__dirname, "../fixtures/wiki-v2/ts-monorepo");
       workdir = mkdtempSync(join(tmpdir(), "cleanup-guard-"));
+      process.env["CODESIFT_DATA_DIR"] = join(workdir, ".codesift-machine-data");
+      resetConfigCache();
       cpSync(fixture, workdir, { recursive: true });
     });
 
     afterEach(() => {
+      delete process.env["CODESIFT_DATA_DIR"];
+      resetConfigCache();
       if (workdir && existsSync(workdir)) {
         rmSync(workdir, { recursive: true, force: true });
       }

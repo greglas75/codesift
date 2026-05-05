@@ -5,6 +5,7 @@ import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { resolvePythonImport, detectSrcLayout } from "../utils/python-import-resolver.js";
 import { getCodeIndex } from "./index-tools.js";
+import { matchesConstantFilePattern } from "../utils/constant-file-pattern.js";
 
 export type PythonLiteralKind =
   | "string"
@@ -641,9 +642,11 @@ export async function resolveConstantValue(
   options?: {
     file_pattern?: string;
     max_depth?: number;
+    /** When set, skips a second getCodeIndex (multi-language orchestrator). */
+    index?: CodeIndex;
   },
 ): Promise<ConstantResolutionResult> {
-  const index = await getCodeIndex(repo);
+  const index = options?.index ?? await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found.`);
   }
@@ -651,7 +654,7 @@ export async function resolveConstantValue(
   const candidates = index.symbols
     .filter((symbol) => symbol.file.endsWith(".py"))
     .filter((symbol) => symbol.name === symbolName)
-    .filter((symbol) => !options?.file_pattern || symbol.file.includes(options.file_pattern))
+    .filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern))
     .filter((symbol) => symbol.kind === "constant" || symbol.kind === "function" || symbol.kind === "method")
     .sort((a, b) => a.file.localeCompare(b.file) || a.start_line - b.start_line);
 

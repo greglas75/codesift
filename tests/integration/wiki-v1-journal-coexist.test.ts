@@ -24,6 +24,7 @@ import { mkdtempSync, cpSync, rmSync, existsSync } from "node:fs";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { resetConfigCache } from "../../src/config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +81,10 @@ describe("V1 rollback — journal coexistence (Task 18)", () => {
     // real indexable repository to work with.
     const fixture = resolve(__dirname, "../fixtures/wiki-v2/ts-monorepo");
     workdir = mkdtempSync(join(tmpdir(), "wiki-v1-coexist-"));
+    // Isolate registry/index store per project — shared ~/.codesift breaks
+    // sequential integration tests under vitest vmForks singleFork.
+    process.env["CODESIFT_DATA_DIR"] = join(workdir, ".codesift-machine-data");
+    resetConfigCache();
     cpSync(fixture, workdir, { recursive: true });
 
     wikiDir = join(workdir, ".codesift", "wiki");
@@ -113,6 +118,8 @@ describe("V1 rollback — journal coexistence (Task 18)", () => {
     } else {
       process.env.CODESIFT_WIKI_V1 = priorV1Env;
     }
+    delete process.env["CODESIFT_DATA_DIR"];
+    resetConfigCache();
     if (workdir && existsSync(workdir)) {
       rmSync(workdir, { recursive: true, force: true });
     }

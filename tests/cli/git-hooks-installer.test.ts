@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -109,6 +109,51 @@ describe("installGitHooks", () => {
     expect(result.reason).toBeDefined();
     expect(result.reason).toMatch(/git/i);
     expect(result.installed).toEqual([]);
+  });
+
+  it("does not overwrite foreign global core.hooksPath without force", async () => {
+    execSyncMock.mockImplementation((cmd: string, opts?: { encoding?: string }) => {
+      if (cmd === "git --version") return Buffer.from("git version 2.50.0");
+      if (cmd.includes("--get core.hooksPath")) {
+        return opts?.encoding === "utf-8" ? "/other/tool/hooks\n" : Buffer.from("/other/tool/hooks\n");
+      }
+      return Buffer.from("");
+    });
+
+    const result = await installGitHooks();
+    expect(result.hooksPathSkippedReason).toMatch(/not overwriting/i);
+    const setHookPath = execSyncMock.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && String(c[0]).includes("config --global core.hooksPath"),
+    );
+    expect(setHookPath).toBeUndefined();
+  });
+
+  it("overwrites foreign global core.hooksPath when force=true", async () => {
+    execSyncMock.mockImplementation((cmd: string, opts?: { encoding?: string }) => {
+      if (cmd === "git --version") return Buffer.from("git version 2.50.0");
+      if (cmd.includes("--get core.hooksPath")) {
+        return opts?.encoding === "utf-8" ? "/other/tool/hooks\n" : Buffer.from("/other/tool/hooks\n");
+      }
+      if (cmd.includes("config --global core.hooksPath")) return Buffer.from("");
+      return Buffer.from("");
+    });
+
+    await installGitHooks({ force: true });
+    const setHookPath = execSyncMock.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && String(c[0]).includes("config --global core.hooksPath"),
+    );
+    expect(setHookPath).toBeDefined();
+  });
+
+  it("restores execute bit when hash matches but post-commit is not executable", async () => {
+    await installGitHooks();
+    const targetPath = join(sandbox, ".claude/hooks/post-commit");
+    await chmod(targetPath, 0o644);
+
+    await installGitHooks();
+
+    const st = await stat(targetPath);
+    expect(st.mode & 0o111).not.toBe(0);
   });
 
   it("does not re-set core.hooksPath when already pointing at the target", async () => {

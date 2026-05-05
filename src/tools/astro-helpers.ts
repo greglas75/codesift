@@ -20,8 +20,8 @@ export function getProperty(obj: Parser.SyntaxNode, name: string): Parser.Syntax
 }
 
 export function isLiteral(n: Parser.SyntaxNode): boolean {
-  return n.type === "string" || n.type === "number" || n.type === "true"
-    || n.type === "false" || n.type === "null" || n.type === "undefined";
+  return n.type === "string" || n.type === "number" || n.type === "bigint"
+    || n.type === "true" || n.type === "false" || n.type === "null" || n.type === "undefined";
 }
 
 export function innermostCall(node: Parser.SyntaxNode): Parser.SyntaxNode {

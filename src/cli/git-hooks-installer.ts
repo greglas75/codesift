@@ -15,7 +15,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, chmod } from "node:fs/promises";
+import { copyFile, mkdir, readFile, chmod, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -36,6 +36,8 @@ export interface GitHooksInstallResult {
   skipped: string[];
   hooksPath: string;
   reason?: string;
+  /** Set when scripts were installed but `git config --global core.hooksPath` was left unchanged. */
+  hooksPathSkippedReason?: string;
 }
 
 /** Resolve the bundled `hooks/` directory inside the installed npm package. */
@@ -78,6 +80,12 @@ async function installScript(
     const existing = await readFile(script.target, "utf-8");
     const bundled = await readFile(sourcePath, "utf-8");
     if (sha256(existing) === sha256(bundled)) {
+      if (script.executable) {
+        const st = await stat(script.target);
+        if ((st.mode & 0o111) === 0) {
+          await chmod(script.target, 0o755);
+        }
+      }
       return "skipped"; // identical, nothing to do
     }
     return "preserved"; // user-modified, don't overwrite
@@ -153,19 +161,34 @@ export async function installGitHooks(
     else skipped.push(script.target);
   }
 
-  // Set global core.hooksPath only when not already pointing here.
-  let hooksPathConfigured = false;
+  const postCommitHook = join(hooksDir, "post-commit");
+  const postCommitPresent = existsSync(postCommitHook);
+
+  // Set global core.hooksPath only when safe: post-commit exists, and we do not
+  // clobber another tool's global hooks directory without --force.
+  let hooksPathMatchesOurs = false;
+  let otherGlobalHooksPath: string | undefined;
   try {
     const current = execSync("git config --global --get core.hooksPath", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-    hooksPathConfigured = current === hooksDir;
+    if (current === hooksDir) hooksPathMatchesOurs = true;
+    else if (current) otherGlobalHooksPath = current;
   } catch {
-    // Not set yet — fall through and set it.
+    /* unset — ok to set once bundle is ready */
   }
 
-  if (!hooksPathConfigured) {
+  let hooksPathSkippedReason: string | undefined;
+
+  if (hooksPathMatchesOurs) {
+    // Already correct
+  } else if (!postCommitPresent) {
+    hooksPathSkippedReason =
+      "bundled hooks did not install to ~/.claude/hooks/post-commit; left core.hooksPath unchanged";
+  } else if (otherGlobalHooksPath && !force) {
+    hooksPathSkippedReason = `global core.hooksPath is already "${otherGlobalHooksPath}" — not overwriting (re-run setup with --force to replace)`;
+  } else {
     execSync(`git config --global core.hooksPath ${JSON.stringify(hooksDir)}`, {
       stdio: "ignore",
     });
@@ -176,5 +199,8 @@ export async function installGitHooks(
     preserved,
     skipped,
     hooksPath: hooksDir,
+    ...(hooksPathSkippedReason !== undefined
+      ? { hooksPathSkippedReason }
+      : {}),
   };
 }

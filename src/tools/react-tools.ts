@@ -564,9 +564,15 @@ export interface RenderAnalysisEntry {
   /** Components rendered as children (from JSX), useful to see impact */
   children_count: number;
   /**
-   * Render-tree depth (Tier 5): longest path in edges from this component UP to
-   * a root in the reverse JSX adjacency. NOT prop-flow depth — does not analyze
-   * which props are consumed vs passed through. `null` only on extractor failure.
+   * JSX **render-tree** depth: longest path in edges from this component up to a
+   * root in the reverse adjacency. Same numeric value as `prop_chain_depth`;
+   * this name reflects semantics (not prop-drilling depth). `null` only when
+   * `metadata.skipped === "extractor-failure"`.
+   */
+  jsx_render_depth: number | null;
+  /**
+   * @deprecated Use `jsx_render_depth`. Same value — retained for backward compatibility.
+   * Render-tree depth, not prop-flow depth.
    */
   prop_chain_depth: number | null;
   /** Suggestion text including "NOT prop-drilling depth" disclaimer when depth >= 3 */
@@ -584,7 +590,7 @@ export interface AnalyzeRendersResult {
     unstable_defaults: number;
     missing_memo: number;
   };
-  /** Diagnostic metadata — fires only on extractor failure (zero component symbols), never on size */
+  /** Diagnostic metadata — see `analyzeRenders` implementation for when this is set. */
   metadata?: { skipped?: "extractor-failure" };
 }
 
@@ -661,16 +667,6 @@ function findRenderRisks(source: string): RenderRisk[] {
 }
 
 /**
- * Analyze re-render risk across React components in a repo.
- *
- * Detects:
- * - Inline object/array/function props in JSX (new reference every render)
- * - Unstable default parameter values ([] or {} in component params)
- * - Components not wrapped in React.memo that render children (missing-memo)
- *
- * Returns per-component risk assessment with actionable suggestions.
- */
-/**
  * Format an AnalyzeRendersResult as human-readable Markdown.
  * Used by analyzeRenders when format="markdown" is requested.
  */
@@ -693,12 +689,23 @@ export function formatRendersMarkdown(result: AnalyzeRendersResult): string {
   lines.push("|-----------|------|------|--------|----------|-------|------|");
   for (const e of result.entries) {
     const file = e.file.length > 40 ? "…" + e.file.slice(-39) : e.file;
-    const chain = e.prop_chain_depth === null ? "—" : String(e.prop_chain_depth);
+    const chain =
+      e.jsx_render_depth === null ? "—" : String(e.jsx_render_depth);
     lines.push(`| ${e.name} | ${file}:${e.start_line} | ${e.risk_level} | ${e.risk_count} | ${e.children_count} | ${chain} | ${e.is_memoized ? "✓" : "✗"} |`);
   }
   return lines.join("\n");
 }
 
+/**
+ * Analyze re-render risk across React components in a repo.
+ *
+ * Detects:
+ * - Inline object/array/function props in JSX (new reference every render)
+ * - Unstable default parameter values ([] or {} in component params)
+ * - Components not wrapped in React.memo that render children (missing-memo)
+ *
+ * Returns per-component risk assessment with actionable suggestions.
+ */
 export async function analyzeRenders(
   repo: string,
   options?: {
@@ -724,9 +731,17 @@ export async function analyzeRenders(
   if (componentName) components = components.filter((s) => s.name === componentName);
   if (filePattern) components = components.filter((s) => s.file.includes(filePattern));
 
-  // Tier 5 — extractor-failure detection (only fires when zero component symbols
-  // were extracted, NOT on flat trees with components but no JSX nesting).
-  const extractorFailure = components.length === 0 && index.symbols.length > 0;
+  // Tier 5 — extractor-failure: only when we have indexed JSX files but zero
+  // component symbols while other symbols exist — likely classification/extractor
+  // issues. Pure `.ts`/non-JSX indexes are not flagged (avoids false positives on
+  // headless/util libraries).
+  const hasJsxIndexedFiles = index.files.some(
+    (f) => f.path.endsWith(".tsx") || f.path.endsWith(".jsx"),
+  );
+  const extractorFailure =
+    components.length === 0 &&
+    index.symbols.length > 0 &&
+    hasJsxIndexedFiles;
 
   // Tier 5 — sort components alphabetically by id ?? name BEFORE building adjacency
   // for deterministic cycle handling.
@@ -786,7 +801,7 @@ export async function analyzeRenders(
     if (riskLevel === "high") highRiskCount++;
 
     // Tier 5 — render-tree depth (longest acyclic path from this component up to a root)
-    const depth = computePropChainDepth(sym.id, reverseAdj, memo, inProgress);
+    const depth = computePropChainDepth(sym.id ?? sym.name, reverseAdj, memo, inProgress);
 
     // Tier 5 — suggestion text with explicit "NOT prop-drilling depth" disclaimer
     // when depth >= 3 (AC 8: prevents the metric from being silently relabeled
@@ -806,6 +821,7 @@ export async function analyzeRenders(
         risk_level: riskLevel,
         risks,
         children_count: childrenSet.size,
+        jsx_render_depth: extractorFailure ? null : depth,
         prop_chain_depth: extractorFailure ? null : depth,
         ...(suggestion ? { suggestion } : {}),
       });
@@ -1074,7 +1090,13 @@ export interface ReactQuickstartResult {
       build_tool: string | null;
     };
   };
-  /** Critical pattern violations (XSS, Rule of Hooks, memory leaks) */
+  /**
+   * High-priority pattern hits for onboarding. Entries use `severity: "critical"` for
+   * XSS / Rule-of-Hooks / effect-loop issues. For **backward compatibility**, legacy
+   * scans that were pre–Tier 5 (`useEffect-missing-cleanup`, `rsc-non-serializable-prop`)
+   * remain in this array with `severity: "warning"` — do not assume the field name
+   * implies severity. Tier 5 warning-only patterns live in `warnings`; style bucket in `style_issues`.
+   */
   critical_issues: Array<{
     pattern: string;
     count: number;
@@ -1167,8 +1189,8 @@ export async function reactQuickstart(
     { name: "derived-state", severity: "warning" },
     { name: "stale-closure-setstate", severity: "warning" },
     { name: "context-provider-value-inline", severity: "warning" },
-    // Tier 5 — style bucket
-    { name: "jsx-no-target-blank", severity: "style" },
+    // Tier 5 — warning (tabnabbing): surfaced in critical_issues with legacy warnings
+    { name: "jsx-no-target-blank", severity: "warning" },
     { name: "button-no-type", severity: "style" },
   ];
   const scanResults = await Promise.all(

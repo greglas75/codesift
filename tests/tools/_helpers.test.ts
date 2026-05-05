@@ -35,4 +35,17 @@ describe("staleToMcpError", () => {
     expect(result.content[0]?.text).toContain("python expected 1.1.0");
     expect(result.content[0]?.text).toContain("got 1.0.0");
   });
+
+  it("includes mismatch_detail when present", () => {
+    const result = staleToMcpError({
+      reason: "extractor_version_mismatch",
+      language: "typescript",
+      expected_version: "3.0.0",
+      actual_version: "2.1.0",
+      mismatch_detail:
+        "python: expected 1.0.0, got 0.9.0; php: expected 2.0.0, got missing",
+    });
+    expect(result.content[0]?.text).toContain("Also:");
+    expect(result.content[0]?.text).toContain("python:");
+  });
 });

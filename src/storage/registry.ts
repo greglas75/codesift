@@ -106,6 +106,36 @@ export async function removeRepo(
 }
 
 /**
+ * Resolve registry metadata for a repo input string.
+ * When `repoInput` is empty, uses CWD-based name then single-repo / root-path fallbacks
+ * (same rules as `getCodeIndex`).
+ */
+export async function resolveRegisteredRepoMeta(
+  registryPath: string,
+  repoInput: string,
+): Promise<{ resolvedName: string; meta: RepoMeta } | null> {
+  let resolved = repoInput;
+  if (!resolved) {
+    resolved = getRepoName(process.cwd());
+  }
+  let meta = await getRepo(registryPath, resolved);
+  if (!meta && !repoInput) {
+    const cwd = process.cwd();
+    const allRepos = await listRepos(registryPath);
+    const byRoot = allRepos.find((r) => r.root === cwd);
+    if (byRoot) {
+      resolved = byRoot.name;
+      meta = byRoot;
+    } else if (allRepos.length === 1) {
+      resolved = allRepos[0]!.name;
+      meta = allRepos[0]!;
+    }
+  }
+  if (!meta) return null;
+  return { resolvedName: resolved, meta };
+}
+
+/**
  * Derive a repo name from its root path.
  * Format: "local/{folder-name}"
  */

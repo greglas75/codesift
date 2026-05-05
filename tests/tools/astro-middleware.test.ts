@@ -103,6 +103,65 @@ export const onRequest = async (context, next) => {
     );
   });
 
+  it("guard with bare context.rewrite (no return) is flagged MW03", async () => {
+    const src = `
+export const onRequest = async (context, next) => {
+  if (!context.locals.user) {
+    context.rewrite(new URL("/login", context.url));
+  }
+  return next();
+};
+`;
+    await withProject(
+      { "src/middleware.ts": src },
+      async (root) => {
+        const result = await astroMiddlewareAudit({ project_root: root });
+        expect(result.issues.some((i) => i.code === "MW03")).toBe(true);
+      },
+    );
+  });
+
+  it("guard with return context.rewrite does not emit MW03 for that if", async () => {
+    const src = `
+export const onRequest = async (context, next) => {
+  if (!context.locals.user) {
+    return context.rewrite(new URL("/login", context.url));
+  }
+  return next();
+};
+`;
+    await withProject(
+      { "src/middleware.ts": src },
+      async (root) => {
+        const result = await astroMiddlewareAudit({ project_root: root });
+        expect(result.issues.filter((i) => i.code === "MW03")).toEqual([]);
+      },
+    );
+  });
+
+  it("MW03 issues carry distinct line numbers per guarding if", async () => {
+    const src = `
+export const onRequest = async (context, next) => {
+  if (context.url.pathname === "/a" && !context.locals.user) {
+    // fallthrough 1
+  }
+  if (context.url.pathname === "/b" && !context.locals.user) {
+    // fallthrough 2
+  }
+  return next();
+};
+`;
+    await withProject(
+      { "src/middleware.ts": src },
+      async (root) => {
+        const result = await astroMiddlewareAudit({ project_root: root });
+        const mw03 = result.issues.filter((i) => i.code === "MW03");
+        expect(mw03.length).toBe(2);
+        expect(new Set(mw03.map((i) => i.line)).size).toBe(2);
+      },
+    );
+  });
+
   it("middleware.js variant is also detected", async () => {
     const src = `export const onRequest = (ctx, next) => next();`;
     await withProject(

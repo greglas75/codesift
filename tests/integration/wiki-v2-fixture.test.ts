@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { mkdtempSync, cpSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { resetConfigCache } from "../../src/config.js";
 
 // Copy the fixture to a tmp dir so the .codesift output doesn't pollute
 // the source tree, and run the full pipeline against it.
@@ -16,6 +17,8 @@ describe("Wiki v2 integration — ts-monorepo fixture", () => {
   it("generates a v2 manifest with project+modules, and no builtin `map` in top-10 hubs", async () => {
     const fixture = resolve(__dirname, "../fixtures/wiki-v2/ts-monorepo");
     const workdir = mkdtempSync(join(tmpdir(), "wiki-v2-fixture-"));
+    process.env["CODESIFT_DATA_DIR"] = join(workdir, ".codesift-machine-data");
+    resetConfigCache();
     cpSync(fixture, workdir, { recursive: true });
 
     try {
@@ -56,6 +59,8 @@ describe("Wiki v2 integration — ts-monorepo fixture", () => {
       expect(overview).toContain("## Stack");
       expect(overview.toLowerCase()).toMatch(/(type|java)script/);
     } finally {
+      delete process.env["CODESIFT_DATA_DIR"];
+      resetConfigCache();
       rmSync(workdir, { recursive: true, force: true });
     }
   }, 60_000);
@@ -63,6 +68,8 @@ describe("Wiki v2 integration — ts-monorepo fixture", () => {
   it("CODESIFT_WIKI_V1=1 produces a v1 manifest (no schema_version/project/modules)", async () => {
     const fixture = resolve(__dirname, "../fixtures/wiki-v2/ts-monorepo");
     const workdir = mkdtempSync(join(tmpdir(), "wiki-v1-rollback-"));
+    process.env["CODESIFT_DATA_DIR"] = join(workdir, ".codesift-machine-data");
+    resetConfigCache();
     cpSync(fixture, workdir, { recursive: true });
     const prior = process.env.CODESIFT_WIKI_V1;
     process.env.CODESIFT_WIKI_V1 = "1";
@@ -81,6 +88,8 @@ describe("Wiki v2 integration — ts-monorepo fixture", () => {
     } finally {
       if (prior === undefined) delete process.env.CODESIFT_WIKI_V1;
       else process.env.CODESIFT_WIKI_V1 = prior;
+      delete process.env["CODESIFT_DATA_DIR"];
+      resetConfigCache();
       rmSync(workdir, { recursive: true, force: true });
     }
   }, 60_000);

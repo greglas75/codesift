@@ -1012,6 +1012,80 @@ export function Widget(): number {
     const result = await findDeadCode(REPO);
     expect(result.candidates.find((c) => c.name === "GET")).toBeUndefined();
   });
+
+  // F14 regression: noise audit found 9/9 candidates were live code referenced
+  // either from tests or via internal/barrel paths the scanner missed.
+  it("F14: does NOT flag symbols referenced only from test files", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "service.ts"),
+      `export function tested(): number { return 1; }
+`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "service.test.ts"),
+      `import { tested } from "./service.js";
+import { describe, it, expect } from "vitest";
+describe("tested", () => { it("works", () => expect(tested()).toBe(1)); });
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findDeadCode(REPO);
+    const tested = result.candidates.find((c) => c.name === "tested");
+    expect(tested, "symbol used in tests must not be flagged dead").toBeUndefined();
+  });
+
+  it("F14: does NOT flag symbols re-exported via barrel `export * from`", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "internals.ts"),
+      `export function forwarded(): number { return 1; }
+export const FORWARDED_CONST = 42;
+`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "index.ts"),
+      `export * from "./internals.js";
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findDeadCode(REPO);
+    expect(result.candidates.find((c) => c.name === "forwarded"),
+      "symbol re-exported via `export *` must not be flagged dead").toBeUndefined();
+    expect(result.candidates.find((c) => c.name === "FORWARDED_CONST"),
+      "const re-exported via `export *` must not be flagged dead").toBeUndefined();
+  });
+
+  it("F14: does NOT flag symbols re-exported via named barrel `export { X } from`", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "core.ts"),
+      `export function namedOnly(): number { return 2; }
+export function alsoExported(): number { return 3; }
+`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "public.ts"),
+      `export { namedOnly, alsoExported } from "./core.js";
+`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await findDeadCode(REPO);
+    // Named re-exports textually mention the symbol — they always passed.
+    // The case here also exercises the `collectReExportedFiles` path so the
+    // file's other (textually-unmentioned) exports stay live too.
+    expect(result.candidates.find((c) => c.name === "namedOnly")).toBeUndefined();
+    expect(result.candidates.find((c) => c.name === "alsoExported")).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
