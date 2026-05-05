@@ -107,6 +107,70 @@ export interface ActiveRecordAnalysis {
   total: number;
 }
 
+/**
+ * Names of class roots that we treat as "this is an ActiveRecord". The check
+ * is done on the LAST namespace segment so prefixed forms (yii\\db\\ActiveRecord,
+ * \\yii\\db\\ActiveRecord, app\\models\\ActiveRecord) all match. Includes
+ * yii\\base\\Model because Yii2 form models extending Model share the
+ * rules() / behaviors() lifecycle that analyzeActiveRecord introspects;
+ * downstream callers can filter by tableName() presence if they need a
+ * stricter "real DB-backed AR" criterion.
+ */
+const AR_ROOT_NAMES = new Set(["ActiveRecord", "Model", "BaseActiveRecord"]);
+
+/**
+ * Walk a class symbol's `extends` chain and return true if any ancestor
+ * matches a known ActiveRecord base class. Resolves transitively via the
+ * symbol index — handles cases like `User extends BaseUser` where
+ * `BaseUser extends ActiveRecord`.
+ *
+ * Direct match (root name in our AR_ROOT_NAMES set) wins immediately.
+ * Otherwise we look up the parent class symbol by name and recurse. The
+ * lookup uses last-segment name matching (e.g. `BaseUser` matches a class
+ * symbol whose `name` is exactly `BaseUser`, regardless of namespace) which
+ * is good enough for the codebases we care about; cross-package aliased
+ * resolution would require parsing per-file `use` tables.
+ *
+ * Cycle protection via a visited set; depth-cap of 5 (no real Yii2 model
+ * has a deeper chain).
+ */
+function isActiveRecordHierarchy(
+  cls: { name: string; extends?: string[]; source?: string },
+  index: { symbols: Array<{ name: string; kind: string; extends?: string[]; source?: string }> },
+  visited: Set<string> = new Set(),
+  depth = 0,
+): boolean {
+  if (depth > 5) return false;
+  if (visited.has(cls.name)) return false;
+  visited.add(cls.name);
+
+  const exts = cls.extends ?? [];
+
+  for (const baseFqcn of exts) {
+    // Last segment of FQCN (handles "\\yii\\db\\ActiveRecord" and aliases).
+    const last = baseFqcn.split(/[\\\\]+/).pop() ?? baseFqcn;
+    if (AR_ROOT_NAMES.has(last)) return true;
+
+    // Look up the base class as an indexed symbol and recurse.
+    const baseSym = index.symbols.find(
+      (s) => s.kind === "class" && s.name === last,
+    );
+    if (baseSym && isActiveRecordHierarchy(baseSym, index, visited, depth + 1)) {
+      return true;
+    }
+  }
+
+  // Fallback for older indexes (e.g. before the v2.0.0 extractor bump): if
+  // `extends` is missing on this symbol, try the legacy regex against
+  // `source` so we don't regress on unindexed projects.
+  if (!cls.extends && cls.source) {
+    return /extends\s+(?:ActiveRecord|Model|\\yii\\db\\ActiveRecord)\b/.test(
+      cls.source,
+    );
+  }
+  return false;
+}
+
 export async function analyzeActiveRecord(
   repo: string,
   options?: { model_name?: string; file_pattern?: string },
@@ -126,10 +190,8 @@ export async function analyzeActiveRecord(
   const models: ActiveRecordModel[] = [];
 
   for (const cls of classSymbols) {
-    // Heuristic: only models that have source containing ActiveRecord or extend Model
     if (!cls.source) continue;
-    const extendsAR = /extends\s+(?:ActiveRecord|Model|\\yii\\db\\ActiveRecord)/.test(cls.source);
-    if (!extendsAR) continue;
+    if (!isActiveRecordHierarchy(cls, index)) continue;
 
     const model: ActiveRecordModel = {
       name: cls.name,

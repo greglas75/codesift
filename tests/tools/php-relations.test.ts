@@ -129,6 +129,85 @@ class Post extends ActiveRecord {
     expect(tags!.target_class).toBe("Tag");
   });
 
+  it("detects transitive AR via base class chain (Sprint 3 — uses extends metadata)", async () => {
+    // Real-world tgm-panel pattern: User extends BaseUser (aliased import of
+    // dektrium\\user\\models\\User), where BaseUser itself extends ActiveRecord.
+    // The legacy regex-on-source check would miss this because the local source
+    // only contains "extends BaseUser". The structural walk handles it.
+    const baseUser = makeClass(
+      "BaseUser",
+      "vendor/dektrium/user/models/User.php",
+      `<?php class BaseUser extends ActiveRecord {}`,
+    );
+    (baseUser as { extends?: string[] }).extends = ["ActiveRecord"];
+
+    const user = makeClass(
+      "User",
+      "models/User.php",
+      `<?php
+namespace app\\models;
+use dektrium\\user\\models\\User as BaseUser;
+class User extends BaseUser {
+    public function getProfile() {
+        return $this->hasOne(Profile::class, ['user_id' => 'id']);
+    }
+}`,
+    );
+    (user as { extends?: string[] }).extends = ["BaseUser"];
+
+    const getter = makeGetterMethod(
+      "getProfile",
+      user.id,
+      "models/User.php",
+      `public function getProfile() { return $this->hasOne(Profile::class, ['user_id' => 'id']); }`,
+    );
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp",
+      symbols: [baseUser, user, getter],
+      files: [
+        { path: "vendor/dektrium/user/models/User.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "models/User.php", language: "php", symbol_count: 2, last_modified: 0 },
+      ],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 3,
+      file_count: 2,
+    });
+
+    const r = await analyzeActiveRecord("test", { model_name: "User" });
+    expect(r.models).toHaveLength(1);
+    expect(r.models[0]!.name).toBe("User");
+    expect(r.models[0]!.relations).toHaveLength(1);
+    expect(r.models[0]!.relations[0]!.name).toBe("profile");
+  });
+
+  it("falls back to legacy regex when extends metadata is absent", async () => {
+    // Backward-compat: indexes built before the v2.0.0 extractor bump have no
+    // `extends` field on class symbols. analyzeActiveRecord should still work
+    // by falling back to source-text regex for those.
+    const cls = makeClass(
+      "LegacyModel",
+      "models/Legacy.php",
+      `<?php class LegacyModel extends ActiveRecord {}`,
+    );
+    // Note: NO `extends` field set on the symbol — simulating an old index.
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp",
+      symbols: [cls],
+      files: [{ path: "models/Legacy.php", language: "php", symbol_count: 1, last_modified: 0 }],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 1,
+      file_count: 1,
+    });
+
+    const r = await analyzeActiveRecord("test");
+    expect(r.models).toHaveLength(1);
+  });
+
   it("upgrades hasMany to manyMany when ->via('junction') is chained", async () => {
     const cls = makeClass(
       "Course",
