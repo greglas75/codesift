@@ -566,3 +566,178 @@ trait SecondTrait {}
     expect(secondChildren.map(s => s.name).sort()).toEqual(["b"]);
   });
 });
+
+describe("extractPhpSymbols — class hierarchy metadata (Sprint 1)", () => {
+  it("extracts extends list from class declaration", async () => {
+    const symbols = await parse(`<?php
+namespace app\\models;
+use yii\\db\\ActiveRecord;
+class User extends ActiveRecord {}
+`);
+    const cls = symbols.find((s) => s.name === "User" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.extends).toEqual(["ActiveRecord"]);
+  });
+
+  it("preserves fully-qualified names in extends", async () => {
+    const symbols = await parse(`<?php
+class User extends \\yii\\db\\ActiveRecord {}
+`);
+    const cls = symbols.find((s) => s.name === "User");
+    expect(cls!.extends).toEqual(["\\yii\\db\\ActiveRecord"]);
+  });
+
+  it("preserves aliased names in extends (resolution is downstream)", async () => {
+    // tgm-panel pattern: User extends BaseUser via aliased import
+    const symbols = await parse(`<?php
+namespace app\\models;
+use dektrium\\user\\models\\User as BaseUser;
+class User extends BaseUser {}
+`);
+    const cls = symbols.find((s) => s.name === "User" && s.kind === "class");
+    expect(cls!.extends).toEqual(["BaseUser"]);
+  });
+
+  it("extracts implements list", async () => {
+    const symbols = await parse(`<?php
+class Foo implements \\JsonSerializable, \\Stringable {}
+`);
+    const cls = symbols.find((s) => s.name === "Foo");
+    expect(cls!.implements).toEqual(["\\JsonSerializable", "\\Stringable"]);
+  });
+
+  it("extracts both extends and implements together", async () => {
+    const symbols = await parse(`<?php
+class Bar extends Base implements Iface1, Iface2 {}
+`);
+    const cls = symbols.find((s) => s.name === "Bar");
+    expect(cls!.extends).toEqual(["Base"]);
+    expect(cls!.implements).toEqual(["Iface1", "Iface2"]);
+  });
+
+  it("extracts use_declaration trait list into meta.uses_traits", async () => {
+    const symbols = await parse(`<?php
+class Survey {
+  use TimestampBehavior;
+  use Searchable, Cacheable;
+}
+`);
+    const cls = symbols.find((s) => s.name === "Survey");
+    expect(cls!.meta?.uses_traits).toBeDefined();
+    const traits = cls!.meta!.uses_traits as string[];
+    // tree-sitter-php may flatten multi-trait `use A, B;` into one or two
+    // declarations depending on grammar version — accept either form.
+    expect(traits.length).toBeGreaterThan(0);
+    expect(traits).toContain("TimestampBehavior");
+  });
+
+  it("extracts class modifiers (abstract, final)", async () => {
+    const symbols = await parse(`<?php
+abstract class A {}
+final class B {}
+class C {}
+`);
+    const a = symbols.find((s) => s.name === "A");
+    const b = symbols.find((s) => s.name === "B");
+    const c = symbols.find((s) => s.name === "C");
+    expect(a!.meta?.is_abstract).toBe(true);
+    expect(b!.meta?.is_final).toBe(true);
+    expect(c!.meta?.is_abstract).toBeUndefined();
+    expect(c!.meta?.is_final).toBeUndefined();
+  });
+
+  it("extracts interface extends list", async () => {
+    const symbols = await parse(`<?php
+interface Repo extends Countable, IteratorAggregate {}
+`);
+    const iface = symbols.find((s) => s.name === "Repo");
+    expect(iface!.extends).toEqual(["Countable", "IteratorAggregate"]);
+  });
+
+  it("does not set extends/implements/meta when absent (backwards compat)", async () => {
+    const symbols = await parse(`<?php
+class Plain {}
+`);
+    const cls = symbols.find((s) => s.name === "Plain");
+    expect(cls!.extends).toBeUndefined();
+    expect(cls!.implements).toBeUndefined();
+    // meta may or may not exist but uses_traits/is_abstract/is_final shouldn't
+    expect(cls!.meta?.uses_traits).toBeUndefined();
+    expect(cls!.meta?.is_abstract).toBeUndefined();
+    expect(cls!.meta?.is_final).toBeUndefined();
+  });
+});
+
+describe("extractPhpSymbols — Codeception test detection (Sprint 1)", () => {
+  it("detects extends Unit (Codeception unit base)", async () => {
+    const symbols = await parse(`<?php
+class UserTest extends \\Codeception\\Test\\Unit {
+  public function testFoo() {}
+}
+`);
+    const cls = symbols.find((s) => s.name === "UserTest");
+    expect(cls!.kind).toBe("test_suite");
+    const m = symbols.find((s) => s.name === "testFoo");
+    expect(m!.kind).toBe("test_case");
+  });
+
+  it("detects extends Cest (Codeception scenario base)", async () => {
+    const symbols = await parse(`<?php
+class LoginCest extends Cest {}
+`);
+    const cls = symbols.find((s) => s.name === "LoginCest");
+    expect(cls!.kind).toBe("test_suite");
+  });
+
+  it("detects extends Cept (Codeception scenario base)", async () => {
+    const symbols = await parse(`<?php
+class FooCept extends Cept {}
+`);
+    expect(symbols.find((s) => s.name === "FooCept")!.kind).toBe("test_suite");
+  });
+
+  it("still detects PHPUnit TestCase (regression check)", async () => {
+    const symbols = await parse(`<?php
+class FooTest extends \\PHPUnit\\Framework\\TestCase {}
+`);
+    expect(symbols.find((s) => s.name === "FooTest")!.kind).toBe("test_suite");
+  });
+});
+
+describe("extractPhpSymbols — PHP 8 attributes (Sprint 1)", () => {
+  it("captures simple class attribute", async () => {
+    const symbols = await parse(`<?php
+#[Entity]
+class User {}
+`);
+    const cls = symbols.find((s) => s.name === "User");
+    expect(cls!.meta?.attributes).toBeDefined();
+    const attrs = cls!.meta!.attributes as Array<{ name: string; args?: string }>;
+    expect(attrs).toHaveLength(1);
+    expect(attrs[0].name).toBe("Entity");
+  });
+
+  it("captures attribute with arguments", async () => {
+    const symbols = await parse(`<?php
+#[Route('/api/users', methods: ['GET'])]
+class UserController {}
+`);
+    const cls = symbols.find((s) => s.name === "UserController");
+    const attrs = cls!.meta?.attributes as Array<{ name: string; args?: string }>;
+    expect(attrs).toBeDefined();
+    expect(attrs[0].name).toBe("Route");
+    expect(attrs[0].args).toContain("/api/users");
+  });
+
+  it("captures multiple attributes", async () => {
+    const symbols = await parse(`<?php
+#[Entity, Index('name')]
+#[ORM\\Table('users')]
+class User {}
+`);
+    const cls = symbols.find((s) => s.name === "User");
+    const attrs = cls!.meta?.attributes as Array<{ name: string }>;
+    expect(attrs.map((a) => a.name)).toContain("Entity");
+    expect(attrs.length).toBeGreaterThanOrEqual(2);
+  });
+});
