@@ -46,6 +46,7 @@ const loadYiiMigrationsTools = memoizeModule(() => import("./tools/yii-migration
 const loadYiiRbacTools = memoizeModule(() => import("./tools/yii-rbac-tools.js"));
 const loadPhp8MigrationCandidatesTools = memoizeModule(() => import("./tools/php8-migration-candidates-tools.js"));
 const loadPhpStanBaselineTools = memoizeModule(() => import("./tools/phpstan-baseline-tools.js"));
+const loadYiiConsoleTools = memoizeModule(() => import("./tools/yii-console-tools.js"));
 const loadMemoryTools = memoizeModule(() => import("./tools/memory-tools.js"));
 const loadCoordinatorTools = memoizeModule(() => import("./tools/coordinator-tools.js"));
 const loadFrequencyTools = memoizeModule(() => import("./tools/frequency-tools.js"));
@@ -183,6 +184,7 @@ export const analyzeYiiMigrations = lazyExport<typeof import("./tools/yii-migrat
 export const analyzeYiiRbac = lazyExport<typeof import("./tools/yii-rbac-tools.js").analyzeYiiRbac>(loadYiiRbacTools, "analyzeYiiRbac");
 export const findPhp8MigrationCandidates = lazyExport<typeof import("./tools/php8-migration-candidates-tools.js").findPhp8MigrationCandidates>(loadPhp8MigrationCandidatesTools, "findPhp8MigrationCandidates");
 export const analyzePhpStanBaseline = lazyExport<typeof import("./tools/phpstan-baseline-tools.js").analyzePhpStanBaseline>(loadPhpStanBaselineTools, "analyzePhpStanBaseline");
+export const analyzeYiiConsoleCommands = lazyExport<typeof import("./tools/yii-console-tools.js").analyzeYiiConsoleCommands>(loadYiiConsoleTools, "analyzeYiiConsoleCommands");
 
 export const consolidateMemories = lazyExport<typeof import("./tools/memory-tools.js").consolidateMemories>(loadMemoryTools, "consolidateMemories");
 export const readMemory = lazyExport<typeof import("./tools/memory-tools.js").readMemory>(loadMemoryTools, "readMemory");

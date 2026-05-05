@@ -80,6 +80,7 @@ import {
   analyzeYiiRbac,
   findPhp8MigrationCandidates,
   analyzePhpStanBaseline,
+  analyzeYiiConsoleCommands,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -415,6 +416,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "analyze_yii_rbac",
     "find_php8_migration_candidates",
     "analyze_phpstan_baseline",
+    "analyze_yii_console_commands",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3252,6 +3254,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       if (typeof args.baseline_path === "string") opts.baseline_path = args.baseline_path;
       if (typeof args.max_paths === "number") opts.max_paths = args.max_paths;
       return await analyzePhpStanBaseline(args.repo as string, opts);
+    },
+  },
+  {
+    name: "analyze_yii_console_commands",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "yii2 console commands controllers cron jobs cli action arguments ExitCode flags risk audit unbounded",
+    description:
+      "Inventory Yii2 console controllers (extends yii\\console\\Controller). For each action returns CLI id, typed argument list, variadic flag, docstring, and risk flags: exits-without-return-status (cron can't tell success from failure), has-unbounded-all (memory bomb), has-no-error-handling (no try/catch), uses-output-via-echo (use stdout/stderr instead). Cross-controller `high_risk_actions` summary surfaces actions with ≥2 flags.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      controller_id: z.string().optional().describe("Filter to a single controller cli_id"),
+    })),
+    handler: async (args) => {
+      const opts: { controller_id?: string } = {};
+      if (typeof args.controller_id === "string") opts.controller_id = args.controller_id;
+      return await analyzeYiiConsoleCommands(args.repo as string, opts);
     },
   },
 
