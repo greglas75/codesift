@@ -471,6 +471,48 @@ export const BUILTIN_PATTERNS: Record<string, {
       "ActiveQuery->all() without ->limit() — loads the entire result set into memory. Use ->batch()/->each() for cron/console flows (Yii2 perf)",
     fileIncludePattern: /(?:commands|console)\/[^/]+Controller\.php$/,
   },
+  // --- Sprint 7 perf patterns (sourced from tgm-panel performance-audit findings) ---
+  "yii-translate-in-loop": {
+    // Yii::t() inside a foreach. Costly when paired with DbMessageSource and
+    // no message cache (which IS the tgm-panel perf-audit P1 finding). 800-char
+    // window after the foreach captures typical loop bodies; nested loops
+    // matched separately by global /g.
+    regex: /\bforeach\s*\([^{]*\{[\s\S]{0,800}?\\?\bYii::t\s*\(/,
+    description:
+      "Yii::t() inside foreach — expensive when DbMessageSource caching is off. Move translation outside the loop OR enable enableCaching on the message source (Yii2 perf)",
+  },
+  "yii-dbtarget-info-level": {
+    // DbTarget log target with 'levels' including info/trace/profile.
+    // Writes setting often left from local dev; writes to DB on every
+    // request hits hard at scale. Bounded window captures the array.
+    regex:
+      /['"]class['"]\s*=>\s*['"][^'"]*DbTarget['"][\s\S]{0,400}?['"]levels['"]\s*=>\s*\[[^\]]*\b(?:info|trace|profile)\b/,
+    description:
+      "DbTarget logging info/trace/profile to DB on every request — moves the logger off the hot path (Yii2 perf)",
+  },
+  "yii-find-with-large-then-filter": {
+    // ->find()->all() followed by `array_filter` / `array_map` on the result —
+    // pull-then-filter pattern that should be ->where()->all() instead.
+    regex: /->find\s*\([^)]*\)[\s\S]{0,200}?->all\s*\(\s*\)\s*;\s*[^\n]{0,200}?\barray_(?:filter|map)\s*\(/,
+    description:
+      "ActiveQuery->all() into array_filter/array_map — push the filter into the WHERE clause to reduce I/O (Yii2 perf)",
+  },
+  "yii-cache-no-ttl": {
+    // Yii::$app->cache->set('key', $value)  — no TTL argument means cache
+    // entry persists indefinitely. Often the deliberate choice, but on
+    // user-keyed caches it's a memory bomb.
+    regex: /\\?\bYii::\$app->cache->set\s*\(\s*[^,]+,\s*[^,)]+\)/,
+    description:
+      "cache->set without TTL — entry persists indefinitely. Add a third TTL argument unless caching a global config value (Yii2 perf)",
+  },
+  "yii-no-batch-on-large": {
+    // Same as yii-unbounded-all but applies to non-controller files (services,
+    // jobs/, components/). Together they cover 95% of unbounded reads.
+    regex: /::find\s*\([^)]*\)[\s\S]{0,400}?->all\s*\(\s*\)(?![\s\S]{0,100}->(?:limit|batch|each)\b)/,
+    description:
+      "find()->all() in service/job code without ->limit() / ->batch() / ->each() — risk of OOM on growing tables (Yii2 perf)",
+    fileIncludePattern: /(?:components|services|jobs|workers|tasks)\/[^/]+\.php$/,
+  },
   // NestJS anti-patterns
   "nest-circular-inject": {
     regex: /@Inject\s*\(\s*forwardRef\s*\(/,

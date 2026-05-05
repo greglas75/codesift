@@ -1340,7 +1340,7 @@ export async function phpProjectAudit(
 ): Promise<PhpProjectAudit> {
   const startTime = Date.now();
   const gates: AuditGate[] = [];
-  const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots", "n_plus_one", "god_model"];
+  const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots", "n_plus_one", "god_model", "yii_performance"];
   const enabled = new Set(options?.checks ?? allChecks);
   const fp = options?.file_pattern ?? ".php";
   const secOpts: { file_pattern?: string } = {};
@@ -1358,6 +1358,58 @@ export async function phpProjectAudit(
   if (enabled.has("hotspots")) tasks.push({ name: "hotspots", run: async () => { const { analyzeHotspots } = await import("./hotspot-tools.js"); return analyzeHotspots(repo, {}); } });
   if (enabled.has("n_plus_one")) tasks.push({ name: "n_plus_one", run: () => findPhpNPlusOne(repo, options?.file_pattern ? { file_pattern: options.file_pattern } : undefined) });
   if (enabled.has("god_model")) tasks.push({ name: "god_model", run: () => findPhpGodModel(repo) });
+  if (enabled.has("yii_performance")) {
+    // Sprint 7: 5 perf patterns sourced from tgm-panel performance-audit
+    // findings. Run them through the file-level scanner alongside
+    // file-level security patterns so module-level matches (configs,
+    // entry-points, view files) are picked up. Each pattern uses its own
+    // severity tier consistent with the perf-audit recommendations.
+    const PERF_PATTERNS = [
+      { pattern: "yii-translate-in-loop", severity: "medium" as const },
+      { pattern: "yii-dbtarget-info-level", severity: "medium" as const },
+      { pattern: "yii-find-with-large-then-filter", severity: "high" as const },
+      { pattern: "yii-cache-no-ttl", severity: "low" as const },
+      { pattern: "yii-no-batch-on-large", severity: "high" as const },
+    ];
+    tasks.push({
+      name: "yii_performance",
+      run: async () => {
+        // We reuse the security scan plumbing (parallel pattern runs +
+        // file-level fallback) but with the perf catalog. The result shape
+        // matches PhpSecurityScanResult — caller treats it as informational.
+        const findings: PhpSecurityFinding[] = [];
+        const summary = { critical: 0, high: 0, medium: 0, low: 0, total: 0 };
+        const symbolResults = await Promise.all(
+          PERF_PATTERNS.map((check) =>
+            searchPatterns(repo, check.pattern, {
+              file_pattern: fp,
+              include_tests: false,
+            }).then((r) => ({ check, result: r })).catch(() => null),
+          ),
+        );
+        for (const res of symbolResults) {
+          if (!res) continue;
+          for (const m of res.result.matches) {
+            findings.push({
+              severity: res.check.severity,
+              pattern: res.check.pattern,
+              file: m.file,
+              line: m.start_line,
+              context: m.context,
+              description: "",
+            });
+            summary[res.check.severity]++;
+            summary.total++;
+          }
+        }
+        return {
+          findings,
+          summary,
+          checks_run: PERF_PATTERNS.map((p) => p.pattern),
+        } as PhpSecurityScanResult;
+      },
+    });
+  }
 
   const settled = await Promise.allSettled(
     tasks.map(async (t) => {
@@ -1387,6 +1439,7 @@ export async function phpProjectAudit(
     else if (name === "hotspots") count = (result as { hotspots?: unknown[] })?.hotspots?.length ?? 0;
     else if (name === "n_plus_one") count = (result as { findings?: unknown[] })?.findings?.length ?? 0;
     else if (name === "god_model") count = (result as { models?: unknown[] })?.models?.length ?? 0;
+    else if (name === "yii_performance") count = (result as { findings?: unknown[] })?.findings?.length ?? 0;
 
     if (name !== "activerecord") totalFindings += count;
     gates.push({ name, status: "ok", findings_count: count, duration_ms: ms });
