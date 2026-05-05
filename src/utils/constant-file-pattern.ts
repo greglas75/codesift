@@ -1,6 +1,8 @@
 /**
  * Match indexed file paths against `resolve_constant_value` `file_pattern`.
- * Prefers exact or suffix matches; avoids loose substring false positives on short patterns.
+ * Prefers exact, suffix, or path-segment matches. The slash-free substring fallback
+ * requires a path-segment boundary (so `pattern="core"` matches `src/core/x.ts`
+ * but not `src/scoreboard.ts`).
  */
 export function matchesConstantFilePattern(file: string, pattern: string | undefined): boolean {
   if (!pattern) return true;
@@ -15,6 +17,7 @@ export function matchesConstantFilePattern(file: string, pattern: string | undef
   }
   const lastSeg = f.split("/").pop() ?? f;
   if (lastSeg === p) return true;
-  if (p.length >= 4) return f.includes(p);
-  return false;
+  // Pattern without slash: require a full path-segment match somewhere in `f`
+  // so we never match arbitrary substrings of unrelated names.
+  return f.split("/").includes(p);
 }

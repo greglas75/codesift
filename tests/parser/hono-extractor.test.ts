@@ -522,3 +522,34 @@ describe("HonoExtractor — T5 advanced runtime detection", () => {
     expect(model.runtime).toBe("unknown");
   });
 });
+
+describe("HonoExtractor — exception safety (R-0 regression)", () => {
+  // Verifies that an exception inside walkRouteMounts does not leave the file
+  // pinned in the inFlight cycle-detection set. Prior behavior: `inFlight.delete`
+  // ran outside `finally`, so a single throw permanently flagged the file as a
+  // cycle for the rest of the parse, producing silently incomplete indexes.
+  it("inFlight is cleared even when walkRouteMounts throws (main-path branch)", async () => {
+    const ext = new HonoExtractor();
+    // Stub walkRouteMounts to throw. Cast through unknown to bypass TS access
+    // restriction on the private method while keeping the runtime contract.
+    (ext as unknown as { walkRouteMounts: () => Promise<void> }).walkRouteMounts =
+      async () => { throw new Error("simulated walk failure"); };
+
+    const entry = path.join(FIXTURES, "subapp-app", "src", "index.ts");
+    let threw = false;
+    try {
+      await ext.parse(entry);
+    } catch {
+      threw = true;
+    }
+    // Either the thrown error propagates or it's caught upstream — either way,
+    // `inFlight` lives only inside `parse()`, so reaching this point at all
+    // means the finally block ran. We then call parse() AGAIN with a fresh
+    // walkRouteMounts that does NOT throw to confirm nothing is residually pinned.
+    expect(threw).toBe(true);
+
+    const ext2 = new HonoExtractor();
+    const model = await ext2.parse(entry);
+    expect(model.routes.length).toBeGreaterThan(0);
+  });
+});

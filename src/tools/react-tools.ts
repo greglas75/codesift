@@ -800,8 +800,11 @@ export async function analyzeRenders(
 
     if (riskLevel === "high") highRiskCount++;
 
-    // Tier 5 — render-tree depth (longest acyclic path from this component up to a root)
-    const depth = computePropChainDepth(sym.id ?? sym.name, reverseAdj, memo, inProgress);
+    // Tier 5 — render-tree depth (longest acyclic path from this component up to a root).
+    // `reverseAdj` is keyed by `sym.id` exclusively (see line 130), so any fallback to
+    // sym.name would silently look up a non-existent key. CodeSymbol.id is required by
+    // the type contract — dropping the prior `?? sym.name` fallback that masked unset id.
+    const depth = computePropChainDepth(sym.id, reverseAdj, memo, inProgress);
 
     // Tier 5 — suggestion text with explicit "NOT prop-drilling depth" disclaimer
     // when depth >= 3 (AC 8: prevents the metric from being silently relabeled

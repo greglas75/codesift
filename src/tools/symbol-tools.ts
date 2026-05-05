@@ -866,7 +866,10 @@ function collectReExportedFiles(
 ): Set<string> {
   const reExported = new Set<string>();
   // Matches:  export * from "./x";   export { A, B } from "./x";   export type { T } from "./x";
-  const RE = /^\s*export\s+(?:\*|type\s+\*|\{[^}]*\}|type\s+\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gm;
+  // Anchor dropped (`^\s*` removed) so block-comment-prefixed exports
+  // (`/** doc */ export { Y } from "./x"`) and continuation-line exports
+  // (`...; export * from "./x"`) are detected too.
+  const RE = /\bexport\s+(?:\*|type\s+\*|\{[^}]*\}|type\s+\{[^}]*\})\s+from\s+['"]([^'"]+)['"]/gm;
   for (const [filePath, content] of fileContents) {
     RE.lastIndex = 0;
     let m: RegExpExecArray | null;

@@ -14,7 +14,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { copyFile, mkdir, readFile, chmod, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -166,6 +166,12 @@ export async function installGitHooks(
 
   // Set global core.hooksPath only when safe: post-commit exists, and we do not
   // clobber another tool's global hooks directory without --force.
+  // Path equality is `realpathSync`-aware so symlinked homes / trailing slashes
+  // do not produce false "matches ours" or "matches other" decisions.
+  const canonicalize = (p: string): string => {
+    try { return realpathSync(p); } catch { return p; }
+  };
+  const hooksDirCanonical = canonicalize(hooksDir);
   let hooksPathMatchesOurs = false;
   let otherGlobalHooksPath: string | undefined;
   try {
@@ -173,8 +179,10 @@ export async function installGitHooks(
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "ignore"],
     }).trim();
-    if (current === hooksDir) hooksPathMatchesOurs = true;
-    else if (current) otherGlobalHooksPath = current;
+    if (current) {
+      if (canonicalize(current) === hooksDirCanonical) hooksPathMatchesOurs = true;
+      else otherGlobalHooksPath = current;
+    }
   } catch {
     /* unset — ok to set once bundle is ready */
   }

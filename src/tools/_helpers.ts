@@ -35,6 +35,20 @@ interface McpErrorEnvelope {
  * wire format is the standard MCP error envelope so existing client code paths
  * handle it without changes. */
 export function staleToMcpError(stale: StaleIndexResult): McpErrorEnvelope {
+  // Sentinel `*` + `actual: "empty_index"` means the on-disk index has no files
+  // and no version keys — treat that as a distinct, clearer message instead of
+  // showing `(* expected any, got empty_index)`.
+  if (stale.language === "*" && stale.actual_version === "empty_index") {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "Index stale: empty_index — on-disk index has no files. Run index_folder to refresh.",
+        },
+      ],
+    };
+  }
   const langPrefix = stale.language ? `${stale.language} ` : "";
   const extra = stale.mismatch_detail ? ` Also: ${stale.mismatch_detail}.` : "";
   return {

@@ -90,26 +90,32 @@ function dirToConfigCacheKey(importerDir: string, repoRoot: string): string {
 
 /** Walk up from `dir` to `repoRoot`, find nearest `tsconfig.json`.
  * Returns absolute path of the config file, or null if none found.
- * Caches per `(repoRoot, dir)` pair so late-added or removed tsconfig files are
- * visible on the next lookup after cache clear. */
+ * Caches every ancestor visited during the walk under the compound `(repoRoot, dir)`
+ * key — sibling lookups under the same parent are O(1) after the first hit. */
 function findNearestTsconfig(dir: string, repoRoot: string): string | null {
   const cacheKey = dirToConfigCacheKey(dir, repoRoot);
   const cached = dirToConfigCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   const repoRootAbs = resolve(repoRoot);
+  const visited: string[] = [];
   let cur = resolve(dir);
   while (isDirInsideRepo(repoRootAbs, cur)) {
+    visited.push(cur);
     const candidate = join(cur, "tsconfig.json");
     if (existsSync(candidate)) {
-      dirToConfigCache.set(cacheKey, candidate);
+      for (const v of visited) {
+        dirToConfigCache.set(dirToConfigCacheKey(v, repoRoot), candidate);
+      }
       return candidate;
     }
     const parent = dirname(cur);
     if (parent === cur) break;
     cur = parent;
   }
-  dirToConfigCache.set(cacheKey, null);
+  for (const v of visited) {
+    dirToConfigCache.set(dirToConfigCacheKey(v, repoRoot), null);
+  }
   return null;
 }
 

@@ -2,6 +2,28 @@
 
 <!-- fingerprint: file|rule|signature -->
 
+<!-- zuvo:review 2026-05-05 ae96065^..ae96065 — consolidated fixes (Hono mounts, extractors, tools, CLI) -->
+- [ ] **R-0** `hono.ts|correctness|inflight-leak-on-throw` — MUST-FIX: `inFlight.delete(file)` outside `finally` in BOTH cache-hit (line ~150) and main-path (line ~239) branches; throw poisons cycle detection set [cross-provider CRITICAL]
+- [ ] **R-1** `tsconfig-paths.ts|perf|ancestor-cache-lost` — populate ancestor dirs in `dirToConfigCache` with new compound key (sibling lookups regressed from O(1) to O(N))
+- [ ] **R-2** `heritage-edges.ts|telemetry|ambiguous-skip-counter` — persist counter for resolution misses (silently drops edges when 2+ files declare same name)
+- [ ] **R-3** `git-hooks-installer.ts|robustness|hookspath-normalize` — `realpathSync` both sides before equality check on `core.hooksPath` [cross-provider WARNING]
+- [ ] **R-4** `index-store.ts|UX|empty-index-language-arbitrary` — degenerate empty branch picks `Object.keys(currentVersions)[0]`; either distinct `reason: "empty_index"` or explicit sentinel in `mismatch_detail` [cross-provider WARNING]
+- [ ] **R-5** `pattern-tools.ts|test|postFilter-fail-open-untested` — add unit test asserting throwing postFilter keeps match + emits warning; document in CHANGELOG
+- [ ] **R-6** `react-tools.ts|hygiene|sym-id-fallback-masks-bug` — drop `sym.id ?? sym.name` fallback at line 804 (sym.name not in reverseAdj keyset)
+- [ ] **R-7** `constant-file-pattern.ts|precision|4char-substring-fp` — raise threshold or word-boundary substring fallback [nit]
+- [ ] **R-8** `symbol-tools.ts|coverage|reexport-regex-anchored-misses` — drop `^` anchor or use tree-sitter walk over export_statement [nit]
+- [ ] **R-9** `commands.ts|UX|git-hooks-flag-precedence` — document `--no-git-hooks` always-wins precedence [nit, cross-provider]
+- [ ] **R-10** `hono.ts|observability|replay-error-context-lost` — capture `String(err)` once into skip_reasons [nit, cross-provider INFO]
+
+<!-- Pre-existing items (now [x]) shipped in this commit per review evidence: -->
+- [x] `typescript-constants-tools.ts|perf|pathmap` — memoized in `state.normalizedPathMap` (this commit)
+- [x] `typescript-constants-tools.ts|robustness|readFile-catch` — narrowed ENOENT vs other I/O (this commit)
+- [x] `typescript-constants-tools.ts|numeric|Number-precision` — `!Number.isFinite(n)` + `!Number.isSafeInteger(n)` guards (this commit)
+- [x] `constant-resolution-tools.ts|UX|infer-lang-fallback` — returns `[]` instead of `["python"]` (this commit)
+- [x] `index-store.ts|tolerance-dedup` — `isExtractorVersionCurrent` delegates to `collectExtractorVersionMismatches` (this commit)
+- [x] `index-store.ts|edge|empty-extractor` — degenerate-empty-index branch returns mismatch (this commit; see R-4 above for residual)
+- [x] `status-tools.ts|resilience|detectStale` — try/catch + shared `resolveRegisteredRepoMeta` (this commit)
+
 <!-- zuvo:review 2026-05-05 713a4a8..05805db astro-helpers + astro-middleware -->
 - [x] `astro-middleware.ts|heuristic|rewrite-return` — fixed: bare `context.rewrite` no longer satisfies EFFECT_RE; require `return` + redirect|rewrite
 - [x] `astro-middleware.ts|parser|js-extension` — fixed: `typescript` for `.ts`, `javascript` for `.js`/`.mjs`
@@ -58,3 +80,14 @@
 - [ ] `typescript.ts|heuristic|react-component-suffix` — tighten ECS-style false positives on `*.Component` vs preserve permissive DX (R-2)
 - [ ] `typescript.ts|coverage|signature-heritage-edge` — asserts/predicate returns; arrow param shape; mixin extends call_expression (R-3) [below-threshold cross-review]
 - [ ] `_helpers.ts|hardening|stale-message-sanitize` — cap length strip control chars if metadata untrusted (R-5) [nit cross-review]
+
+<!-- zuvo:review 2026-05-05 9e3be29^..9e3be29 react Tier 6 — 9 patterns + severity migration -->
+- [ ] `pattern-tools.ts|precision|derived-state-reducer-sync-substring` — `[a-zA-Z_-]*sync` with `i` flag overmatches `async`/`asynchronous`; word-boundary or allowlist (R-1) [superseded][cross-review]
+- [ ] `pattern-tools.ts|accuracy|error-boundary-incomplete-description` — claim "React requires both" lifecycles is inaccurate; `cDC + setState` is valid (R-2) [superseded][cross-review]
+- [ ] `pattern-tools.ts|precision|rsc-deep-pascalcase-critical` — open-ended `[A-Z]\w*` constructor at severity=critical flags `new Error()`/`new URL()`; denylist + downgrade unknowns (R-3) [superseded][cross-review]
+- [ ] `pattern-tools.test.ts|coverage|severity-migration-hardcoded` — derive React-pattern list at runtime so Tier 5 + future tiers can't skip severity gate (R-4) [superseded][cross-review]
+- [ ] `pattern-tools.ts|nit|stale-closure-toggle-handler-scope` — `setOpen(!open)` flagged universally; scope to async/effect closures (R-5) [superseded][nit cross-review]
+- [ ] `pattern-tools.ts|nit|context-provider-via-variable-ASI` — requires `;` between literal and JSX; loosen to `[;\n]` (R-6) [superseded][nit cross-review]
+- [ ] `pattern-tools.ts|nit|react-lazy-prefix-tempered` — `^((?!Suspense)[\s\S])*` fragile on minified files; two-pass indexOf alternative (R-7) [superseded][nit cross-review]
+<!-- NOTE: All 7 entries in this block reference Tier 6 code that ae96065 reverted at HEAD — superseded, not actionable until Tier 6 is re-introduced on another branch. -->
+

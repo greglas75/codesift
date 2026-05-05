@@ -90,15 +90,17 @@ export function collectExtractorVersionMismatches(
 
   const out: ExtractorVersionMismatchRow[] = [];
 
-  // Degenerate index: no files and no version keys cannot be treated as current.
+  // Degenerate index: no files AND no version keys — treat as empty/uninitialized.
+  // Use the sentinel language "*" so callers and operators can recognize the case
+  // instead of being misled into thinking a specific extractor drifted (the prior
+  // implementation reported `Object.keys(currentVersions)[0]`, which was arbitrary).
   if (index.files.length === 0 && storedKeys.length === 0) {
     const langKeys = Object.keys(currentVersions);
     if (langKeys.length === 0) return [];
-    const lang = langKeys[0]!;
     out.push({
-      language: lang,
-      expected: currentVersions[lang] ?? "unknown",
-      actual: "missing",
+      language: "*",
+      expected: "any",
+      actual: "empty_index",
     });
     return out;
   }

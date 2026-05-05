@@ -109,15 +109,10 @@ export class HonoExtractor {
     // Check memoization cache for previously parsed child
     const cached = parsedCache.get(file);
     if (cached) {
-      // Re-use local HTTP routes with fresh mount prefix (path already includes basePath)
-      for (const route of cached.routes) {
-        model.routes.push({
-          ...route,
-          path: joinPaths(prefix, route.path),
-        });
-      }
-      // Still re-run mount expansion: nested app.route() lives outside localRoutes;
+      // Re-run mount expansion FIRST: nested app.route() lives outside cached.routes;
       // a prior bug skipped this on cache hit so the 2nd+ mount missed grandchild routes.
+      // Local route push is deferred to AFTER replay so a partial-graph state cannot leak
+      // when the replay parse/walk fails (R-11).
       let replaySrc: string;
       try {
         replaySrc = await readFile(file, "utf-8");
@@ -139,16 +134,23 @@ export class HonoExtractor {
           (model.skip_reasons.parse_failed ?? 0) + 1;
         return;
       }
+      inFlight.add(file);
       try {
         const importMap = this.extractImportMap(replayTree.rootNode, file);
         const localMounts: HonoMount[] = [];
-        inFlight.add(file);
         await this.walkRouteMounts(
           replayTree.rootNode, file, prefix, cached.app_variables, importMap,
           inFlight, parsedCache, model, localMounts,
         );
-        inFlight.delete(file);
+        // Replay succeeded — now push local routes with fresh mount prefix.
+        for (const route of cached.routes) {
+          model.routes.push({
+            ...route,
+            path: joinPaths(prefix, route.path),
+          });
+        }
       } finally {
+        inFlight.delete(file);
         replayTree.delete();
       }
       return;
@@ -230,13 +232,18 @@ export class HonoExtractor {
         this.extractEnvBindings(tree.rootNode, source, model);
       }
 
-      // Walk for app.route() mounts — recursive into child files
+      // Walk for app.route() mounts — recursive into child files.
+      // `inFlight.delete(file)` runs in `finally` so an exception in walkRouteMounts
+      // cannot poison cycle detection for the rest of the parse (R-0).
       inFlight.add(file);
-      await this.walkRouteMounts(
-        tree.rootNode, file, prefix, localAppVars, importMap,
-        inFlight, parsedCache, model, localMounts,
-      );
-      inFlight.delete(file);
+      try {
+        await this.walkRouteMounts(
+          tree.rootNode, file, prefix, localAppVars, importMap,
+          inFlight, parsedCache, model, localMounts,
+        );
+      } finally {
+        inFlight.delete(file);
+      }
 
       // Cache after mounts so localMounts is complete; routes are mount-prefix-agnostic locals
       parsedCache.set(file, {
