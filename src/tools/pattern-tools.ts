@@ -110,8 +110,11 @@ export const BUILTIN_PATTERNS: Record<string, {
     severity: "critical",
   },
   "react19-server-action-not-async": {
-    regex: /^[\s\S]{0,200}["']use server["'][\s\S]{0,500}?\bexport\s+(?!async)function\s+\w+\s*\(/m,
-    description: "React 19 Server Action: function in 'use server' file must be async (returns Promise). Synchronous functions break the action contract.",
+    // Tier 7 fix: matches `export function X`, `export const X = (...) =>`,
+    // AND `export default function X` (gemini finding — default exports were missed).
+    // 2000-char window for actions defined far from the directive.
+    regex: /^[\s\S]{0,200}["']use server["'][\s\S]{0,2000}?\bexport\s+(?:(?:const|let|var)\s+\w+\s*=\s+(?!async\b)(?:\([^)]*\)|\w+)\s*=>|default\s+(?!async\b)function(?:\s+\w+)?\s*\(|(?!async\b)function\s+\w+\s*\()/m,
+    description: "React 19 Server Action: function in 'use server' file must be async (returns Promise). Pattern detects `export function X`, `export const X = (...) =>` arrow, AND `export default function X` (default exports).",
     fileIncludePattern: /\.(tsx|jsx|ts|js)$/,
     severity: "critical",
   },
@@ -122,8 +125,17 @@ export const BUILTIN_PATTERNS: Record<string, {
     severity: "warning",
   },
   "react19-useoptimistic-no-transition": {
-    regex: /\buseOptimistic\s*\([\s\S]{0,300}?(?!useTransition|startTransition)/,
-    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. Without it, optimistic updates can be interrupted.",
+    // Tier 7 fix (gemini Run 6 CRITICAL): negative lookahead trivially succeeded
+    // because [\s\S]{0,300}? matched 0 chars before the lookahead, then any text
+    // that wasn't `useTransition` immediately satisfied the negation. Result: every
+    // useOptimistic call was flagged. Fix: scope the negative lookahead over the
+    // entire forward window so it only succeeds when NO mention of useTransition
+    // exists in the surrounding ~1000 chars.
+    // Tier 7 R-2 fix: \b boundary — `myUseTransitionWrapper` no longer suppresses match.
+    // Tier 7 R-2.1 known limit: comment/string-embedded `useTransition` text in the
+    // forward window may spoof lookahead (Tier 8: comment-strip preprocessor at engine).
+    regex: /\buseOptimistic\s*\((?![\s\S]{0,1000}?\b(?:useTransition|startTransition)\b)/,
+    description: "React 19 useOptimistic should be paired with useTransition/startTransition for non-urgent updates. NOTE: comment/string-embedded transition tokens may suppress detection (Tier 8 fix).",
     fileIncludePattern: /\.(tsx|jsx)$/,
     severity: "warning",
   },
@@ -207,8 +219,17 @@ export const BUILTIN_PATTERNS: Record<string, {
     severity: "warning",
   },
   "useEffect-setstate-loop": {
-    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>[\s\S]{0,500}?set([A-Z]\w*)\s*\([\s\S]{0,300}?\[\s*[\s\S]*?\b\1\b/i,
-    description: "setState inside useEffect with same state variable in dependency array — causes infinite render loop. Either remove from deps or use functional updater: setState(prev => ...).",
+    // Tier 7 fix (multiple gemini findings):
+    //  1. Original matched `[` in setState array literal arg → anchored on `}, [`.
+    //  2. Cross-effect bridging — non-greedy walk now bails on next `useEffect`.
+    //  3. Implicit-return arrows: alternation block-bodied OR concise.
+    //  4. `\1\b` matched `count` inside `props.count` — fixed by `(?<!\.)\b\1\b`.
+    //  5. Tier 7 review R-3: concise arm's first `\)` could close a NESTED call like
+    //     `setCount(getY())`. Fix: require concise-arm setState arg has NO inner `(`
+    //     by using `[^()]*` for the simple case (most real bugs); complex args fall
+    //     through to the block-bodied arm. Documented as known limit.
+    regex: /useEffect\s*\(\s*(?:\([^)]*\)|[a-z_$][\w$]*)\s*=>\s*(?:\{(?:(?!\buseEffect\b)[\s\S]){0,800}?\bset([A-Z]\w*)\s*\((?:(?!\buseEffect\b)[\s\S]){0,300}?\}\s*,\s*\[[^\]]*?(?<!\.)\b\1\b|set([A-Z]\w*)\s*\([^()]{0,200}\)\s*,\s*\[[^\]]*?(?<!\.)\b\2\b)/i,
+    description: "setState inside useEffect with same state variable in dependency array — infinite render loop. Block-bodied form `() => { setX(); }, [x]` AND concise form `() => setX(arg), [x]` (concise arm requires non-nested arg). Bails out at next useEffect; rejects `props.count` property chains. Known limit: concise form with nested calls (setX(getY())) is not detected — block form covers it.",
     fileIncludePattern: /\.(tsx|jsx)$/,
     severity: "critical",
   },
