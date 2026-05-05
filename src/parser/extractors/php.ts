@@ -50,6 +50,23 @@ export function parsePhpDocTags(
   return results;
 }
 
+/**
+ * Extract a `@var T` type annotation from a PHPDoc block. Used for inferring
+ * property types in pre-PHP-7.4 codebases that keep typing in docblocks
+ * rather than as inline type hints. Returns the raw type string (no further
+ * normalization) or undefined if no `@var` is present.
+ *
+ * Examples:
+ *   /** @var string *\/        → "string"
+ *   /** @var User|null *\/     → "User|null"
+ *   /** @var int[] *\/         → "int[]"
+ */
+export function parsePhpDocVar(docstring?: string): string | undefined {
+  if (!docstring) return undefined;
+  const m = /@var\s+(\S+)/.exec(docstring);
+  return m?.[1];
+}
+
 // --- Helpers ---
 
 /**
@@ -352,6 +369,67 @@ function getPropertyName(node: Parser.SyntaxNode): string | null {
   return null;
 }
 
+/**
+ * Pull a type annotation off a property_declaration / parameter / promoted
+ * parameter node. Walks named children looking for the first type-bearing
+ * node. Returns the raw source text exactly as written.
+ *
+ * Type-bearing node types in tree-sitter-php:
+ *   primitive_type        (string, int, bool, float, array, mixed, void, ...)
+ *   named_type            (User, \\App\\Model)
+ *   optional_type         (?T) — wraps the inner type
+ *   union_type            (PHP 8.0+: A|B)
+ *   intersection_type     (PHP 8.1+: A&B)
+ *   disjunctive_normal_form_type (PHP 8.2+: (A&B)|C)
+ */
+function getInlineType(node: Parser.SyntaxNode): string | undefined {
+  const TYPE_NODES = new Set([
+    "primitive_type",
+    "named_type",
+    "optional_type",
+    "union_type",
+    "intersection_type",
+    "disjunctive_normal_form_type",
+  ]);
+  for (const child of node.namedChildren) {
+    if (TYPE_NODES.has(child.type)) {
+      return child.text.trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Build a Property metadata object from a property_declaration node.
+ * Combines inline type (PHP 7.4+ typed property) with `@var T` from a
+ * leading PHPDoc block. Inline type takes precedence; `@var` is used when
+ * inline type is absent (legacy 7.2/7.3 code).
+ */
+function buildPropertyMeta(
+  node: Parser.SyntaxNode,
+  docstring: string | undefined,
+): Record<string, unknown> {
+  const meta: Record<string, unknown> = {};
+  const modifiers = collectModifiers(node);
+  if (modifiers.visibility) meta.visibility = modifiers.visibility;
+  if (modifiers.is_static) meta.is_static = true;
+  if (modifiers.is_readonly) meta.is_readonly = true;
+
+  const inlineType = getInlineType(node);
+  const docVar = parsePhpDocVar(docstring);
+  if (inlineType) {
+    meta.type = inlineType;
+    meta.type_source = "inline";
+  } else if (docVar) {
+    meta.type = docVar;
+    meta.type_source = "phpdoc";
+  }
+
+  const attrs = parseAttributes(node);
+  if (attrs.length > 0) meta.attributes = attrs;
+  return meta;
+}
+
 // --- Main extractor ---
 
 export function extractPhpSymbols(
@@ -404,6 +482,56 @@ export function extractPhpSymbols(
         synOpts,
       );
       symbols.push(synthetic);
+    }
+  }
+
+  /**
+   * Emit synthetic `field` symbols for PHP 8.0+ promoted constructor params.
+   *
+   * Promoted ctor params (`public readonly string $name` inside a __construct
+   * signature) are real properties at runtime, but the property has no
+   * separate `property_declaration` in the class body — only the parameter
+   * inside `formal_parameters`. Without this, downstream tools see a class
+   * with N parameters in its ctor and think the class has 0 properties.
+   *
+   * Each emitted symbol carries `meta.from_constructor: true` so callers
+   * (e.g. analyzeActiveRecord, find_php_god_model) can distinguish promoted
+   * fields from declared ones if they need to.
+   */
+  function emitPromotedCtorFields(
+    methodNode: Parser.SyntaxNode,
+    classId: string,
+  ): void {
+    const params = methodNode.childForFieldName("parameters")
+      ?? methodNode.namedChildren.find((c) => c.type === "formal_parameters");
+    if (!params) return;
+    for (const child of params.namedChildren) {
+      if (child.type !== "property_promotion_parameter") continue;
+      const varName = child.namedChildren.find((c) => c.type === "variable_name");
+      if (!varName) continue;
+      const nameNode = varName.namedChildren.find((c) => c.type === "name");
+      if (!nameNode) continue;
+      const propName = "$" + nameNode.text;
+
+      const modifiers = collectModifiers(child);
+      const inlineType = getInlineType(child);
+      const attrs = parseAttributes(child);
+
+      const meta: Record<string, unknown> = { from_constructor: true };
+      if (modifiers.visibility) meta.visibility = modifiers.visibility;
+      if (modifiers.is_readonly) meta.is_readonly = true;
+      if (inlineType) {
+        meta.type = inlineType;
+        meta.type_source = "inline";
+      }
+      if (attrs.length > 0) meta.attributes = attrs;
+
+      symbols.push(
+        makeSymbol(child, propName, "field", filePath, source, repo, {
+          parentId: classId,
+          meta,
+        }),
+      );
     }
   }
 
@@ -552,13 +680,45 @@ export function extractPhpSymbols(
 
       case "enum_declaration": {
         const name = getNodeName(node) ?? "<anonymous>";
-        const sym = makeSymbol(node, name, "enum", filePath, source, repo, {
+
+        // PHP 8.1 backed enum: `enum Status: string {…}`. The backing type
+        // appears as a `primitive_type` direct child of enum_declaration,
+        // sitting between the name and the body. Capture it so downstream
+        // tools (e.g. M1 enum-from-class-consts migration assist) can tell
+        // backed from pure enums.
+        let backedType: string | undefined;
+        for (const child of node.namedChildren) {
+          if (child.type === "primitive_type") {
+            backedType = child.text.trim();
+            break;
+          }
+        }
+
+        // PHP 8.1 enums can implement interfaces too.
+        const implementsList = collectClassImplements(node);
+        const attributes = parseAttributes(node);
+
+        const meta: Record<string, unknown> = {};
+        if (backedType) meta.backed_type = backedType;
+        if (attributes.length > 0) meta.attributes = attributes;
+
+        const opts: Parameters<typeof makeSymbol>[6] = {
           parentId,
           docstring: getDocstring(node, source),
-        });
+        };
+        if (implementsList.length > 0) opts.implements = implementsList;
+        if (Object.keys(meta).length > 0) opts.meta = meta;
+
+        const sym = makeSymbol(node, name, "enum", filePath, source, repo, opts);
         symbols.push(sym);
 
-        const body = node.childForFieldName("body");
+        // tree-sitter-php uses `enum_declaration_list` for the body container,
+        // not `body`. Try field name first for forward-compat, fall back to
+        // the named child lookup.
+        const body =
+          node.childForFieldName("body") ??
+          node.namedChildren.find((c) => c.type === "enum_declaration_list") ??
+          null;
         if (body) {
           for (const child of body.namedChildren) {
             walk(child, sym.id, false);
@@ -585,12 +745,32 @@ export function extractPhpSymbols(
         if (name) {
           const docstring = getDocstring(node, source);
           const kind = classifyMethod(name, parentIsTest, docstring);
-          const sym = makeSymbol(node, name, kind, filePath, source, repo, {
+          const modifiers = collectModifiers(node);
+          const attributes = parseAttributes(node);
+
+          const meta: Record<string, unknown> = {};
+          if (modifiers.visibility) meta.visibility = modifiers.visibility;
+          if (modifiers.is_static) meta.is_static = true;
+          if (modifiers.is_abstract) meta.is_abstract = true;
+          if (modifiers.is_final) meta.is_final = true;
+          if (attributes.length > 0) meta.attributes = attributes;
+
+          const opts: Parameters<typeof makeSymbol>[6] = {
             parentId,
             docstring,
             signature: getSignature(node, source),
-          });
+          };
+          if (Object.keys(meta).length > 0) opts.meta = meta;
+
+          const sym = makeSymbol(node, name, kind, filePath, source, repo, opts);
           symbols.push(sym);
+
+          // Promoted constructor params (PHP 8.0+): the body has no field
+          // declarations for these, so synthesize them as `field` symbols
+          // attached to the parent class. Only fires for __construct.
+          if (name === "__construct" && parentId) {
+            emitPromotedCtorFields(node, parentId);
+          }
         }
         return;
       }
@@ -598,10 +778,14 @@ export function extractPhpSymbols(
       case "property_declaration": {
         const propName = getPropertyName(node);
         if (propName) {
-          const sym = makeSymbol(node, propName, "field", filePath, source, repo, {
+          const docstring = getDocstring(node, source);
+          const meta = buildPropertyMeta(node, docstring);
+          const opts: Parameters<typeof makeSymbol>[6] = {
             parentId,
-            docstring: getDocstring(node, source),
-          });
+            docstring,
+          };
+          if (Object.keys(meta).length > 0) opts.meta = meta;
+          const sym = makeSymbol(node, propName, "field", filePath, source, repo, opts);
           symbols.push(sym);
         }
         return;
