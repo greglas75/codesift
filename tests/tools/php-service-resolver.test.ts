@@ -56,3 +56,37 @@ describe("resolvePhpService", () => {
     expect(r.services[0]?.class).toBe("app\\components\\UserComponent");
   });
 });
+
+describe("resolvePhpService — Sprint 3 (modules + container + factories)", () => {
+  it("resolves module-scoped component with source label module:<id>", async () => {
+    const r = await resolvePhpService(REPO);
+    const notifier = r.services.find((s) => s.name === "notifier");
+    expect(notifier).toBeDefined();
+    expect(notifier!.class).toBe("app\\modules\\review\\components\\Notifier");
+    expect(notifier!.source).toBe("module:review");
+  });
+
+  it("resolves container singletons", async () => {
+    const r = await resolvePhpService(REPO);
+    const logger = r.services.find(
+      (s) => s.name === "app\\interfaces\\LoggerInterface" || s.class === "app\\components\\FileLogger",
+    );
+    expect(logger).toBeDefined();
+    expect(logger!.source).toMatch(/container/);
+  });
+
+  it("surfaces factory closures with is_factory=true and class=null", async () => {
+    const r = await resolvePhpService(REPO);
+    const cb = r.services.find((s) => s.name === "cacheBuilder");
+    expect(cb).toBeDefined();
+    expect(cb!.is_factory).toBe(true);
+    expect(cb!.class).toBeNull();
+  });
+
+  it("non-module components still tagged source=components", async () => {
+    const r = await resolvePhpService(REPO);
+    const db = r.services.find((s) => s.name === "db");
+    expect(db).toBeDefined();
+    expect(db!.source).toBe("components");
+  });
+});

@@ -15,7 +15,7 @@ import { tracePhpEvent, findPhpViews } from "../../src/tools/php-tools.js";
 function makeSym(opts: {
   id: string;
   name: string;
-  kind: "class" | "method" | "function";
+  kind: "class" | "method" | "function" | "constant";
   file: string;
   start_line: number;
   end_line: number;
@@ -357,5 +357,109 @@ describe("findPhpViews", () => {
 
     const r = await findPhpViews("test");
     expect(r.total).toBe(0);
+  });
+});
+
+describe("tracePhpEvent — Sprint 3 class const resolution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves Class::CONST_NAME to its string literal value in trigger()", async () => {
+    const userClass = makeSym({
+      id: "uc",
+      name: "User",
+      kind: "class",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 50,
+      source: `class User extends ActiveRecord { const EVENT_AFTER_LOGIN = 'afterLogin'; }`,
+    });
+    const constSym = makeSym({
+      id: "uc-const",
+      name: "EVENT_AFTER_LOGIN",
+      kind: "constant",
+      file: "models/User.php",
+      start_line: 2,
+      end_line: 2,
+      source: `const EVENT_AFTER_LOGIN = 'afterLogin'`,
+      parent: "uc",
+    });
+    const emitter = makeSym({
+      id: "em",
+      name: "login",
+      kind: "method",
+      file: "models/User.php",
+      start_line: 10,
+      end_line: 15,
+      source: `public function login() { $this->trigger(User::EVENT_AFTER_LOGIN); }`,
+    });
+    mockIndex([userClass, constSym, emitter]);
+
+    const r = await tracePhpEvent("test");
+    // The const value 'afterLogin' should be the resolved event name in the
+    // chain, not the raw "User::EVENT_AFTER_LOGIN" string.
+    const chain = r.events.find((e) => e.event_name === "afterLogin");
+    expect(chain).toBeDefined();
+    expect(chain!.triggers.length).toBe(1);
+  });
+
+  it("resolves Class::CONST_NAME in Event::on(SomeClass::class, SomeClass::EVENT, ...)", async () => {
+    const userClass = makeSym({
+      id: "uc2",
+      name: "User",
+      kind: "class",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 50,
+      source: `class User extends ActiveRecord { const EVENT_AFTER_INSERT = 'afterInsert'; }`,
+    });
+    const constSym = makeSym({
+      id: "uc2-const",
+      name: "EVENT_AFTER_INSERT",
+      kind: "constant",
+      file: "models/User.php",
+      start_line: 2,
+      end_line: 2,
+      source: `const EVENT_AFTER_INSERT = 'afterInsert'`,
+      parent: "uc2",
+    });
+    const bootstrap = makeSym({
+      id: "boot",
+      name: "bootstrap",
+      kind: "method",
+      file: "components/Bootstrap.php",
+      start_line: 5,
+      end_line: 12,
+      source: `public function bootstrap() {
+        Event::on(User::class, User::EVENT_AFTER_INSERT, [SomeListener::class, 'handle']);
+      }`,
+    });
+    mockIndex([userClass, constSym, bootstrap]);
+
+    const r = await tracePhpEvent("test");
+    const chain = r.events.find((e) => e.event_name === "afterInsert");
+    expect(chain).toBeDefined();
+    expect(chain!.listeners.length).toBe(1);
+  });
+
+  it("falls back to raw Class::CONST when constant cannot be resolved (vendor const)", async () => {
+    // No class symbol in the index — simulating a const defined in vendor/.
+    const emitter = makeSym({
+      id: "em3",
+      name: "login",
+      kind: "method",
+      file: "models/User.php",
+      start_line: 10,
+      end_line: 15,
+      source: `public function login() { $this->trigger(Vendor::EXTERNAL_EVENT); }`,
+    });
+    mockIndex([emitter]);
+
+    const r = await tracePhpEvent("test");
+    // Should NOT silently drop the trigger — surface it under the unresolved key.
+    const chain = r.events.find((e) => e.event_name === "Vendor::EXTERNAL_EVENT");
+    expect(chain).toBeDefined();
+    expect(chain!.triggers.length).toBe(1);
   });
 });

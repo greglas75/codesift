@@ -87,3 +87,60 @@ describe("findPhpNPlusOne", () => {
     expect(chained.some((f) => f.relation === "customer")).toBe(true);
   });
 });
+
+describe("findPhpNPlusOne — Sprint 3 Pattern 4 (findOne in loop)", () => {
+  it("flags User::findOne($id) inside foreach", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const hits = r.findings.filter(
+      (f) =>
+        f.file.includes("FindOneInLoopController.php") &&
+        f.method === "actionFindOneInLoop" &&
+        f.pattern === "foreach-findone-in-loop",
+    );
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0].relation).toBe("User::findOne");
+  });
+
+  it("flags Member::findAll(...) inside foreach", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const hits = r.findings.filter(
+      (f) =>
+        f.file.includes("FindOneInLoopController.php") &&
+        f.method === "actionFindAllInLoop" &&
+        f.pattern === "foreach-findone-in-loop",
+    );
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0].relation).toBe("Member::findAll");
+  });
+
+  it("does not flag Yii::createObject in loop (whitelisted)", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const hits = r.findings.filter(
+      (f) =>
+        f.file.includes("FindOneInLoopController.php") &&
+        f.method === "actionLeaveYiiAlone",
+    );
+    expect(hits.length).toBe(0);
+  });
+
+  it("does not flag self::find in loop (whitelisted)", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const hits = r.findings.filter(
+      (f) =>
+        f.file.includes("FindOneInLoopController.php") &&
+        f.method === "actionLeaveSelfAlone",
+    );
+    expect(hits.length).toBe(0);
+  });
+});
+
+describe("findPhpNPlusOne — Sprint 3 Pattern 5 (relation access in views)", () => {
+  it("flags $order->customer->... inside foreach in view file", async () => {
+    const r = await findPhpNPlusOne(REPO);
+    const viewHits = r.findings.filter((f) => f.file.includes("views/order/list.php"));
+    expect(viewHits.length).toBeGreaterThanOrEqual(1);
+    // Both `customer` (chained) and `getInvoice()` (getter) should fire.
+    const relations = viewHits.map((h) => h.relation);
+    expect(relations).toContain("customer");
+  });
+});

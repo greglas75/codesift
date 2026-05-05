@@ -279,6 +279,54 @@ export interface PhpEventChain {
   listeners: { file: string; line: number; context: string }[];
 }
 
+/**
+ * Build a class-const → literal-value map for the entire index. Yii2's
+ * canonical event idiom is `Event::on(User::class, User::EVENT_AFTER_LOGIN, ...)`,
+ * where `EVENT_AFTER_LOGIN` is a class constant with a string value. The
+ * default tracePhpEvent regex only sees literals, so without resolution
+ * `Class::CONST` references look like dead code. This pre-pass walks all
+ * `constant` symbols belonging to PHP classes and extracts their string /
+ * int literal values from `source`.
+ *
+ * Map keys are `ClassName::CONST_NAME`. Class lookup is by last name segment
+ * — same convention as isActiveRecordHierarchy — so namespace prefixes don't
+ * matter for callers using `User::EVENT_X` against a class named `User`.
+ *
+ * Returns an empty map if no constants resolve. Cost is one O(n) walk per
+ * call; could be cached on the index in the future if event tracing becomes
+ * a hot path.
+ */
+function buildConstantValueMap(
+  index: { symbols: Array<{ name: string; kind: string; parent?: string; source?: string }> },
+): Map<string, string> {
+  const out = new Map<string, string>();
+  // First, build classId → className map so we can resolve const owners.
+  const classIdToName = new Map<string, string>();
+  for (const s of index.symbols) {
+    if (s.kind === "class" || s.kind === "interface" || s.kind === "enum") {
+      // Use the symbol id as key — every constant carries `parent` referring
+      // to its enclosing class id, so we only need the id→name lookup.
+      const id = (s as { id?: string }).id;
+      if (id) classIdToName.set(id, s.name);
+    }
+  }
+  for (const s of index.symbols) {
+    if (s.kind !== "constant") continue;
+    if (!s.parent || !s.source) continue;
+    const className = classIdToName.get(s.parent);
+    if (!className) continue;
+    // Match the literal value: `const NAME = 'value';` or `const NAME = "v";`
+    // or `const NAME = 42;`. We accept the first occurrence in the constant's
+    // source slice — the extractor already narrows source to a single decl.
+    const m = /=\s*(?:['"]([^'"]+)['"]|(-?\d+(?:\.\d+)?))/.exec(s.source);
+    if (!m) continue;
+    const value = m[1] ?? m[2];
+    if (value === undefined) continue;
+    out.set(`${className}::${s.name}`, value);
+  }
+  return out;
+}
+
 export async function tracePhpEvent(
   repo: string,
   options?: { event_name?: string },
@@ -287,6 +335,7 @@ export async function tracePhpEvent(
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const eventMap = new Map<string, PhpEventChain>();
+  const constantValues = buildConstantValueMap(index);
 
   const getOrCreate = (name: string): PhpEventChain => {
     let e = eventMap.get(name);
@@ -297,17 +346,31 @@ export async function tracePhpEvent(
     return e;
   };
 
+  // Resolve `Class::CONST` references to their literal values via the pre-pass
+  // map. Returns the original key when the class+const pair isn't indexed
+  // (e.g. constants defined in vendor/) so the trace at least shows there's
+  // SOMETHING happening at this site.
+  const resolveEventName = (raw: string): string => {
+    return constantValues.get(raw) ?? raw;
+  };
+
   // Scan PHP file symbols for event triggers and listeners
   const phpSymbols = index.symbols.filter((s) => s.file.endsWith(".php") && s.source);
 
   for (const sym of phpSymbols) {
     const source = sym.source!;
 
-    // Triggers: ->trigger('eventName') or Event::trigger(...)
-    const triggerRe = /->trigger\s*\(\s*['"]([^'"]+)['"]/g;
+    // Triggers: ->trigger('eventName') or ->trigger(Class::CONST)
+    // Now also accepts a bare identifier path (Foo::BAR) in addition to the
+    // string-literal form.
+    const triggerRe =
+      /->trigger\s*\(\s*(?:['"]([^'"]+)['"]|([A-Z_][\w]*::[A-Z_][\w]*))/g;
     let match: RegExpExecArray | null;
     while ((match = triggerRe.exec(source)) !== null) {
-      const eventName = match[1]!;
+      const literal = match[1];
+      const constRef = match[2];
+      const eventName = literal ?? (constRef ? resolveEventName(constRef) : undefined);
+      if (!eventName) continue;
       if (options?.event_name && eventName !== options.event_name) continue;
       const line = sym.start_line + (source.slice(0, match.index).match(/\n/g)?.length ?? 0);
       getOrCreate(eventName).triggers.push({
@@ -317,10 +380,17 @@ export async function tracePhpEvent(
       });
     }
 
-    // Listeners: ->on('eventName', ...) or Event::on(...)
-    const listenerRe = /(?:->|::)on\s*\(\s*['"]([^'"]+)['"]/g;
+    // Listeners: ->on('eventName', ...) or ::on('eventName', ...) or
+    //            ::on(Foo::class, Foo::EVENT_BAR, ...)
+    // Yii2 prefers the class-const form for built-in events, so resolution is
+    // critical here.
+    const listenerRe =
+      /(?:->|::)on\s*\(\s*(?:[A-Z_][\w]*::class\s*,\s*)?(?:['"]([^'"]+)['"]|([A-Z_][\w]*::[A-Z_][\w]*))/g;
     while ((match = listenerRe.exec(source)) !== null) {
-      const eventName = match[1]!;
+      const literal = match[1];
+      const constRef = match[2];
+      const eventName = literal ?? (constRef ? resolveEventName(constRef) : undefined);
+      if (!eventName) continue;
       if (options?.event_name && eventName !== options.event_name) continue;
       const line = sym.start_line + (source.slice(0, match.index).match(/\n/g)?.length ?? 0);
       getOrCreate(eventName).listeners.push({
@@ -405,6 +475,18 @@ export interface PhpServiceResolution {
   class: string | null;
   file: string | null;
   config_file: string | null;
+  /** Sprint 3: tracks where the service was defined.
+   *   "components"           — top-level Yii2 application components
+   *   "container.singletons" — DI container singletons
+   *   "container.definitions"— DI container regular bindings
+   *   "module:<id>"          — module-scoped components (modules.<id>.components.X)
+   *   "factory"              — closure / factory function (no static class resolution)
+   */
+  source: string;
+  /** Sprint 3: true when the service was defined as a closure/factory and we
+   *  cannot statically determine the produced class. Caller can choose to
+   *  skip these or surface them as TODOs. */
+  is_factory?: boolean;
 }
 
 export async function resolvePhpService(
@@ -415,9 +497,34 @@ export async function resolvePhpService(
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const services: PhpServiceResolution[] = [];
-  const configFiles = index.files.filter((f) =>
-    /config\/(web|console|main|db)\.php$/.test(f.path),
-  );
+  // Sprint 3: include `params*.php` only as suppress-source — those files
+  // hold flat key-value pairs that look like components but aren't. We also
+  // drop config/test*.php (intentionally divergent) and pick up the broader
+  // *-local.php and main-*.php variants (advanced template + per-env splits).
+  const configFiles = index.files.filter((f) => {
+    if (!f.path.endsWith(".php")) return false;
+    if (/config\/test/.test(f.path)) return false;
+    return /config\/(?:web|console|main|db|api|backend|frontend|common)(?:[-_][\w-]+)?\.php$/.test(
+      f.path,
+    );
+  });
+
+  // Track (name, class, source, configFile) tuples so we don't duplicate
+  // when the same component appears in both web.php and main-local.php.
+  const seen = new Set<string>();
+  const dedupKey = (
+    name: string,
+    cls: string | null,
+    sourceLabel: string,
+    file: string,
+  ): string => `${sourceLabel}::${name}::${cls ?? "<factory>"}::${file}`;
+
+  const pushService = (s: PhpServiceResolution): void => {
+    const key = dedupKey(s.name, s.class, s.source, s.config_file ?? "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    services.push(s);
+  };
 
   for (const cf of configFiles) {
     let source: string;
@@ -426,7 +533,14 @@ export async function resolvePhpService(
     } catch { continue; }
 
     // Match component definitions: 'componentName' => ['class' => 'FQCN', ...]
-    const componentRe = /['"]([\w-]+)['"]\s*=>\s*\[\s*['"]class['"]\s*=>\s*['"]([\w\\]+)['"]/g;
+    // Top-level components live under 'components' => [...]; module-scoped
+    // ones live under 'modules' => ['<id>' => ['components' => [...]]]. We
+    // don't try to distinguish here — every match is tagged via post-pass.
+    //
+    // The key pattern accepts both bare names ("db") and FQCNs
+    // ("app\\interfaces\\LoggerInterface") because container.singletons /
+    // container.definitions almost always use FQCNs as keys.
+    const componentRe = /['"]([\w\\-]+)['"]\s*=>\s*\[\s*['"]class['"]\s*=>\s*['"]([\w\\]+)['"]/g;
     let match: RegExpExecArray | null;
     while ((match = componentRe.exec(source)) !== null) {
       const name = match[1]!;
@@ -441,16 +555,176 @@ export async function resolvePhpService(
         if (resolved.exists) filePath = resolved.file_path;
       } catch { /* ignore */ }
 
-      services.push({
+      // Best-effort source labeling: scan the prefix up to the match to see
+      // whether we're inside `'modules' => ['x' => ['components' => [...]]]`
+      // or `'container' => ['singletons' => [...]]`. This is fuzzy; the
+      // labeling failures fall back to "components".
+      const prefix = source.slice(0, match.index);
+      const sourceLabel = inferConfigSection(prefix);
+
+      pushService({
         name,
         class: cls,
         file: filePath,
         config_file: cf.path,
+        source: sourceLabel,
+      });
+    }
+
+    // DI container: `Yii::$container->set(InterfaceName::class, ImplName::class)`
+    // and the static `'container' => ['definitions' => [...]]` form. Both are
+    // common in Yii2 codebases that use interface-based DI.
+    const containerSetRe =
+      /Yii::\$container->set\s*\(\s*([\w\\]+)::class\s*,\s*([\w\\]+)::class/g;
+    while ((match = containerSetRe.exec(source)) !== null) {
+      const iface = match[1]!;
+      const impl = match[2]!;
+      if (options?.service_name && iface !== options.service_name) continue;
+
+      let filePath: string | null = null;
+      try {
+        const resolved = await resolvePhpNamespace(repo, impl);
+        if (resolved.exists) filePath = resolved.file_path;
+      } catch { /* ignore */ }
+
+      pushService({
+        name: iface,
+        class: impl,
+        file: filePath,
+        config_file: cf.path,
+        source: "container.set",
+      });
+    }
+
+    // Closure / factory: `'mailer' => function() { return new Mailer(); }`
+    // We can't statically resolve the produced class, so we surface the
+    // service name with class=null and is_factory=true so callers can
+    // either ignore them or flag them as needs-manual-review.
+    const factoryRe =
+      /['"]([\w-]+)['"]\s*=>\s*function\s*\(/g;
+    while ((match = factoryRe.exec(source)) !== null) {
+      const name = match[1]!;
+      if (options?.service_name && name !== options.service_name) continue;
+      pushService({
+        name,
+        class: null,
+        file: null,
+        config_file: cf.path,
+        source: "factory",
+        is_factory: true,
       });
     }
   }
 
   return { services, total: services.length };
+}
+
+/**
+ * Sprint 3 helper: given the source prefix up to a component match, identify
+ * which Yii2 config section we're inside by walking the prefix forward with a
+ * bracket-balanced stack. Each `'KEY' => [` pushes KEY onto the stack; each
+ * matching `]` pops it. At the end of the prefix the stack tells us the
+ * exact nesting path, regardless of how many sibling sections came before.
+ *
+ * Why not regex: regex can't track balanced brackets. The previous version
+ * used non-greedy `[\\s\\S]*?` which incorrectly matched a `'modules' =>
+ * ['x' => [...]]` block that had already closed by the time we reached a
+ * `'container' => ['singletons' => ...]` later in the file.
+ *
+ * Returns one of:
+ *   "module:<id>"            — inside `'modules' => ['<id>' => ['components' => [<HERE>...
+ *   "container.singletons"   — inside `'container' => ['singletons' => [<HERE>...
+ *   "container.definitions"  — inside `'container' => ['definitions' => [<HERE>...
+ *   "components"             — fallback (top-level components or unknown)
+ *
+ * String literals (single + double quoted) and PHP comments are skipped so
+ * brackets inside them don't confuse the depth counter.
+ */
+function inferConfigSection(prefix: string): string {
+  type Frame = { key: string; depth: number };
+  const stack: Frame[] = [];
+  let depth = 0;
+
+  let i = 0;
+  while (i < prefix.length) {
+    const c = prefix[i]!;
+
+    // Skip comments
+    if (c === "/" && prefix[i + 1] === "/") {
+      const nl = prefix.indexOf("\n", i);
+      i = nl === -1 ? prefix.length : nl + 1;
+      continue;
+    }
+    if (c === "/" && prefix[i + 1] === "*") {
+      const end = prefix.indexOf("*/", i + 2);
+      i = end === -1 ? prefix.length : end + 2;
+      continue;
+    }
+    if (c === "#") {
+      const nl = prefix.indexOf("\n", i);
+      i = nl === -1 ? prefix.length : nl + 1;
+      continue;
+    }
+
+    // Look for `'KEY' => [` BEFORE the generic string-skip — otherwise the
+    // string-skip swallows the opening quote and we never push the key.
+    if (c === '"' || c === "'") {
+      const m = /^(['"])([\w\\-]+)\1\s*=>\s*\[/.exec(prefix.slice(i));
+      if (m) {
+        const keyName = m[2]!;
+        // Push at the new depth (after the bracket we're about to enter).
+        stack.push({ key: keyName, depth: depth + 1 });
+        depth++;
+        i += m[0].length;
+        continue;
+      }
+      // Plain string literal — skip past the closing quote.
+      const quote = c;
+      i++;
+      while (i < prefix.length) {
+        if (prefix[i] === "\\") { i += 2; continue; }
+        if (prefix[i] === quote) { i++; break; }
+        i++;
+      }
+      continue;
+    }
+
+    if (c === "[") {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === "]") {
+      depth--;
+      while (stack.length > 0 && stack[stack.length - 1]!.depth > depth) {
+        stack.pop();
+      }
+      i++;
+      continue;
+    }
+
+    i++;
+  }
+
+  // Read the live nesting path from the stack.
+  const keys = stack.map((f) => f.key);
+
+  // module:<id> when we're inside modules.<id>.components.<*>
+  const modIdx = keys.indexOf("modules");
+  if (modIdx !== -1 && keys.length >= modIdx + 3) {
+    const moduleId = keys[modIdx + 1]!;
+    const inner = keys[modIdx + 2]!;
+    if (inner === "components") return `module:${moduleId}`;
+  }
+
+  const cIdx = keys.indexOf("container");
+  if (cIdx !== -1 && keys.length >= cIdx + 2) {
+    const sub = keys[cIdx + 1]!;
+    if (sub === "singletons") return "container.singletons";
+    if (sub === "definitions") return "container.definitions";
+  }
+
+  return "components";
 }
 
 // ---------------------------------------------------------------------------
@@ -763,56 +1037,158 @@ export async function findPhpNPlusOne(
     return findings.length >= limit;
   };
 
-  for (const sym of index.symbols) {
-    if (sym.kind !== "method" || !sym.file.endsWith(".php") || !sym.source) continue;
-    if (filePattern && !sym.file.includes(filePattern)) continue;
-
-    const src = sym.source;
+  // Helper: scan a single chunk of source (a method body OR a view file) for
+  // all 4 N+1 patterns. Returns true once `limit` is hit so the caller can
+  // short-circuit.
+  function scanChunk(
+    file: string,
+    methodName: string,
+    src: string,
+    startLine: number,
+  ): boolean {
     const foreachRe = /foreach\s*\(\s*\$(\w+)\s+as\s+(?:\$\w+\s*=>\s*)?\$(\w+)\s*\)/g;
     let fm: RegExpExecArray | null;
     while ((fm = foreachRe.exec(src)) !== null) {
       const itemVar = fm[2]!;
       const foreachIdx = fm.index;
       const after = src.slice(foreachIdx);
-      // Guard against double-counting: each distinct relation name reported
-      // once per foreach, regardless of which pattern matched first.
       const seen = new Set<string>();
 
       // Pattern 1 — property access: $item->profile
-      // The negative lookahead `(?![\w(])` blocks both:
-      //   1) following word chars (prevents backtracking to a partial capture
-      //      like `$item->getProfile()` matching "getProfil" as a property);
-      //   2) an opening paren (excludes method calls, handled by pattern 2).
       const propRe = new RegExp(`\\$${itemVar}->(\\w+)(?![\\w(])`, "g");
       let m: RegExpExecArray | null;
       while ((m = propRe.exec(after)) !== null) {
-        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, m[1]!, "foreach-access-without-with", seen)) {
-          return { findings, total: findings.length };
+        if (
+          emitFinding(
+            { file, name: methodName, source: src, start_line: startLine },
+            foreachIdx,
+            m[1]!,
+            "foreach-access-without-with",
+            seen,
+          )
+        ) {
+          return true;
         }
       }
 
       // Pattern 2 — getter method call: $item->getProfile()
-      // Normalize to bare relation name for both the dedup and the ->with() check.
-      const getterRe = new RegExp(`\\$${itemVar}->(get\\w+)\\s*\\(\\s*\\)`, "g");
+      const getterRe = new RegExp(
+        `\\$${itemVar}->(get\\w+)\\s*\\(\\s*\\)`,
+        "g",
+      );
       while ((m = getterRe.exec(after)) !== null) {
         const rawMethod = m[1]!;
         if (METHOD_CALL_BLOCKLIST.has(rawMethod)) continue;
         const normalized = normalizeGetter(rawMethod);
-        if (!normalized || METHOD_CALL_BLOCKLIST.has(normalized.toLowerCase())) continue;
-        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, normalized, "foreach-getter-without-with", seen)) {
-          return { findings, total: findings.length };
+        if (!normalized || METHOD_CALL_BLOCKLIST.has(normalized.toLowerCase()))
+          continue;
+        if (
+          emitFinding(
+            { file, name: methodName, source: src, start_line: startLine },
+            foreachIdx,
+            normalized,
+            "foreach-getter-without-with",
+            seen,
+          )
+        ) {
+          return true;
         }
       }
 
-      // Pattern 3 — chained access: $item->rel->sub (the first segment is the trigger)
+      // Pattern 3 — chained access: $item->rel->sub
       const chainRe = new RegExp(`\\$${itemVar}->(\\w+)->\\w`, "g");
       while ((m = chainRe.exec(after)) !== null) {
-        if (emitFinding({ file: sym.file, name: sym.name, source: src, start_line: sym.start_line }, foreachIdx, m[1]!, "foreach-chained-without-with", seen)) {
-          return { findings, total: findings.length };
+        if (
+          emitFinding(
+            { file, name: methodName, source: src, start_line: startLine },
+            foreachIdx,
+            m[1]!,
+            "foreach-chained-without-with",
+            seen,
+          )
+        ) {
+          return true;
+        }
+      }
+
+      // Pattern 4 (Sprint 3) — explicit lookup in loop body. Inside the foreach,
+      // a `Model::findOne(...)` / `Model::findAll(...)` / `->find()` is the
+      // lazy-load smell — each iteration hits the database.
+      //
+      // We scan a bounded 2000-char window after the foreach header to keep
+      // the regex cost predictable on large methods. A nested foreach inside
+      // the window will still match on its own /g iteration, and the outer
+      // `seen` set deduplicates so we never double-report a single class+method.
+      const body = after.slice(0, Math.min(after.length, 2000));
+
+      const findOneRe =
+        /(\w+)::(findOne|findAll|find|findBySql)\s*\(/g;
+      let lm: RegExpExecArray | null;
+      while ((lm = findOneRe.exec(body)) !== null) {
+        const targetClass = lm[1]!;
+        const method = lm[2]!;
+        // Filter common false positives: top-level utility classes that
+        // happen to expose static `find*` methods but aren't AR.
+        if (
+          targetClass === "Yii" ||
+          targetClass === "ArrayHelper" ||
+          targetClass === "self" ||
+          targetClass === "static"
+        ) {
+          continue;
+        }
+        const synthetic = `${targetClass}::${method}`;
+        if (
+          emitFinding(
+            { file, name: methodName, source: src, start_line: startLine },
+            foreachIdx,
+            synthetic,
+            "foreach-findone-in-loop",
+            seen,
+          )
+        ) {
+          return true;
         }
       }
     }
+    return false;
   }
+
+  // Method-level scan (Patterns 1-4 inside class methods, the original surface).
+  for (const sym of index.symbols) {
+    if (sym.kind !== "method" || !sym.file.endsWith(".php") || !sym.source) continue;
+    if (filePattern && !sym.file.includes(filePattern)) continue;
+    if (scanChunk(sym.file, sym.name, sym.source, sym.start_line)) {
+      return { findings, total: findings.length };
+    }
+  }
+
+  // View-level scan (Sprint 3 Pattern 5) — Yii2 views/**/*.php files render
+  // lists of models at module level. They're not class methods so they have
+  // no symbol; scan the raw file content. `views/**/*.php` is the canonical
+  // path; `_*.php` partials live at the same level.
+  const viewFiles = index.files.filter((f) => {
+    if (!f.path.endsWith(".php")) return false;
+    if (filePattern && !f.path.includes(filePattern)) return false;
+    // Standard Yii2 view paths (basic + advanced + module-scoped layouts).
+    return /(?:^|\/)(?:views|widgets|layouts)\//.test(f.path);
+  });
+
+  await Promise.all(
+    viewFiles.map(async (file) => {
+      if (findings.length >= limit) return;
+      let content: string;
+      try {
+        content = await readFile(join(index.root, file.path), "utf-8");
+      } catch {
+        return;
+      }
+      // For views the "method name" is just the file basename — that's what
+      // the caller sees in the finding when there is no enclosing function.
+      const methodName = file.path.split("/").pop() ?? file.path;
+      scanChunk(file.path, methodName, content, 1);
+    }),
+  );
 
   return { findings, total: findings.length };
 }
