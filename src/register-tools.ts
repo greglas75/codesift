@@ -76,6 +76,7 @@ import {
   yii3MigrationAudit,
   php8CompatCheck,
   analyzeYiiModules,
+  analyzeYiiMigrations,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -407,6 +408,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "yii3_migration_audit",
     "php8_compat_check",
     "analyze_yii_modules",
+    "analyze_yii_migrations",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3152,6 +3154,30 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const opts: { module_id?: string } = {};
       if (typeof args.module_id === "string") opts.module_id = args.module_id;
       return await analyzeYiiModules(args.repo as string, opts);
+    },
+  },
+  {
+    name: "analyze_yii_migrations",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "yii2 migration migrations PHP DSL safeUp safeDown createTable dropTable addColumn dropColumn alterColumn addForeignKey createIndex online ddl ALGORITHM INPLACE LOCK NONE irreversible audit",
+    description:
+      "Audit Yii2 PHP-DSL migrations. Parses extends Migration classes — createTable / dropTable / addColumn / dropColumn / alterColumn / createIndex / addForeignKey / etc — into structured operations and runs per-migration audit checks: missing-safe-down, alter-without-online-ddl (high — destructive ops on large tables without ALGORITHM=INPLACE/LOCK=NONE hint), fk-without-index (medium — addForeignKey without preceding createIndex), raw-sql-without-comment. Closes the gap that the generic SQL toolchain (migration_lint) misses because it only parses .sql files.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Substring filter on migration file paths"),
+      rules: z.string().optional().describe("Comma-separated rule IDs to run (default: all). Available: missing-safe-down, alter-without-online-ddl, fk-without-index, raw-sql-without-comment, drop-without-safety"),
+    })),
+    handler: async (args) => {
+      const opts: {
+        file_pattern?: string;
+        rules?: import("./tools/yii-migrations-tools.js").YiiMigrationAuditFinding["rule_id"][];
+      } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.rules === "string" && args.rules.trim()) {
+        opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/yii-migrations-tools.js").YiiMigrationAuditFinding["rule_id"][];
+      }
+      return await analyzeYiiMigrations(args.repo as string, opts);
     },
   },
 
