@@ -39,6 +39,7 @@ const loadLspTools = memoizeModule(() => import("./lsp/lsp-tools.js"));
 const loadConversationTools = memoizeModule(() => import("./tools/conversation-tools.js"));
 const loadSecretTools = memoizeModule(() => import("./tools/secret-tools.js"));
 const loadPhpTools = memoizeModule(() => import("./tools/php-tools.js"));
+const loadYii3MigrationTools = memoizeModule(() => import("./tools/yii3-migration-tools.js"));
 const loadMemoryTools = memoizeModule(() => import("./tools/memory-tools.js"));
 const loadCoordinatorTools = memoizeModule(() => import("./tools/coordinator-tools.js"));
 const loadFrequencyTools = memoizeModule(() => import("./tools/frequency-tools.js"));
@@ -169,6 +170,7 @@ export const findPhpViews = lazyExport<typeof import("./tools/php-tools.js").fin
 export const resolvePhpService = lazyExport<typeof import("./tools/php-tools.js").resolvePhpService>(loadPhpTools, "resolvePhpService");
 export const phpSecurityScan = lazyExport<typeof import("./tools/php-tools.js").phpSecurityScan>(loadPhpTools, "phpSecurityScan");
 export const phpProjectAudit = lazyExport<typeof import("./tools/php-tools.js").phpProjectAudit>(loadPhpTools, "phpProjectAudit");
+export const yii3MigrationAudit = lazyExport<typeof import("./tools/yii3-migration-tools.js").yii3MigrationAudit>(loadYii3MigrationTools, "yii3MigrationAudit");
 
 export const consolidateMemories = lazyExport<typeof import("./tools/memory-tools.js").consolidateMemories>(loadMemoryTools, "consolidateMemories");
 export const readMemory = lazyExport<typeof import("./tools/memory-tools.js").readMemory>(loadMemoryTools, "readMemory");

@@ -73,6 +73,7 @@ import {
   resolvePhpService,
   phpSecurityScan,
   phpProjectAudit,
+  yii3MigrationAudit,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -401,6 +402,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "resolve_php_service",
     "php_security_scan",
     "php_project_audit",
+    "yii3_migration_audit",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3070,6 +3072,33 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         opts.checks = args.checks.split(",").map((c) => c.trim()).filter(Boolean);
       }
       return await phpProjectAudit(args.repo as string, opts);
+    },
+  },
+  {
+    name: "yii3_migration_audit",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "yii2 yii3 migration audit decision support upgrade php8 active record module rbac authmanager service locator yii::$app legacy modernization effort estimate",
+    description:
+      "Yii2→Yii3 migration audit. Inventories Yii2-specific API usage across 21 categories (service-locator, ActiveRecord, Module, RBAC, console, migrations, widgets, view, url-manager, ...) with severity, sample evidence, and an effort_estimate. Returns a decision_signal (stay-on-yii2 / consider-yii3 / high-effort-yii3 / blocked) so engineering leadership can choose between staying on Yii 2.0.49+ with PHP 8 vs migrating to Yii3.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      file_pattern: z.string().optional().describe("Substring filter on file paths"),
+      max_samples_per_category: z.number().optional().describe("Cap on sample evidence per category (default 5)"),
+      include_vendor: z.boolean().optional().describe("Include vendor/ paths in scan (default false)"),
+    })),
+    handler: async (args) => {
+      const opts: {
+        file_pattern?: string;
+        max_samples_per_category?: number;
+        include_vendor?: boolean;
+      } = {};
+      if (typeof args.file_pattern === "string") opts.file_pattern = args.file_pattern;
+      if (typeof args.max_samples_per_category === "number") {
+        opts.max_samples_per_category = args.max_samples_per_category;
+      }
+      if (typeof args.include_vendor === "boolean") opts.include_vendor = args.include_vendor;
+      return await yii3MigrationAudit(args.repo as string, opts);
     },
   },
 
