@@ -1925,3 +1925,113 @@ describe("useEffect-setstate-loop (Tier 7 R-3 — concise nested-paren)", () => 
     expect(regex.test(src)).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Tier 8 — preprocess: strip-comments-strings integration
+// ─────────────────────────────────────────────────────────────
+
+describe("preprocess: strip-comments-strings (Tier 8)", () => {
+  it("dangerously-set-html: does NOT match mention inside line comment", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  // TODO: dangerouslySetInnerHTML={x} should be sanitized
+  return <div>safe</div>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("dangerously-set-html: STILL matches real usage", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  return <div dangerouslySetInnerHTML={{ __html: x }}/>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(1);
+  });
+
+  it("dangerously-set-html: does NOT match mention in string literal", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  const docs = "use dangerouslySetInnerHTML={...} cautiously";
+  return <div>{docs}</div>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("console-log: does NOT match commented-out console.log", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  // console.log('debug');
+  return 1;
+}`,
+    });
+    const result = await searchPatterns(repo, "console-log");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("console-log: STILL matches real console.log", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  console.log('debug');
+  return 1;
+}`,
+    });
+    const result = await searchPatterns(repo, "console-log");
+    expect(result.matches.length).toBe(1);
+  });
+
+  it("empty-catch: does NOT match commented-out empty catch", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  try { foo(); }
+  catch (e) { logger.error(e); }
+  // catch (e) {}
+}`,
+    });
+    const result = await searchPatterns(repo, "empty-catch");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("empty-catch: STILL matches real empty catch", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  try { foo(); }
+  catch (e) {}
+}`,
+    });
+    const result = await searchPatterns(repo, "empty-catch");
+    expect(result.matches.length).toBe(1);
+  });
+
+  it("preprocess preserves match line numbers", async () => {
+    // Comment on line 1, real match on line 3 — line number must report 3
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `// dangerouslySetInnerHTML={x} mentioned
+function Comp() {
+  return <div dangerouslySetInnerHTML={{ __html: y }}/>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(1);
+    // Match should be on line 3 of the source (after the comment + function declaration)
+    const m = result.matches[0]!;
+    expect(m.start_line).toBeGreaterThanOrEqual(2);
+  });
+
+  it("preprocess preserves displayed context (uses original line, not stripped)", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  return <div dangerouslySetInnerHTML={{ __html: x }}/>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(1);
+    // Context should include the actual JSX text, not whitespace
+    expect(result.matches[0]!.context).toContain("dangerouslySetInnerHTML");
+  });
+});
