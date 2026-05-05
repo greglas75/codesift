@@ -75,6 +75,7 @@ import {
   phpProjectAudit,
   yii3MigrationAudit,
   php8CompatCheck,
+  analyzeYiiModules,
   consolidateMemories,
   readMemory,
   createAnalysisPlan,
@@ -405,6 +406,7 @@ const FRAMEWORK_TOOL_GROUPS: Record<string, string[]> = {
     "php_project_audit",
     "yii3_migration_audit",
     "php8_compat_check",
+    "analyze_yii_modules",
     // PHP stacks (Yii2/Laravel/Symfony) overwhelmingly run on MySQL/Postgres with
     // raw .sql migrations and ActiveRecord models. The SQL toolchain is the
     // missing entry-point for schema/drift/lint/dml work — auto-revealing it
@@ -3133,6 +3135,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         opts.rules = args.rules.split(",").map((s) => s.trim()).filter(Boolean) as import("./tools/php8-compat-tools.js").Php8RuleId[];
       }
       return await php8CompatCheck(args.repo as string, opts);
+    },
+  },
+  {
+    name: "analyze_yii_modules",
+    category: "analysis",
+    requiresLanguage: "php",
+    searchHint: "yii2 module modules controllerNamespace structure routing inventory submodule per-module migrations views",
+    description:
+      "Inventory Yii2 modules in a codebase. For each module returns id, controllerNamespace (declared or default), controllers + actions, views_count, migrations_path/count, sub-modules, and URL prefixes resolved from urlManager rules. Yii2 advanced/standard template friendly.",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      module_id: z.string().optional().describe("Filter to a single module id"),
+    })),
+    handler: async (args) => {
+      const opts: { module_id?: string } = {};
+      if (typeof args.module_id === "string") opts.module_id = args.module_id;
+      return await analyzeYiiModules(args.repo as string, opts);
     },
   },
 

@@ -1,0 +1,5 @@
+{
+  "name": "test/php-yii-modules-fixture",
+  "require": { "php": ">=7.2.0", "yiisoft/yii2": "2.0.49" },
+  "autoload": { "psr-4": { "app\\": "./" } }
+}
