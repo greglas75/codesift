@@ -20,22 +20,27 @@ describe("phpProjectAudit", () => {
     await indexFolder(FIXTURE_ROOT);
   });
 
-  it("runs 9 gates by default and returns the full structured result", async () => {
+  it("runs the default gate set and returns the full structured result", async () => {
     const r = await phpProjectAudit(REPO);
-    // Every gate landed in `gates`, regardless of pass/fail/timeout
-    expect(r.gates.length).toBe(9);
+    // Every gate landed in `gates`, regardless of pass/fail/timeout. Sprint 7
+    // added a `yii_performance` gate; assert membership rather than exact
+    // count so future additions don't break the contract test.
+    expect(r.gates.length).toBeGreaterThanOrEqual(10);
     const names = r.gates.map((g) => g.name).sort();
-    expect(names).toEqual([
-      "activerecord",
-      "clones",
-      "complexity",
-      "dead_code",
-      "god_model",
-      "hotspots",
-      "n_plus_one",
-      "patterns",
-      "security",
-    ]);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "activerecord",
+        "clones",
+        "complexity",
+        "dead_code",
+        "god_model",
+        "hotspots",
+        "n_plus_one",
+        "patterns",
+        "security",
+        "yii_performance",
+      ]),
+    );
   });
 
   it("each gate has status, findings_count, and duration_ms", async () => {

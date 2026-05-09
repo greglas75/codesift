@@ -1,0 +1,4 @@
+{
+  "name": "test/php-m1-candidates-fixture",
+  "require": { "php": ">=7.2.0" }
+}

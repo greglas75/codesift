@@ -566,3 +566,388 @@ trait SecondTrait {}
     expect(secondChildren.map(s => s.name).sort()).toEqual(["b"]);
   });
 });
+
+describe("extractPhpSymbols — class hierarchy metadata (Sprint 1)", () => {
+  it("extracts extends list from class declaration", async () => {
+    const symbols = await parse(`<?php
+namespace app\\models;
+use yii\\db\\ActiveRecord;
+class User extends ActiveRecord {}
+`);
+    const cls = symbols.find((s) => s.name === "User" && s.kind === "class");
+    expect(cls).toBeDefined();
+    expect(cls!.extends).toEqual(["ActiveRecord"]);
+  });
+
+  it("preserves fully-qualified names in extends", async () => {
+    const symbols = await parse(`<?php
+class User extends \\yii\\db\\ActiveRecord {}
+`);
+    const cls = symbols.find((s) => s.name === "User");
+    expect(cls!.extends).toEqual(["\\yii\\db\\ActiveRecord"]);
+  });
+
+  it("preserves aliased names in extends (resolution is downstream)", async () => {
+    // tgm-panel pattern: User extends BaseUser via aliased import
+    const symbols = await parse(`<?php
+namespace app\\models;
+use dektrium\\user\\models\\User as BaseUser;
+class User extends BaseUser {}
+`);
+    const cls = symbols.find((s) => s.name === "User" && s.kind === "class");
+    expect(cls!.extends).toEqual(["BaseUser"]);
+  });
+
+  it("extracts implements list", async () => {
+    const symbols = await parse(`<?php
+class Foo implements \\JsonSerializable, \\Stringable {}
+`);
+    const cls = symbols.find((s) => s.name === "Foo");
+    expect(cls!.implements).toEqual(["\\JsonSerializable", "\\Stringable"]);
+  });
+
+  it("extracts both extends and implements together", async () => {
+    const symbols = await parse(`<?php
+class Bar extends Base implements Iface1, Iface2 {}
+`);
+    const cls = symbols.find((s) => s.name === "Bar");
+    expect(cls!.extends).toEqual(["Base"]);
+    expect(cls!.implements).toEqual(["Iface1", "Iface2"]);
+  });
+
+  it("extracts use_declaration trait list into meta.uses_traits", async () => {
+    const symbols = await parse(`<?php
+class Survey {
+  use TimestampBehavior;
+  use Searchable, Cacheable;
+}
+`);
+    const cls = symbols.find((s) => s.name === "Survey");
+    expect(cls!.meta?.uses_traits).toBeDefined();
+    const traits = cls!.meta!.uses_traits as string[];
+    // tree-sitter-php may flatten multi-trait `use A, B;` into one or two
+    // declarations depending on grammar version — accept either form.
+    expect(traits.length).toBeGreaterThan(0);
+    expect(traits).toContain("TimestampBehavior");
+  });
+
+  it("extracts class modifiers (abstract, final)", async () => {
+    const symbols = await parse(`<?php
+abstract class A {}
+final class B {}
+class C {}
+`);
+    const a = symbols.find((s) => s.name === "A");
+    const b = symbols.find((s) => s.name === "B");
+    const c = symbols.find((s) => s.name === "C");
+    expect(a!.meta?.is_abstract).toBe(true);
+    expect(b!.meta?.is_final).toBe(true);
+    expect(c!.meta?.is_abstract).toBeUndefined();
+    expect(c!.meta?.is_final).toBeUndefined();
+  });
+
+  it("extracts interface extends list", async () => {
+    const symbols = await parse(`<?php
+interface Repo extends Countable, IteratorAggregate {}
+`);
+    const iface = symbols.find((s) => s.name === "Repo");
+    expect(iface!.extends).toEqual(["Countable", "IteratorAggregate"]);
+  });
+
+  it("does not set extends/implements/meta when absent (backwards compat)", async () => {
+    const symbols = await parse(`<?php
+class Plain {}
+`);
+    const cls = symbols.find((s) => s.name === "Plain");
+    expect(cls!.extends).toBeUndefined();
+    expect(cls!.implements).toBeUndefined();
+    // meta may or may not exist but uses_traits/is_abstract/is_final shouldn't
+    expect(cls!.meta?.uses_traits).toBeUndefined();
+    expect(cls!.meta?.is_abstract).toBeUndefined();
+    expect(cls!.meta?.is_final).toBeUndefined();
+  });
+});
+
+describe("extractPhpSymbols — Codeception test detection (Sprint 1)", () => {
+  it("detects extends Unit (Codeception unit base)", async () => {
+    const symbols = await parse(`<?php
+class UserTest extends \\Codeception\\Test\\Unit {
+  public function testFoo() {}
+}
+`);
+    const cls = symbols.find((s) => s.name === "UserTest");
+    expect(cls!.kind).toBe("test_suite");
+    const m = symbols.find((s) => s.name === "testFoo");
+    expect(m!.kind).toBe("test_case");
+  });
+
+  it("detects extends Cest (Codeception scenario base)", async () => {
+    const symbols = await parse(`<?php
+class LoginCest extends Cest {}
+`);
+    const cls = symbols.find((s) => s.name === "LoginCest");
+    expect(cls!.kind).toBe("test_suite");
+  });
+
+  it("detects extends Cept (Codeception scenario base)", async () => {
+    const symbols = await parse(`<?php
+class FooCept extends Cept {}
+`);
+    expect(symbols.find((s) => s.name === "FooCept")!.kind).toBe("test_suite");
+  });
+
+  it("still detects PHPUnit TestCase (regression check)", async () => {
+    const symbols = await parse(`<?php
+class FooTest extends \\PHPUnit\\Framework\\TestCase {}
+`);
+    expect(symbols.find((s) => s.name === "FooTest")!.kind).toBe("test_suite");
+  });
+});
+
+describe("extractPhpSymbols — PHP 8 attributes (Sprint 1)", () => {
+  it("captures simple class attribute", async () => {
+    const symbols = await parse(`<?php
+#[Entity]
+class User {}
+`);
+    const cls = symbols.find((s) => s.name === "User");
+    expect(cls!.meta?.attributes).toBeDefined();
+    const attrs = cls!.meta!.attributes as Array<{ name: string; args?: string }>;
+    expect(attrs).toHaveLength(1);
+    expect(attrs[0].name).toBe("Entity");
+  });
+
+  it("captures attribute with arguments", async () => {
+    const symbols = await parse(`<?php
+#[Route('/api/users', methods: ['GET'])]
+class UserController {}
+`);
+    const cls = symbols.find((s) => s.name === "UserController");
+    const attrs = cls!.meta?.attributes as Array<{ name: string; args?: string }>;
+    expect(attrs).toBeDefined();
+    expect(attrs[0].name).toBe("Route");
+    expect(attrs[0].args).toContain("/api/users");
+  });
+
+  it("captures multiple attributes", async () => {
+    const symbols = await parse(`<?php
+#[Entity, Index('name')]
+#[ORM\\Table('users')]
+class User {}
+`);
+    const cls = symbols.find((s) => s.name === "User");
+    const attrs = cls!.meta?.attributes as Array<{ name: string }>;
+    expect(attrs.map((a) => a.name)).toContain("Entity");
+    expect(attrs.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("extractPhpSymbols — typed properties + @var (Sprint 1 part 2)", () => {
+  it("extracts inline type from PHP 7.4+ typed property", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  private string $email;
+  public ?int $age;
+}
+`);
+    const email = symbols.find((s) => s.name === "$email");
+    const age = symbols.find((s) => s.name === "$age");
+    expect(email!.meta?.type).toBe("string");
+    expect(email!.meta?.type_source).toBe("inline");
+    expect(email!.meta?.visibility).toBe("private");
+    expect(age!.meta?.type).toBe("?int");
+    expect(age!.meta?.visibility).toBe("public");
+  });
+
+  it("falls back to @var docblock when no inline type (legacy 7.2 style)", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  /** @var string */
+  public $portalUserRmsid;
+  /** @var float */
+  public $regBonus;
+}
+`);
+    const rmsid = symbols.find((s) => s.name === "$portalUserRmsid");
+    const bonus = symbols.find((s) => s.name === "$regBonus");
+    expect(rmsid!.meta?.type).toBe("string");
+    expect(rmsid!.meta?.type_source).toBe("phpdoc");
+    expect(bonus!.meta?.type).toBe("float");
+  });
+
+  it("inline type wins over @var when both present", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  /** @var int */
+  public string $name;
+}
+`);
+    const name = symbols.find((s) => s.name === "$name");
+    expect(name!.meta?.type).toBe("string");
+    expect(name!.meta?.type_source).toBe("inline");
+  });
+
+  it("captures readonly modifier (PHP 8.1+)", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  public readonly int $id;
+  public string $name;
+}
+`);
+    const id = symbols.find((s) => s.name === "$id");
+    const name = symbols.find((s) => s.name === "$name");
+    expect(id!.meta?.is_readonly).toBe(true);
+    expect(name!.meta?.is_readonly).toBeUndefined();
+  });
+
+  it("captures static modifier on properties", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  public static int $counter = 0;
+}
+`);
+    const c = symbols.find((s) => s.name === "$counter");
+    expect(c!.meta?.is_static).toBe(true);
+  });
+
+  it("captures union and intersection types (PHP 8.0/8.1)", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  public int|string $id;
+  public Countable&IteratorAggregate $list;
+}
+`);
+    const id = symbols.find((s) => s.name === "$id");
+    const list = symbols.find((s) => s.name === "$list");
+    expect(id!.meta?.type).toBe("int|string");
+    expect(list!.meta?.type).toBe("Countable&IteratorAggregate");
+  });
+});
+
+describe("extractPhpSymbols — promoted constructor params (Sprint 1 part 2)", () => {
+  it("emits synthetic field symbols for promoted ctor params", async () => {
+    const symbols = await parse(`<?php
+class User {
+  public function __construct(
+    public readonly string $name,
+    private LoggerInterface $log,
+    int $age = 0,
+  ) {}
+}
+`);
+    const cls = symbols.find((s) => s.name === "User" && s.kind === "class");
+    const name = symbols.find((s) => s.name === "$name" && s.parent === cls!.id);
+    const log = symbols.find((s) => s.name === "$log" && s.parent === cls!.id);
+    const age = symbols.find((s) => s.name === "$age" && s.parent === cls!.id);
+
+    expect(name).toBeDefined();
+    expect(name!.kind).toBe("field");
+    expect(name!.meta?.from_constructor).toBe(true);
+    expect(name!.meta?.is_readonly).toBe(true);
+    expect(name!.meta?.visibility).toBe("public");
+    expect(name!.meta?.type).toBe("string");
+
+    expect(log).toBeDefined();
+    expect(log!.meta?.visibility).toBe("private");
+    expect(log!.meta?.type).toBe("LoggerInterface");
+
+    // Plain (non-promoted) ctor parameter is NOT emitted as a class field.
+    expect(age).toBeUndefined();
+  });
+
+  it("does not emit promoted fields for non-__construct methods", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  public function bar(public string $x) {}
+}
+`);
+    const cls = symbols.find((s) => s.name === "Foo");
+    const x = symbols.find((s) => s.name === "$x" && s.parent === cls!.id);
+    // PHP 8 only allows promoted params in __construct — anywhere else is a
+    // runtime error. We don't emit synthetic fields outside __construct.
+    expect(x).toBeUndefined();
+  });
+});
+
+describe("extractPhpSymbols — backed enums (Sprint 1 part 2)", () => {
+  it("captures backing type on PHP 8.1 backed enum", async () => {
+    const symbols = await parse(`<?php
+enum Status: string {
+  case Active = 'active';
+  case Pending = 'pending';
+}
+`);
+    const e = symbols.find((s) => s.name === "Status");
+    expect(e!.kind).toBe("enum");
+    expect(e!.meta?.backed_type).toBe("string");
+    const active = symbols.find((s) => s.name === "Active");
+    expect(active!.kind).toBe("constant");
+  });
+
+  it("does not set backed_type for pure enums", async () => {
+    const symbols = await parse(`<?php
+enum Direction {
+  case Up;
+  case Down;
+}
+`);
+    const e = symbols.find((s) => s.name === "Direction");
+    expect(e!.meta?.backed_type).toBeUndefined();
+  });
+
+  it("captures int-backed enum", async () => {
+    const symbols = await parse(`<?php
+enum Priority: int {
+  case Low = 1;
+  case High = 10;
+}
+`);
+    const e = symbols.find((s) => s.name === "Priority");
+    expect(e!.meta?.backed_type).toBe("int");
+  });
+
+  it("captures interfaces implemented by enum", async () => {
+    const symbols = await parse(`<?php
+enum Status: string implements \\JsonSerializable {
+  case Active = 'active';
+}
+`);
+    const e = symbols.find((s) => s.name === "Status");
+    expect(e!.implements).toEqual(["\\JsonSerializable"]);
+  });
+});
+
+describe("extractPhpSymbols — method modifiers (Sprint 1 part 2)", () => {
+  it("captures visibility, static, abstract, final on methods", async () => {
+    const symbols = await parse(`<?php
+abstract class Foo {
+  public function pub() {}
+  private function priv() {}
+  protected static function staticProt() {}
+  abstract public function abs();
+  final public function fin() {}
+}
+`);
+    const find = (n: string) => symbols.find((s) => s.name === n);
+    expect(find("pub")!.meta?.visibility).toBe("public");
+    expect(find("priv")!.meta?.visibility).toBe("private");
+    expect(find("staticProt")!.meta?.is_static).toBe(true);
+    expect(find("staticProt")!.meta?.visibility).toBe("protected");
+    expect(find("abs")!.meta?.is_abstract).toBe(true);
+    expect(find("fin")!.meta?.is_final).toBe(true);
+  });
+
+  it("captures method-level attributes", async () => {
+    const symbols = await parse(`<?php
+class FooController {
+  #[Route('/api/foo', methods: ['POST'])]
+  public function actionFoo() {}
+}
+`);
+    const m = symbols.find((s) => s.name === "actionFoo");
+    const attrs = m!.meta?.attributes as Array<{ name: string; args?: string }>;
+    expect(attrs).toBeDefined();
+    expect(attrs[0].name).toBe("Route");
+    expect(attrs[0].args).toContain("/api/foo");
+  });
+});
