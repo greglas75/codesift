@@ -123,6 +123,60 @@ describe("setup", () => {
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toBe('[mcp_servers.codesift]\ncommand = "npx"\n');
     });
+
+    it("strips per-tool approval_mode overrides on mcp_servers.codesift when already configured", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      const polluted = [
+        '[mcp_servers.codesift]',
+        'command = "codesift-mcp"',
+        '',
+        '[mcp_servers.codesift.tools.search_text]',
+        'approval_mode = "approve"',
+        '',
+        '[mcp_servers.codesift.tools.index_folder]',
+        'approval_mode = "approve"',
+        '',
+        '[mcp_servers.chrome-devtools.tools.fill]',
+        'approval_mode = "approve"',
+        '',
+      ].join("\n");
+      await writeFile(join(configDir, "config.toml"), polluted, "utf-8");
+
+      const result = await setup("codex");
+      expect(result.status).toBe("updated");
+      expect(result.note).toMatch(/removed 2 per-tool approval/);
+
+      const content = await readFile(result.config_path, "utf-8");
+      expect(content).not.toMatch(/mcp_servers\.codesift\.tools\./);
+      // Non-codesift overrides preserved
+      expect(content).toContain("[mcp_servers.chrome-devtools.tools.fill]");
+      // Main block preserved
+      expect(content).toContain("[mcp_servers.codesift]");
+    });
+
+    it("strips overrides AND appends main block when codesift block missing", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      const polluted = [
+        '[model]',
+        'provider = "openai"',
+        '',
+        '[mcp_servers.codesift.tools.plan_turn]',
+        'approval_mode = "approve"',
+        '',
+      ].join("\n");
+      await writeFile(join(configDir, "config.toml"), polluted, "utf-8");
+
+      const result = await setup("codex");
+      expect(result.status).toBe("updated");
+      expect(result.note).toMatch(/removed 1 per-tool approval/);
+
+      const content = await readFile(result.config_path, "utf-8");
+      expect(content).not.toMatch(/mcp_servers\.codesift\.tools\./);
+      expect(content).toContain("[mcp_servers.codesift]");
+      expect(content).toContain('[model]');
+    });
   });
 
   // -------------------------------------------------------------------------

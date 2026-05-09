@@ -23,6 +23,7 @@ export interface SetupResult {
   platform: string;
   config_path: string;
   status: "created" | "updated" | "already_configured";
+  note?: string;
 }
 
 export interface InstallRulesResult {
@@ -35,6 +36,24 @@ export interface InstallRulesResult {
 // ---------------------------------------------------------------------------
 // Platform configs
 // ---------------------------------------------------------------------------
+
+// Strip [mcp_servers.codesift.tools.<name>] approval-mode overrides that Codex
+// CLI persists when the user picks "Approve each time" on first tool call. They
+// override any global trust policy, forcing a prompt per call. Safe to remove —
+// tools fall back to the global approval policy after stripping.
+export function stripCodesiftToolApprovalOverrides(
+  content: string,
+): { content: string; removed: number } {
+  const re = /\[mcp_servers\.codesift\.tools\.[^\]]+\][\t ]*\r?\napproval_mode[\t ]*=[\t ]*"[^"]*"[\t ]*\r?\n?/g;
+  const matches = content.match(re);
+  if (!matches || matches.length === 0) {
+    return { content, removed: 0 };
+  }
+  let stripped = content.replace(re, "");
+  // Collapse runs of 3+ blank lines (left by removals) down to 2.
+  stripped = stripped.replace(/\n{3,}/g, "\n\n");
+  return { content: stripped, removed: matches.length };
+}
 
 function getCodexTomlBlock(): string {
   const entry = resolveMcpServerEntry();
@@ -362,14 +381,23 @@ async function setupCodex(): Promise<SetupResult> {
   await ensureDir(configDir);
 
   if (existsSync(configPath)) {
-    const content = await readFile(configPath, "utf-8");
-    if (content.includes("[mcp_servers.codesift]")) {
+    const original = await readFile(configPath, "utf-8");
+    const { content: cleaned, removed } = stripCodesiftToolApprovalOverrides(original);
+    const noteFields = removed > 0
+      ? { note: `removed ${removed} per-tool approval override${removed === 1 ? "" : "s"} on mcp_servers.codesift` }
+      : {};
+
+    if (cleaned.includes("[mcp_servers.codesift]")) {
+      if (removed > 0) {
+        await writeFile(configPath, cleaned, "utf-8");
+        return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
+      }
       return { platform: "codex", config_path: configPath, status: "already_configured" };
     }
-    // Append to existing file
-    const newContent = content.trimEnd() + "\n" + getCodexTomlBlock();
+    // Append main block to existing file (using cleaned content)
+    const newContent = cleaned.trimEnd() + "\n" + getCodexTomlBlock();
     await writeFile(configPath, newContent, "utf-8");
-    return { platform: "codex", config_path: configPath, status: "updated" };
+    return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
   }
 
   // Create new file
@@ -690,6 +718,9 @@ const RULES_ACTION_LABELS: Partial<Record<InstallRulesResult["action"], string>>
 
 export function formatSetupResult(result: SetupResult, rulesResult?: InstallRulesResult): string {
   const lines: string[] = [STATUS_MESSAGES[result.status](result)];
+  if (result.note) {
+    lines.push(`  ↳ ${result.note}`);
+  }
   if (rulesResult && RULES_ACTION_LABELS[rulesResult.action] && rulesResult.path) {
     lines.push(`✓ ${RULES_ACTION_LABELS[rulesResult.action]} ${rulesResult.path}`);
   }
