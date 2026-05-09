@@ -1,14 +1,14 @@
 {
-  "count": 3,
-  "captured_at": "2026-05-04T03:26:15.764Z",
+  "count": 2,
+  "captured_at": "2026-05-09T03:46:39.724Z",
   "fixture_dir": "tests/fixtures/react-tier5",
   "plan_revision": 5,
   "per_pattern": {
-    "useEffect-setstate-loop": 1,
     "rsc-non-serializable-prop": 2,
+    "jsx-no-target-blank": 1,
     "derived-state": 1,
     "context-provider-value-inline": 1,
-    "jsx-no-target-blank": 1,
+    "derived-state-custom-setter": 1,
     "button-no-type": 2
   }
 }

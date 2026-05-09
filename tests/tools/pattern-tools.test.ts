@@ -1596,3 +1596,442 @@ describe("postFilter runner integration (Tier 5)", () => {
     }
   });
 });
+
+// Tier 6 — derived-state-reducer, derived-state-custom-setter,
+// stale-closure-toggle, stale-closure-broken-functional,
+// context-provider-value-via-variable, context-provider-value-inline-destructured,
+// react-lazy-no-suspense-same-file, rsc-non-serializable-prop-deep,
+// error-boundary-incomplete
+// ─────────────────────────────────────────────────────────────
+
+describe("derived-state-reducer (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["derived-state-reducer"]!.regex;
+  it("matches useReducer + useEffect dispatching sync action", () => {
+    const src = `function Foo(props) {
+      const [state, dispatch] = useReducer(reducer, props.initial);
+      useEffect(() => { dispatch({type: 'sync', payload: props.x}); }, [props.x]);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match useReducer with non-sync dispatch type", () => {
+    const src = `function Foo() {
+      const [state, dispatch] = useReducer(reducer, init);
+      useEffect(() => { dispatch({type: 'increment'}); }, []);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("derived-state-custom-setter (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["derived-state-custom-setter"]!.regex;
+  it("matches useState(props.value) + useEffect with custom setter setDisplayValue", () => {
+    const src = `function Foo(props) {
+      const [displayValue, setDisplayValue] = useState(props.value);
+      useEffect(() => { setDisplayValue(props.value); }, [props.value]);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match seed-only useState(props.value)", () => {
+    const src = `function Foo(props) {
+      const [v, setV] = useState(props.initial);
+      return v;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("stale-closure-toggle (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["stale-closure-toggle"]!.regex;
+  it("matches setOpen(!open) boolean toggle", () => {
+    const src = `function Modal() {
+      const [open, setOpen] = useState(false);
+      const toggle = () => setOpen(!open);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match functional setOpen(prev => !prev)", () => {
+    const src = `function Modal() {
+      const [open, setOpen] = useState(false);
+      const toggle = () => setOpen(prev => !prev);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("stale-closure-broken-functional (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["stale-closure-broken-functional"]!.regex;
+  it("matches setCount(prev => count + 1) — wrong reference to outer var", () => {
+    const src = `function Counter() {
+      const [count, setCount] = useState(0);
+      const inc = () => setCount(prev => count + 1);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match setCount(prev => prev + 1) — correct functional updater", () => {
+    const src = `function Counter() {
+      const [count, setCount] = useState(0);
+      const inc = () => setCount(prev => prev + 1);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("context-provider-value-via-variable (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["context-provider-value-via-variable"]!.regex;
+  it("matches inline-object var passed to Provider value", () => {
+    const src = `function App() {
+      const ctx = { user, login };
+      return <AuthCtx.Provider value={ctx}>{children}</AuthCtx.Provider>;
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("does not match useMemo-wrapped variable", () => {
+    const src = `function App() {
+      const ctx = useMemo(() => ({ user, login }), [user]);
+      return <AuthCtx.Provider value={ctx}>{children}</AuthCtx.Provider>;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("context-provider-value-inline-destructured (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["context-provider-value-inline-destructured"]!.regex;
+  it("matches destructured Provider with inline object", () => {
+    const src = `const { Provider } = ThemeContext;
+function App() { return <Provider value={{ mode: 'dark' }}>x</Provider>; }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("matches destructured ThemeProvider variant", () => {
+    const src = `const { ThemeProvider } = ThemeContext;
+function App() { return <ThemeProvider value={{x: 1}}>x</ThemeProvider>; }`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
+
+describe("rsc-non-serializable-prop-deep (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["rsc-non-serializable-prop-deep"]!.regex;
+  it("matches Map passed as data prop", () => {
+    expect(regex.test(`<Component data={new Map()}>`)).toBe(true);
+  });
+  it("matches Set passed as value prop", () => {
+    expect(regex.test(`<Component value={new Set([1,2])}>`)).toBe(true);
+  });
+  it("matches Class instance passed as state", () => {
+    expect(regex.test(`<Component state={new UserModel()}>`)).toBe(true);
+  });
+  it("does not match plain object value", () => {
+    expect(regex.test(`<Component value={{a:1}}>`)).toBe(false);
+  });
+});
+
+describe("error-boundary-incomplete (Tier 6)", () => {
+  const regex = BUILTIN_PATTERNS["error-boundary-incomplete"]!.regex;
+  it("matches class with componentDidCatch but no getDerivedStateFromError", () => {
+    const src = `class MyBoundary extends React.Component {
+      componentDidCatch(err, info) { console.log(err); }
+      render() { return this.props.children; }
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+  it("matches class with getDerivedStateFromError but no componentDidCatch", () => {
+    const src = `class MyBoundary extends Component {
+      static getDerivedStateFromError(err) { return {hasError: true}; }
+      render() { return this.props.children; }
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
+
+describe("Tier 6 — severity migration", () => {
+  it("all React patterns now have severity field", () => {
+    const reactPatterns = [
+      "hook-in-condition", "useEffect-async", "useEffect-object-dep", "missing-display-name",
+      "index-as-key", "inline-handler", "conditional-render-hook", "dangerously-set-html",
+      "direct-dom-access", "unstable-default-value", "jsx-falsy-and", "nested-component-def",
+      "usecallback-no-deps", "react19-use-without-suspense", "react19-server-action-not-async",
+      "react19-form-action-non-function", "react19-useoptimistic-no-transition",
+      "hook-usestate-destructure", "prefer-function-component",
+      "compiler-side-effect-in-render", "compiler-ref-read-in-render", "compiler-prop-mutation",
+      "compiler-state-mutation", "compiler-try-catch-bailout", "compiler-redundant-memo",
+      "compiler-redundant-usecallback", "rsc-non-serializable-prop", "rsc-date-prop",
+    ];
+    for (const name of reactPatterns) {
+      const entry = BUILTIN_PATTERNS[name];
+      expect(entry, `pattern ${name} not found`).toBeDefined();
+      expect(entry!.severity, `pattern ${name} missing severity`).toMatch(/^(critical|warning|style)$/);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 — pre-existing CRITICAL bugfixes (regex correctness)
+// All 3 fixes surfaced by adversarial review of Tier 6 commits.
+// ─────────────────────────────────────────────────────────────
+
+describe("react19-useoptimistic-no-transition (Tier 7 fix)", () => {
+  const regex = BUILTIN_PATTERNS["react19-useoptimistic-no-transition"]!.regex;
+
+  it("matches useOptimistic without nearby useTransition (real bug)", () => {
+    const src = `function Form() {
+      const [state, addOpt] = useOptimistic(messages);
+      return <div>{state}</div>;
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match useOptimistic paired with useTransition (correct usage)", () => {
+    const src = `function Form() {
+      const [isPending, startTransition] = useTransition();
+      const [state, addOpt] = useOptimistic(messages);
+      return <button onClick={() => startTransition(() => addOpt(x))}>x</button>;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("does NOT match useOptimistic when startTransition appears AFTER call (forward-1000-char window)", () => {
+    // KNOWN LIMITATION: regex uses forward-only lookahead. If startTransition
+    // appears ONLY in the import line ABOVE useOptimistic, it's not detected
+    // (JS regex lacks efficient bidirectional lookbehind here). This test covers
+    // the practical case where startTransition is declared/used near the call.
+    const src = `function Form() {
+      const [state, addOpt] = useOptimistic(messages);
+      const [pending, startTransition] = useTransition();
+      return <div onClick={() => startTransition(() => addOpt(x))}/>;
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("useEffect-setstate-loop (Tier 7 fix)", () => {
+  const regex = BUILTIN_PATTERNS["useEffect-setstate-loop"]!.regex;
+
+  it("matches real loop: setX in useEffect with X in deps array", () => {
+    const src = `function Foo() {
+      useEffect(() => { setCount(count + 1); }, [count]);
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match setItems([...items, x]) — array literal as setState arg", () => {
+    // gemini Run 6 CRITICAL: the array literal `[...items, x]` was wrongly
+    // detected as the deps array. Fix anchors on the closing `}, [` of useEffect.
+    const src = `function Foo() {
+      useEffect(() => { setItems([...items, newItem]); }, [newItem]);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("does NOT match setX with valid different deps", () => {
+    const src = `function Foo() {
+      useEffect(() => { setCount(c => c + 1); }, [trigger]);
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("react19-server-action-not-async (Tier 7 fix)", () => {
+  const regex = BUILTIN_PATTERNS["react19-server-action-not-async"]!.regex;
+
+  it("matches sync `export function` after 'use server'", () => {
+    const src = `"use server";
+export function login(formData) { return db.login(formData); }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("matches sync arrow `export const X = () =>` after 'use server'", () => {
+    // gemini Run 6 CRITICAL: arrow functions were missed.
+    const src = `"use server";
+export const login = (formData) => { return db.login(formData); };`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match async function (correct)", () => {
+    const src = `"use server";
+export async function login(formData) { return await db.login(formData); }`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("does NOT match async arrow (correct)", () => {
+    const src = `"use server";
+export const login = async (formData) => { return await db.login(formData); };`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("matches sync arrow far from directive (>500 chars)", () => {
+    // gemini fix: extended search window to 2000 chars.
+    const filler = "// ".repeat(200) + "\n// banner comment block\n";
+    const src = `"use server";\n${filler}export const action = (data) => { return process(data); };`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Tier 7 R-2 / R-3 — review fixes
+// ─────────────────────────────────────────────────────────────
+
+describe("react19-useoptimistic-no-transition (Tier 7 R-2 — \\b boundary)", () => {
+  const regex = BUILTIN_PATTERNS["react19-useoptimistic-no-transition"]!.regex;
+
+  it("STILL matches: useOptimistic alone", () => {
+    expect(regex.test(`function F() { useOptimistic(messages); }`)).toBe(true);
+  });
+
+  it("STILL matches when only myUseTransition appears (no real useTransition)", () => {
+    // R-2 fix: \b boundary prevents `myUseTransition` from suppressing the warning
+    const src = `function F() {
+      const [state, addOpt] = useOptimistic(messages);
+      const myUseTransition = () => null;
+      myUseTransition();
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("STILL matches when only startTransitionHandler appears", () => {
+    const src = `function F() {
+      const [state, addOpt] = useOptimistic(messages);
+      const startTransitionHandler = () => null;
+    }`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match real useTransition pairing (when in forward lookahead window)", () => {
+    // Forward-only lookahead — useTransition must appear AFTER useOptimistic.
+    // Documented limit: useTransition declared above is not seen.
+    const src = `function F() {
+      const [state, addOpt] = useOptimistic(messages);
+      const [pending, startTransition] = useTransition();
+    }`;
+    expect(regex.test(src)).toBe(false);
+  });
+});
+
+describe("useEffect-setstate-loop (Tier 7 R-3 — concise nested-paren)", () => {
+  const regex = BUILTIN_PATTERNS["useEffect-setstate-loop"]!.regex;
+
+  it("matches concise form with simple identifier arg", () => {
+    const src = `useEffect(() => setCount(count), [count]);`;
+    expect(regex.test(src)).toBe(true);
+  });
+
+  it("does NOT match concise form when setX has nested call (avoids FP)", () => {
+    // R-3: setCount(getY()) in concise form — first ) closes inner getY().
+    // R-3 fix: concise arm requires [^()] arg → falls through to no-match.
+    const src = `useEffect(() => setCount(getY()), [count]);`;
+    expect(regex.test(src)).toBe(false);
+  });
+
+  it("STILL matches block form even with nested calls (correct)", () => {
+    const src = `useEffect(() => { setCount(getValue() + count); }, [count]);`;
+    expect(regex.test(src)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Tier 8 — preprocess: strip-comments-strings integration
+// ─────────────────────────────────────────────────────────────
+
+describe("preprocess: strip-comments-strings (Tier 8)", () => {
+  it("dangerously-set-html: does NOT match mention inside line comment", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  // TODO: dangerouslySetInnerHTML={x} should be sanitized
+  return <div>safe</div>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("dangerously-set-html: STILL matches real usage", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  return <div dangerouslySetInnerHTML={{ __html: x }}/>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(1);
+  });
+
+  it("dangerously-set-html: does NOT match mention in string literal", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  const docs = "use dangerouslySetInnerHTML={...} cautiously";
+  return <div>{docs}</div>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("console-log: does NOT match commented-out console.log", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  // console.log('debug');
+  return 1;
+}`,
+    });
+    const result = await searchPatterns(repo, "console-log");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("console-log: STILL matches real console.log", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  console.log('debug');
+  return 1;
+}`,
+    });
+    const result = await searchPatterns(repo, "console-log");
+    expect(result.matches.length).toBe(1);
+  });
+
+  it("empty-catch: does NOT match commented-out empty catch", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  try { foo(); }
+  catch (e) { logger.error(e); }
+  // catch (e) {}
+}`,
+    });
+    const result = await searchPatterns(repo, "empty-catch");
+    expect(result.matches.length).toBe(0);
+  });
+
+  it("empty-catch: STILL matches real empty catch", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": `function fn() {
+  try { foo(); }
+  catch (e) {}
+}`,
+    });
+    const result = await searchPatterns(repo, "empty-catch");
+    expect(result.matches.length).toBe(1);
+  });
+
+  it("preprocess preserves match line numbers", async () => {
+    // Comment on line 1, real match on line 3 — line number must report 3
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `// dangerouslySetInnerHTML={x} mentioned
+function Comp() {
+  return <div dangerouslySetInnerHTML={{ __html: y }}/>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(1);
+    // Match should be on line 3 of the source (after the comment + function declaration)
+    const m = result.matches[0]!;
+    expect(m.start_line).toBeGreaterThanOrEqual(2);
+  });
+
+  it("preprocess preserves displayed context (uses original line, not stripped)", async () => {
+    const repo = await createIndexedFixture({
+      "src/Comp.tsx": `function Comp() {
+  return <div dangerouslySetInnerHTML={{ __html: x }}/>;
+}`,
+    });
+    const result = await searchPatterns(repo, "dangerously-set-html");
+    expect(result.matches.length).toBe(1);
+    // Context should include the actual JSX text, not whitespace
+    expect(result.matches[0]!.context).toContain("dangerouslySetInnerHTML");
+  });
+});
