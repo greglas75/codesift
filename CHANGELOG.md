@@ -1,5 +1,139 @@
 # Changelog
 
+## [0.7.0] — 2026-05-08
+
+### PHP/Yii2 deep intelligence — 10 new tools + extractor v2.0.0
+
+> Note: v0.6.0 was claimed by an in-flight React Tier 6/7/8 release on `main`
+> shipped earlier the same day; this PHP/Yii2 work bumps minor to 0.7.0.
+
+Closes the PHP/Yii2 gap analysis (`docs/specs/2026-05-05-php-yii2-gap-analysis.md`).
+Validated end-to-end on real production tgm-panel codebase (1979 files, 13104
+symbols) — full 12-tool audit completes in 4.48 seconds. See
+`docs/specs/2026-05-07-tgm-panel-smoke.md` for the headline numbers.
+
+#### Added
+
+**10 new MCP tools** auto-loaded under `composer.json` detection:
+
+- `yii3_migration_audit` — decision-support tool inventorying Yii2-API usage
+  across 21 categories (service-locator, ActiveRecord, Module, RBAC, …) with
+  effort estimate + decision_signal (stay-on-yii2 / consider-yii3 /
+  high-effort-yii3 / blocked).
+- `php8_compat_check` — pre-merge gating tool for PHP 7→8 upgrade. 13 rules
+  across breaking_8_0 / deprecated_8_1 / deprecated_8_2 buckets. Detects Yii2
+  < 2.0.49 + PHP 8 incompatibility automatically.
+- `find_php8_migration_candidates` — post-merge modernization helper. 6 rule
+  classes: promotable-ctor, docblock-to-typed-property, nullable-flag-to-syntax,
+  readonly-candidate, enum-from-class-consts, match-from-switch.
+- `find_yii3_attribute_candidates` — Yii2→Yii3 array-config → attribute
+  conversion. behaviors-to-attributes, rules-to-attributes (with validator
+  → attribute name mapping), urlmanager-rule-to-route.
+- `analyze_yii_modules` — module inventory with controllerNamespace,
+  controllers, views, migrations, sub-modules, URL prefixes resolved from
+  urlManager rules.
+- `analyze_yii_migrations` — Yii2 PHP-DSL migration parser (createTable,
+  alterColumn, addForeignKey, …). 4 audit rules: missing-safe-down,
+  alter-without-online-ddl (the tgm-panel db-audit DB6-001 finding),
+  fk-without-index, raw-sql-without-comment.
+- `analyze_yii_rbac` — permission graph audit. Cross-references definitions
+  (createPermission/createRole in seed migrations) against runtime checks
+  (Yii::$app->user->can + AccessControl behaviors). Surfaces orphan_checks,
+  unused_definitions, controllers_without_access_control, dynamic_creates.
+- `analyze_yii_console_commands` — console controller inventory with typed
+  argument list, variadic flag, and 4 risk flags (exits-without-return-status,
+  has-unbounded-all, has-no-error-handling, uses-output-via-echo).
+- `analyze_phpstan_baseline` — universal PHPStan baseline triage. Parses
+  `phpstan-baseline.neon`, ranks by_path, by_category, surfaces quick_wins
+  (≤3 errors per file).
+
+**12 new security patterns** added to `php_security_scan` (8 → 20 total):
+
+- `yii-csrf-disabled`, `yii-debug-mode-prod`, `yii-cookie-no-validation`,
+  `yii-mass-assignment-unsafe`, `yii-raw-sql-where`, `yii-no-row-level-locking`,
+  `yii-config-hardcoded-secret`, `yii-unbounded-all`, `yii-rbac-cached-permission`,
+  `php-md5-password`, `php-rand-token`, `php-loose-comparison-secret`.
+- File-level scanning path added (`runFileLevelChecks`) for patterns that
+  match at module level — entry-point files (`web/index.php` with
+  `define('YII_DEBUG', true)`) and config arrays (`return [...]`) are now
+  visible to the scanner.
+
+**5 new performance patterns** in `yii_performance` gate of `php_project_audit`:
+
+- `yii-translate-in-loop`, `yii-dbtarget-info-level`,
+  `yii-find-with-large-then-filter`, `yii-cache-no-ttl`,
+  `yii-no-batch-on-large`. Sourced from tgm-panel performance-audit findings.
+
+#### Changed
+
+**Extractor v2.0.0 (`src/parser/extractors/php.ts`)** — bumped from 1.0.0 to
+2.0.0, forces full reindex of all PHP files. Adds:
+
+- `extends`, `implements`, `meta.uses_traits` on classes/interfaces/traits.
+- `meta.modifiers`: visibility, is_static, is_abstract, is_final, is_readonly.
+- `meta.attributes`: PHP 8.0+ `#[Attribute]` list with raw arg strings.
+- `meta.type` + `meta.type_source: "inline" | "phpdoc"` on properties — PHP
+  7.4+ typed properties OR `@var T` from leading docblock as fallback.
+- Promoted constructor params (PHP 8.0+) emitted as synthetic `field` symbols
+  with `meta.from_constructor: true`.
+- Backed enum types (PHP 8.1+) captured in `meta.backed_type`.
+- Codeception base classes (Unit, Cest, Cept) classify as `test_suite` along
+  with PHPUnit's TestCase.
+
+**`analyzeActiveRecord`** — uses structural `extends` graph with cycle
+protection + depth cap, falls back to source regex for stale indexes. Detects
+transitive AR (e.g. `User extends BaseUser` with aliased import of dektrium AR).
+
+**`findPhpNPlusOne`** — adds Pattern 4 (explicit `Model::findOne($id)` /
+`Model::findAll(...)` inside foreach body, with whitelist for
+Yii::createObject / ArrayHelper / self / static) and Pattern 5 (file-level
+scan over `views/**/*.php` + `widgets/` + `layouts/`).
+
+**`tracePhpEvent`** — class-const event-name resolution. `Event::on(User::class,
+User::EVENT_AFTER_LOGIN, …)` now resolves to the const's literal value via
+a pre-pass that walks all `constant` symbols under PHP classes.
+
+**`resolvePhpService`** — module-scoped components, DI container singletons
++ definitions, closure factories, `Yii::$container->set()`. Bracket-balanced
+forward-walking parser identifies the exact nesting (`module:<id>` /
+`container.singletons` / `container.definitions` / `factory` / `components`).
+Per-env `*-local.php` config files merged into the result.
+
+**`find_php_views`** — render-kind tagging (full / partial / ajax / json /
+file), `path_alias` field for `@app/...`-style references, `$this->layout`
+assignments (controller-wide property + per-action override) captured as
+`layouts[]`, widget references via `Widget::begin/widget` calls collected in
+`widgets[]`, `AssetBundle::register($this)` call sites in `asset_bundles[]`.
+
+#### Fixed
+
+- Extractor's `extends` was missing on PHP class symbols, forcing every
+  downstream tool to fall back to brittle source-text regex.
+  Confirmed against tgm-panel: `User extends BaseUser` (aliased import of
+  `dektrium\\user\\models\\User`) was previously not classified as AR.
+- `analyzeActiveRecord`'s behaviors detection used unbounded
+  `[A-Z]\w+Behavior` regex picking up references in comments. Now scopes
+  to the `behaviors()` method body.
+
+#### Tests
+
+- 21 new test files (~280 new tests) covering every new tool.
+- 502 PHP+pattern tests pass sequentially.
+- All test fixtures shaped after real Yii2 idioms found in tgm-panel
+  (Mobi 2 patterns: 11 modules, 379 migrations, dektrium/yii2-rbac, etc.).
+
+#### Known recommendations (from cross-provider review — non-blocking)
+
+- `phpstan-baseline-tools.ts:81` accepts a user-controlled `baseline_path`
+  argument and passes it to `readFile()` without a path-traversal guard.
+  Low impact for local-dev MCP, medium for hosted multi-tenant. Two-line
+  fix: resolve path, ensure `result.startsWith(index.root + sep)`.
+- `php8-compat-tools.ts:189` `VENDOR_RE` omits `tests/_data` (other 5 tools
+  include it) — minor inconsistency.
+- Smoke report (`docs/specs/2026-05-07-tgm-panel-smoke.md`) declares
+  "successfully" while same artifact contains stale stderr OpenAI errors
+  — cosmetic, harden the smoke driver to redirect stderr separately.
+
 ## [Unreleased] — Editor-agnostic git post-commit hook
 
 `codesift setup` now installs a global git post-commit hook (default ON when
