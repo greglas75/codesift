@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.6.0] — 2026-05-09 — React Tier 6+7+8
+
+Three-tier React static-analysis upgrade. Pattern count goes from 34 → 43 with
+engine-level comment/string preprocessing and proper cross-file Suspense walking.
+
+### Added
+- **Tier 8 — engine preprocessing.** New `src/utils/source-stripper.ts` (single-pass
+  7-state machine) strips comments, string/template/regex literals before regex
+  match while preserving character positions. New `preprocess: "strip-comments-strings"`
+  declarative field on `BUILTIN_PATTERNS` entries — opted in for `dangerously-set-html`,
+  `direct-dom-access`, `react19-useoptimistic-no-transition`, `empty-catch`, `any-type`,
+  `console-log`. Closes the Tier 7 R-2.1 known limit (comment-embedded transition tokens
+  spoofing useOptimistic).
+- **Tier 7 — cross-file Suspense detection.** New `findSuspenseAncestor` and
+  `findLazyComponentsWithoutSuspense` helpers walk reverse JSX adjacency to verify
+  `React.lazy()` usage has a real `<Suspense>` ancestor (handles aliased imports,
+  module-scope `lazy()` declarations, cycle safety).
+- **Tier 6 — 9 new patterns:** `derived-state-reducer`, `derived-state-custom-setter`,
+  `stale-closure-toggle`, `stale-closure-broken-functional`,
+  `context-provider-value-via-variable`, `context-provider-value-inline-destructured`,
+  `react-lazy-no-suspense-same-file`, `rsc-non-serializable-prop-deep`,
+  `error-boundary-incomplete`.
+- Severity field assigned to all 29 prior React patterns (Tier 6 migration).
+- 360 new tests covering all three tiers (pattern + helper + integration + state
+  machine + adversarial-regression).
+
+### Fixed
+- **Tier 7 — 3 pre-existing CRITICAL bugs** in shipped patterns surfaced by
+  Tier 6 adversarial review:
+  - `react19-useoptimistic-no-transition`: trivial lookahead bypass — every call
+    was being flagged because `[\s\S]{0,300}?` matched zero chars before the
+    forward negation.
+  - `useEffect-setstate-loop`: array literal in `setItems([...items])` was wrongly
+    matching as the dependency array; cross-effect bridging via unbounded
+    `[\s\S]{0,800}?`; missing implicit-return arrow form; property-chain false
+    positive on `props.count`.
+  - `react19-server-action-not-async`: missed arrow function and default-export
+    forms; 500-char window too small for header-comment files.
+- Adversarial-driven post-release fixes folded inline across 5 review rounds:
+  word-boundary on `useOptimistic` lookahead, concise-arm balanced-paren tracker
+  in setstate-loop, regex-after-keyword detection (`return /x/`, `throw /x/`,
+  `case /x/`), regex-flag consumption (`gimsuy`), template `${expr}` interpolation
+  processed as code (was opaque), wrong-owner attribution in lazy detection.
+
+### Changed
+- `BUILTIN_PATTERNS` entry shape extended with optional `severity`,
+  `postFilter`, `preprocess` fields (all backward-compatible).
+- README updated to reflect 8 waves of React support (was 6).
+
 ## [Unreleased] — Editor-agnostic git post-commit hook
 
 `codesift setup` now installs a global git post-commit hook (default ON when
