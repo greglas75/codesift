@@ -38,7 +38,12 @@ NEVER: index_folder if already indexed. list_repos in single-repo. get_knowledge
 
 KEY PARAMS
   search_symbols: detail_level=compact | token_budget=N | kind=function/class/component/hook
-  search_text: group_by_file=true | auto_group | ranked=true (dedup by function)
+  search_text decision tree:
+    - identifier-only query (e.g. "OrganizationService", "useAuth") → ranked=true
+      auto-applied server-side when no grouping passed; symbol-grouped+centrality-ranked
+    - error string / unknown phrase → omit grouping; server auto-groups above 30 matches
+    - already passing top_k≥30 → group_by_file=true
+    - ALWAYS pass file_pattern when scope is known
   assemble_context: L0 full | L1 sigs (3-5x denser) | L2 summaries | L3 dirs
   codebase_retrieval: always token_budget | get_knowledge_map: ALWAYS focus=
 

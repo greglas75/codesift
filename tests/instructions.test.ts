@@ -38,6 +38,12 @@ describe("CODESIFT_INSTRUCTIONS", () => {
     expect(CODESIFT_INSTRUCTIONS).toContain("token_budget");
   });
 
+  it("leads search_text guidance with identifier→ranked auto-promotion (G1)", () => {
+    // Anti-regression: the search_text section must explicitly tie identifier
+    // queries to ranked=true, the guidance that closes the 0/5640 adoption gap.
+    expect(CODESIFT_INSTRUCTIONS).toMatch(/identifier.*ranked=true|ranked=true.*identifier/is);
+  });
+
   it("contains cascade behavior", () => {
     expect(CODESIFT_INSTRUCTIONS).toContain("compact");
     expect(CODESIFT_INSTRUCTIONS).toContain("counts");

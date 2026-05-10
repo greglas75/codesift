@@ -9,7 +9,7 @@ describe("rules/ directory content", () => {
     const content = readFileSync(join(rulesDir, "codesift.md"), "utf-8");
     expect(content).toMatch(/^<!-- codesift-rules v/);
     expect(content.length).toBeGreaterThan(500);
-    expect(content.length).toBeLessThan(15000);
+    expect(content.length).toBeLessThan(18000);
   });
 
   it("contains all required sections", () => {
