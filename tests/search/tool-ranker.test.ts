@@ -360,10 +360,12 @@ describe("getToolEmbeddings", () => {
       VOYAGE: process.env["CODESIFT_VOYAGE_API_KEY"],
       OPENAI: process.env["CODESIFT_OPENAI_API_KEY"],
       OLLAMA: process.env["CODESIFT_OLLAMA_URL"],
+      DISABLE_LOCAL: process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"],
     };
     delete process.env["CODESIFT_VOYAGE_API_KEY"];
     delete process.env["CODESIFT_OPENAI_API_KEY"];
     delete process.env["CODESIFT_OLLAMA_URL"];
+    process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = "true";
 
     // Bust the cached config singleton.
     const { resetConfigCache } = await import("../../src/config.js");
@@ -376,6 +378,8 @@ describe("getToolEmbeddings", () => {
       if (saved.VOYAGE !== undefined) process.env["CODESIFT_VOYAGE_API_KEY"] = saved.VOYAGE;
       if (saved.OPENAI !== undefined) process.env["CODESIFT_OPENAI_API_KEY"] = saved.OPENAI;
       if (saved.OLLAMA !== undefined) process.env["CODESIFT_OLLAMA_URL"] = saved.OLLAMA;
+      if (saved.DISABLE_LOCAL !== undefined) process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = saved.DISABLE_LOCAL;
+      else delete process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
       resetConfigCache();
     }
   });

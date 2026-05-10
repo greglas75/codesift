@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { buildSymbolText, searchSemantic, VoyageProvider, OpenAIProvider, OllamaProvider, createEmbeddingProvider } from "../../src/search/semantic.js";
+import { describe, it, expect, beforeEach } from "vitest";
+import { buildSymbolText, searchSemantic, VoyageProvider, OpenAIProvider, OllamaProvider, LocalProvider, createEmbeddingProvider, getPrefix, _resetLocalProvider } from "../../src/search/semantic.js";
 import type { CodeSymbol } from "../../src/types.js";
 
 function makeSymbol(overrides: Partial<CodeSymbol> = {}): CodeSymbol {
@@ -156,6 +156,26 @@ describe("createEmbeddingProvider", () => {
     expect(provider.dimensions).toBe(768);
   });
 
+  it("creates LocalProvider when provider=local with no config", () => {
+    const provider = createEmbeddingProvider("local", {});
+    expect(provider).toBeInstanceOf(LocalProvider);
+    expect(provider.model).toBe("nomic-ai/nomic-embed-text-v1.5");
+    expect(provider.dimensions).toBe(768);
+  });
+
+  it("creates LocalProvider with custom model and looks up its real dimensions", () => {
+    const provider = createEmbeddingProvider("local", { localModel: "Xenova/all-MiniLM-L6-v2" });
+    expect(provider).toBeInstanceOf(LocalProvider);
+    expect(provider.model).toBe("Xenova/all-MiniLM-L6-v2");
+    // 384d, not the 768d default — keeps EmbeddingMeta.dimensions honest
+    expect(provider.dimensions).toBe(384);
+  });
+
+  it("falls back to default dimensions for unknown local models", () => {
+    const provider = createEmbeddingProvider("local", { localModel: "Xenova/some-future-model" });
+    expect(provider.dimensions).toBe(768);
+  });
+
   it("throws when voyage key is missing", () => {
     expect(() => createEmbeddingProvider("voyage", {})).toThrow("CODESIFT_VOYAGE_API_KEY not set");
   });
@@ -167,4 +187,84 @@ describe("createEmbeddingProvider", () => {
   it("throws when ollama url is missing", () => {
     expect(() => createEmbeddingProvider("ollama", {})).toThrow("CODESIFT_OLLAMA_URL not set");
   });
+});
+
+// ---------------------------------------------------------------------------
+// LocalProvider — empty input shortcut (no model load required)
+// ---------------------------------------------------------------------------
+
+describe("LocalProvider", () => {
+  it("returns empty array when given no texts (no pipeline load)", async () => {
+    const provider = new LocalProvider();
+    const result = await provider.embed([]);
+    expect(result).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getPrefix — instruction-tuned model task prefixes
+// ---------------------------------------------------------------------------
+
+describe("getPrefix", () => {
+  it("prefixes nomic-embed with search_document/search_query", () => {
+    expect(getPrefix("nomic-ai/nomic-embed-text-v1.5", "document")).toBe("search_document: ");
+    expect(getPrefix("nomic-ai/nomic-embed-text-v1.5", "query")).toBe("search_query: ");
+    // matches v1 too (substring match on "nomic-embed-text")
+    expect(getPrefix("nomic-ai/nomic-embed-text-v1", "query")).toBe("search_query: ");
+  });
+
+  it("prefixes E5 family with passage/query", () => {
+    expect(getPrefix("Xenova/multilingual-e5-base", "document")).toBe("passage: ");
+    expect(getPrefix("Xenova/multilingual-e5-base", "query")).toBe("query: ");
+    expect(getPrefix("intfloat/e5-large-v2", "document")).toBe("passage: ");
+  });
+
+  it("returns empty prefix for models that need none", () => {
+    expect(getPrefix("Xenova/all-MiniLM-L6-v2", "document")).toBe("");
+    expect(getPrefix("Xenova/all-MiniLM-L6-v2", "query")).toBe("");
+    expect(getPrefix("Xenova/bge-small-en-v1.5", "query")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LocalProvider integration test (skipped unless CODESIFT_E2E_LOCAL=true)
+//
+// Downloads ~140MB on first run; opt in only.
+//
+// NOTE: this suite currently fails inside vitest because onnxruntime-node uses
+// native bindings that reject the Float32Array supplied from vitest's VM
+// context (`A float32 tensor's data must be type of function Float32Array`).
+// The same code runs cleanly under plain `node`. For a one-shot live check
+// outside vitest, see `scripts/verify-local-embedding.mjs`.
+//
+// We keep the suite here so that (a) the test scaffolding stays maintained and
+// (b) anyone running with vitest's `--pool=forks` and a future onnxruntime fix
+// can flip CODESIFT_E2E_LOCAL=true to validate end-to-end.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.env["CODESIFT_E2E_LOCAL"] !== "true")("LocalProvider (E2E)", () => {
+  // ONNX runtime keeps per-process tensor backing; reset cache so each test
+  // owns a fresh extractor and we don't fight vitest worker isolation.
+  beforeEach(() => { _resetLocalProvider(); });
+
+  it("embeds two texts and returns 768d normalized vectors with self-similarity ≈ 1", async () => {
+    const provider = new LocalProvider();
+    const result = await provider.embed(["authentication helper", "user lookup function"], "document");
+    expect(result).toHaveLength(2);
+    expect(result[0]?.length).toBe(768);
+    expect(result[1]?.length).toBe(768);
+    // Different inputs → different embeddings
+    expect(result[0]).not.toEqual(result[1]);
+    // Cosine of normalized vector with itself = 1
+    const a = result[0]!;
+    const dot = a.reduce((acc, v) => acc + v * v, 0);
+    expect(dot).toBeCloseTo(1, 4);
+  }, 60_000);
+
+  it("query and document embeddings of the same text differ when prefixes apply", async () => {
+    const provider = new LocalProvider();
+    const [q] = await provider.embed(["authentication"], "query");
+    const [d] = await provider.embed(["authentication"], "document");
+    expect(q).not.toEqual(d);
+  }, 60_000);
 });

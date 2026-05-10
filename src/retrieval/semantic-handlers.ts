@@ -63,7 +63,7 @@ async function loadSemanticContext(
 
   const provider = createEmbeddingProvider(config.embeddingProvider, config);
   const subQueryTexts = decomposeQuery(query.query);
-  const vecs = await withTimeout(provider.embed(subQueryTexts), EMBED_TIMEOUT_MS, "Embedding API");
+  const vecs = await withTimeout(provider.embed(subQueryTexts, "query"), EMBED_TIMEOUT_MS, "Embedding API");
 
   const repoMeta = await getRepo(config.registryPath, repo);
   let chunks: Map<string, CodeChunk> | null = null;

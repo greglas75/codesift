@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type EmbeddingProvider = "voyage" | "openai" | "ollama" | null;
+export type EmbeddingProvider = "voyage" | "openai" | "ollama" | "local" | null;
 
 export interface Config {
   // Storage
@@ -20,11 +20,12 @@ export interface Config {
     comments: number;
   };
 
-  // Semantic search (optional)
+  // Semantic search (defaults to local on-device embeddings — no API key needed)
   embeddingProvider: EmbeddingProvider;
   voyageApiKey: string | null;
   openaiApiKey: string | null;
   ollamaUrl: string | null;
+  localModel: string | null;
   embeddingBatchSize: number; // 128
 
   // Retrieval
@@ -44,11 +45,17 @@ export function loadConfig(): Config {
   const voyageApiKey = process.env["CODESIFT_VOYAGE_API_KEY"] ?? null;
   const openaiApiKey = process.env["CODESIFT_OPENAI_API_KEY"] ?? null;
   const ollamaUrl = process.env["CODESIFT_OLLAMA_URL"] ?? null;
+  const localModel = process.env["CODESIFT_LOCAL_MODEL"] ?? null;
+  const localDisabled = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] === "true";
+  const explicitProvider = process.env["CODESIFT_EMBEDDING_PROVIDER"] ?? null;
 
   let embeddingProvider: EmbeddingProvider = null;
-  if (voyageApiKey) embeddingProvider = "voyage";
+  if (explicitProvider === "voyage" || explicitProvider === "openai" || explicitProvider === "ollama" || explicitProvider === "local") {
+    embeddingProvider = explicitProvider;
+  } else if (voyageApiKey) embeddingProvider = "voyage";
   else if (openaiApiKey) embeddingProvider = "openai";
   else if (ollamaUrl) embeddingProvider = "ollama";
+  else if (!localDisabled) embeddingProvider = "local";
 
   cachedConfig = {
     dataDir,
@@ -68,6 +75,7 @@ export function loadConfig(): Config {
     voyageApiKey,
     openaiApiKey,
     ollamaUrl,
+    localModel,
     embeddingBatchSize: parseIntEnv("CODESIFT_EMBEDDING_BATCH_SIZE", 128),
 
     defaultTokenBudget: parseIntEnv("CODESIFT_DEFAULT_TOKEN_BUDGET", 8000),

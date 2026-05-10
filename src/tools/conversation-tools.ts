@@ -296,7 +296,7 @@ export async function searchConversations(
       const embeddings = await loadEmbeddings(embeddingPath);
 
       if (embeddings.size > 0) {
-        const [queryVec] = await provider.embed([query]);
+        const [queryVec] = await provider.embed([query], "query");
         if (queryVec) {
           const qEmb = new Float32Array(queryVec);
           semanticResults = searchSemantic(qEmb, embeddings, symbols, topK * 2);

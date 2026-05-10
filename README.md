@@ -621,13 +621,18 @@ Semantic search uses embeddings to answer concept queries like "how does authent
 
 ### Setup
 
-Set **one** of these environment variables:
+**Zero config** — semantic search works out of the box. CodeSift defaults to local on-device embeddings (`nomic-ai/nomic-embed-text-v1.5` via `@huggingface/transformers` v3, INT8 ONNX, ~140MB downloaded on first use, cached after). No API key, no internet after first run, no data leaves your machine. The provider applies the model's task-aware prefixes (`search_document:` / `search_query:`) automatically, so retrieval quality matches remote providers.
+
+To opt into a remote provider for higher quality, set **one** of these:
 
 | Variable | Provider | Model | Cost |
 |----------|----------|-------|------|
+| _(default)_ | Local (ONNX) | `nomic-ai/nomic-embed-text-v1.5` | Free, runs on CPU |
 | `CODESIFT_VOYAGE_API_KEY` | [Voyage AI](https://voyageai.com/) | `voyage-code-3` | Best for code |
 | `CODESIFT_OPENAI_API_KEY` | [OpenAI](https://openai.com/) | `text-embedding-3-small` | ~$0.02/1M tok (~$0.21 for 44 repos) |
 | `CODESIFT_OLLAMA_URL` | [Ollama](https://ollama.com/) (local) | `nomic-embed-text` | Free (local) |
+
+To disable local embeddings entirely (BM25-only), set `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=true`. To pin a different local model, set `CODESIFT_LOCAL_MODEL=<owner>/<model>` (e.g. `Xenova/bge-small-en-v1.5`).
 
 ### Usage
 

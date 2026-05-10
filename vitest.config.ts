@@ -17,6 +17,15 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 15000,
+    // Disable local embedding default in tests. The Local provider lazy-loads
+    // onnxruntime-node, which crashes on Float32Array prototype checks inside
+    // vitest's VM context (`A float32 tensor's data must be type of function
+    // Float32Array`). Tests that explicitly want local embeddings (the E2E
+    // suite in tests/search/semantic.test.ts) override this with their own
+    // `process.env` setup.
+    env: {
+      CODESIFT_DISABLE_LOCAL_EMBEDDINGS: "true",
+    },
     server: {
       deps: {
         // Ensure chevrotain + prisma-ast ESM are transformed by Vite so the

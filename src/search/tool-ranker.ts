@@ -530,7 +530,7 @@ export async function getToolEmbeddings(
     const result = await batchEmbed(
       texts,
       existing,
-      provider.embed.bind(provider),
+      (batch) => provider.embed(batch, "document"),
       config.embeddingBatchSize,
       TOOL_EMBEDDING_CACHE_KEY,
     );
