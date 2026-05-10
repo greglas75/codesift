@@ -22,6 +22,7 @@ import {
   EXTRACTOR_VERSIONS,
   analyzeProject,
   buildConventionsSummary,
+  resetAnalyzeProjectCacheForTesting,
 } from "../../src/tools/project-tools.js";
 import type { ProfileSummary, ProjectProfile } from "../../src/tools/project-tools.js";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
@@ -932,6 +933,57 @@ describe("analyzeProject — astro branch", () => {
     expect(conv.integrations).toBeGreaterThanOrEqual(1);
 
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+});
+
+describe("analyzeProject cache", () => {
+  it("returns the same summary on repeat calls when index updated_at is unchanged", async () => {
+    const root = await createFixture("cache-stable", {
+      "package.json": JSON.stringify({ name: "x", dependencies: {} }),
+      "src/index.ts": "export const x = 1;",
+    });
+    const idx = mockIndex(root, ["src/index.ts"]);
+    resetAnalyzeProjectCacheForTesting();
+    (getCodeIndex as any).mockResolvedValue(idx);
+
+    const a = await analyzeProject("local/test");
+    const b = await analyzeProject("local/test");
+    // Identity equality — second call returned the cached object
+    expect(b).toBe(a);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("recomputes when index updated_at advances", async () => {
+    const root = await createFixture("cache-bust", {
+      "package.json": JSON.stringify({ name: "x", dependencies: {} }),
+      "src/index.ts": "export const x = 1;",
+    });
+    const idx1 = mockIndex(root, ["src/index.ts"]);
+    resetAnalyzeProjectCacheForTesting();
+    (getCodeIndex as any).mockResolvedValue(idx1);
+    const a = await analyzeProject("local/test");
+
+    const idx2 = { ...idx1, updated_at: idx1.updated_at + 1 };
+    (getCodeIndex as any).mockResolvedValue(idx2);
+    const b = await analyzeProject("local/test");
+
+    expect(b).not.toBe(a);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("force=true bypasses the cache", async () => {
+    const root = await createFixture("cache-force", {
+      "package.json": JSON.stringify({ name: "x", dependencies: {} }),
+      "src/index.ts": "export const x = 1;",
+    });
+    const idx = mockIndex(root, ["src/index.ts"]);
+    resetAnalyzeProjectCacheForTesting();
+    (getCodeIndex as any).mockResolvedValue(idx);
+
+    const a = await analyzeProject("local/test");
+    const b = await analyzeProject("local/test", { force: true });
+    expect(b).not.toBe(a);
+    await rm(root, { recursive: true, force: true });
   });
 });
 

@@ -1989,9 +1989,25 @@ async function extractGitHealth(projectRoot: string): Promise<GitHealth | null> 
 // Main orchestrator: analyze_project
 // ---------------------------------------------------------------------------
 
+// Cache for analyzeProject results, keyed by repoName. Invalidates whenever
+// the underlying CodeIndex `updated_at` advances — i.e. whenever a file is
+// re-indexed or indexFolder runs again. Telemetry showed 264 calls with p95
+// of 30s; many calls are agents using analyze_project as a status check.
+// Keyed by repoName so two repos in the same process don't share state.
+interface AnalyzeProjectCacheEntry {
+  updatedAt: number;
+  profile: ProfileSummary;
+}
+const analyzeProjectCache = new Map<string, AnalyzeProjectCacheEntry>();
+
+/** Test-only — clear the analyzeProject cache. */
+export function resetAnalyzeProjectCacheForTesting(): void {
+  analyzeProjectCache.clear();
+}
+
 export async function analyzeProject(
   repoName: string,
-  _options: { force?: boolean | undefined } = {},
+  options: { force?: boolean | undefined } = {},
 ): Promise<ProfileSummary> {
   const startTime = Date.now();
   let files_analyzed = 0;
@@ -2018,6 +2034,16 @@ export async function analyzeProject(
       },
     };
     return buildSummary(failedProfile, "(not written — no index)");
+  }
+
+  // Cache hit: reuse previous profile when the underlying index hasn't been
+  // touched since we last computed. force=true bypasses (callers needing
+  // fresh analysis even on an unchanged index, e.g. wiki regeneration).
+  if (!options.force) {
+    const cached = analyzeProjectCache.get(repoName);
+    if (cached && cached.updatedAt === index.updated_at) {
+      return cached.profile;
+    }
   }
 
   // Prefer real project root over conversation index root (~/.claude/projects/...)
@@ -2150,7 +2176,9 @@ export async function analyzeProject(
   // Write full profile to disk — MCP returns only summary
   const profilePath = await writeProfileToDisk(projectRoot, profile);
 
-  return buildSummary(profile, profilePath);
+  const summary = buildSummary(profile, profilePath);
+  analyzeProjectCache.set(repoName, { updatedAt: index.updated_at, profile: summary });
+  return summary;
 }
 
 // ---------------------------------------------------------------------------
