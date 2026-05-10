@@ -16,3 +16,4 @@ Commits pending review. Auto-managed:
 - 5954f48 (2026-05-10) perf(analyze_project): cache profile by index updated_at
 - 269259b (2026-05-10) docs(instructions+rules): lead search_text guidance with identifier→ranked
 - 948334c (2026-05-10) feat(embeddings): zero-config local provider + task-aware prefixes
+- ada7aa2 (2026-05-10) chore(docs): semantic-adoption plan + accumulated review artifacts
