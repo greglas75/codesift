@@ -58,6 +58,24 @@ const bm25Indexes = new Map<string, BM25Index>();
 const codeIndexes = new Map<string, CodeIndex>();
 const embeddingCaches = new Map<string, Map<string, Float32Array>>();
 
+// Tracks last successful full indexFolder run keyed by absolute rootPath, used
+// to short-circuit redundant scans while a watcher is keeping the index live.
+// Populated at the end of every indexFolder call that completes normally.
+const lastFullIndexAt = new Map<string, number>();
+
+/**
+ * Window during which a re-run of indexFolder against the same root is treated
+ * as redundant when a watcher is active. Telemetry showed 35 calls > 30s and a
+ * 786s outlier — these are agents defensively re-indexing repos the watcher is
+ * already maintaining. 60s matches the "fresh enough" threshold used elsewhere.
+ */
+const INDEX_FOLDER_REDUNDANT_WINDOW_MS = 60_000;
+
+/** Test-only — clear short-circuit state between cases. */
+export function resetIndexFolderRedundancyForTesting(): void {
+  lastFullIndexAt.clear();
+}
+
 /**
  * Parse a single file and extract its symbols + metadata.
  * Returns null if the file cannot be parsed.
@@ -249,7 +267,7 @@ export async function embedSymbols(
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
     const existing = await loadEmbeddings(embeddingPath);
-    const embeddings = await batchEmbed(symbolTexts, existing, provider.embed.bind(provider), config.embeddingBatchSize, repoName);
+    const embeddings = await batchEmbed(symbolTexts, existing, (texts) => provider.embed(texts, "document"), config.embeddingBatchSize, repoName);
     await saveEmbeddings(embeddingPath, embeddings);
     await saveEmbeddingMeta(metaPath, {
       model: provider.model,
@@ -329,7 +347,7 @@ async function embedChunks(
       const chunkEmbeddings = await batchEmbed(
         chunkTexts,
         existingChunkEmbeddings,
-        provider.embed.bind(provider),
+        (texts) => provider.embed(texts, "document"),
         CHUNK_EMBEDDING_BATCH_SIZE,
         `${repoName}:chunks`,
       );
@@ -352,6 +370,11 @@ export interface IndexFolderResult {
   file_count: number;
   symbol_count: number;
   duration_ms: number;
+  /** Set when the call short-circuited because a watcher is keeping the index live. */
+  status?: "skipped";
+  reason?: string;
+  last_indexed?: string;
+  hint?: string;
 }
 
 export async function indexFolder(
@@ -366,10 +389,39 @@ export async function indexFolder(
      * memory. Default: DEFAULT_MAX_FILES (or CODESIFT_MAX_FILES env var).
      */
     max_files?: number | undefined;
+    /**
+     * Bypass the watcher-active short-circuit (see lastFullIndexAt). Used by
+     * indexRepo for fresh clones where defensive reindex is correct.
+     */
+    force?: boolean | undefined;
   },
 ): Promise<IndexFolderResult> {
   if (!folderPath || typeof folderPath !== "string") {
     throw new Error("folderPath is required and must be a non-empty string");
+  }
+
+  const rootPath = resolve(folderPath);
+  const repoName = getRepoName(rootPath);
+
+  // Short-circuit: if a watcher is already keeping the index for this root
+  // live and we re-indexed recently, return a skipped status instead of
+  // walking the filesystem again.
+  if (!options?.force) {
+    const lastTs = lastFullIndexAt.get(rootPath);
+    const watcher = activeWatchers.get(repoName);
+    if (watcher && lastTs && Date.now() - lastTs < INDEX_FOLDER_REDUNDANT_WINDOW_MS) {
+      return {
+        repo: repoName,
+        root: rootPath,
+        file_count: 0,
+        symbol_count: 0,
+        duration_ms: 0,
+        status: "skipped",
+        reason: "watcher active, recent index",
+        last_indexed: new Date(lastTs).toISOString(),
+        hint: "pass force=true to override",
+      };
+    }
   }
 
   // Clear tsconfig path resolver cache so config edits between runs take effect.
@@ -381,8 +433,6 @@ export async function indexFolder(
   const config = loadConfig();
   const startTime = Date.now();
 
-  const rootPath = resolve(folderPath);
-  const repoName = getRepoName(rootPath);
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
   // Read .codesiftignore for user-defined exclude patterns
@@ -577,6 +627,10 @@ export async function indexFolder(
   } catch {
     // Non-fatal — framework auto-enable is a convenience feature
   }
+
+  // Record completion timestamp so subsequent re-runs can short-circuit when
+  // the watcher is keeping the index fresh.
+  lastFullIndexAt.set(rootPath, Date.now());
 
   return {
     repo: repoName,
