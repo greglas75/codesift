@@ -1,0 +1,20 @@
+{
+  "version": "0.6.0",
+  "previousVersion": "0.5.30",
+  "newTag": "v0.6.0",
+  "previousTag": "review-2026-05-05-ae96065-fixall",
+  "baseSha": "ae96065",
+  "releaseCommitSha": "29b445b",
+  "range": "ae96065..29b445b",
+  "branch": "main",
+  "targetBranch": null,
+  "flow": "direct",
+  "pr": null,
+  "date": "2026-05-09T03:55:00Z",
+  "tests": "pass",
+  "reviewDepth": "full",
+  "diffLOC": 1827,
+  "tagPushed": true,
+  "pushed": true,
+  "notes": "React Tier 6+7+8 — 9 new patterns + severity migration + cross-file Suspense walker + state-machine source stripper. 360 new tests passing; 3 pre-existing test failures (rules-content, journal/llm-client, infra) unchanged from baseline."
+}
