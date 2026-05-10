@@ -442,6 +442,55 @@ export async function handlePrecheckGrep(): Promise<void> {
 // Always exits 0 (fire-and-forget — never block the agent on hook errors).
 // ---------------------------------------------------------------------------
 
+// Debounce window for handlePostindexFile. Telemetry showed 417/659
+// index_file calls were duplicates within 60s — Edit/Edit/Edit bursts hit the
+// hook 2-3× per logical change. 2s catches them without delaying real reindex.
+const POSTINDEX_DEBOUNCE_MS = 2000;
+
+function postindexDebouncePath(): string {
+  const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  return join(dataDir, "hook-debounce.json");
+}
+
+/**
+ * Returns true if `filePath` was indexed within the debounce window.
+ * Best-effort: any I/O error returns false so the hook never blocks the agent.
+ */
+function shouldDebouncePostindex(filePath: string, now: number): boolean {
+  try {
+    const path = postindexDebouncePath();
+    let state: Record<string, number> = {};
+    if (existsSync(path)) {
+      try {
+        state = JSON.parse(readFileSync(path, "utf-8")) as Record<string, number>;
+      } catch {
+        state = {};
+      }
+    }
+    const last = state[filePath];
+    if (typeof last === "number" && now - last < POSTINDEX_DEBOUNCE_MS) {
+      return true;
+    }
+    // Update state with current timestamp; opportunistically prune stale entries
+    // older than 60s to keep the file small.
+    const pruned: Record<string, number> = { [filePath]: now };
+    for (const [k, v] of Object.entries(state)) {
+      if (k !== filePath && typeof v === "number" && now - v < 60_000) {
+        pruned[k] = v;
+      }
+    }
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify(pruned));
+    } catch {
+      // Disk error — fall through; we still indexed once, no harm done.
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function handlePostindexFile(): Promise<void> {
   try {
     const raw = readRawInput();
@@ -458,6 +507,11 @@ export async function handlePostindexFile(): Promise<void> {
 
     const ext = extname(filePath).toLowerCase();
     if (!CODE_EXTENSIONS.has(ext)) {
+      process.exit(0);
+      return;
+    }
+
+    if (shouldDebouncePostindex(filePath, Date.now())) {
       process.exit(0);
       return;
     }

@@ -640,6 +640,69 @@ describe("handlePostindexFile", () => {
 
     expect(exitCode).toBe(0);
   });
+
+  describe("debounce", () => {
+    let dataDir: string;
+    const origDataDir = process.env["CODESIFT_DATA_DIR"];
+
+    beforeEach(() => {
+      dataDir = mkdtempSync(join(tmpdir(), "hook-debounce-"));
+      process.env["CODESIFT_DATA_DIR"] = dataDir;
+    });
+
+    afterEach(() => {
+      rmSync(dataDir, { recursive: true, force: true });
+      if (origDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+      else process.env["CODESIFT_DATA_DIR"] = origDataDir;
+    });
+
+    it("skips indexFile on second invocation within 2s on the same path", async () => {
+      const filePath = "/project/src/foo.ts";
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        tool_name: "Edit",
+        tool_input: { file_path: filePath },
+      });
+
+      await handlePostindexFile();
+      expect(mockIndexFile).toHaveBeenCalledTimes(1);
+
+      // Second call immediately after — must be debounced
+      await handlePostindexFile();
+      expect(mockIndexFile).toHaveBeenCalledTimes(1);
+      expect(exitCode).toBe(0);
+    });
+
+    it("re-indexes after the debounce window expires", async () => {
+      const filePath = "/project/src/foo.ts";
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        tool_name: "Edit",
+        tool_input: { file_path: filePath },
+      });
+
+      // Pre-seed debounce state with a timestamp 3s ago
+      const debouncePath = join(dataDir, "hook-debounce.json");
+      writeFileSync(debouncePath, JSON.stringify({ [filePath]: Date.now() - 3000 }));
+
+      await handlePostindexFile();
+      expect(mockIndexFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not debounce different paths", async () => {
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        tool_name: "Edit",
+        tool_input: { file_path: "/project/src/a.ts" },
+      });
+      await handlePostindexFile();
+
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        tool_name: "Edit",
+        tool_input: { file_path: "/project/src/b.ts" },
+      });
+      await handlePostindexFile();
+
+      expect(mockIndexFile).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe("wikiSummaryMaxChars (env var + NaN guard)", () => {
