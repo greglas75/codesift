@@ -63,6 +63,8 @@ function isValidEntry(value: unknown): value is UsageEntry {
 async function loadEntries(options?: {
   since?: string;
   repo?: string;
+  tool?: string;
+  session_id?: string;
 }): Promise<UsageEntry[]> {
   const usagePath = getUsagePath();
   let raw: string;
@@ -75,6 +77,8 @@ async function loadEntries(options?: {
 
   const sinceTs = options?.since ? new Date(options.since).getTime() : 0;
   const repoFilter = options?.repo ?? null;
+  const toolFilter = options?.tool ?? null;
+  const sessionFilter = options?.session_id ?? null;
   const entries: UsageEntry[] = [];
 
   for (const line of raw.split("\n")) {
@@ -86,6 +90,8 @@ async function loadEntries(options?: {
       if (!isValidEntry(parsed)) continue;
       if (parsed.ts < sinceTs) continue;
       if (repoFilter && parsed.repo !== repoFilter) continue;
+      if (toolFilter && parsed.tool !== toolFilter) continue;
+      if (sessionFilter && parsed.session_id !== sessionFilter) continue;
       entries.push(parsed);
     } catch {
       // Skip malformed lines
@@ -102,6 +108,8 @@ async function loadEntries(options?: {
 export async function getUsageStats(options?: {
   since?: string;
   repo?: string;
+  tool?: string;
+  session_id?: string;
 }): Promise<UsageStats> {
   const entries = await loadEntries(options);
 

@@ -84,6 +84,13 @@ import {
   findYii3AttributeCandidates,
   consolidateMemories,
   readMemory,
+  usageHotspots,
+  usageTraceSession,
+  retrosList,
+  retrosAnalyze,
+  memoryCandidateExtract,
+  optimizationCandidates,
+  popeInsightsPushCandidates,
   createAnalysisPlan,
   writeScratchpad,
   readScratchpad,
@@ -1028,7 +1035,7 @@ export const OutputSchemas = {
   }),
 
   /** usage_stats */
-  usageStats: z.object({ report: z.string() }),
+  usageStats: z.object({ report: z.string() }).passthrough(),
 
   /** list_repos */
   repoList: z.union([z.array(z.string()), z.array(z.object({ name: z.string() }).passthrough())]),
@@ -1083,6 +1090,13 @@ export const CORE_TOOL_NAMES = new Set([
   "trace_call_chain",        // 15 calls, 100% direct
   "suggest_queries",         // 13 calls, 13 sessions
   "usage_stats",             // 11 calls, 100% direct
+  "usage_hotspots",          // PopeInsights: find expensive CodeSift patterns
+  "usage_trace_session",     // PopeInsights: inspect one CodeSift session
+  "retros_list",             // PopeInsights: inspect Zuvo retros
+  "retros_analyze",          // PopeInsights: aggregate Zuvo friction
+  "memory_candidate_extract",// PopeInsights: extract memory candidates
+  "optimization_candidates", // PopeInsights: rank tool/skill improvements
+  "pope_insights_push_candidates",
   "get_knowledge_map",       // 10 calls, 100% direct
   "get_repo_outline",        // 9 calls, 100% direct
   "trace_route",             // 9 calls, 100% direct
@@ -3493,14 +3507,126 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     searchHint: "usage statistics tool calls tokens timing metrics",
     outputSchema: OutputSchemas.usageStats,
     description: "Show usage statistics for all CodeSift tool calls (call counts, tokens, timing, repos)",
-    schema: lazySchema(() => ({})),
-    handler: async () => {
-      const stats = await getUsageStats();
+    schema: lazySchema(() => ({
+      since: z.string().optional().describe("ISO date/time lower bound, e.g. 2026-05-01"),
+      repo: z.string().optional().describe("Exact CodeSift repo key"),
+      tool: z.string().optional().describe("Exact tool name"),
+      session_id: z.string().optional().describe("Exact CodeSift session id"),
+    })),
+    handler: async (args) => {
+      const filters: { since?: string; repo?: string; tool?: string; session_id?: string } = {};
+      if (typeof args.since === "string") filters.since = args.since;
+      if (typeof args.repo === "string") filters.repo = args.repo;
+      if (typeof args.tool === "string") filters.tool = args.tool;
+      if (typeof args.session_id === "string") filters.session_id = args.session_id;
+      const stats = await getUsageStats(filters);
       const { createRequire } = await import("node:module");
       const req = createRequire(import.meta.url);
       const pkgVersion: string = (req("../package.json") as { version: string }).version;
-      return { version: pkgVersion, report: formatUsageReport(stats) };
+      return { version: pkgVersion, filters: args, stats, report: formatUsageReport(stats) };
     },
+  },
+  {
+    name: "usage_hotspots",
+    category: "meta",
+    searchHint: "PopeInsights usage hotspots slow tools high tokens duplicate calls optimize CodeSift",
+    description: "Analyze ~/.codesift/usage.jsonl for slow tools, token-heavy outputs, and repeated calls.",
+    schema: lazySchema(() => ({
+      since: z.string().optional().describe("ISO date/time lower bound, e.g. 2026-05-01"),
+      repo: z.string().optional().describe("Exact CodeSift repo key"),
+      tool: z.string().optional().describe("Exact tool name"),
+      session_id: z.string().optional().describe("Exact CodeSift session id"),
+      limit: zNum().describe("Optional row limit for returned repeated calls"),
+    })),
+    handler: async (args) => usageHotspots(args as Record<string, unknown>),
+  },
+  {
+    name: "usage_trace_session",
+    category: "meta",
+    searchHint: "PopeInsights trace usage session timeline tool calls elapsed tokens",
+    description: "Show the timeline of CodeSift tool calls for one usage.jsonl session.",
+    schema: lazySchema(() => ({
+      session_id: z.string().describe("CodeSift session id"),
+      limit: zNum().describe("Max calls to return"),
+    })),
+    handler: async (args) => {
+      const input: { session_id: string; limit?: number } = { session_id: args.session_id as string };
+      if (typeof args.limit === "number") input.limit = args.limit;
+      return usageTraceSession(input);
+    },
+  },
+  {
+    name: "retros_list",
+    category: "meta",
+    searchHint: "PopeInsights Zuvo retros list project skill friction retrospective",
+    description: "List Zuvo retros from ~/.zuvo/retros.log and ~/.zuvo/retros.md with filters.",
+    schema: lazySchema(() => ({
+      project: z.string().optional().describe("Project key, e.g. codesift-mcp"),
+      skill: z.string().optional().describe("Zuvo skill name"),
+      friction_category: z.string().optional().describe("Friction category"),
+      since: z.string().optional().describe("ISO date/time lower bound"),
+      limit: zNum().describe("Max retros to return"),
+      zuvo_dir: z.string().optional().describe("Override Zuvo dir. Default ~/.zuvo"),
+    })),
+    handler: async (args) => retrosList(args as Record<string, unknown>),
+  },
+  {
+    name: "retros_analyze",
+    category: "meta",
+    searchHint: "PopeInsights Zuvo retros analyze friction skill gaps missing templates routing failures",
+    description: "Aggregate Zuvo retros into friction, project, and missing-template hotspots.",
+    schema: lazySchema(() => ({
+      project: z.string().optional().describe("Project key, e.g. codesift-mcp"),
+      skill: z.string().optional().describe("Zuvo skill name"),
+      friction_category: z.string().optional().describe("Friction category"),
+      since: z.string().optional().describe("ISO date/time lower bound"),
+      limit: zNum().describe("Max retros to analyze"),
+      zuvo_dir: z.string().optional().describe("Override Zuvo dir. Default ~/.zuvo"),
+    })),
+    handler: async (args) => retrosAnalyze(args as Record<string, unknown>),
+  },
+  {
+    name: "memory_candidate_extract",
+    category: "meta",
+    searchHint: "PopeInsights memory candidates extract Zuvo proposals promote PopeMemory evidence",
+    description: "Extract evidence-backed memory candidates from Zuvo retros proposals.",
+    schema: lazySchema(() => ({
+      project: z.string().optional().describe("Project key"),
+      skill: z.string().optional().describe("Zuvo skill name"),
+      since: z.string().optional().describe("ISO date/time lower bound"),
+      limit: zNum().describe("Max candidates to return"),
+      zuvo_dir: z.string().optional().describe("Override Zuvo dir. Default ~/.zuvo"),
+    })),
+    handler: async (args) => memoryCandidateExtract(args as Record<string, unknown>),
+  },
+  {
+    name: "optimization_candidates",
+    category: "meta",
+    searchHint: "PopeInsights optimization candidates usage retros CodeSift tools Zuvo skills",
+    description: "Combine usage hotspots and Zuvo retros into ranked optimization candidates.",
+    schema: lazySchema(() => ({
+      since: z.string().optional().describe("ISO date/time lower bound"),
+      repo: z.string().optional().describe("Exact CodeSift repo key for usage filtering"),
+      project: z.string().optional().describe("Zuvo project key for retros filtering"),
+      skill: z.string().optional().describe("Zuvo skill name"),
+      zuvo_dir: z.string().optional().describe("Override Zuvo dir. Default ~/.zuvo"),
+    })),
+    handler: async (args) => optimizationCandidates(args as Record<string, unknown>),
+  },
+  {
+    name: "pope_insights_push_candidates",
+    category: "meta",
+    searchHint: "PopeInsights push candidates PopeBot API dry run",
+    description: "Push generated optimization candidates to PopeBot /api/insights/ingest. Defaults to dry_run=true.",
+    schema: lazySchema(() => ({
+      server: z.string().optional().describe("PopeBot base URL or /api/insights URL"),
+      api_key: z.string().optional().describe("PopeBot API key. Required only with dry_run=false"),
+      dry_run: zBool().describe("Return payload without network write. Default true"),
+      since: z.string().optional().describe("ISO date/time lower bound"),
+      repo: z.string().optional().describe("Exact CodeSift repo key for usage filtering"),
+      zuvo_dir: z.string().optional().describe("Override Zuvo dir. Default ~/.zuvo"),
+    })),
+    handler: async (args) => popeInsightsPushCandidates(args as Record<string, unknown>),
   },
 
   // ── Session context tools ───────────────────────────────────────────────

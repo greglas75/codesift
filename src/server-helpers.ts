@@ -9,7 +9,7 @@ import { tmpdir, homedir } from "node:os";
 // ---------------------------------------------------------------------------
 
 /** Tools that accept a `repo` param and should auto-resolve from CWD */
-const TOOLS_WITHOUT_REPO = new Set(["list_repos", "index_folder", "index_repo", "index_conversations", "discover_tools", "describe_tools", "search_conversations", "search_all_conversations", "get_session_snapshot", "get_session_context", "usage_stats", "test_tool"]);
+const TOOLS_WITHOUT_REPO = new Set(["list_repos", "index_folder", "index_repo", "index_conversations", "discover_tools", "describe_tools", "search_conversations", "search_all_conversations", "get_session_snapshot", "get_session_context", "usage_stats", "usage_hotspots", "usage_trace_session", "retros_list", "retros_analyze", "memory_candidate_extract", "optimization_candidates", "pope_insights_push_candidates", "test_tool"]);
 
 const REGISTRY_PATH = join(homedir(), ".codesift", "registry.json");
 const CONVERSATIONS_PREFIX = join(homedir(), ".claude", "projects") + sep;

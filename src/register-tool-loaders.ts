@@ -49,6 +49,7 @@ const loadPhpStanBaselineTools = memoizeModule(() => import("./tools/phpstan-bas
 const loadYiiConsoleTools = memoizeModule(() => import("./tools/yii-console-tools.js"));
 const loadYii3AttributeCandidatesTools = memoizeModule(() => import("./tools/yii3-attribute-candidates-tools.js"));
 const loadMemoryTools = memoizeModule(() => import("./tools/memory-tools.js"));
+const loadInsightsTools = memoizeModule(() => import("./tools/insights-tools.js"));
 const loadCoordinatorTools = memoizeModule(() => import("./tools/coordinator-tools.js"));
 const loadFrequencyTools = memoizeModule(() => import("./tools/frequency-tools.js"));
 const loadKotlinTools = memoizeModule(() => import("./tools/kotlin-tools.js"));
@@ -190,6 +191,13 @@ export const findYii3AttributeCandidates = lazyExport<typeof import("./tools/yii
 
 export const consolidateMemories = lazyExport<typeof import("./tools/memory-tools.js").consolidateMemories>(loadMemoryTools, "consolidateMemories");
 export const readMemory = lazyExport<typeof import("./tools/memory-tools.js").readMemory>(loadMemoryTools, "readMemory");
+export const usageHotspots = lazyExport<typeof import("./tools/insights-tools.js").usageHotspots>(loadInsightsTools, "usageHotspots");
+export const usageTraceSession = lazyExport<typeof import("./tools/insights-tools.js").usageTraceSession>(loadInsightsTools, "usageTraceSession");
+export const retrosList = lazyExport<typeof import("./tools/insights-tools.js").retrosList>(loadInsightsTools, "retrosList");
+export const retrosAnalyze = lazyExport<typeof import("./tools/insights-tools.js").retrosAnalyze>(loadInsightsTools, "retrosAnalyze");
+export const memoryCandidateExtract = lazyExport<typeof import("./tools/insights-tools.js").memoryCandidateExtract>(loadInsightsTools, "memoryCandidateExtract");
+export const optimizationCandidates = lazyExport<typeof import("./tools/insights-tools.js").optimizationCandidates>(loadInsightsTools, "optimizationCandidates");
+export const popeInsightsPushCandidates = lazyExport<typeof import("./tools/insights-tools.js").popeInsightsPushCandidates>(loadInsightsTools, "popeInsightsPushCandidates");
 
 export const createAnalysisPlan = lazyExport<typeof import("./tools/coordinator-tools.js").createAnalysisPlan>(loadCoordinatorTools, "createAnalysisPlan");
 export const writeScratchpad = lazyExport<typeof import("./tools/coordinator-tools.js").writeScratchpad>(loadCoordinatorTools, "writeScratchpad");
