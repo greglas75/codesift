@@ -6,11 +6,23 @@ import { searchBM25, applyCutoff } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { walkDirectory } from "../utils/walk.js";
 import { matchFilePattern } from "../utils/glob.js";
+import { raceWallClock } from "../utils/wall-clock.js";
 import type { SearchResult, TextMatch, TextMatchGroup, SymbolKind } from "../types.js";
 
 const DEFAULT_MAX_TEXT_MATCHES = 200;
 const MAX_WALK_FILES = 50_000; // Safety limit — stop walking after this many files
 const SEARCH_TIMEOUT_MS = 30_000; // Abort search after 30s to prevent 100s+ hangs
+
+/**
+ * End-to-end wall-clock cap on a single searchText call. Telemetry showed
+ * p95 = 2.4s but a 937s outlier — slow paths exist in semantic enrichment
+ * and Node.js fallback walks. Configurable via CODESIFT_SEARCH_TEXT_CAP_MS.
+ */
+const SEARCH_TEXT_WALL_CLOCK_MS = (() => {
+  const env = process.env["CODESIFT_SEARCH_TEXT_CAP_MS"];
+  const parsed = env ? Number(env) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
+})();
 const AUTO_GROUP_THRESHOLD = 50; // Auto-switch to group_by_file above this match count (when auto_group=true)
 const SERVER_AUTO_GROUP_THRESHOLD = 30; // Server-side auto-group when caller omitted ALL grouping opts
 const MAX_RESPONSE_CHARS = 80_000; // ~20K tokens — force group_by_file above this
@@ -544,6 +556,24 @@ export async function searchText(
   query: string,
   options?: SearchTextOptions,
 ): Promise<TextMatch[] | TextMatchGroup[] | string> {
+  return raceWallClock(
+    searchTextInner(repo, query, options),
+    SEARCH_TEXT_WALL_CLOCK_MS,
+    () => [{
+      file: "<truncated>",
+      line: 0,
+      content: `search exceeded ${SEARCH_TEXT_WALL_CLOCK_MS}ms — narrow scope with file_pattern, or use ranked=true for identifier queries`,
+      truncated: true,
+      hint: "narrow scope with file_pattern, or use ranked=true",
+    }] as TextMatch[],
+  );
+}
+
+async function searchTextInner(
+  repo: string,
+  query: string,
+  options?: SearchTextOptions,
+): Promise<TextMatch[] | TextMatchGroup[] | string> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
@@ -609,9 +639,24 @@ export async function searchText(
     }
   }
 
+  // Server-side auto-promotion of ranked mode for identifier-like queries when
+  // the caller passed no grouping/ranking options. Telemetry showed 0/5640
+  // calls used ranked=true despite it saving 1-3 follow-up get_symbol calls
+  // for "find usages of X" queries — agents simply weren't reaching for it.
+  // Conservative trigger: query must look like a single identifier (≥3 chars)
+  // and the caller must not have expressed any grouping preference.
+  const callerOmittedGroupOpts =
+    options?.group_by_file === undefined
+    && options?.auto_group === undefined
+    && options?.ranked === undefined
+    && options?.compact === undefined;
+  const isIdentifierQuery = !useRegex && /^[A-Za-z_][A-Za-z0-9_]{2,}$/.test(query);
+  const shouldRank = options?.ranked
+    || (callerOmittedGroupOpts && isIdentifierQuery);
+
   // Ranked mode: classify hits with symbol context, deduplicate, and sort by centrality.
   // Takes precedence over auto_group/compact — returns TextMatch[] with containing_symbol.
-  if (options?.ranked && matches.length > 0) {
+  if (shouldRank && matches.length > 0) {
     try {
       const { classifyHitsWithSymbols } = await import("./search-ranker.js");
       const bm25Idx = await getBM25Index(repo);
@@ -661,11 +706,7 @@ export async function searchText(
   // option AND result count exceeds SERVER_AUTO_GROUP_THRESHOLD, group by file.
   // Telemetry showed 51% of search_text calls omitted these opts entirely;
   // grouping cuts payload by ~50% (975 → 499 avg tokens per call).
-  const callerOmittedGroupOpts =
-    options?.group_by_file === undefined
-    && options?.auto_group === undefined
-    && options?.ranked === undefined
-    && options?.compact === undefined;
+  // (callerOmittedGroupOpts hoisted above for shared use with ranked auto-promote)
 
   const shouldGroup = options?.group_by_file
     || (options?.auto_group && matches.length > AUTO_GROUP_THRESHOLD)

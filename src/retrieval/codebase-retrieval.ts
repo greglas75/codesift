@@ -1,10 +1,23 @@
 import { loadConfig } from "../config.js";
+import { raceWallClock } from "../utils/wall-clock.js";
 import {
   SubQuerySchema,
   type SubQuery,
   type SubQueryResult,
   type CodebaseRetrievalResult,
 } from "./retrieval-schemas.js";
+
+/**
+ * End-to-end wall-clock cap on a single codebase_retrieval call. Per-sub-query
+ * timeout is already 25s; this protects against a batch of slow queries
+ * stacking up behind bounded concurrency. Telemetry: max=907s. Configurable
+ * via CODESIFT_CODEBASE_RETRIEVAL_CAP_MS.
+ */
+const CODEBASE_RETRIEVAL_WALL_CLOCK_MS = (() => {
+  const env = process.env["CODESIFT_CODEBASE_RETRIEVAL_CAP_MS"];
+  const parsed = env ? Number(env) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+})();
 import { estimateTokens } from "./retrieval-utils.js";
 import { handleSemanticQuery, handleHybridQuery } from "./semantic-handlers.js";
 import {
@@ -149,6 +162,25 @@ async function executeSubQuery(
 // ---------------------------------------------------------------------------
 
 export async function codebaseRetrieval(
+  repo: string,
+  queries: unknown[],
+  tokenBudget?: number,
+): Promise<CodebaseRetrievalResult> {
+  return raceWallClock(
+    codebaseRetrievalInner(repo, queries, tokenBudget),
+    CODEBASE_RETRIEVAL_WALL_CLOCK_MS,
+    () => ({
+      results: [],
+      total_tokens: 0,
+      truncated: true,
+      query_count: queries.length,
+      wall_clock_truncated: true,
+      hint: `codebase_retrieval exceeded ${CODEBASE_RETRIEVAL_WALL_CLOCK_MS}ms — narrow scope (file_pattern), split into smaller batches, or use targeted tools (search_text/search_symbols)`,
+    }),
+  );
+}
+
+async function codebaseRetrievalInner(
   repo: string,
   queries: unknown[],
   tokenBudget?: number,

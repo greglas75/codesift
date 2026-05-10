@@ -127,4 +127,8 @@ export interface CodebaseRetrievalResult {
   total_tokens: number;
   truncated: boolean;
   query_count: number;
+  /** Set when the call hit the end-to-end wall-clock cap. Carries an
+   * actionable hint so the agent can narrow scope or split queries. */
+  wall_clock_truncated?: boolean;
+  hint?: string;
 }

@@ -196,6 +196,10 @@ export interface TextMatch {
   context_before?: string[];
   context_after?: string[];
   containing_symbol?: ContainingSymbol;
+  /** Set when the search aborted on a wall-clock cap. The single returned match
+   * carries the hint so agents see actionable guidance instead of a hang. */
+  truncated?: boolean;
+  hint?: string;
 }
 
 export interface TextMatchGroup {
@@ -251,7 +255,7 @@ export interface ImpactResult {
 
 export interface EmbeddingMeta {
   model: string;
-  provider: "voyage" | "openai" | "ollama";
+  provider: "voyage" | "openai" | "ollama" | "local";
   dimensions: number;
   symbol_count: number;
   updated_at: number;
