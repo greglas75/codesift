@@ -4795,12 +4795,26 @@ interface DescribeToolsResult {
   not_found: string[];
 }
 
+// Cache for describeTools results. Schemas are deterministic per name set and
+// never change within a process — telemetry showed 263/559 calls were duplicates
+// within a session. Key = sorted-joined names, value = computed result. No TTL.
+const describeToolsCache = new Map<string, DescribeToolsResult>();
+
+/** Reset the describeTools cache. Test-only — not exported via index. */
+export function resetDescribeToolsCacheForTesting(): void {
+  describeToolsCache.clear();
+}
+
 /**
  * Return full param details for a specific list of tool names.
  * Unknown names are collected in not_found.
  */
 export function describeTools(names: string[]): DescribeToolsResult {
   const capped = names.slice(0, 100); // CQ6 cap
+  const cacheKey = [...capped].sort().join(" ");
+  const cached = describeToolsCache.get(cacheKey);
+  if (cached) return cached;
+
   const tools: DescribeToolsResult["tools"] = [];
   const not_found: string[] = [];
 
@@ -4819,7 +4833,9 @@ export function describeTools(names: string[]): DescribeToolsResult {
     });
   }
 
-  return { tools, not_found };
+  const result = { tools, not_found };
+  describeToolsCache.set(cacheKey, result);
+  return result;
 }
 
 /**

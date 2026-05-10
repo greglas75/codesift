@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { describeTools, getToolDefinitions, registerTools, getToolHandle } from "../../src/register-tools.js";
+import { describeTools, getToolDefinitions, registerTools, getToolHandle, resetDescribeToolsCacheForTesting } from "../../src/register-tools.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -84,6 +84,31 @@ describe("describeTools", () => {
     const result = describeTools(["find_dead_code"]);
     expect(result.tools).toHaveLength(1);
     expect(result.tools[0].is_core).toBe(false);
+  });
+
+  describe("cache", () => {
+    it("returns same result reference for repeated identical name sets", () => {
+      resetDescribeToolsCacheForTesting();
+      const a = describeTools(["search_text"]);
+      const b = describeTools(["search_text"]);
+      expect(b).toBe(a); // identity equality — second call returned cached object
+    });
+
+    it("treats different orderings of the same name set as a cache hit", () => {
+      resetDescribeToolsCacheForTesting();
+      const a = describeTools(["search_text", "find_dead_code"]);
+      const b = describeTools(["find_dead_code", "search_text"]);
+      expect(b).toBe(a);
+    });
+
+    it("does not collide across different name sets", () => {
+      resetDescribeToolsCacheForTesting();
+      const a = describeTools(["search_text"]);
+      const b = describeTools(["find_dead_code"]);
+      expect(b).not.toBe(a);
+      expect(a.tools[0].name).toBe("search_text");
+      expect(b.tools[0].name).toBe("find_dead_code");
+    });
   });
 });
 
