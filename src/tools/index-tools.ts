@@ -585,7 +585,17 @@ export async function indexFolder(
       console.error(`[codesift] Background embedding failed for ${repoName}: ${msg}`);
     });
 
-  // Register in the global registry
+  // Register in the global registry. If a stale entry exists with the same
+  // root but a different name (e.g. `local/workspace` from before the git
+  // origin auto-detect landed), drop it so `list_repos` doesn't show ghosts.
+  const existingRepos = await listRegistryRepos(config.registryPath);
+  for (const stale of existingRepos) {
+    if (stale.root === rootPath && stale.name !== repoName) {
+      await removeRepo(config.registryPath, stale.name);
+      console.error(`[codesift] Migrated registry: ${stale.name} -> ${repoName} (same root)`);
+    }
+  }
+
   const meta: RepoMeta = {
     name: repoName,
     root: rootPath,

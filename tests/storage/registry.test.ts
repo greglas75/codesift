@@ -8,9 +8,17 @@ import {
   getRepoName,
 } from "../../src/storage/registry.js";
 import type { RepoMeta } from "../../src/types.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+async function writeGitOrigin(repoRoot: string, url: string): Promise<void> {
+  await mkdir(join(repoRoot, ".git"), { recursive: true });
+  await writeFile(
+    join(repoRoot, ".git", "config"),
+    `[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = ${url}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`,
+  );
+}
 
 function makeMeta(name: string): RepoMeta {
   return {
@@ -145,6 +153,91 @@ describe("registry", () => {
     it("handles deeply nested paths", () => {
       const result = getRepoName("/a/b/c/d/e/deep-project");
       expect(result).toBe("local/deep-project");
+    });
+
+    it("honors .codesift.json name override (bare name)", async () => {
+      await writeFile(join(tmpDir, ".codesift.json"), JSON.stringify({ name: "tgm-survey-platform" }));
+      expect(getRepoName(tmpDir)).toBe("local/tgm-survey-platform");
+    });
+
+    it("honors .codesift.json name override (namespaced)", async () => {
+      await writeFile(join(tmpDir, ".codesift.json"), JSON.stringify({ name: "team/tgm-survey-platform" }));
+      expect(getRepoName(tmpDir)).toBe("team/tgm-survey-platform");
+    });
+
+    it("falls back to basename when override is malformed JSON", async () => {
+      await writeFile(join(tmpDir, ".codesift.json"), "{ not json");
+      expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
+    });
+
+    it("falls back to basename when override has empty name", async () => {
+      await writeFile(join(tmpDir, ".codesift.json"), JSON.stringify({ name: "   " }));
+      expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
+    });
+
+    it("falls back to basename when override has no name field", async () => {
+      await writeFile(join(tmpDir, ".codesift.json"), JSON.stringify({ other: "value" }));
+      expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
+    });
+
+    describe("git remote.origin.url auto-detection", () => {
+      it("derives name from SSH remote (git@host:owner/repo.git)", async () => {
+        await writeGitOrigin(tmpDir, "git@github.com:greglas/tgm-survey-platform.git");
+        expect(getRepoName(tmpDir)).toBe("local/tgm-survey-platform");
+      });
+
+      it("derives name from HTTPS remote with .git suffix", async () => {
+        await writeGitOrigin(tmpDir, "https://github.com/greglas/tgm-survey-platform.git");
+        expect(getRepoName(tmpDir)).toBe("local/tgm-survey-platform");
+      });
+
+      it("derives name from HTTPS remote without .git suffix", async () => {
+        await writeGitOrigin(tmpDir, "https://github.com/greglas/tgm-survey-platform");
+        expect(getRepoName(tmpDir)).toBe("local/tgm-survey-platform");
+      });
+
+      it("derives name from ssh:// URL form", async () => {
+        await writeGitOrigin(tmpDir, "ssh://git@github.com/greglas/tgm-survey-platform.git");
+        expect(getRepoName(tmpDir)).toBe("local/tgm-survey-platform");
+      });
+
+      it("returns trailing segment for GitLab subgroups", async () => {
+        await writeGitOrigin(tmpDir, "git@gitlab.com:team/sub/tgm-survey-platform.git");
+        expect(getRepoName(tmpDir)).toBe("local/tgm-survey-platform");
+      });
+
+      it("git origin overrides basename when CWD has a different name", async () => {
+        // Simulates VPS: directory is ~/workspace but remote is tgm-survey-platform.
+        const vpsDir = join(tmpDir, "workspace");
+        await mkdir(vpsDir);
+        await writeGitOrigin(vpsDir, "git@github.com:greglas/tgm-survey-platform.git");
+        expect(getRepoName(vpsDir)).toBe("local/tgm-survey-platform");
+      });
+
+      it(".codesift.json takes precedence over git origin", async () => {
+        await writeGitOrigin(tmpDir, "git@github.com:greglas/auto-name.git");
+        await writeFile(join(tmpDir, ".codesift.json"), JSON.stringify({ name: "manual-override" }));
+        expect(getRepoName(tmpDir)).toBe("local/manual-override");
+      });
+
+      it("falls back to basename when .git is a file (worktree/submodule)", async () => {
+        await writeFile(join(tmpDir, ".git"), "gitdir: /some/other/path\n");
+        expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
+      });
+
+      it("falls back to basename when origin remote is absent", async () => {
+        await mkdir(join(tmpDir, ".git"), { recursive: true });
+        await writeFile(
+          join(tmpDir, ".git", "config"),
+          `[core]\n\trepositoryformatversion = 0\n[remote "upstream"]\n\turl = git@github.com:other/repo.git\n`,
+        );
+        expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
+      });
+
+      it("falls back to basename when origin url is unparseable", async () => {
+        await writeGitOrigin(tmpDir, "::not a url::");
+        expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
+      });
     });
   });
 });
