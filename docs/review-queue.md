@@ -19,3 +19,4 @@ Commits pending review. Auto-managed:
 - ada7aa2 (2026-05-10) chore(docs): semantic-adoption plan + accumulated review artifacts
 - e43dea9 (2026-05-10) 0.8.0
 - 0cccd78 (2026-05-10) Add PopeInsights analysis tools
+- 8b99c30 (2026-05-11) feat(registry): stable repo name via .git/config + .codesift.json override
