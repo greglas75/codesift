@@ -108,8 +108,12 @@ export async function removeRepo(
 
 /**
  * Resolve registry metadata for a repo input string.
- * When `repoInput` is empty, uses CWD-based name then single-repo / root-path fallbacks
- * (same rules as `getCodeIndex`).
+ * When `repoInput` is empty, uses CWD-based name then single-repo / root-path fallbacks.
+ * When `repoInput` is non-empty but the exact key misses, falls back to:
+ *   1. "local/<input>" (agents passing bare basename like "thepopebot")
+ *   2. unique suffix match on "<prefix>/<input>" across all registered repos
+ *   3. unique basename(root) === input match (handles .codesift.json overrides)
+ * Ambiguous matches (>1 candidate) return null instead of guessing.
  */
 export async function resolveRegisteredRepoMeta(
   registryPath: string,
@@ -130,6 +134,23 @@ export async function resolveRegisteredRepoMeta(
     } else if (allRepos.length === 1) {
       resolved = allRepos[0]!.name;
       meta = allRepos[0]!;
+    }
+  }
+  if (!meta && repoInput && !repoInput.includes("/")) {
+    // Bare-name fallback: agent passed `thepopebot` but registry has `local/thepopebot`.
+    // Collect every repo whose name ends in `/<input>` and decide on the union to avoid
+    // silently picking `local/widget` when `team/widget` also exists.
+    const allRepos = await listRepos(registryPath);
+    const suffixMatches = allRepos.filter((r) => r.name.endsWith(`/${repoInput}`));
+    if (suffixMatches.length === 1) {
+      resolved = suffixMatches[0]!.name;
+      meta = suffixMatches[0]!;
+    } else if (suffixMatches.length === 0) {
+      const byBasename = allRepos.filter((r) => basename(r.root) === repoInput);
+      if (byBasename.length === 1) {
+        resolved = byBasename[0]!.name;
+        meta = byBasename[0]!;
+      }
     }
   }
   if (!meta) return null;

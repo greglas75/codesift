@@ -6,6 +6,7 @@ import {
   listRepos,
   removeRepo,
   getRepoName,
+  resolveRegisteredRepoMeta,
 } from "../../src/storage/registry.js";
 import type { RepoMeta } from "../../src/types.js";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -238,6 +239,64 @@ describe("registry", () => {
         await writeGitOrigin(tmpDir, "::not a url::");
         expect(getRepoName(tmpDir)).toBe(`local/${tmpDir.split("/").pop()}`);
       });
+    });
+  });
+
+  describe("resolveRegisteredRepoMeta — bare-name fallback", () => {
+    it("matches `<basename>` against registered `local/<basename>`", async () => {
+      await registerRepo(registryPath, makeMeta("local/thepopebot"));
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "thepopebot");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("local/thepopebot");
+    });
+
+    it("matches `<basename>` against unique non-local prefix (e.g. `team/<name>`)", async () => {
+      await registerRepo(registryPath, makeMeta("team/widget"));
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "widget");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("team/widget");
+    });
+
+    it("returns null when bare name is ambiguous across prefixes", async () => {
+      await registerRepo(registryPath, makeMeta("local/widget"));
+      await registerRepo(registryPath, makeMeta("team/widget"));
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "widget");
+
+      expect(result).toBeNull();
+    });
+
+    it("falls back to basename(root) match when name lookup misses", async () => {
+      const meta = makeMeta("custom-override-name");
+      meta.root = "/tmp/realfolder";
+      await registerRepo(registryPath, meta);
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "realfolder");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("custom-override-name");
+    });
+
+    it("preserves exact match precedence over fallback", async () => {
+      await registerRepo(registryPath, makeMeta("thepopebot"));
+      await registerRepo(registryPath, makeMeta("local/thepopebot"));
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "thepopebot");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("thepopebot");
+    });
+
+    it("does not fall back when input contains a slash", async () => {
+      await registerRepo(registryPath, makeMeta("local/thepopebot"));
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "team/thepopebot");
+
+      expect(result).toBeNull();
     });
   });
 });
