@@ -330,6 +330,18 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
     }
   }
 
+  // H15: search_symbols("<bare keyword>") returned 0 results → query is likely a
+  // substring/concept, not a symbol name. Telemetry showed 98× zero-result calls
+  // for queries like "auth", "user", "render" — agents kept retrying instead of
+  // switching tool. Detect lowercase ≤8-char queries with no uppercase/underscore
+  // (true identifiers conventionally include caps or underscores).
+  if (toolName === "search_symbols" && Array.isArray(data) && data.length === 0) {
+    const q = typeof args["query"] === "string" ? args["query"] : "";
+    if (/^[a-z]{2,8}$/.test(q)) {
+      hints.push(`⚡H15 "${q}" returned 0 symbols — looks like a keyword, not a symbol name. Try search_text("${q}") for substring matches.`);
+    }
+  }
+
   if (toolName === "get_symbol" && sessionSearchSymbolsCalled) {
     hints.push(`⚡H7`);
   }

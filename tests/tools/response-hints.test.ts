@@ -422,3 +422,48 @@ describe("H13/H14 cross-hint isolation", () => {
     expect(hint).not.toContain("H13");
   });
 });
+
+// ---------------------------------------------------------------------------
+// H15: search_symbols bare-keyword zero-result → suggest search_text
+// ---------------------------------------------------------------------------
+
+describe("H15: search_symbols bare-keyword zero-result", () => {
+  beforeEach(() => resetSessionState());
+
+  it("fires for empty result with bare-keyword query", () => {
+    const hint = buildResponseHint("search_symbols", { repo: "local/proj", query: "auth" }, []);
+    expect(hint).toContain("H15");
+    expect(hint).toContain('search_text("auth")');
+  });
+
+  it("fires for short lowercase queries like 'user' or 'render'", () => {
+    expect(buildResponseHint("search_symbols", { repo: "local/proj", query: "user" }, [])).toContain("H15");
+    expect(buildResponseHint("search_symbols", { repo: "local/proj", query: "render" }, [])).toContain("H15");
+  });
+
+  it("does NOT fire for PascalCase identifier (likely real symbol name)", () => {
+    const hint = buildResponseHint("search_symbols", { repo: "local/proj", query: "AuthService" }, []);
+    expect(hint === null || !hint.includes("H15")).toBe(true);
+  });
+
+  it("does NOT fire for camelCase/snake_case identifier", () => {
+    const h1 = buildResponseHint("search_symbols", { repo: "local/proj", query: "authUser" }, []);
+    const h2 = buildResponseHint("search_symbols", { repo: "local/proj", query: "auth_user" }, []);
+    expect(h1 === null || !h1.includes("H15")).toBe(true);
+    expect(h2 === null || !h2.includes("H15")).toBe(true);
+  });
+
+  it("does NOT fire when there are actual results (>0)", () => {
+    const hint = buildResponseHint(
+      "search_symbols",
+      { repo: "local/proj", query: "auth" },
+      [{ symbol: { name: "x" }, score: 1 }],
+    );
+    expect(hint === null || !hint.includes("H15")).toBe(true);
+  });
+
+  it("does NOT fire for queries longer than 8 chars (likely specific identifier)", () => {
+    const hint = buildResponseHint("search_symbols", { repo: "local/proj", query: "authorization" }, []);
+    expect(hint === null || !hint.includes("H15")).toBe(true);
+  });
+});
