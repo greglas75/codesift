@@ -176,13 +176,14 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
     }
   });
 
-  it("should not hint for keyword queries", () => {
+  it("should not emit H9 for keyword queries", () => {
+    // Updated for H11: empty result emits H11 (not H9) for identifier queries.
     const hint = buildResponseHint(
       "search_text",
       { repo: "local/proj", query: "validateUser" },
       [],
     );
-    expect(hint).toBeNull();
+    expect(hint === null || !hint.includes("H9")).toBe(true);
   });
 
   it("should not hint when query is not a string", () => {
@@ -204,13 +205,15 @@ describe("Fix 7: question-word text queries → semantic hint", () => {
     expect(hint).toContain("H9");
   });
 
-  it("should not hint when question word is mid-query", () => {
+  it("should not emit H9 when question word is mid-query", () => {
+    // Updated for H11: empty result emits H11; H9 should still NOT fire because
+    // the question word must be at the start of the query.
     const hint = buildResponseHint(
       "search_text",
       { repo: "local/proj", query: "find how" },
       [],
     );
-    expect(hint).toBeNull();
+    expect(hint === null || !hint.includes("H9")).toBe(true);
   });
 });
 
@@ -420,6 +423,166 @@ describe("H13/H14 cross-hint isolation", () => {
     const hint = buildResponseHint("search_text", { repo: "local/proj", query: "how does auth work" }, []);
     expect(hint).toContain("H9");
     expect(hint).not.toContain("H13");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H11: search_text empty-result hints
+// ---------------------------------------------------------------------------
+
+describe("H11: search_text 0-result guidance", () => {
+  beforeEach(() => resetSessionState());
+
+  it("suggests dropping file_pattern when one is set and result is empty", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", query: "foo", file_pattern: "src/**/*.ts" },
+      [],
+    );
+    expect(hint).toContain("H11");
+    expect(hint).toContain("drop file_pattern");
+  });
+
+  it("suggests search_symbols when query is an identifier and result is empty", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/p", query: "MyClass" }, []);
+    expect(hint).toContain("H11");
+    expect(hint).toContain('search_symbols("MyClass")');
+  });
+
+  it("suggests semantic_search for question-word queries", () => {
+    const hint = buildResponseHint("search_text", { repo: "local/p", query: "how does auth work" }, []);
+    // H9 also fires for question queries — H11 should still suggest semantic
+    expect(hint).toContain("semantic_search");
+  });
+
+  it("does NOT fire when there are matches", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", query: "foo" },
+      [{ file: "x.ts", line: 1, content: "foo" }],
+    );
+    expect(hint === null || !hint.includes("H11")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H16: get_file_tree empty with name_pattern
+// ---------------------------------------------------------------------------
+
+describe("H16: get_file_tree name_pattern matched nothing", () => {
+  beforeEach(() => resetSessionState());
+
+  it("fires when name_pattern is set and result is empty", () => {
+    const hint = buildResponseHint(
+      "get_file_tree",
+      { repo: "local/p", name_pattern: "*.kt" },
+      [],
+    );
+    expect(hint).toContain("H16");
+    expect(hint).toContain("*.kt");
+  });
+
+  it("fires when name_pattern matched zero entries inside an object result", () => {
+    const hint = buildResponseHint(
+      "get_file_tree",
+      { repo: "local/p", name_pattern: "*.kt" },
+      { entries: [], truncated: false, total: 0 },
+    );
+    expect(hint).toContain("H16");
+  });
+
+  it("does NOT fire without name_pattern", () => {
+    const hint = buildResponseHint("get_file_tree", { repo: "local/p" }, []);
+    expect(hint === null || !hint.includes("H16")).toBe(true);
+  });
+
+  it("does NOT fire when there are matches", () => {
+    const hint = buildResponseHint(
+      "get_file_tree",
+      { repo: "local/p", name_pattern: "*.ts" },
+      [{ name: "x.ts", type: "file" }],
+    );
+    expect(hint === null || !hint.includes("H16")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H17: find_references empty-result
+// ---------------------------------------------------------------------------
+
+describe("H17: find_references 0 results", () => {
+  beforeEach(() => resetSessionState());
+
+  it("suggests verifying symbol_name via search_symbols", () => {
+    const hint = buildResponseHint(
+      "find_references",
+      { repo: "local/p", symbol_name: "DoesNotExist" },
+      [],
+    );
+    expect(hint).toContain("H17");
+    expect(hint).toContain('search_symbols(query="DoesNotExist")');
+  });
+
+  it("does NOT fire when references found", () => {
+    const hint = buildResponseHint(
+      "find_references",
+      { repo: "local/p", symbol_name: "X" },
+      [{ file: "a.ts", line: 1, context: "x()" }],
+    );
+    expect(hint === null || !hint.includes("H17")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H18: test-antipattern signature → suggest batch
+// ---------------------------------------------------------------------------
+
+describe("H18: test-antipattern regex → batch via codebase_retrieval", () => {
+  beforeEach(() => resetSessionState());
+
+  it("fires for `expect(true).toBe(true)` style queries", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", regex: true, query: "expect\\(true\\)\\.toBe\\(true\\)" },
+      [],
+    );
+    expect(hint).toContain("H18");
+  });
+
+  it("fires for `.toBeTruthy()` style", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", regex: true, query: "\\.toBeTruthy\\(\\)" },
+      [],
+    );
+    expect(hint).toContain("H18");
+  });
+
+  it("fires for `as any` queries", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", regex: true, query: "\\bas\\s+any\\b" },
+      [],
+    );
+    expect(hint).toContain("H18");
+  });
+
+  it("does NOT fire for non-regex queries even if string matches signature", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", query: "toBeTruthy" }, // regex=false default
+      [],
+    );
+    expect(hint === null || !hint.includes("H18")).toBe(true);
+  });
+
+  it("does NOT fire for unrelated regex queries", () => {
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", regex: true, query: "function\\s+\\w+" },
+      [],
+    );
+    expect(hint === null || !hint.includes("H18")).toBe(true);
   });
 });
 
