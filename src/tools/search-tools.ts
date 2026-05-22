@@ -562,9 +562,9 @@ export async function searchText(
     () => [{
       file: "<truncated>",
       line: 0,
-      content: `search exceeded ${SEARCH_TEXT_WALL_CLOCK_MS}ms — narrow scope with file_pattern, or use ranked=true for identifier queries`,
+      content: `search exceeded ${SEARCH_TEXT_WALL_CLOCK_MS}ms — narrow scope with file_pattern (e.g. "src/**/*.ts") or use search_symbols for identifier lookup. Ranked mode runs after the regex scan and does not speed it up.`,
       truncated: true,
-      hint: "narrow scope with file_pattern, or use ranked=true",
+      hint: "narrow scope with file_pattern, or use search_symbols for identifier lookup",
     }] as TextMatch[],
   );
 }
