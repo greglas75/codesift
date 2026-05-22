@@ -31,6 +31,8 @@ const MAX_LINE_CHARS = 500; // Truncate individual match lines (minified JS/JSON
 const DEFAULT_TOP_K_WITH_SOURCE = 10; // Cap results when include_source=true without file_pattern
 const BM25_FILTER_MULTIPLIER = 5; // Widen BM25 candidate set when filters active
 const BM25_FILTER_MIN_K = 200; // Minimum candidate set size when filters active
+const BM25_FILE_SHORTLIST_K = 60; // top-K BM25 symbol hits → unique file set for identifier-query shortlist
+const IDENTIFIER_QUERY_RX = /^[A-Za-z_][A-Za-z0-9_]{2,}$/; // single identifier ≥3 chars — triggers BM25 shortlist + auto-rank
 const DEFAULT_SOURCE_CHARS_NARROW = 200; // Source truncation without file_pattern (reduce waste)
 const DEFAULT_SOURCE_CHARS_WIDE = 500; // Source truncation with file_pattern
 const CHARS_PER_TOKEN = 3.5; // Approximate chars-per-token for budget calculation
@@ -207,7 +209,14 @@ function hasRipgrep(): boolean {
 function searchWithRipgrep(
   root: string,
   query: string,
-  options: { regex?: boolean; filePattern?: string | undefined; maxResults: number; contextLines: number },
+  options: {
+    regex?: boolean;
+    filePattern?: string | undefined;
+    maxResults: number;
+    contextLines: number;
+    /** Optional: restrict search to this file list (relative paths) instead of walking `root`. */
+    candidateFiles?: readonly string[] | undefined;
+  },
 ): TextMatch[] {
   const args: string[] = [
     "-n",                    // line numbers
@@ -231,12 +240,29 @@ function searchWithRipgrep(
     args.push("--glob", options.filePattern);
   }
 
-  // Exclude dirs
-  for (const dir of RG_EXCLUDE_DIRS) {
-    args.push("--glob", `!${dir}`);
+  // Exclude dirs (only relevant when scanning the whole root — candidate file lists
+  // are explicit paths and bypass the walker)
+  if (!options.candidateFiles || options.candidateFiles.length === 0) {
+    for (const dir of RG_EXCLUDE_DIRS) {
+      args.push("--glob", `!${dir}`);
+    }
   }
 
-  args.push("--", query, root);
+  if (options.candidateFiles && options.candidateFiles.length > 0) {
+    // ripgrep omits the file-path prefix in output when given a single file,
+    // and the parser below expects `path:line:content`. `--with-filename`
+    // forces the prefix regardless of file count.
+    args.push("--with-filename");
+  }
+  args.push("--", query);
+  if (options.candidateFiles && options.candidateFiles.length > 0) {
+    // Pass explicit file paths as positional args. Avoids whole-tree walk.
+    for (const relPath of options.candidateFiles) {
+      args.push(join(root, relPath));
+    }
+  } else {
+    args.push(root);
+  }
 
   let stdout: string;
   try {
@@ -590,6 +616,32 @@ async function searchTextInner(
     compileSearchRegex(query); // throws on ReDoS patterns
   }
 
+  // OPT-RANK-1: For single-identifier queries without an explicit file_pattern,
+  // shortlist candidate files via BM25 (top-K symbol hits → unique file set)
+  // BEFORE scanning. Telemetry showed identifier queries on large repos hit
+  // the 8s wall-clock cap because ripgrep walked the entire tree; restricting
+  // to ~60 candidate files drops scan time to <500ms while preserving the
+  // matches an agent actually wants (definition + usages of the identifier).
+  // Skipped when the agent passed file_pattern (already narrowed) or for
+  // regex/multi-word queries (BM25 symbol relevance doesn't generalize).
+  let candidateFiles: string[] | undefined;
+  if (!useRegex && !filePattern && IDENTIFIER_QUERY_RX.test(query)) {
+    try {
+      const bm25 = await getBM25Index(repo);
+      if (bm25) {
+        const config = loadConfig();
+        const bm25Hits = searchBM25(bm25, query, BM25_FILE_SHORTLIST_K, config.bm25FieldWeights);
+        if (bm25Hits.length > 0) {
+          const fileSet = new Set<string>();
+          for (const r of bm25Hits) fileSet.add(r.symbol.file);
+          candidateFiles = [...fileSet];
+        }
+      }
+    } catch {
+      // Graceful fallback — full scan if BM25 lookup fails for any reason
+    }
+  }
+
   let matches: TextMatch[];
 
   // OPT-1: Use ripgrep when available (10x faster)
@@ -599,13 +651,17 @@ async function searchTextInner(
       filePattern: filePattern,
       maxResults: maxResults,
       contextLines: contextLines,
+      candidateFiles: candidateFiles,
     });
   } else {
     // Node.js fallback
     const regex = useRegex ? compileSearchRegex(query) : null;
 
     let allFiles: string[];
-    if (filePattern) {
+    if (candidateFiles && candidateFiles.length > 0) {
+      // OPT-RANK-1: BM25 shortlist already narrowed the search space — skip the walk.
+      allFiles = [...candidateFiles];
+    } else if (filePattern) {
       allFiles = index.files.map((f) => f.path);
     } else {
       allFiles = await walkDirectory(index.root, {
@@ -650,7 +706,7 @@ async function searchTextInner(
     && options?.auto_group === undefined
     && options?.ranked === undefined
     && options?.compact === undefined;
-  const isIdentifierQuery = !useRegex && /^[A-Za-z_][A-Za-z0-9_]{2,}$/.test(query);
+  const isIdentifierQuery = !useRegex && IDENTIFIER_QUERY_RX.test(query);
   const shouldRank = options?.ranked
     || (callerOmittedGroupOpts && isIdentifierQuery);
 
