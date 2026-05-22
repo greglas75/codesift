@@ -14,6 +14,7 @@ import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync } from "
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { getRepoName } from "../storage/registry.js";
 
 // ---------------------------------------------------------------------------
 // Cross-platform input parsing
@@ -345,6 +346,34 @@ function isContentGrepCommand(cmd: string): boolean {
   return hasRecursiveGrep || hasRg;
 }
 
+function getRegistryPath(): string {
+  return join(process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift"), "registry.json");
+}
+
+function isCurrentRepoIndexed(): boolean {
+  try {
+    const raw = readFileSync(getRegistryPath(), "utf-8");
+    const parsed = JSON.parse(raw) as { repos?: unknown };
+    if (!parsed.repos || typeof parsed.repos !== "object") return false;
+
+    const repos = Object.values(parsed.repos as Record<string, unknown>);
+    const cwd = process.cwd();
+    const derivedName = getRepoName(cwd);
+
+    for (const repo of repos) {
+      if (!repo || typeof repo !== "object") continue;
+      const meta = repo as { name?: unknown; root?: unknown; index_path?: unknown };
+      const sameRepo = meta.name === derivedName || meta.root === cwd;
+      if (sameRepo && typeof meta.index_path === "string" && existsSync(meta.index_path)) {
+        return true;
+      }
+    }
+  } catch {
+    // Hooks should never block normal shell use if registry inspection fails.
+  }
+  return false;
+}
+
 export async function handlePrecheckBash(): Promise<void> {
   try {
     const raw = readRawInput();
@@ -359,9 +388,21 @@ export async function handlePrecheckBash(): Promise<void> {
       return;
     }
 
+    const shouldIntercept = isFileFindCommand(command) || isContentGrepCommand(command);
+    if (!shouldIntercept) {
+      process.exit(0);
+      return;
+    }
+
+    const shouldRedirectToCodeSift = isCurrentRepoIndexed();
+    if (!shouldRedirectToCodeSift) {
+      process.exit(0);
+      return;
+    }
+
     if (isFileFindCommand(command)) {
       denyTool(
-        `CodeSift has repos pre-indexed. Use CodeSift MCP tools instead of find:\n` +
+        `Current repo is indexed by CodeSift. Use CodeSift MCP tools instead of find:\n` +
           `  get_file_tree(compact=true, name_pattern="*.ts")\n` +
           `  search_symbols(query="test", kind="function")`,
       );
@@ -369,7 +410,7 @@ export async function handlePrecheckBash(): Promise<void> {
 
     if (isContentGrepCommand(command)) {
       denyTool(
-        `CodeSift has repos pre-indexed. Use CodeSift MCP tools instead of grep/rg:\n` +
+        `Current repo is indexed by CodeSift. Use CodeSift MCP tools instead of grep/rg:\n` +
           `  search_text(query="pattern", file_pattern="*.ts")\n` +
           `  search_symbols(query="name", include_source=true)`,
       );

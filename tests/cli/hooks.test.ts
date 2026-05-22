@@ -379,10 +379,31 @@ describe("handlePrecheckRead", () => {
 describe("handlePrecheckBash", () => {
   let exitCode: number | undefined;
   let stdoutOutput: string;
+  let dataDir: string;
 
   beforeEach(() => {
     exitCode = undefined;
     stdoutOutput = "";
+    dataDir = mkdtempSync(join(tmpdir(), "codesift-hook-data-"));
+    const indexPath = join(dataDir, "current.index.json");
+    writeFileSync(indexPath, "{}");
+    writeFileSync(
+      join(dataDir, "registry.json"),
+      JSON.stringify({
+        updated_at: Date.now(),
+        repos: {
+          "local/current": {
+            name: "local/current",
+            root: process.cwd(),
+            index_path: indexPath,
+            symbol_count: 1,
+            file_count: 1,
+            updated_at: Date.now(),
+          },
+        },
+      }),
+    );
+    process.env["CODESIFT_DATA_DIR"] = dataDir;
     vi.spyOn(process, "exit").mockImplementation((code?: number) => {
       exitCode = code ?? 0;
       return undefined as never;
@@ -396,6 +417,8 @@ describe("handlePrecheckBash", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env["HOOK_TOOL_INPUT"];
+    delete process.env["CODESIFT_DATA_DIR"];
+    rmSync(dataDir, { recursive: true, force: true });
   });
 
   it("exits 2 for find with -name (file exploration)", async () => {
@@ -481,6 +504,19 @@ describe("handlePrecheckBash", () => {
     expect(exitCode).toBe(0);
     expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     expect(stdoutOutput).toContain("search_text");
+  });
+
+  it("exits 0 for rg when current repo is not indexed", async () => {
+    writeFileSync(join(dataDir, "registry.json"), JSON.stringify({ updated_at: Date.now(), repos: {} }));
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'rg "createUser" --type ts' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
   });
 
   it("exits 0 for git grep (not intercepted)", async () => {
