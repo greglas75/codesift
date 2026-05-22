@@ -14,7 +14,6 @@ import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync } from "
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { getRepoName } from "../storage/registry.js";
 
 // ---------------------------------------------------------------------------
 // Cross-platform input parsing
@@ -350,6 +349,13 @@ function getRegistryPath(): string {
   return join(process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift"), "registry.json");
 }
 
+/**
+ * Treat the current shell as "inside an indexed repo" when CWD equals OR is
+ * a descendant of any registered repo root whose on-disk index still exists.
+ * Subdirectory match matters because agents typically work several levels
+ * below the repo root (e.g. `src/utils/`); the previous exact-equality check
+ * silently bypassed the redirect in those cases.
+ */
 function isCurrentRepoIndexed(): boolean {
   try {
     const raw = readFileSync(getRegistryPath(), "utf-8");
@@ -358,20 +364,24 @@ function isCurrentRepoIndexed(): boolean {
 
     const repos = Object.values(parsed.repos as Record<string, unknown>);
     const cwd = process.cwd();
-    const derivedName = getRepoName(cwd);
 
     for (const repo of repos) {
       if (!repo || typeof repo !== "object") continue;
-      const meta = repo as { name?: unknown; root?: unknown; index_path?: unknown };
-      const sameRepo = meta.name === derivedName || meta.root === cwd;
-      if (sameRepo && typeof meta.index_path === "string" && existsSync(meta.index_path)) {
-        return true;
-      }
+      const meta = repo as { root?: unknown; index_path?: unknown };
+      if (typeof meta.root !== "string" || typeof meta.index_path !== "string") continue;
+      if (!isCwdInsideRepo(cwd, meta.root)) continue;
+      if (existsSync(meta.index_path)) return true;
     }
   } catch {
     // Hooks should never block normal shell use if registry inspection fails.
   }
   return false;
+}
+
+function isCwdInsideRepo(cwd: string, repoRoot: string): boolean {
+  if (cwd === repoRoot) return true;
+  const rootWithSep = repoRoot.endsWith("/") ? repoRoot : repoRoot + "/";
+  return cwd.startsWith(rootWithSep);
 }
 
 export async function handlePrecheckBash(): Promise<void> {

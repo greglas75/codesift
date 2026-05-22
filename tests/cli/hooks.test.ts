@@ -519,6 +519,39 @@ describe("handlePrecheckBash", () => {
     expect(stdoutOutput).toBe("");
   });
 
+  it("redirects rg when CWD is a SUBDIRECTORY of an indexed repo (R-2 fix)", async () => {
+    // Register the parent directory of CWD as an indexed repo. Before the
+    // R-2 fix, only exact-equality match worked → subdirectory ran free.
+    const parent = join(process.cwd(), "..");
+    const indexPath = join(dataDir, "parent.index.json");
+    writeFileSync(indexPath, "{}");
+    writeFileSync(
+      join(dataDir, "registry.json"),
+      JSON.stringify({
+        updated_at: Date.now(),
+        repos: {
+          "local/parent": {
+            name: "local/parent",
+            root: parent,
+            index_path: indexPath,
+            symbol_count: 1,
+            file_count: 1,
+            updated_at: Date.now(),
+          },
+        },
+      }),
+    );
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'rg "createUser" --type ts' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+  });
+
   it("exits 0 for git grep (not intercepted)", async () => {
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Bash",

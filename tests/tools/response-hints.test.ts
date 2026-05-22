@@ -558,13 +558,25 @@ describe("H18: test-antipattern regex → batch via codebase_retrieval", () => {
     expect(hint).toContain("H18");
   });
 
-  it("fires for `as any` queries", () => {
+  it("fires for `\\bas\\s+any` regex-escaped query", () => {
     const hint = buildResponseHint(
       "search_text",
       { repo: "local/p", regex: true, query: "\\bas\\s+any\\b" },
       [],
     );
     expect(hint).toContain("H18");
+  });
+
+  it("does NOT fire for innocent queries containing the bare substring 'as any' (R-1 fix)", () => {
+    // Pre-fix this matched on "as any" substring → false positive on
+    // queries like "has any value". After fix only the regex-escaped form
+    // `\bas\s+any` triggers, so plain text containing those chars is safe.
+    const hint = buildResponseHint(
+      "search_text",
+      { repo: "local/p", regex: true, query: "has any value" },
+      [],
+    );
+    expect(hint === null || !hint.includes("H18")).toBe(true);
   });
 
   it("does NOT fire for non-regex queries even if string matches signature", () => {

@@ -277,7 +277,8 @@ const SECRET_PATTERN = /api[._-]?key|AWS_|OPENAI_|SECRET_KEY|password|credential
  * hint to collapse 100+ per-pattern calls into one composite call.
  */
 const TEST_ANTIPATTERN_SUBSTRINGS = [
-  // Unescaped matchers (work on plain queries and escaped regexes alike)
+  // Distinctive Jest/Vitest/RTL matcher names — unlikely to appear outside test
+  // audit context, so plain substring match is safe.
   "toBeTruthy", "toBeFalsy", "toBeDefined", "toBeGreaterThan", "toBeLessThan",
   "toBeNull", "toBeUndefined",
   "toHaveBeenCalled", "toHaveLength", "toHaveProperty",
@@ -286,7 +287,9 @@ const TEST_ANTIPATTERN_SUBSTRINGS = [
   // chars in the query string the agent passes (regex=true mode).
   "toBe\\(true", "toBe\\(false", "expect\\(true", "expect\\(false",
   "\\.skip\\(", "\\.only\\(",
-  "\\bas\\s+any", "as any",
+  // Use only the regex-escaped form for short tokens like "as any" — the bare
+  // 6-char string was false-positive prone (e.g. "has any value", "cargo has anyone").
+  "\\bas\\s+any",
   "TODO|FIXME", "FIXME|TODO",
 ];
 function isTestAntipatternQuery(query: string): boolean {
