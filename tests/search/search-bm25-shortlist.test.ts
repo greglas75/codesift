@@ -23,9 +23,15 @@ import type { TextMatch } from "../../src/types.js";
  */
 describe("searchText BM25 file shortlist for identifier queries", () => {
   let tmpRoot: string;
+  let dataDir: string;
   let repoName: string;
+  const originalDataDir = process.env["CODESIFT_DATA_DIR"];
 
   beforeAll(async () => {
+    // Isolate per-test data dir so parallel test files (and any live codesift
+    // process on the dev box) can't race on ~/.codesift/registry.json.
+    dataDir = await mkdtemp(join(tmpdir(), "codesift-bm25-data-"));
+    process.env["CODESIFT_DATA_DIR"] = dataDir;
     resetIndexFolderRedundancyForTesting();
     tmpRoot = await mkdtemp(join(tmpdir(), "bm25-shortlist-"));
     await mkdir(join(tmpRoot, "src/feature"), { recursive: true });
@@ -55,6 +61,9 @@ export function makeTargetWidget(): TargetWidget {
   afterAll(async () => {
     await stopAllWatchersForTesting();
     await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (originalDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+    else process.env["CODESIFT_DATA_DIR"] = originalDataDir;
   });
 
   it("finds identifier hits via the BM25-shortlisted file", async () => {

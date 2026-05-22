@@ -12,9 +12,13 @@ import type { TextMatch } from "../../src/types.js";
 
 describe("searchText auto-rank for identifier-only queries", () => {
   let tmpRoot: string;
+  let dataDir: string;
   let repoName: string;
+  const originalDataDir = process.env["CODESIFT_DATA_DIR"];
 
   beforeAll(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), "codesift-autorank-data-"));
+    process.env["CODESIFT_DATA_DIR"] = dataDir;
     resetIndexFolderRedundancyForTesting();
     tmpRoot = await mkdtemp(join(tmpdir(), "auto-rank-"));
     await mkdir(join(tmpRoot, "src"), { recursive: true });
@@ -36,6 +40,9 @@ export function helper() {
   afterAll(async () => {
     await stopAllWatchersForTesting();
     await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (originalDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+    else process.env["CODESIFT_DATA_DIR"] = originalDataDir;
   });
 
   it("auto-promotes ranked=true when query is an identifier and no grouping opts passed", async () => {
