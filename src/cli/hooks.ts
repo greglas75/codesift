@@ -10,7 +10,7 @@
 // Exit codes: 0 = allow, 2 = deny (with redirect message on stdout)
 // ---------------------------------------------------------------------------
 
-import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -199,6 +199,33 @@ function findRepoRootFromDir(startDir: string): string | null {
  */
 function findRepoRoot(filePath: string): string | null {
   return findRepoRootFromDir(dirname(filePath));
+}
+
+/**
+ * Append a wiki telemetry event to usage.jsonl (same shape as MCP tool events,
+ * so usage_stats and existing tooling pick it up). Synchronous + swallowed:
+ * hooks are short-lived and call process.exit, so an async write could be lost.
+ * Opt out of all wiki telemetry with CODESIFT_WIKI_TELEMETRY=0.
+ */
+function logWikiEvent(tool: string, repo: string, args: Record<string, unknown>, resultTokens = 0): void {
+  try {
+    if (process.env.CODESIFT_WIKI_TELEMETRY === "0") return;
+    const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+    const entry = {
+      ts: Date.now(),
+      tool,
+      repo,
+      args_summary: args,
+      elapsed_ms: 0,
+      result_tokens: resultTokens,
+      result_chunks: 0,
+      session_id: process.env["CLAUDE_SESSION_ID"] ?? "hook",
+    };
+    mkdirSync(dataDir, { recursive: true });
+    appendFileSync(join(dataDir, "usage.jsonl"), JSON.stringify(entry) + "\n");
+  } catch {
+    // CQ8: telemetry must never break the hook.
+  }
 }
 
 /**
@@ -754,6 +781,7 @@ function maybeRegenerateWiki(filePath: string, now: number): void {
     });
     child.on("error", () => { /* CQ8: never surface spawn failures */ });
     child.unref();
+    logWikiEvent("wiki_auto_regen", repoRoot, { trigger: "new-file", file: relative(repoRoot, filePath) });
   } catch {
     // CQ8: auto-regen is best-effort — never crash the hook.
   }
@@ -903,7 +931,13 @@ export async function handleSessionStart(): Promise<void> {
       const repoRoot = findRepoRootFromDir(process.cwd());
       if (repoRoot) {
         const overview = tryLoadProjectOverview(repoRoot);
-        if (overview) additionalContext += overview;
+        if (overview) {
+          additionalContext += overview;
+          logWikiEvent("wiki_overview_injected", repoRoot, {
+            chars: overview.length,
+            modules: (overview.match(/^  - /gm) || []).length,
+          }, Math.ceil(overview.length / 4));
+        }
       }
     }
 

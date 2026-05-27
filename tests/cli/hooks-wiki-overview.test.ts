@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -69,10 +69,14 @@ describe("wikiOverviewMaxChars (env var + NaN guard)", () => {
 describe("handleSessionStart — project overview injection", () => {
   let stdoutOutput: string;
   let tmpDir: string;
+  let dataDir: string;
 
   beforeEach(() => {
     stdoutOutput = "";
     tmpDir = mkdtempSync(join(tmpdir(), "hook-overview-"));
+    // Isolate telemetry writes so logWikiEvent never touches the real ~/.codesift.
+    dataDir = mkdtempSync(join(tmpdir(), "hook-overview-data-"));
+    process.env.CODESIFT_DATA_DIR = dataDir;
     vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
       stdoutOutput += String(chunk);
@@ -85,8 +89,18 @@ describe("handleSessionStart — project overview injection", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
+    try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* */ }
+    delete process.env.CODESIFT_DATA_DIR;
     delete process.env.CODESIFT_WIKI_OVERVIEW;
   });
+
+  function usageEvents(): Array<Record<string, unknown>> {
+    try {
+      return readFileSync(join(dataDir, "usage.jsonl"), "utf-8")
+        .trim().split("\n").filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+    } catch { return []; }
+  }
 
   function parsedContext(): string {
     const obj = JSON.parse(stdoutOutput) as { hookSpecificOutput?: { additionalContext?: string } };
@@ -105,6 +119,16 @@ describe("handleSessionStart — project overview injection", () => {
     // high-severity gotcha surfaces; static prompt still present
     expect(ctx).toContain("indexes must stay in sync");
     expect(ctx).toContain("Entry points: src/server.ts");
+    // telemetry: an injection event is logged to usage.jsonl
+    const ev = usageEvents().find((e) => e.tool === "wiki_overview_injected");
+    expect(ev).toBeDefined();
+    expect((ev!.args_summary as Record<string, unknown>).modules).toBe(2);
+  });
+
+  it("logs NO telemetry when no overview is injected (v1 manifest)", async () => {
+    writeManifest(tmpDir, { generated_at: "x", git_commit: "unknown" });
+    await handleSessionStart();
+    expect(usageEvents().some((e) => e.tool === "wiki_overview_injected")).toBe(false);
   });
 
   it("emits only the static prompt for a v1 manifest", async () => {
@@ -168,6 +192,9 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
     expect(args[1]).toContain("wiki-generate");
     expect(args[2].cwd).toBe(tmpDir);
     expect(args[2].detached).toBe(true);
+    // telemetry: a wiki_auto_regen event is logged
+    const events = readFileSync(join(dataDir, "usage.jsonl"), "utf-8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(events.some((e) => e.tool === "wiki_auto_regen")).toBe(true);
   });
 
   it("does NOT spawn when the repo has no wiki", async () => {
