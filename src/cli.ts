@@ -37,6 +37,13 @@ async function getVersion(): Promise<string> {
 // Main dispatch
 // ---------------------------------------------------------------------------
 
+// Commands that intentionally keep the process alive (file watcher). Every
+// other command is one-shot and must force-exit afterwards: the local embedding
+// provider (onnxruntime workers) and other lazy singletons hold open handles
+// that otherwise keep the event loop alive, leaving `codesift wiki-generate`
+// (and any hook-spawned regeneration) hanging as a zombie process.
+let keepProcessAlive = false;
+
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   const { positional, flags } = parseArgs(rawArgs);
@@ -79,10 +86,22 @@ async function main(): Promise<void> {
   if (!handler) {
     die(`Unknown command: ${command}. Run 'codesift --help' for available commands.`);
   }
+
+  // `index` / `index-repo` keep a file watcher alive unless --no-watch is set.
+  if ((command === "index" || command === "index-repo") && getBoolFlag(flags, "no-watch") !== true) {
+    keepProcessAlive = true;
+  }
+
   await handler(commandArgs, flags);
 }
 
-main().catch((err: unknown) => {
+main()
+  .then(() => {
+    // Force a clean exit for one-shot commands so leaked handles (embedding
+    // workers, etc.) can't keep the process hanging. Watch mode opts out.
+    if (!keepProcessAlive) process.exit(0);
+  })
+  .catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
   process.stderr.write(`Error: ${message}\n`);
   process.exit(1);

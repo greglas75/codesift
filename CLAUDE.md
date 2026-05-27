@@ -58,7 +58,14 @@ in `detectAutoLoadTools` at `src/register-tools.ts`.
 Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts only, >105K → hard truncate. Skipped when `detail_level` or `token_budget` is explicitly set. Annotation `[compact]` or `[counts]` prepended.
 
 ### CLI hooks (NEW)
-`codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift), PostToolUse (auto index-file after Edit/Write), and PreCompact (inject session snapshot before context compaction). Hooks go to `.claude/settings.local.json`.
+`codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift), PostToolUse (auto index-file after Edit/Write), SessionStart (inject CodeSift availability prompt + wiki project overview), and PreCompact (inject session snapshot before context compaction). Hooks go to `.claude/settings.local.json`.
+
+### Wiki auto-update + agent access (NEW)
+The wiki is kept fresh and surfaced to agents automatically — no manual `wiki-generate` needed once a wiki exists:
+- **Auto-update**: `handlePostindexFile` (PostToolUse Write|Edit) spawns a detached, throttled `wiki-generate` after re-indexing — never blocks the agent. Gated to keep CPU cost negligible: (1) wiki manifest must already exist (never auto-creates), (2) **structural trigger** — only regenerates when the edited file is NOT in the manifest's `file_to_community` (a new file = structure changed); edits to known files skip regen since the overview won't change, so the common case costs nothing, (3) **size gate** — skips repos with > `CODESIFT_WIKI_AUTO_REGEN_MAX_FILES` files (default 5000; huge repos are manual-only), (4) throttle `WIKI_REGEN_DEBOUNCE_MS` = 30 min/repo via `wiki-regen-debounce.json`. Opt out: `CODESIFT_WIKI_AUTO_REGEN=0`. `git_commit` in the manifest is now captured from real HEAD (was hardcoded "unknown") to power the staleness hint.
+- **SessionStart overview**: `handleSessionStart` appends a compact project overview (stack, entry points, modules + one-line descriptions, top gotchas, staleness hint) built from the v2 manifest `project`/`modules` blocks via `tryLoadProjectOverview`. v1/missing manifest → static prompt only. Budget `CODESIFT_WIKI_OVERVIEW_MAX_CHARS` (default 1800). Opt out: `CODESIFT_WIKI_OVERVIEW=0`.
+- **Per-file summary**: `precheck-read` still injects the community `.summary.md` when an agent reads a small file (unchanged).
+- `codesift wiki-generate` now auto-resolves the repo from CWD when no repo id is passed (the hook relies on this).
 
 ## Release & Install
 

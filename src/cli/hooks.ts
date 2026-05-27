@@ -14,6 +14,7 @@ import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync } from "
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Cross-platform input parsing
@@ -148,24 +149,35 @@ const DEFAULT_MIN_LINES = 50;
 
 const WIKI_MANIFEST_REL = join(".codesift", "wiki", "wiki-manifest.json");
 const WIKI_SUMMARY_DEFAULT_MAX_CHARS = 2500;
+const WIKI_OVERVIEW_DEFAULT_MAX_CHARS = 1800;
 
 /** Char budget for `.summary.md` hook injection. `CODESIFT_WIKI_SUMMARY_MAX_CHARS`
  *  env var overrides when it parses to a positive integer; NaN or <=0 falls
  *  back to the default (CQ8: defensive env parsing so the hook never crashes). */
 export function wikiSummaryMaxChars(): number {
-  const raw = process.env.CODESIFT_WIKI_SUMMARY_MAX_CHARS;
-  if (raw === undefined || raw === "") return WIKI_SUMMARY_DEFAULT_MAX_CHARS;
+  return positiveIntEnv("CODESIFT_WIKI_SUMMARY_MAX_CHARS", WIKI_SUMMARY_DEFAULT_MAX_CHARS);
+}
+
+/** Char budget for the SessionStart project-overview injection. */
+export function wikiOverviewMaxChars(): number {
+  return positiveIntEnv("CODESIFT_WIKI_OVERVIEW_MAX_CHARS", WIKI_OVERVIEW_DEFAULT_MAX_CHARS);
+}
+
+/** Parse a positive-int env var with a default fallback (NaN/<=0 → default). */
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
   const n = parseInt(raw, 10);
-  if (!Number.isFinite(n) || n <= 0) return WIKI_SUMMARY_DEFAULT_MAX_CHARS;
+  if (!Number.isFinite(n) || n <= 0) return fallback;
   return n;
 }
 
 /**
- * Walk up from `filePath` looking for `.codesift/wiki/wiki-manifest.json`.
+ * Walk up from `startDir` looking for `.codesift/wiki/wiki-manifest.json`.
  * Returns the repo root directory if found, otherwise null.
  */
-function findRepoRoot(filePath: string): string | null {
-  let dir = dirname(filePath);
+function findRepoRootFromDir(startDir: string): string | null {
+  let dir = startDir;
   while (true) {
     try {
       readFileSync(join(dir, WIKI_MANIFEST_REL));
@@ -178,6 +190,14 @@ function findRepoRoot(filePath: string): string | null {
     dir = parent;
   }
   return null;
+}
+
+/**
+ * Walk up from `filePath`'s directory looking for the wiki manifest.
+ * Returns the repo root directory if found, otherwise null.
+ */
+function findRepoRoot(filePath: string): string | null {
+  return findRepoRootFromDir(dirname(filePath));
 }
 
 /**
@@ -236,6 +256,107 @@ function tryLoadWikiSummary(filePath: string): string | null {
     // CQ8: never crash the hook
     return null;
   }
+}
+
+/** Current git HEAD short SHA for `dir`, or null on any failure. */
+function currentGitCommit(dir: string): string | null {
+  try {
+    const r = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+      timeout: 1500,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (r.status !== 0 || typeof r.stdout !== "string") return null;
+    const sha = r.stdout.trim();
+    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a compact, agent-facing project overview from the v2 wiki manifest at
+ * `repoRoot`. Returns null for missing/v1/malformed manifests (graceful — the
+ * caller falls back to the static prompt). Output is capped to the overview
+ * char budget so it never bloats the SessionStart context.
+ *
+ * ALL reads are synchronous and ALL errors are swallowed (CQ8: never crash).
+ */
+function tryLoadProjectOverview(repoRoot: string): string | null {
+  try {
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(readFileSync(join(repoRoot, WIKI_MANIFEST_REL), "utf-8")) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+    // v2 manifests carry schema_version === 2; v1 has no project/modules blocks.
+    if (manifest["schema_version"] !== 2) return null;
+
+    const project = manifest["project"];
+    if (!project || typeof project !== "object") return null;
+    const p = project as Record<string, unknown>;
+    const stack = (p["stack"] ?? {}) as Record<string, unknown>;
+    const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+
+    const lines: string[] = [];
+    lines.push(`\n\nCodeSift project wiki (architecture map — use instead of re-discovering structure):`);
+
+    const name = str(p["name"]) ?? "this repo";
+    const stackBits = [
+      str(stack["language"]),
+      str(stack["framework"]),
+      str(stack["test_runner"]) ? `test:${str(stack["test_runner"])}` : null,
+      str(stack["package_manager"]) ? `pm:${str(stack["package_manager"])}` : null,
+    ].filter(Boolean);
+    lines.push(`Project: ${name}${stackBits.length ? ` — ${stackBits.join(" · ")}` : ""}`);
+
+    const entry = p["entry_points"];
+    if (Array.isArray(entry) && entry.length > 0) {
+      lines.push(`Entry points: ${entry.filter((e) => typeof e === "string").slice(0, 5).join(", ")}`);
+    }
+
+    const modules = manifest["modules"];
+    if (Array.isArray(modules) && modules.length > 0) {
+      lines.push(`Modules (${modules.length}):`);
+      for (const m of modules.slice(0, 14)) {
+        if (!m || typeof m !== "object") continue;
+        const mod = m as Record<string, unknown>;
+        const mName = str(mod["name"]) ?? str(mod["slug"]) ?? "module";
+        let desc = str(mod["description"]) ?? "";
+        if (desc.length > 110) desc = desc.slice(0, 107) + "…";
+        lines.push(`  - ${mName}${desc ? `: ${desc}` : ""}`);
+      }
+    }
+
+    const gotchas = p["known_gotchas"];
+    if (Array.isArray(gotchas) && gotchas.length > 0) {
+      const top = gotchas
+        .filter((g): g is Record<string, unknown> => !!g && typeof g === "object")
+        .sort((a, b) => sevRank(b["severity"]) - sevRank(a["severity"]))
+        .slice(0, 2)
+        .map((g) => str(g["gotcha"]))
+        .filter(Boolean);
+      if (top.length > 0) lines.push(`Gotchas: ${top.join(" | ")}`);
+    }
+
+    // Staleness hint: compare manifest commit to current HEAD. Best-effort.
+    const manifestCommit = str(manifest["git_commit"]);
+    const head = currentGitCommit(repoRoot);
+    if (manifestCommit && manifestCommit !== "unknown" && head && !head.startsWith(manifestCommit) && !manifestCommit.startsWith(head)) {
+      lines.push(`(Wiki generated at ${manifestCommit.slice(0, 8)}; HEAD is ${head.slice(0, 8)} — auto-refreshes on edits.)`);
+    }
+
+    const out = lines.join("\n");
+    const max = wikiOverviewMaxChars();
+    return out.length > max ? out.slice(0, max) : out;
+  } catch {
+    return null;
+  }
+}
+
+function sevRank(s: unknown): number {
+  return s === "high" ? 3 : s === "medium" ? 2 : s === "low" ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +663,108 @@ function shouldDebouncePostindex(filePath: string, now: number): boolean {
   }
 }
 
+// Auto-regenerate the wiki at most once per this window per repo. Wiki
+// generation is a heavy whole-repo analysis, so it runs detached in the
+// background and is throttled well above the per-file reindex debounce. The
+// project overview changes slowly, so 30 min keeps CPU cost negligible.
+const WIKI_REGEN_DEBOUNCE_MS = 30 * 60 * 1000;
+
+// Skip background auto-regen entirely for repos larger than this (file count).
+// Whole-repo analysis on a huge repo is too heavy to run opportunistically on
+// edit — users regenerate those manually with `codesift wiki-generate`.
+// Override with CODESIFT_WIKI_AUTO_REGEN_MAX_FILES.
+const WIKI_REGEN_DEFAULT_MAX_FILES = 5000;
+function wikiRegenMaxFiles(): number {
+  return positiveIntEnv("CODESIFT_WIKI_AUTO_REGEN_MAX_FILES", WIKI_REGEN_DEFAULT_MAX_FILES);
+}
+
+function wikiRegenStatePath(): string {
+  const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  return join(dataDir, "wiki-regen-debounce.json");
+}
+
+/** True if `repoRoot`'s wiki was regenerated within the throttle window. */
+function shouldDebounceWikiRegen(repoRoot: string, now: number): boolean {
+  try {
+    const path = wikiRegenStatePath();
+    let state: Record<string, number> = {};
+    if (existsSync(path)) {
+      try { state = JSON.parse(readFileSync(path, "utf-8")) as Record<string, number>; } catch { state = {}; }
+    }
+    const last = state[repoRoot];
+    if (typeof last === "number" && now - last < WIKI_REGEN_DEBOUNCE_MS) return true;
+    const pruned: Record<string, number> = { [repoRoot]: now };
+    for (const [k, v] of Object.entries(state)) {
+      if (k !== repoRoot && typeof v === "number" && now - v < 60 * 60_000) pruned[k] = v;
+    }
+    try { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(pruned)); } catch { /* disk */ }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Opportunistically regenerate the wiki for the repo containing `filePath`.
+ * Fire-and-forget: spawns a detached `wiki-generate` process and returns
+ * immediately so the agent is never blocked. No-ops unless ALL of:
+ *   - a wiki already exists for the repo (we never auto-create — opt-in only),
+ *   - the repo is not larger than the size cap (huge repos are manual-only),
+ *   - the edit added a NEW file (structure changed). Edits to files already
+ *     known to the wiki don't change the module map / overview, so they skip
+ *     regen — this makes the common case (editing existing code) cost nothing,
+ *   - the per-repo throttle window has elapsed.
+ * Opt out entirely via `CODESIFT_WIKI_AUTO_REGEN=0`.
+ */
+function maybeRegenerateWiki(filePath: string, now: number): void {
+  try {
+    const optOut = process.env.CODESIFT_WIKI_AUTO_REGEN;
+    if (optOut === "0" || optOut === "false") return;
+
+    // Only repos that already have a wiki manifest are auto-refreshed.
+    const repoRoot = findRepoRoot(filePath);
+    if (!repoRoot) return;
+
+    // Read the manifest once for the size + structural gates.
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(readFileSync(join(repoRoot, WIKI_MANIFEST_REL), "utf-8")) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const fileMap = manifest["file_to_community"];
+    const knownFiles = fileMap && typeof fileMap === "object" ? (fileMap as Record<string, unknown>) : null;
+
+    // Size gate: don't run whole-repo analysis in the background for huge repos.
+    if (knownFiles && Object.keys(knownFiles).length > wikiRegenMaxFiles()) return;
+
+    // Structural gate: only regenerate when a NEW file appeared. An edit to a
+    // file the wiki already knows about doesn't change the architecture map, so
+    // we skip it — the throttle is then never even consulted for plain edits.
+    if (knownFiles) {
+      const rel = pathPosix.normalize(relative(repoRoot, filePath).split("\\").join("/"));
+      if (rel in knownFiles) return;
+    }
+
+    if (shouldDebounceWikiRegen(repoRoot, now)) return;
+
+    // Re-run the same CLI entry point that's executing this hook, with cwd set
+    // to the repo root so `wiki-generate` auto-resolves the repo. Detached +
+    // unref + ignored stdio so it outlives this short-lived hook process.
+    const cliEntry = process.argv[1];
+    if (!cliEntry) return;
+    const child = spawn(process.execPath, [cliEntry, "wiki-generate", "--no-lens"], {
+      cwd: repoRoot,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.on("error", () => { /* CQ8: never surface spawn failures */ });
+    child.unref();
+  } catch {
+    // CQ8: auto-regen is best-effort — never crash the hook.
+  }
+}
+
 export async function handlePostindexFile(): Promise<void> {
   try {
     const raw = readRawInput();
@@ -573,6 +796,9 @@ export async function handlePostindexFile(): Promise<void> {
     } catch {
       // CQ8: fire-and-forget — never crash, never block the agent
     }
+
+    // Keep the wiki fresh: throttled, detached background regeneration.
+    maybeRegenerateWiki(filePath, Date.now());
 
     process.exit(0);
   } catch {
@@ -670,11 +896,22 @@ export async function handleSessionStart(): Promise<void> {
     try { unlinkSync(sentinel); } catch { /* not exist */ }
 
     // Inject context prompt
-    const additionalContext =
+    let additionalContext =
       "CodeSift MCP is available (mcp__codesift__* tools). " +
       "Before searching code with built-in Grep/Glob/Read, prefer CodeSift tools: " +
       "search_text, get_file_tree, search_symbols, plan_turn. " +
       "Repo auto-resolves from CWD — no need for list_repos.";
+
+    // Append the project wiki overview (architecture map) so every session starts
+    // oriented without spending tool calls re-discovering structure. Best-effort:
+    // only fires when a v2 wiki manifest exists at/above CWD; never blocks startup.
+    if (process.env.CODESIFT_WIKI_OVERVIEW !== "0") {
+      const repoRoot = findRepoRootFromDir(process.cwd());
+      if (repoRoot) {
+        const overview = tryLoadProjectOverview(repoRoot);
+        if (overview) additionalContext += overview;
+      }
+    }
 
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {

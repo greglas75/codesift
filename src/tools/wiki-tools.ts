@@ -1,4 +1,5 @@
 import { writeFile, mkdir, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { detectCommunities } from "./community-tools.js";
@@ -119,6 +120,20 @@ async function loadOldManifest(outputDir: string): Promise<unknown> {
 // ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
+
+/** Current git HEAD SHA for `root`, or "unknown" when not a git repo. Used for
+ *  manifest freshness tracking (the SessionStart staleness hint compares this
+ *  against the working HEAD). */
+function captureGitCommit(root: string): string {
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root, encoding: "utf-8", timeout: 5000,
+    }).trim();
+    return /^[0-9a-f]{7,40}$/i.test(head) ? head : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 export async function generateWiki(
   repo: string,
@@ -465,11 +480,12 @@ export async function generateWiki(
 
   // Build manifest — v2 by default, v1 when CODESIFT_WIKI_V1=1 or no overview
   const indexHash = computeIndexHash(index.files);
+  const gitCommit = captureGitCommit(index.root);
   const useV2 = !v1Mode && projectOverview !== null;
   const manifest: WikiManifest | WikiManifestV2 = useV2
     ? buildWikiManifestV2({
         index_hash: indexHash,
-        git_commit: "unknown",
+        git_commit: gitCommit,
         pages: resolvedPageInfos,
         communities,
         project: projectOverview as ProjectOverview,
@@ -479,7 +495,7 @@ export async function generateWiki(
       })
     : buildWikiManifestV1({
         index_hash: indexHash,
-        git_commit: "unknown",
+        git_commit: gitCommit,
         pages: resolvedPageInfos,
         communities,
         degradedReasons,

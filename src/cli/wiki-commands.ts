@@ -6,7 +6,15 @@ import type { Flags } from "./args.js";
 import { getFlag, getBoolFlag } from "./args.js";
 
 export async function handleWikiGenerate(args: string[], flags: Flags): Promise<void> {
-  const repo = args[0] ?? "";
+  // Repo id is optional: when omitted, auto-resolve from CWD (same rule the MCP
+  // tools use). This lets `codesift wiki-generate` run from inside a repo with no
+  // argument — and lets the postindex hook trigger regeneration knowing only the
+  // repo root (it spawns this command with cwd set to the repo root).
+  let repo = args[0] ?? "";
+  if (!repo) {
+    const { resolveRepoFromCwd } = await import("../server-helpers.js");
+    repo = resolveRepoFromCwd(process.cwd());
+  }
   const focus = getFlag(flags, "focus") ?? undefined;
   const outputDir = getFlag(flags, "output") ?? undefined;
   const noLens = getBoolFlag(flags, "no-lens");
