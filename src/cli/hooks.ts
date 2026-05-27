@@ -14,7 +14,8 @@ import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync } from "
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { getCurrentGitCommit } from "../utils/git-head.js";
 
 // ---------------------------------------------------------------------------
 // Cross-platform input parsing
@@ -258,22 +259,6 @@ function tryLoadWikiSummary(filePath: string): string | null {
   }
 }
 
-/** Current git HEAD short SHA for `dir`, or null on any failure. */
-function currentGitCommit(dir: string): string | null {
-  try {
-    const r = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], {
-      encoding: "utf-8",
-      timeout: 1500,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (r.status !== 0 || typeof r.stdout !== "string") return null;
-    const sha = r.stdout.trim();
-    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Build a compact, agent-facing project overview from the v2 wiki manifest at
  * `repoRoot`. Returns null for missing/v1/malformed manifests (graceful — the
@@ -340,16 +325,25 @@ function tryLoadProjectOverview(repoRoot: string): string | null {
       if (top.length > 0) lines.push(`Gotchas: ${top.join(" | ")}`);
     }
 
-    // Staleness hint: compare manifest commit to current HEAD. Best-effort.
-    const manifestCommit = str(manifest["git_commit"]);
-    const head = currentGitCommit(repoRoot);
-    if (manifestCommit && manifestCommit !== "unknown" && head && !head.startsWith(manifestCommit) && !manifestCommit.startsWith(head)) {
-      lines.push(`(Wiki generated at ${manifestCommit.slice(0, 8)}; HEAD is ${head.slice(0, 8)} — auto-refreshes on edits.)`);
+    // Staleness hint: compare manifest commit to current HEAD. Best-effort and
+    // gated — the probe is a synchronous subprocess on the SessionStart hot
+    // path, so users who care about absolute startup latency can disable it.
+    // (Auto-regen keeps the wiki fresh anyway, so the hint rarely fires.)
+    if (process.env.CODESIFT_WIKI_STALENESS_CHECK !== "0") {
+      const manifestCommit = str(manifest["git_commit"]);
+      const head = getCurrentGitCommit(repoRoot);
+      if (manifestCommit && manifestCommit !== "unknown" && head && !head.startsWith(manifestCommit) && !manifestCommit.startsWith(head)) {
+        lines.push(`(Wiki generated at ${manifestCommit.slice(0, 8)}; HEAD is ${head.slice(0, 8)} — auto-refreshes on edits.)`);
+      }
     }
 
     const out = lines.join("\n");
     const max = wikiOverviewMaxChars();
-    return out.length > max ? out.slice(0, max) : out;
+    if (out.length <= max) return out;
+    // Trim to the last full line so the overview never ends mid-sentence.
+    const truncated = out.slice(0, max);
+    const lastNl = truncated.lastIndexOf("\n");
+    return lastNl > 0 ? truncated.slice(0, lastNl) : truncated;
   } catch {
     return null;
   }

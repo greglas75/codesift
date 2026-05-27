@@ -99,7 +99,13 @@ main()
   .then(() => {
     // Force a clean exit for one-shot commands so leaked handles (embedding
     // workers, etc.) can't keep the process hanging. Watch mode opts out.
-    if (!keepProcessAlive) process.exit(0);
+    // Drain stdout+stderr first via empty-write callbacks so piped output
+    // (`codesift search ... > out.json`) doesn't get truncated when there's
+    // pending data in the buffer.
+    if (keepProcessAlive) return;
+    process.stdout.write("", () => {
+      process.stderr.write("", () => process.exit(0));
+    });
   })
   .catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
