@@ -19,6 +19,7 @@
  *   8. Populates metadata flags (stale_index, framework_mismatch, cold_start…)
  */
 
+import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import {
   getToolDefinitions,
@@ -33,6 +34,8 @@ import {
 } from "../search/tool-ranker.js";
 import { getSessionState } from "../storage/session-state.js";
 import { getUsageStats } from "../storage/usage-stats.js";
+import { loadConfig } from "../config.js";
+import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import type { CodeIndex } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -218,10 +221,65 @@ export function _resetPlanTurnCaches(): void {
 // Constants for merging / framework mismatch detection
 // ---------------------------------------------------------------------------
 
-const STALE_INDEX_THRESHOLD_MS = 5 * 60 * 1000;
+/**
+ * Time-based fallback only. The primary `stale_index` check now compares the
+ * registry's `last_git_commit` against the live git HEAD. This 24 h fallback
+ * fires only when the git read fails (not a repo, git missing) so the flag
+ * still surfaces for repos that have drifted untracked for a long idle period.
+ */
+const STALE_INDEX_TIME_FALLBACK_MS = 24 * 60 * 60 * 1000;
 const MAX_TOOLS = 10;
 const MAX_SYMBOLS = 20;
 const MAX_FILES = 10;
+
+/**
+ * Return the current `git rev-parse HEAD` SHA for `repoRoot`, or `null` if the
+ * directory isn't a git checkout / git isn't available / spawn times out.
+ *
+ * Synchronous + bounded (timeout 1500ms) because `plan_turn` is the front-door
+ * routing tool — p99 budget is a few hundred ms. Real-world cost on warm git
+ * caches is ~5–15 ms. Failures are silent on purpose; the caller falls back
+ * to the time-based stale check.
+ */
+export function safeReadGitHead(repoRoot: string): string | null {
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      timeout: 1500,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^[0-9a-f]{40}$/.test(head) ? head : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decide whether the in-memory index has drifted from the live repository.
+ *
+ * Source-of-truth priority:
+ *   1. `git rev-parse HEAD` vs registry's `last_git_commit` — definitive when
+ *      both are available; flips true iff the HEAD has moved.
+ *   2. Time-based fallback (24 h) — only when git is unavailable, so we don't
+ *      go fully silent on non-git repos or after `git` spawn failures.
+ *
+ * Notably we no longer flip true after 5 min of agent idle — that was the
+ * historical behavior and produced false positives in read-mostly sessions
+ * (audits, plans, explorations) where the index was perfectly in sync.
+ */
+export function isStaleIndex(
+  index: CodeIndex,
+  lastGitCommit: string | undefined,
+): boolean {
+  const headSha = safeReadGitHead(index.root);
+  if (headSha != null && lastGitCommit != null) {
+    return headSha !== lastGitCommit;
+  }
+  // Git unavailable on either side — fall back to time-based check.
+  const indexAgeMs = Date.now() - (index.updated_at ?? index.created_at ?? 0);
+  return indexAgeMs > STALE_INDEX_TIME_FALLBACK_MS;
+}
 
 /** Frameworks detectable via detectAutoLoadTools. If user mentions one but
  *  it's not in the detected framework tools, flag framework_mismatch. */
@@ -385,6 +443,20 @@ export async function planTurn(
     return buildUnindexedResult(query, startedAt);
   }
 
+  // Registry meta carries `last_git_commit` (the recorded HEAD at last index
+  // touch). We compare it against the live HEAD to detect real drift, instead
+  // of using the time-based heuristic that produced false positives in
+  // read-mostly sessions. Failure is non-fatal — `isStaleIndex` falls back to
+  // a much longer time threshold (24 h) when git is unavailable.
+  let lastGitCommit: string | undefined;
+  try {
+    const config = loadConfig();
+    const resolved = await resolveRegisteredRepoMeta(config.registryPath, repo);
+    lastGitCommit = resolved?.meta.last_git_commit;
+  } catch {
+    // ignore — staleness check handles undefined last_git_commit
+  }
+
   // --- 2. Parse query ---------------------------------------------------
   const parsed = parseQuery(query, index);
 
@@ -533,8 +605,7 @@ export async function planTurn(
   const files = collectFileRecommendations(parsed, index).slice(0, MAX_FILES);
 
   // --- 9. Metadata ------------------------------------------------------
-  const staleIndex =
-    Date.now() - (index.updated_at ?? index.created_at ?? 0) > STALE_INDEX_THRESHOLD_MS;
+  const staleIndex = isStaleIndex(index, lastGitCommit);
 
   const coldStart = usageFreq.size === 0;
 
