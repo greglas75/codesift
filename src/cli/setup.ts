@@ -759,6 +759,17 @@ export async function formatSetupLines(
       };
       const hooksPath = hookPaths[platform] ?? "hooks";
       lines.push(`✓ hooks configured ${hooksPath}`);
+      // Surface the wiki workflow. The SessionStart hook injects a project
+      // overview into every new agent session, but only once a wiki manifest
+      // exists — otherwise the hook is a silent no-op and the feature stays
+      // invisible (the #1 reason wiki adoption is zero). Tell the user how to
+      // turn it on.
+      lines.push(
+        "  ↳ wiki: run `codesift wiki-generate` in a repo to enable the SessionStart",
+      );
+      lines.push(
+        "    project-overview injection + PostToolUse auto-refresh",
+      );
     }
   }
 

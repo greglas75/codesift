@@ -475,6 +475,12 @@ What it does:
   - Installs hooks for supported platforms (currently Claude Code, Codex, Gemini)
   - Skips if already configured (safe to run multiple times)
 
+Wiki (Claude Code):
+  --hooks wires a SessionStart hook that injects a project overview into every
+  new agent session, plus a PostToolUse hook that auto-refreshes it. Both are
+  no-ops until you run `codesift wiki-generate` in the repo to build the wiki.
+  Run wiki-generate once per repo to turn the feature on.
+
 Examples:
   codesift setup codex
   codesift setup claude
