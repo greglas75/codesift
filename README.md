@@ -65,7 +65,15 @@ codesift symbols local/my-project "createUser" --kind function --include-source
 # Semantic search (requires embedding provider)
 codesift retrieve local/my-project \
   --queries '[{"type":"semantic","query":"how does caching work?"}]'
+
+# Build the project wiki — agents read it on every new session
+codesift wiki-generate
 ```
+
+> **Wiki tip:** `setup --hooks` (on by default) wires a SessionStart hook that injects a
+> project overview into every new agent session, plus a PostToolUse hook that auto-refreshes
+> it. Both are silent no-ops until you run `codesift wiki-generate` once in the repo — skip it
+> and the wiki never reaches your agent. This is the #1 reason wiki adoption stays at zero.
 
 ## Benchmark results
 
