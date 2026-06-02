@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
 
@@ -136,6 +136,14 @@ export async function resolveRegisteredRepoMeta(
       meta = allRepos[0]!;
     }
   }
+  if (!meta && repoInput) {
+    const allRepos = await listRepos(registryPath);
+    const explicitMatches = resolveExplicitRepoInput(allRepos, repoInput);
+    if (explicitMatches.length === 1) {
+      meta = explicitMatches[0]!;
+      resolved = meta.name;
+    }
+  }
   if (!meta && repoInput && !repoInput.includes("/")) {
     // Bare-name fallback: agent passed `thepopebot` but registry has `local/thepopebot`.
     // Collect every repo whose name ends in `/<input>` and decide on the union to avoid
@@ -155,6 +163,35 @@ export async function resolveRegisteredRepoMeta(
   }
   if (!meta) return null;
   return { resolvedName: resolved, meta };
+}
+
+function resolveExplicitRepoInput(repos: RepoMeta[], repoInput: string): RepoMeta[] {
+  if (isAbsolute(repoInput)) {
+    const inputPath = resolve(repoInput);
+    const matches = repos
+      .filter((r) => isAncestorOrEqual(resolve(r.root), inputPath))
+      .sort((a, b) => resolve(b.root).length - resolve(a.root).length);
+    const longestRootLength = matches[0] ? resolve(matches[0].root).length : 0;
+    return matches.filter((r) => resolve(r.root).length === longestRootLength);
+  }
+
+  const lowerInput = repoInput.toLowerCase();
+  const caseMatches = repos.filter((r) => r.name.toLowerCase() === lowerInput);
+  if (caseMatches.length > 0) return caseMatches;
+
+  const localPrefix = "local/";
+  if (lowerInput.startsWith(localPrefix)) {
+    const requestedBasename = repoInput.slice(localPrefix.length).toLowerCase();
+    return repos.filter((r) => basename(r.root).toLowerCase() === requestedBasename);
+  }
+
+  return [];
+}
+
+function isAncestorOrEqual(ancestor: string, descendant: string): boolean {
+  if (ancestor === descendant) return true;
+  const prefix = ancestor.endsWith(sep) ? ancestor : ancestor + sep;
+  return descendant.startsWith(prefix);
 }
 
 /**

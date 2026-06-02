@@ -1056,9 +1056,9 @@ export async function handleSentinelWriter(): Promise<void> {
 
 const CODESIFT_TOOL_KEYWORDS = [
   "search_text", "search_symbols", "get_file_tree", "get_file_outline",
-  "get_symbol", "get_symbols", "find_references", "trace_call_chain",
+  "index_file", "get_symbol", "get_symbols", "find_references", "trace_call_chain",
   "trace_route", "codebase_retrieval", "assemble_context", "plan_turn",
-  "find_dead_code", "scan_secrets", "review_diff", "audit_scan",
+  "search_all_conversations", "find_dead_code", "scan_secrets", "review_diff", "audit_scan",
   "detect_communities", "analyze_complexity", "analyze_hotspots",
   "impact_analysis", "find_and_show", "discover_tools", "describe_tools",
   "codesift", "CodeSift",

@@ -1,8 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getToolDefinitions, CORE_TOOL_NAMES, enableToolByName, extractToolParams, getToolDefinition } from "../../src/register-tools.js";
+import {
+  ALWAYS_VISIBLE_TOOL_NAMES,
+  getToolDefinitions,
+  CORE_TOOL_NAMES,
+  enableToolByName,
+  extractToolParams,
+  getToolDefinition,
+  registerTools,
+} from "../../src/register-tools.js";
 
 // All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
@@ -21,6 +29,50 @@ const ASTRO_CORE_TOOL_NAMES = [
   "astro_config_analyze",
   "astro_content_collections",
 ] as const;
+
+function createMockServer() {
+  const registeredTools = new Map<string, {
+    name: string;
+    enabled: boolean;
+    disable: ReturnType<typeof vi.fn>;
+    enable: ReturnType<typeof vi.fn>;
+    handler: unknown;
+  }>();
+  return {
+    registeredTools,
+    tool: vi.fn((name: string, _desc: string, _schema: unknown, handler: unknown) => {
+      const handle = {
+        name,
+        enabled: true,
+        disable: vi.fn(() => { handle.enabled = false; }),
+        enable: vi.fn(() => { handle.enabled = true; }),
+        handler,
+      };
+      registeredTools.set(name, handle);
+      return handle;
+    }),
+  };
+}
+
+describe("register-tools — always-visible tools", () => {
+  it("keeps usage-critical tools in CORE_TOOL_NAMES", () => {
+    for (const toolName of ALWAYS_VISIBLE_TOOL_NAMES) {
+      expect(CORE_TOOL_NAMES.has(toolName), `${toolName} must stay core`).toBe(true);
+    }
+  });
+
+  it("registers usage-critical tools up front in deferred mode", () => {
+    const server = createMockServer();
+
+    registerTools(server as any, { deferNonCore: true });
+
+    for (const toolName of ALWAYS_VISIBLE_TOOL_NAMES) {
+      const handle = server.registeredTools.get(toolName);
+      expect(handle, `${toolName} should be registered without discovery`).toBeDefined();
+      expect(handle!.enabled, `${toolName} should be enabled`).toBe(true);
+    }
+  });
+});
 
 describe("register-tools — astro tools registration", () => {
   const defs = getToolDefinitions();

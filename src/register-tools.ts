@@ -1063,19 +1063,26 @@ export type ToolCategory =
   | "meta"
   | "discovery";
 
+/** Usage-critical tools that must never require discover_tools/describe_tools. */
+export const ALWAYS_VISIBLE_TOOL_NAMES = [
+  "search_text",
+  "get_file_outline",
+  "plan_turn",
+  "index_file",
+  "search_symbols",
+  "get_file_tree",
+  "search_all_conversations",
+  "codebase_retrieval",
+] as const;
+
 /** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
 export const CORE_TOOL_NAMES = new Set([
-  // --- Top 10 by usage (91% of calls) ---
-  "search_text",             // #1: 1841 calls
-  "codebase_retrieval",      // #2: 574 calls
-  "get_file_outline",        // #3: 351 calls
-  "search_symbols",          // #4: 332 calls
-  "list_repos",              // #5: 292 calls
-  "get_file_tree",           // #6: 268 calls
-  "index_file",              // #7: 209 calls
-  "get_symbol",              // #8: 138 calls
-  "search_patterns",         // #9: 135 calls
-  "index_conversations",     // #10: 127 calls
+  ...ALWAYS_VISIBLE_TOOL_NAMES,
+  // --- Additional high-usage/direct-use tools ---
+  "list_repos",
+  "get_symbol",
+  "search_patterns",
+  "index_conversations",
   // --- Direct-use: agents call these without discovery ---
   "assemble_context",        // 64 calls, 21 sessions, 100% direct
   "get_symbols",             // 69 calls — batch symbol reads
@@ -1110,7 +1117,6 @@ export const CORE_TOOL_NAMES = new Set([
   "index_folder",            // repo onboarding
   "discover_tools",          // meta: discovers remaining hidden tools
   "describe_tools",          // meta: full schema for hidden tools
-  "plan_turn",               // meta: route query to best tools/symbols/files
   "initial_instructions",    // meta: Serena-style onboarding tool, "must call first"
   "get_session_snapshot",    // session: compaction survival
   "analyze_project",         // project profile

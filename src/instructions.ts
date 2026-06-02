@@ -2,11 +2,11 @@
  * CODESIFT_INSTRUCTIONS — single source of truth for agent guidance.
  * Target: ~800 tokens (~3200 chars). Compact abbreviated format.
  */
-export const CODESIFT_INSTRUCTIONS = `CodeSift — 150 MCP tools (51 core, 95 hidden via disable()).
+export const CODESIFT_INSTRUCTIONS = `CodeSift — 150 MCP tools. Usage-critical tools are always visible; niche tools are discoverable.
 
 START HERE: For any non-trivial code task call mcp__codesift__plan_turn(query="<your task>") FIRST. plan_turn is always visible — no schema-loading required. It returns ranked tools+symbols+files and auto-reveals hidden tools in one call. Do NOT iterate ToolSearch to discover CodeSift tools — plan_turn replaces that path.
 
-PREFER core CodeSift tools over Grep/Glob/Read for code search. Always-visible core covers: search_text, search_symbols, get_file_outline, get_file_tree, get_symbol, get_symbols, codebase_retrieval, find_references, find_and_show, get_context_bundle, analyze_complexity, detect_communities, audit_scan, search_conversations, index_status, plus framework-core (framework_audit, nextjs_route_map, nextjs_metadata_audit for Next.js; analyze_hono_app, trace_middleware_chain for Hono; astro_audit + 6 astro_* for Astro; nest_audit for NestJS).
+PREFER core CodeSift tools over Grep/Glob/Read for code search. Always-visible usage core: plan_turn, search_text, search_symbols, get_file_outline, get_file_tree, index_file, codebase_retrieval, search_all_conversations. Additional visible core covers get_symbol, get_symbols, find_references, find_and_show, get_context_bundle, analyze_complexity, detect_communities, audit_scan, search_conversations, index_status, plus framework-core (framework_audit, nextjs_route_map, nextjs_metadata_audit for Next.js; analyze_hono_app, trace_middleware_chain for Hono; astro_audit + 6 astro_* for Astro; nest_audit for NestJS).
 
 AUTO-LOAD: Framework-specific tools auto-enable when project type is detected at CWD or indexed path:
   composer.json → PHP/Yii2 (6 tools)        build.gradle.kts → Kotlin (10 tools incl. Compose/Room)

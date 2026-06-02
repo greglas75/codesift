@@ -281,6 +281,66 @@ describe("registry", () => {
       expect(result!.resolvedName).toBe("custom-override-name");
     });
 
+    it("resolves an absolute repo root to the registered repo key", async () => {
+      const meta = makeMeta("local/rewards-api");
+      meta.root = "/Users/greglas/DEV/Rewards-API";
+      await registerRepo(registryPath, meta);
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "/Users/greglas/DEV/Rewards-API");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("local/rewards-api");
+    });
+
+    it("resolves an absolute subdirectory to the longest matching registered root", async () => {
+      const outer = makeMeta("local/outer");
+      outer.root = "/Users/greglas/DEV/repo";
+      const inner = makeMeta("local/inner");
+      inner.root = "/Users/greglas/DEV/repo/packages/inner";
+      await registerRepo(registryPath, outer);
+      await registerRepo(registryPath, inner);
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "/Users/greglas/DEV/repo/packages/inner/src");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("local/inner");
+    });
+
+    it("resolves case-only repo key drift to the registered repo key", async () => {
+      const meta = makeMeta("local/rewards-api");
+      meta.root = "/Users/greglas/DEV/Rewards-API";
+      await registerRepo(registryPath, meta);
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "local/Rewards-API");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("local/rewards-api");
+    });
+
+    it("resolves local/<root basename> drift to the registered repo key", async () => {
+      const meta = makeMeta("local/TGMQuotas");
+      meta.root = "/Users/greglas/DEV/QuotasMobi";
+      await registerRepo(registryPath, meta);
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "local/QuotasMobi");
+
+      expect(result).not.toBeNull();
+      expect(result!.resolvedName).toBe("local/TGMQuotas");
+    });
+
+    it("returns null when absolute path matches multiple registered roots", async () => {
+      const first = makeMeta("local/rewards-api");
+      first.root = "/Users/greglas/DEV/Rewards-API";
+      const second = makeMeta("vps/rewards-api");
+      second.root = "/Users/greglas/DEV/Rewards-API";
+      await registerRepo(registryPath, first);
+      await registerRepo(registryPath, second);
+
+      const result = await resolveRegisteredRepoMeta(registryPath, "/Users/greglas/DEV/Rewards-API");
+
+      expect(result).toBeNull();
+    });
+
     it("preserves exact match precedence over fallback", async () => {
       await registerRepo(registryPath, makeMeta("thepopebot"));
       await registerRepo(registryPath, makeMeta("local/thepopebot"));
