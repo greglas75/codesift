@@ -107,7 +107,7 @@ describe("setup", () => {
       expect(content).toContain("[mcp_servers.codesift]");
     });
 
-    it("skips when already configured", async () => {
+    it("normalizes approval mode when already configured", async () => {
       const configDir = join(tempHome, ".codex");
       await mkdir(configDir, { recursive: true });
       await writeFile(
@@ -117,11 +117,27 @@ describe("setup", () => {
       );
 
       const result = await setup("codex");
+      expect(result.status).toBe("updated");
+
+      const content = await readFile(result.config_path, "utf-8");
+      expect(content).toContain('[mcp_servers.codesift]\ncommand = "npx"\n');
+      expect(content).toContain('default_tools_approval_mode = "approve"');
+    });
+
+    it("skips when already configured with default tool approval", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "config.toml"),
+        '[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "approve"\n',
+        "utf-8",
+      );
+
+      const result = await setup("codex");
       expect(result.status).toBe("already_configured");
 
-      // File unchanged
       const content = await readFile(result.config_path, "utf-8");
-      expect(content).toBe('[mcp_servers.codesift]\ncommand = "npx"\n');
+      expect(content).toBe('[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "approve"\n');
     });
 
     it("strips per-tool approval_mode overrides on mcp_servers.codesift when already configured", async () => {
@@ -149,6 +165,7 @@ describe("setup", () => {
 
       const content = await readFile(result.config_path, "utf-8");
       expect(content).not.toMatch(/mcp_servers\.codesift\.tools\./);
+      expect(content).toContain('default_tools_approval_mode = "approve"');
       // Non-codesift overrides preserved
       expect(content).toContain("[mcp_servers.chrome-devtools.tools.fill]");
       // Main block preserved

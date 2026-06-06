@@ -20,6 +20,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { basename, relative } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import {
   getToolDefinitions,
@@ -524,7 +525,7 @@ export async function planTurn(
   // for the word "package" don't suddenly rank workspace tools above
   // search/symbol tools.
   const frameworkTools = augmentFrameworkToolsForMonorepo(
-    baseFrameworkTools,
+    filterWorkspaceFrameworkTools(baseFrameworkTools, parsed.normalized, index),
     parsed.normalized,
     index,
   );
@@ -769,6 +770,101 @@ const MONOREPO_TOOL_NAMES = [
   "workspace_boundaries",
 ];
 
+const FRAMEWORK_TOOL_OWNERS: Record<string, string> = {
+  astro_actions_audit: "astro",
+  astro_analyze_islands: "astro",
+  astro_audit: "astro",
+  astro_config_analyze: "astro",
+  astro_content_collections: "astro",
+  astro_db_audit: "astro",
+  astro_env_validator: "astro",
+  astro_image_audit: "astro",
+  astro_middleware: "astro",
+  astro_migration_check: "astro",
+  astro_route_map: "astro",
+  astro_sessions: "astro",
+  astro_svg_components: "astro",
+  analyze_context_graph: "react",
+  analyze_hooks: "react",
+  analyze_renders: "react",
+  audit_compiler_readiness: "react",
+  react_quickstart: "react",
+  trace_component_tree: "react",
+  analyze_hono_app: "hono",
+  analyze_inline_handler: "hono",
+  audit_hono_security: "hono",
+  detect_hono_modules: "hono",
+  extract_api_contract: "hono",
+  extract_response_types: "hono",
+  find_dead_hono_routes: "hono",
+  trace_context_flow: "hono",
+  trace_middleware_chain: "hono",
+  trace_rpc_types: "hono",
+  visualize_hono_routes: "hono",
+};
+
+function queryMentionsFramework(query: string, framework: string): boolean {
+  const keywords = KNOWN_FRAMEWORK_KEYWORDS[framework] ?? [framework];
+  return keywords.some((kw) => {
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(query);
+  });
+}
+
+function workspaceQueryTokens(
+  workspace: import("../types.js").Workspace,
+  index: import("../types.js").CodeIndex,
+): string[] {
+  const relRoot = relative(index.root, workspace.root).replace(/\\/g, "/");
+  const raw = [
+    workspace.id,
+    workspace.name ?? "",
+    relRoot,
+    basename(workspace.root),
+  ];
+  if (workspace.name?.includes("/")) raw.push(workspace.name.split("/").pop() ?? "");
+  if (workspace.id.includes("/")) raw.push(workspace.id.split("/").pop() ?? "");
+  return [...new Set(raw.map((v) => v.toLowerCase().trim()).filter((v) => v.length > 1))];
+}
+
+function queryMentionsWorkspace(
+  query: string,
+  workspace: import("../types.js").Workspace,
+  index: import("../types.js").CodeIndex,
+): boolean {
+  return workspaceQueryTokens(workspace, index).some((token) => {
+    if (token.includes("/") || token.includes("@")) return query.includes(token);
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(query);
+  });
+}
+
+function filterWorkspaceFrameworkTools(
+  base: string[],
+  query: string,
+  index: import("../types.js").CodeIndex,
+): string[] {
+  const workspaces = index.workspaces ?? [];
+  if (workspaces.length === 0) return base;
+
+  const frameworksFromMentionedWorkspaces = new Set<string>();
+  const frameworksInWorkspaces = new Set<string>();
+  for (const ws of workspaces) {
+    for (const fw of ws.detected_frameworks) frameworksInWorkspaces.add(fw);
+    if (queryMentionsWorkspace(query, ws, index)) {
+      for (const fw of ws.detected_frameworks) frameworksFromMentionedWorkspaces.add(fw);
+    }
+  }
+
+  return base.filter((tool) => {
+    const framework = FRAMEWORK_TOOL_OWNERS[tool];
+    if (!framework) return true;
+    if (!frameworksInWorkspaces.has(framework)) return true;
+    if (queryMentionsFramework(query, framework)) return true;
+    return frameworksFromMentionedWorkspaces.has(framework);
+  });
+}
+
 function augmentFrameworkToolsForMonorepo(
   base: string[],
   query: string,
@@ -781,4 +877,3 @@ function augmentFrameworkToolsForMonorepo(
   if (!hasMonorepoTerm) return base;
   return [...base, ...MONOREPO_TOOL_NAMES];
 }
-

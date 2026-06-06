@@ -92,6 +92,45 @@ function makeIndex(symbols: CodeSymbol[] = []): CodeIndex {
   };
 }
 
+function makeMonorepoIndex(): CodeIndex {
+  return {
+    ...makeIndex(),
+    root: "/tmp/test",
+    workspaces: [
+      {
+        id: "@tgm/help",
+        name: "@tgm/help",
+        root: "/tmp/test/apps/help",
+        package_manager_role: "package",
+        manifest_tool: "turbo",
+        dependencies: { workspace: ["@tgm/shared-types"], external: ["astro"] },
+        tsconfig_paths: [],
+        detected_frameworks: ["astro"],
+      },
+      {
+        id: "@tgm/runner",
+        name: "@tgm/runner",
+        root: "/tmp/test/apps/runner",
+        package_manager_role: "package",
+        manifest_tool: "turbo",
+        dependencies: { workspace: ["@tgm/shared-types"], external: ["react"] },
+        tsconfig_paths: [],
+        detected_frameworks: ["react"],
+      },
+      {
+        id: "@tgm/shared-types",
+        name: "@tgm/shared-types",
+        root: "/tmp/test/packages/shared-types",
+        package_manager_role: "package",
+        manifest_tool: "turbo",
+        dependencies: { workspace: [], external: [] },
+        tsconfig_paths: [],
+        detected_frameworks: [],
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -343,6 +382,45 @@ describe("planTurn", () => {
     expect(result.tools[0]?.name).toBe("find_dead_code");
     expect(result.tools[1]?.name).toBe("search_text");
     expect(result.metadata.intents_detected).toBe(2);
+  });
+
+  it("8. monorepo query for runner/shared-types does not boost Astro tools from apps/help", async () => {
+    getCodeIndexMock.mockResolvedValue(makeMonorepoIndex());
+    detectAutoLoadToolsMock.mockResolvedValue([
+      "astro_config_analyze",
+      "astro_route_map",
+      "analyze_hooks",
+      "check_boundaries",
+    ]);
+    rankToolsMock.mockImplementation((ctx: ToolRankerContext) => {
+      expect(ctx.frameworkTools).not.toContain("astro_config_analyze");
+      expect(ctx.frameworkTools).not.toContain("astro_route_map");
+      expect(ctx.frameworkTools).toContain("analyze_hooks");
+      expect(ctx.frameworkTools).toContain("check_boundaries");
+      return ctx.frameworkTools.map((name, i) => rec(name, 0.9 - i * 0.01));
+    });
+
+    const result = await planTurn("test", "update runner shared-types validation");
+
+    expect(result.tools.map((t) => t.name)).not.toContain("astro_config_analyze");
+  });
+
+  it("9. monorepo query for help/Astro keeps Astro tools", async () => {
+    getCodeIndexMock.mockResolvedValue(makeMonorepoIndex());
+    detectAutoLoadToolsMock.mockResolvedValue([
+      "astro_config_analyze",
+      "astro_route_map",
+      "analyze_hooks",
+    ]);
+    rankToolsMock.mockImplementation((ctx: ToolRankerContext) => {
+      expect(ctx.frameworkTools).toContain("astro_config_analyze");
+      expect(ctx.frameworkTools).toContain("astro_route_map");
+      return ctx.frameworkTools.map((name, i) => rec(name, 0.9 - i * 0.01));
+    });
+
+    const result = await planTurn("test", "inspect apps/help astro config");
+
+    expect(result.tools.map((t) => t.name)).toContain("astro_config_analyze");
   });
 });
 

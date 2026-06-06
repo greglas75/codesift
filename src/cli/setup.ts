@@ -55,6 +55,41 @@ export function stripCodesiftToolApprovalOverrides(
   return { content: stripped, removed: matches.length };
 }
 
+// Codex Desktop may still prompt for MCP calls when the server default is
+// "auto"; make the CodeSift setup explicit so trusted local tools are approved
+// by default after setup.
+export function ensureCodesiftDefaultToolsApprovalApprove(
+  content: string,
+): { content: string; changed: boolean } {
+  const header = "[mcp_servers.codesift]";
+  const start = content.indexOf(header);
+  if (start === -1) {
+    return { content, changed: false };
+  }
+
+  const afterHeader = start + header.length;
+  const nextTableOffset = content.slice(afterHeader).search(/\n\[[^\]]+\]/);
+  const end = nextTableOffset === -1 ? content.length : afterHeader + nextTableOffset;
+  const block = content.slice(start, end);
+  const approvalRe = /^default_tools_approval_mode[\t ]*=[\t ]*"[^"]*"[\t ]*$/m;
+
+  if (approvalRe.test(block)) {
+    const updatedBlock = block.replace(approvalRe, 'default_tools_approval_mode = "approve"');
+    if (updatedBlock === block) {
+      return { content, changed: false };
+    }
+    return { content: content.slice(0, start) + updatedBlock + content.slice(end), changed: true };
+  }
+
+  const insertionPoint = block.endsWith("\n") ? end : end;
+  const prefix = content.slice(0, insertionPoint).replace(/\n?$/, "\n");
+  const suffix = content.slice(insertionPoint);
+  return {
+    content: `${prefix}default_tools_approval_mode = "approve"${suffix.startsWith("\n") || suffix === "" ? "" : "\n"}${suffix}`,
+    changed: true,
+  };
+}
+
 function getCodexTomlBlock(): string {
   const entry = resolveMcpServerEntry();
   const argsToml = entry.args.map((a) => `"${a}"`).join(", ");
@@ -63,6 +98,7 @@ function getCodexTomlBlock(): string {
 command = "${entry.command}"
 args = [${argsToml}]
 tool_timeout_sec = 120
+default_tools_approval_mode = "approve"
 `;
 }
 
@@ -383,19 +419,21 @@ async function setupCodex(): Promise<SetupResult> {
   if (existsSync(configPath)) {
     const original = await readFile(configPath, "utf-8");
     const { content: cleaned, removed } = stripCodesiftToolApprovalOverrides(original);
+    const normalized = ensureCodesiftDefaultToolsApprovalApprove(cleaned);
+    const content = normalized.content;
     const noteFields = removed > 0
       ? { note: `removed ${removed} per-tool approval override${removed === 1 ? "" : "s"} on mcp_servers.codesift` }
       : {};
 
-    if (cleaned.includes("[mcp_servers.codesift]")) {
-      if (removed > 0) {
-        await writeFile(configPath, cleaned, "utf-8");
+    if (content.includes("[mcp_servers.codesift]")) {
+      if (removed > 0 || normalized.changed) {
+        await writeFile(configPath, content, "utf-8");
         return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
       }
       return { platform: "codex", config_path: configPath, status: "already_configured" };
     }
     // Append main block to existing file (using cleaned content)
-    const newContent = cleaned.trimEnd() + "\n" + getCodexTomlBlock();
+    const newContent = content.trimEnd() + "\n" + getCodexTomlBlock();
     await writeFile(configPath, newContent, "utf-8");
     return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
   }
