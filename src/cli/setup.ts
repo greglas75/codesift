@@ -513,7 +513,14 @@ function hasCodesiftHook(entries: HookEntry[]): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code hooks — .claude/settings.local.json
+// Claude Code hooks — ~/.claude/settings.json
+//
+// NOTE: must be settings.json, not settings.local.json. Claude Code only reads
+// settings.local.json at the PROJECT level (<repo>/.claude/settings.local.json);
+// a user-level ~/.claude/settings.local.json is silently ignored, which left
+// every hook (session-start wiki overview, postindex auto-reindex, prechecks,
+// precompact snapshot) dead. Versions ≤0.8.9 wrote to the ignored file —
+// migrateLegacyClaudeHooks() cleans those entries up on the next setup run.
 // ---------------------------------------------------------------------------
 
 const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
@@ -539,7 +546,7 @@ const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
 
 export async function setupClaudeHooks(): Promise<void> {
   const configDir = join(homedir(), ".claude");
-  const settingsPath = join(configDir, "settings.local.json");
+  const settingsPath = join(configDir, "settings.json");
   await ensureDir(configDir);
 
   const { root, hooks } = await loadHooksSection(settingsPath);
@@ -551,6 +558,48 @@ export async function setupClaudeHooks(): Promise<void> {
   }
 
   await writeJsonFile(settingsPath, root);
+  await migrateLegacyClaudeHooks(configDir);
+}
+
+/**
+ * Remove codesift hook entries from the legacy ~/.claude/settings.local.json
+ * (written by setup ≤0.8.9, never read by Claude Code at the user level).
+ * Non-codesift hooks and all other keys in the file are preserved.
+ */
+async function migrateLegacyClaudeHooks(configDir: string): Promise<void> {
+  const legacyPath = join(configDir, "settings.local.json");
+  if (!existsSync(legacyPath)) return;
+
+  let root: Record<string, unknown>;
+  try {
+    root = await readJsonFile(legacyPath);
+  } catch {
+    return; // unparseable — leave the user's file alone
+  }
+  const hooks = root["hooks"];
+  if (typeof hooks !== "object" || hooks === null || Array.isArray(hooks)) return;
+
+  let changed = false;
+  const hooksSection = hooks as HooksSection;
+  for (const event of Object.keys(hooksSection)) {
+    const entries = hooksSection[event];
+    if (!Array.isArray(entries)) continue;
+    const kept = entries.filter((entry) => !hasCodesiftHook([entry]));
+    if (kept.length !== entries.length) {
+      changed = true;
+      if (kept.length === 0) {
+        delete hooksSection[event];
+      } else {
+        hooksSection[event] = kept;
+      }
+    }
+  }
+  if (!changed) return;
+
+  if (Object.keys(hooksSection).length === 0) {
+    delete root["hooks"];
+  }
+  await writeJsonFile(legacyPath, root);
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +840,7 @@ export async function formatSetupLines(
     if (hookInstaller) {
       await hookInstaller();
       const hookPaths: Record<string, string> = {
-        claude: join(homedir(), ".claude", "settings.local.json"),
+        claude: join(homedir(), ".claude", "settings.json"),
         codex: join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "hooks.json"),
         gemini: join(homedir(), ".gemini", "settings.json"),
       };

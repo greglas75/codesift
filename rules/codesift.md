@@ -274,7 +274,7 @@ Setup auto-indexing and read-redirect hooks for Claude Code:
 codesift setup claude --hooks
 ```
 
-Installs hooks in `.claude/settings.local.json` and rules in `~/.claude/rules/codesift.md`:
+Installs hooks in `~/.claude/settings.json` and rules in `~/.claude/rules/codesift.md`:
 
 - **PreToolUse** (`precheck-read`) — redirects `Read` on large code files to CodeSift tools
 - **PreToolUse** (`precheck-bash`) — redirects `find`/`grep`/`rg` in Bash to CodeSift tools

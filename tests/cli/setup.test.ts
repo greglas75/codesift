@@ -602,7 +602,7 @@ describe("setup", () => {
       const result = await setup("claude", { hooks: true });
       expect(result.status).toBe("created");
 
-      const settingsPath = join(tempHome, ".claude", "settings.local.json");
+      const settingsPath = join(tempHome, ".claude", "settings.json");
       const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
       const preToolUse = settings.hooks?.PreToolUse as Array<{ matcher: string }> | undefined;
@@ -618,7 +618,7 @@ describe("setup", () => {
       await setup("claude", { hooks: true });
       await setup("claude", { hooks: true });
 
-      const settingsPath = join(tempHome, ".claude", "settings.local.json");
+      const settingsPath = join(tempHome, ".claude", "settings.json");
       const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
 
       const preToolUse = settings.hooks?.PreToolUse as Array<{ matcher: string }> | undefined;
@@ -633,21 +633,16 @@ describe("setup", () => {
     it("setup('claude') without hooks flag does NOT write hook entries", async () => {
       await setup("claude");
 
-      const settingsPath = join(tempHome, ".claude", "settings.local.json");
-      // File should NOT exist because no hooks flag was passed
-      let exists = true;
-      try {
-        await readFile(settingsPath, "utf-8");
-      } catch {
-        exists = false;
-      }
-      expect(exists).toBe(false);
+      // settings.json exists (mcpServers), but must have no hooks section
+      const settingsPath = join(tempHome, ".claude", "settings.json");
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(settings.hooks).toBeUndefined();
     });
 
-    it("merges hooks into existing settings.local.json without overwriting other hooks", async () => {
+    it("merges hooks into existing settings.json without overwriting other hooks", async () => {
       const claudeDir = join(tempHome, ".claude");
       await mkdir(claudeDir, { recursive: true });
-      const settingsPath = join(claudeDir, "settings.local.json");
+      const settingsPath = join(claudeDir, "settings.json");
 
       // Write existing Stop hook
       await writeFile(
@@ -672,6 +667,45 @@ describe("setup", () => {
       // New hooks must be added
       expect(settings.hooks?.PreToolUse).toBeDefined();
       expect(settings.hooks?.PostToolUse).toBeDefined();
+    });
+
+    it("migrates codesift hooks out of legacy ~/.claude/settings.local.json", async () => {
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      const legacyPath = join(claudeDir, "settings.local.json");
+
+      // Legacy file as written by setup ≤0.8.9: codesift hooks + one user hook
+      await writeFile(
+        legacyPath,
+        JSON.stringify({
+          permissions: { allow: ["Bash(ls:*)"] },
+          hooks: {
+            SessionStart: [
+              { matcher: "", hooks: [{ type: "command", command: "codesift session-start" }] },
+            ],
+            PostToolUse: [
+              { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file" }] },
+              { matcher: "Skill", hooks: [{ type: "command", command: "my-own-logger.sh" }] },
+            ],
+          },
+        }),
+        "utf-8",
+      );
+
+      await setup("claude", { hooks: true });
+
+      // Canonical hooks land in settings.json
+      const settings = JSON.parse(
+        await readFile(join(claudeDir, "settings.json"), "utf-8"),
+      );
+      expect(settings.hooks?.SessionStart).toBeDefined();
+
+      // Legacy file: codesift entries removed, user hook + other keys preserved
+      const legacy = JSON.parse(await readFile(legacyPath, "utf-8"));
+      expect(legacy.permissions).toEqual({ allow: ["Bash(ls:*)"] });
+      expect(legacy.hooks.SessionStart).toBeUndefined();
+      expect(legacy.hooks.PostToolUse).toHaveLength(1);
+      expect(legacy.hooks.PostToolUse[0].hooks[0].command).toBe("my-own-logger.sh");
     });
   });
 
@@ -1035,7 +1069,7 @@ describe("setup", () => {
   describe("setupHooksForPlatform", () => {
     it("installs Claude hooks for platform 'claude'", async () => {
       await setupHooksForPlatform("claude");
-      const hooksPath = join(tempHome, ".claude", "settings.local.json");
+      const hooksPath = join(tempHome, ".claude", "settings.json");
       expect(existsSync(hooksPath)).toBe(true);
       const content = JSON.parse(await readFile(hooksPath, "utf-8"));
       expect(content.hooks.PreToolUse).toBeDefined();
@@ -1058,7 +1092,7 @@ describe("setup", () => {
     it("does nothing for platform 'unknown'", async () => {
       await setupHooksForPlatform("unknown");
       // Should not throw, should not create any files
-      expect(existsSync(join(tempHome, ".claude", "settings.local.json"))).toBe(false);
+      expect(existsSync(join(tempHome, ".claude", "settings.json"))).toBe(false);
     });
   });
 
@@ -1088,7 +1122,10 @@ describe("setup", () => {
       await setupAll({ hooks: true });
 
       // Claude hooks
-      expect(existsSync(join(tempHome, ".claude", "settings.local.json"))).toBe(true);
+      const claudeSettings = JSON.parse(
+        await readFile(join(tempHome, ".claude", "settings.json"), "utf-8"),
+      );
+      expect(claudeSettings.hooks.SessionStart).toBeDefined();
       // Codex hooks
       expect(existsSync(join(tempHome, ".codex", "hooks.json"))).toBe(true);
       // Gemini hooks
