@@ -1,4 +1,4 @@
-import { buildArgsSummary } from "../../src/storage/usage-tracker.js";
+import { buildArgsSummary, extractResultChunks } from "../../src/storage/usage-tracker.js";
 
 describe("buildArgsSummary", () => {
   describe("search_text field schema", () => {
@@ -45,5 +45,32 @@ describe("buildArgsSummary", () => {
       expect(s["ranked"]).toBe(true);
       expect(s["compact"]).toBe(false);
     });
+  });
+});
+
+describe("extractResultChunks", () => {
+  it("counts array results", () => {
+    expect(extractResultChunks([1, 2, 3])).toBe(3);
+  });
+
+  it("counts non-empty lines of formatted-string results", () => {
+    const formatted = "src/a.ts:10 function alpha\nsrc/b.ts:20 class Beta\n\nsrc/c.ts:5 type Gamma";
+    expect(extractResultChunks(formatted)).toBe(3);
+  });
+
+  it("returns 0 for empty strings", () => {
+    expect(extractResultChunks("")).toBe(0);
+    expect(extractResultChunks("   \n  ")).toBe(0);
+  });
+
+  it("returns 0 for common no-result markers", () => {
+    expect(extractResultChunks("(no results)")).toBe(0);
+    expect(extractResultChunks("No matches.")).toBe(0);
+    expect(extractResultChunks("no symbols found for query")).toBe(0);
+  });
+
+  it("still handles object results under common keys", () => {
+    expect(extractResultChunks({ results: [1, 2] })).toBe(2);
+    expect(extractResultChunks({ matches: [] })).toBe(0);
   });
 });

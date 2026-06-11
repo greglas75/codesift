@@ -574,7 +574,6 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         const data = await fn();
         const text = typeof data === "string" ? data : JSON.stringify(data);
         const elapsed = performance.now() - start;
-        trackToolCall(toolName, args, text, data, elapsed);
         trackSequentialCalls(toolName);
         recordSessionCall(toolName, args, extractResultChunks(data), data);
         scheduleSidecarFlush();
@@ -590,11 +589,16 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         } else {
           setCache(cacheKey, text);
         }
-        return formatResponse(text, toolName, args, data);
+        const response = formatResponse(text, toolName, args, data);
+        // Track AFTER formatting so telemetry can record both the raw size
+        // and what was actually sent post-cascade (result_tokens_sent).
+        const sentChars = response.content[0]?.text?.length ?? 0;
+        trackToolCall(toolName, args, text, data, elapsed, { sentChars });
+        return response;
       } catch (err: unknown) {
         const elapsed = performance.now() - start;
         const message = err instanceof Error ? err.message : String(err);
-        trackToolCall(toolName, args, message, { error: message }, elapsed);
+        trackToolCall(toolName, args, message, { error: message }, elapsed, { error: true });
         trackSequentialCalls(toolName);
         recordSessionCall(toolName, args, 0, { error: message });
         scheduleSidecarFlush();

@@ -19,9 +19,16 @@ export interface UsageEntry {
   repo: string;
   args_summary: Record<string, unknown>;
   elapsed_ms: number;
+  /** Estimated tokens of the RAW handler result (pre-shortening). */
   result_tokens: number;
   result_chunks: number;
   session_id: string;
+  /** Estimated tokens actually sent after the progressive-shortening
+   * cascade + response hints. Present only when it differs from
+   * result_tokens — so cascade effectiveness is measurable. */
+  result_tokens_sent?: number;
+  /** True when the handler threw — the logged result is the error message. */
+  error?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +116,9 @@ export function buildArgsSummary(
  * Estimate the number of discrete result items (chunks, symbols, files, etc.)
  * from the tool result object.
  */
+/** Common "nothing found" markers in formatted string results. */
+const NO_RESULT_STRING_RX = /^\(?no (results|matches|symbols|references|files)/i;
+
 export function extractResultChunks(data: unknown): number {
   if (Array.isArray(data)) return data.length;
 
@@ -127,6 +137,16 @@ export function extractResultChunks(data: unknown): number {
 
     // single item results
     if (typeof obj["id"] === "string") return 1;
+  }
+
+  // Formatted-string results (most handlers return strings): non-empty line
+  // count is a serviceable item proxy for tabular output, and lets telemetry
+  // distinguish zero-result calls — previously every string-returning tool
+  // logged result_chunks=0, making miss rates unmeasurable.
+  if (typeof data === "string") {
+    const trimmed = data.trim();
+    if (trimmed === "" || NO_RESULT_STRING_RX.test(trimmed)) return 0;
+    return trimmed.split("\n").filter((l) => l.trim() !== "").length;
   }
 
   return 0;
@@ -181,16 +201,26 @@ export function trackToolCall(
   resultText: string,
   resultData: unknown,
   elapsedMs: number,
+  extra?: {
+    /** Char length of the response actually sent (post-cascade, with hints). */
+    sentChars?: number;
+    /** The handler threw — resultText is the error message. */
+    error?: boolean;
+  },
 ): void {
+  const resultTokens = Math.ceil(resultText.length / 4);
+  const sentTokens = extra?.sentChars !== undefined ? Math.ceil(extra.sentChars / 4) : undefined;
   const entry: UsageEntry = {
     ts: Date.now(),
     tool,
     repo: typeof args["repo"] === "string" ? args["repo"] : "",
     args_summary: buildArgsSummary(tool, args),
     elapsed_ms: Math.round(elapsedMs),
-    result_tokens: Math.ceil(resultText.length / 4),
+    result_tokens: resultTokens,
     result_chunks: extractResultChunks(resultData),
     session_id: SESSION_ID,
+    ...(sentTokens !== undefined && sentTokens !== resultTokens ? { result_tokens_sent: sentTokens } : {}),
+    ...(extra?.error ? { error: true } : {}),
   };
 
   // Fire and forget — never block the tool response
