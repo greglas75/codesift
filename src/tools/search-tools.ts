@@ -801,3 +801,127 @@ export async function semanticSearch(
   });
   return typeof result.data === "string" ? result.data : JSON.stringify(result.data);
 }
+
+// ---------------------------------------------------------------------------
+// Zero-hit fallback — vocabulary suggestions + semantic rescue
+//
+// Telemetry (30d window, 2026-06): 44% of search_text calls (2,539/5,826)
+// returned zero matches. Each miss costs the agent a turn of re-guessing.
+// On a miss we now return (a) near-miss symbol names from the index
+// vocabulary and (b) semantic results when an embeddings index already
+// exists on disk — never triggering a fresh embedding build on this path.
+// ---------------------------------------------------------------------------
+
+const ZERO_HIT_SUGGESTION_CAP = 5;
+const ZERO_HIT_SEMANTIC_TOP_K = 5;
+const ZERO_HIT_SEMANTIC_CAP_MS = 4000;
+const ZERO_HIT_EDIT_DISTANCE_MAX = 2;
+const ZERO_HIT_MIN_QUERY_LEN = 3;
+
+export interface ZeroHitFallbackResult {
+  /** Near-miss symbol names from the index vocabulary ("did you mean"). */
+  suggestions?: string[];
+  /** Formatted semantic-search results — present only when an embeddings
+   * index already existed and the query embedded within the time cap. */
+  semantic_results?: string;
+}
+
+/** Levenshtein distance with early exit once the distance exceeds `max`. */
+function boundedEditDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + cost);
+      if (curr[j]! < rowMin) rowMin = curr[j]!;
+    }
+    if (rowMin > max) return max + 1;
+    prev = curr;
+  }
+  return prev[b.length]!;
+}
+
+/** Rank symbol names against a single-token query: exact-insensitive first,
+ * then substring containment, then small edit distance. */
+function suggestFromVocabulary(query: string, names: Iterable<string>): string[] {
+  const q = query.toLowerCase();
+  const scored: Array<{ name: string; score: number }> = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const n = name.toLowerCase();
+    if (n === q) continue; // exact match would have been found by the scan
+    let score: number;
+    if (n.includes(q) || q.includes(n)) {
+      score = Math.abs(n.length - q.length); // tighter containment ranks higher
+    } else {
+      const d = boundedEditDistance(q, n, ZERO_HIT_EDIT_DISTANCE_MAX);
+      if (d > ZERO_HIT_EDIT_DISTANCE_MAX) continue;
+      score = 10 + d; // containment always beats fuzzy
+    }
+    scored.push({ name, score });
+  }
+  scored.sort((a, b) => a.score - b.score || a.name.length - b.name.length);
+  return scored.slice(0, ZERO_HIT_SUGGESTION_CAP).map((s) => s.name);
+}
+
+/**
+ * Build fallback guidance after a zero-hit text search. Both branches are
+ * best-effort: any failure degrades to an empty object, never an error.
+ */
+export async function zeroHitFallback(
+  repo: string,
+  query: string,
+): Promise<ZeroHitFallbackResult> {
+  const out: ZeroHitFallbackResult = {};
+  const trimmed = query.trim();
+  if (trimmed.length < ZERO_HIT_MIN_QUERY_LEN) return out;
+
+  // (a) Vocabulary suggestions — only meaningful for single-token queries.
+  if (!/\s/.test(trimmed)) {
+    try {
+      const index = await getCodeIndex(repo);
+      if (index) {
+        const suggestions = suggestFromVocabulary(
+          trimmed,
+          index.symbols.map((s) => s.name),
+        );
+        if (suggestions.length > 0) out.suggestions = suggestions;
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  // (b) Semantic rescue — gated on a pre-existing embeddings file so a miss
+  // never triggers an expensive embedding build.
+  try {
+    const config = loadConfig();
+    const { getRepo } = await import("../storage/registry.js");
+    const meta = await getRepo(config.registryPath, repo);
+    if (meta) {
+      const { existsSync } = await import("node:fs");
+      const { getEmbeddingPath } = await import("../storage/embedding-store.js");
+      const { getChunkEmbeddingPath } = await import("../storage/chunk-store.js");
+      const hasEmbeddings =
+        existsSync(getEmbeddingPath(meta.index_path))
+        || existsSync(getChunkEmbeddingPath(meta.index_path));
+      if (hasEmbeddings) {
+        const semantic = await raceWallClock(
+          semanticSearch(repo, trimmed, { top_k: ZERO_HIT_SEMANTIC_TOP_K }),
+          ZERO_HIT_SEMANTIC_CAP_MS,
+          () => "",
+        );
+        if (semantic && semantic !== "(no results)") out.semantic_results = semantic;
+      }
+    }
+  } catch {
+    // best-effort — no provider, no registry entry, embed timeout, etc.
+  }
+
+  return out;
+}

@@ -116,6 +116,7 @@ export const getCodeIndex = lazyExport<typeof import("./tools/index-tools.js").g
 export const searchSymbols = lazyExport<typeof import("./tools/search-tools.js").searchSymbols>(loadSearchTools, "searchSymbols");
 export const searchText = lazyExport<typeof import("./tools/search-tools.js").searchText>(loadSearchTools, "searchText");
 export const semanticSearch = lazyExport<typeof import("./tools/search-tools.js").semanticSearch>(loadSearchTools, "semanticSearch");
+export const zeroHitFallback = lazyExport<typeof import("./tools/search-tools.js").zeroHitFallback>(loadSearchTools, "zeroHitFallback");
 
 export const getFileTree = lazyExport<typeof import("./tools/outline-tools.js").getFileTree>(loadOutlineTools, "getFileTree");
 export const getFileOutline = lazyExport<typeof import("./tools/outline-tools.js").getFileOutline>(loadOutlineTools, "getFileOutline");

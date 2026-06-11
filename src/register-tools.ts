@@ -1339,9 +1339,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         auto_group: args.auto_group as boolean | undefined,
         ranked: args.ranked as boolean | undefined,
       });
-      // Zero-result hint: 41% of search_text calls return nothing in telemetry.
-      // Suggest the most likely fix based on query shape so the agent doesn't
-      // burn 2-3 follow-up turns guessing.
+      // Zero-result fallback: 44% of search_text calls return nothing in
+      // telemetry. Instead of a bare empty array, return (a) shape-based
+      // hints, (b) near-miss symbol names from the index vocabulary, and
+      // (c) semantic results when an embeddings index already exists —
+      // so the agent doesn't burn 2-3 follow-up turns guessing.
       const isEmpty =
         (Array.isArray(result) && result.length === 0)
         || (typeof result === "string" && (result as string).length === 0);
@@ -1357,7 +1359,20 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         if (fp) hints.push(`Try without file_pattern="${fp}" to widen scope.`);
         if (args.regex === true) hints.push("Try regex=false (literal) — escapes may be off.");
         if (!fp && !looksLikeSymbol) hints.push("Try a shorter substring, or add file_pattern= to scope.");
-        return { matches: [], hint: hints.join(" ") };
+
+        const { zeroHitFallback } = await import("./register-tool-loaders.js");
+        const fallback = await zeroHitFallback(args.repo as string, q);
+        if (fallback.semantic_results) {
+          hints.push("Exact text not found — semantic_fallback below shows closest matches by meaning.");
+        }
+        const response: Record<string, unknown> = { matches: [], hint: hints.join(" ") };
+        if (fallback.suggestions) {
+          response["did_you_mean"] = fallback.suggestions;
+        }
+        if (fallback.semantic_results) {
+          response["semantic_fallback"] = fallback.semantic_results;
+        }
+        return response;
       }
       return result;
     },
