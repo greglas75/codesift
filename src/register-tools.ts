@@ -3922,7 +3922,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         // Pass first matched workspace path through the existing file_pattern-style hook
         (opts as Record<string, unknown>).file_pattern = `${scope.rootPaths[0]}/**`;
       }
-      return nestAudit(args.repo ?? "", opts);
+      const result = await nestAudit(args.repo ?? "", opts);
+      // Telemetry: nest_audit averaged 18.4K tok/call with 110K-tok peaks —
+      // cap arrays to keep JSON valid instead of letting the cascade
+      // hard-truncate mid-structure.
+      const { capArraysToBudget } = await import("./formatters-shortening.js");
+      return capArraysToBudget(result);
     },
   },
 

@@ -444,12 +444,24 @@ interface ImpactResult {
 
 export function formatImpactAnalysis(data: ImpactResult): string {
   const parts: string[] = [];
-  parts.push(`changed: ${data.changed_files.join(", ")}`);
+  // Cap unbounded lists — a `since=<old sha>` spanning thousands of files
+  // once produced a 141K-token response from these two loops alone.
+  const MAX_CHANGED = 100;
+  const MAX_RISK = 50;
+  const changedShown = data.changed_files.slice(0, MAX_CHANGED);
+  let changedLine = `changed: ${changedShown.join(", ")}`;
+  if (data.changed_files.length > MAX_CHANGED) {
+    changedLine += ` … +${data.changed_files.length - MAX_CHANGED} more files`;
+  }
+  parts.push(changedLine);
 
   if (data.risk_scores.length > 0) {
     parts.push("\nrisk:");
-    for (const r of data.risk_scores) {
+    for (const r of data.risk_scores.slice(0, MAX_RISK)) {
       parts.push(`  [${r.risk}] ${r.file}`);
+    }
+    if (data.risk_scores.length > MAX_RISK) {
+      parts.push(`  +${data.risk_scores.length - MAX_RISK} more (narrow the since= range for full detail)`);
     }
   }
 

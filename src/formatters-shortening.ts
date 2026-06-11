@@ -31,6 +31,58 @@ interface HotspotEntry {
   hotspot_score: number;
 }
 
+// ── Generic array-cap budgeting ────────────────────
+//
+// Composite tools (nest_audit, impact_analysis) can emit 100K+ token
+// responses — telemetry showed nest_audit peaks of 110K tokens that the
+// downstream cascade could only hard-truncate mid-JSON. This shrinker
+// keeps JSON valid: it deep-caps every array, retrying with smaller caps
+// until the payload fits the char budget. A no-op for responses already
+// under budget.
+
+const ARRAY_CAP_LADDER = [30, 10, 5, 3] as const;
+
+function deepCapArrays(value: unknown, cap: number): unknown {
+  if (Array.isArray(value)) {
+    const items = value.slice(0, cap).map((v) => deepCapArrays(v, cap));
+    if (value.length > cap) {
+      items.push(`… ${value.length - cap} more items truncated — narrow with checks=/file_pattern= for full detail`);
+    }
+    return items;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = deepCapArrays(v, cap);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Cap arrays throughout `value` so its JSON form fits `budgetChars`.
+ * Returns the original object untouched when already within budget.
+ */
+export function capArraysToBudget(
+  value: unknown,
+  opts?: { budgetChars?: number },
+): unknown {
+  const budget = opts?.budgetChars ?? 60_000;
+  let json: string;
+  try {
+    json = JSON.stringify(value) ?? "";
+  } catch {
+    return value; // circular or non-serializable — leave to the caller
+  }
+  if (json.length <= budget) return value;
+
+  let smallest: unknown = value;
+  for (const cap of ARRAY_CAP_LADDER) {
+    smallest = deepCapArrays(value, cap);
+    if ((JSON.stringify(smallest) ?? "").length <= budget) return smallest;
+  }
+  return smallest; // best effort at the tightest cap
+}
+
 // ── Analyze complexity ─────────────────────────────
 
 const MAX_COMPLEXITY_COMPACT = 25;
