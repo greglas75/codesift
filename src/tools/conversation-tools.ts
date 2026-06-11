@@ -26,6 +26,35 @@ function getCurrentHomeDir(): string {
 /** Module-level BM25 cache keyed by conversation repo name. */
 const bm25Indexes = new Map<string, BM25Index>();
 
+/**
+ * Module-level embeddings cache keyed by embedding file path, validated by
+ * file mtime. Telemetry (30d): search_all_conversations p50 was 8.1s across
+ * 627 calls — dominated by re-reading multi-MB embeddings ndjson files from
+ * disk on every call. Embeddings only change on index-conversations, so an
+ * mtime-validated cache makes repeat searches near-instant.
+ */
+const conversationEmbeddingsCache = new Map<string, { mtimeMs: number; embeddings: Map<string, Float32Array> }>();
+
+export async function loadConversationEmbeddingsCached(embeddingPath: string): Promise<Map<string, Float32Array>> {
+  let mtimeMs = -1;
+  try {
+    mtimeMs = (await stat(embeddingPath)).mtimeMs;
+  } catch {
+    // Missing file — loadEmbeddings returns an empty map; cache that too.
+  }
+  const cached = conversationEmbeddingsCache.get(embeddingPath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.embeddings;
+  const { loadEmbeddings } = await import("../storage/embedding-store.js");
+  const embeddings = await loadEmbeddings(embeddingPath);
+  conversationEmbeddingsCache.set(embeddingPath, { mtimeMs, embeddings });
+  return embeddings;
+}
+
+/** Test hook — clear the embeddings cache. */
+export function clearConversationEmbeddingsCacheForTesting(): void {
+  conversationEmbeddingsCache.clear();
+}
+
 /** Get the cached BM25 index for a conversation repo (used by search tools). */
 export function getConversationBM25Index(repoName: string): BM25Index | null {
   return bm25Indexes.get(repoName) ?? null;
@@ -271,6 +300,11 @@ export async function searchConversations(
   query: string,
   projectPath?: string,
   limit?: number,
+  internalOpts?: {
+    /** Precomputed query embedding — lets searchAllConversations embed the
+     * query once instead of once per conversation repo. */
+    queryVec?: Float32Array;
+  },
 ): Promise<SearchConversationsResult> {
   const rootPath = resolveConversationProjectPath(projectPath);
   const loaded = await loadConversationIndex(rootPath);
@@ -288,17 +322,20 @@ export async function searchConversations(
   let semanticResults: Array<{ symbol: CodeSymbol; score: number }> = [];
   if (config.embeddingProvider) {
     try {
-      const { createEmbeddingProvider, searchSemantic, cosineSimilarity: _cos } = await import("../search/semantic.js");
-      const { loadEmbeddings, getEmbeddingPath } = await import("../storage/embedding-store.js");
+      const { createEmbeddingProvider, searchSemantic } = await import("../search/semantic.js");
+      const { getEmbeddingPath } = await import("../storage/embedding-store.js");
 
-      const provider = createEmbeddingProvider(config.embeddingProvider, config);
       const embeddingPath = getEmbeddingPath(indexPath);
-      const embeddings = await loadEmbeddings(embeddingPath);
+      const embeddings = await loadConversationEmbeddingsCached(embeddingPath);
 
       if (embeddings.size > 0) {
-        const [queryVec] = await provider.embed([query], "query");
-        if (queryVec) {
-          const qEmb = new Float32Array(queryVec);
+        let qEmb = internalOpts?.queryVec;
+        if (!qEmb) {
+          const provider = createEmbeddingProvider(config.embeddingProvider, config);
+          const [queryVec] = await provider.embed([query], "query");
+          if (queryVec) qEmb = new Float32Array(queryVec);
+        }
+        if (qEmb) {
           semanticResults = searchSemantic(qEmb, embeddings, symbols, topK * 2);
         }
       }
@@ -357,18 +394,37 @@ export async function searchAllConversations(
     (r) => r.name.startsWith("conversations/") && !r.name.includes("conv-test") && !r.name.includes("conv-ret"),
   );
 
-  const allResults: ConversationSearchResult[] = [];
-
-  for (const repo of conversationRepos) {
+  // Embed the query ONCE for all repos. Previously each repo embedded the
+  // same query independently and the loop was sequential — with ~20+
+  // conversation repos that compounded to a p50 of 8.1s per call.
+  let queryVec: Float32Array | undefined;
+  if (config.embeddingProvider && conversationRepos.length > 0) {
     try {
-      const { results } = await searchConversations(query, repo.root, limit ?? 10);
-      for (const r of results) {
-        allResults.push({ ...r, project: repo.name } as ConversationSearchResult);
-      }
+      const { createEmbeddingProvider } = await import("../search/semantic.js");
+      const provider = createEmbeddingProvider(config.embeddingProvider, config);
+      const [vec] = await provider.embed([query], "query");
+      if (vec) queryVec = new Float32Array(vec);
     } catch {
-      // Skip repos that fail to load
+      // No embed → per-repo searches fall back to BM25-only
     }
   }
+
+  const perRepo = await Promise.all(
+    conversationRepos.map(async (repo): Promise<ConversationSearchResult[]> => {
+      try {
+        const { results } = await searchConversations(
+          query,
+          repo.root,
+          limit ?? 10,
+          queryVec ? { queryVec } : {},
+        );
+        return results.map((r) => ({ ...r, project: repo.name }) as ConversationSearchResult);
+      } catch {
+        return []; // Skip repos that fail to load
+      }
+    }),
+  );
+  const allResults: ConversationSearchResult[] = perRepo.flat();
 
   // Sort by score descending, take top limit
   allResults.sort((a, b) => b.score - a.score);
