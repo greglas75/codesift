@@ -527,13 +527,18 @@ export async function searchSymbols(
   }
 
   // Server-side auto-compact: telemetry showed 100% of search_symbols calls
-  // omit detail_level/token_budget. When result count > 20 and caller didn't
-  // specify detail_level, switch to "compact" — cuts payload roughly in half
-  // without losing critical info (location is preserved; agent can fetch
-  // source via get_symbol if needed).
-  const SERVER_AUTO_COMPACT_THRESHOLD = 20;
+  // omit detail_level/token_budget (post-fact H6 hints don't change agent
+  // behavior). When the result count is large and the caller didn't specify
+  // detail_level, switch to "compact" — cuts payload roughly in half without
+  // losing critical info (location is preserved; agent can fetch source via
+  // get_symbol if needed). An EXPLICIT include_source=true opts out: the
+  // caller asked for source, compact would silently drop it.
+  const SERVER_AUTO_COMPACT_THRESHOLD = 12;
+  const callerExplicitlyWantsSource = options?.include_source === true;
   const detail = options?.detail_level
-    ?? (results.length > SERVER_AUTO_COMPACT_THRESHOLD && !options?.token_budget
+    ?? (results.length > SERVER_AUTO_COMPACT_THRESHOLD
+        && !options?.token_budget
+        && !callerExplicitlyWantsSource
         ? "compact"
         : "standard");
   const shaped = shapeSearchResults(results, detail, includeSource, options);
