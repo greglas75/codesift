@@ -948,6 +948,24 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
 }
 
 /**
+ * In-process record of the last indexed state per absolute file path.
+ *
+ * Telemetry (30d, 2026-06): 750 consecutive duplicate index_file calls at
+ * avg 3.7s each (~47 min of agent wall-clock). Two causes: (1) duplicate
+ * hook registrations firing index_file twice per edit, and (2) a race where
+ * call N+1's on-disk mtime pre-check read the index before call N's
+ * serialized saveIncremental landed, forcing a full re-parse + full-index
+ * save. This map short-circuits both in-process in ~1ms (mtime first, then
+ * content hash for touch/no-op rewrites) without loading the on-disk index.
+ */
+const lastIndexedState = new Map<string, { mtimeMs: number; contentHash: string; symbolCount: number }>();
+
+/** Test hook — clear the in-process last-indexed state. */
+export function clearLastIndexedStateForTesting(): void {
+  lastIndexedState.clear();
+}
+
+/**
  * Re-index a single file instantly. Finds the repo by matching the file
  * path against indexed repo roots. Updates symbols, BM25 index, and
  * invalidates embedding cache — no full repo walk needed.
@@ -988,13 +1006,48 @@ export async function indexFile(filePath: string): Promise<{
     }
   }
 
-  // mtime check — skip if unchanged
-  const existing = await loadIndex(matchingRepo.index_path);
-  if (existing) {
-    const prevEntry = existing.files.find((f) => f.path === relPath);
-    if (prevEntry?.mtime_ms) {
-      const st = await stat(absPath);
-      if (Math.round(st.mtimeMs) === prevEntry.mtime_ms) {
+  // In-process short-circuit: mtime, then content hash. Both avoid loading
+  // the on-disk index entirely (the expensive part on large repos).
+  const st = await stat(absPath);
+  const mem = lastIndexedState.get(absPath);
+  if (mem && Math.round(st.mtimeMs) === mem.mtimeMs) {
+    return {
+      repo: matchingRepo.name,
+      file: relPath,
+      symbol_count: mem.symbolCount,
+      duration_ms: Date.now() - startTime,
+      skipped: true,
+    };
+  }
+  const content = await readFile(absPath, "utf-8").catch(() => null);
+  const contentHash = content !== null ? createHash("sha1").update(content).digest("hex") : null;
+  if (mem && contentHash !== null && contentHash === mem.contentHash) {
+    // Touched / rewritten with identical content — refresh mtime, skip work.
+    mem.mtimeMs = Math.round(st.mtimeMs);
+    return {
+      repo: matchingRepo.name,
+      file: relPath,
+      symbol_count: mem.symbolCount,
+      duration_ms: Date.now() - startTime,
+      skipped: true,
+    };
+  }
+
+  // On-disk mtime check — first touch of this file in this process (CLI
+  // hook invocations, fresh server). Skips files unchanged since the last
+  // full index, and seeds the in-process state for subsequent calls.
+  if (!mem) {
+    const existing = await loadIndex(matchingRepo.index_path);
+    if (existing) {
+      const prevEntry = existing.files.find((f) => f.path === relPath);
+      if (prevEntry?.mtime_ms && Math.round(st.mtimeMs) === prevEntry.mtime_ms) {
+        if (contentHash !== null) {
+          lastIndexedState.set(absPath, {
+            mtimeMs: Math.round(st.mtimeMs),
+            contentHash,
+            symbolCount: prevEntry.symbol_count,
+          });
+        }
         return {
           repo: matchingRepo.name,
           file: relPath,
@@ -1012,6 +1065,14 @@ export async function indexFile(filePath: string): Promise<{
   }
 
   await saveIncremental(matchingRepo.index_path, relPath, result.symbols, result.entry);
+
+  if (contentHash !== null) {
+    lastIndexedState.set(absPath, {
+      mtimeMs: Math.round(st.mtimeMs),
+      contentHash,
+      symbolCount: result.symbols.length,
+    });
+  }
 
   let secretFindingsCount = 0;
   if (config.secretScanEnabled) {
