@@ -1,0 +1,20 @@
+[
+  {
+    "file": "publishReadinessClient.ts",
+    "url_prefix": "/api/moderation/publish-readiness/",
+    "method": "GET",
+    "partial": true
+  },
+  {
+    "file": "ops-alert-tick.ts",
+    "url_prefix": "/api/internal/teams/post-card",
+    "method": "POST",
+    "partial": true
+  },
+  {
+    "file": "teams-pull-report.ts",
+    "url_prefix": "/api/internal/teams/send-card",
+    "method": "POST",
+    "partial": true
+  }
+]
