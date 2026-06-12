@@ -272,6 +272,7 @@ export function getPrefix(model: string, mode: EmbeddingMode): string {
  * Falls back to {@link DEFAULT_LOCAL_DIMS} for unknown models.
  */
 const KNOWN_LOCAL_DIMS: Readonly<Record<string, number>> = {
+  "minishlab/potion-code-16M": 256,
   "nomic-ai/nomic-embed-text-v1.5": 768,
   "nomic-ai/nomic-embed-text-v1": 768,
   "Xenova/all-MiniLM-L6-v2": 384,
