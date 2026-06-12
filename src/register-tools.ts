@@ -4806,6 +4806,40 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       return parts.join("\n");
     },
   },
+  // --- PostgreSQL live introspection (hidden/discoverable) ---
+  {
+    name: "introspect_pg",
+    category: "analysis" as ToolCategory,
+    searchHint: "postgres postgresql live schema introspect information_schema tables columns drift live database",
+    description: "Introspect a live PostgreSQL database schema via information_schema. Reads table/column structure from a running PG instance. Connection string is read from the CODESIFT_PG_CONN_STR environment variable (never passed as an argument — SSRF/CQ5 safety). Optionally runs pgDriftCheck to compare the live schema against migration-derived SQL symbols in the index.",
+    schema: lazySchema(() => ({
+      schema: z.string().optional().describe("PostgreSQL schema name (default: 'public')"),
+      drift_check: z.boolean().optional().describe("When true, compare live schema against migration-derived SQL symbols in the index and return drift report"),
+      repo: z.string().optional().describe("Repository identifier for drift_check (default: auto-detected from CWD). Only used when drift_check=true."),
+    })),
+    handler: async (args) => {
+      const { loadConfig } = await import("./config.js");
+      const connStr = loadConfig().pgConnStr;
+      if (!connStr) {
+        return { error: "CODESIFT_PG_CONN_STR not set — export a read-only connection string to enable live introspection" };
+      }
+      const { introspectPgSchema, pgDriftCheck } = await import("./tools/pg-introspect-tools.js");
+      const introspectOpts: import("./tools/pg-introspect-tools.js").IntrospectPgOptions = {};
+      if (args.schema != null) introspectOpts.schema = args.schema as string;
+      const result = await introspectPgSchema(connStr, introspectOpts);
+      if ("error" in result) return result;
+      if (args.drift_check === true) {
+        const { getCodeIndex } = await import("./tools/index-tools.js");
+        const repo = args.repo as string | undefined;
+        const index = repo ? await getCodeIndex(repo) : null;
+        const symbols = index?.symbols ?? [];
+        const drift = pgDriftCheck(result, symbols);
+        return { ...result, drift };
+      }
+      return result;
+    },
+  },
+
   // --- Astro v6 migration check ---
   {
     name: "astro_migration_check",

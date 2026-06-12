@@ -69,8 +69,9 @@ export function getLocalHostTag(): string {
 // Args summary builders — lightweight, never includes large content
 // ---------------------------------------------------------------------------
 
-/** Per-tool field extraction schema: [key, expectedType] pairs */
-const TOOL_ARG_FIELDS: Record<string, Array<[string, "string" | "number" | "boolean"]>> = {
+/** Per-tool field extraction schema: [key, expectedType] pairs.
+ * Exported for testing — assert a tool is absent to confirm telemetry blacklisting. */
+export const TOOL_ARG_FIELDS: Record<string, Array<[string, "string" | "number" | "boolean"]>> = {
   search_symbols: [["kind", "string"], ["top_k", "number"], ["file_pattern", "string"], ["decorator", "string"], ["include_source", "boolean"]],
   search_text: [["regex", "boolean"], ["context_lines", "number"], ["file_pattern", "string"], ["max_results", "number"], ["group_by_file", "boolean"], ["auto_group", "boolean"], ["ranked", "boolean"], ["compact", "boolean"]],
   get_file_tree: [["path_prefix", "string"], ["name_pattern", "string"], ["depth", "number"]],

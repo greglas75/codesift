@@ -9,12 +9,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   loadPgClient,
   introspectPgSchema,
+  pgDriftCheck,
   redactConnStr,
   type PgClientLike,
   type PgIntrospectResult,
   type PgIntrospectError,
+  type SqlSymbol,
 } from "../../src/tools/pg-introspect-tools.js";
 import { loadConfig, resetConfigCache } from "../../src/config.js";
+import { TOOL_ARG_FIELDS } from "../../src/storage/usage-tracker.js";
 
 // ---------------------------------------------------------------------------
 // loadPgClient — optional-dep loading
@@ -414,5 +417,249 @@ describe("redactConnStr", () => {
 
   it("is a no-op-safe pass-through for empty conn string", () => {
     expect(redactConnStr("nothing to hide here", "")).toBe("nothing to hide here");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10 — pgDriftCheck
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal SqlSymbol fixture. We use the id convention
+ * "local/repo:migrations/001.sql:tableName:1" to match what getCodeIndex
+ * would return; pgDriftCheck only needs id, kind, name, parent, signature.
+ */
+function makeTableSymbol(name: string, id?: string): SqlSymbol {
+  return {
+    id: id ?? `repo:migrations/001.sql:${name}:1`,
+    kind: "table",
+    name,
+  };
+}
+
+function makeFieldSymbol(name: string, parentId: string, type: string): SqlSymbol {
+  return {
+    id: `repo:migrations/001.sql:${parentId}__${name}:2`,
+    kind: "field",
+    name,
+    parent: parentId,
+    signature: type,
+  };
+}
+
+describe("pgDriftCheck", () => {
+  const usersId = "repo:migrations/001.sql:users:1";
+  const postsId = "repo:migrations/001.sql:posts:1";
+
+  const baseSymbols: SqlSymbol[] = [
+    makeTableSymbol("users", usersId),
+    makeFieldSymbol("id", usersId, "integer"),
+    makeFieldSymbol("email", usersId, "text"),
+    makeTableSymbol("posts", postsId),
+    makeFieldSymbol("id", postsId, "integer"),
+    makeFieldSymbol("title", postsId, "text"),
+  ];
+
+  const baseLive: PgIntrospectResult = {
+    tables: [
+      {
+        name: "users",
+        columns: [
+          { name: "id", type: "integer", nullable: false },
+          { name: "email", type: "text", nullable: true },
+        ],
+        primary_key: ["id"],
+        indexes: [],
+      },
+      {
+        name: "posts",
+        columns: [
+          { name: "id", type: "integer", nullable: false },
+          { name: "title", type: "text", nullable: false },
+        ],
+        primary_key: ["id"],
+        indexes: [],
+      },
+    ],
+    relationships: [],
+    warnings: [],
+  };
+
+  it("clean match → empty drift arrays (no missing tables, no column mismatches)", () => {
+    const result = pgDriftCheck(baseLive, baseSymbols);
+    expect(result.missing_tables_live_only).toHaveLength(0);
+    expect(result.missing_tables_migrations_only).toHaveLength(0);
+    expect(result.column_mismatches).toHaveLength(0);
+    expect(result.note).toBeUndefined();
+  });
+
+  it("live-only table reported in missing_tables_live_only", () => {
+    // Add a table to live that has no symbol in migrations
+    const liveWithExtra: PgIntrospectResult = {
+      ...baseLive,
+      tables: [
+        ...baseLive.tables,
+        {
+          name: "audit_log",
+          columns: [{ name: "id", type: "bigint", nullable: false }],
+          primary_key: ["id"],
+          indexes: [],
+        },
+      ],
+    };
+    const result = pgDriftCheck(liveWithExtra, baseSymbols);
+    expect(result.missing_tables_live_only).toContain("audit_log");
+    expect(result.missing_tables_migrations_only).toHaveLength(0);
+  });
+
+  it("migration-only column reported as missing_live in column_mismatches", () => {
+    // Migrations have a column that doesn't exist in live
+    const usersIdExtra = "repo:migrations/001.sql:users_extra:1";
+    const symbolsWithExtraCol: SqlSymbol[] = [
+      makeTableSymbol("users", usersIdExtra),
+      makeFieldSymbol("id", usersIdExtra, "integer"),
+      makeFieldSymbol("email", usersIdExtra, "text"),
+      makeFieldSymbol("deleted_at", usersIdExtra, "timestamp"), // only in migrations
+    ];
+    const liveUsersOnly: PgIntrospectResult = {
+      tables: [
+        {
+          name: "users",
+          columns: [
+            { name: "id", type: "integer", nullable: false },
+            { name: "email", type: "text", nullable: true },
+          ],
+          primary_key: ["id"],
+          indexes: [],
+        },
+      ],
+      relationships: [],
+      warnings: [],
+    };
+    const result = pgDriftCheck(liveUsersOnly, symbolsWithExtraCol);
+    const mismatch = result.column_mismatches.find(
+      (m) => m.column === "deleted_at" && m.kind === "missing_live",
+    );
+    expect(mismatch).toBeDefined();
+    expect(mismatch!.migrations_type).toMatch(/timestamp/i);
+  });
+
+  it("type mismatch between live and migrations reported in column_mismatches", () => {
+    // Live has 'email' as varchar(255), migrations say 'text'
+    const liveTypeMismatch: PgIntrospectResult = {
+      tables: [
+        {
+          name: "users",
+          columns: [
+            { name: "id", type: "integer", nullable: false },
+            { name: "email", type: "varchar", nullable: true }, // different from "text"
+          ],
+          primary_key: ["id"],
+          indexes: [],
+        },
+      ],
+      relationships: [],
+      warnings: [],
+    };
+    const usersIdMismatch = "repo:migrations/001.sql:users_mismatch:1";
+    const symbolsMismatch: SqlSymbol[] = [
+      makeTableSymbol("users", usersIdMismatch),
+      makeFieldSymbol("id", usersIdMismatch, "integer"),
+      makeFieldSymbol("email", usersIdMismatch, "text"),
+    ];
+    const result = pgDriftCheck(liveTypeMismatch, symbolsMismatch);
+    const mismatch = result.column_mismatches.find(
+      (m) => m.table === "users" && m.column === "email" && m.kind === "type_mismatch",
+    );
+    expect(mismatch).toBeDefined();
+    expect(mismatch!.live_type).toBe("varchar");
+    expect(mismatch!.migrations_type).toBe("text");
+  });
+
+  it("repo without SQL symbols → result with note 'no migration-derived schema', no throw", () => {
+    const result = pgDriftCheck(baseLive, []); // no symbols at all
+    expect(result).not.toBeUndefined();
+    expect(result.note).toBeDefined();
+    expect(result.note).toMatch(/no migration-derived schema/i);
+    expect(result.missing_tables_live_only).toHaveLength(0);
+    expect(result.missing_tables_migrations_only).toHaveLength(0);
+    expect(result.column_mismatches).toHaveLength(0);
+  });
+
+  it("repo with only non-table SQL symbols returns note (no tables found)", () => {
+    // Symbols present but none are kind=table
+    const nonTableSymbols: SqlSymbol[] = [
+      { id: "repo:f.sql:some_view:1", kind: "field", name: "some_view" },
+    ];
+    const result = pgDriftCheck(baseLive, nonTableSymbols);
+    expect(result.note).toBeDefined();
+    expect(result.note).toMatch(/no migration-derived schema/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10 — introspect_pg registration
+// ---------------------------------------------------------------------------
+
+describe("introspect_pg registration", () => {
+  it("tool exists in TOOL_DEFINITIONS with name 'introspect_pg'", async () => {
+    const { getToolDefinitions } = await import("../../src/register-tools.js");
+    const defs = getToolDefinitions();
+    const def = defs.find((d) => d.name === "introspect_pg");
+    expect(def, "introspect_pg must be in TOOL_DEFINITIONS").toBeDefined();
+  });
+
+  it("schema keys are exactly a subset of {schema, drift_check, repo} — no conn_str/connection arg", async () => {
+    const { getToolDefinitions } = await import("../../src/register-tools.js");
+    const defs = getToolDefinitions();
+    const def = defs.find((d) => d.name === "introspect_pg")!;
+    const allowed = new Set(["schema", "drift_check", "repo"]);
+    const keys = Object.keys(def.schema);
+    // Every key must be in the allowed set
+    for (const key of keys) {
+      expect(allowed.has(key), `Unexpected schema key: '${key}' — conn_str must never be in schema`).toBe(true);
+    }
+    // Explicitly assert forbidden keys are absent
+    expect(keys).not.toContain("conn_str");
+    expect(keys).not.toContain("connection");
+    expect(keys).not.toContain("connection_string");
+    expect(keys).not.toContain("connStr");
+  });
+
+  it("handler with CODESIFT_PG_CONN_STR unset returns structured error mentioning CODESIFT_PG_CONN_STR", async () => {
+    const { getToolDefinitions } = await import("../../src/register-tools.js");
+    const defs = getToolDefinitions();
+    const def = defs.find((d) => d.name === "introspect_pg")!;
+    const savedEnv = process.env["CODESIFT_PG_CONN_STR"];
+    delete process.env["CODESIFT_PG_CONN_STR"];
+    const { resetConfigCache } = await import("../../src/config.js");
+    resetConfigCache();
+    try {
+      const result = await def.handler({}) as { error: string };
+      expect(result).toHaveProperty("error");
+      expect(result.error).toContain("CODESIFT_PG_CONN_STR");
+    } finally {
+      if (savedEnv !== undefined) process.env["CODESIFT_PG_CONN_STR"] = savedEnv;
+      else delete process.env["CODESIFT_PG_CONN_STR"];
+      resetConfigCache();
+    }
+  });
+
+  it("introspect_pg is NOT in CORE_TOOL_NAMES (it is hidden/discoverable)", async () => {
+    const { CORE_TOOL_NAMES } = await import("../../src/register-tools.js");
+    expect(CORE_TOOL_NAMES.has("introspect_pg")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10 — telemetry safety
+// ---------------------------------------------------------------------------
+
+describe("usage-tracker telemetry safety", () => {
+  it("TOOL_ARG_FIELDS has no 'introspect_pg' key (pg args never captured in telemetry)", () => {
+    // Verifies that no conn_str / schema / drift_check fields are wired into
+    // the arg-capture table — if introspect_pg were added, it would risk
+    // accidentally logging a connection string.
+    expect(Object.prototype.hasOwnProperty.call(TOOL_ARG_FIELDS, "introspect_pg")).toBe(false);
   });
 });
