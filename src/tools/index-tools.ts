@@ -23,6 +23,7 @@ import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
 import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "./secret-tools.js";
 import { getGraphPath } from "../storage/graph-store.js";
+import { getSnapshotPath, loadHashSnapshot, saveHashSnapshot, HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../storage/hash-snapshot.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -84,10 +85,17 @@ async function parseOneFile(
   filePath: string,
   repoRoot: string,
   repoName: string,
-): Promise<{ symbols: CodeSymbol[]; entry: FileEntry } | null> {
+): Promise<{ symbols: CodeSymbol[]; entry: FileEntry; sha1: string } | null> {
   try {
     const stat = await import("node:fs/promises").then((fs) => fs.stat(filePath));
     const source = await readFile(filePath, "utf-8");
+    // CRITICAL-1 (TOCTOU parse↔hash): hash the EXACT source string we parse,
+    // here — never via a post-parse re-read. A re-read can observe a different
+    // on-disk version if the file is modified between parse and hash, pairing
+    // OLD symbols with a NEW sha so future runs permanently reuse mismatched
+    // symbols. The sha is NOT persisted inside FileEntry; callers thread it
+    // into the hash snapshot (and it saves one extra full read per parsed file).
+    const fileSha1 = createHash("sha1").update(source).digest("hex");
     const relPath = relative(repoRoot, filePath);
     const baseName = filePath.split("/").pop() ?? "";
     // Use full-path resolver so multi-dot suffixes like `.gradle.kts` beat
@@ -143,7 +151,7 @@ async function parseOneFile(
       mtime_ms: Math.round(stat.mtimeMs),
     };
 
-    return { symbols, entry };
+    return { symbols, entry, sha1: fileSha1 };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[codesift] Failed to parse ${relative(repoRoot, filePath)}: ${message}`);
@@ -158,9 +166,12 @@ async function parseFiles(
   files: string[],
   repoRoot: string,
   repoName: string,
-): Promise<{ symbols: CodeSymbol[]; fileEntries: FileEntry[] }> {
+): Promise<{ symbols: CodeSymbol[]; fileEntries: FileEntry[]; shas: Record<string, string> }> {
   const allSymbols: CodeSymbol[] = [];
   const fileEntries: FileEntry[] = [];
+  // CRITICAL-1: sha1 of the exact parsed source, keyed by relPath. Carried out
+  // of parseOneFile so the snapshot never re-reads (and never races) the file.
+  const shas: Record<string, string> = {};
 
   for (let i = 0; i < files.length; i += PARSE_CONCURRENCY) {
     const batch = files.slice(i, i + PARSE_CONCURRENCY);
@@ -172,11 +183,12 @@ async function parseFiles(
       if (result) {
         allSymbols.push(...result.symbols);
         fileEntries.push(result.entry);
+        shas[result.entry.path] = result.sha1;
       }
     }
   }
 
-  return { symbols: allSymbols, fileEntries };
+  return { symbols: allSymbols, fileEntries, shas };
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +433,66 @@ async function isExistingIndexStale(
   return missing >= sampled.length * STALE_MISSING_FRACTION;
 }
 
+/**
+ * Read a file and return the sha1 hex of its UTF-8 content, or null on read
+ * failure (deleted mid-walk, permission error). Code-sized files only — same
+ * assumption parseOneFile already makes. Non-throwing: callers treat null as
+ * "could not hash → fall through to re-parse".
+ */
+async function sha1OfFile(absPath: string): Promise<string | null> {
+  try {
+    const content = await readFile(absPath, "utf-8");
+    return createHash("sha1").update(content).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Exported for unit testing only — not part of the public API.
+ *
+ * Drains a legacy-hash queue: hashes each file, then re-stats to confirm the
+ * mtime has not drifted since the decision-time stat. Entries whose mtime
+ * drifted (or whose stat fails) are omitted from the returned map so the next
+ * run re-parses them rather than reusing symbols against a mismatched sha.
+ *
+ * @param queue  Items from the legacyHashQueue (relPath + filePath + decision-time mtimeMs).
+ * @param hashFn Injectable hash function (default: sha1OfFile). Tests inject a
+ *               function that also modifies the file so they can trigger the
+ *               TOCTOU drift-detection path without real concurrency.
+ * @param statFn Injectable stat function (default: fs.stat). Tests can stub this
+ *               to return a post-modification mtime.
+ */
+export async function drainLegacyHashQueue(
+  queue: Array<{ relPath: string; filePath: string; mtimeMs: number }>,
+  hashFn: (absPath: string) => Promise<string | null> = sha1OfFile,
+  statFn: (absPath: string) => Promise<{ mtimeMs: number }> = (p) =>
+    import("node:fs/promises").then((m) => m.stat(p)),
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  for (let i = 0; i < queue.length; i += PARSE_CONCURRENCY) {
+    const batch = queue.slice(i, i + PARSE_CONCURRENCY);
+    const shas = await Promise.all(batch.map((q) => hashFn(q.filePath)));
+    const stats = await Promise.all(
+      batch.map((q) =>
+        statFn(q.filePath).then(
+          (st) => Math.round(st.mtimeMs),
+          () => null,
+        ),
+      ),
+    );
+    batch.forEach((q, j) => {
+      const currentMtime = stats[j];
+      if (currentMtime === null || currentMtime !== q.mtimeMs) {
+        // Mtime drifted or file gone — omit so next run re-parses.
+        return;
+      }
+      result[q.relPath] = shas[j] ?? "";
+    });
+  }
+  return result;
+}
+
 export async function indexFolder(
   folderPath: string,
   options?: {
@@ -519,9 +591,85 @@ export async function indexFolder(
     }
   }
 
+  // Persistent hash snapshot (Task 6): relPath → sha1 from the previous index.
+  // mtime stays the cheap pre-filter (unchanged mtime → reuse without hashing,
+  // the fastest path). When mtime *changed*, the snapshot sha1 lets us still
+  // reuse symbols for touch/checkout no-op rewrites that bumped mtime without
+  // changing content — something mtime-only logic could never catch.
+  // null when absent/corrupt/version-or-repo-mismatch → degrade to full parse.
+  const snapshotPath = getSnapshotPath(indexPath);
+  let oldSnapshot = existing
+    ? await loadHashSnapshot(snapshotPath, repoName)
+    : null;
+
+  // Staleness guard (Task 6, CRITICAL-2): an incremental saveIncremental /
+  // removeFileFromIndex advances index.updated_at WITHOUT touching the
+  // snapshot. If saveIndex landed but the subsequent snapshot save failed (or
+  // an incremental edit ran after the last full index), the on-disk snapshot
+  // is OLDER than the index and its SHAs may no longer match the indexed
+  // symbols — carrying them forward (fast path) or sha-matching against them
+  // (changed path) would produce wrong reuse on revert+touch sequences. When
+  // the snapshot predates the index, discard it: the legacy hash-now
+  // convergence path below repopulates a fresh, correct snapshot this run.
+  // Guard uses strict inequality (!==), not <. The fresh-write contract is
+  // snapshot.created_at === index.updated_at exactly (created_at is anchored to
+  // codeIndex.updated_at, not a fresh Date.now()). So ANY mismatch — older OR
+  // newer — means the snapshot is not the one paired with this index and must
+  // be discarded. A FUTURE created_at (e.g. a snapshot written against a later,
+  // since-rolled-back index, or clock skew) is just as untrustworthy as a stale
+  // one: its SHAs may not match the indexed symbols.
+  if (oldSnapshot && existing && oldSnapshot.created_at !== existing.updated_at) {
+    console.warn(
+      `[codesift] hash-snapshot older than index — rebuilding (${repoName})`,
+    );
+    oldSnapshot = null;
+  }
+
   const filesToParse: string[] = [];
   const keptSymbols: CodeSymbol[] = [];
   const keptEntries: FileEntry[] = [];
+
+  // sha1 of every file in the NEW index, by relPath. Populated for reused files
+  // here (from the old snapshot when present, else hashed-now for convergence)
+  // and for parsed files after parseFiles resolves.
+  const newSnapshotFiles: Record<string, string> = {};
+
+  // CRITICAL-1: reused files whose sha1 must be (re)computed because the old
+  // snapshot lacks it (legacy snapshot-less index, or stale snapshot discarded
+  // above). Collected here and hashed AFTER the loop in PARSE_CONCURRENCY
+  // batches instead of one serial await per file inside the loop — on a first
+  // run after upgrade against a many-thousand-file repo the serial version cost
+  // thousands of sequential awaits. Behavior is identical, wall-clock is
+  // parallelized.
+  //
+  // mtimeMs: the mtime observed at decision time (the moment we confirmed
+  // mtime === prevMtime and placed the file in the queue). We re-stat after
+  // hashing to detect any concurrent modification that landed between the two
+  // operations. If the mtime drifted, we omit the file from newSnapshotFiles
+  // entirely — the missing sha causes the next cold run to re-parse, avoiding
+  // a snapshot that pairs new-content sha against old (reused) symbols.
+  const legacyHashQueue: Array<{ relPath: string; filePath: string; mtimeMs: number }> = [];
+
+  // PERF: pre-build per-file lookups ONCE before the reuse loop. Both reuse
+  // branches need (a) the existing index's symbols for a given relPath and (b)
+  // its FileEntry. Doing `existing.symbols.filter(s => s.file === relPath)` /
+  // `existing.files.find(f => f.path === relPath)` per file is O(files ×
+  // symbols) and O(files²) respectively — quadratic, and on a many-thousand
+  // file/symbol repo that dominated the reuse-heavy fast path. A single pass
+  // builds Map lookups each branch hits in O(1). Built only when there's an
+  // existing index to reuse from.
+  const symbolsByFile = new Map<string, CodeSymbol[]>();
+  const fileEntryByPath = new Map<string, FileEntry>();
+  if (existing) {
+    for (const sym of existing.symbols) {
+      const list = symbolsByFile.get(sym.file);
+      if (list) list.push(sym);
+      else symbolsByFile.set(sym.file, [sym]);
+    }
+    for (const fe of existing.files) {
+      fileEntryByPath.set(fe.path, fe);
+    }
+  }
 
   if (mtimeMap.size > 0) {
     const { stat } = await import("node:fs/promises");
@@ -529,7 +677,7 @@ export async function indexFolder(
       const relPath = relative(rootPath, filePath);
       const prevMtime = mtimeMap.get(relPath);
       if (prevMtime !== undefined) {
-        const fileEntry = existing!.files.find((f) => f.path === relPath);
+        const fileEntry = fileEntryByPath.get(relPath);
         // Force re-parse if file is marked stale (callee signature changed)
         if (fileEntry?.stale) {
           filesToParse.push(filePath);
@@ -538,12 +686,43 @@ export async function indexFolder(
         try {
           const st = await stat(filePath);
           if (Math.round(st.mtimeMs) === prevMtime) {
-            // File unchanged — keep existing symbols
-            const fileSymbols = existing!.symbols.filter((s) => s.file === relPath);
+            // Fast path: mtime unchanged → reuse symbols without hashing.
+            const fileSymbols = symbolsByFile.get(relPath) ?? [];
             if (fileEntry) {
               keptSymbols.push(...fileSymbols);
               keptEntries.push(fileEntry);
+              // Carry the sha1 forward: reuse from old snapshot if present,
+              // else DEFER hashing so legacy (snapshot-less) indexes converge
+              // to a complete snapshot after one run — without paying a serial
+              // hash per file inside this loop.
+              const carried = oldSnapshot?.files[relPath];
+              if (carried !== undefined) {
+                newSnapshotFiles[relPath] = carried;
+              } else {
+                legacyHashQueue.push({ relPath, filePath, mtimeMs: Math.round(st.mtimeMs) });
+              }
               continue;
+            }
+          } else {
+            // mtime changed — hash decides reuse vs re-parse. This catches
+            // touch/checkout that bumped mtime without changing content.
+            const snapSha = oldSnapshot?.files[relPath];
+            if (snapSha !== undefined && fileEntry && !fileEntry.stale) {
+              const currentSha = await sha1OfFile(filePath);
+              if (currentSha !== null && currentSha === snapSha) {
+                const fileSymbols = symbolsByFile.get(relPath) ?? [];
+                keptSymbols.push(...fileSymbols);
+                // FIX: the file's mtime changed but content is identical (touch /
+                // checkout no-op rewrite). Reuse the symbols, but DON'T carry the
+                // stale FileEntry verbatim — its mtime_ms still holds the OLD
+                // mtime, so every future run would see mtime !== prevMtime and
+                // re-hash this file forever, permanently degrading it off the
+                // mtime fast path. Clone the entry with mtime_ms bumped to the
+                // CURRENT stat's mtime so the next run takes the cheap fast path.
+                keptEntries.push({ ...fileEntry, mtime_ms: Math.round(st.mtimeMs) });
+                newSnapshotFiles[relPath] = currentSha;
+                continue;
+              }
             }
           }
         } catch { /* file may have been deleted — reparse */ }
@@ -554,10 +733,33 @@ export async function indexFolder(
     filesToParse.push(...files);
   }
 
+  // Drain the deferred legacy-hash queue (CRITICAL-1): files reused via the
+  // mtime fast path that had no carried sha1 (legacy snapshot-less index, or a
+  // stale snapshot discarded by the guard above). See drainLegacyHashQueue for
+  // the TOCTOU guard details — entries whose mtime drifted between decision
+  // time and hash time are omitted so the next run re-parses rather than
+  // reusing symbols against a mismatched sha.
+  if (legacyHashQueue.length > 0) {
+    const drained = await drainLegacyHashQueue(legacyHashQueue);
+    Object.assign(newSnapshotFiles, drained);
+  }
+
   // Parse only changed/new files
-  const { symbols: parsedSymbols, fileEntries: parsedEntries } = await parseFiles(filesToParse, rootPath, repoName);
+  const { symbols: parsedSymbols, fileEntries: parsedEntries, shas: parsedShas } = await parseFiles(filesToParse, rootPath, repoName);
   const symbols = [...keptSymbols, ...parsedSymbols];
   const fileEntries = [...keptEntries, ...parsedEntries];
+
+  // Record sha1s for the files that were actually parsed (changed/new).
+  // CRITICAL-1 (TOCTOU): these hashes come straight from parseOneFile — they
+  // are the sha1 of the EXACT source string that produced the symbols, so the
+  // snapshot can never pair old symbols with a newer file's sha. Only entries
+  // that survived parseFiles (parseOneFile returned non-null) have a sha here,
+  // keeping the snapshot in lockstep with fileEntries. The previous post-parse
+  // double-read loop is gone — one fewer full read per parsed file.
+  for (const entry of parsedEntries) {
+    const sha = parsedShas[entry.path];
+    if (sha !== undefined) newSnapshotFiles[entry.path] = sha;
+  }
 
   // Dirty propagation: detect signature changes and mark caller files stale
   if (existing && filesToParse.length > 0 && filesToParse.length < files.length) {
@@ -636,6 +838,31 @@ export async function indexFolder(
     ...(workspaces ? { workspaces } : {}),
   };
   await saveIndex(indexPath, codeIndex);
+
+  // Persist the hash snapshot AFTER the index lands (mirrors registerRepo
+  // ordering) and only on the success path — the rejected_partial branch
+  // returned earlier, leaving the previous snapshot intact. Non-fatal: the
+  // snapshot is a reuse-optimization cache; a write failure just costs a full
+  // re-parse next run, so we warn and continue.
+  try {
+    const newSnapshot: FileHashSnapshot = {
+      version: HASH_SNAPSHOT_VERSION,
+      repo: repoName,
+      // CRITICAL-2 (created_at race): use the EXACT timestamp serialized into
+      // the index, not a fresh Date.now(). A watcher's saveIncremental that
+      // lands between saveIndex and this write would otherwise leave the
+      // snapshot OLDER than created_at, blinding the staleness guard above. By
+      // anchoring to codeIndex.updated_at, snapshot.created_at === the index's
+      // updated_at on a fresh write, so any later incremental strictly advances
+      // index.updated_at past it and the guard fires correctly.
+      created_at: codeIndex.updated_at,
+      files: newSnapshotFiles,
+    };
+    await saveHashSnapshot(snapshotPath, newSnapshot);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[codesift] hash-snapshot save failed for ${repoName} (non-fatal): ${msg}`);
+  }
 
   // Embed symbols and chunks in background (non-fatal, don't block MCP response)
   // Large repos (71K symbols) can take minutes — fire-and-forget to prevent timeout
@@ -999,7 +1226,8 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   const chunkPath = getChunkPath(meta.index_path);
   const chunkEmbeddingPath = getChunkEmbeddingPath(meta.index_path);
   const graphStorePath = getGraphPath(meta.index_path);
-  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath, graphStorePath]) {
+  const snapshotPath = getSnapshotPath(meta.index_path);
+  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath, graphStorePath, snapshotPath]) {
     try { await unlink(fp); } catch { /* File may not exist */ }
   }
 
