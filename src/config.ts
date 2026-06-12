@@ -34,6 +34,9 @@ export interface Config {
 
   // Secret scanning
   secretScanEnabled: boolean;  // true by default
+
+  // PostgreSQL introspection (optional)
+  pgConnStr: string | null;
 }
 
 let cachedConfig: Config | null = null;
@@ -82,6 +85,8 @@ export function loadConfig(): Config {
     defaultTopK: parseIntEnv("CODESIFT_DEFAULT_TOP_K", 50),
 
     secretScanEnabled: process.env["CODESIFT_SECRET_SCAN"] !== "false",
+
+    pgConnStr: process.env["CODESIFT_PG_CONN_STR"] ?? null,
   };
   return cachedConfig;
 }
