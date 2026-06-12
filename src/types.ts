@@ -269,3 +269,42 @@ export interface CodeChunk {
   text: string;        // the actual chunk text
   tokenCount: number;  // estimated token count
 }
+
+// ---------------------------------------------------------------------------
+// Repo group types — used by group-registry and cross-repo tools
+// ---------------------------------------------------------------------------
+
+export interface RepoGroup {
+  name: string;
+  repos: string[];
+  description?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GroupRegistry {
+  groups: Record<string, RepoGroup>;
+  updated_at: number;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-repo contract matching types
+// ---------------------------------------------------------------------------
+
+export interface RepoEndpoint {
+  repo: string;
+  method: string;
+  path: string;
+  normalized_path: string;
+  file: string;
+}
+
+export interface ContractMatch {
+  producer_repo: string;
+  consumer_repo: string;
+  method: string;
+  path: string;
+  consumer_file: string;
+  consumer_line: number;
+  confidence: "exact" | "partial";
+}
