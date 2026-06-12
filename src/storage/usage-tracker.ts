@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -8,6 +8,11 @@ import { randomUUID } from "node:crypto";
 // ---------------------------------------------------------------------------
 
 const SESSION_ID = randomUUID();
+
+/** Machine identity stamped on every entry so logs merged across machines
+ *  (laptop + VPS, see usage-remote/) stay attributable. Overridable for
+ *  ephemeral hosts whose hostnames are random (CI, containers). */
+const HOST = process.env["CODESIFT_HOST_TAG"] ?? hostname();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +28,10 @@ export interface UsageEntry {
   result_tokens: number;
   result_chunks: number;
   session_id: string;
+  /** Machine that produced the entry (os.hostname() or CODESIFT_HOST_TAG).
+   * Lets stats split local vs remote once logs are merged. Absent in
+   * pre-multi-host entries — readers treat those as the local host. */
+  host?: string;
   /** Estimated tokens actually sent after the progressive-shortening
    * cascade + response hints. Present only when it differs from
    * result_tokens — so cascade effectiveness is measurable. */
@@ -38,6 +47,22 @@ export interface UsageEntry {
 export function getUsagePath(): string {
   const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
   return join(dataDir, "usage.jsonl");
+}
+
+/**
+ * Directory holding usage logs synced from other machines (one .jsonl per
+ * host, e.g. usage-remote/vps.jsonl pulled via rsync/cron). Stats readers
+ * merge these with the local log; the filename stem doubles as the host tag
+ * for pre-multi-host entries that lack a `host` field.
+ */
+export function getRemoteUsageDir(): string {
+  const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  return join(dataDir, "usage-remote");
+}
+
+/** Host tag stamped on entries written by this process. */
+export function getLocalHostTag(): string {
+  return HOST;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +244,7 @@ export function trackToolCall(
     result_tokens: resultTokens,
     result_chunks: extractResultChunks(resultData),
     session_id: SESSION_ID,
+    host: HOST,
     ...(sentTokens !== undefined && sentTokens !== resultTokens ? { result_tokens_sent: sentTokens } : {}),
     ...(extra?.error ? { error: true } : {}),
   };

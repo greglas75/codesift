@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { join, basename } from "node:path";
 import type { UsageEntry } from "./usage-tracker.js";
-import { getCumulativeSavings, getUsagePath } from "./usage-tracker.js";
+import { getCumulativeSavings, getUsagePath, getRemoteUsageDir, getLocalHostTag } from "./usage-tracker.js";
 import { formatTable } from "../formatters.js";
 
 // ---------------------------------------------------------------------------
@@ -18,6 +19,12 @@ export interface ToolStats {
 export interface RepoStats {
   repo: string;
   call_count: number;
+}
+
+export interface HostStats {
+  host: string;
+  call_count: number;
+  total_tokens: number;
 }
 
 export interface DailyStats {
@@ -38,6 +45,8 @@ export interface UsageStats {
   avg_calls_per_session: number;
   tools: ToolStats[];
   top_repos: RepoStats[];
+  /** Per-machine breakdown — only meaningful once usage-remote/ logs are synced in. */
+  hosts: HostStats[];
   daily: DailyStats[];
   query_types: QueryTypeStats[];
   earliest_ts: number;
@@ -60,44 +69,70 @@ function isValidEntry(value: unknown): value is UsageEntry {
   );
 }
 
+/** The local log plus any host logs synced into usage-remote/. Each source
+ *  carries a fallback host tag for entries written before the `host` field
+ *  existed: the local hostname, or the remote file's name stem. */
+async function listUsageSources(): Promise<Array<{ path: string; fallbackHost: string }>> {
+  const sources = [{ path: getUsagePath(), fallbackHost: getLocalHostTag() }];
+  const remoteDir = getRemoteUsageDir();
+  try {
+    for (const name of await readdir(remoteDir)) {
+      if (!name.endsWith(".jsonl")) continue;
+      sources.push({
+        path: join(remoteDir, name),
+        fallbackHost: basename(name, ".jsonl"),
+      });
+    }
+  } catch {
+    // usage-remote/ absent — single-machine setup
+  }
+  return sources;
+}
+
 async function loadEntries(options?: {
   since?: string;
   repo?: string;
   tool?: string;
   session_id?: string;
+  host?: string;
 }): Promise<UsageEntry[]> {
-  const usagePath = getUsagePath();
-  let raw: string;
-
-  try {
-    raw = await readFile(usagePath, "utf-8");
-  } catch {
-    return [];
-  }
-
   const sinceTs = options?.since ? new Date(options.since).getTime() : 0;
   const repoFilter = options?.repo ?? null;
   const toolFilter = options?.tool ?? null;
   const sessionFilter = options?.session_id ?? null;
+  const hostFilter = options?.host ?? null;
   const entries: UsageEntry[] = [];
 
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
+  for (const source of await listUsageSources()) {
+    let raw: string;
     try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (!isValidEntry(parsed)) continue;
-      if (parsed.ts < sinceTs) continue;
-      if (repoFilter && parsed.repo !== repoFilter) continue;
-      if (toolFilter && parsed.tool !== toolFilter) continue;
-      if (sessionFilter && parsed.session_id !== sessionFilter) continue;
-      entries.push(parsed);
+      raw = await readFile(source.path, "utf-8");
     } catch {
-      // Skip malformed lines
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (!isValidEntry(parsed)) continue;
+        if (parsed.host === undefined) parsed.host = source.fallbackHost;
+        if (parsed.ts < sinceTs) continue;
+        if (repoFilter && parsed.repo !== repoFilter) continue;
+        if (toolFilter && parsed.tool !== toolFilter) continue;
+        if (sessionFilter && parsed.session_id !== sessionFilter) continue;
+        if (hostFilter && parsed.host !== hostFilter) continue;
+        entries.push(parsed);
+      } catch {
+        // Skip malformed lines
+      }
     }
   }
 
+  // Sources are per-host append logs — interleave them chronologically.
+  entries.sort((a, b) => a.ts - b.ts);
   return entries;
 }
 
@@ -110,6 +145,7 @@ export async function getUsageStats(options?: {
   repo?: string;
   tool?: string;
   session_id?: string;
+  host?: string;
 }): Promise<UsageStats> {
   const entries = await loadEntries(options);
 
@@ -120,6 +156,7 @@ export async function getUsageStats(options?: {
       avg_calls_per_session: 0,
       tools: [],
       top_repos: [],
+      hosts: [],
       daily: [],
       query_types: [],
       earliest_ts: 0,
@@ -130,6 +167,7 @@ export async function getUsageStats(options?: {
   // Per-tool aggregation
   const toolMap = new Map<string, { calls: number; tokens: number; elapsed: number }>();
   const repoMap = new Map<string, number>();
+  const hostMap = new Map<string, { calls: number; tokens: number }>();
   const sessionSet = new Set<string>();
   const dailyMap = new Map<string, { calls: number; tokens: number }>();
   // codebase_retrieval query type breakdown
@@ -151,6 +189,13 @@ export async function getUsageStats(options?: {
     if (entry.repo) {
       repoMap.set(entry.repo, (repoMap.get(entry.repo) ?? 0) + 1);
     }
+
+    // Host stats (loadEntries guarantees a host on every entry)
+    const hostKey = entry.host ?? "unknown";
+    const hostStats = hostMap.get(hostKey) ?? { calls: 0, tokens: 0 };
+    hostStats.calls += 1;
+    hostStats.tokens += entry.result_tokens;
+    hostMap.set(hostKey, hostStats);
 
     // Sessions
     sessionSet.add(entry.session_id);
@@ -200,6 +245,10 @@ export async function getUsageStats(options?: {
     .sort((a, b) => b.call_count - a.call_count)
     .slice(0, 20);
 
+  const hosts: HostStats[] = [...hostMap.entries()]
+    .map(([host, stats]) => ({ host, call_count: stats.calls, total_tokens: stats.tokens }))
+    .sort((a, b) => b.call_count - a.call_count);
+
   const daily: DailyStats[] = [...dailyMap.entries()]
     .map(([date, stats]) => ({
       date,
@@ -224,6 +273,7 @@ export async function getUsageStats(options?: {
     avg_calls_per_session: Math.round((entries.length / totalSessions) * 10) / 10,
     tools,
     top_repos,
+    hosts,
     daily,
     query_types,
     earliest_ts: earliest,
@@ -287,6 +337,15 @@ export function formatUsageReport(stats: UsageStats): string {
     lines.push("--- Top Repos ---");
     for (const r of stats.top_repos) {
       lines.push(`  ${r.repo}: ${r.call_count} calls`);
+    }
+    lines.push("");
+  }
+
+  // Hosts — only worth showing once logs from more than one machine are merged
+  if (stats.hosts.length > 1) {
+    lines.push("--- Hosts ---");
+    for (const h of stats.hosts) {
+      lines.push(`  ${h.host}: ${h.call_count} calls, ${h.total_tokens} tokens`);
     }
     lines.push("");
   }

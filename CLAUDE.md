@@ -54,6 +54,12 @@ in `detectAutoLoadTools` at `src/register-tools.ts`.
 ### search_text ranked mode (NEW)
 `search_text(repo, query, ranked=true)` classifies each hit by its containing function, deduplicates (max 2 per function), and ranks by symbol centrality. Returns `TextMatch` with `containing_symbol` field. Saves 1-3 follow-up get_symbol calls. Takes precedence over `auto_group`.
 
+### index_folder sanity check is now visible + self-healing (NEW)
+When a re-walk finds <50% of the previously indexed file count, index_folder keeps the old index — but now returns `status: "rejected_partial"` + `reason` + `hint` instead of silently echoing the old counts as success (pre-fix this skipped saveIndex AND registerRepo, so the repo could vanish from the registry while the tool reported OK). Before rejecting, it samples the old index's paths on disk: if ≥50% no longer exist (e.g. deleted `.worktrees/` swept by an older walker), the old index is treated as stale and the new one is accepted (auto-heal — breaks the poisoned-baseline deadlock where every honest reindex was rejected forever).
+
+### Multi-host usage telemetry (NEW)
+Every usage.jsonl entry now carries `host` (os.hostname(), override via `CODESIFT_HOST_TAG`). Logs pulled from other machines into `~/.codesift/usage-remote/<host>.jsonl` (see `scripts/sync-usage-remote.sh` + cron) are merged by `usage_stats` (new `host` filter param, `hosts` breakdown in stats/report) and by the dashboard (Usage by Host section on /analytics). Entries predating the field inherit the local hostname or the remote file's name stem.
+
 ### Progressive response shortening (NEW)
 Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts only, >105K → hard truncate. Skipped when `detail_level` or `token_budget` is explicitly set. Annotation `[compact]` or `[counts]` prepended.
 

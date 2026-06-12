@@ -12,7 +12,7 @@
 
 import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, extname, join, relative, posix as pathPosix } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { getCurrentGitCommit } from "../utils/git-head.js";
@@ -220,6 +220,7 @@ function logWikiEvent(tool: string, repo: string, args: Record<string, unknown>,
       result_tokens: resultTokens,
       result_chunks: 0,
       session_id: process.env["CLAUDE_SESSION_ID"] ?? "hook",
+      host: process.env["CODESIFT_HOST_TAG"] ?? hostname(),
     };
     mkdirSync(dataDir, { recursive: true });
     appendFileSync(join(dataDir, "usage.jsonl"), JSON.stringify(entry) + "\n");

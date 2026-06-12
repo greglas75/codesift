@@ -3527,19 +3527,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     category: "meta",
     searchHint: "usage statistics tool calls tokens timing metrics",
     outputSchema: OutputSchemas.usageStats,
-    description: "Show usage statistics for all CodeSift tool calls (call counts, tokens, timing, repos)",
+    description: "Show usage statistics for all CodeSift tool calls (call counts, tokens, timing, repos, hosts). Merges logs synced from other machines (~/.codesift/usage-remote/*.jsonl).",
     schema: lazySchema(() => ({
       since: z.string().optional().describe("ISO date/time lower bound, e.g. 2026-05-01"),
       repo: z.string().optional().describe("Exact CodeSift repo key"),
       tool: z.string().optional().describe("Exact tool name"),
       session_id: z.string().optional().describe("Exact CodeSift session id"),
+      host: z.string().optional().describe("Exact host tag (machine hostname or usage-remote/<name>.jsonl stem)"),
     })),
     handler: async (args) => {
-      const filters: { since?: string; repo?: string; tool?: string; session_id?: string } = {};
+      const filters: { since?: string; repo?: string; tool?: string; session_id?: string; host?: string } = {};
       if (typeof args.since === "string") filters.since = args.since;
       if (typeof args.repo === "string") filters.repo = args.repo;
       if (typeof args.tool === "string") filters.tool = args.tool;
       if (typeof args.session_id === "string") filters.session_id = args.session_id;
+      if (typeof args.host === "string") filters.host = args.host;
       const stats = await getUsageStats(filters);
       const { createRequire } = await import("node:module");
       const req = createRequire(import.meta.url);
