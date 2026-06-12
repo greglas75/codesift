@@ -32,25 +32,29 @@ describe("indexFolder sanity check (partial-index rejection + auto-heal)", () =>
     await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it("rejects a shrunken walk with status=rejected_partial when old files still exist", async () => {
-    // Baseline: 60 files (above the >50 file_count gate).
+  it("merge-persists an explicitly-scoped walk instead of rejecting the whole index", async () => {
+    // T7 amended the pre-existing contract: a scoped (include_paths) walk no
+    // longer rejects the whole index when it covers fewer files than before —
+    // it MERGES (out-of-scope files preserved, in-scope refreshed). Rejection is
+    // reserved for genuine in-scope under-enumeration (covered by the
+    // index-folder-snapshot suite's (m)/(g) cases). [POST-CAP: SPEC-AMENDED]
     await writeTsFiles(tmpRoot, "src", 60);
     const first = await indexFolder(tmpRoot, { watch: false });
     expect(first.status).toBeUndefined();
     expect(first.file_count).toBe(60);
 
-    // Simulate a truncated walk: scope to a subdir holding <50% of the files.
+    // Scope the re-index to a new subdir holding 5 files (prefix match, mirrors
+    // walkDirectory's startsWith semantics).
     await writeTsFiles(tmpRoot, "tiny", 5);
     const second = await indexFolder(tmpRoot, {
       watch: false,
-      include_paths: ["tiny/**"],
+      include_paths: ["tiny"],
     });
 
-    expect(second.status).toBe("rejected_partial");
-    expect(second.reason).toMatch(/<50%/);
-    expect(second.hint).toMatch(/invalidate_cache/);
-    // Echoes the KEPT old index, not the rejected walk.
-    expect(second.file_count).toBe(60);
+    // Not rejected — the 60 out-of-scope src/ files are preserved and the 5
+    // in-scope tiny/ files are merged in (65 total), never clobbered.
+    expect(second.status).toBeUndefined();
+    expect(second.file_count).toBe(65);
   });
 
   it("auto-heals when most of the old index's files no longer exist on disk", async () => {
