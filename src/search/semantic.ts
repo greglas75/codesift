@@ -1,4 +1,5 @@
 import type { CodeSymbol, SearchResult } from "../types.js";
+import { StaticEmbeddingProvider } from "./static-embedding-provider.js";
 
 const MAX_SYMBOL_SOURCE_CHARS = 200;
 const MAX_ERROR_DETAIL_CHARS = 200;
@@ -243,6 +244,8 @@ export class OllamaProvider implements EmbeddingProvider {
 
 const DEFAULT_LOCAL_MODEL = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_LOCAL_DIMS = 768;
+const STATIC_EMBEDDING_MODEL_PREFIX = "minishlab/potion";
+const STATIC_EMBEDDING_MODEL_SUBSTRING = "model2vec";
 
 /**
  * Some open-weights instruction-tuned models require task-specific prefixes for
@@ -402,6 +405,9 @@ export function createEmbeddingProvider(
     }
     case "local": {
       const model = config.localModel ?? DEFAULT_LOCAL_MODEL;
+      if (model.startsWith(STATIC_EMBEDDING_MODEL_PREFIX) || model.includes(STATIC_EMBEDDING_MODEL_SUBSTRING)) {
+        return new StaticEmbeddingProvider(model);
+      }
       return new LocalProvider(model);
     }
   }

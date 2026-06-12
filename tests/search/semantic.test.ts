@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { buildSymbolText, searchSemantic, VoyageProvider, OpenAIProvider, OllamaProvider, LocalProvider, createEmbeddingProvider, getPrefix, _resetLocalProvider } from "../../src/search/semantic.js";
-import type { CodeSymbol } from "../../src/types.js";
+import { StaticEmbeddingProvider } from "../../src/search/static-embedding-provider.js";
+import type { CodeSymbol, EmbeddingMeta } from "../../src/types.js";
 
 function makeSymbol(overrides: Partial<CodeSymbol> = {}): CodeSymbol {
   return {
@@ -186,6 +187,45 @@ describe("createEmbeddingProvider", () => {
 
   it("throws when ollama url is missing", () => {
     expect(() => createEmbeddingProvider("ollama", {})).toThrow("CODESIFT_OLLAMA_URL not set");
+  });
+
+  // --- StaticEmbeddingProvider routing (potion / model2vec) ---
+
+  it("routes minishlab/potion-code-16M to StaticEmbeddingProvider with dimensions=256", () => {
+    const provider = createEmbeddingProvider("local", { localModel: "minishlab/potion-code-16M" });
+    expect(provider).toBeInstanceOf(StaticEmbeddingProvider);
+    expect(provider.dimensions).toBe(256);
+  });
+
+  it("does NOT route nomic-ai/nomic-embed-text-v1.5 to StaticEmbeddingProvider (LocalProvider path preserved)", () => {
+    const provider = createEmbeddingProvider("local", { localModel: "nomic-ai/nomic-embed-text-v1.5" });
+    expect(provider).not.toBeInstanceOf(StaticEmbeddingProvider);
+    expect(provider).toBeInstanceOf(LocalProvider);
+  });
+
+  it("does NOT route unknown model with 'potion' in org name but no prefix match to StaticEmbeddingProvider", () => {
+    // "my-org/notapotion-v2" does NOT start with "minishlab/potion" → LocalProvider
+    const provider = createEmbeddingProvider("local", { localModel: "my-org/notapotion-v2" });
+    expect(provider).not.toBeInstanceOf(StaticEmbeddingProvider);
+    expect(provider).toBeInstanceOf(LocalProvider);
+  });
+
+  it("routes model2vec substring models to StaticEmbeddingProvider", () => {
+    const provider = createEmbeddingProvider("local", { localModel: "some-org/model2vec-custom" });
+    expect(provider).toBeInstanceOf(StaticEmbeddingProvider);
+  });
+
+  it("EmbeddingMeta.provider union still accepts 'local' (type-compat, no new union member)", () => {
+    // Compile-time type check: if EmbeddingMeta["provider"] gained new members this would widen.
+    // We assert it accepts "local" and does NOT change the persisted value from provider-side.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _typeCheck: EmbeddingMeta["provider"] = "local";
+    // Runtime: createEmbeddingProvider still receives "local" as its first argument — no new
+    // literal leaks out of semantic.ts's union (provider param type is unchanged).
+    const p = createEmbeddingProvider("local", { localModel: "minishlab/potion-code-16M" });
+    expect(p).toBeInstanceOf(StaticEmbeddingProvider);
+    // The provider object itself exposes no "provider" property (meta is config-side) — good.
+    expect("provider" in p).toBe(false);
   });
 });
 
