@@ -8,6 +8,12 @@
 #   ./scripts/sync-usage-remote.sh vps1 [vps2 ...]     # ssh-config host aliases
 #   CODESIFT_SYNC_HOSTS="vps1 vps2" ./scripts/sync-usage-remote.sh
 #
+# Concat mode — for hosts where CodeSift runs in many containers/workspaces,
+# each with its own ~/.codesift (e.g. thepopebot: one per workspace bind-mount).
+# Append :<remote-glob> to the host; all matching logs are concatenated into
+# one <host>.jsonl. Entries without a host field inherit "<host>" at read time.
+#   ./scripts/sync-usage-remote.sh 'coding-vps:/root/bot/data/workspaces/*/.codesift/usage.jsonl'
+#
 # Cron (every 30 min):
 #   */30 * * * * /path/to/sync-usage-remote.sh vps1 >/dev/null 2>&1
 set -euo pipefail
@@ -24,9 +30,21 @@ fi
 DEST="${CODESIFT_DATA_DIR:-$HOME/.codesift}/usage-remote"
 mkdir -p "$DEST"
 
-for host in "${HOSTS[@]}"; do
-  # --partial + tmp suffix so stats readers never see a half-copied file.
-  if rsync -az --timeout=20 "$host:~/.codesift/usage.jsonl" "$DEST/$host.jsonl.tmp" 2>/dev/null; then
+for spec in "${HOSTS[@]}"; do
+  host="${spec%%:*}"
+  glob="${spec#*:}"
+  # tmp + rename so stats readers never see a half-copied file.
+  if [ "$glob" != "$spec" ]; then
+    # concat mode: host:glob — gather every per-workspace log in one pass
+    if ssh -o ConnectTimeout=15 -o BatchMode=yes "$host" "cat $glob 2>/dev/null" > "$DEST/$host.jsonl.tmp" 2>/dev/null \
+       && [ -s "$DEST/$host.jsonl.tmp" ]; then
+      mv "$DEST/$host.jsonl.tmp" "$DEST/$host.jsonl"
+      echo "synced $host concat ($(wc -l < "$DEST/$host.jsonl" | tr -d ' ') entries)"
+    else
+      rm -f "$DEST/$host.jsonl.tmp"
+      echo "skip $host (unreachable or glob matched nothing)" >&2
+    fi
+  elif rsync -az --timeout=20 "$host:~/.codesift/usage.jsonl" "$DEST/$host.jsonl.tmp" 2>/dev/null; then
     mv "$DEST/$host.jsonl.tmp" "$DEST/$host.jsonl"
     echo "synced $host ($(wc -l < "$DEST/$host.jsonl" | tr -d ' ') entries)"
   else
