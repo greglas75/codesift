@@ -812,3 +812,185 @@ describe("extractOutboundCalls — real corpus recall ≥ 0.8", () => {
     expect(recall).toBeGreaterThanOrEqual(0.8);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 15 — group orchestration + registration
+// ---------------------------------------------------------------------------
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import {
+  matchGroupContracts,
+  findEndpointConsumers,
+  MAX_GROUP_REPOS,
+  type RepoResolver,
+  type RepoContractData,
+} from "../../src/tools/cross-repo-contract-tools.js";
+import { registerGroup, getGroupRegistryPath } from "../../src/storage/group-registry.js";
+
+describe("matchGroupContracts (T15 orchestration)", () => {
+  async function withRegistry(fn: (registryPath: string) => Promise<void>): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), "cgc-grp-"));
+    try {
+      await fn(getGroupRegistryPath(dir));
+    } finally {
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }
+
+  // Synthetic resolver: api repo serves GET /users/{param}; web repo calls fetch('/users/1').
+  const resolver: RepoResolver = async (repo): Promise<RepoContractData> => {
+    if (repo === "api") {
+      return {
+        indexed: true,
+        producers: [{ repo: "api", method: "GET", path: "/users/:id", normalized_path: "/users/{param}", file: "src/users.ts" }],
+        consumers: [],
+      };
+    }
+    if (repo === "web") {
+      return {
+        indexed: true,
+        producers: [],
+        consumers: [{ repo: "web", method: "GET", url_prefix: "/users/1", partial: false, file: "src/client.ts", line: 4 }],
+      };
+    }
+    if (repo === "unindexed") {
+      return { indexed: false, producers: [], consumers: [] };
+    }
+    return { indexed: true, producers: [], consumers: [] };
+  };
+
+  it("T15-1: matches a producer endpoint to a cross-repo consumer end-to-end", async () => {
+    await withRegistry(async (registryPath) => {
+      await registerGroup(registryPath, { name: "tgm", repos: ["api", "web"] });
+      const r = await matchGroupContracts("tgm", { registryPath, resolver });
+      expect(r.error).toBeUndefined();
+      expect(r.repos_processed).toBe(2);
+      expect(r.matches).toHaveLength(1);
+      expect(r.matches[0]).toMatchObject({
+        producer_repo: "api",
+        consumer_repo: "web",
+        method: "GET",
+        path: "/users/{param}",
+        confidence: "exact",
+      });
+    });
+  });
+
+  it("T15-2: unindexed repo collects a warning, others still processed", async () => {
+    await withRegistry(async (registryPath) => {
+      await registerGroup(registryPath, { name: "tgm", repos: ["api", "web", "unindexed"] });
+      const r = await matchGroupContracts("tgm", { registryPath, resolver });
+      expect(r.repos_processed).toBe(2);
+      expect(r.warnings.some((w) => w.includes("unindexed") && w.includes("not indexed"))).toBe(true);
+      expect(r.matches).toHaveLength(1);
+    });
+  });
+
+  it("T15-3: missing group returns a structured error, no throw", async () => {
+    await withRegistry(async (registryPath) => {
+      const r = await matchGroupContracts("nope", { registryPath, resolver });
+      expect(r.error).toMatch(/not found/i);
+      expect(r.matches).toEqual([]);
+    });
+  });
+
+  it("T15-4: group over MAX_GROUP_REPOS is capped with a truncation warning", async () => {
+    await withRegistry(async (registryPath) => {
+      const repos = Array.from({ length: MAX_GROUP_REPOS + 5 }, (_, i) => `r${i}`);
+      await registerGroup(registryPath, { name: "big", repos });
+      const seen: string[] = [];
+      const countingResolver: RepoResolver = async (repo) => {
+        seen.push(repo);
+        return { indexed: true, producers: [], consumers: [] };
+      };
+      const r = await matchGroupContracts("big", { registryPath, resolver: countingResolver });
+      expect(seen.length).toBe(MAX_GROUP_REPOS);
+      expect(r.warnings.some((w) => w.includes("capped at " + MAX_GROUP_REPOS))).toBe(true);
+    });
+  });
+
+  it("T15-5: a resolver that throws for one repo warns and continues", async () => {
+    await withRegistry(async (registryPath) => {
+      await registerGroup(registryPath, { name: "tgm", repos: ["api", "boom", "web"] });
+      const throwing: RepoResolver = async (repo) => {
+        if (repo === "boom") throw new Error("kaboom");
+        return resolver(repo);
+      };
+      const r = await matchGroupContracts("tgm", { registryPath, resolver: throwing });
+      expect(r.repos_processed).toBe(2);
+      expect(r.warnings.some((w) => w.includes("boom") && w.includes("kaboom"))).toBe(true);
+      expect(r.matches).toHaveLength(1);
+    });
+  });
+
+  it("T15-5b: per-repo resolver warnings (e.g. extractor failure) propagate", async () => {
+    await withRegistry(async (registryPath) => {
+      await registerGroup(registryPath, { name: "tgm", repos: ["api", "web"] });
+      const warnResolver: RepoResolver = async (repo) => {
+        const base = await resolver(repo);
+        if (repo === "api") return { ...base, warnings: [`repo "api" producer extraction failed: boom`] };
+        return base;
+      };
+      const r = await matchGroupContracts("tgm", { registryPath, resolver: warnResolver });
+      expect(r.repos_processed).toBe(2);
+      expect(r.warnings.some((w) => w.includes("producer extraction failed"))).toBe(true);
+      expect(r.matches).toHaveLength(1); // still matches what it can
+    });
+  });
+
+  it("T15-6: findEndpointConsumers filters to one producer endpoint (method+path normalised)", async () => {
+    await withRegistry(async (registryPath) => {
+      await registerGroup(registryPath, { name: "tgm", repos: ["api", "web"] });
+      // query with a different param style + lowercase method — must still match
+      const r = await findEndpointConsumers("tgm", "get", "/users/{id}", { registryPath, resolver });
+      expect(r.matches).toHaveLength(1);
+      expect(r.matches[0]!.consumer_repo).toBe("web");
+      // consumers_of_path also surfaces the raw consumer call
+      expect(r.consumers_of_path).toHaveLength(1);
+      expect(r.consumers_of_path![0]!.repo).toBe("web");
+      // a non-existent endpoint yields zero
+      const none = await findEndpointConsumers("tgm", "POST", "/orders", { registryPath, resolver });
+      expect(none.matches).toHaveLength(0);
+      expect(none.consumers_of_path).toHaveLength(0);
+    });
+  });
+
+  it("T15-7: surfaces a consumer of an external endpoint (no group producer)", async () => {
+    await withRegistry(async (registryPath) => {
+      await registerGroup(registryPath, { name: "ext", repos: ["caller"] });
+      const extResolver: RepoResolver = async (repo) => {
+        if (repo === "caller") return {
+          indexed: true,
+          producers: [],
+          consumers: [{ repo: "caller", method: "POST", url_prefix: "/rewards/grant", partial: false, file: "src/r.ts", line: 9 }],
+        };
+        return { indexed: true, producers: [], consumers: [] };
+      };
+      const r = await findEndpointConsumers("ext", "post", "/rewards/grant", { registryPath, resolver: extResolver });
+      // no producer in the group → zero matches, but the consumer IS surfaced
+      expect(r.matches).toHaveLength(0);
+      expect(r.consumers_of_path).toHaveLength(1);
+      expect(r.consumers_of_path![0]!.repo).toBe("caller");
+    });
+  });
+});
+
+describe("F1 group tools registration", () => {
+  const NAMES = ["repo_group", "match_group_contracts", "find_endpoint_consumers"];
+
+  it("registers all three group tools in TOOL_DEFINITIONS", async () => {
+    const { getToolDefinitions } = await import("../../src/register-tools.js");
+    const defs = getToolDefinitions();
+    for (const n of NAMES) {
+      expect(defs.find((d) => d.name === n), `${n} must be registered`).toBeDefined();
+    }
+  });
+
+  it("group tools are hidden (not in CORE_TOOL_NAMES)", async () => {
+    const { CORE_TOOL_NAMES } = await import("../../src/register-tools.js");
+    const core = new Set(CORE_TOOL_NAMES as readonly string[]);
+    for (const n of NAMES) {
+      expect(core.has(n), `${n} should be hidden/discoverable`).toBe(false);
+    }
+  });
+});

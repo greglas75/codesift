@@ -4840,6 +4840,69 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
 
+  // --- Cross-repo contract groups (F1) ---
+  {
+    name: "repo_group",
+    category: "architecture" as ToolCategory,
+    searchHint: "repo group multi-repo cross-repo service group create list remove register contract",
+    description: "Manage named groups of indexed repos for cross-service contract analysis. action='create' (name + repos[] required, optional description), 'list', or 'remove' (name required). Groups are stored in groups.json under the data dir.",
+    schema: lazySchema(() => ({
+      action: z.enum(["create", "list", "remove"]).describe("create | list | remove"),
+      name: z.string().optional().describe("Group name (required for create/remove)"),
+      repos: z.array(z.string()).optional().describe("Repo identifiers in the group (required for create)"),
+      description: z.string().optional().describe("Optional human description (create only)"),
+    })),
+    handler: async (args) => {
+      const { loadConfig } = await import("./config.js");
+      const reg = await import("./storage/group-registry.js");
+      const registryPath = reg.getGroupRegistryPath(loadConfig().dataDir);
+      const action = args.action as string;
+      if (action === "list") {
+        return { groups: await reg.listGroups(registryPath) };
+      }
+      if (action === "create") {
+        const name = args.name as string | undefined;
+        const repos = args.repos as string[] | undefined;
+        if (!name || !repos) return { error: "create requires name and repos[]" };
+        const input: { name: string; repos: string[]; description?: string } = { name, repos };
+        if (typeof args.description === "string") input.description = args.description;
+        return { group: await reg.registerGroup(registryPath, input) };
+      }
+      // remove
+      const name = args.name as string | undefined;
+      if (!name) return { error: "remove requires name" };
+      return { removed: await reg.removeGroup(registryPath, name) };
+    },
+  },
+  {
+    name: "match_group_contracts",
+    category: "architecture" as ToolCategory,
+    searchHint: "cross-repo contract match who calls endpoint producer consumer fetch axios downstream break group",
+    description: "Match producer HTTP endpoints to cross-repo consumer calls (fetch/axios/got) across every indexed repo in a group. Returns ContractMatch[] (exact + partial), plus warnings for unindexed/failed repos. Answers 'who calls this endpoint' across services.",
+    schema: lazySchema(() => ({
+      group: z.string().describe("Repo group name (created via repo_group)"),
+    })),
+    handler: async (args) => {
+      const { matchGroupContracts } = await import("./tools/cross-repo-contract-tools.js");
+      return matchGroupContracts(args.group as string);
+    },
+  },
+  {
+    name: "find_endpoint_consumers",
+    category: "architecture" as ToolCategory,
+    searchHint: "who calls endpoint consumers downstream impact contract change break group cross-repo",
+    description: "Find every cross-repo consumer of a specific producer endpoint within a group — 'who calls GET /users/{id}'. Method is case-insensitive; path params in any style (:id, {id}, [id]) are normalised. Answers 'what breaks downstream if I change this contract'.",
+    schema: lazySchema(() => ({
+      group: z.string().describe("Repo group name"),
+      method: z.string().describe("HTTP method (GET/POST/...) — case-insensitive"),
+      path: z.string().describe("Producer path, any param style (e.g. /users/{id} or /users/:id)"),
+    })),
+    handler: async (args) => {
+      const { findEndpointConsumers } = await import("./tools/cross-repo-contract-tools.js");
+      return findEndpointConsumers(args.group as string, args.method as string, args.path as string);
+    },
+  },
+
   // --- Astro v6 migration check ---
   {
     name: "astro_migration_check",
