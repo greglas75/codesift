@@ -15,7 +15,10 @@ export async function atomicWriteFile(
   const dir = dirname(targetPath);
   await mkdir(dir, { recursive: true });
 
-  const tmpPath = `${targetPath}.tmp.${Date.now()}`;
+  // pid + random: Date.now() alone collides when two writers (parallel test
+  // workers, concurrent MCP server instances) hit the same target in the same
+  // millisecond — the loser's rename then fails with ENOENT.
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
 
   try {
     await writeFile(tmpPath, content, "utf-8");

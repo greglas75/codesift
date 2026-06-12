@@ -370,11 +370,55 @@ export interface IndexFolderResult {
   file_count: number;
   symbol_count: number;
   duration_ms: number;
-  /** Set when the call short-circuited because a watcher is keeping the index live. */
-  status?: "skipped";
+  /**
+   * Set when the call did not persist a fresh index:
+   * - "skipped" — short-circuited because a watcher is keeping the index live.
+   * - "rejected_partial" — new walk found <50% of the previous file count and
+   *   the previous index still matches what's on disk, so the new (likely
+   *   truncated) result was discarded. file_count/symbol_count echo the KEPT
+   *   old index. Follow `hint` to force a rebuild if the shrink is expected.
+   */
+  status?: "skipped" | "rejected_partial";
   reason?: string;
   last_indexed?: string;
   hint?: string;
+}
+
+/**
+ * Decide whether a previously stored index no longer reflects the working
+ * tree. Samples up to 256 of its file paths (even stride) and stats them;
+ * when at least half are gone the old index is treated as stale. Used by the
+ * indexFolder sanity check to break the poisoned-baseline deadlock: an old
+ * index bloated with since-deleted trees (.worktrees/, vendored dirs) would
+ * otherwise reject every honest reindex as "truncated" forever.
+ */
+const STALE_SAMPLE_LIMIT = 256;
+const STALE_MISSING_FRACTION = 0.5;
+
+async function isExistingIndexStale(
+  existing: CodeIndex,
+  rootPath: string,
+): Promise<boolean> {
+  const paths = existing.files.map((f) => f.path);
+  if (paths.length === 0) return true;
+
+  const stride = Math.max(1, Math.floor(paths.length / STALE_SAMPLE_LIMIT));
+  const sampled: string[] = [];
+  for (let i = 0; i < paths.length && sampled.length < STALE_SAMPLE_LIMIT; i += stride) {
+    const p = paths[i];
+    if (p) sampled.push(p);
+  }
+
+  let missing = 0;
+  await Promise.all(sampled.map(async (relPath) => {
+    try {
+      await stat(join(rootPath, relPath));
+    } catch {
+      missing++;
+    }
+  }));
+
+  return missing >= sampled.length * STALE_MISSING_FRACTION;
 }
 
 export async function indexFolder(
@@ -532,18 +576,35 @@ export async function indexFolder(
   // (WASM crash or walk failure can produce truncated results)
   const DROP_THRESHOLD = 0.5; // Reject if new index has <50% of old file count
   if (existing && fileEntries.length < existing.file_count * DROP_THRESHOLD && existing.file_count > 50) {
-    console.error(
-      `[codesift] SANITY CHECK FAILED for ${repoName}: ` +
-      `new index has ${fileEntries.length} files vs ${existing.file_count} previously. ` +
-      `Keeping old index. Use invalidate_cache + index_folder to force reindex.`,
-    );
-    return {
-      repo: repoName,
-      root: rootPath,
-      file_count: existing.file_count,
-      symbol_count: existing.symbol_count,
-      duration_ms: Date.now() - startTime,
-    };
+    // The shrink can also mean the OLD index is the bogus one: an earlier
+    // walker may have swept since-deleted trees (.worktrees/, vendored dirs),
+    // permanently inflating the baseline so every honest reindex looks
+    // truncated and gets rejected forever. Disambiguate by sampling the old
+    // index's paths: if most of them no longer exist on disk, the old index
+    // is stale dead weight — accept the new result instead of keeping it.
+    if (await isExistingIndexStale(existing, rootPath)) {
+      console.error(
+        `[codesift] Sanity check auto-heal for ${repoName}: old index has ` +
+        `${existing.file_count} files but most sampled paths no longer exist ` +
+        `on disk. Accepting new index (${fileEntries.length} files).`,
+      );
+    } else {
+      console.error(
+        `[codesift] SANITY CHECK FAILED for ${repoName}: ` +
+        `new index has ${fileEntries.length} files vs ${existing.file_count} previously. ` +
+        `Keeping old index. Use invalidate_cache + index_folder to force reindex.`,
+      );
+      return {
+        repo: repoName,
+        root: rootPath,
+        file_count: existing.file_count,
+        symbol_count: existing.symbol_count,
+        duration_ms: Date.now() - startTime,
+        status: "rejected_partial",
+        reason: `new walk found ${fileEntries.length} files, <50% of the ${existing.file_count} previously indexed — kept old index, nothing was re-registered`,
+        hint: "If the shrink is expected (deleted trees, new excludes), run invalidate_cache then index_folder to rebuild from scratch.",
+      };
+    }
   }
 
   // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges
