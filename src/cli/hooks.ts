@@ -146,7 +146,7 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".svelte",
 ]);
 
-const DEFAULT_MIN_LINES = 50;
+const DEFAULT_MIN_LINES = 200;
 
 const WIKI_MANIFEST_REL = join(".codesift", "wiki", "wiki-manifest.json");
 const WIKI_SUMMARY_DEFAULT_MAX_CHARS = 2500;
@@ -412,6 +412,21 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
+    // Allow bounded reads (offset/limit): a windowed read is targeted, and it
+    // is how an agent reads the region it is about to Edit — Claude Code
+    // requires a prior Read before Edit/Write, so redirecting these would make
+    // any file >= the threshold uneditable (a catch-22). Unbounded full reads
+    // of large files are still redirected below.
+    try {
+      const ti = (JSON.parse(raw) as { tool_input?: Record<string, unknown> }).tool_input;
+      if (ti && (typeof ti["offset"] === "number" || typeof ti["limit"] === "number")) {
+        process.exit(0);
+        return;
+      }
+    } catch {
+      // malformed — fall through to the size check
+    }
+
     const minLinesEnv = process.env["CODESIFT_READ_HOOK_MIN_LINES"];
     const parsed_min = minLinesEnv ? parseInt(minLinesEnv, 10) : NaN;
     const minLines = Number.isNaN(parsed_min) ? DEFAULT_MIN_LINES : parsed_min;
@@ -432,7 +447,8 @@ export async function handlePrecheckRead(): Promise<void> {
         `File ${relPath} has ${lineCount} lines. Use CodeSift tools instead:\n` +
         `  get_file_outline(repo, "${relPath}") for structure\n` +
         `  search_text(repo, "query", file_pattern="${relPath}") for specific content\n` +
-        `  get_symbol(repo, "symbol_id") for a specific function`;
+        `  get_symbol(repo, "symbol_id") for a specific function\n` +
+        `  To EDIT this file: Read a bounded range (pass offset+limit) — bounded reads are always allowed.`;
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",

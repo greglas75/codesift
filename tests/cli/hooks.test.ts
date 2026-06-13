@@ -129,10 +129,10 @@ describe("handlePrecheckRead", () => {
     rmSync(tmpDir, { recursive: true });
   });
 
-  it("uses default 50 for invalid CODESIFT_READ_HOOK_MIN_LINES", async () => {
+  it("uses default 200 for invalid CODESIFT_READ_HOOK_MIN_LINES", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "medium.ts");
-    writeFileSync(filePath, "line\n".repeat(30)); // 30 lines < 50 default
+    writeFileSync(filePath, "line\n".repeat(150)); // 150 lines < 200 default
 
     process.env["CODESIFT_READ_HOOK_MIN_LINES"] = "abc";
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
@@ -142,7 +142,46 @@ describe("handlePrecheckRead", () => {
 
     await handlePrecheckRead();
 
-    expect(exitCode).toBe(0); // 30 < 50 default
+    expect(exitCode).toBe(0); // 150 < 200 default → allowed
+    expect(stdoutOutput).not.toContain('"permissionDecision":"deny"');
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("allows a BOUNDED read (offset/limit) of a large file — fixes the Read→Edit catch-22", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
+    const filePath = join(tmpDir, "big.ts");
+    writeFileSync(filePath, "line\n".repeat(1000)); // 1000 lines, well over threshold
+
+    process.env["CODESIFT_READ_HOOK_MIN_LINES"] = "50";
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath, offset: 400, limit: 50 },
+    });
+
+    await handlePrecheckRead();
+
+    // Bounded read is the region an agent reads before Edit — must NOT be denied.
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).not.toContain('"permissionDecision":"deny"');
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("still redirects an UNBOUNDED read of a large file, and the deny names the bounded-read escape hatch", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
+    const filePath = join(tmpDir, "big.ts");
+    writeFileSync(filePath, "line\n".repeat(1000));
+
+    process.env["CODESIFT_READ_HOOK_MIN_LINES"] = "50";
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath }, // no offset/limit → unbounded
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+    expect(stdoutOutput).toContain("bounded range");
     rmSync(tmpDir, { recursive: true });
   });
 
