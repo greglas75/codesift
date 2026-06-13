@@ -12,7 +12,7 @@
  * falsely reported.
  */
 
-import type { RepoEndpoint } from "../types.js";
+import type { RepoEndpoint, ContractMatch } from "../types.js";
 import type { ApiContractResult as HonoContractResult } from "./hono-api-contract.js";
 import type { NestRouteInventoryResult } from "./nest-tools.js";
 import type { ApiContractResult as NextjsContractResult } from "./nextjs-api-contract-tools.js";
@@ -259,8 +259,7 @@ function sniffFetchMethodFromWindow(window: string): string {
 // matchContracts — Task 14
 // ---------------------------------------------------------------------------
 
-import type { ContractMatch } from "../types.js";
-// (ContractMatch import lives here; matchContracts implementation follows below)
+// (matchContracts implementation follows below; ContractMatch imported at top)
 
 /**
  * Split a path into non-empty segments (splitting on "/").
@@ -479,8 +478,6 @@ function findLineStart(source: string, lineNumber: number): number {
 // Group orchestration + MCP-facing helpers — Task 15
 // ---------------------------------------------------------------------------
 
-import type { ContractMatch as _ContractMatch } from "../types.js";
-
 /** Hard cap on repos processed per group (CQ6 — bounds cross-repo fan-out). */
 export const MAX_GROUP_REPOS = 20;
 
@@ -498,7 +495,7 @@ export interface RepoContractData {
 export type RepoResolver = (repo: string) => Promise<RepoContractData>;
 
 export interface GroupContractResult {
-  matches: _ContractMatch[];
+  matches: ContractMatch[];
   warnings: string[];
   repos_processed: number;
   error?: string;

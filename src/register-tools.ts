@@ -4829,10 +4829,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       const result = await introspectPgSchema(connStr, introspectOpts);
       if ("error" in result) return result;
       if (args.drift_check === true) {
+        // Fail loud at the TOP level (not buried under `drift`) so pipelines
+        // gating on `"error" in result` don't silently skip drift validation.
+        // Without resolved migration-schema symbols, pgDriftCheck would report
+        // a vacuous "no drift" — the exact false-negative we're guarding.
+        const repo = typeof args.repo === "string" ? args.repo.trim() : "";
+        if (!repo) {
+          return {
+            error:
+              "drift_check requires an explicit `repo` to load migration-derived schema symbols",
+          };
+        }
         const { getCodeIndex } = await import("./tools/index-tools.js");
-        const repo = args.repo as string | undefined;
-        const index = repo ? await getCodeIndex(repo) : null;
-        const symbols = index?.symbols ?? [];
+        const index = await getCodeIndex(repo);
+        if (!index) {
+          return {
+            error: `drift_check: repo '${repo}' is not indexed — cannot load migration-derived schema symbols`,
+          };
+        }
+        const symbols = index.symbols ?? [];
         const drift = pgDriftCheck(result, symbols);
         return { ...result, drift };
       }
@@ -4866,7 +4881,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         if (!name || !repos) return { error: "create requires name and repos[]" };
         const input: { name: string; repos: string[]; description?: string } = { name, repos };
         if (typeof args.description === "string") input.description = args.description;
-        return { group: await reg.registerGroup(registryPath, input) };
+        // registerGroup returns void — read the persisted group back so the
+        // caller gets a non-empty confirmation (name/repos) instead of `{}`.
+        // Fail loud if the read-back misses (corruption / concurrent delete)
+        // rather than returning an empty group a caller would retry on.
+        await reg.registerGroup(registryPath, input);
+        const created = await reg.getGroup(registryPath, name);
+        if (!created) return { error: "group persisted but read-back failed" };
+        return { group: created };
       }
       // remove
       const name = args.name as string | undefined;

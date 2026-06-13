@@ -487,7 +487,9 @@ export async function drainLegacyHashQueue(
         // Mtime drifted or file gone — omit so next run re-parses.
         return;
       }
-      result[q.relPath] = shas[j] ?? "";
+      // Omit on null hash — never persist an empty-string sentinel that a
+      // snapshot reader could mistake for a valid sha1.
+      if (shas[j]) result[q.relPath] = shas[j]!;
     });
   }
   return result;

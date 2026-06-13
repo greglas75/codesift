@@ -146,7 +146,14 @@ export class StaticEmbeddingProvider implements EmbeddingProvider {
    * with a different width than the static table records.
    */
   get dimensions(): number {
-    return this.#realDims ?? lookupStaticDimensions(this.model);
+    if (this.#realDims !== null) return this.#realDims;
+    // embed() hasn't run yet (all-cache-hit indexing path): report the real
+    // column count from the module cache if the model is already loaded, so
+    // persisted EmbeddingMeta records the true width instead of the static
+    // fallback. Read-only — the authoritative #realDims is still set by embed()
+    // from actual output, never pinned early from a read.
+    const cached = staticModelCache.get(this.model);
+    return cached?.cols ?? lookupStaticDimensions(this.model);
   }
 
   /**
