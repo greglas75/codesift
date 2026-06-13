@@ -512,6 +512,39 @@ function hasCodesiftHook(entries: HookEntry[]): boolean {
   );
 }
 
+// Codesift hook subcommands that read the payload from stdin and therefore
+// REQUIRE `--stdin`. session-start is intentionally excluded — it resolves the
+// repo from process.cwd() and needs no input.
+const STDIN_HOOK_SUBCOMMANDS = [
+  "session-gate", "precheck-read", "precheck-bash", "precheck-glob",
+  "precheck-grep", "precheck-agent", "postindex-file", "sentinel-writer",
+  "precompact-snapshot",
+] as const;
+
+/**
+ * Upgrade pre-existing codesift hook commands that read stdin to include
+ * `--stdin`. setup ≤0.8.11 wrote them without the flag, so Claude Code's stdin
+ * payload was never read and the hooks no-opped. ensureHookEntry() matches on
+ * matcher alone and won't replace an existing entry, so this rewrites the
+ * command in place. Idempotent: skips commands that already carry `--stdin`.
+ */
+function upgradeStdinHookCommands(hooks: HooksSection): void {
+  for (const entries of Object.values(hooks)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const list = (entry as HookEntry).hooks as Array<Record<string, unknown>> | undefined;
+      if (!Array.isArray(list)) continue;
+      for (const hk of list) {
+        const cmd = hk["command"];
+        if (typeof cmd !== "string" || !cmd.includes("codesift") || cmd.includes("--stdin")) continue;
+        if (STDIN_HOOK_SUBCOMMANDS.some((sub) => new RegExp(`(^|\\s)${sub}(\\s|$)`).test(cmd))) {
+          hk["command"] = `${cmd} --stdin`;
+        }
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Claude Code hooks — ~/.claude/settings.json
 //
@@ -524,23 +557,30 @@ function hasCodesiftHook(entries: HookEntry[]): boolean {
 // ---------------------------------------------------------------------------
 
 const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
+  // NOTE: every input-dependent hook MUST carry `--stdin`. Claude Code delivers
+  // the hook payload (tool_input.file_path, session_id, …) on stdin and sets no
+  // HOOK_TOOL_INPUT env var; readRawInput() only reads stdin when `--stdin` is
+  // present, so a command without it gets null input and no-ops silently. This
+  // previously left postindex-file (auto-reindex + wiki auto-regen), every
+  // precheck, sentinel-writer, and precompact-snapshot dead — only session-start
+  // worked because it resolves the repo from process.cwd() and needs no input.
   PreToolUse: [
-    { matcher: "", hooks: [{ type: "command", command: "codesift session-gate" }] },
-    { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read" }] },
-    { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash" }] },
-    { matcher: "Glob", hooks: [{ type: "command", command: "codesift precheck-glob" }] },
-    { matcher: "Grep", hooks: [{ type: "command", command: "codesift precheck-grep" }] },
-    { matcher: "Agent", hooks: [{ type: "command", command: "codesift precheck-agent" }] },
+    { matcher: "", hooks: [{ type: "command", command: "codesift session-gate --stdin" }] },
+    { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read --stdin" }] },
+    { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }] },
+    { matcher: "Glob", hooks: [{ type: "command", command: "codesift precheck-glob --stdin" }] },
+    { matcher: "Grep", hooks: [{ type: "command", command: "codesift precheck-grep --stdin" }] },
+    { matcher: "Agent", hooks: [{ type: "command", command: "codesift precheck-agent --stdin" }] },
   ],
   SessionStart: [
     { matcher: "", hooks: [{ type: "command", command: "codesift session-start" }] },
   ],
   PostToolUse: [
-    { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file" }] },
-    { matcher: "mcp__codesift__.*", hooks: [{ type: "command", command: "codesift sentinel-writer" }] },
+    { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file --stdin" }] },
+    { matcher: "mcp__codesift__.*", hooks: [{ type: "command", command: "codesift sentinel-writer --stdin" }] },
   ],
   PreCompact: [
-    { matcher: "", hooks: [{ type: "command", command: "codesift precompact-snapshot" }] },
+    { matcher: "", hooks: [{ type: "command", command: "codesift precompact-snapshot --stdin" }] },
   ],
 };
 
@@ -556,6 +596,9 @@ export async function setupClaudeHooks(): Promise<void> {
       ensureHookEntry(hooks, event, entry);
     }
   }
+
+  // Repair installs from setup ≤0.8.11 that wrote stdin hooks without `--stdin`.
+  upgradeStdinHookCommands(hooks);
 
   await writeJsonFile(settingsPath, root);
   await migrateLegacyClaudeHooks(configDir);

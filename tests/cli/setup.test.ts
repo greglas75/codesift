@@ -630,6 +630,54 @@ describe("setup", () => {
       expect(postWriteCount).toBe(1);
     });
 
+    it("every input-dependent Claude hook command carries --stdin (session-start excluded)", async () => {
+      await setup("claude", { hooks: true });
+      const settingsPath = join(tempHome, ".claude", "settings.json");
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+      const cmds: string[] = [];
+      for (const entries of Object.values(settings.hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>)) {
+        for (const e of entries) for (const hk of e.hooks) cmds.push(hk.command);
+      }
+      const codesiftCmds = cmds.filter((c) => c.includes("codesift"));
+      expect(codesiftCmds.length).toBeGreaterThan(0);
+      for (const c of codesiftCmds) {
+        // session-start resolves the repo from cwd and needs no stdin payload;
+        // index-conversations uses --quiet. Everything else reads stdin.
+        if (c.includes("session-start") || c.includes("index-conversations")) continue;
+        expect(c, `hook "${c}" must read stdin`).toContain("--stdin");
+      }
+    });
+
+    it("upgrades a pre-0.8.12 install that wrote stdin hooks without --stdin (in place, no dup)", async () => {
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      const settingsPath = join(claudeDir, "settings.json");
+      // Simulate the broken legacy install: postindex-file + precheck-read with no flag.
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read" }] }],
+            PostToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file" }] }],
+          },
+        }),
+        "utf-8",
+      );
+
+      await setupClaudeHooks();
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+      const post = settings.hooks.PostToolUse as Array<{ matcher: string; hooks: Array<{ command: string }> }>;
+      const writeEntries = post.filter((h) => h.matcher === "Write|Edit");
+      expect(writeEntries).toHaveLength(1); // upgraded in place, not duplicated
+      expect(writeEntries[0]!.hooks[0]!.command).toBe("codesift postindex-file --stdin");
+
+      const pre = settings.hooks.PreToolUse as Array<{ matcher: string; hooks: Array<{ command: string }> }>;
+      const readEntry = pre.find((h) => h.matcher === "Read")!;
+      expect(readEntry.hooks[0]!.command).toBe("codesift precheck-read --stdin");
+    });
+
     it("setup('claude') without hooks flag does NOT write hook entries", async () => {
       await setup("claude");
 
