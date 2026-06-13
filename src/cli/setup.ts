@@ -522,6 +522,29 @@ const STDIN_HOOK_SUBCOMMANDS = [
 ] as const;
 
 /**
+ * Remove hooks retired in 0.8.14 from existing installs: `session-gate`
+ * (blocked the first tool of EVERY session — even in repos with no CodeSift
+ * index — forcing a CodeSift call before any work) and `sentinel-writer`
+ * (only existed to release that gate). Net friction with little value; the
+ * SessionStart overview already primes CodeSift awareness.
+ */
+function removeRetiredClaudeHooks(hooks: HooksSection): void {
+  const retired = (cmd: string): boolean =>
+    cmd.includes("session-gate") || cmd.includes("sentinel-writer");
+  for (const event of Object.keys(hooks)) {
+    const entries = hooks[event];
+    if (!Array.isArray(entries)) continue;
+    const kept = entries.filter((entry) => {
+      const list = (entry as HookEntry).hooks as Array<Record<string, unknown>> | undefined;
+      if (!Array.isArray(list)) return true;
+      return !list.some((hk) => typeof hk["command"] === "string" && retired(hk["command"] as string));
+    });
+    if (kept.length === 0) delete hooks[event];
+    else hooks[event] = kept;
+  }
+}
+
+/**
  * Upgrade pre-existing codesift hook commands that read stdin to include
  * `--stdin`. setup ≤0.8.11 wrote them without the flag, so Claude Code's stdin
  * payload was never read and the hooks no-opped. ensureHookEntry() matches on
@@ -565,7 +588,6 @@ const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
   // precheck, sentinel-writer, and precompact-snapshot dead — only session-start
   // worked because it resolves the repo from process.cwd() and needs no input.
   PreToolUse: [
-    { matcher: "", hooks: [{ type: "command", command: "codesift session-gate --stdin" }] },
     { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read --stdin" }] },
     { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }] },
     { matcher: "Glob", hooks: [{ type: "command", command: "codesift precheck-glob --stdin" }] },
@@ -577,7 +599,6 @@ const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
   ],
   PostToolUse: [
     { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file --stdin" }] },
-    { matcher: "mcp__codesift__.*", hooks: [{ type: "command", command: "codesift sentinel-writer --stdin" }] },
   ],
   PreCompact: [
     { matcher: "", hooks: [{ type: "command", command: "codesift precompact-snapshot --stdin" }] },
@@ -599,6 +620,9 @@ export async function setupClaudeHooks(): Promise<void> {
 
   // Repair installs from setup ≤0.8.11 that wrote stdin hooks without `--stdin`.
   upgradeStdinHookCommands(hooks);
+
+  // Drop hooks retired in 0.8.14 (session-gate / sentinel-writer) from existing installs.
+  removeRetiredClaudeHooks(hooks);
 
   await writeJsonFile(settingsPath, root);
   await migrateLegacyClaudeHooks(configDir);

@@ -678,6 +678,42 @@ describe("setup", () => {
       expect(readEntry.hooks[0]!.command).toBe("codesift precheck-read --stdin");
     });
 
+    it("retires session-gate + sentinel-writer from an existing install (0.8.14)", async () => {
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      const settingsPath = join(claudeDir, "settings.json");
+      // A 0.8.12/0.8.13 install carried the retired hooks.
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              { matcher: "", hooks: [{ type: "command", command: "codesift session-gate --stdin" }] },
+              { matcher: "Read", hooks: [{ type: "command", command: "codesift precheck-read --stdin" }] },
+            ],
+            PostToolUse: [
+              { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file --stdin" }] },
+              { matcher: "mcp__codesift__.*", hooks: [{ type: "command", command: "codesift sentinel-writer --stdin" }] },
+            ],
+          },
+        }),
+        "utf-8",
+      );
+
+      await setupClaudeHooks();
+      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
+
+      const allCmds = JSON.stringify(settings.hooks);
+      expect(allCmds).not.toContain("session-gate");
+      expect(allCmds).not.toContain("sentinel-writer");
+      // Survivors stay intact.
+      expect(allCmds).toContain("codesift precheck-read --stdin");
+      expect(allCmds).toContain("codesift postindex-file --stdin");
+      // The PostToolUse mcp matcher block (only held sentinel-writer) is gone.
+      const post = settings.hooks.PostToolUse as Array<{ matcher: string }>;
+      expect(post.some((h) => h.matcher === "mcp__codesift__.*")).toBe(false);
+    });
+
     it("setup('claude') without hooks flag does NOT write hook entries", async () => {
       await setup("claude");
 

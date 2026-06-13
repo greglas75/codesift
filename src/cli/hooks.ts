@@ -412,6 +412,14 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
+    // Only redirect inside repos the user actually indexed — never interfere
+    // with reads in unrelated (non-CodeSift) projects. This makes precheck-read
+    // consistent with precheck-bash/glob/grep (all indexed-repo-scoped).
+    if (!isCurrentRepoIndexed()) {
+      process.exit(0);
+      return;
+    }
+
     // Allow bounded reads (offset/limit): a windowed read is targeted, and it
     // is how an agent reads the region it is about to Edit — Claude Code
     // requires a prior Read before Edit/Write, so redirecting these would make
@@ -1096,6 +1104,12 @@ export async function handlePrecheckAgent(): Promise<void> {
 
     const subagentType = typeof ti["subagent_type"] === "string" ? ti["subagent_type"] : "";
     const prompt = typeof ti["prompt"] === "string" ? ti["prompt"] : "";
+
+    // Only nudge inside indexed repos — Explore can't use CodeSift in a repo
+    // that was never indexed, so gating subagents there is pointless friction.
+    if (!isCurrentRepoIndexed()) {
+      process.exit(0); return;
+    }
 
     // Only gate code-exploration subagents
     if (subagentType !== "Explore" && subagentType !== "general-purpose" && subagentType !== "Plan") {

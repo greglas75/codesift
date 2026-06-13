@@ -19,10 +19,35 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 describe("handlePrecheckRead", () => {
   let exitCode: number | undefined;
   let stdoutOutput: string;
+  let dataDir: string;
 
   beforeEach(() => {
     exitCode = undefined;
     stdoutOutput = "";
+    // precheck-read now only fires inside an indexed repo (isCurrentRepoIndexed).
+    // Register CWD with a valid index so the gate is deterministically open in
+    // CI — otherwise these deny-tests would silently pass only on a machine
+    // where this repo happens to be indexed.
+    dataDir = mkdtempSync(join(tmpdir(), "codesift-read-hook-"));
+    const indexPath = join(dataDir, "current.index.json");
+    writeFileSync(indexPath, "{}");
+    writeFileSync(
+      join(dataDir, "registry.json"),
+      JSON.stringify({
+        updated_at: Date.now(),
+        repos: {
+          "local/current": {
+            name: "local/current",
+            root: process.cwd(),
+            index_path: indexPath,
+            symbol_count: 1,
+            file_count: 1,
+            updated_at: Date.now(),
+          },
+        },
+      }),
+    );
+    process.env["CODESIFT_DATA_DIR"] = dataDir;
     vi.spyOn(process, "exit").mockImplementation((code?: number) => {
       exitCode = code ?? 0;
       return undefined as never;
@@ -37,6 +62,30 @@ describe("handlePrecheckRead", () => {
     vi.restoreAllMocks();
     delete process.env["HOOK_TOOL_INPUT"];
     delete process.env["CODESIFT_READ_HOOK_MIN_LINES"];
+    delete process.env["CODESIFT_DATA_DIR"];
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("does NOT fire in a repo that is not indexed (allows the read)", async () => {
+    // Point CODESIFT_DATA_DIR at an empty registry → isCurrentRepoIndexed=false.
+    const emptyDir = mkdtempSync(join(tmpdir(), "codesift-empty-"));
+    writeFileSync(join(emptyDir, "registry.json"), JSON.stringify({ updated_at: Date.now(), repos: {} }));
+    process.env["CODESIFT_DATA_DIR"] = emptyDir;
+
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
+    const filePath = join(tmpDir, "big.ts");
+    writeFileSync(filePath, "line\n".repeat(500));
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).not.toContain('"permissionDecision":"deny"');
+    rmSync(tmpDir, { recursive: true });
+    rmSync(emptyDir, { recursive: true, force: true });
   });
 
   it("exits 2 for large .ts file", async () => {
