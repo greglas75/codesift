@@ -119,10 +119,33 @@ describe("handleSessionStart — project overview injection", () => {
     // high-severity gotcha surfaces; static prompt still present
     expect(ctx).toContain("indexes must stay in sync");
     expect(ctx).toContain("Entry points: src/server.ts");
+    // push→pull pointer: the overview points the agent at the on-demand path
+    expect(ctx).toContain("get_knowledge_map");
+    expect(ctx).toContain("Pull on demand");
     // telemetry: an injection event is logged to usage.jsonl
     const ev = usageEvents().find((e) => e.tool === "wiki_overview_injected");
     expect(ev).toBeDefined();
     expect((ev!.args_summary as Record<string, unknown>).modules).toBe(2);
+  });
+
+  it("records the real session_id from the hook payload (not the 'hook' placeholder)", async () => {
+    writeManifest(tmpDir, V2_MANIFEST);
+    process.env.HOOK_TOOL_INPUT = JSON.stringify({
+      hook_event_name: "SessionStart",
+      session_id: "sess-abc-123",
+    });
+    await handleSessionStart();
+    const ev = usageEvents().find((e) => e.tool === "wiki_overview_injected");
+    expect(ev).toBeDefined();
+    expect(ev!.session_id).toBe("sess-abc-123"); // was hardcoded "hook" — blocked correlation
+  });
+
+  it("falls back to 'hook' when the payload carries no session_id", async () => {
+    writeManifest(tmpDir, V2_MANIFEST);
+    process.env.HOOK_TOOL_INPUT = JSON.stringify({ hook_event_name: "SessionStart" });
+    await handleSessionStart();
+    const ev = usageEvents().find((e) => e.tool === "wiki_overview_injected");
+    expect(ev!.session_id).toBe("hook");
   });
 
   it("logs NO telemetry when no overview is injected (v1 manifest)", async () => {

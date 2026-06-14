@@ -207,7 +207,7 @@ function findRepoRoot(filePath: string): string | null {
  * hooks are short-lived and call process.exit, so an async write could be lost.
  * Opt out of all wiki telemetry with CODESIFT_WIKI_TELEMETRY=0.
  */
-function logWikiEvent(tool: string, repo: string, args: Record<string, unknown>, resultTokens = 0): void {
+function logWikiEvent(tool: string, repo: string, args: Record<string, unknown>, resultTokens = 0, sessionId?: string | null): void {
   try {
     if (process.env.CODESIFT_WIKI_TELEMETRY === "0") return;
     const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
@@ -219,7 +219,10 @@ function logWikiEvent(tool: string, repo: string, args: Record<string, unknown>,
       elapsed_ms: 0,
       result_tokens: resultTokens,
       result_chunks: 0,
-      session_id: process.env["CLAUDE_SESSION_ID"] ?? "hook",
+      // Prefer the real session_id from the hook payload (now that --stdin works)
+      // so wiki consumption can be correlated to sessions; fall back to the env
+      // var, then "hook" for entries with no resolvable session.
+      session_id: sessionId ?? process.env["CLAUDE_SESSION_ID"] ?? "hook",
       host: process.env["CODESIFT_HOST_TAG"] ?? hostname(),
     };
     mkdirSync(dataDir, { recursive: true });
@@ -352,6 +355,16 @@ function tryLoadProjectOverview(repoRoot: string): string | null {
         .filter(Boolean);
       if (top.length > 0) lines.push(`Gotchas: ${top.join(" | ")}`);
     }
+
+    // Push→pull pointer: this overview is an orientation MAP, not the full
+    // architecture. Point the agent at the on-demand path — the queryable tools
+    // (get_knowledge_map / assemble_context) have near-zero usage because agents
+    // don't know to reach for them. Research (ETH arXiv:2602.11988) shows a
+    // pushed overview earns its tokens only when it surfaces non-inferable signal
+    // AND lets the agent pull the rest rather than re-discovering by hand.
+    lines.push(
+      "Need detail beyond this map? Pull on demand: get_knowledge_map(focus=<module>) for dependencies, assemble_context(level=\"L3\") for a directory overview, search_symbols/get_file_outline for a specific area — don't hand-walk the tree.",
+    );
 
     // Staleness hint: compare manifest commit to current HEAD. Best-effort and
     // gated — the probe is a synchronous subprocess on the SessionStart hot
@@ -762,7 +775,7 @@ function shouldDebounceWikiRegen(repoRoot: string, now: number): boolean {
  *   - the per-repo throttle window has elapsed.
  * Opt out entirely via `CODESIFT_WIKI_AUTO_REGEN=0`.
  */
-function maybeRegenerateWiki(filePath: string, now: number): void {
+function maybeRegenerateWiki(filePath: string, now: number, sessionId?: string | null): void {
   try {
     const optOut = process.env.CODESIFT_WIKI_AUTO_REGEN;
     if (optOut === "0" || optOut === "false") return;
@@ -806,7 +819,7 @@ function maybeRegenerateWiki(filePath: string, now: number): void {
     });
     child.on("error", () => { /* CQ8: never surface spawn failures */ });
     child.unref();
-    logWikiEvent("wiki_auto_regen", repoRoot, { trigger: "new-file", file: relative(repoRoot, filePath) });
+    logWikiEvent("wiki_auto_regen", repoRoot, { trigger: "new-file", file: relative(repoRoot, filePath) }, 0, sessionId);
   } catch {
     // CQ8: auto-regen is best-effort — never crash the hook.
   }
@@ -845,7 +858,7 @@ export async function handlePostindexFile(): Promise<void> {
     }
 
     // Keep the wiki fresh: throttled, detached background regeneration.
-    maybeRegenerateWiki(filePath, Date.now());
+    maybeRegenerateWiki(filePath, Date.now(), parseHookInput(raw).sessionId);
 
     process.exit(0);
   } catch {
@@ -961,7 +974,7 @@ export async function handleSessionStart(): Promise<void> {
           logWikiEvent("wiki_overview_injected", repoRoot, {
             chars: overview.length,
             modules: (overview.match(/^  - /gm) || []).length,
-          }, Math.ceil(overview.length / 4));
+          }, Math.ceil(overview.length / 4), sessionId);
         }
       }
     }
