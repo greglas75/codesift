@@ -1,4 +1,4 @@
-import { writeFile, mkdir, readFile, readdir, rename, unlink } from "node:fs/promises";
+import { writeFile, mkdir, readFile, readdir, rename, unlink, appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getCurrentGitCommit } from "../utils/git-head.js";
 import { getCodeIndex } from "./index-tools.js";
@@ -121,6 +121,35 @@ async function loadOldManifest(outputDir: string): Promise<unknown> {
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
+/**
+ * Best-effort: ensure the repo's .gitignore excludes `.codesift/`. The index +
+ * wiki live under `<repo>/.codesift/`, are per-machine, and regenerate on every
+ * edit — committing them is pure churn. Appends the ignore rule once if missing.
+ * Never throws (CQ8): wiki generation must not fail on gitignore IO.
+ */
+export async function ensureCodesiftGitignored(repoRoot: string): Promise<void> {
+  try {
+    const giPath = join(repoRoot, ".gitignore");
+    let current = "";
+    try {
+      current = await readFile(giPath, "utf-8");
+    } catch {
+      // no .gitignore yet — it will be created by the append below
+    }
+    const hasRule = current
+      .split("\n")
+      .some((l) => l.trim() === ".codesift/" || l.trim() === ".codesift");
+    if (hasRule) return;
+    const prefix = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
+    await appendFile(
+      giPath,
+      `${prefix}\n# CodeSift auto-generated index + wiki (per-repo, regenerated on edits) — do not commit\n.codesift/\n`,
+    );
+  } catch {
+    // best-effort — never block wiki generation on gitignore IO
+  }
+}
+
 export async function generateWiki(
   repo: string,
   options?: {
@@ -146,6 +175,11 @@ export async function generateWiki(
   }
 
   await mkdir(outputDir, { recursive: true });
+
+  // The wiki + whole .codesift/ dir is auto-generated, per-repo, and regenerated
+  // on edits — committing it is churn. Ensure the repo ignores it so it never
+  // lands on a branch. Best-effort; never blocks generation.
+  await ensureCodesiftGitignored(index.root);
 
   // Lockfile: prevent concurrent wiki generation
   const lockPath = join(outputDir, ".wiki-lock");
