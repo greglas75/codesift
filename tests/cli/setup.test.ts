@@ -630,7 +630,7 @@ describe("setup", () => {
       expect(postWriteCount).toBe(1);
     });
 
-    it("every input-dependent Claude hook command carries --stdin (session-start excluded)", async () => {
+    it("every input-dependent Claude hook command carries --stdin (incl. session-start)", async () => {
       await setup("claude", { hooks: true });
       const settingsPath = join(tempHome, ".claude", "settings.json");
       const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
@@ -642,9 +642,9 @@ describe("setup", () => {
       const codesiftCmds = cmds.filter((c) => c.includes("codesift"));
       expect(codesiftCmds.length).toBeGreaterThan(0);
       for (const c of codesiftCmds) {
-        // session-start resolves the repo from cwd and needs no stdin payload;
-        // index-conversations uses --quiet. Everything else reads stdin.
-        if (c.includes("session-start") || c.includes("index-conversations")) continue;
+        // index-conversations uses --quiet (Stop hook). Everything else —
+        // including session-start (needs session_id for wiki telemetry) — reads stdin.
+        if (c.includes("index-conversations")) continue;
         expect(c, `hook "${c}" must read stdin`).toContain("--stdin");
       }
     });

@@ -513,10 +513,12 @@ function hasCodesiftHook(entries: HookEntry[]): boolean {
 }
 
 // Codesift hook subcommands that read the payload from stdin and therefore
-// REQUIRE `--stdin`. session-start is intentionally excluded — it resolves the
-// repo from process.cwd() and needs no input.
+// REQUIRE `--stdin`. session-start is included: it resolves the repo from
+// process.cwd() for the overview, but still needs the payload's session_id so
+// wiki telemetry can be correlated to a session (without --stdin it logged the
+// "hook" placeholder).
 const STDIN_HOOK_SUBCOMMANDS = [
-  "session-gate", "precheck-read", "precheck-bash", "precheck-glob",
+  "session-start", "session-gate", "precheck-read", "precheck-bash", "precheck-glob",
   "precheck-grep", "precheck-agent", "postindex-file", "sentinel-writer",
   "precompact-snapshot",
 ] as const;
@@ -595,7 +597,7 @@ const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
     { matcher: "Agent", hooks: [{ type: "command", command: "codesift precheck-agent --stdin" }] },
   ],
   SessionStart: [
-    { matcher: "", hooks: [{ type: "command", command: "codesift session-start" }] },
+    { matcher: "", hooks: [{ type: "command", command: "codesift session-start --stdin" }] },
   ],
   PostToolUse: [
     { matcher: "Write|Edit", hooks: [{ type: "command", command: "codesift postindex-file --stdin" }] },
