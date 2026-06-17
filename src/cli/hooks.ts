@@ -722,11 +722,20 @@ function shouldDebouncePostindex(filePath: string, now: number): boolean {
   }
 }
 
-// Auto-regenerate the wiki at most once per this window per repo. Wiki
-// generation is a heavy whole-repo analysis, so it runs detached in the
-// background and is throttled well above the per-file reindex debounce. The
-// project overview changes slowly, so 30 min keeps CPU cost negligible.
-const WIKI_REGEN_DEBOUNCE_MS = 30 * 60 * 1000;
+// Auto-regenerate the wiki at most once per this window per repo. Telemetry
+// (Jun 2026) showed the wiki's queryable/pull path goes effectively unused by
+// agents, so per-structural-change regen was burning CPU to keep a map nobody
+// reads on demand fresh-to-the-minute. The overview changes slowly and tolerates
+// being a day stale, so the window is 24h: still auto-fresh, near-zero cost, no
+// per-edit churn. Override with CODESIFT_WIKI_REGEN_DEBOUNCE_MIN (minutes); set
+// CODESIFT_WIKI_AUTO_REGEN=0 to disable entirely (then refresh via
+// `codesift wiki-generate`).
+function wikiRegenDebounceMs(): number {
+  const raw = process.env["CODESIFT_WIKI_REGEN_DEBOUNCE_MIN"];
+  const min = raw ? parseInt(raw, 10) : NaN;
+  return (Number.isNaN(min) || min <= 0 ? 24 * 60 : min) * 60 * 1000;
+}
+const WIKI_REGEN_DEBOUNCE_MS = wikiRegenDebounceMs();
 
 // Skip background auto-regen entirely for repos larger than this (file count).
 // Whole-repo analysis on a huge repo is too heavy to run opportunistically on
