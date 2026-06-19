@@ -60,6 +60,62 @@ async function handleInvalidate(args: string[], flags: Flags): Promise<void> {
   output({ invalidated: result, repo }, flags);
 }
 
+/**
+ * Delete orphaned per-repo cache artifacts (embeddings/index/meta/bm25/graph)
+ * whose hash stem is no longer in the registry. These accumulate from
+ * re-indexes (hash changes) and ephemeral/test repos that were indexed then
+ * deleted — each leaves multi-GB embedding files behind. Use --dry-run to
+ * preview. Regenerable: re-indexing recreates anything still needed.
+ */
+async function handlePrune(_args: string[], flags: Flags): Promise<void> {
+  const { readFileSync, readdirSync, statSync, unlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { loadConfig } = await import("../config.js");
+  const dataDir = loadConfig().dataDir;
+  const dryRun = getBoolFlag(flags, "dry-run");
+
+  // Live index hashes from the registry — everything else is orphaned cache.
+  const live = new Set<string>();
+  try {
+    const reg = JSON.parse(readFileSync(join(dataDir, "registry.json"), "utf-8")) as {
+      repos?: Record<string, { index_path?: string }>;
+    };
+    for (const v of Object.values(reg.repos ?? {})) {
+      const ip = v.index_path;
+      if (typeof ip === "string") live.add(ip.split("/").pop()!.replace(".index.json", ""));
+    }
+  } catch {
+    die("prune: cannot read registry.json — aborting so live data is never deleted.");
+  }
+  // Safety: an empty live set would mark every artifact orphaned. Refuse rather
+  // than risk nuking a valid (but momentarily empty-looking) data dir.
+  if (live.size === 0) {
+    die("prune: registry lists 0 repos — aborting (refusing to treat all artifacts as orphans).");
+  }
+
+  const re = /^([0-9a-f]{8,})\.(embeddings\.ndjson(\.tmp.*)?|index\.json|embeddings\.meta.*|bm25\.json|graph\.json)$/;
+  let files = 0, bytes = 0, kept = 0;
+  for (const name of readdirSync(dataDir)) {
+    const m = re.exec(name);
+    if (!m) continue;
+    if (live.has(m[1]!)) { kept++; continue; }
+    const full = join(dataDir, name);
+    try {
+      bytes += statSync(full).size;
+      if (!dryRun) unlinkSync(full);
+      files++;
+    } catch { /* skip unreadable/already-gone */ }
+  }
+  output({
+    pruned: !dryRun,
+    dry_run: dryRun,
+    orphan_files: files,
+    freed_gb: +(bytes / 1e9).toFixed(2),
+    kept_live_artifacts: kept,
+    data_dir: dataDir,
+  }, flags);
+}
+
 async function handleIndexConversations(args: string[], flags: Flags): Promise<void> {
   const projectPath = args[0];
   const { indexConversations } = await import("../tools/conversation-tools.js");
@@ -522,6 +578,7 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "index-repo": handleIndexRepo,
   "repos": handleRepos,
   "invalidate": handleInvalidate,
+  "prune": handlePrune,
   "index-conversations": handleIndexConversations,
   "search": handleSearch,
   "symbols": handleSymbols,

@@ -11,6 +11,7 @@ Commands:
   index-repo <url>                Clone and index a remote git repository
   repos                           List all indexed repositories
   invalidate <repo>               Clear index cache for a repository
+  prune [--dry-run]               Delete orphaned cache (embeddings/index of dead repos)
   index-conversations [path]      Index Claude Code conversations for the current project
 
   search <repo> <query>           Full-text search across all files
@@ -117,6 +118,16 @@ Clear the index cache for a repository, forcing full re-index on next use.
 
 Arguments:
   <repo>    Repository identifier (e.g. local/my-project)`,
+
+  prune: `codesift prune [--dry-run]
+
+Delete orphaned per-repo cache artifacts (embeddings, index, bm25, graph) whose
+hash is no longer in the registry — left behind by re-indexes and ephemeral/test
+repos. Each can be multi-GB. Safe: regenerable, and aborts if the registry is
+unreadable or empty.
+
+Flags:
+  --dry-run    Report what would be freed without deleting`,
 
   search: `codesift search <repo> <query> [options]
 
