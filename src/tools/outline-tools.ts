@@ -272,6 +272,14 @@ function buildCompactList(
  * entries instead of the full nested tree — 10-50x less output.
  */
 const MAX_TREE_FILES = 500; // Cap file count in tree output to prevent 30K+ tok responses
+// The nested tree format is ~5-6× more tokens/file than the flat compact list
+// (indentation + dir nodes + per-node symbol counts). Telemetry showed
+// get_file_tree p95 ≈ 9K tok because agents rarely pass compact=true and the
+// nested view rendered up to MAX_TREE_FILES. Above this threshold, default
+// (compact omitted) calls return the flat compact list instead — caps the p95
+// at ~2K while small repos keep the readable nested tree. Pass compact=false to
+// force the nested view regardless.
+const NESTED_TREE_MAX = 150;
 
 export async function getFileTree(
   repo: string,
@@ -301,6 +309,22 @@ export async function getFileTree(
     name_pattern: options?.name_pattern,
     min_symbols: options?.min_symbols,
   });
+
+  // Default (compact omitted) returns the flat compact list once the tree is
+  // non-trivial — the nested view's token cost grows fast. compact=false forces
+  // the nested view at any size.
+  if (options?.compact === undefined && filteredFiles.length > NESTED_TREE_MAX) {
+    const full = buildCompactList(index, options);
+    const overCap = full.length > MAX_TREE_FILES;
+    return {
+      entries: overCap ? full.slice(0, MAX_TREE_FILES) : full,
+      truncated: overCap,
+      total: full.length,
+      hint: overCap
+        ? `Auto-compacted: ${full.length} files exceeds ${MAX_TREE_FILES} limit. Use path_prefix, name_pattern, or compact=true.`
+        : `Auto-compacted to a flat list (${full.length} files) — nested tree omitted to save tokens. Pass compact=false for the nested view, or path_prefix/name_pattern to narrow.`,
+    };
+  }
 
   if (filteredFiles.length > MAX_TREE_FILES) {
     const list = buildCompactList(index, options).slice(0, MAX_TREE_FILES);
