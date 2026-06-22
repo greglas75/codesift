@@ -67,6 +67,9 @@ export function createCodesiftServer(): McpServer {
 
 const server = createCodesiftServer();
 
+/** Bind addresses considered loopback-safe for the local daemon. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
 export interface HttpServerHandle {
   /** Actual listening port (resolved when port 0 was requested). */
   port: number;
@@ -118,6 +121,13 @@ export async function startHttpServer(
     "@modelcontextprotocol/sdk/server/streamableHttp.js"
   );
   const host = opts.host ?? "127.0.0.1"; // loopback only — never expose to the network
+  // Hard refuse a non-loopback bind: the daemon serves trusted local editor
+  // windows only and has no network auth model beyond the optional token.
+  if (!LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `codesift HTTP daemon refuses non-loopback bind "${host}" — it is local-only by design.`,
+    );
+  }
   const token = opts.token ?? process.env["CODESIFT_HTTP_TOKEN"];
 
   type Session = {
