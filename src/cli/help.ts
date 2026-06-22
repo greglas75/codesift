@@ -12,6 +12,7 @@ Commands:
   repos                           List all indexed repositories
   invalidate <repo>               Clear index cache for a repository
   prune [--dry-run]               Delete orphaned cache (embeddings/index of dead repos)
+  serve [--port N] [--host H]     Run one shared local daemon (embeddings load once for all windows)
   index-conversations [path]      Index Claude Code conversations for the current project
 
   search <repo> <query>           Full-text search across all files
@@ -128,6 +129,21 @@ unreadable or empty.
 
 Flags:
   --dry-run    Report what would be freed without deleting`,
+
+  serve: `codesift serve [--port N] [--host H]
+
+Run a single shared CodeSift daemon over local HTTP. Every editor window connects
+to this one process, so per-repo embeddings load ONCE instead of once per window —
+the fix for multi-session memory exhaustion on smaller machines. Point clients at
+it with 'codesift setup <platform> --http'.
+
+Single-instance (refuses a 2nd serve while one is live; reclaims a stale lock from
+a crashed daemon). Binds 127.0.0.1 only. Set CODESIFT_HTTP_TOKEN to require a
+bearer token. SIGTERM/SIGINT shut down cleanly.
+
+Flags:
+  --port N     Port to listen on (default 7077)
+  --host H     Bind address (default 127.0.0.1 — do not expose to the network)`,
 
   search: `codesift search <repo> <query> [options]
 

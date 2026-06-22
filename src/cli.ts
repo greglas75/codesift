@@ -92,6 +92,11 @@ async function main(): Promise<void> {
     keepProcessAlive = true;
   }
 
+  // `serve` is a long-lived daemon — never force-exit it.
+  if (command === "serve") {
+    keepProcessAlive = true;
+  }
+
   await handler(commandArgs, flags);
 }
 
