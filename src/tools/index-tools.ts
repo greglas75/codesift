@@ -1823,9 +1823,28 @@ export function _cachedEmbeddingReposForTesting(): string[] {
 }
 
 /**
+ * In-flight embedding loads, keyed by repo. Two MCP sessions (e.g. two editor
+ * windows on one `codesift serve` daemon) that first-access the same repo
+ * concurrently must trigger ONE disk load, not one per session — otherwise a
+ * GB-scale load runs N times in parallel. Concurrent callers await the same
+ * promise; the entry clears once the load settles.
+ */
+const embeddingLoadsInFlight = new Map<string, Promise<Map<string, Float32Array> | null>>();
+
+/** Count of actual disk loads (test-only) — proves load-once across sessions. */
+let embeddingLoadCount = 0;
+export function _embeddingLoadCountForTesting(): number {
+  return embeddingLoadCount;
+}
+export function _resetEmbeddingLoadCountForTesting(): void {
+  embeddingLoadCount = 0;
+}
+
+/**
  * Get the in-memory embedding cache for a repo.
  * Loads from disk if not cached. Returns null if no embeddings file exists,
- * or if embeddings are disabled (lite mode). Bounds resident RAM via LRU.
+ * or if embeddings are disabled (lite mode). Bounds resident RAM via LRU, and
+ * dedupes concurrent first-access so the load runs exactly once per repo.
  */
 export async function getEmbeddingCache(
   repoName: string,
@@ -1841,17 +1860,33 @@ export async function getEmbeddingCache(
     return cached;
   }
 
-  const config = loadConfig();
-  const meta = await getRepo(config.registryPath, repoName);
-  if (!meta) return null;
+  // Coalesce concurrent first-access onto one load.
+  const inFlight = embeddingLoadsInFlight.get(repoName);
+  if (inFlight) return inFlight;
 
-  const embeddingPath = getEmbeddingPath(meta.index_path);
-  const embeddings = await loadEmbeddings(embeddingPath);
-  if (embeddings.size === 0) return null;
+  const loadPromise = (async (): Promise<Map<string, Float32Array> | null> => {
+    const config = loadConfig();
+    const meta = await getRepo(config.registryPath, repoName);
+    if (!meta) return null;
 
-  embeddingCaches.set(repoName, embeddings);
-  evictEmbeddingCachesOverBudget(repoName);
-  return embeddings;
+    const embeddingPath = getEmbeddingPath(meta.index_path);
+    embeddingLoadCount++;
+    const embeddings = await loadEmbeddings(embeddingPath);
+    if (embeddings.size === 0) return null;
+
+    // Pin-on-access: this repo is the one being served, so eviction never drops
+    // it out from under the load/query that just requested it.
+    embeddingCaches.set(repoName, embeddings);
+    evictEmbeddingCachesOverBudget(repoName);
+    return embeddings;
+  })();
+
+  embeddingLoadsInFlight.set(repoName, loadPromise);
+  try {
+    return await loadPromise;
+  } finally {
+    embeddingLoadsInFlight.delete(repoName);
+  }
 }
 
 // ---------------------------------------------------------------------------
