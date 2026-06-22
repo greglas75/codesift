@@ -159,3 +159,7 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 **src/instructions.ts** — CODESIFT_INSTRUCTIONS (~1.5K tok) sent via MCP instructions field
 **rules/** — Platform-specific rules (codesift.md, codesift.mdc, codex.md, gemini.md)
 **tests/** (193 files, 2971 tests, all passing) — Vitest with `exactOptionalPropertyTypes: true`
+
+## Memory controls (low-RAM / multi-session)
+- `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` — lite mode: no embeddings in RAM (semantic off; BM25+symbols still work). For 16–24GB machines.
+- `CODESIFT_MAX_EMBEDDING_MEM_MB` (default 1024) — LRU-evict per-repo embeddings over this budget; `getEmbeddingCache` pins the in-use repo. `loadEmbeddings` streams the ndjson (no whole-file slurp). Shared HTTP daemon (`codesift serve`, load-once) planned — see docs/specs/2026-06-22-shared-server-memory-plan.md.

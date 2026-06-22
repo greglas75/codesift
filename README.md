@@ -863,3 +863,20 @@ BSL-1.1
 | Development | package.json:scripts (line 19-28) |
 | Git URL | package.json:repository (line 62-64) |
 -->
+
+## Low-memory / multi-session (teams, 16–24GB machines)
+
+Each editor session (Claude Code/Cursor/Codex window) currently spawns its **own**
+stdio `codesift` server process, and each loads per-repo embeddings into its own
+RAM. On big repos (GB-scale embedding files) several windows can exhaust memory on
+smaller machines. Controls:
+
+| Env var | Effect | Default |
+|---------|--------|---------|
+| `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` | **Lite mode** — never load embeddings into RAM (semantic search off; `search_text` + `search_symbols` + tree-sitter still work). Footprint drops to hundreds of MB. Best for 16GB machines. | off |
+| `CODESIFT_MAX_EMBEDDING_MEM_MB` | Cap resident embedding RAM; least-recently-used repos are evicted (and lazily reloaded) above the budget. | `1024` |
+
+Set these in the `env` block of your MCP client config (e.g. `~/.claude.json`
+`mcpServers.codesift.env`). A shared HTTP daemon (`codesift serve`) that loads
+embeddings **once** for all windows is on the roadmap (eliminates the per-session
+duplication entirely).
