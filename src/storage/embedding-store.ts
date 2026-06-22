@@ -32,27 +32,42 @@ export async function loadEmbeddings(
 ): Promise<Map<string, Float32Array>> {
   const embeddings = new Map<string, Float32Array>();
 
-  try {
-    const raw = await readFile(embeddingPath, "utf-8");
-    const lines = raw.split("\n");
+  // Stream line-by-line rather than readFile-ing the whole file into one string:
+  // embedding files are GB-scale (e.g. 4.5GB), so a single slurp spikes the heap
+  // by the full file size at load. readline keeps peak memory to one line plus
+  // the resident Float32Array map.
+  const { createReadStream, existsSync } = await import("node:fs");
+  const { createInterface } = await import("node:readline");
 
-    for (const line of lines) {
+  // Missing file → empty map (mirrors prior readFile catch). Guarding here avoids
+  // an async ENOENT surfacing as an unhandled stream/readline error.
+  if (!existsSync(embeddingPath)) return embeddings;
+
+  await new Promise<void>((resolve) => {
+    let stream: import("node:fs").ReadStream;
+    try {
+      stream = createReadStream(embeddingPath, { encoding: "utf-8" });
+    } catch {
+      resolve();
+      return;
+    }
+    stream.on("error", () => resolve()); // unreadable mid-stream → return what we have
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    rl.on("error", () => resolve());
+    rl.on("line", (line) => {
       const trimmed = line.trim();
-      if (!trimmed) continue;
-
+      if (!trimmed) return;
       try {
-        const parsed: unknown = JSON.parse(trimmed);
-        const entry = parsed as EmbeddingLine;
+        const entry = JSON.parse(trimmed) as EmbeddingLine;
         if (entry.id && Array.isArray(entry.vec)) {
           embeddings.set(entry.id, new Float32Array(entry.vec));
         }
       } catch {
         // Skip malformed lines
       }
-    }
-  } catch {
-    // File doesn't exist — return empty
-  }
+    });
+    rl.on("close", () => resolve());
+  });
 
   return embeddings;
 }
