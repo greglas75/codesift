@@ -1773,15 +1773,73 @@ export async function autoIndexCurrentRepo(cwd: string): Promise<void> {
   console.error(`[codesift] Auto-index complete: ${repoName}`);
 }
 
+/** True when embeddings are disabled entirely (low-RAM / lite mode). */
+function embeddingsDisabled(): boolean {
+  const v = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
+  return v === "1" || v === "true";
+}
+
+/** Resident-embedding RAM budget in MB (default 1024). 0/invalid → default. */
+function embeddingMemBudgetBytes(): number {
+  const raw = process.env["CODESIFT_MAX_EMBEDDING_MEM_MB"];
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return (Number.isNaN(n) || n <= 0 ? 1024 : n) * 1024 * 1024;
+}
+
+function embeddingMapBytes(m: Map<string, Float32Array>): number {
+  let b = 0;
+  for (const v of m.values()) b += v.byteLength;
+  return b;
+}
+
+/**
+ * Evict least-recently-used repo embeddings while total resident bytes exceed
+ * the budget. `embeddingCaches` insertion order is the LRU order (getter
+ * re-inserts on hit). `pinned` (the repo being served right now) is never
+ * evicted mid-query. Bytes are summed from the live maps (source of truth) so
+ * the many `.delete` call sites can't drift an accounting counter.
+ */
+function evictEmbeddingCachesOverBudget(pinned: string): void {
+  const budget = embeddingMemBudgetBytes();
+  const sizes = new Map<string, number>();
+  let total = 0;
+  for (const [k, m] of embeddingCaches) {
+    const b = embeddingMapBytes(m);
+    sizes.set(k, b);
+    total += b;
+  }
+  if (total <= budget) return;
+  for (const k of [...embeddingCaches.keys()]) {
+    if (total <= budget) break;
+    if (k === pinned) continue;
+    embeddingCaches.delete(k);
+    total -= sizes.get(k) ?? 0;
+  }
+}
+
+/** Test-only: repo names currently resident in the embedding cache (LRU order, oldest first). */
+export function _cachedEmbeddingReposForTesting(): string[] {
+  return [...embeddingCaches.keys()];
+}
+
 /**
  * Get the in-memory embedding cache for a repo.
- * Loads from disk if not cached. Returns null if no embeddings file exists.
+ * Loads from disk if not cached. Returns null if no embeddings file exists,
+ * or if embeddings are disabled (lite mode). Bounds resident RAM via LRU.
  */
 export async function getEmbeddingCache(
   repoName: string,
 ): Promise<Map<string, Float32Array> | null> {
+  // Lite mode: never hold embeddings in RAM (semantic falls back to BM25).
+  if (embeddingsDisabled()) return null;
+
   const cached = embeddingCaches.get(repoName);
-  if (cached) return cached;
+  if (cached) {
+    // LRU touch: move to most-recently-used end.
+    embeddingCaches.delete(repoName);
+    embeddingCaches.set(repoName, cached);
+    return cached;
+  }
 
   const config = loadConfig();
   const meta = await getRepo(config.registryPath, repoName);
@@ -1792,6 +1850,7 @@ export async function getEmbeddingCache(
   if (embeddings.size === 0) return null;
 
   embeddingCaches.set(repoName, embeddings);
+  evictEmbeddingCachesOverBudget(repoName);
   return embeddings;
 }
 
