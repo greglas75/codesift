@@ -90,7 +90,15 @@ export function ensureCodesiftDefaultToolsApprovalApprove(
   };
 }
 
-function getCodexTomlBlock(): string {
+function getCodexTomlBlock(options?: SetupOptions): string {
+  if (options?.http) {
+    return `
+[mcp_servers.codesift]
+url = "${daemonHttpUrl(options.port)}"
+tool_timeout_sec = 120
+default_tools_approval_mode = "approve"
+`;
+  }
   const entry = resolveMcpServerEntry();
   const argsToml = entry.args.map((a) => `"${a}"`).join(", ");
   return `
@@ -410,7 +418,7 @@ export async function installRules(
 // Codex — ~/.codex/config.toml (unique TOML format)
 // ---------------------------------------------------------------------------
 
-async function setupCodex(): Promise<SetupResult> {
+async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   const configDir = join(homedir(), ".codex");
   const configPath = join(configDir, "config.toml");
 
@@ -433,13 +441,13 @@ async function setupCodex(): Promise<SetupResult> {
       return { platform: "codex", config_path: configPath, status: "already_configured" };
     }
     // Append main block to existing file (using cleaned content)
-    const newContent = content.trimEnd() + "\n" + getCodexTomlBlock();
+    const newContent = content.trimEnd() + "\n" + getCodexTomlBlock(options);
     await writeFile(configPath, newContent, "utf-8");
     return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
   }
 
   // Create new file
-  await writeFile(configPath, getCodexTomlBlock().trimStart(), "utf-8");
+  await writeFile(configPath, getCodexTomlBlock(options).trimStart(), "utf-8");
   return { platform: "codex", config_path: configPath, status: "created" };
 }
 
@@ -447,30 +455,62 @@ async function setupCodex(): Promise<SetupResult> {
 // JSON-based platform setup (Claude, Cursor, Gemini)
 // ---------------------------------------------------------------------------
 
-async function setupJsonPlatform(platform: string): Promise<SetupResult> {
+/** Default shared-daemon port (mirrors DEFAULT_DAEMON_PORT in cli/commands.ts). */
+const DEFAULT_DAEMON_PORT = 7077;
+
+/** MCP HTTP endpoint URL for the shared daemon. */
+export function daemonHttpUrl(port?: number): string {
+  return `http://127.0.0.1:${port ?? DEFAULT_DAEMON_PORT}/mcp`;
+}
+
+/**
+ * The `codesift` MCP client entry. Default = stdio (command/args). With
+ * `options.http` = the shared-daemon HTTP client (`type`/`url`) so every editor
+ * window connects to one `codesift serve` process instead of spawning its own.
+ */
+export function buildJsonServerEntry(options?: SetupOptions): Record<string, unknown> {
+  if (options?.http) {
+    return { type: "http", url: daemonHttpUrl(options.port) };
+  }
+  return { ...MCP_SERVER_ENTRY };
+}
+
+/** Transport kind of an existing/desired codesift entry: "http" vs stdio. */
+function serverEntryKind(entry: unknown): "http" | "stdio" {
+  if (entry && typeof entry === "object" && ((entry as Record<string, unknown>)["type"] === "http" || "url" in (entry as object))) {
+    return "http";
+  }
+  return "stdio";
+}
+
+async function setupJsonPlatform(platform: string, options?: SetupOptions): Promise<SetupResult> {
   const config = JSON_PLATFORM_CONFIGS[platform];
   if (!config) throw new Error(`No JSON config for platform: ${platform}`);
 
   const configDir = join(homedir(), config.configDirName);
   const configPath = join(configDir, config.configFileName);
+  const entry = buildJsonServerEntry(options);
 
   await ensureDir(configDir);
 
   if (existsSync(configPath)) {
     const settings = await readJsonFile(configPath);
     const mcpServers = settings["mcpServers"] as Record<string, unknown> | undefined;
-    if (mcpServers?.["codesift"]) {
+    const existing = mcpServers?.["codesift"];
+    // Same transport kind already present → leave it (don't churn env-varying
+    // stdio paths). Switch only when going stdio↔http.
+    if (existing && serverEntryKind(existing) === serverEntryKind(entry)) {
       return { platform, config_path: configPath, status: "already_configured" };
     }
     if (!settings["mcpServers"]) {
       settings["mcpServers"] = {};
     }
-    (settings["mcpServers"] as Record<string, unknown>)["codesift"] = { ...MCP_SERVER_ENTRY };
+    (settings["mcpServers"] as Record<string, unknown>)["codesift"] = entry;
     await writeJsonFile(configPath, settings);
     return { platform, config_path: configPath, status: "updated" };
   }
 
-  await writeJsonFile(configPath, { mcpServers: { codesift: { ...MCP_SERVER_ENTRY } } });
+  await writeJsonFile(configPath, { mcpServers: { codesift: entry } });
   return { platform, config_path: configPath, status: "created" };
 }
 
@@ -795,14 +835,19 @@ export interface SetupOptions {
    *  is editor-agnostic and benefits all platforms equally. Pass `false` to
    *  opt out (e.g., users who manage git hooks via Husky / Lefthook). */
   gitHooks?: boolean;
+  /** Write the shared-daemon HTTP client config instead of stdio. Pair with
+   *  `codesift serve`. See [[startDaemon]] in cli/commands.ts. */
+  http?: boolean;
+  /** Daemon port for the HTTP client URL (default 7077). */
+  port?: number;
 }
 
-const PLATFORM_HANDLERS: Record<Platform, () => Promise<SetupResult>> = {
-  codex: setupCodex,
-  claude: () => setupJsonPlatform("claude"),
-  cursor: () => setupJsonPlatform("cursor"),
-  gemini: () => setupJsonPlatform("gemini"),
-  antigravity: () => setupJsonPlatform("antigravity"),
+const PLATFORM_HANDLERS: Record<Platform, (options?: SetupOptions) => Promise<SetupResult>> = {
+  codex: (options) => setupCodex(options),
+  claude: (options) => setupJsonPlatform("claude", options),
+  cursor: (options) => setupJsonPlatform("cursor", options),
+  gemini: (options) => setupJsonPlatform("gemini", options),
+  antigravity: (options) => setupJsonPlatform("antigravity", options),
 };
 
 export async function setup(platform: string, options?: SetupOptions): Promise<SetupResult> {
@@ -812,7 +857,7 @@ export async function setup(platform: string, options?: SetupOptions): Promise<S
       `Unknown platform: "${platform}". Supported: ${SUPPORTED_PLATFORMS.join(", ")}, all`,
     );
   }
-  const result = await handler();
+  const result = await handler(options);
   if (options?.hooks) {
     const hookInstaller = PLATFORM_HOOK_INSTALLERS[platform as HookPlatform];
     if (hookInstaller) {
@@ -893,7 +938,7 @@ export async function formatSetupLines(
       `Unknown platform: "${platform}". Supported: ${SUPPORTED_PLATFORMS.join(", ")}, all`,
     );
   }
-  const result = await handler();
+  const result = await handler(options);
   const lines: string[] = [STATUS_MESSAGES[result.status](result)];
 
   if (options?.rules) {

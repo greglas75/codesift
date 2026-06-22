@@ -494,6 +494,10 @@ Options:
   --rules       Install platform rules file (default: on)
   --no-rules    Skip rules file installation
   --force       Overwrite rules file even if it has been modified by the user
+  --http        Point the client at the shared 'codesift serve' daemon (one
+                process per machine — embeddings load once for all windows)
+                instead of a stdio server per window. Run 'codesift serve' too.
+  --port N      Daemon port for --http URL (default 7077)
 
 What it does:
   - Creates the config file if it doesn't exist

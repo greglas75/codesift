@@ -292,6 +292,54 @@ describe("setup", () => {
   // Cursor
   // -------------------------------------------------------------------------
 
+  describe("--http (shared daemon client)", () => {
+    it("writes an HTTP client entry (type/url, no stdio command) for claude", async () => {
+      const result = await setup("claude", { http: true });
+      expect(result.status).toBe("created");
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift).toEqual({
+        type: "http",
+        url: "http://127.0.0.1:7077/mcp",
+      });
+      expect(content.mcpServers.codesift.command).toBeUndefined();
+    });
+
+    it("honors a custom --port in the URL", async () => {
+      const result = await setup("claude", { http: true, port: 9001 });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.url).toBe("http://127.0.0.1:9001/mcp");
+    });
+
+    it("stdio remains the default without the flag", async () => {
+      const result = await setup("claude");
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
+      expect(content.mcpServers.codesift.type).toBeUndefined();
+    });
+
+    it("is idempotent (second --http run → already_configured)", async () => {
+      await setup("claude", { http: true });
+      const again = await setup("claude", { http: true });
+      expect(again.status).toBe("already_configured");
+    });
+
+    it("switches an existing stdio entry to http (update)", async () => {
+      await setup("claude"); // stdio
+      const switched = await setup("claude", { http: true });
+      expect(switched.status).toBe("updated");
+      const content = JSON.parse(await readFile(switched.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.type).toBe("http");
+    });
+
+    it("codex --http writes a url-based mcp_servers block", async () => {
+      const result = await setup("codex", { http: true });
+      const content = await readFile(result.config_path, "utf-8");
+      expect(content).toContain("[mcp_servers.codesift]");
+      expect(content).toContain('url = "http://127.0.0.1:7077/mcp"');
+      expect(content).not.toContain("command =");
+    });
+  });
+
   describe("cursor", () => {
     it("creates mcp.json when none exists", async () => {
       const result = await setup("cursor");

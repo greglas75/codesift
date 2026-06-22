@@ -639,7 +639,11 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
   const gitHooks = getBoolFlag(flags, "no-git-hooks")
     ? false
     : (getBoolFlag(flags, "git-hooks") ?? hooks);
-  const options = { hooks, rules, force, gitHooks };
+  // --http points the client at the shared `codesift serve` daemon (one process
+  // per machine) instead of spawning a stdio server per editor window.
+  const http = getBoolFlag(flags, "http") ?? false;
+  const port = getNumFlag(flags, "port");
+  const options = { hooks, rules, force, gitHooks, http, ...(port !== undefined ? { port } : {}) };
 
   /** Global post-commit backlog hook — wired here because `formatSetupLines` stays editor-setup only (see setup/setupAll for programmatic installs). */
   async function emitGlobalGitHooksIfRequested(): Promise<void> {
