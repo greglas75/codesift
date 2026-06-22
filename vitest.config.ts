@@ -66,6 +66,7 @@ export default defineConfig({
             "tests/lsp/**/*.test.ts",
             "tests/scripts/**/*.test.ts",
             "tests/server-helpers/**/*.test.ts",
+            "tests/server/**/*.test.ts",
             "tests/storage/**/*.test.ts",
             "tests/search/**/*.test.ts",
             "tests/tools/**/*.test.ts",
