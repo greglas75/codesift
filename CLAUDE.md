@@ -163,3 +163,26 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 ## Memory controls (low-RAM / multi-session)
 - `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` — lite mode: no embeddings in RAM (semantic off; BM25+symbols still work). For 16–24GB machines.
 - `CODESIFT_MAX_EMBEDDING_MEM_MB` (default 1024) — LRU-evict per-repo embeddings over this budget; `getEmbeddingCache` pins the in-use repo. `loadEmbeddings` streams the ndjson (no whole-file slurp). Shared HTTP daemon (`codesift serve`, load-once) planned — see docs/specs/2026-06-22-shared-server-memory-plan.md.
+
+
+<!-- SECRETS-1PW -->
+## 🔐 Secrets — read from 1Password (`op://`)
+
+The `.env` file(s) in this repo hold **1Password references**, not literal
+secrets. Real values live in the **`MyApps`** vault. Run anything that needs
+secrets through `op run` (resolves references in-memory, nothing on disk):
+
+```sh
+op run --env-file=.env -- <command>   # e.g. npm run dev, prisma, tests
+```
+
+Running commands that read `.env` directly sees literal `op://…` strings and fails.
+
+**This repo's env files → vault item:**
+
+- `.env` → `op://MyApps/codesift-mcp/<KEY>`
+
+- **Add / rotate a secret:** `op item edit <item> --vault MyApps "KEY[password]=value"` — never paste a literal secret back into `.env`.
+- Non-secret config (feature flags, public keys, plain URLs) stays as literals in `.env`.
+- Migrator: `~/DEV/op-env-migrate.py` (re-run with `--apply` after adding new secret keys).
+<!-- /SECRETS-1PW -->

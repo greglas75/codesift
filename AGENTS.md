@@ -170,10 +170,17 @@ Use this table to pick the right tool for each task:
 - `include_source=true` — include source code in results
 
 ### search_text
-- `group_by_file=true` — ~80% output reduction on many matches
-- `auto_group=true` — auto-switch to grouped above 50 matches
+**Decision tree (read first):**
+- **Identifier-only query** (e.g. `OrganizationService`, `useAuth`, `handleLogin`) → use `ranked=true`. Returns symbol-grouped, centrality-ranked hits with `containing_symbol`. Saves 1-3 follow-up `get_symbol` calls. **Auto-applied server-side** when caller passes no grouping options and the query matches `^[A-Za-z_][A-Za-z0-9_]{2,}.
+- **Error string / unknown phrase** (e.g. `"connection refused"`, `"is not a function"`) → omit grouping options. Server auto-groups by file above 30 matches.
+- **Already passing `top_k≥30`** → set `group_by_file=true` explicitly.
+- **ALWAYS** pass `file_pattern=` when scope is known.
+
+**Param reference:**
 - `ranked=true` — classifies hits by containing function, deduplicates (max 2/function), ranks by centrality. Returns `containing_symbol` field. Takes precedence over `auto_group`.
-- `file_pattern=` — always pass when scope is known
+- `group_by_file=true` — ~80% output reduction on many matches.
+- `auto_group=true` — auto-switch to grouped above 50 matches.
+- `file_pattern=` — required scope filter for repos > 500 files.
 
 ### assemble_context levels
 - `L0` — full source (use when editing)
@@ -264,3 +271,26 @@ This ensures the index stays current without manual `index_file` calls after eve
 | package-level cycles | `find_circular_deps` (output gains `package_cycles[]` in monorepo mode) |
 | scope a framework audit | pass `workspace=<name|path>` to `framework_audit`, `nextjs_route_map`, `nextjs_metadata_audit`, `analyze_hono_app`, `nest_audit`, `astro_audit` |
 <!-- codesift-rules-end -->
+
+
+<!-- SECRETS-1PW -->
+## 🔐 Secrets — read from 1Password (`op://`)
+
+The `.env` file(s) in this repo hold **1Password references**, not literal
+secrets. Real values live in the **`MyApps`** vault. Run anything that needs
+secrets through `op run` (resolves references in-memory, nothing on disk):
+
+```sh
+op run --env-file=.env -- <command>   # e.g. npm run dev, prisma, tests
+```
+
+Running commands that read `.env` directly sees literal `op://…` strings and fails.
+
+**This repo's env files → vault item:**
+
+- `.env` → `op://MyApps/codesift-mcp/<KEY>`
+
+- **Add / rotate a secret:** `op item edit <item> --vault MyApps "KEY[password]=value"` — never paste a literal secret back into `.env`.
+- Non-secret config (feature flags, public keys, plain URLs) stays as literals in `.env`.
+- Migrator: `~/DEV/op-env-migrate.py` (re-run with `--apply` after adding new secret keys).
+<!-- /SECRETS-1PW -->
