@@ -293,4 +293,26 @@ Running commands that read `.env` directly sees literal `op://…` strings and f
 - **Add / rotate a secret:** `op item edit <item> --vault MyApps "KEY[password]=value"` — never paste a literal secret back into `.env`.
 - Non-secret config (feature flags, public keys, plain URLs) stays as literals in `.env`.
 - Migrator: `~/DEV/op-env-migrate.py` (re-run with `--apply` after adding new secret keys).
+
+### Agents / non-interactive shells — READ THIS (avoid the Touch ID storm)
+
+Agent harnesses run each command in a **fresh shell**, so 1Password sees a new
+CLI client every time and `op run` re-prompts Touch ID on **every command**.
+Extending the 1Password auto-lock does NOT fix this — the prompt is per-CLI-process
+authorization, not vault unlock. Use ONE of these instead:
+
+- **PREFERRED — materialize once per session (zero prompts after):**
+  ```sh
+  op inject -i .env -o .env.local   # ONE Touch ID, writes real values
+  ```
+  `.env.local` is gitignored (verify!). Then run the app normally — it reads
+  `.env.local`, no `op` at runtime, so **no further prompts**. Re-run only when a
+  secret changes. (If your stack doesn't auto-load `.env.local`, use
+  `dotenv -e .env.local -- <cmd>` or `op inject -o .env.runtime` + point at it.)
+- **Do NOT run `op signin` / `eval $(op signin)`** — no TTY/biometric in an agent
+  shell, so it loops forever. This is the #1 cause of the prompt storm.
+- If you must use `op run`, **batch everything in ONE call** (`op run -- <script>`),
+  never `op` in a loop — each process is another prompt.
+- **Zero-prompt CI/automation:** `OP_SERVICE_ACCOUNT_TOKEN` (1Password **Business**
+  service account only — NOT available on Family plans).
 <!-- /SECRETS-1PW -->
