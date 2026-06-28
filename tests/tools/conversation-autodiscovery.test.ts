@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 
 describe("auto-discovery", () => {
   it("encodeCwdToClaudePath converts / to -", async () => {
@@ -27,28 +28,24 @@ describe("hook installation", () => {
     await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it("creates .claude/settings.local.json with correct hook format", async () => {
+  it("does not create a session-end hook", async () => {
     const { installSessionEndHook } = await import("../../src/tools/conversation-tools.js");
     await installSessionEndHook(tmpDir);
 
     const settingsPath = join(tmpDir, ".claude", "settings.local.json");
-    const content = JSON.parse(await readFile(settingsPath, "utf-8"));
-    expect(content.hooks.Stop).toBeDefined();
-    expect(content.hooks.Stop[0].hooks[0].type).toBe("command");
-    expect(content.hooks.Stop[0].hooks[0].command).toContain("codesift");
+    expect(existsSync(settingsPath)).toBe(false);
   });
 
-  it("does not duplicate hook on second call (idempotent)", async () => {
+  it("is idempotent", async () => {
     const { installSessionEndHook } = await import("../../src/tools/conversation-tools.js");
     await installSessionEndHook(tmpDir);
     await installSessionEndHook(tmpDir);
 
     const settingsPath = join(tmpDir, ".claude", "settings.local.json");
-    const content = JSON.parse(await readFile(settingsPath, "utf-8"));
-    expect(content.hooks.Stop).toHaveLength(1);
+    expect(existsSync(settingsPath)).toBe(false);
   });
 
-  it("preserves existing hooks when adding", async () => {
+  it("preserves existing files by not touching them", async () => {
     const { installSessionEndHook } = await import("../../src/tools/conversation-tools.js");
     const settingsDir = join(tmpDir, ".claude");
     await mkdir(settingsDir, { recursive: true });
@@ -59,7 +56,7 @@ describe("hook installation", () => {
     await installSessionEndHook(tmpDir);
 
     const content = JSON.parse(await readFile(join(settingsDir, "settings.local.json"), "utf-8"));
-    expect(content.hooks.Stop).toHaveLength(2);
+    expect(content.hooks.Stop).toHaveLength(1);
     expect(content.hooks.Stop[0].hooks[0].command).toBe("echo done");
   });
 });

@@ -121,7 +121,7 @@ describe("setup", () => {
 
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain('[mcp_servers.codesift]\ncommand = "npx"\n');
-      expect(content).toContain('default_tools_approval_mode = "approve"');
+      expect(content).toContain('default_tools_approval_mode = "auto"');
     });
 
     it("skips when already configured with default tool approval", async () => {
@@ -129,7 +129,7 @@ describe("setup", () => {
       await mkdir(configDir, { recursive: true });
       await writeFile(
         join(configDir, "config.toml"),
-        '[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "approve"\n',
+        '[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "auto"\n',
         "utf-8",
       );
 
@@ -137,7 +137,7 @@ describe("setup", () => {
       expect(result.status).toBe("already_configured");
 
       const content = await readFile(result.config_path, "utf-8");
-      expect(content).toBe('[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "approve"\n');
+      expect(content).toBe('[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "auto"\n');
     });
 
     it("strips per-tool approval_mode overrides on mcp_servers.codesift when already configured", async () => {
@@ -165,7 +165,7 @@ describe("setup", () => {
 
       const content = await readFile(result.config_path, "utf-8");
       expect(content).not.toMatch(/mcp_servers\.codesift\.tools\./);
-      expect(content).toContain('default_tools_approval_mode = "approve"');
+      expect(content).toContain('default_tools_approval_mode = "auto"');
       // Non-codesift overrides preserved
       expect(content).toContain("[mcp_servers.chrome-devtools.tools.fill]");
       // Main block preserved
@@ -1080,18 +1080,14 @@ describe("setup", () => {
   // -------------------------------------------------------------------------
 
   describe("setupCodexHooks", () => {
-    it("creates hooks.json with PreToolUse and Stop hooks when none exists", async () => {
+    it("creates hooks.json without CodeSift hooks when none exists", async () => {
       await setupCodexHooks();
 
       const hooksPath = join(tempHome, ".codex", "hooks.json");
       expect(existsSync(hooksPath)).toBe(true);
 
       const content = JSON.parse(await readFile(hooksPath, "utf-8"));
-      expect(content.hooks.PreToolUse).toHaveLength(1);
-      expect(content.hooks.PreToolUse[0].matcher).toBe("Bash");
-      expect(content.hooks.PreToolUse[0].hooks[0].command).toContain("codesift precheck-bash --stdin");
-      expect(content.hooks.Stop).toHaveLength(1);
-      expect(content.hooks.Stop[0].hooks[0].command).toContain("codesift index-conversations");
+      expect(content.hooks).toEqual({});
     });
 
     it("is idempotent — no duplicates on second run", async () => {
@@ -1100,11 +1096,10 @@ describe("setup", () => {
 
       const hooksPath = join(tempHome, ".codex", "hooks.json");
       const content = JSON.parse(await readFile(hooksPath, "utf-8"));
-      expect(content.hooks.PreToolUse).toHaveLength(1);
-      expect(content.hooks.Stop).toHaveLength(1);
+      expect(content.hooks).toEqual({});
     });
 
-    it("preserves existing hooks in hooks.json", async () => {
+    it("preserves existing non-CodeSift hooks in hooks.json", async () => {
       const configDir = join(tempHome, ".codex");
       await mkdir(configDir, { recursive: true });
       await writeFile(
@@ -1116,11 +1111,34 @@ describe("setup", () => {
       await setupCodexHooks();
 
       const content = JSON.parse(await readFile(join(configDir, "hooks.json"), "utf-8"));
-      // Existing user hook preserved + codesift PreToolUse added
-      expect(content.hooks.PreToolUse).toHaveLength(2);
+      expect(content.hooks.PreToolUse).toHaveLength(1);
       expect(content.hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
-      expect(content.hooks.PreToolUse[1].hooks[0].command).toContain("codesift precheck-bash");
-      expect(content.hooks.Stop).toHaveLength(1);
+      expect(content.hooks.Stop).toBeUndefined();
+    });
+
+    it("removes legacy CodeSift hooks from hooks.json", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "hooks.json"),
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }] },
+              { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] },
+            ],
+            Stop: [{ matcher: "", hooks: [{ type: "command", command: "codesift index-conversations --quiet" }] }],
+          },
+        }),
+        "utf-8",
+      );
+
+      await setupCodexHooks();
+
+      const content = JSON.parse(await readFile(join(configDir, "hooks.json"), "utf-8"));
+      expect(content.hooks.PreToolUse).toHaveLength(1);
+      expect(content.hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
+      expect(content.hooks.Stop).toBeUndefined();
     });
   });
 
@@ -1141,7 +1159,7 @@ describe("setup", () => {
       expect(content.hooks.AfterTool).toHaveLength(1);
       expect(content.hooks.AfterTool[0].matcher).toBe("write_file|replace");
       expect(content.hooks.PreCompress).toHaveLength(1);
-      expect(content.hooks.SessionEnd).toHaveLength(1);
+      expect(content.hooks.SessionEnd).toBeUndefined();
     });
 
     it("is idempotent — no duplicates on second run", async () => {
@@ -1153,7 +1171,7 @@ describe("setup", () => {
       expect(content.hooks.BeforeTool).toHaveLength(1);
       expect(content.hooks.AfterTool).toHaveLength(1);
       expect(content.hooks.PreCompress).toHaveLength(1);
-      expect(content.hooks.SessionEnd).toHaveLength(1);
+      expect(content.hooks.SessionEnd).toBeUndefined();
     });
 
     it("preserves existing mcpServers when adding hooks", async () => {

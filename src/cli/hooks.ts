@@ -728,8 +728,8 @@ function shouldDebouncePostindex(filePath: string, now: number): boolean {
 // reads on demand fresh-to-the-minute. The overview changes slowly and tolerates
 // being a day stale, so the window is 24h: still auto-fresh, near-zero cost, no
 // per-edit churn. Override with CODESIFT_WIKI_REGEN_DEBOUNCE_MIN (minutes); set
-// CODESIFT_WIKI_AUTO_REGEN=0 to disable entirely (then refresh via
-// `codesift wiki-generate`).
+// CODESIFT_WIKI_AUTO_REGEN=1 to enable background refresh (manual
+// `codesift wiki-generate` is the default).
 function wikiRegenDebounceMs(): number {
   const raw = process.env["CODESIFT_WIKI_REGEN_DEBOUNCE_MIN"];
   const min = raw ? parseInt(raw, 10) : NaN;
@@ -782,12 +782,12 @@ function shouldDebounceWikiRegen(repoRoot: string, now: number): boolean {
  *     known to the wiki don't change the module map / overview, so they skip
  *     regen — this makes the common case (editing existing code) cost nothing,
  *   - the per-repo throttle window has elapsed.
- * Opt out entirely via `CODESIFT_WIKI_AUTO_REGEN=0`.
+ * Opt in via `CODESIFT_WIKI_AUTO_REGEN=1`.
  */
 function maybeRegenerateWiki(filePath: string, now: number, sessionId?: string | null): void {
   try {
-    const optOut = process.env.CODESIFT_WIKI_AUTO_REGEN;
-    if (optOut === "0" || optOut === "false") return;
+    const optIn = process.env.CODESIFT_WIKI_AUTO_REGEN;
+    if (optIn !== "1" && optIn !== "true") return;
 
     // Only repos that already have a wiki manifest are auto-refreshed.
     const repoRoot = findRepoRoot(filePath);

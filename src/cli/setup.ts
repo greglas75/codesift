@@ -56,9 +56,9 @@ export function stripCodesiftToolApprovalOverrides(
 }
 
 // Codex Desktop may still prompt for MCP calls when the server default is
-// "auto"; make the CodeSift setup explicit so trusted local tools are approved
-// by default after setup.
-export function ensureCodesiftDefaultToolsApprovalApprove(
+// missing; make the CodeSift setup explicit so trusted local tools are approved
+// automatically by default after setup.
+export function ensureCodesiftDefaultToolsApprovalAuto(
   content: string,
 ): { content: string; changed: boolean } {
   const header = "[mcp_servers.codesift]";
@@ -74,7 +74,7 @@ export function ensureCodesiftDefaultToolsApprovalApprove(
   const approvalRe = /^default_tools_approval_mode[\t ]*=[\t ]*"[^"]*"[\t ]*$/m;
 
   if (approvalRe.test(block)) {
-    const updatedBlock = block.replace(approvalRe, 'default_tools_approval_mode = "approve"');
+    const updatedBlock = block.replace(approvalRe, 'default_tools_approval_mode = "auto"');
     if (updatedBlock === block) {
       return { content, changed: false };
     }
@@ -85,7 +85,7 @@ export function ensureCodesiftDefaultToolsApprovalApprove(
   const prefix = content.slice(0, insertionPoint).replace(/\n?$/, "\n");
   const suffix = content.slice(insertionPoint);
   return {
-    content: `${prefix}default_tools_approval_mode = "approve"${suffix.startsWith("\n") || suffix === "" ? "" : "\n"}${suffix}`,
+    content: `${prefix}default_tools_approval_mode = "auto"${suffix.startsWith("\n") || suffix === "" ? "" : "\n"}${suffix}`,
     changed: true,
   };
 }
@@ -96,7 +96,7 @@ function getCodexTomlBlock(options?: SetupOptions): string {
 [mcp_servers.codesift]
 url = "${daemonHttpUrl(options.port)}"
 tool_timeout_sec = 120
-default_tools_approval_mode = "approve"
+default_tools_approval_mode = "auto"
 `;
   }
   const entry = resolveMcpServerEntry();
@@ -106,7 +106,7 @@ default_tools_approval_mode = "approve"
 command = "${entry.command}"
 args = [${argsToml}]
 tool_timeout_sec = 120
-default_tools_approval_mode = "approve"
+default_tools_approval_mode = "auto"
 `;
 }
 
@@ -427,7 +427,7 @@ async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   if (existsSync(configPath)) {
     const original = await readFile(configPath, "utf-8");
     const { content: cleaned, removed } = stripCodesiftToolApprovalOverrides(original);
-    const normalized = ensureCodesiftDefaultToolsApprovalApprove(cleaned);
+    const normalized = ensureCodesiftDefaultToolsApprovalAuto(cleaned);
     const content = normalized.content;
     const noteFields = removed > 0
       ? { note: `removed ${removed} per-tool approval override${removed === 1 ? "" : "s"} on mcp_servers.codesift` }
@@ -714,12 +714,10 @@ async function migrateLegacyClaudeHooks(configDir: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // Codex CLI hooks — ~/.codex/hooks.json
 // ---------------------------------------------------------------------------
-// Codex PreToolUse/PostToolUse only intercept the Bash tool (not Read/Write/MCP).
-// No PreCompact event. Codex passes hook input via stdin (like Gemini).
-//
-// Hooks installed:
-//   PreToolUse (Bash) → precheck-bash: redirect find/grep to CodeSift
-//   Stop              → index-conversations: index session on end
+// Codex Desktop already has its own approval/sandbox model. Installing
+// CodeSift shell hooks here creates repeated approval prompts and leaves
+// background conversation indexers running after a session ends. Setup now
+// removes legacy CodeSift Codex hooks and preserves unrelated user hooks.
 // ---------------------------------------------------------------------------
 
 export async function setupCodexHooks(): Promise<void> {
@@ -729,26 +727,15 @@ export async function setupCodexHooks(): Promise<void> {
 
   const { root, hooks } = await loadHooksSection(hooksPath);
 
-  // PreToolUse: redirect find/grep bash commands to CodeSift tools
-  if (!Array.isArray(hooks["PreToolUse"])) {
-    hooks["PreToolUse"] = [];
-  }
-  if (!hasCodesiftHook(hooks["PreToolUse"])) {
-    hooks["PreToolUse"].push({
-      matcher: "Bash",
-      hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }],
-    });
-  }
-
-  // Stop: index conversations on session end
-  if (!Array.isArray(hooks["Stop"])) {
-    hooks["Stop"] = [];
-  }
-  if (!hasCodesiftHook(hooks["Stop"])) {
-    hooks["Stop"].push({
-      matcher: "",
-      hooks: [{ type: "command", command: "codesift index-conversations --quiet" }],
-    });
+  for (const event of Object.keys(hooks)) {
+    const entries = hooks[event];
+    if (!Array.isArray(entries)) continue;
+    const kept = entries.filter((entry) => !hasCodesiftHook([entry]));
+    if (kept.length === 0) {
+      delete hooks[event];
+    } else {
+      hooks[event] = kept;
+    }
   }
 
   await writeJsonFile(hooksPath, root);
@@ -776,10 +763,6 @@ const GEMINI_HOOKS: Record<string, HookEntry> = {
   PreCompress: {
     matcher: "",
     hooks: [{ type: "command", command: "codesift precompact-snapshot --stdin" }],
-  },
-  SessionEnd: {
-    matcher: "",
-    hooks: [{ type: "command", command: "codesift index-conversations --quiet" }],
   },
 };
 
@@ -960,16 +943,9 @@ export async function formatSetupLines(
       };
       const hooksPath = hookPaths[platform] ?? "hooks";
       lines.push(`✓ hooks configured ${hooksPath}`);
-      // Surface the wiki workflow. The SessionStart hook injects a project
-      // overview into every new agent session, but only once a wiki manifest
-      // exists — otherwise the hook is a silent no-op and the feature stays
-      // invisible (the #1 reason wiki adoption is zero). Tell the user how to
-      // turn it on.
+      // Surface the manual wiki workflow without implying background refresh.
       lines.push(
-        "  ↳ wiki: run `codesift wiki-generate` in a repo to enable the SessionStart",
-      );
-      lines.push(
-        "    project-overview injection + PostToolUse auto-refresh",
+        "  ↳ wiki: run `codesift wiki-generate` manually when you want to refresh repo docs",
       );
     }
   }

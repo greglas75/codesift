@@ -206,7 +206,8 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
     return handlePostindexFile();
   }
 
-  it("spawns wiki-generate when a wiki manifest exists", async () => {
+  it("spawns wiki-generate when explicitly enabled and a wiki manifest exists", async () => {
+    process.env.CODESIFT_WIKI_AUTO_REGEN = "1";
     writeManifest(tmpDir, V2_MANIFEST);
     await fireEdit();
     expect(mockIndexFile).toHaveBeenCalledOnce();
@@ -221,6 +222,14 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
   });
 
   it("does NOT spawn when the repo has no wiki", async () => {
+    process.env.CODESIFT_WIKI_AUTO_REGEN = "1";
+    await fireEdit();
+    expect(mockIndexFile).toHaveBeenCalledOnce();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("does NOT spawn by default", async () => {
+    writeManifest(tmpDir, V2_MANIFEST);
     await fireEdit();
     expect(mockIndexFile).toHaveBeenCalledOnce();
     expect(mockSpawn).not.toHaveBeenCalled();
@@ -234,6 +243,7 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
   });
 
   it("throttles repeated regenerations within the window", async () => {
+    process.env.CODESIFT_WIKI_AUTO_REGEN = "1";
     writeManifest(tmpDir, V2_MANIFEST);
     await fireEdit();
     // Second edit to a different file in the same repo, past the per-file
@@ -245,6 +255,7 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
   });
 
   it("structural gate: edit to a KNOWN file does NOT regen", async () => {
+    process.env.CODESIFT_WIKI_AUTO_REGEN = "1";
     // foo.ts (the file fireEdit touches) is already in the wiki's file map.
     writeManifest(tmpDir, { ...V2_MANIFEST, file_to_community: { "src/foo.ts": "search" } });
     await fireEdit();
@@ -253,6 +264,7 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
   });
 
   it("structural gate: edit to a NEW file regenerates", async () => {
+    process.env.CODESIFT_WIKI_AUTO_REGEN = "1";
     // foo.ts is NOT in the map → structure changed → regen.
     writeManifest(tmpDir, { ...V2_MANIFEST, file_to_community: { "src/other.ts": "tools" } });
     await fireEdit();
@@ -260,6 +272,7 @@ describe("handlePostindexFile — auto wiki regeneration", () => {
   });
 
   it("size gate: skips regen for repos over the file cap", async () => {
+    process.env.CODESIFT_WIKI_AUTO_REGEN = "1";
     const bigMap: Record<string, string> = {};
     for (let i = 0; i < 12; i++) bigMap[`src/f${i}.ts`] = "m";
     writeManifest(tmpDir, { ...V2_MANIFEST, file_to_community: bigMap });

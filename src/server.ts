@@ -320,7 +320,8 @@ const isEntrypoint = (() => {
     const entry = process.argv[1];
     if (!entry) return false;
     const { pathToFileURL } = require("node:url") as typeof import("node:url");
-    return import.meta.url === pathToFileURL(entry).href;
+    const { realpathSync } = require("node:fs") as typeof import("node:fs");
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
   } catch {
     return false;
   }

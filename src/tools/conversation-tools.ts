@@ -5,7 +5,7 @@
  * and registers them into the CodeSift index so they are searchable via BM25.
  */
 
-import { readdir, stat, readFile, writeFile, mkdir, rename } from "node:fs/promises";
+import { readdir, stat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative, basename, resolve } from "node:path";
 import { extractConversationSymbols } from "../parser/symbol-extractor.js";
@@ -513,58 +513,13 @@ export function encodeCwdToClaudePath(cwd: string): string {
 }
 
 /**
- * Install a session-end hook into `<projectRoot>/.claude/settings.local.json`.
- *
- * The hook runs `codesift index-conversations --quiet` whenever Claude stops,
- * keeping the conversation index up-to-date automatically. Idempotent — will
- * not add a duplicate if the codesift hook is already present.
+ * Retired compatibility shim. Older versions installed a session-end hook into
+ * `<projectRoot>/.claude/settings.local.json` that spawned
+ * `codesift index-conversations --quiet`. That hook was prone to orphaned
+ * background processes, so conversation indexing is now manual.
  */
 export async function installSessionEndHook(projectRoot: string): Promise<void> {
-  const settingsDir = join(projectRoot, ".claude");
-  const settingsPath = join(settingsDir, "settings.local.json");
-
-  const hookEntry = {
-    matcher: "",
-    hooks: [
-      {
-        type: "command",
-        command: "codesift index-conversations --quiet",
-      },
-    ],
-  };
-
-  let settings: Record<string, unknown> = {};
-  try {
-    const content = await readFile(settingsPath, "utf-8");
-    settings = JSON.parse(content) as Record<string, unknown>;
-  } catch {
-    // File doesn't exist or is invalid — start fresh
-  }
-
-  // Ensure hooks.Stop array exists
-  if (!settings.hooks || typeof settings.hooks !== "object") {
-    settings.hooks = {};
-  }
-  const hooksObj = settings.hooks as Record<string, unknown[]>;
-  if (!Array.isArray(hooksObj.Stop)) {
-    hooksObj.Stop = [];
-  }
-
-  // Check if codesift hook already exists (idempotent)
-  const existing = hooksObj.Stop as Array<{ hooks?: Array<{ command?: string }> }>;
-  if (existing.some((h) => h.hooks?.some((hk) => hk.command?.includes("codesift")))) {
-    return; // Already installed
-  }
-
-  existing.push(hookEntry);
-
-  // Write atomically
-  await mkdir(settingsDir, { recursive: true });
-  const tmpPath = settingsPath + ".tmp";
-  await writeFile(tmpPath, JSON.stringify(settings, null, 2));
-  await rename(tmpPath, settingsPath);
-
-  console.error("CodeSift: conversation index hook installed in .claude/settings.local.json");
+  void projectRoot;
 }
 
 /**
