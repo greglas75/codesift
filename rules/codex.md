@@ -229,7 +229,7 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 - Call `list_repos` in single-repo sessions — repo auto-resolves from CWD
 - Use manual Edit on multiple files for rename — use `rename_symbol`
 - Read entire file just to get a return type — use `get_type_info`
-- Index worktrees — use the main repo index
+- Index a worktree only when it is the reviewed/edited target and `index_status(path=<worktree>)` shows the branch tip is missing; otherwise use `index_file(path=...)` for edited files
 - Call `get_knowledge_map` without `focus=` parameter
 
 ## Response Cascade
