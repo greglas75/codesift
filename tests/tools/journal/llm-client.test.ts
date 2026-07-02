@@ -129,17 +129,8 @@ describe("AnthropicJournalProvider retry on 503", () => {
         content: [{ type: "text", text: "ok" }],
         usage: { input_tokens: 10, output_tokens: 5 },
       });
-    vi.useFakeTimers();
     const p = new AnthropicJournalProvider();
-    const promise = p.generate("hi", { model: "claude-sonnet-4-6" });
-    const caught = promise.then((v) => ({ ok: v }), (e) => ({ err: e }));
-    // Advance in 100ms slices so microtasks flush between retries.
-    for (let i = 0; i < 60; i++) {
-      await vi.advanceTimersByTimeAsync(100);
-    }
-    const outcome = await caught;
-    expect("ok" in outcome).toBe(true);
-    const r = (outcome as { ok: { content: string } }).ok;
+    const r = await p.generate("hi", { model: "claude-sonnet-4-6" });
     expect(r.content).toBe("ok");
     expect(anthropicCreate).toHaveBeenCalledTimes(LLM_MAX_RETRIES + 1);
   }, 10_000);

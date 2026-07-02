@@ -72,7 +72,7 @@ describe("PHP resilience — malformed/missing composer.json", () => {
   });
 
   it("collectImportEdges handles repo with no composer.json gracefully", async () => {
-    await indexFolder(NO_COMPOSER_ROOT);
+    await indexFolder(NO_COMPOSER_ROOT, { force: true, watch: false });
     const index = await getCodeIndex("local/php-no-composer");
     expect(index).not.toBeNull();
     // Should not throw when scanning PHP files without a composer.json to resolve against.
