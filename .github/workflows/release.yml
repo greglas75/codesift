@@ -1,0 +1,56 @@
+# Publish codesift-mcp to npm via OIDC Trusted Publishing — no tokens, no OTP.
+#
+# npm killed bypass-2FA write tokens (May 2026) and classic tokens (Dec 2025),
+# so interactive `npm publish` + 2FA or THIS workflow are the only paths.
+# Trusted publishing exchanges a short-lived OIDC credential between GitHub
+# Actions and npm — nothing long-lived to leak, provenance attached for free.
+#
+# One-time setup on npmjs.com (package codesift-mcp → Settings → Trusted
+# Publisher): GitHub Actions / owner `greglas75` / repository `codesift` /
+# workflow `release.yml` (environment: leave empty).
+#
+# Release flow afterwards:
+#   npm version patch   (bumps package.json + creates the vX.Y.Z tag)
+#   git push --follow-tags
+# → this workflow builds, tests (prepublishOnly), and publishes.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC credential for npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs a recent npm CLI (OIDC support landed in 11.5+).
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # Guard: the pushed tag must match package.json — a mismatched tag
+      # publishing the wrong version is worse than a failed run.
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      # prepublishOnly runs `npm run build && npm test` — the same gate as a
+      # local publish, so CI cannot ship an untested build.
+      - run: npm publish
