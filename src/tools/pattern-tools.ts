@@ -276,7 +276,7 @@ export const BUILTIN_PATTERNS: Record<string, {
     fileIncludePattern: /\.(tsx|jsx)$/,
   },
   "stale-closure-setstate": {
-    regex: /const\s*\[\s*(\w+)\s*,\s*set([A-Z]\w*)\s*\]\s*=\s*useState[\s\S]{0,3000}?\bset\2\s*\(\s*\1\s*[+\-*/]/,
+    regex: /const\s*\[\s*(\w+)\s*,\s*set([A-Z]\w*)\s*\]\s*=\s*useState[^\n;]*(?:;|\n)(?:(?!const\s*\[\s*\w+\s*,\s*set[A-Z]\w*\s*\]\s*=\s*useState)[\s\S]){0,3000}?\bset\2\s*\(\s*\1\s*[+\-*/]/,
     description: "setState called with non-functional update referencing current state value (setX(X + n)) — risks stale closure in event handlers, timers, or async callbacks. Use functional form: setX(prev => prev + n). NOTE: requires standard [x, setX] = useState() naming; boolean toggles (setOpen(!open)) and broken functional updaters not detected.",
     severity: "warning",
     fileIncludePattern: /\.(tsx|jsx)$/,
@@ -1178,4 +1178,3 @@ export function listPatterns(): Array<{
     ...(p.fileIncludePattern ? { fileIncludePattern: p.fileIncludePattern.source } : {}),
   }));
 }
-
