@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerTools, getToolHandle, getToolDefinitions } from "../../src/register-tools.js";
+import { registerTools, getToolHandle, getToolDefinitions, enableToolByName } from "../../src/register-tools.js";
 
 function createProject(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "lang-gate-test-"));
@@ -88,6 +88,37 @@ describe("registerTools language gating", () => {
     expect(searchTool).toBeDefined();
     // @ts-expect-error
     expect(searchTool.enabled).toBe(true);
+  });
+
+  it("does not reveal disabled language-gated tools when the language is absent", () => {
+    const root = createProject({
+      "src/main.py": "def x(): pass",
+    });
+    const server = makeServer();
+    registerTools(server, { projectRoot: root, deferNonCore: true });
+
+    expect(enableToolByName("php_security_scan")).toBe(false);
+
+    const phpTool = getToolHandle("php_security_scan");
+    expect(phpTool).toBeDefined();
+    // @ts-expect-error
+    expect(phpTool.enabled).toBe(false);
+  });
+
+  it("auto-loads deferred tools from projectRoot instead of process.cwd()", async () => {
+    const root = createProject({
+      "composer.json": JSON.stringify({ require: { php: "^8.2" } }),
+      "src/User.php": "<?php class User {}",
+    });
+    const server = makeServer();
+    registerTools(server, { projectRoot: root, deferNonCore: true });
+
+    await vi.waitFor(() => {
+      const phpTool = getToolHandle("php_project_audit");
+      expect(phpTool).toBeDefined();
+      // @ts-expect-error
+      expect(phpTool.enabled).toBe(true);
+    });
   });
 
   it("all gated tools in TOOL_DEFINITIONS have requiresLanguage set correctly", () => {

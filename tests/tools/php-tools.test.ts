@@ -217,9 +217,9 @@ use Yii;
 
 describe("PHP tools auto-load on composer.json detection", () => {
   it("includes all 9 PHP tools in the composer.json framework group", async () => {
-    // Read the register-tools source to verify the group config
+    // Read the autoload source to verify the group config
     const { readFileSync } = await import("node:fs");
-    const source = readFileSync("src/register-tools.ts", "utf-8");
+    const source = readFileSync("src/register-tools/autoload.ts", "utf-8");
 
     expect(source).toContain("FRAMEWORK_TOOL_GROUPS");
     expect(source).toContain('"composer.json"');
@@ -240,14 +240,14 @@ describe("PHP tools auto-load on composer.json detection", () => {
 
   it("has detectAutoLoadTools function that checks file existence", async () => {
     const { readFileSync } = await import("node:fs");
-    const source = readFileSync("src/register-tools.ts", "utf-8");
+    const source = readFileSync("src/register-tools/autoload.ts", "utf-8");
     expect(source).toContain("async function detectAutoLoadTools");
     expect(source).toContain("existsSync");
   });
 
   it("PHP sub-tools absorbed into php_project_audit — no longer standalone entries", async () => {
     const { readFileSync } = await import("node:fs");
-    const source = readFileSync("src/register-tools.ts", "utf-8");
+    const source = readFileSync("src/register-tool-groups/php.ts", "utf-8");
     // Sub-tools no longer have standalone TOOL_DEFINITIONS entries
     expect(source).not.toContain('name: "find_php_n_plus_one"');
     expect(source).not.toContain('name: "find_php_god_model"');

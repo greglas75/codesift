@@ -11,6 +11,31 @@ import {
   getToolDefinition,
   registerTools,
 } from "../../src/register-tools.js";
+import { ANALYSIS_TOOL_ENTRIES } from "../../src/register-tool-groups/analysis.js";
+import { ASTRO_TOOL_ENTRIES } from "../../src/register-tool-groups/astro.js";
+import { CORE_TOOL_ENTRIES } from "../../src/register-tool-groups/core.js";
+import { HONO_TOOL_ENTRIES } from "../../src/register-tool-groups/hono.js";
+import { KOTLIN_TOOL_ENTRIES } from "../../src/register-tool-groups/kotlin.js";
+import { META_TOOL_ENTRIES } from "../../src/register-tool-groups/meta.js";
+import { NEXTJS_TOOL_ENTRIES } from "../../src/register-tool-groups/nextjs.js";
+import { PHP_TOOL_ENTRIES } from "../../src/register-tool-groups/php.js";
+import { PYTHON_TOOL_ENTRIES } from "../../src/register-tool-groups/python.js";
+import { REACT_TOOL_ENTRIES } from "../../src/register-tool-groups/react.js";
+import { SQL_TOOL_ENTRIES } from "../../src/register-tool-groups/sql.js";
+
+const ALL_TOOL_GROUP_ENTRIES = [
+  ...CORE_TOOL_ENTRIES,
+  ...REACT_TOOL_ENTRIES,
+  ...ANALYSIS_TOOL_ENTRIES,
+  ...KOTLIN_TOOL_ENTRIES,
+  ...PYTHON_TOOL_ENTRIES,
+  ...PHP_TOOL_ENTRIES,
+  ...META_TOOL_ENTRIES,
+  ...SQL_TOOL_ENTRIES,
+  ...ASTRO_TOOL_ENTRIES,
+  ...HONO_TOOL_ENTRIES,
+  ...NEXTJS_TOOL_ENTRIES,
+];
 
 // All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
@@ -71,6 +96,23 @@ describe("register-tools — always-visible tools", () => {
       expect(handle, `${toolName} should be registered without discovery`).toBeDefined();
       expect(handle!.enabled, `${toolName} should be enabled`).toBe(true);
     }
+  });
+
+  it("exposes one unique catalog entry per registered tool", () => {
+    const names = getToolDefinitions().map((tool) => tool.name);
+    const uniqueNames = new Set(names);
+
+    expect(names.length).toBeGreaterThan(170);
+    expect(uniqueNames.size).toBe(names.length);
+  });
+
+  it("assembles every group entry into the public catalog in order", () => {
+    const expectedNames = [...ALL_TOOL_GROUP_ENTRIES]
+      .sort((a, b) => a.order - b.order)
+      .map((entry) => entry.definition.name);
+    const actualNames = getToolDefinitions().map((tool) => tool.name);
+
+    expect(actualNames).toEqual(expectedNames);
   });
 });
 
@@ -452,6 +494,22 @@ describe("register-tools — React tools registration & auto-load", () => {
         const tools = await detectAutoLoadToolsCached(dir);
         expect(tools).toContain("trace_component_tree");
         expect(tools).toContain("analyze_hooks");
+      } finally {
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+
+    it("detectAutoLoadToolsCached returns a defensive copy", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "codesift-idx-autoload-copy-"));
+      try {
+        await writeFile(join(dir, "tsconfig.json"), "{}");
+        const { detectAutoLoadToolsCached } = await import("../../src/register-tools.js");
+        const first = await detectAutoLoadToolsCached(dir);
+        first.push("__mutated_by_caller__");
+
+        const second = await detectAutoLoadToolsCached(dir);
+        expect(second).toContain("dependency_audit");
+        expect(second).not.toContain("__mutated_by_caller__");
       } finally {
         await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }

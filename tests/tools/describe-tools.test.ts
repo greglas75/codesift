@@ -12,18 +12,20 @@ function createMockServer() {
     enabled: boolean;
     disable: ReturnType<typeof vi.fn>;
     enable: ReturnType<typeof vi.fn>;
+    schema: unknown;
     handler: unknown;
     update: ReturnType<typeof vi.fn>;
     remove: ReturnType<typeof vi.fn>;
   }>();
   return {
     registeredTools,
-    tool: vi.fn((name: string, _desc: string, _schema: unknown, handler: unknown) => {
+    tool: vi.fn((name: string, _desc: string, schema: unknown, handler: unknown) => {
       const handle = {
         name,
         enabled: true,
         disable: vi.fn(() => { handle.enabled = false; }),
         enable: vi.fn(() => { handle.enabled = true; }),
+        schema,
         handler,
         update: vi.fn(),
         remove: vi.fn(),
@@ -143,6 +145,18 @@ describe("registerTools with deferNonCore", () => {
     const describeHandle = mock.registeredTools.get("describe_tools");
     expect(describeHandle).toBeDefined();
     expect(describeHandle!.name).toBe("describe_tools");
+  });
+
+  it("describe_tools names schema validates stringified arrays only", () => {
+    const mock = createMockServer();
+    registerTools(mock as any, { deferNonCore: true });
+
+    const describeHandle = mock.registeredTools.get("describe_tools");
+    const namesSchema = (describeHandle!.schema as Record<string, any>).names;
+
+    expect(namesSchema.safeParse(JSON.stringify(["search_text"])).success).toBe(true);
+    expect(namesSchema.safeParse(JSON.stringify("search_text")).success).toBe(false);
+    expect(namesSchema.safeParse(JSON.stringify({ name: "search_text" })).success).toBe(false);
   });
 
   it("describe_tools handler returns valid result for known tool", async () => {
