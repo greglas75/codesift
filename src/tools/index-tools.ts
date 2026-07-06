@@ -3,7 +3,7 @@ import { join, relative, resolve, basename, dirname } from "node:path";
 import { openSync, closeSync, statSync, unlinkSync, writeFileSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { EXTRACTOR_VERSIONS } from "./project-tools.js";
+import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 import { extractMarkdownSymbols, extractPrismaSymbols, extractAstroSymbols, extractConversationSymbols } from "../parser/symbol-extractor.js";
 import { runTreeSitterParse } from "../parser/parser-pool.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../parser/extractors/sql.js";
@@ -21,7 +21,7 @@ import { loadConfig } from "../config.js";
 import { validateGitUrl, validateGitRef } from "../utils/git-validation.js";
 import { walkDirectory } from "../utils/walk.js";
 import type { CodeSymbol, CodeIndex, FileEntry, RepoMeta, CodeChunk } from "../types.js";
-import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "./secret-tools.js";
+import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "./secret-scan-shared.js";
 import { getGraphPath } from "../storage/graph-store.js";
 import { getSnapshotPath, loadHashSnapshot, saveHashSnapshot, HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../storage/hash-snapshot.js";
 

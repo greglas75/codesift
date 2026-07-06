@@ -2,7 +2,7 @@ import { getCodeIndex } from "./index-tools.js";
 import { loadConfig } from "../config.js";
 import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { loadIndexOrStale } from "../storage/index-store.js";
-import { EXTRACTOR_VERSIONS } from "./project-tools.js";
+import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 
 // ---------------------------------------------------------------------------
 // Types

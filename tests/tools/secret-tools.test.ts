@@ -53,6 +53,11 @@ import {
   SEVERITY_MAP,
 } from "../../src/tools/secret-tools.js";
 import type { SecretFinding, SecretContext } from "../../src/tools/secret-tools.js";
+import {
+  isMissingFileError,
+  severityAtLeast,
+  shouldSkipFile,
+} from "../../src/tools/secret-scan-shared.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -205,6 +210,10 @@ describe("classifyContext", () => {
     expect(classifyContext("config.ini")).toBe("config");
   });
 
+  it('returns "config" for non-package json files', () => {
+    expect(classifyContext("config/secrets.json")).toBe("config");
+  });
+
   it('returns "production" for source files', () => {
     expect(classifyContext("src/main.ts")).toBe("production");
     expect(classifyContext("src/utils/helper.ts")).toBe("production");
@@ -236,6 +245,38 @@ describe("getSeverity", () => {
 
   it("returns medium for unknown rules", () => {
     expect(getSeverity("unknown-rule-xyz")).toBe("medium");
+  });
+});
+
+// ===== severityAtLeast =====
+
+describe("severityAtLeast", () => {
+  it("returns true when severity is above the minimum", () => {
+    expect(severityAtLeast("critical", "high")).toBe(true);
+    expect(severityAtLeast("high", "medium")).toBe(true);
+  });
+
+  it("returns true when severity equals the minimum", () => {
+    expect(severityAtLeast("medium", "medium")).toBe(true);
+  });
+
+  it("returns false when severity is below the minimum", () => {
+    expect(severityAtLeast("low", "medium")).toBe(false);
+    expect(severityAtLeast("medium", "high")).toBe(false);
+  });
+});
+
+// ===== isMissingFileError =====
+
+describe("isMissingFileError", () => {
+  it("returns true for ENOENT-shaped errors", () => {
+    expect(isMissingFileError({ code: "ENOENT" })).toBe(true);
+  });
+
+  it("returns false for other error shapes", () => {
+    expect(isMissingFileError({ code: "EACCES" })).toBe(false);
+    expect(isMissingFileError(new Error("missing"))).toBe(false);
+    expect(isMissingFileError(null)).toBe(false);
   });
 });
 
@@ -276,6 +317,18 @@ describe("isAllowlisted", () => {
   it("handles line 1 correctly (no line above)", () => {
     const lines = ['const key = "sk-test-1234";'];
     expect(isAllowlisted(lines, 1)).toBe(false);
+  });
+});
+
+// ===== shouldSkipFile =====
+
+describe("shouldSkipFile", () => {
+  it("returns true for audit artifact paths", () => {
+    expect(shouldSkipFile("audits/artifacts/report.ts")).toBe(true);
+  });
+
+  it("returns false for normal source paths", () => {
+    expect(shouldSkipFile("src/config.ts")).toBe(false);
   });
 });
 
@@ -610,6 +663,80 @@ describe("scanFileForSecrets", () => {
 
     expect(result).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
+  });
+
+  it("skips audit artifact paths and caches an empty result", async () => {
+    const result = await scanFileForSecrets(
+      "/tmp/test/audits/artifacts/report.ts",
+      "audits/artifacts/report.ts",
+      "test",
+      [],
+    );
+
+    expect(result).toEqual([]);
+    expect(mockReadFile).not.toHaveBeenCalled();
+    expect(mockScan).not.toHaveBeenCalled();
+    expect(getSecretCache().get("test")?.get("audits/artifacts/report.ts")).toEqual({
+      mtime_ms: 1000,
+      findings: [],
+    });
+  });
+
+  it("skips oversized files and caches an empty result", async () => {
+    mockReadFile.mockResolvedValue(Buffer.alloc(500 * 1024 + 1, "a"));
+
+    const result = await scanFileForSecrets(
+      "/tmp/test/src/large.ts",
+      "src/large.ts",
+      "test",
+      [],
+    );
+
+    expect(result).toEqual([]);
+    expect(mockScan).not.toHaveBeenCalled();
+    expect(getSecretCache().get("test")?.get("src/large.ts")).toEqual({
+      mtime_ms: 1000,
+      findings: [],
+    });
+  });
+
+  it("demotes documentation findings, maps multi-line offsets, and enriches symbol context", async () => {
+    const docContent = 'intro\nconst DOC_KEY = "sk-proj-docabcdef123456";';
+    const secretText = "sk-proj-docabcdef123456";
+    mockReadFile.mockResolvedValue(Buffer.from(docContent));
+    mockScan.mockReturnValue([
+      {
+        rule: "openai",
+        label: "OpenAI",
+        text: secretText,
+        confidence: "high" as const,
+        start: docContent.indexOf(secretText),
+        end: docContent.indexOf(secretText) + secretText.length,
+      },
+    ]);
+
+    const result = await scanFileForSecrets(
+      "/tmp/test/docs/guide.md",
+      "docs/guide.md",
+      "test",
+      [
+        makeSymbol({
+          name: "loadDocs",
+          file: "docs/guide.md",
+          start_line: 2,
+          end_line: 2,
+        }),
+      ],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.line).toBe(2);
+    expect(result[0]!.confidence).toBe("low");
+    expect(result[0]!.context).toEqual({
+      type: "doc",
+      symbol_name: "loadDocs",
+      symbol_kind: "function",
+    });
   });
 });
 

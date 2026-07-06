@@ -26,7 +26,7 @@ vi.mock("../../src/config.js", () => ({
   loadConfig: () => ({ registryPath: "/tmp/test-registry.json" }),
 }));
 
-vi.mock("../../src/tools/project-tools.js", () => ({
+vi.mock("../../src/tools/index-shared.js", () => ({
   EXTRACTOR_VERSIONS: { typescript: "3.0.0", python: "1.0.0" },
 }));
 
