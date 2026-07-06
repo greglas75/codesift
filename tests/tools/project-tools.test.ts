@@ -115,6 +115,16 @@ describe("detectStack", () => {
     expect(stack.framework).toBeNull();
   });
 
+  it("detects Python framework dependencies from pyproject.toml text", async () => {
+    const root = await createFixture("pyproject-fastapi", {
+      "pyproject.toml": "[project]\ndependencies = [\"fastapi>=0.110\"]\n",
+    });
+    const stack = await detectStack(root);
+    expect(stack.framework).toBe("fastapi");
+    expect(stack.language).toBe("python");
+    expect(stack.detected_from).toContain("python:fastapi");
+  });
+
   it("detects monorepo with turborepo", async () => {
     const root = await createFixture("monorepo", {
       "package.json": JSON.stringify({
@@ -280,12 +290,66 @@ describe("classifyFiles", () => {
 
   it("classifies shallow index.ts as critical (entry point)", async () => {
     const index = mockIndex("/tmp/test", [
+      "index.ts",
+      "server.ts",
       "src/index.ts",
       "apps/api/src/index.ts",
     ]);
     const result = classifyFiles(index);
+    expect(result.critical.some((f) => f.path === "index.ts")).toBe(true);
+    expect(result.critical.some((f) => f.path === "server.ts")).toBe(true);
     expect(result.critical.some((f) => f.path === "src/index.ts")).toBe(true);
     expect(result.critical.some((f) => f.path === "apps/api/src/index.ts")).toBe(true);
+  });
+
+  it("counts relative importers and classifies hub modules as critical", async () => {
+    const importers = ["a", "b", "c", "d", "e", "f"];
+    const index = mockIndex("/tmp/test", [
+      "src/hub.ts",
+      ...importers.map((name) => `src/${name}.ts`),
+    ]);
+    index.symbols = importers.map((name) => ({
+      id: `local/test:src/${name}.ts:${name}:1`,
+      repo: "local/test",
+      name,
+      kind: "variable",
+      file: `src/${name}.ts`,
+      start_line: 1,
+      end_line: 1,
+      line: 1,
+      source: `import { hub } from "./hub"; export const ${name} = hub;`,
+    })) as CodeIndex["symbols"];
+
+    const result = classifyFiles(index);
+    const hub = result.critical.find((file) => file.path === "src/hub.ts");
+
+    expect(hub?.dependents_count).toBe(6);
+    expect(hub?.reason).toBe("Hub module (6 importers)");
+  });
+
+  it("resolves root-level relative importers", async () => {
+    const importers = ["a", "b", "c", "d", "e", "f"];
+    const index = mockIndex("/tmp/test", [
+      "hub.ts",
+      ...importers.map((name) => `${name}.ts`),
+    ]);
+    index.symbols = importers.map((name) => ({
+      id: `local/test:${name}.ts:${name}:1`,
+      repo: "local/test",
+      name,
+      kind: "variable",
+      file: `${name}.ts`,
+      start_line: 1,
+      end_line: 1,
+      line: 1,
+      source: `import { hub } from "./hub"; export const ${name} = hub;`,
+    })) as CodeIndex["symbols"];
+
+    const result = classifyFiles(index);
+    const hub = result.critical.find((file) => file.path === "hub.ts");
+
+    expect(hub?.dependents_count).toBe(6);
+    expect(hub?.reason).toBe("Hub module (6 importers)");
   });
 
   it("does NOT classify deep index.ts as critical (barrel re-export)", async () => {
@@ -392,6 +456,17 @@ describe("extractHonoConventions", () => {
   it("returns empty middleware_chains for source with no .use() calls", async () => {
     const conv = await extractHonoConventions("const x = 1;\n", "test.ts");
     expect(conv.middleware_chains).toEqual([]);
+  });
+
+  it("prefers supplied source over existing disk contents", async () => {
+    const root = await createFixture("hono-source-precedence", {
+      "app.ts": HONO_APP_SOURCE,
+    });
+
+    const conv = await extractHonoConventions("const x = 1;\n", join(root, "app.ts"));
+
+    expect(conv.middleware_chains).toEqual([]);
+    await rm(root, { recursive: true, force: true });
   });
 
   // Task 6: Rate limits and route mounts

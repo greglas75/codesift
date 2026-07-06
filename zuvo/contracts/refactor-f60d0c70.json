@@ -1,0 +1,157 @@
+{
+  "version": 3,
+  "file": "src/tools/project-tools.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "PHASE-4",
+  "queue_file": null,
+  "queue_entry": "tools/project-tools.ts: analyze_project composite; decompose per-analysis modules and resolve index-tools cycle",
+  "cq_before": {
+    "score": "20/29",
+    "critical_failures": [],
+    "notes": [
+      "CQ11=0: project-tools.ts was 2380 LOC and mixed stack detection, classification, framework convention extraction, profile persistence, profile summary, and analyze_project orchestration",
+      "CodeSift hotspot: project-tools.ts was the #1 90-day hotspot with 43 commits and 3175 changed lines",
+      "Runtime import graph target check found no static project-tools/index-tools cycle after replacing the index-tools static import with a dynamic boundary"
+    ]
+  },
+  "scope_fence": [
+    "CHANGELOG.md",
+    "src/tools/project-tools.ts",
+    "src/tools/project-profile-extractors.ts",
+    "src/tools/project-profile-fs.ts",
+    "src/tools/project-profile-imports.ts",
+    "src/tools/project-profile-persistence.ts",
+    "src/tools/project-profile-summary.ts",
+    "tests/tools/project-profile-boundaries.test.ts",
+    "tests/tools/project-tools.test.ts"
+  ],
+  "backup_branch": null,
+  "plan": {
+    "summary": "Split analyze_project profile extraction, persistence, summary, fs, and import-count helpers out of project-tools.ts while preserving the public tool facade and removing the static index-tools dependency.",
+    "pre_scan": {
+      "codesift": "indexed",
+      "loc_before": 2380,
+      "loc_after": 1986,
+      "complex_hotspots": [
+        "detectStack CC71",
+        "extractReactConventions CC68",
+        "extractTestConventions CC45",
+        "extractNestConventions CC36",
+        "analyzeProject CC34"
+      ]
+    },
+    "extractions": [
+      {
+        "unit": "profile identity, dependency graph, test conventions, gotchas, dependency health, and git health",
+        "destination": "src/tools/project-profile-extractors.ts"
+      },
+      {
+        "unit": "profile fs helpers",
+        "destination": "src/tools/project-profile-fs.ts"
+      },
+      {
+        "unit": "import specifier extraction and importer-count helpers",
+        "destination": "src/tools/project-profile-imports.ts"
+      },
+      {
+        "unit": "atomic .zuvo/project-profile.json persistence",
+        "destination": "src/tools/project-profile-persistence.ts"
+      },
+      {
+        "unit": "ProfileSummary construction and conventions summaries",
+        "destination": "src/tools/project-profile-summary.ts"
+      },
+      {
+        "unit": "public analyze_project orchestration and framework-specific extractors",
+        "destination": "src/tools/project-tools.ts"
+      }
+    ]
+  },
+  "test_mode": "CHARACTERIZATION_PLUS_REGRESSION",
+  "test_audit_before": {
+    "test_file": "tests/tools/project-tools.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 9,
+    "units_covered": 9,
+    "uncovered_units": [],
+    "added_characterization": "project-profile-boundaries suite covers dynamic index boundary, summary construction, convention summaries, dependency graph, identity sanitization, atomic persistence, import counting, dependency health, gotchas, and test-convention sampling"
+  },
+  "prove": {
+    "blind_audit": "clean:strict via independent CQ auditor after test strengthening; no actionable findings remained in the scoped boundary tests",
+    "adversarial": "completed: adversarial-review.sh --rotate --mode code on staged diff; earlier critical/warning findings drove fixes for importer counting, pyproject detection, root entrypoints, Hono source precedence, git remote sanitization, atomic writes, import parsing, shortlog isolation, and summary/test-path resilience",
+    "findings_disposition": "fixed: high/critical issues introduced or exposed inside the refactor fence. preserved/accepted: readJson remains graceful on malformed JSON to preserve pre-refactor behavior; extractDependencyGraph keeps a sync default for exported API compatibility while analyzeProject passes the async full-file importer count; broader non-JS/PHP/Python dependency graph semantics remain out of this split's scope.",
+    "latest": {
+      "focused": "green: npm test -- tests/tools/project-tools.test.ts tests/tools/project-profile-boundaries.test.ts tests/tools/index-shared.test.ts; 3 files passed, 90 tests passed",
+      "typecheck": "green: npm run lint",
+      "build": "green: npm run build",
+      "full_suite": "green: npm test -- --maxWorkers=2; 319 files passed, 4638 tests passed, 3 skipped",
+      "cycle_check": "green: projectToolsImportsIndexTools=false, targetCycles=[]",
+      "diff_check": "green: git diff --check on scoped files"
+    }
+  },
+  "progress": [
+    {
+      "stage": "PHASE-1",
+      "status": "baseline-green",
+      "command": "npm test -- tests/tools/project-tools.test.ts tests/tools/index-shared.test.ts",
+      "result": "2 files passed, 73 tests passed before production edits"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "implemented",
+      "command": "extract profile helper responsibilities into project-profile modules",
+      "result": "project-tools.ts reduced to 1986 LOC; profile extraction, persistence, summary, fs, and import-count helpers split into focused modules"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "cycle-fixed",
+      "command": "replace static getCodeIndex import with dynamic getProjectCodeIndex boundary",
+      "result": "project-tools.ts no longer has a static import from index-tools.ts"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "npm test -- tests/tools/project-tools.test.ts tests/tools/project-profile-boundaries.test.ts tests/tools/index-shared.test.ts",
+      "result": "3 files passed, 90 tests passed"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "npm run lint",
+      "result": "tsc --noEmit passed"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "npm run build",
+      "result": "tsc emit, parser language copy, and executable chmod passed"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "npm test -- --maxWorkers=2",
+      "result": "319 files passed; 4638 tests passed; 3 skipped"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "node static import graph check for src/tools/project-tools.ts and src/tools/index-tools.ts",
+      "result": "projectToolsImportsIndexTools=false; targetCycles=[]"
+    },
+    {
+      "stage": "PHASE-4",
+      "status": "review-completed",
+      "command": "git diff --staged | ~/.codex/scripts/adversarial-review.sh --rotate --mode code",
+      "result": "completed with single-provider fallback; critical/high in-scope findings were fixed through focused patches and regression tests; remaining warnings dispositioned in prove.findings_disposition"
+    },
+    {
+      "stage": "PHASE-4",
+      "status": "index-updated",
+      "command": "mcp__codesift.index_file for scoped source and test files",
+      "result": "all scoped edited/new source and test files re-indexed; CodeSift secret warnings were heuristic false-positives on detector/test strings"
+    }
+  ]
+}

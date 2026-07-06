@@ -6,24 +6,35 @@
  * the zuvo project-profile schema v1.0.
  */
 
-import { readFile, writeFile, access, readdir, mkdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
-import { getCodeIndex } from "./index-tools.js";
 import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { extractAstroConventions } from "./astro-config.js";
 import type { AstroConventions } from "./astro-config.js";
+import {
+  extractDependencyGraph,
+  extractDependencyHealth,
+  extractGitHealth,
+  extractIdentity,
+  extractKnownGotchas,
+  extractTestConventions,
+} from "./project-profile-extractors.js";
+import { fileExists, readJson } from "./project-profile-fs.js";
+import { buildImporterCount, buildImporterCountFromSources } from "./project-profile-imports.js";
+import { writeProfileToDisk } from "./project-profile-persistence.js";
+import { buildSummary } from "./project-profile-summary.js";
+import type { ProfileSummary } from "./project-profile-summary.js";
 
 // ---------------------------------------------------------------------------
 // Versioning — used by get_extractor_versions
 // ---------------------------------------------------------------------------
 
 export { EXTRACTOR_VERSIONS } from "./index-shared.js";
+export { buildConventionsSummary } from "./project-profile-summary.js";
+export type { ProfileSummary } from "./project-profile-summary.js";
 
 // ---------------------------------------------------------------------------
 // Profile schema types
@@ -47,6 +58,15 @@ export interface ProjectProfile {
   dependency_graph?: DependencyGraph;
   test_conventions?: TestConventions;
   known_gotchas?: KnownGotchas;
+  nest_conventions?: NestConventions;
+  next_conventions?: NextConventions;
+  express_conventions?: ExpressConventions;
+  react_conventions?: ReactConventions;
+  python_conventions?: PythonConventions;
+  php_conventions?: PhpConventions;
+  astro_conventions?: AstroConventions;
+  dependency_health?: DependencyHealth;
+  git_health?: GitHealth;
   generation_metadata: GenerationMetadata;
 }
 
@@ -209,23 +229,6 @@ export interface GenerationMetadata {
 // Stack Detector
 // ---------------------------------------------------------------------------
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function readJson(path: string): Promise<any> {
-  try {
-    return JSON.parse(await readFile(path, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
 export async function detectStack(projectRoot: string): Promise<StackInfo> {
   const detected_from: string[] = [];
   const pkg = await readJson(join(projectRoot, "package.json"));
@@ -270,10 +273,10 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
 
   // Python framework detection (if no JS framework found)
   if (!framework) {
-    const pyproject = await readJson(join(projectRoot, "pyproject.toml")) ?? null;
+    const pyproject = await readFile(join(projectRoot, "pyproject.toml"), "utf-8").catch(() => "");
     const requirements = await readFile(join(projectRoot, "requirements.txt"), "utf-8").catch(() => "");
     const pipfile = await readFile(join(projectRoot, "Pipfile"), "utf-8").catch(() => "");
-    const pyDeps = requirements + pipfile + (pyproject ? JSON.stringify(pyproject) : "");
+    const pyDeps = `${requirements}\n${pipfile}\n${pyproject}`.toLowerCase();
 
     if (pyDeps.includes("fastapi")) {
       framework = "fastapi";
@@ -590,7 +593,7 @@ export async function detectStack(projectRoot: string): Promise<StackInfo> {
 // ---------------------------------------------------------------------------
 
 const CRITICAL_PATH_PATTERNS = [
-  /\/(app|main|server)\.(ts|js|tsx|jsx)$/,
+  /(^|\/)(app|main|server)\.(ts|js|tsx|jsx)$/,
   /\/middleware\//,
   /\/security\//,
   /\/auth\//,
@@ -599,7 +602,7 @@ const CRITICAL_PATH_PATTERNS = [
 
 /** index.ts is critical ONLY at shallow depth (src/index.ts, apps/api/src/index.ts) — not barrel re-exports */
 function isEntryPointIndex(path: string): boolean {
-  if (!/\/index\.(ts|js|tsx|jsx)$/.test(path)) return false;
+  if (!/(^|\/)index\.(ts|js|tsx|jsx)$/.test(path)) return false;
   // Count path depth — barrel files are deep (components/Foo/index.ts = 3+ segments after src)
   const parts = path.split("/");
   const srcIdx = parts.indexOf("src");
@@ -632,7 +635,7 @@ function isTestFile(path: string): boolean {
 }
 
 function classifyCodeType(path: string, _symbol_count: number): string {
-  if (/\/(app|main|server)\.(ts|js)$/.test(path)) return "ORCHESTRATOR";
+  if (/(^|\/)(app|main|server)\.(ts|js)$/.test(path)) return "ORCHESTRATOR";
   if (/\/middleware\//.test(path)) return "GUARD";
   if (/\/auth\//.test(path)) return "GUARD";
   if (/\.(service|repository)\.(ts|js)$/.test(path)) return "SERVICE";
@@ -645,20 +648,14 @@ function classifyCodeType(path: string, _symbol_count: number): string {
   return "PURE";
 }
 
-export function classifyFiles(index: CodeIndex): FileClassifications {
+export function classifyFiles(
+  index: CodeIndex,
+  importerCount: Map<string, number> = buildImporterCountFromSources(index),
+): FileClassifications {
   const critical: ClassifiedFile[] = [];
   const important: ClassifiedFile[] = [];
   const routineCounts: Record<string, number> = {};
   let routineCount = 0;
-
-  // Build importer count map
-  const importerCount = new Map<string, number>();
-  for (const sym of index.symbols) {
-    // Count how many unique files import each file
-    if (sym.source?.includes("import ") || sym.source?.includes("require(")) {
-      // Simplified — in production this would use the actual import graph
-    }
-  }
 
   // Build test file set for has_tests detection
   const testFiles = new Set(
@@ -763,6 +760,17 @@ export async function extractHonoConventions(
   const { isAbsolute, resolve: pathResolve } = await import("node:path");
   const resolved = isAbsolute(filePath) ? filePath : pathResolve(filePath);
   if (!existsSync(resolved)) {
+    const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
+    return legacyExtractHonoConventions(source, filePath);
+  }
+
+  let diskSource: string;
+  try {
+    diskSource = await readFile(resolved, "utf-8");
+  } catch (err) {
+    throw new Error(`Unable to read Hono source file ${resolved}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (diskSource !== source) {
     const { legacyExtractHonoConventions } = await import("./legacy-hono-conventions.js");
     return legacyExtractHonoConventions(source, filePath);
   }
@@ -1660,318 +1668,6 @@ export function extractYii2Conventions(
 }
 
 // ---------------------------------------------------------------------------
-// Identity Extractor
-// ---------------------------------------------------------------------------
-
-async function extractIdentity(projectRoot: string): Promise<ProjectIdentity> {
-  const pkg = await readJson(join(projectRoot, "package.json"));
-  const projectName = pkg?.name ?? projectRoot.split("/").pop() ?? "unknown";
-
-  // Detect monorepo
-  const isMonorepo = !!(pkg?.workspaces || await fileExists(join(projectRoot, "pnpm-workspace.yaml")));
-
-  // Git remote
-  let gitRemote: string | null = null;
-  try {
-    const { stdout } = await execFileAsync("git", ["config", "--get", "remote.origin.url"], {
-      cwd: projectRoot, timeout: 3000,
-    });
-    gitRemote = stdout.toString().trim().replace(/\.git$/, "").replace(/^git@github\.com:/, "github.com/") || null;
-  } catch { /* not a git repo or no remote */ }
-
-  return {
-    project_name: projectName,
-    project_type: isMonorepo ? "monorepo" : "single",
-    workspace_root: projectRoot,
-    git_remote: gitRemote,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Dependency Graph Extractor
-// ---------------------------------------------------------------------------
-
-function extractDependencyGraph(index: CodeIndex): DependencyGraph {
-  // Entry points: files matching app/main/server/index at shallow depth
-  const entry_points: string[] = [];
-  const importCount = new Map<string, number>();
-
-  // Count imports per file from symbols
-  for (const sym of index.symbols) {
-    if (sym.source) {
-      const importMatches = sym.source.match(/from\s+['"]([^'"]+)['"]/g);
-      if (importMatches) {
-        for (const m of importMatches) {
-          const path = m.replace(/from\s+['"]/, "").replace(/['"]$/, "");
-          // Resolve relative imports to file paths
-          if (path.startsWith(".")) {
-            const resolved = join(sym.file.replace(/\/[^/]+$/, ""), path).replace(/\.(js|ts|tsx|jsx)$/, "");
-            importCount.set(resolved, (importCount.get(resolved) ?? 0) + 1);
-          }
-        }
-      }
-    }
-  }
-
-  // Find entry points
-  for (const f of index.files) {
-    if (/\/(app|main|server)\.(ts|js|tsx)$/.test(f.path)) entry_points.push(f.path);
-    if (/^(src\/)?index\.(ts|js)$/.test(f.path)) entry_points.push(f.path);
-  }
-
-  // Hub modules: files imported by many others
-  const hub_modules = [...importCount.entries()]
-    .filter(([, count]) => count >= 5)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([path, count]) => ({ path, imported_by_count: count }));
-
-  // Leaf modules: files that import others but are not imported themselves
-  const importedFiles = new Set(importCount.keys());
-  const leaf_modules = index.files
-    .filter((f) => !importedFiles.has(f.path.replace(/\.(ts|js|tsx|jsx)$/, "")) && !/(test|spec)\.(ts|js)$/.test(f.path))
-    .slice(0, 30)
-    .map((f) => f.path);
-
-  // Orphan files: files with no imports AND not imported
-  const orphan_files = index.files
-    .filter((f) => {
-      const base = f.path.replace(/\.(ts|js|tsx|jsx)$/, "");
-      return !importedFiles.has(base) && f.symbol_count === 0 && !/(test|spec)\.(ts|js)$/.test(f.path);
-    })
-    .slice(0, 20)
-    .map((f) => f.path);
-
-  return { entry_points, hub_modules, leaf_modules, orphan_files };
-}
-
-// ---------------------------------------------------------------------------
-// Test Conventions Extractor
-// ---------------------------------------------------------------------------
-
-async function extractTestConventions(
-  projectRoot: string,
-  index: CodeIndex,
-): Promise<TestConventions> {
-  const testFiles = index.files.filter((f) => /(test|spec)\.(ts|js|tsx|jsx)$/.test(f.path));
-  const file_patterns = [...new Set(testFiles.map((f) => {
-    if (f.path.includes(".test.")) return "*.test.*";
-    if (f.path.includes(".spec.")) return "*.spec.*";
-    return "*.test.*";
-  }))];
-
-  // Find setup files
-  const setup_files: string[] = [];
-  for (const f of index.files) {
-    if (/setup\.(ts|js)$/.test(f.path) && !/(node_modules|dist|\.next)/.test(f.path)) {
-      setup_files.push(f.path);
-    }
-    if (/vitest\.setup\.(ts|js)$/.test(f.path)) setup_files.push(f.path);
-    if (/jest\.setup\.(ts|js)$/.test(f.path)) setup_files.push(f.path);
-  }
-
-  // Detect mock style and common patterns by reading a few test files
-  let mock_style: string | null = null;
-  const mock_patterns: TestConventions["mock_patterns"] = [];
-  const common_mocks_set = new Set<string>();
-
-  // Read up to 5 test files to detect patterns
-  const sampleTests = testFiles
-    .filter((f) => f.path.includes("service") || f.path.includes("controller") || f.path.includes("guard"))
-    .slice(0, 5);
-
-  for (const tf of sampleTests) {
-    try {
-      const content = await readFile(join(projectRoot, tf.path), "utf-8");
-
-      // Mock style
-      if (!mock_style) {
-        if (content.includes("vi.mock")) mock_style = "vi.mock";
-        else if (content.includes("jest.mock")) mock_style = "jest.mock";
-        else if (content.includes("sinon")) mock_style = "sinon";
-      }
-
-      // Common mock patterns — extract vi.mock/jest.mock calls
-      const mockCalls = content.match(/(?:vi|jest)\.mock\s*\(\s*['"]([^'"]+)['"]/g);
-      if (mockCalls) {
-        for (const mc of mockCalls) {
-          const path = mc.match(/['"]([^'"]+)['"]/)?.[1];
-          if (path) common_mocks_set.add(path);
-        }
-      }
-
-      // Detect specific patterns
-      if (content.includes("mockPrismaClient") || content.includes("prismaMock")) {
-        if (!mock_patterns.some((p) => p.name === "prisma")) {
-          mock_patterns.push({ name: "prisma", import_from: "setup or inline", usage: "mockPrismaClient / prismaMock" });
-        }
-      }
-      if (content.includes("mockDeep") || content.includes("DeepMockProxy")) {
-        if (!mock_patterns.some((p) => p.name === "deep-mock")) {
-          mock_patterns.push({ name: "deep-mock", import_from: "vitest-mock-extended or jest-mock-extended", usage: "mockDeep<Type>()" });
-        }
-      }
-      if (content.includes("$transaction") && content.includes("mock")) {
-        if (!mock_patterns.some((p) => p.name === "transaction")) {
-          mock_patterns.push({ name: "transaction", import_from: "prisma mock", usage: "$transaction mock for DB operations" });
-        }
-      }
-    } catch { /* skip unreadable files */ }
-  }
-
-  // Also check setup files for shared patterns
-  for (const sf of setup_files) {
-    try {
-      const content = await readFile(join(projectRoot, sf), "utf-8");
-      const exports = content.match(/export\s+(?:const|function|class)\s+(\w+)/g);
-      if (exports) {
-        for (const exp of exports) {
-          const name = exp.match(/(\w+)$/)?.[1];
-          if (name && /mock|stub|fake|fixture|factory/i.test(name)) {
-            mock_patterns.push({ name, import_from: sf, usage: "shared test helper" });
-          }
-        }
-      }
-    } catch { /* skip */ }
-  }
-
-  // Determine assertion library from stack
-  const pkg = await readJson(join(projectRoot, "package.json"));
-  const devDeps = pkg?.devDependencies ?? {};
-  let assertion_library = "expect"; // default
-  if (devDeps["vitest"]) assertion_library = "vitest/expect";
-  else if (devDeps["jest"]) assertion_library = "jest/expect";
-  else if (devDeps["chai"]) assertion_library = "chai";
-
-  return {
-    mock_style,
-    setup_files,
-    mock_patterns: mock_patterns.slice(0, 10),
-    assertion_library,
-    file_patterns,
-    common_mocks: [...common_mocks_set].slice(0, 20),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Known Gotchas Extractor
-// ---------------------------------------------------------------------------
-
-function extractKnownGotchas(index: CodeIndex): KnownGotchas {
-  const gotchas: KnownGotchas["auto_detected"] = [];
-
-  // Check for common gotcha patterns in symbols
-  for (const sym of index.symbols) {
-    if (!sym.source) continue;
-
-    // as any casts in production code (not tests)
-    if (/(test|spec)\.(ts|js)$/.test(sym.file)) continue;
-
-    // Detect patterns that are known gotchas
-    if (/process\.env\.\w+/.test(sym.source) && !/config|env\.schema|validate/.test(sym.file)) {
-      if (!gotchas.some((g) => g.gotcha.includes("scattered process.env"))) {
-        gotchas.push({
-          gotcha: "scattered process.env access outside config module",
-          evidence: [sym.file],
-          severity: "medium",
-        });
-      }
-    }
-  }
-
-  // Check for common project-level gotchas
-  const hasEslintIgnore = index.files.some((f) => f.path.includes(".eslintignore"));
-  if (hasEslintIgnore) {
-    gotchas.push({
-      gotcha: ".eslintignore present — some files bypass linting",
-      evidence: [".eslintignore"],
-      severity: "low",
-    });
-  }
-
-  return { auto_detected: gotchas.slice(0, 10) };
-}
-
-// ---------------------------------------------------------------------------
-// Dependency Health
-// ---------------------------------------------------------------------------
-
-async function extractDependencyHealth(projectRoot: string): Promise<DependencyHealth | null> {
-  const pkg = await readJson(join(projectRoot, "package.json"));
-  if (!pkg) {
-    // Try Python
-    const pyproject = await readJson(join(projectRoot, "pyproject.toml"));
-    if (!pyproject) return null;
-    return { total: 0, prod: 0, dev: 0, key_versions: {} };
-  }
-
-  const prod = Object.keys(pkg.dependencies ?? {});
-  const dev = Object.keys(pkg.devDependencies ?? {});
-  const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-
-  // Extract key versions — frameworks, runtimes, major tools
-  const keyPackages = [
-    "react", "next", "hono", "@nestjs/core", "express", "vue", "angular",
-    "typescript", "vitest", "jest", "prisma", "@prisma/client",
-    "tailwindcss", "@anthropic-ai/sdk", "openai",
-    "stripe", "inngest", "@clerk/nextjs", "@clerk/backend",
-    "@sentry/nextjs", "@sentry/nestjs", "drizzle-orm",
-  ];
-
-  const key_versions: Record<string, string> = {};
-  for (const k of keyPackages) {
-    if (allDeps[k]) key_versions[k] = allDeps[k];
-  }
-
-  return {
-    total: prod.length + dev.length,
-    prod: prod.length,
-    dev: dev.length,
-    key_versions,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Git Health
-// ---------------------------------------------------------------------------
-
-async function extractGitHealth(projectRoot: string): Promise<GitHealth | null> {
-  try {
-    const totalRes = await execFileAsync("git", ["rev-list", "--count", "HEAD"], {
-      cwd: projectRoot, timeout: 5000,
-    });
-    const totalStr = totalRes.stdout.toString().trim();
-
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const recentRes = await execFileAsync("git", ["rev-list", "--count", `--since=${thirtyDaysAgo}`, "HEAD"], {
-      cwd: projectRoot, timeout: 5000,
-    });
-    const recentStr = recentRes.stdout.toString().trim();
-
-    const lastRes = await execFileAsync("git", ["log", "-1", "--format=%aI"], {
-      cwd: projectRoot, timeout: 5000,
-    });
-    const lastCommitDate = lastRes.stdout.toString().trim();
-
-    const contribRes = await execFileAsync("git", ["shortlog", "-sn", "--no-merges", "HEAD"], {
-      cwd: projectRoot, timeout: 10000,
-      maxBuffer: 5 * 1024 * 1024, // 5MB — many contributors on long-lived repos
-    });
-    const contributorsStr = contribRes.stdout.toString().trim();
-    const contributors = contributorsStr.split("\n").filter(Boolean).length;
-
-    return {
-      total_commits: parseInt(totalStr) || 0,
-      recent_commits_30d: parseInt(recentStr) || 0,
-      last_commit_date: lastCommitDate || null,
-      contributors,
-    };
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main orchestrator: analyze_project
 // ---------------------------------------------------------------------------
 
@@ -1991,6 +1687,11 @@ export function resetAnalyzeProjectCacheForTesting(): void {
   analyzeProjectCache.clear();
 }
 
+async function getProjectCodeIndex(repoName: string): Promise<CodeIndex | null> {
+  const { getCodeIndex } = await import("./index-tools.js");
+  return getCodeIndex(repoName);
+}
+
 export async function analyzeProject(
   repoName: string,
   options: { force?: boolean | undefined } = {},
@@ -2000,7 +1701,7 @@ export async function analyzeProject(
   let files_skipped = 0;
   const skip_reasons: Record<string, number> = {};
 
-  const index = await getCodeIndex(repoName);
+  const index = await getProjectCodeIndex(repoName);
   if (!index) {
     const failedProfile: ProjectProfile = {
       version: "1.0",
@@ -2048,10 +1749,11 @@ export async function analyzeProject(
   const stack = await detectStack(projectRoot);
 
   // Step 2: File classification
-  const file_classifications = classifyFiles(index);
+  const importerCount = await buildImporterCount(index);
+  const file_classifications = classifyFiles(index, importerCount);
 
   // Step 2b: Dependency graph
-  const dependency_graph = extractDependencyGraph(index);
+  const dependency_graph = extractDependencyGraph(index, importerCount);
 
   // Step 2c: Test conventions
   const test_conventions = await extractTestConventions(projectRoot, index);
@@ -2125,6 +1827,9 @@ export async function analyzeProject(
     skip_reasons[`${fw ?? "unknown"}_extractor_error`] = 1;
   }
 
+  const dependencyHealth = await extractDependencyHealth(projectRoot);
+  const gitHealth = await extractGitHealth(projectRoot);
+
   const profile: ProjectProfile = {
     version: "1.0",
     generated_at: new Date().toISOString(),
@@ -2149,15 +1854,15 @@ export async function analyzeProject(
     ...(pythonConventions ? { python_conventions: pythonConventions } : {}),
     ...(phpConventions ? { php_conventions: phpConventions } : {}),
     ...(astroConventions ? { astro_conventions: astroConventions } : {}),
-    dependency_health: await extractDependencyHealth(projectRoot) ?? undefined,
-    git_health: (await extractGitHealth(projectRoot)) ?? undefined,
+    ...(dependencyHealth ? { dependency_health: dependencyHealth } : {}),
+    ...(gitHealth ? { git_health: gitHealth } : {}),
     generation_metadata: {
       files_analyzed,
       files_skipped,
       skip_reasons,
       duration_ms: Date.now() - startTime,
     },
-  } as ProjectProfile;
+  };
 
   // Write full profile to disk — MCP returns only summary
   const profilePath = await writeProfileToDisk(projectRoot, profile);
@@ -2165,137 +1870,6 @@ export async function analyzeProject(
   const summary = buildSummary(profile, profilePath);
   analyzeProjectCache.set(repoName, { updatedAt: index.updated_at, profile: summary });
   return summary;
-}
-
-// ---------------------------------------------------------------------------
-// Disk persistence — write profile to .zuvo/project-profile.json
-// ---------------------------------------------------------------------------
-
-async function writeProfileToDisk(projectRoot: string, profile: ProjectProfile): Promise<string> {
-  const zuvoDir = join(projectRoot, ".zuvo");
-  await mkdir(zuvoDir, { recursive: true });
-  const profilePath = join(zuvoDir, "project-profile.json");
-  await writeFile(profilePath, JSON.stringify(profile, null, 2), "utf-8");
-  return profilePath;
-}
-
-// ---------------------------------------------------------------------------
-// Summary — compact return value for MCP (full profile is on disk)
-// ---------------------------------------------------------------------------
-
-export interface ProfileSummary {
-  status: ProjectProfile["status"];
-  profile_path: string;
-  stack: {
-    framework: string | null;
-    language: string;
-    test_runner: string | null;
-    package_manager: string | null;
-    monorepo: boolean;
-  };
-  file_counts: {
-    critical: number;
-    important: number;
-    routine: number;
-    total_analyzed: number;
-  };
-  conventions_summary: Record<string, unknown> | null;
-  dependency_health: { total: number; prod: number; dev: number; key_count: number } | null;
-  git_health: GitHealth | null;
-  duration_ms: number;
-}
-
-export function buildConventionsSummary(profile: ProjectProfile): ProfileSummary["conventions_summary"] {
-  const p = profile as any;
-  if (p.conventions) return {
-    middleware_chains: p.conventions.middleware_chains.length,
-    rate_limits: p.conventions.rate_limits.length,
-    route_mounts: p.conventions.route_mounts.length,
-    auth_groups: Object.keys(p.conventions.auth_patterns.groups).length,
-  };
-  if (p.nest_conventions) return {
-    type: "nestjs",
-    modules: p.nest_conventions.modules.length,
-    global_guards: p.nest_conventions.global_guards.length,
-    global_filters: p.nest_conventions.global_filters.length,
-    global_interceptors: p.nest_conventions.global_interceptors.length,
-    controllers: p.nest_conventions.controllers.length,
-    has_throttler: !!p.nest_conventions.throttler,
-  };
-  if (p.next_conventions) return {
-    type: "nextjs",
-    pages: p.next_conventions.pages.length,
-    api_routes: p.next_conventions.api_routes.length,
-    services: p.next_conventions.services_count,
-    inngest_functions: p.next_conventions.inngest_functions.length,
-    webhooks: p.next_conventions.webhooks.length,
-    has_middleware: !!p.next_conventions.middleware,
-    app_router: p.next_conventions.config.app_router,
-    i18n: p.next_conventions.config.i18n,
-  };
-  if (p.express_conventions) return {
-    type: "express",
-    middleware: p.express_conventions.middleware.length,
-    routers: p.express_conventions.routers.length,
-    error_handlers: p.express_conventions.error_handlers.length,
-  };
-  if (p.react_conventions) return {
-    type: "react",
-    ...p.react_conventions.component_count,
-    state_management: p.react_conventions.state_management,
-    ui_library: p.react_conventions.ui_library,
-  };
-  if (p.python_conventions) return {
-    type: "python",
-    routers: p.python_conventions.routers.length,
-    middleware: p.python_conventions.middleware.length,
-    framework_type: p.python_conventions.framework_type,
-  };
-  if (p.php_conventions) return {
-    type: "php",
-    controllers: p.php_conventions.controllers.length,
-    middleware: p.php_conventions.middleware.length,
-    models: p.php_conventions.models.length,
-    migrations: p.php_conventions.migrations_count,
-  };
-  if (p.astro_conventions) return {
-    type: "astro",
-    output_mode: p.astro_conventions.output_mode,
-    adapter: p.astro_conventions.adapter,
-    integrations: p.astro_conventions.integrations.length,
-    has_i18n: !!p.astro_conventions.i18n,
-    config_resolution: p.astro_conventions.config_resolution,
-  };
-  return null;
-}
-
-function buildSummary(profile: ProjectProfile, profilePath: string): ProfileSummary {
-  return {
-    status: profile.status,
-    profile_path: profilePath,
-    stack: {
-      framework: profile.stack?.framework ?? null,
-      language: profile.stack?.language ?? "unknown",
-      test_runner: profile.stack?.test_runner ?? null,
-      package_manager: profile.stack?.package_manager ?? null,
-      monorepo: !!profile.stack?.monorepo,
-    },
-    file_counts: {
-      critical: profile.file_classifications?.critical.length ?? 0,
-      important: profile.file_classifications?.important.count ?? 0,
-      routine: profile.file_classifications?.routine.count ?? 0,
-      total_analyzed: profile.generation_metadata.files_analyzed,
-    },
-    conventions_summary: buildConventionsSummary(profile),
-    dependency_health: (profile as any).dependency_health ? {
-      total: (profile as any).dependency_health.total,
-      prod: (profile as any).dependency_health.prod,
-      dev: (profile as any).dependency_health.dev,
-      key_count: Object.keys((profile as any).dependency_health.key_versions).length,
-    } : null,
-    git_health: (profile as any).git_health ?? null,
-    duration_ms: profile.generation_metadata.duration_ms,
-  };
 }
 
 // ---------------------------------------------------------------------------

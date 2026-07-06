@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Split `analyze_project` profile generation out of `src/tools/project-tools.ts`
+  into focused project-profile modules, keeping `project-tools.ts` as the thin
+  orchestration layer and removing its static `index-tools` import cycle.
+
+### Fixed
+
+- Hardened project profile extraction around root entrypoints, Python
+  `pyproject.toml` detection, Hono source precedence, importer counting, git
+  remote sanitization, and atomic profile writes.
+
 ## [0.7.0] — 2026-05-08
 
 ### PHP/Yii2 deep intelligence — 10 new tools + extractor v2.0.0
