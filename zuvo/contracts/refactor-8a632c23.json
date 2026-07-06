@@ -1,0 +1,157 @@
+{
+  "version": 3,
+  "file": "src/tools/php-tools.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "PHASE-3.5-REFACTOR-COMMIT_READY",
+  "queue_file": null,
+  "queue_entry": null,
+  "cq_before": {
+    "score": "structural split target; blocking CQ gates passed post-split",
+    "critical_failures": [],
+    "notes": [
+      "Target is 1863 LOC and combines PHP/Yii namespace resolution, ActiveRecord analysis, event tracing, view mapping, service resolution, security scanning, N+1 detection, god model detection, and project audit orchestration.",
+      "Public callers import src/tools/php-tools.js; the split must preserve this facade and every public export.",
+      "Registered standalone PHP/Yii catalog entries are 6, but the implementation file exposes 9 public tool functions used by tests and the php_project_audit composite."
+    ]
+  },
+  "scope_fence": [
+    "src/tools/php-tools.ts",
+    "src/tools/php-namespace-tools.ts",
+    "src/tools/php-active-record-tools.ts",
+    "src/tools/php-event-tools.ts",
+    "src/tools/php-view-tools.ts",
+    "src/tools/php-service-tools.ts",
+    "src/tools/php-security-tools.ts",
+    "src/tools/php-nplus1-tools.ts",
+    "src/tools/php-god-model-tools.ts",
+    "src/tools/php-project-audit-tools.ts",
+    "tests/tools/php-tools.test.ts",
+    "CHANGELOG.md",
+    "zuvo/contracts/refactor-8a632c23.json"
+  ],
+  "backup_branch": "backup/refactor-php-tools-20260707",
+  "plan": {
+    "summary": "Split PHP/Yii tool implementations into per-tool modules while keeping src/tools/php-tools.ts as the compatibility facade.",
+    "extractions": [
+      {
+        "unit": "resolve_php_namespace",
+        "destination": "src/tools/php-namespace-tools.ts"
+      },
+      {
+        "unit": "analyze_activerecord",
+        "destination": "src/tools/php-active-record-tools.ts"
+      },
+      {
+        "unit": "trace_php_event",
+        "destination": "src/tools/php-event-tools.ts"
+      },
+      {
+        "unit": "find_php_views",
+        "destination": "src/tools/php-view-tools.ts"
+      },
+      {
+        "unit": "resolve_php_service",
+        "destination": "src/tools/php-service-tools.ts"
+      },
+      {
+        "unit": "php_security_scan",
+        "destination": "src/tools/php-security-tools.ts"
+      },
+      {
+        "unit": "find_php_n_plus_one",
+        "destination": "src/tools/php-nplus1-tools.ts"
+      },
+      {
+        "unit": "find_php_god_model",
+        "destination": "src/tools/php-god-model-tools.ts"
+      },
+      {
+        "unit": "php_project_audit",
+        "destination": "src/tools/php-project-audit-tools.ts"
+      }
+    ]
+  },
+  "test_mode": "CHARACTERIZATION_PLUS_EXISTING",
+  "test_audit_before": {
+    "test_file": "tests/tools/php-tools.test.ts + focused PHP/Yii suites",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 9,
+    "units_covered": 9,
+    "uncovered_units": [],
+    "added_characterization": "Facade runtime re-export identity plus type-level equality for every public type re-export from the per-tool modules."
+  },
+  "prove": {
+    "blind_audit": "clean:strict: blind-audit-codex over src/tools/php-tools.ts + tests/tools/php-tools.test.ts reported CLEAN after adding type-level facade assertions; inventory 26/26 FULL.",
+    "adversarial": "5warnings+1info:preserved",
+    "findings_disposition": "Adversarial findings are algorithmic behavior gaps pre-existing in the moved implementations. They are preserved for the pure split commit; warning-level bugs will be fixed in a separate follow-up commit in this same run. Info-level ActiveRecord Model classification is documented but not changed without product semantics confirmation.",
+    "latest": {
+      "baseline_focused": "green before refactor: npm test -- focused PHP/Yii suites; 9 files passed, 116 tests passed",
+      "focused": "green after refactor: npm test -- focused PHP/Yii suites; 9 files passed, 117 tests passed before type assertions; php-tools facade test later 26 tests passed",
+      "typecheck": "green: npm run lint",
+      "build": "green: npm run build",
+      "diff_check": "green: git diff --check on scoped files",
+      "codesift_audit": "CQ8/CQ13/CQ14/CQ17 pass; CQ11 reports inherited function complexity now isolated in per-tool modules",
+      "adversarial_findings": [
+        "php-namespace-tools: PSR-4 array roots only checked first root",
+        "php-namespace-tools: Composer empty-prefix fallback ignored",
+        "php-active-record-tools: parent class resolution uses short-name global fallback",
+        "php-event-tools: namespaced event constant references not matched",
+        "php-view-tools: Yii alias resolution should use longest matching alias prefix",
+        "php-active-record-tools INFO: Yii base Model subclasses classified with ActiveRecord inventory"
+      ]
+    }
+  },
+  "progress": [
+    {
+      "stage": "PHASE-1",
+      "status": "baseline-green",
+      "command": "npm test -- tests/tools/php-tools.test.ts tests/utils/import-graph-php.test.ts tests/tools/php-relations.test.ts tests/tools/php-tracing.test.ts tests/tools/php-service-resolver.test.ts tests/tools/php-security-scan.test.ts tests/tools/php-project-audit.test.ts tests/tools/php-nplus1.test.ts tests/tools/php-god-model.test.ts",
+      "result": "9 files passed, 116 tests passed before refactor"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "implemented",
+      "command": "mechanical extraction by existing php-tools section markers",
+      "result": "src/tools/php-tools.ts reduced from 1863 LOC to 39 LOC; 9 per-tool modules created; public facade preserved"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "characterization-added",
+      "command": "updated tests/tools/php-tools.test.ts",
+      "result": "added runtime re-export identity assertions and type-level facade equality assertions"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "npm test -- focused PHP/Yii suites",
+      "result": "9 files passed, 117 tests passed after split"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "verification-green",
+      "command": "npm run lint && npm run build && git diff --check -- scoped files",
+      "result": "typecheck, build, and whitespace checks passed"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "codesift-audit-partial",
+      "command": "audit_scan(file_pattern=src/tools/php-, checks=CQ8,CQ11,CQ13,CQ14,CQ17)",
+      "result": "CQ8/CQ13/CQ14/CQ17 passed; CQ11 reported inherited complex PHP tool functions"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "blind-audit-clean",
+      "command": "blind-audit-codex.sh --production src/tools/php-tools.ts --test tests/tools/php-tools.test.ts",
+      "result": "CLEAN, 26/26 facade delegation rows fully covered after type assertion fix"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "adversarial-preserved-for-refactor-commit",
+      "command": "adversarial-review.sh --single --mode code --files scoped files",
+      "result": "5 warning-level pre-existing algorithm gaps + 1 info finding; warning fixes planned as separate follow-up commit"
+    }
+  ]
+}

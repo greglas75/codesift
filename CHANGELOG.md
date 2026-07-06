@@ -10,6 +10,8 @@
 - Split the built-in pattern registry out of `src/tools/pattern-tools.ts`,
   keeping `pattern-tools.ts` as the search engine/facade with compatible
   `BUILTIN_PATTERNS`, `searchPatterns`, and `listPatterns` exports.
+- Split the PHP/Yii implementation file into per-tool modules while keeping
+  `src/tools/php-tools.ts` as the compatibility facade for existing callers.
 
 ### Fixed
 

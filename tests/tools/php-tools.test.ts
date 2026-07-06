@@ -4,7 +4,49 @@
  * These are unit tests that mock the code index rather than requiring
  * a real indexed repo. They test the extraction logic in isolation.
  */
+import { expectTypeOf } from "vitest";
 import { extractYii2Conventions, extractPhpConventions } from "../../src/tools/project-tools.js";
+import type {
+  ActiveRecordAnalysis as FacadeActiveRecordAnalysis,
+  ActiveRecordModel as FacadeActiveRecordModel,
+  AuditGate as FacadeAuditGate,
+  FindPhpViewsResult as FacadeFindPhpViewsResult,
+  GodModelFinding as FacadeGodModelFinding,
+  NPlusOneFinding as FacadeNPlusOneFinding,
+  PhpAssetBundleRef as FacadePhpAssetBundleRef,
+  PhpEventChain as FacadePhpEventChain,
+  PhpLayoutMapping as FacadePhpLayoutMapping,
+  PhpNamespaceResolution as FacadePhpNamespaceResolution,
+  PhpProjectAudit as FacadePhpProjectAudit,
+  PhpRenderKind as FacadePhpRenderKind,
+  PhpSecurityFinding as FacadePhpSecurityFinding,
+  PhpSecurityScanResult as FacadePhpSecurityScanResult,
+  PhpServiceResolution as FacadePhpServiceResolution,
+  PhpViewMapping as FacadePhpViewMapping,
+  PhpWidgetReference as FacadePhpWidgetReference,
+} from "../../src/tools/php-tools.js";
+import type {
+  ActiveRecordAnalysis,
+  ActiveRecordModel,
+} from "../../src/tools/php-active-record-tools.js";
+import type { PhpEventChain } from "../../src/tools/php-event-tools.js";
+import type { GodModelFinding } from "../../src/tools/php-god-model-tools.js";
+import type { PhpNamespaceResolution } from "../../src/tools/php-namespace-tools.js";
+import type { NPlusOneFinding } from "../../src/tools/php-nplus1-tools.js";
+import type { AuditGate, PhpProjectAudit } from "../../src/tools/php-project-audit-tools.js";
+import type {
+  PhpSecurityFinding,
+  PhpSecurityScanResult,
+} from "../../src/tools/php-security-tools.js";
+import type { PhpServiceResolution } from "../../src/tools/php-service-tools.js";
+import type {
+  FindPhpViewsResult,
+  PhpAssetBundleRef,
+  PhpLayoutMapping,
+  PhpRenderKind,
+  PhpViewMapping,
+  PhpWidgetReference,
+} from "../../src/tools/php-view-tools.js";
 
 // We can't easily test the full tool functions (they call getCodeIndex)
 // without integration setup, so we test the convention extractors and
@@ -22,6 +64,49 @@ describe("PHP tool module exports", () => {
     expect(typeof mod.phpProjectAudit).toBe("function");
     expect(typeof mod.findPhpNPlusOne).toBe("function");
     expect(typeof mod.findPhpGodModel).toBe("function");
+  });
+
+  it("re-exports the per-tool implementation modules through the legacy facade", async () => {
+    const facade = await import("../../src/tools/php-tools.js");
+    const namespace = await import("../../src/tools/php-namespace-tools.js");
+    const activeRecord = await import("../../src/tools/php-active-record-tools.js");
+    const events = await import("../../src/tools/php-event-tools.js");
+    const views = await import("../../src/tools/php-view-tools.js");
+    const services = await import("../../src/tools/php-service-tools.js");
+    const security = await import("../../src/tools/php-security-tools.js");
+    const nplus1 = await import("../../src/tools/php-nplus1-tools.js");
+    const godModel = await import("../../src/tools/php-god-model-tools.js");
+    const projectAudit = await import("../../src/tools/php-project-audit-tools.js");
+
+    expect(facade.resolvePhpNamespace).toBe(namespace.resolvePhpNamespace);
+    expect(facade.analyzeActiveRecord).toBe(activeRecord.analyzeActiveRecord);
+    expect(facade.tracePhpEvent).toBe(events.tracePhpEvent);
+    expect(facade.findPhpViews).toBe(views.findPhpViews);
+    expect(facade.resolvePhpService).toBe(services.resolvePhpService);
+    expect(facade.phpSecurityScan).toBe(security.phpSecurityScan);
+    expect(facade.findPhpNPlusOne).toBe(nplus1.findPhpNPlusOne);
+    expect(facade.findPhpGodModel).toBe(godModel.findPhpGodModel);
+    expect(facade.phpProjectAudit).toBe(projectAudit.phpProjectAudit);
+  });
+
+  it("re-exports the per-tool public types through the legacy facade", () => {
+    expectTypeOf<FacadePhpNamespaceResolution>().toEqualTypeOf<PhpNamespaceResolution>();
+    expectTypeOf<FacadeActiveRecordModel>().toEqualTypeOf<ActiveRecordModel>();
+    expectTypeOf<FacadeActiveRecordAnalysis>().toEqualTypeOf<ActiveRecordAnalysis>();
+    expectTypeOf<FacadePhpEventChain>().toEqualTypeOf<PhpEventChain>();
+    expectTypeOf<FacadePhpRenderKind>().toEqualTypeOf<PhpRenderKind>();
+    expectTypeOf<FacadePhpViewMapping>().toEqualTypeOf<PhpViewMapping>();
+    expectTypeOf<FacadePhpLayoutMapping>().toEqualTypeOf<PhpLayoutMapping>();
+    expectTypeOf<FacadePhpWidgetReference>().toEqualTypeOf<PhpWidgetReference>();
+    expectTypeOf<FacadePhpAssetBundleRef>().toEqualTypeOf<PhpAssetBundleRef>();
+    expectTypeOf<FacadeFindPhpViewsResult>().toEqualTypeOf<FindPhpViewsResult>();
+    expectTypeOf<FacadePhpServiceResolution>().toEqualTypeOf<PhpServiceResolution>();
+    expectTypeOf<FacadePhpSecurityFinding>().toEqualTypeOf<PhpSecurityFinding>();
+    expectTypeOf<FacadePhpSecurityScanResult>().toEqualTypeOf<PhpSecurityScanResult>();
+    expectTypeOf<FacadeNPlusOneFinding>().toEqualTypeOf<NPlusOneFinding>();
+    expectTypeOf<FacadeGodModelFinding>().toEqualTypeOf<GodModelFinding>();
+    expectTypeOf<FacadeAuditGate>().toEqualTypeOf<AuditGate>();
+    expectTypeOf<FacadePhpProjectAudit>().toEqualTypeOf<PhpProjectAudit>();
   });
 });
 
