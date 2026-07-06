@@ -1,10 +1,38 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type Parser from "web-tree-sitter";
+import * as parserManager from "../../src/parser/parser-manager.js";
 import { HonoExtractor } from "../../src/parser/extractors/hono.js";
+import type {
+  HonoApp,
+  HonoAppModel,
+  HonoMount,
+  HonoRoute,
+} from "../../src/parser/extractors/hono-model.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, "..", "fixtures", "hono");
+
+function emptyHonoModel(entryFile: string): HonoAppModel {
+  return {
+    entry_file: entryFile,
+    app_variables: {},
+    routes: [],
+    mounts: [],
+    middleware_chains: [],
+    context_vars: [],
+    openapi_routes: [],
+    rpc_exports: [],
+    runtime: "unknown",
+    env_bindings: [],
+    files_used: [],
+    extraction_status: "complete",
+    skip_reasons: {},
+  };
+}
 
 describe("HonoExtractor — subapp-app", () => {
   const subappEntry = path.join(FIXTURES, "subapp-app", "src", "index.ts");
@@ -112,6 +140,7 @@ describe("HonoExtractor — double-mount nested sub-app", () => {
     expect(paths.filter((p) => p.includes("nested-mount/hello")).length).toBe(
       2,
     );
+    expect(new Set(model.files_used).size).toBe(model.files_used.length);
   });
 
   it("records one mount row per app.route on the child for each entry mount", async () => {
@@ -262,6 +291,8 @@ describe("HonoExtractor — basepath-app", () => {
     const legacyMount = model.mounts.find((m) => m.mount_path === "/legacy");
     expect(legacyMount).toBeDefined();
     expect(legacyMount?.mount_type).toBe("hono_mount");
+    expect(legacyMount?.child_var).toBe("<external>");
+    expect(legacyMount?.child_file).toBe("");
   });
 });
 
@@ -337,6 +368,36 @@ describe("HonoExtractor — basic-app", () => {
     for (const e of expanded ?? []) {
       expect(e.conditional).toBe(true);
     }
+  });
+
+  it("expands every() from hono/combine without marking entries conditional", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-every-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `import { every } from "hono/combine";`,
+        `const authMw = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const tenantMw = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const app = new Hono();`,
+        `app.use("/secure/*", every(authMw, tenantMw));`,
+        `app.get("/secure/status", (c) => c.json({ ok: true }));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await extractor.parse(entry);
+    const secureChain = model.middleware_chains.find(
+      (mc) => mc.scope === "/secure/*",
+    );
+    expect(secureChain).toBeDefined();
+    const expanded = secureChain?.entries.filter(
+      (e) => e.expanded_from === "every",
+    ) ?? [];
+    expect(expanded.map((e) => e.name)).toEqual(["authMw", "tenantMw"]);
+    expect(expanded.every((e) => e.conditional === false)).toBe(true);
   });
 
   it("expands spread array middleware (AC-M4)", async () => {
@@ -520,6 +581,926 @@ describe("HonoExtractor — T5 advanced runtime detection", () => {
     const entry = path.join(FIXTURES, "basic-app", "src", "index.ts");
     const model = await extractor.parse(entry);
     expect(model.runtime).toBe("unknown");
+  });
+});
+
+describe("HonoExtractor — parse safety fallbacks", () => {
+  type ChildParseResultFixture = {
+    app_variables: Record<string, HonoApp>;
+    routes: HonoRoute[];
+    mounts: HonoMount[];
+    files_used: string[];
+  };
+
+  type HonoExtractorInternals = {
+    parseFile(
+      file: string,
+      prefix: string,
+      inFlight: Set<string>,
+      parsedCache: Map<string, ChildParseResultFixture>,
+      model: HonoAppModel,
+    ): Promise<void>;
+  };
+
+  function asInternals(extractor: HonoExtractor): HonoExtractorInternals {
+    return extractor as unknown as HonoExtractorInternals;
+  }
+
+  it("increments parse_cycle_skipped when a file is already in flight", async () => {
+    const file = path.join(tmpdir(), "hono-cycle-guard.ts");
+    const model = emptyHonoModel(file);
+
+    await asInternals(new HonoExtractor()).parseFile(
+      file,
+      "",
+      new Set([file]),
+      new Map(),
+      model,
+    );
+
+    expect(model.skip_reasons.parse_cycle_skipped).toBe(1);
+    expect(model.files_used).toEqual([]);
+  });
+
+  it("records file_read_failed and keeps the unresolved canonical path for missing entries", async () => {
+    const missing = path.join(
+      tmpdir(),
+      `hono-missing-${Date.now()}`,
+      "index.ts",
+    );
+
+    const model = await new HonoExtractor().parse(missing);
+
+    expect(model.entry_file).toBe(path.resolve(missing));
+    expect(model.files_used).toContain(path.resolve(missing));
+    expect(model.skip_reasons.file_read_failed).toBe(1);
+  });
+
+  it("records file_read_failed during cached replay before emitting cached routes", async () => {
+    const missing = path.join(
+      tmpdir(),
+      `hono-missing-replay-${Date.now()}`,
+      "index.ts",
+    );
+    const model = emptyHonoModel(missing);
+    const cached: ChildParseResultFixture = {
+      app_variables: {},
+      routes: [
+        {
+          method: "GET",
+          path: "/cached",
+          raw_path: "/cached",
+          file: missing,
+          line: 1,
+          owner_var: "app",
+          handler: { name: "<inline>", inline: true, file: missing, line: 1 },
+          inline_middleware: [],
+          validators: [],
+        },
+      ],
+      mounts: [],
+      files_used: [missing],
+    };
+
+    await asInternals(new HonoExtractor()).parseFile(
+      missing,
+      "/prefix",
+      new Set(),
+      new Map([[missing, cached]]),
+      model,
+    );
+
+    expect(model.skip_reasons.file_read_failed).toBe(1);
+    expect(model.routes).toEqual([]);
+  });
+
+  it("records parser_unavailable before parsing the main file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-parser-null-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(entry, `const app = null;\n`);
+    const spy = vi.spyOn(parserManager, "getParser").mockResolvedValueOnce(null);
+
+    try {
+      const model = await new HonoExtractor().parse(entry);
+      expect(model.skip_reasons.parser_unavailable).toBe(1);
+      expect(model.routes).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records parse_failed when the main parser returns no tree", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-parse-null-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(entry, `const app = null;\n`);
+    const parser = { parse: () => null } as unknown as Parser;
+    const spy = vi
+      .spyOn(parserManager, "getParser")
+      .mockResolvedValueOnce(parser);
+
+    try {
+      const model = await new HonoExtractor().parse(entry);
+      expect(model.skip_reasons.parse_failed).toBe(1);
+      expect(model.routes).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records parser_unavailable during cached replay before emitting cached routes", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-replay-parser-null-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(entry, `const app = null;\n`);
+    const model = emptyHonoModel(entry);
+    const cached: ChildParseResultFixture = {
+      app_variables: {},
+      routes: [
+        {
+          method: "GET",
+          path: "/cached",
+          raw_path: "/cached",
+          file: entry,
+          line: 1,
+          owner_var: "app",
+          handler: { name: "<inline>", inline: true, file: entry, line: 1 },
+          inline_middleware: [],
+          validators: [],
+        },
+      ],
+      mounts: [],
+      files_used: [entry],
+    };
+    const spy = vi.spyOn(parserManager, "getParser").mockResolvedValueOnce(null);
+
+    try {
+      await asInternals(new HonoExtractor()).parseFile(
+        entry,
+        "/prefix",
+        new Set(),
+        new Map([[entry, cached]]),
+        model,
+      );
+      expect(model.skip_reasons.parser_unavailable).toBe(1);
+      expect(model.routes).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records parse_failed during cached replay before emitting cached routes", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-replay-parse-null-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(entry, `const app = null;\n`);
+    const model = emptyHonoModel(entry);
+    const cached: ChildParseResultFixture = {
+      app_variables: {},
+      routes: [
+        {
+          method: "GET",
+          path: "/cached",
+          raw_path: "/cached",
+          file: entry,
+          line: 1,
+          owner_var: "app",
+          handler: { name: "<inline>", inline: true, file: entry, line: 1 },
+          inline_middleware: [],
+          validators: [],
+        },
+      ],
+      mounts: [],
+      files_used: [entry],
+    };
+    const parser = { parse: () => null } as unknown as Parser;
+    const spy = vi
+      .spyOn(parserManager, "getParser")
+      .mockResolvedValueOnce(parser);
+
+    try {
+      await asInternals(new HonoExtractor()).parseFile(
+        entry,
+        "/prefix",
+        new Set(),
+        new Map([[entry, cached]]),
+        model,
+      );
+      expect(model.skip_reasons.parse_failed).toBe(1);
+      expect(model.routes).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("increments unresolved_import when an app.route child has no resolvable file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-unresolved-route-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `app.route("/missing", missingApp);`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.skip_reasons.unresolved_import).toBe(1);
+    expect(model.mounts).toContainEqual({
+      parent_var: "app",
+      mount_path: "/missing",
+      child_var: "missingApp",
+      child_file: "",
+      mount_type: "hono_route",
+    });
+  });
+
+  it("resolves named import aliases and .js specifiers to TypeScript child routers", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-aliased-route-"));
+    const entry = path.join(dir, "index.ts");
+    const child = path.join(dir, "child.ts");
+    await writeFile(
+      child,
+      [
+        `import { Hono } from "hono";`,
+        `export const child = new Hono();`,
+        `child.get("/ping", (c) => c.text("pong"));`,
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `import { child as aliasedChild } from "./child.js";`,
+        `const app = new Hono();`,
+        `app.route("/aliased", aliasedChild);`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const canonicalChild = await realpath(child);
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET /aliased/ping");
+    expect(model.mounts).toContainEqual({
+      parent_var: "app",
+      mount_path: "/aliased",
+      child_var: "aliasedChild",
+      child_file: canonicalChild,
+      mount_type: "hono_route",
+    });
+  });
+
+  it("ignores side-effect and unresolved imports while resolving index.ts and .tsx child routers", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-import-map-edges-"));
+    const entry = path.join(dir, "index.ts");
+    const featureDir = path.join(dir, "feature-dir");
+    const featureIndex = path.join(featureDir, "index.ts");
+    const tsxFeature = path.join(dir, "feature-tsx.tsx");
+    await mkdir(featureDir);
+    await writeFile(
+      path.join(dir, "polyfills.css"),
+      `.noop { color: red; }\n`,
+    );
+    await writeFile(
+      featureIndex,
+      [
+        `import { Hono } from "hono";`,
+        `export const feature = new Hono();`,
+          `feature.get("/ok", (c) => c.text("feature"));`,
+          "",
+        ].join("\n"),
+    );
+    await writeFile(
+      tsxFeature,
+      [
+        `import { Hono } from "hono";`,
+        `export const tsxFeature = new Hono();`,
+        `tsxFeature.get("/ok", (c) => c.text("tsx"));`,
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `import "./polyfills.css";`,
+        `import { missing } from "./does-not-exist";`,
+        `import { feature } from "./feature-dir";`,
+        `import { tsxFeature } from "./feature-tsx";`,
+        `const app = new Hono();`,
+        `app.route("/feature", feature);`,
+        `app.route("/tsx", tsxFeature);`,
+        `app.get("/health", (c) => c.text(typeof missing));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const canonicalFeatureIndex = await realpath(featureIndex);
+    const canonicalTsxFeature = await realpath(tsxFeature);
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toEqual(expect.arrayContaining([
+        "GET /feature/ok",
+        "GET /tsx/ok",
+        "GET /health",
+      ]));
+    expect(model.mounts).toEqual(expect.arrayContaining([
+      {
+        parent_var: "app",
+        mount_path: "/feature",
+        child_var: "feature",
+        child_file: canonicalFeatureIndex,
+        mount_type: "hono_route",
+      },
+      {
+        parent_var: "app",
+        mount_path: "/tsx",
+        child_var: "tsxFeature",
+        child_file: canonicalTsxFeature,
+        mount_type: "hono_route",
+      },
+    ]));
+    expect(model.skip_reasons.unresolved_import ?? 0).toBe(0);
+    expect(model.files_used.some((file) => file.includes("does-not-exist")))
+      .toBe(false);
+    expect(model.files_used.some((file) => file.endsWith("polyfills.css")))
+      .toBe(false);
+  });
+
+  it("skips inline app.route child expressions without recording a bogus mount", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-inline-route-child-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `app.route("/inline", new Hono());`,
+        `app.get("/health", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET /health");
+    expect(model.mounts).toEqual([]);
+    expect(model.skip_reasons.unresolved_import ?? 0).toBe(0);
+  });
+
+  it("classifies middleware-only RPC exports as full_app", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-rpc-middleware-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use("*", auth);`,
+        `export type AppType = typeof app;`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.middleware_chains).toHaveLength(1);
+    expect(model.mounts).toEqual([]);
+    expect(model.rpc_exports).toContainEqual({
+      export_name: "AppType",
+      file: model.entry_file,
+      line: 5,
+      shape: "full_app",
+      source_var: "app",
+    });
+  });
+
+  it("keeps call-expression middleware inside spread arrays", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-array-mw-call-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `import { rateLimit } from "hono/rate-limit";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const chain = [auth, rateLimit({ max: 5 })];`,
+        `app.use("/local/*", ...chain);`,
+        `app.get("/local/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/local/*",
+    );
+
+    expect(chain?.entries.map((entry) => entry.name)).toEqual([
+      "auth",
+      "rateLimit",
+    ]);
+    expect(chain?.entries.find((entry) => entry.name === "rateLimit"))
+      .toMatchObject({
+        imported_from: "hono/rate-limit",
+        is_third_party: true,
+      });
+  });
+
+  it("records unresolved external spread middleware as a placeholder entry", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-external-spread-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `import { coreChain } from "@corp/middleware";`,
+        `const app = new Hono();`,
+        `app.use("/external/*", ...coreChain);`,
+        `app.get("/external/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/external/*",
+    );
+
+    expect(chain?.entries).toContainEqual(expect.objectContaining({
+      name: "...coreChain",
+      imported_from: "@corp/middleware",
+      is_third_party: true,
+    }));
+  });
+
+  it("extracts chained app.use() registrations after the first call", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-chained-use-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const tenant = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use("/a/*", auth).use("/b/*", tenant);`,
+        `app.get("/b/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.middleware_chains).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        scope: "/a/*",
+        entries: [expect.objectContaining({ name: "auth" })],
+      }),
+      expect.objectContaining({
+        scope: "/b/*",
+        entries: [expect.objectContaining({ name: "tenant" })],
+      }),
+    ]));
+  });
+
+  it("expands array path scopes without treating the path array as middleware", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-array-scopes-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use(["/api/*", "/admin/*"], auth);`,
+        `app.get("/api/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.middleware_chains.map((chain) => chain.scope).sort())
+      .toEqual(["/admin/*", "/api/*"]);
+    for (const chain of model.middleware_chains) {
+      expect(chain.entries.map((entry) => entry.name)).toEqual(["auth"]);
+    }
+  });
+
+  it("resolves spread elements inside local middleware array declarations", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-array-spread-array-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const tenant = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const base = [auth];`,
+        `const chain = [...base, tenant];`,
+        `app.use("/combo/*", ...chain);`,
+        `app.get("/combo/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/combo/*",
+    );
+
+    expect(chain?.entries.map((entry) => entry.name)).toEqual([
+      "auth",
+      "tenant",
+    ]);
+  });
+
+  it("keeps multiple identifier middleware arguments on the global scope", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-multiple-global-mw-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const logger = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use(auth, logger);`,
+        `app.get("/api/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "*",
+    );
+
+    expect(chain?.entries.map((entry) => entry.name)).toEqual([
+      "auth",
+      "logger",
+    ]);
+  });
+
+  it("resolves local string constants used as middleware scopes", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-constant-scope-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const API_SCOPE = "/api/*";`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use(API_SCOPE, auth);`,
+        `app.get("/api/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/api/*",
+    );
+
+    expect(chain?.entries.map((entry) => entry.name)).toEqual(["auth"]);
+  });
+
+  it("unwraps typed middleware array declarations before spread expansion", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-typed-array-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const tenant = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const chain = [auth, tenant] as const;`,
+        `app.use("/typed/*", ...chain);`,
+        `app.get("/typed/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/typed/*",
+    );
+
+    expect(chain?.entries.map((entry) => entry.name)).toEqual([
+      "auth",
+      "tenant",
+    ]);
+  });
+
+  it("marks short-circuit c.set() calls as conditional context writes", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-short-circuit-context-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `app.use(async (c, next) => {`,
+        `  c.req.header("x-admin") && c.set("admin", "1");`,
+        `  await next();`,
+        `});`,
+        `app.get("/admin", (c) => c.text(c.get("admin")));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const admin = model.context_vars.find((contextVar) =>
+      contextVar.name === "admin"
+    );
+
+    expect(admin?.set_points).toContainEqual(expect.objectContaining({
+      condition: "conditional",
+    }));
+  });
+
+  it("recognizes ctx/context aliases without false conditional matches from string operands", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-context-alias-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `app.use(async (ctx, next) => {`,
+        `  ctx.set("mode", "always") + "&&";`,
+        `  await next();`,
+        `});`,
+        `app.get("/mode", (context) => context.text(context.get("mode")));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const mode = model.context_vars.find((contextVar) =>
+      contextVar.name === "mode"
+    );
+
+    expect(mode?.set_points).toContainEqual(expect.objectContaining({
+      condition: "always",
+    }));
+    expect(mode?.get_points.length).toBeGreaterThan(0);
+  });
+
+  it("tracks symbolic context keys and c.var destructuring reads", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-context-symbolic-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const AUTH_KEY = "user";`,
+        `app.use(async (c, next) => {`,
+        `  c.set(AUTH_KEY, { id: "1" });`,
+        `  await next();`,
+        `});`,
+        `app.get("/me", (context) => {`,
+        `  const { user } = context.var;`,
+        `  return context.json({ user, id: context.get(AUTH_KEY) });`,
+        `});`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const symbolic = model.context_vars.find((contextVar) =>
+      contextVar.name === "AUTH_KEY"
+    );
+    const destructured = model.context_vars.find((contextVar) =>
+      contextVar.name === "user"
+    );
+
+    expect(symbolic?.set_points.length).toBeGreaterThan(0);
+    expect(symbolic?.get_points.length).toBeGreaterThan(0);
+    expect(destructured?.get_points.length).toBeGreaterThan(0);
+  });
+
+  it("finds nested conditional middleware calls inside try blocks", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-nested-conditional-mw-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use("/nested/*", async (c, next) => {`,
+        `  try {`,
+        `    if (c.req.header("authorization")) return auth(c, next);`,
+        `  } catch {}`,
+        `  await next();`,
+        `});`,
+        `app.get("/nested/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/nested/*",
+    );
+
+    expect(chain?.entries).toContainEqual(expect.objectContaining({
+      name: "auth",
+      conditional: true,
+      applied_when: expect.objectContaining({ condition_type: "header" }),
+    }));
+  });
+
+  it("converts hyphenated OpenAPI path params into Hono path params", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-openapi-hyphen-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { OpenAPIHono, createRoute } from "@hono/zod-openapi";`,
+        `const app = new OpenAPIHono();`,
+        `const route = createRoute({ method: "get", path: "/users/{user-id}" });`,
+        `app.openapi(route, (c) => c.json({ ok: true }));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.openapi_routes[0]?.hono_path).toBe("/users/:user-id");
+    expect(model.routes).toContainEqual(expect.objectContaining({
+      method: "GET",
+      path: "/users/:user-id",
+      raw_path: "/users/:user-id",
+    }));
+  });
+
+  it("decodes static template string escapes before applying basePath", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-template-basepath-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const app = new Hono();`,
+        "const api = app.basePath(`/api\\u002fv1`);",
+        `api.get("/ping", (c) => c.text("pong"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET /api/v1/ping");
+  });
+
+  it("detects chained new Hono().basePath() apps and JS hex escapes", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-chained-basepath-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const api = new Hono().basePath("/api").basePath("/v\\x32");`,
+        `api.get("/ping", (c) => c.text("pong"));`,
+        `export default api;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.app_variables.api?.created_via).toBe("basePath");
+    expect(model.app_variables.api?.base_path).toBe("/api/v2");
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET /api/v2/ping");
+  });
+
+  it("detects factory-created apps with chained basePath", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-factory-basepath-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { createFactory } from "hono/factory";`,
+        `const factory = createFactory();`,
+        `const api = factory.createApp().basePath("/api");`,
+        `api.get("/ping", (c) => c.text("pong"));`,
+        `export default api;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.app_variables.api?.created_via).toBe("basePath");
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET /api/ping");
+  });
+
+  it("tracks apps initialized through chained new Hono() calls", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-chained-init-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const mw = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const app = new Hono().use(mw);`,
+        `app.get("/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.app_variables.app?.created_via).toBe("new Hono");
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET /status");
+  });
+
+  it("keeps apps with dynamic basePath arguments in the model", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-dynamic-basepath-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `const API_PREFIX = "/api";`,
+        `const api = new Hono().basePath(API_PREFIX);`,
+        `api.get("/ping", (c) => c.text("pong"));`,
+        `export default api;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+
+    expect(model.app_variables.api?.created_via).toBe("basePath");
+    expect(model.app_variables.api?.base_path).toBe("<dynamic:API_PREFIX>");
+    expect(model.routes.map((route) => `${route.method} ${route.path}`))
+      .toContain("GET <dynamic:API_PREFIX>/ping");
+  });
+
+  it("expands namespaced combine.some middleware calls", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "hono-namespaced-combine-"));
+    const entry = path.join(dir, "index.ts");
+    await writeFile(
+      entry,
+      [
+        `import { Hono } from "hono";`,
+        `import * as combine from "hono/combine";`,
+        `const app = new Hono();`,
+        `const auth = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `const guest = async (_c: unknown, next: () => Promise<void>) => next();`,
+        `app.use("/api/*", combine.some(auth, guest));`,
+        `app.get("/api/status", (c) => c.text("ok"));`,
+        `export default app;`,
+        "",
+      ].join("\n"),
+    );
+
+    const model = await new HonoExtractor().parse(entry);
+    const chain = model.middleware_chains.find(
+      (middlewareChain) => middlewareChain.scope === "/api/*",
+    );
+
+    expect(chain?.entries.filter((entry) => entry.expanded_from === "some")
+      .map((entry) => entry.name)).toEqual(["auth", "guest"]);
   });
 });
 
