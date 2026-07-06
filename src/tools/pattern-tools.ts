@@ -1021,6 +1021,230 @@ function shouldKeepPostFilterMatch(
   }
 }
 
+type CodeIndex = NonNullable<Awaited<ReturnType<typeof getCodeIndex>>>;
+type IndexedSymbol = CodeIndex["symbols"][number];
+type IndexedFileEntry = CodeIndex["files"][number];
+
+interface SearchPatternOptions {
+  file_pattern?: string | undefined;
+  include_tests?: boolean | undefined;
+  max_results?: number | undefined;
+}
+
+interface SearchPatternSettings {
+  includeTests: boolean;
+  maxResults: number;
+  filePattern?: string;
+}
+
+interface PatternExecutionConfig {
+  key: string;
+  regex: RegExp;
+  patternName: string;
+  fileExcludePattern?: RegExp;
+  fileIncludePattern?: RegExp;
+  postFilter?: (match: string) => boolean;
+  preprocess?: "strip-comments-strings";
+}
+
+interface PatternSearchContext {
+  index: CodeIndex;
+  config: PatternExecutionConfig;
+  settings: SearchPatternSettings;
+  matches: PatternMatch[];
+  scanned: number;
+}
+
+interface PatternScanStrategy {
+  name: "symbols" | "files";
+  shouldRun: (context: PatternSearchContext) => boolean;
+  scan: (context: PatternSearchContext) => Promise<void> | void;
+}
+
+type SymbolScanFilter = (sym: IndexedSymbol, context: PatternSearchContext) => boolean;
+type FileScanFilter = (fileEntry: IndexedFileEntry, context: PatternSearchContext) => boolean;
+
+const SYMBOL_SCAN_FILTERS: readonly SymbolScanFilter[] = [
+  (sym) => Boolean(sym.source),
+  (sym, { settings }) => settings.includeTests || !isTestFile(sym.file),
+  (sym, { settings }) => !settings.filePattern || sym.file.includes(settings.filePattern),
+  (sym, { config }) => !config.fileExcludePattern?.test(sym.file),
+  (sym, { config }) => !config.fileIncludePattern || config.fileIncludePattern.test(sym.file),
+];
+
+const FILE_SCAN_FILTERS: readonly FileScanFilter[] = [
+  (fileEntry, { config }) => config.fileIncludePattern?.test(fileEntry.path) === true,
+  (fileEntry, { settings }) => !settings.filePattern || fileEntry.path.includes(settings.filePattern),
+  (fileEntry, { config }) => !config.fileExcludePattern?.test(fileEntry.path),
+  (fileEntry, { matches }) => !matches.some((match) => match.file === fileEntry.path),
+];
+
+function normalizeSearchPatternOptions(options: SearchPatternOptions | undefined): SearchPatternSettings {
+  return {
+    includeTests: options?.include_tests ?? false,
+    maxResults: options?.max_results ?? 50,
+    ...(options?.file_pattern ? { filePattern: options.file_pattern } : {}),
+  };
+}
+
+function resolvePatternConfig(pattern: string): PatternExecutionConfig {
+  const builtin = BUILTIN_PATTERNS[pattern];
+  if (builtin) {
+    return {
+      key: pattern,
+      regex: builtin.regex,
+      patternName: `${pattern}: ${builtin.description}`,
+      ...(builtin.fileExcludePattern ? { fileExcludePattern: builtin.fileExcludePattern } : {}),
+      ...(builtin.fileIncludePattern ? { fileIncludePattern: builtin.fileIncludePattern } : {}),
+      ...(builtin.postFilter ? { postFilter: builtin.postFilter } : {}),
+      ...(builtin.preprocess ? { preprocess: builtin.preprocess } : {}),
+    };
+  }
+
+  try {
+    return {
+      key: pattern,
+      regex: new RegExp(pattern),
+      patternName: pattern,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid regex pattern: ${msg}`);
+  }
+}
+
+function hasMatchCapacity(context: PatternSearchContext): boolean {
+  return context.matches.length < context.settings.maxResults;
+}
+
+function sourceForPatternScan(source: string, preprocess: PatternExecutionConfig["preprocess"]): string {
+  return preprocess === "strip-comments-strings"
+    ? stripCommentsAndStrings(source)
+    : source;
+}
+
+function findAcceptedMatch(config: PatternExecutionConfig, source: string): RegExpExecArray | null {
+  const scanSource = sourceForPatternScan(source, config.preprocess);
+  const match = config.regex.exec(scanSource);
+  if (!match) return null;
+  return shouldKeepPostFilterMatch(config.key, match[0], config.postFilter) ? match : null;
+}
+
+function matchLineNumber(source: string, matchIndex: number): number {
+  return source.slice(0, matchIndex).split("\n").length;
+}
+
+function matchedLineText(source: string, match: RegExpExecArray): string {
+  const lineEnd = source.indexOf("\n", match.index);
+  const originalLine = source.slice(match.index, lineEnd === -1 ? source.length : lineEnd);
+  return originalLine.length > 0 ? originalLine : match[0].split("\n")[0]!;
+}
+
+function shouldScanSymbol(sym: IndexedSymbol, context: PatternSearchContext): boolean {
+  return SYMBOL_SCAN_FILTERS.every((filter) => filter(sym, context));
+}
+
+function toSymbolPatternMatch(sym: IndexedSymbol, config: PatternExecutionConfig): PatternMatch | undefined {
+  if (!sym.source) return undefined;
+
+  const match = findAcceptedMatch(config, sym.source);
+  if (!match) return undefined;
+
+  const linesBefore = matchLineNumber(sym.source, match.index);
+  return {
+    name: sym.name,
+    kind: sym.kind,
+    file: sym.file,
+    start_line: sym.start_line + linesBefore - 1,
+    end_line: sym.end_line,
+    matched_pattern: config.patternName,
+    context: matchedLineText(sym.source, match).trim().slice(0, 200),
+  };
+}
+
+function shouldScanFile(fileEntry: IndexedFileEntry, context: PatternSearchContext): boolean {
+  return FILE_SCAN_FILTERS.every((filter) => filter(fileEntry, context));
+}
+
+async function readIndexedFile(index: CodeIndex, fileEntry: IndexedFileEntry): Promise<string | undefined> {
+  try {
+    return await readFile(join(index.root, fileEntry.path), "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+function toFilePatternMatch(
+  fileEntry: IndexedFileEntry,
+  content: string,
+  config: PatternExecutionConfig,
+): PatternMatch | undefined {
+  const match = findAcceptedMatch(config, content);
+  if (!match) return undefined;
+
+  const linesBefore = matchLineNumber(content, match.index);
+  return {
+    name: fileEntry.path.split("/").pop() ?? fileEntry.path,
+    kind: "function" as SymbolKind, // file-level match has no symbol kind
+    file: fileEntry.path,
+    start_line: linesBefore,
+    end_line: linesBefore,
+    matched_pattern: config.patternName,
+    context: matchedLineText(content, match).trim().slice(0, 200),
+  };
+}
+
+function scanSymbolEntry(context: PatternSearchContext, sym: IndexedSymbol): PatternMatch | undefined {
+  if (!shouldScanSymbol(sym, context)) return undefined;
+
+  context.scanned++;
+  return toSymbolPatternMatch(sym, context.config);
+}
+
+async function scanFileEntry(
+  context: PatternSearchContext,
+  fileEntry: IndexedFileEntry,
+): Promise<PatternMatch | undefined> {
+  if (!shouldScanFile(fileEntry, context)) return undefined;
+
+  const content = await readIndexedFile(context.index, fileEntry);
+  if (content === undefined) return undefined;
+
+  context.scanned++;
+  return toFilePatternMatch(fileEntry, content, context.config);
+}
+
+function scanIndexedSymbols(context: PatternSearchContext): void {
+  for (const sym of context.index.symbols) {
+    if (!hasMatchCapacity(context)) return;
+
+    const match = scanSymbolEntry(context, sym);
+    if (match) context.matches.push(match);
+  }
+}
+
+async function scanIndexedFiles(context: PatternSearchContext): Promise<void> {
+  for (const fileEntry of context.index.files) {
+    if (!hasMatchCapacity(context)) return;
+
+    const match = await scanFileEntry(context, fileEntry);
+    if (match) context.matches.push(match);
+  }
+}
+
+const PATTERN_SCAN_STRATEGIES: readonly PatternScanStrategy[] = [
+  {
+    name: "symbols",
+    shouldRun: () => true,
+    scan: scanIndexedSymbols,
+  },
+  {
+    name: "files",
+    shouldRun: ({ config }) => config.fileIncludePattern !== undefined,
+    scan: scanIndexedFiles,
+  },
+];
+
 /**
  * Search for structural code patterns across indexed symbols.
  * Supports built-in patterns (by name) or custom regex.
@@ -1028,137 +1252,30 @@ function shouldKeepPostFilterMatch(
 export async function searchPatterns(
   repo: string,
   pattern: string,
-  options?: {
-    file_pattern?: string | undefined;
-    include_tests?: boolean | undefined;
-    max_results?: number | undefined;
-  },
+  options?: SearchPatternOptions,
 ): Promise<PatternResult> {
   const index = await getCodeIndex(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
-  const includeTests = options?.include_tests ?? false;
-  const filePattern = options?.file_pattern;
-  const maxResults = options?.max_results ?? 50;
+  const context: PatternSearchContext = {
+    index,
+    config: resolvePatternConfig(pattern),
+    settings: normalizeSearchPatternOptions(options),
+    matches: [],
+    scanned: 0,
+  };
 
-  // Resolve pattern: built-in name or custom regex
-  let regex: RegExp;
-  let patternName: string;
-  let fileExcludePattern: RegExp | undefined;
-  let fileIncludePattern: RegExp | undefined;
-  let postFilter: ((match: string) => boolean) | undefined;
-  let preprocess: "strip-comments-strings" | undefined;
-
-  const builtin = BUILTIN_PATTERNS[pattern];
-  if (builtin) {
-    regex = builtin.regex;
-    patternName = `${pattern}: ${builtin.description}`;
-    fileExcludePattern = builtin.fileExcludePattern;
-    fileIncludePattern = builtin.fileIncludePattern;
-    postFilter = builtin.postFilter;
-    preprocess = builtin.preprocess;
-  } else {
-    try {
-      regex = new RegExp(pattern);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`Invalid regex pattern: ${msg}`);
-    }
-    patternName = pattern;
-  }
-
-  const matches: PatternMatch[] = [];
-  let scanned = 0;
-
-  for (const sym of index.symbols) {
-    if (matches.length >= maxResults) break;
-    if (!sym.source) continue;
-    if (!includeTests && isTestFile(sym.file)) continue;
-    if (filePattern && !sym.file.includes(filePattern)) continue;
-    if (fileExcludePattern && fileExcludePattern.test(sym.file)) continue;
-    if (fileIncludePattern && !fileIncludePattern.test(sym.file)) continue;
-
-    scanned++;
-    // Tier 8 — preprocess source if pattern opts in. Strip preserves positions
-    // so line/column math below remains accurate.
-    const scanSource = preprocess === "strip-comments-strings"
-      ? stripCommentsAndStrings(sym.source)
-      : sym.source;
-    const match = regex.exec(scanSource);
-    if (match) {
-      if (!shouldKeepPostFilterMatch(pattern, match[0], postFilter)) continue;
-      // Extract context: the matching line(s)
-      const matchStart = match.index;
-      const linesBefore = sym.source.slice(0, matchStart).split("\n").length;
-      // Use ORIGINAL source for the displayed context line, not stripped.
-      const origLine = sym.source.slice(matchStart, sym.source.indexOf("\n", matchStart) === -1 ? sym.source.length : sym.source.indexOf("\n", matchStart));
-      const matchedText = origLine.length > 0 ? origLine : match[0].split("\n")[0]!;
-
-      matches.push({
-        name: sym.name,
-        kind: sym.kind,
-        file: sym.file,
-        start_line: sym.start_line + linesBefore - 1,
-        end_line: sym.end_line,
-        matched_pattern: patternName,
-        context: matchedText.trim().slice(0, 200),
-      });
-    }
-  }
-
-  // File-level scanning fallback for patterns targeting non-source files
-  // (e.g. SQL migrations, .env files). Triggered when fileIncludePattern is set.
-  // This iterates index.files and reads them directly — needed because such
-  // files have no parsed symbols.
-  if (fileIncludePattern) {
-    for (const fileEntry of index.files) {
-      if (matches.length >= maxResults) break;
-      if (!fileIncludePattern.test(fileEntry.path)) continue;
-      if (filePattern && !fileEntry.path.includes(filePattern)) continue;
-      if (fileExcludePattern && fileExcludePattern.test(fileEntry.path)) continue;
-
-      // Skip files that already had symbol matches above (avoid duplicates)
-      if (matches.some((m) => m.file === fileEntry.path)) continue;
-
-      let content: string;
-      try {
-        content = await readFile(join(index.root, fileEntry.path), "utf-8");
-      } catch {
-        continue;
-      }
-
-      scanned++;
-      // Tier 8 — preprocess source if pattern opts in.
-      const scanContent = preprocess === "strip-comments-strings"
-        ? stripCommentsAndStrings(content)
-        : content;
-      const match = regex.exec(scanContent);
-      if (match) {
-        if (!shouldKeepPostFilterMatch(pattern, match[0], postFilter)) continue;
-        const linesBefore = content.slice(0, match.index).split("\n").length;
-        // Display original line, not stripped
-        const lineEnd = content.indexOf("\n", match.index);
-        const origLine = content.slice(match.index, lineEnd === -1 ? content.length : lineEnd);
-        const matchedText = origLine.length > 0 ? origLine : match[0].split("\n")[0]!;
-        matches.push({
-          name: fileEntry.path.split("/").pop() ?? fileEntry.path,
-          kind: "function" as SymbolKind, // file-level match has no symbol kind
-          file: fileEntry.path,
-          start_line: linesBefore,
-          end_line: linesBefore,
-          matched_pattern: patternName,
-          context: matchedText.trim().slice(0, 200),
-        });
-      }
-    }
+  for (const strategy of PATTERN_SCAN_STRATEGIES) {
+    if (!hasMatchCapacity(context)) break;
+    if (strategy.shouldRun(context)) await strategy.scan(context);
   }
 
   return {
-    matches,
-    pattern: patternName,
-    scanned_symbols: scanned,
+    matches: context.matches,
+    pattern: context.config.patternName,
+    scanned_symbols: context.scanned,
   };
 }
 

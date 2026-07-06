@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { BUILTIN_PATTERNS, listPatterns, searchPatterns } from "../../src/tools/pattern-tools.js";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -762,6 +762,14 @@ describe("listPatterns", () => {
     expect(wrongRouter).toBeDefined();
     expect(wrongRouter!.fileExcludePattern).toBeDefined();
     expect(wrongRouter!.fileExcludePattern).toContain("pages");
+  });
+
+  it("includes fileIncludePattern when present", () => {
+    const patterns = listPatterns();
+    const migrationIndex = patterns.find((p) => p.name === "migration-create-index-no-concurrently");
+    expect(migrationIndex).toBeDefined();
+    expect(migrationIndex!.fileIncludePattern).toBeDefined();
+    expect(migrationIndex!.fileIncludePattern).toContain("migrations");
   });
 
   it("includes all 7 hono patterns in BUILTIN_PATTERNS", () => {
@@ -1593,6 +1601,111 @@ describe("postFilter runner integration (Tier 5)", () => {
     for (const name of tier5Names) {
       expect(BUILTIN_PATTERNS[name]).toBeDefined();
       expect(BUILTIN_PATTERNS[name]!.severity).toMatch(/^(critical|warning|style)$/);
+    }
+  });
+});
+
+describe("searchPatterns dispatch behavior", () => {
+  it("throws a descriptive error for an invalid custom regex", async () => {
+    const repo = await createIndexedFixture({
+      "src/util.ts": "export function util() { return 1; }",
+    });
+
+    await expect(searchPatterns(repo, "[")).rejects.toThrow("Invalid regex pattern:");
+  });
+
+  it("throws a repository-not-found error when the repo is not indexed", async () => {
+    await expect(searchPatterns("local/missing-pattern-repo", "empty-catch")).rejects.toThrow(
+      'Repository "local/missing-pattern-repo" not found. Index it first with index_folder.',
+    );
+  });
+
+  it("applies file_pattern, include_tests, and max_results before returning matches", async () => {
+    const repo = await createIndexedFixture({
+      "src/feature.ts": `export function feature() {
+  console.log("feature");
+}`,
+      "src/ignored.ts": `export function ignored() {
+  console.log("ignored");
+}`,
+      "src/feature.test.ts": `export function testFeature() {
+  console.log("test");
+}`,
+    });
+
+    const sourceOnly = await searchPatterns(repo, "console-log");
+    expect(sourceOnly.matches.map((match) => match.file).sort()).toEqual([
+      "src/feature.ts",
+      "src/ignored.ts",
+    ]);
+
+    const filtered = await searchPatterns(repo, "console-log", {
+      file_pattern: "feature",
+      include_tests: true,
+    });
+    expect(filtered.matches.map((match) => match.file).sort()).toEqual([
+      "src/feature.test.ts",
+      "src/feature.ts",
+    ]);
+
+    const limited = await searchPatterns(repo, "console-log", {
+      file_pattern: "feature",
+      include_tests: true,
+      max_results: 1,
+    });
+    expect(limited.matches).toHaveLength(1);
+    expect(["src/feature.test.ts", "src/feature.ts"]).toContain(limited.matches[0]!.file);
+  });
+
+  it("keeps a match and logs when a postFilter throws", async () => {
+    const patternName = "__test-throwing-post-filter";
+    BUILTIN_PATTERNS[patternName] = {
+      regex: /dangerousCall\(\)/,
+      description: "Test-only throwing postFilter",
+      postFilter: () => {
+        throw new Error("filter failed");
+      },
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      const repo = await createIndexedFixture({
+        "src/util.ts": `export function util() {
+  dangerousCall();
+}`,
+      });
+
+      const result = await searchPatterns(repo, patternName);
+      expect(result.matches).toHaveLength(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[search_patterns] postFilter for "__test-throwing-post-filter" threw: filter failed — keeping match (fail-open)',
+      );
+    } finally {
+      delete BUILTIN_PATTERNS[patternName];
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("skips indexed file-level entries that disappeared before scanning", async () => {
+    const patternName = "__test-file-level-read-miss";
+    const filePath = "docs/pattern.txt";
+    BUILTIN_PATTERNS[patternName] = {
+      regex: /dangerousCall\(\)/,
+      description: "Test-only file-level read miss",
+      fileIncludePattern: /\.txt$/,
+    };
+
+    const repo = await createIndexedFixture({
+      [filePath]: "dangerousCall();",
+      "src/app.ts": "export const x = 1;",
+    });
+    await rm(join(tmpDir, "test-project", filePath), { force: true });
+
+    try {
+      const result = await searchPatterns(repo, patternName);
+      expect(result.matches).toHaveLength(0);
+    } finally {
+      delete BUILTIN_PATTERNS[patternName];
     }
   });
 });
