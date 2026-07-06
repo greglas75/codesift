@@ -7,6 +7,9 @@
 - Split `analyze_project` profile generation out of `src/tools/project-tools.ts`
   into focused project-profile modules, keeping `project-tools.ts` as the thin
   orchestration layer and removing its static `index-tools` import cycle.
+- Split the built-in pattern registry out of `src/tools/pattern-tools.ts`,
+  keeping `pattern-tools.ts` as the search engine/facade with compatible
+  `BUILTIN_PATTERNS`, `searchPatterns`, and `listPatterns` exports.
 
 ### Fixed
 

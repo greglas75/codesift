@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { BUILTIN_PATTERNS, listPatterns, searchPatterns } from "../../src/tools/pattern-tools.js";
+import { BUILTIN_PATTERNS as REGISTRY_BUILTIN_PATTERNS } from "../../src/tools/pattern-registry.js";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -31,6 +32,13 @@ async function createIndexedFixture(files: Record<string, string>): Promise<stri
   await indexFolder(projDir, { watch: false });
   return "local/test-project";
 }
+
+describe("pattern-tools registry boundary", () => {
+  it("re-exports the registry object and preserves list order", () => {
+    expect(BUILTIN_PATTERNS).toBe(REGISTRY_BUILTIN_PATTERNS);
+    expect(listPatterns().map((pattern) => pattern.name)).toEqual(Object.keys(REGISTRY_BUILTIN_PATTERNS));
+  });
+});
 
 describe("pattern-tools — React anti-patterns", () => {
   describe("hook-in-condition", () => {

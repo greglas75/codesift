@@ -1,0 +1,127 @@
+{
+  "version": 3,
+  "file": "src/tools/pattern-tools.ts",
+  "type": "SPLIT",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "queue_file": null,
+  "queue_entry": null,
+  "scope_fence": [
+    "src/tools/pattern-tools.ts",
+    "src/tools/pattern-registry.ts",
+    "tests/tools/pattern-tools.test.ts",
+    "CHANGELOG.md"
+  ],
+  "plan": {
+    "summary": "Split the built-in pattern registry out of pattern-tools while preserving the public pattern-tools facade and search engine behavior.",
+    "pre_scan": {
+      "hotspot": "src/tools/pattern-tools.ts is the large, churny pattern catalog and search engine module.",
+      "public_contract": "Preserve BUILTIN_PATTERNS, searchPatterns, listPatterns, PatternMatch, and PatternResult from src/tools/pattern-tools.ts.",
+      "dependency_impact": "Existing imports from pattern-tools remain valid; new registry module owns the catalog and definition type."
+    },
+    "extractions": [
+      {
+        "unit": "built-in pattern registry",
+        "destination": "src/tools/pattern-registry.ts",
+        "signature": "BUILTIN_PATTERNS: Record<string, BuiltinPatternDefinition>"
+      },
+      {
+        "unit": "pattern search engine and facade",
+        "destination": "src/tools/pattern-tools.ts",
+        "signature": "searchPatterns(repo, pattern, options), listPatterns(), re-exported BUILTIN_PATTERNS"
+      }
+    ],
+    "test_strategy": "Run baseline and post-change pattern tests, importer/integration tests, lint, and build; add a registry boundary test for exact object re-export and list order."
+  },
+  "test_mode": "RUN_EXISTING_PLUS_TARGETED",
+  "progress": [
+    {
+      "stage": "BASELINE",
+      "status": "passed",
+      "command": "npm test -- tests/tools/pattern-tools.test.ts tests/tools/pattern-tools-python.test.ts tests/tools/react-conventions.test.ts",
+      "result": "3 files passed; 302 tests passed before production edit"
+    },
+    {
+      "stage": "IMPLEMENT",
+      "status": "completed",
+      "command": "mechanical extraction + apply_patch",
+      "result": "Moved BUILTIN_PATTERNS and BuiltinPatternDefinition to src/tools/pattern-registry.ts; pattern-tools imports and re-exports the registry"
+    },
+    {
+      "stage": "VERIFY",
+      "status": "passed",
+      "command": "npm test -- tests/tools/pattern-tools.test.ts tests/tools/pattern-tools-python.test.ts tests/tools/react-conventions.test.ts",
+      "result": "3 files passed; 303 tests passed after adding registry boundary coverage"
+    },
+    {
+      "stage": "VERIFY",
+      "status": "passed",
+      "command": "npm run lint",
+      "result": "tsc --noEmit passed"
+    },
+    {
+      "stage": "VERIFY",
+      "status": "passed",
+      "command": "npm run build",
+      "result": "tsc build and dist asset copy passed"
+    },
+    {
+      "stage": "VERIFY",
+      "status": "passed",
+      "command": "npm test -- tests/integration/tools.test.ts tests/integration/react-tier5-baseline.test.ts tests/tools/php-tools.test.ts tests/tools/python-audit.test.ts tests/tools/review-diff-tools.test.ts",
+      "result": "5 files passed; 207 tests passed; 1 skipped"
+    },
+    {
+      "stage": "VERIFY",
+      "status": "passed",
+      "command": "npm test -- --maxWorkers=2",
+      "result": "319 files passed; 4639 tests passed; 3 skipped"
+    },
+    {
+      "stage": "AUDIT",
+      "status": "deferred",
+      "command": "~/.codex/scripts/blind-audit-codex.sh --protocol ~/.codex/shared/includes/blind-coverage-audit.md --production src/tools/pattern-tools.ts --production src/tools/pattern-registry.ts --test tests/tools/pattern-tools.test.ts --timeout 240",
+      "result": "Strict audit returned FIX for broad pre-existing per-pattern fixture coverage gaps across the 168-entry registry; split-specific boundary coverage is present"
+    },
+    {
+      "stage": "AUDIT",
+      "status": "deferred",
+      "command": "~/.codex/scripts/adversarial-review.sh --single --mode code --files <scope>",
+      "result": "Reported pre-existing searchPatterns engine behavior risks: first-match postFilter, file-level fallback suppression, silent read skips, max_results normalization, and file_pattern substring semantics"
+    },
+    {
+      "stage": "AUDIT",
+      "status": "passed-with-known-false-positives",
+      "command": "mcp__codesift.audit_scan(file_pattern='src/tools/pattern', checks='CQ11,CQ13,CQ14,CQ17')",
+      "result": "CQ11/CQ14/CQ17 passed; CQ13 repeated local-helper false positives that tsc/tests cover"
+    }
+  ],
+  "prove": {
+    "blind_audit": "deferred: broad pre-existing registry fixture debt, not introduced by split",
+    "adversarial": "deferred: pre-existing searchPatterns engine behavior risks, not introduced by split",
+    "findings_disposition": "This task is a structural split. Behavior-changing searchPatterns fixes and full per-pattern fixture matrix are intentionally left for separate tasks."
+  },
+  "cq_after": {
+    "score": "CQ11/CQ14/CQ17 pass, CQ13 false positives",
+    "critical_failures": [],
+    "notes": [
+      "src/tools/pattern-tools.ts reduced from 1297 LOC to 322 LOC.",
+      "src/tools/pattern-registry.ts owns the 979-line static pattern catalog and BuiltinPatternDefinition.",
+      "audit_scan CQ13 reports internal helpers/types as unused despite local usage; TypeScript compilation and full tests passed."
+    ]
+  },
+  "test_audit_after": {
+    "test_file": "tests/tools/pattern-tools.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 2,
+    "units_covered": 2,
+    "uncovered_units": [],
+    "notes": [
+      "Added explicit coverage that pattern-tools re-exports the exact registry object.",
+      "Added listPatterns order/completeness coverage against Object.keys(BUILTIN_PATTERNS)."
+    ]
+  },
+  "commits": []
+}
