@@ -39,20 +39,26 @@ export async function resolvePhpNamespace(
   const namespaceOnly = parts.slice(0, -1).join("\\");
   const shortName = parts[parts.length - 1]!;
 
-  // Find matching PSR-4 prefix (longest match wins)
-  let bestPrefix: string | null = null;
-  let bestRoot: string | null = null;
+  // Find matching PSR-4 prefix (longest match wins). Composer also allows an
+  // empty fallback prefix and multiple roots per prefix.
+  let bestMatch: { prefix: string; roots: string[] } | null = null;
   for (const [prefix, roots] of Object.entries(psr4)) {
     const normalizedPrefix = prefix.replace(/\\$/, "");
-    if (normalized.startsWith(normalizedPrefix + "\\") || normalized === normalizedPrefix) {
-      if (!bestPrefix || normalizedPrefix.length > bestPrefix.length) {
-        bestPrefix = normalizedPrefix;
-        bestRoot = Array.isArray(roots) ? roots[0] ?? null : roots;
+    const matches =
+      normalizedPrefix === "" ||
+      normalized.startsWith(normalizedPrefix + "\\") ||
+      normalized === normalizedPrefix;
+    if (matches) {
+      if (!bestMatch || normalizedPrefix.length > bestMatch.prefix.length) {
+        bestMatch = {
+          prefix: normalizedPrefix,
+          roots: (Array.isArray(roots) ? roots : [roots]).filter(Boolean),
+        };
       }
     }
   }
 
-  if (!bestPrefix || !bestRoot) {
+  if (!bestMatch || bestMatch.roots.length === 0) {
     return {
       class_name: shortName,
       namespace: namespaceOnly,
@@ -64,22 +70,29 @@ export async function resolvePhpNamespace(
   }
 
   // Construct file path: strip prefix, replace \ with /, append .php
-  const remainder = normalized.slice(bestPrefix.length).replace(/^\\/, "");
+  const remainder = bestMatch.prefix === ""
+    ? normalized
+    : normalized.slice(bestMatch.prefix.length).replace(/^\\/, "");
   const relativePath = remainder.replace(/\\/g, "/") + ".php";
-  const root = bestRoot.replace(/\/$/, "");
-  const filePath = root + "/" + relativePath;
+  const candidates = bestMatch.roots.map((psr4Root) => {
+    const root = psr4Root.replace(/\/$/, "");
+    const filePath = root ? `${root}/${relativePath}` : relativePath;
+    return { psr4Root, filePath };
+  });
 
-  // Check if file exists in index (strip leading ./ for comparison)
-  const normalizedFP = filePath.replace(/^\.\//, "");
-  const exists = index.files.some((f) => f.path === normalizedFP || f.path === filePath);
+  const existing = candidates.find(({ filePath }) => {
+    const normalizedFP = filePath.replace(/^\.\//, "");
+    return index.files.some((f) => f.path === normalizedFP || f.path === filePath);
+  });
+  const selected = existing ?? candidates[0]!;
 
   return {
     class_name: shortName,
     namespace: namespaceOnly,
-    file_path: filePath,
-    exists,
-    psr4_root: bestRoot,
-    psr4_prefix: bestPrefix,
+    file_path: selected.filePath,
+    exists: Boolean(existing),
+    psr4_root: selected.psr4Root,
+    psr4_prefix: bestMatch.prefix,
   };
 }
 

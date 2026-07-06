@@ -9,7 +9,7 @@ const FIXTURE_ROOT = resolve(join(__dirname, "..", "fixtures", "php-psr4"));
 describe("collectImportEdges — PHP PSR-4 resolution", () => {
   beforeAll(async () => {
     // Index the fixture so resolvePhpNamespace can find it via getCodeIndex.
-    await indexFolder(FIXTURE_ROOT);
+    await indexFolder(FIXTURE_ROOT, { force: true, watch: false });
   });
 
   it("resolvePhpNamespace finds User.php via composer PSR-4 map", async () => {
@@ -18,6 +18,14 @@ describe("collectImportEdges — PHP PSR-4 resolution", () => {
     const r = await resolvePhpNamespace("local/php-psr4", "App\\Models\\User");
     expect(r.exists).toBe(true);
     expect(r.file_path).toContain("src/Models/User.php");
+    expect(r.psr4_root).toBe("src/");
+  });
+
+  it("resolvePhpNamespace supports Composer empty-prefix fallback roots", async () => {
+    const r = await resolvePhpNamespace("local/php-psr4", "Legacy\\Utility");
+    expect(r.exists).toBe(true);
+    expect(r.file_path).toContain("fallback/Legacy/Utility.php");
+    expect(r.psr4_prefix).toBe("");
   });
 
   it("creates a cross-file edge from PostController to User via `use App\\Models\\User`", async () => {
@@ -37,7 +45,8 @@ describe("collectImportEdges — PHP edge cases", () => {
   it("gracefully handles vendor FQCN not in PSR-4 map (no edge, no crash)", async () => {
     const r = await resolvePhpNamespace("local/php-psr4", "Vendor\\Package\\Missing");
     expect(r.exists).toBe(false);
-    expect(r.psr4_prefix).toBeNull();
+    expect(r.psr4_prefix).toBe("");
+    expect(r.file_path).toContain("fallback/Vendor/Package/Missing.php");
   });
 
   it("does not create self-edges or duplicates for PHP files", async () => {

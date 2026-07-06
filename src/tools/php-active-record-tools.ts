@@ -4,6 +4,7 @@
  * Implementation module extracted from the legacy php-tools facade.
  */
 import { getCodeIndex } from "./index-tools.js";
+import { extractPhpNamespace, extractPhpUseImports, resolvePhpClassReference } from "./php-import-utils.js";
 
 // 7b. analyze_activerecord — Model schema
 // ---------------------------------------------------------------------------
@@ -42,23 +43,71 @@ const AR_ROOT_NAMES = new Set(["ActiveRecord", "Model", "BaseActiveRecord"]);
  *
  * Direct match (root name in our AR_ROOT_NAMES set) wins immediately.
  * Otherwise we look up the parent class symbol by name and recurse. The
- * lookup uses last-segment name matching (e.g. `BaseUser` matches a class
- * symbol whose `name` is exactly `BaseUser`, regardless of namespace) which
- * is good enough for the codebases we care about; cross-package aliased
- * resolution would require parsing per-file `use` tables.
+ * lookup prefers fully qualified namespace matches when the extractor
+ * provides them, then falls back to same-namespace and short-name matching.
  *
  * Cycle protection via a visited set; depth-cap of 5 (no real Yii2 model
  * has a deeper chain).
  */
+type PhpClassSymbol = {
+  name: string;
+  kind: string;
+  extends?: string[];
+  source?: string;
+};
+
+function phpClassFqcn(cls: PhpClassSymbol): string {
+  const name = cls.name.replace(/^\\/, "");
+  if (name.includes("\\")) return name;
+  const namespace = extractPhpNamespace(cls.source);
+  return namespace ? `${namespace}\\${name}` : name;
+}
+
+function resolveParentClass(
+  parentFqcn: string,
+  current: PhpClassSymbol,
+  index: { symbols: PhpClassSymbol[] },
+): PhpClassSymbol | undefined {
+  const currentNamespace = extractPhpNamespace(current.source);
+  const currentImports = extractPhpUseImports(current.source);
+  const rawNormalized = parentFqcn.replace(/^\\/, "");
+  const rawLast = rawNormalized.split(/[\\]+/).pop() ?? rawNormalized;
+
+  if (rawNormalized.includes("\\")) {
+    const exactRaw = index.symbols.find(
+      (s) => s.kind === "class" && phpClassFqcn(s) === rawNormalized,
+    );
+    if (exactRaw) return exactRaw;
+  }
+
+  const normalized = resolvePhpClassReference(parentFqcn, {
+    namespace: currentNamespace,
+    imports: currentImports,
+  });
+  const last = normalized.split(/[\\]+/).pop() ?? normalized;
+
+  if (normalized.includes("\\")) {
+    const exact = index.symbols.find(
+      (s) => s.kind === "class" && phpClassFqcn(s) === normalized,
+    );
+    if (exact) return exact;
+  }
+
+  return index.symbols.find(
+    (s) => s.kind === "class" && (s.name === last || s.name === rawLast),
+  );
+}
+
 function isActiveRecordHierarchy(
-  cls: { name: string; extends?: string[]; source?: string },
-  index: { symbols: Array<{ name: string; kind: string; extends?: string[]; source?: string }> },
+  cls: PhpClassSymbol,
+  index: { symbols: PhpClassSymbol[] },
   visited: Set<string> = new Set(),
   depth = 0,
 ): boolean {
   if (depth > 5) return false;
-  if (visited.has(cls.name)) return false;
-  visited.add(cls.name);
+  const clsKey = phpClassFqcn(cls);
+  if (visited.has(clsKey)) return false;
+  visited.add(clsKey);
 
   const exts = cls.extends ?? [];
 
@@ -68,9 +117,7 @@ function isActiveRecordHierarchy(
     if (AR_ROOT_NAMES.has(last)) return true;
 
     // Look up the base class as an indexed symbol and recurse.
-    const baseSym = index.symbols.find(
-      (s) => s.kind === "class" && s.name === last,
-    );
+    const baseSym = resolveParentClass(baseFqcn, cls, index);
     if (baseSym && isActiveRecordHierarchy(baseSym, index, visited, depth + 1)) {
       return true;
     }

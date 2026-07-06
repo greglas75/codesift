@@ -285,20 +285,17 @@ function resolveViewFile(
 ): { file: string | null; alias: string | null } {
   // Path alias: `@app/views/...` or any alias-prefixed string.
   if (viewName.startsWith("@")) {
-    const aliasMatch = /^(@[\w-]+)(\/.*)?$/.exec(viewName);
+    const aliasMatch = resolveAliasPrefix(viewName, aliases);
     if (aliasMatch) {
-      const alias = aliasMatch[1]!;
-      const remainder = aliasMatch[2] ?? "";
-      const aliasTarget = aliases.get(alias);
-      if (aliasTarget !== undefined) {
-        const candidate = (aliasTarget.replace(/\/$/, "") + remainder).replace(/^\.\//, "");
+      if (aliasMatch.target !== undefined) {
+        const candidate = (aliasMatch.target.replace(/\/$/, "") + aliasMatch.remainder).replace(/^\.\//, "");
         const final = candidate.endsWith(".php") ? candidate : candidate + ".php";
         const exists = index.files.some(
           (f) => f.path === final || f.path.endsWith("/" + final),
         );
-        return { file: exists ? final : null, alias };
+        return { file: exists ? final : null, alias: aliasMatch.alias };
       }
-      return { file: null, alias };
+      return { file: null, alias: aliasMatch.alias };
     }
   }
   // Path-style relative name: `subdir/foo` keeps the explicit subdir.
@@ -321,12 +318,10 @@ function resolveLayoutFile(
 ): string | null {
   // Layouts default to `views/layouts/<name>.php` rather than per-controller.
   if (layoutName.startsWith("@")) {
-    const aliasMatch = /^(@[\w-]+)(\/.*)?$/.exec(layoutName);
+    const aliasMatch = resolveAliasPrefix(layoutName, aliases);
     if (aliasMatch) {
-      const aliasTarget = aliases.get(aliasMatch[1]!);
-      if (!aliasTarget) return null;
-      const remainder = aliasMatch[2] ?? "";
-      const candidate = (aliasTarget.replace(/\/$/, "") + remainder).replace(/^\.\//, "");
+      if (!aliasMatch.target) return null;
+      const candidate = (aliasMatch.target.replace(/\/$/, "") + aliasMatch.remainder).replace(/^\.\//, "");
       const final = candidate.endsWith(".php") ? candidate : candidate + ".php";
       const exists = index.files.some(
         (f) => f.path === final || f.path.endsWith("/" + final),
@@ -344,6 +339,30 @@ function resolveLayoutFile(
   );
   return exists ? candidate : null;
   void controllerClass; // referenced for future per-module path resolution
+}
+
+function resolveAliasPrefix(
+  value: string,
+  aliases: Map<string, string>,
+): { alias: string; target: string | undefined; remainder: string } | null {
+  const configured = [...aliases.keys()]
+    .filter((alias) => value === alias || value.startsWith(alias + "/"))
+    .sort((a, b) => b.length - a.length)[0];
+  if (configured) {
+    return {
+      alias: configured,
+      target: aliases.get(configured),
+      remainder: value.slice(configured.length),
+    };
+  }
+
+  const fallback = /^(@[\w-]+)(\/.*)?$/.exec(value);
+  if (!fallback) return null;
+  return {
+    alias: fallback[1]!,
+    target: undefined,
+    remainder: fallback[2] ?? "",
+  };
 }
 
 function collectWidgetRefs(

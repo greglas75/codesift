@@ -4,6 +4,9 @@
  * mocked getCodeIndex is enough — no filesystem access required.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: vi.fn(),
@@ -38,10 +41,14 @@ function makeSym(opts: {
   };
 }
 
-function mockIndex(symbols: ReturnType<typeof makeSym>[], files: { path: string; language: string }[] = []) {
+function mockIndex(
+  symbols: ReturnType<typeof makeSym>[],
+  files: { path: string; language: string }[] = [],
+  root = "/tmp/test",
+) {
   vi.mocked(getCodeIndex).mockResolvedValue({
     repo: "test",
-    root: "/tmp/test",
+    root,
     symbols,
     files: files.map((f) => ({ ...f, symbol_count: 0, last_modified: 0 })),
     created_at: 0,
@@ -462,6 +469,375 @@ describe("tracePhpEvent — Sprint 3 class const resolution", () => {
     expect(chain).toBeDefined();
     expect(chain!.triggers.length).toBe(1);
   });
+
+  it("resolves namespaced Class::CONST references in triggers and listeners", async () => {
+    const userClass = makeSym({
+      id: "uc-ns",
+      name: "User",
+      kind: "class",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 50,
+      source: `namespace App\\Models;
+class User extends ActiveRecord { const EVENT_AFTER_LOGIN = 'afterLogin'; }`,
+    });
+    const constSym = makeSym({
+      id: "uc-ns-const",
+      name: "EVENT_AFTER_LOGIN",
+      kind: "constant",
+      file: "models/User.php",
+      start_line: 2,
+      end_line: 2,
+      source: `const EVENT_AFTER_LOGIN = 'afterLogin'`,
+      parent: "uc-ns",
+    });
+    const emitter = makeSym({
+      id: "em-ns",
+      name: "login",
+      kind: "method",
+      file: "models/User.php",
+      start_line: 10,
+      end_line: 15,
+      source: `public function login() {
+        $this->trigger(App\\Models\\User::EVENT_AFTER_LOGIN);
+      }`,
+    });
+    const listener = makeSym({
+      id: "li-ns",
+      name: "bootstrap",
+      kind: "method",
+      file: "components/Bootstrap.php",
+      start_line: 5,
+      end_line: 12,
+      source: `public function bootstrap() {
+        Event::on(\\App\\Models\\User::class, \\App\\Models\\User::EVENT_AFTER_LOGIN, [$this, 'handle']);
+      }`,
+    });
+    mockIndex([userClass, constSym, emitter, listener]);
+
+    const r = await tracePhpEvent("test");
+    const chain = r.events.find((e) => e.event_name === "afterLogin");
+    expect(chain).toBeDefined();
+    expect(chain!.triggers).toHaveLength(1);
+    expect(chain!.listeners).toHaveLength(1);
+  });
+
+  it("resolves imported event constant aliases without using ambiguous short-class fallbacks", async () => {
+    const appUser = makeSym({
+      id: "app-user",
+      name: "User",
+      kind: "class",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 50,
+      source: `<?php namespace App\\Models;
+class User { const EVENT_AFTER_LOGIN = 'afterLogin'; }`,
+    });
+    const appConst = makeSym({
+      id: "app-user-const",
+      name: "EVENT_AFTER_LOGIN",
+      kind: "constant",
+      file: "models/User.php",
+      start_line: 2,
+      end_line: 2,
+      source: `const EVENT_AFTER_LOGIN = 'afterLogin'`,
+      parent: "app-user",
+    });
+    const adminUser = makeSym({
+      id: "admin-user",
+      name: "User",
+      kind: "class",
+      file: "admin/User.php",
+      start_line: 1,
+      end_line: 50,
+      source: `<?php namespace Admin\\Models;
+class User { const EVENT_AFTER_LOGIN = 'adminLogin'; }`,
+    });
+    const adminConst = makeSym({
+      id: "admin-user-const",
+      name: "EVENT_AFTER_LOGIN",
+      kind: "constant",
+      file: "admin/User.php",
+      start_line: 2,
+      end_line: 2,
+      source: `const EVENT_AFTER_LOGIN = 'adminLogin'`,
+      parent: "admin-user",
+    });
+    const bootstrapClass = makeSym({
+      id: "boot-class",
+      name: "Bootstrap",
+      kind: "class",
+      file: "components/Bootstrap.php",
+      start_line: 1,
+      end_line: 20,
+      source: `<?php
+namespace App\\Components;
+use App\\Models\\{User as LoginUser};
+class Bootstrap {}`,
+    });
+    const listener = makeSym({
+      id: "boot-method",
+      name: "bootstrap",
+      kind: "method",
+      file: "components/Bootstrap.php",
+      start_line: 5,
+      end_line: 12,
+      source: `public function bootstrap() {
+        $this->trigger(LoginUser::EVENT_AFTER_LOGIN);
+        $this->trigger(User::EVENT_AFTER_LOGIN);
+      }`,
+      parent: "boot-class",
+    });
+    mockIndex([appUser, appConst, adminUser, adminConst, bootstrapClass, listener]);
+
+    const r = await tracePhpEvent("test");
+    expect(r.events.find((e) => e.event_name === "afterLogin")?.triggers).toHaveLength(1);
+    expect(r.events.find((e) => e.event_name === "adminLogin")).toBeUndefined();
+    expect(r.events.find((e) => e.event_name === "User::EVENT_AFTER_LOGIN")?.triggers).toHaveLength(1);
+  });
+
+  it("reads file headers for imports when method symbols contain only method bodies", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codesift-php-events-"));
+    try {
+      await mkdir(join(root, "components"), { recursive: true });
+      await writeFile(
+        join(root, "components", "Bootstrap.php"),
+        `<?php
+namespace App\\Components;
+use App\\Models\\User as LoginUser;
+class Bootstrap {
+    public function bootstrap() {
+        $this->trigger(LoginUser::EVENT_AFTER_LOGIN);
+    }
+}`,
+      );
+
+      const appUser = makeSym({
+        id: "file-app-user",
+        name: "User",
+        kind: "class",
+        file: "models/User.php",
+        start_line: 1,
+        end_line: 50,
+        source: `<?php namespace App\\Models;
+class User { const EVENT_AFTER_LOGIN = 'afterLogin'; }`,
+      });
+      const appConst = makeSym({
+        id: "file-app-user-const",
+        name: "EVENT_AFTER_LOGIN",
+        kind: "constant",
+        file: "models/User.php",
+        start_line: 2,
+        end_line: 2,
+        source: `const EVENT_AFTER_LOGIN = 'afterLogin'`,
+        parent: "file-app-user",
+      });
+      const listener = makeSym({
+        id: "file-boot-method",
+        name: "bootstrap",
+        kind: "method",
+        file: "components/Bootstrap.php",
+        start_line: 5,
+        end_line: 8,
+        source: `public function bootstrap() {
+        $this->trigger(LoginUser::EVENT_AFTER_LOGIN);
+      }`,
+      });
+      mockIndex(
+        [appUser, appConst, listener],
+        [{ path: "components/Bootstrap.php", language: "php" }],
+        root,
+      );
+
+      const r = await tracePhpEvent("test");
+      expect(r.events.find((e) => e.event_name === "afterLogin")?.triggers).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a real global class constant when a namespaced short-name collision exists", async () => {
+    const globalUser = makeSym({
+      id: "global-user",
+      name: "User",
+      kind: "class",
+      file: "User.php",
+      start_line: 1,
+      end_line: 20,
+      source: `<?php class User { const EVENT_SAVE = 'globalSave'; }`,
+    });
+    const globalConst = makeSym({
+      id: "global-user-const",
+      name: "EVENT_SAVE",
+      kind: "constant",
+      file: "User.php",
+      start_line: 1,
+      end_line: 1,
+      source: `const EVENT_SAVE = 'globalSave'`,
+      parent: "global-user",
+    });
+    const appUser = makeSym({
+      id: "app-user-save",
+      name: "User",
+      kind: "class",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 20,
+      source: `<?php namespace App\\Models; class User { const EVENT_SAVE = 'appSave'; }`,
+    });
+    const appConst = makeSym({
+      id: "app-user-save-const",
+      name: "EVENT_SAVE",
+      kind: "constant",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 1,
+      source: `const EVENT_SAVE = 'appSave'`,
+      parent: "app-user-save",
+    });
+    const emitter = makeSym({
+      id: "global-emitter",
+      name: "emit",
+      kind: "method",
+      file: "Emitter.php",
+      start_line: 1,
+      end_line: 5,
+      source: `public function emit() { $this->trigger(User::EVENT_SAVE); }`,
+    });
+    mockIndex([globalUser, globalConst, appUser, appConst, emitter]);
+
+    const r = await tracePhpEvent("test");
+    expect(r.events.find((e) => e.event_name === "globalSave")?.triggers).toHaveLength(1);
+    expect(r.events.find((e) => e.event_name === "appSave")).toBeUndefined();
+  });
+
+  it("reports degraded import context when indexed PHP files cannot be read", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codesift-php-events-missing-"));
+    try {
+      const emitter = makeSym({
+        id: "missing-file-emitter",
+        name: "emit",
+        kind: "method",
+        file: "missing/Emitter.php",
+        start_line: 1,
+        end_line: 5,
+        source: `public function emit() { $this->trigger('eventName'); }`,
+      });
+      mockIndex([emitter], [{ path: "missing/Emitter.php", language: "php" }], root);
+
+      const r = await tracePhpEvent("test");
+      expect(r.events.find((e) => e.event_name === "eventName")?.triggers).toHaveLength(1);
+      expect(r.warnings).toContain("Unable to read PHP file for import context: missing/Emitter.php");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects mixed-case PHP constant names in event references", async () => {
+    const userClass = makeSym({
+      id: "mixed-user",
+      name: "User",
+      kind: "class",
+      file: "User.php",
+      start_line: 1,
+      end_line: 20,
+      source: `<?php class User { const eventAfterLogin = 'afterLogin'; }`,
+    });
+    const constSym = makeSym({
+      id: "mixed-user-const",
+      name: "eventAfterLogin",
+      kind: "constant",
+      file: "User.php",
+      start_line: 1,
+      end_line: 1,
+      source: `const eventAfterLogin = 'afterLogin'`,
+      parent: "mixed-user",
+    });
+    const emitter = makeSym({
+      id: "mixed-emitter",
+      name: "emit",
+      kind: "method",
+      file: "Emitter.php",
+      start_line: 1,
+      end_line: 5,
+      source: `public function emit() { $this->trigger(User::eventAfterLogin); }`,
+    });
+    mockIndex([userClass, constSym, emitter]);
+
+    const r = await tracePhpEvent("test");
+    expect(r.events.find((e) => e.event_name === "afterLogin")?.triggers).toHaveLength(1);
+  });
+
+  it("resolves relative qualified event class names and namespace aliases", async () => {
+    const localEventClass = makeSym({
+      id: "local-event-user",
+      name: "User",
+      kind: "class",
+      file: "controllers/Events/User.php",
+      start_line: 1,
+      end_line: 20,
+      source: `<?php namespace App\\Controllers\\Events; class User { const EVENT_LOGIN = 'localLogin'; }`,
+    });
+    const localConst = makeSym({
+      id: "local-event-user-const",
+      name: "EVENT_LOGIN",
+      kind: "constant",
+      file: "controllers/Events/User.php",
+      start_line: 1,
+      end_line: 1,
+      source: `const EVENT_LOGIN = 'localLogin'`,
+      parent: "local-event-user",
+    });
+    const modelUser = makeSym({
+      id: "model-user-alias",
+      name: "User",
+      kind: "class",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 20,
+      source: `<?php namespace App\\Models; class User { const EVENT_LOGIN = 'modelLogin'; }`,
+    });
+    const modelConst = makeSym({
+      id: "model-user-alias-const",
+      name: "EVENT_LOGIN",
+      kind: "constant",
+      file: "models/User.php",
+      start_line: 1,
+      end_line: 1,
+      source: `const EVENT_LOGIN = 'modelLogin'`,
+      parent: "model-user-alias",
+    });
+    const controllerClass = makeSym({
+      id: "auth-controller",
+      name: "AuthController",
+      kind: "class",
+      file: "controllers/AuthController.php",
+      start_line: 1,
+      end_line: 30,
+      source: `<?php
+namespace App\\Controllers;
+use App\\Models as M;
+class AuthController {}`,
+    });
+    const action = makeSym({
+      id: "auth-action",
+      name: "actionLogin",
+      kind: "method",
+      file: "controllers/AuthController.php",
+      start_line: 5,
+      end_line: 10,
+      source: `public function actionLogin() {
+        $this->trigger(Events\\User::EVENT_LOGIN);
+        $this->trigger(M\\User::EVENT_LOGIN);
+      }`,
+      parent: "auth-controller",
+    });
+    mockIndex([localEventClass, localConst, modelUser, modelConst, controllerClass, action]);
+
+    const r = await tracePhpEvent("test");
+    expect(r.events.find((e) => e.event_name === "localLogin")?.triggers).toHaveLength(1);
+    expect(r.events.find((e) => e.event_name === "modelLogin")?.triggers).toHaveLength(1);
+  });
 });
 
 describe("findPhpViews — Sprint 8 extensions (kind, layout, widgets, asset bundles, aliases)", () => {
@@ -532,6 +908,52 @@ describe("findPhpViews — Sprint 8 extensions (kind, layout, widgets, asset bun
     const r = await findPhpViews("test");
     expect(r.mappings).toHaveLength(1);
     expect(r.mappings[0]!.path_alias).toBe("@app");
+  });
+
+  it("resolves the longest configured Yii path alias prefix", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codesift-php-views-"));
+    try {
+      await mkdir(join(root, "config"), { recursive: true });
+      await writeFile(
+        join(root, "config", "web.php"),
+        `<?php return ['aliases' => ['@frontend/views' => 'frontend/views']];`,
+      );
+
+      const ctrl = makeSym({
+        id: "ctrl-al-long",
+        name: "AliasController",
+        kind: "class",
+        file: "controllers/AliasController.php",
+        start_line: 1,
+        end_line: 30,
+        source: `class AliasController extends Controller { }`,
+      });
+      const action = makeSym({
+        id: "act-al-long",
+        name: "actionShared",
+        kind: "method",
+        file: "controllers/AliasController.php",
+        start_line: 5,
+        end_line: 8,
+        source: `public function actionShared() { return $this->render('@frontend/views/site/index'); }`,
+        parent: "ctrl-al-long",
+      });
+      mockIndex(
+        [ctrl, action],
+        [
+          { path: "config/web.php", language: "php" },
+          { path: "frontend/views/site/index.php", language: "php" },
+        ],
+        root,
+      );
+
+      const r = await findPhpViews("test");
+      expect(r.mappings).toHaveLength(1);
+      expect(r.mappings[0]!.path_alias).toBe("@frontend/views");
+      expect(r.mappings[0]!.view_file).toBe("frontend/views/site/index.php");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("captures controller-wide $layout property and per-action override", async () => {

@@ -183,6 +183,155 @@ class User extends BaseUser {
     expect(r.models[0]!.relations[0]!.name).toBe("profile");
   });
 
+  it("prefers fully-qualified parent resolution over global short-name matches", async () => {
+    const nonArBase = makeClass(
+      "BaseUser",
+      "common/models/BaseUser.php",
+      `<?php
+namespace common\\models;
+class BaseUser extends DTO {}`,
+    );
+    (nonArBase as { extends?: string[] }).extends = ["DTO"];
+
+    const arBase = makeClass(
+      "BaseUser",
+      "backend/models/BaseUser.php",
+      `<?php
+namespace backend\\models;
+class BaseUser extends ActiveRecord {}`,
+    );
+    (arBase as { extends?: string[] }).extends = ["ActiveRecord"];
+
+    const user = makeClass(
+      "User",
+      "backend/models/User.php",
+      `<?php
+namespace backend\\models;
+class User extends BaseUser {
+    public function getProfile() {
+        return $this->hasOne(Profile::class, ['user_id' => 'id']);
+    }
+}`,
+    );
+    (user as { extends?: string[] }).extends = ["backend\\models\\BaseUser"];
+
+    const getter = makeGetterMethod(
+      "getProfile",
+      user.id,
+      "backend/models/User.php",
+      `public function getProfile() { return $this->hasOne(Profile::class, ['user_id' => 'id']); }`,
+    );
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp",
+      symbols: [nonArBase, arBase, user, getter],
+      files: [
+        { path: "common/models/BaseUser.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "backend/models/BaseUser.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "backend/models/User.php", language: "php", symbol_count: 2, last_modified: 0 },
+      ],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 4,
+      file_count: 3,
+    });
+
+    const r = await analyzeActiveRecord("test", { model_name: "User" });
+    expect(r.models).toHaveLength(1);
+    expect(r.models[0]!.file).toBe("backend/models/User.php");
+    expect(r.models[0]!.relations[0]!.target_class).toBe("Profile");
+  });
+
+  it("uses PHP imports before same-namespace fallback for unqualified parents", async () => {
+    const localBase = makeClass(
+      "BaseUser",
+      "backend/models/BaseUser.php",
+      `<?php
+namespace backend\\models;
+class BaseUser extends DTO {}`,
+    );
+    (localBase as { extends?: string[] }).extends = ["DTO"];
+
+    const importedBase = makeClass(
+      "BaseUser",
+      "common/models/BaseUser.php",
+      `<?php namespace common\\models; class BaseUser extends ActiveRecord {}`,
+    );
+    (importedBase as { extends?: string[] }).extends = ["ActiveRecord"];
+
+    const user = makeClass(
+      "User",
+      "backend/models/User.php",
+      `<?php
+namespace backend\\models;
+use common\\models\\{BaseUser, Profile};
+class User extends BaseUser {}`,
+    );
+    (user as { extends?: string[] }).extends = ["BaseUser"];
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp",
+      symbols: [localBase, importedBase, user],
+      files: [
+        { path: "backend/models/BaseUser.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "common/models/BaseUser.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "backend/models/User.php", language: "php", symbol_count: 1, last_modified: 0 },
+      ],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 3,
+      file_count: 3,
+    });
+
+    const r = await analyzeActiveRecord("test", { model_name: "User" });
+    expect(r.models).toHaveLength(1);
+    expect(r.models[0]!.file).toBe("backend/models/User.php");
+  });
+
+  it("resolves relative qualified parent names against the current namespace", async () => {
+    const otherBase = makeClass(
+      "BaseUser",
+      "common/BaseUser.php",
+      `<?php namespace Common; class BaseUser extends DTO {}`,
+    );
+    (otherBase as { extends?: string[] }).extends = ["DTO"];
+
+    const localBase = makeClass(
+      "BaseUser",
+      "backend/Models/BaseUser.php",
+      `<?php namespace Backend\\Models; class BaseUser extends ActiveRecord {}`,
+    );
+    (localBase as { extends?: string[] }).extends = ["ActiveRecord"];
+
+    const user = makeClass(
+      "User",
+      "backend/User.php",
+      `<?php namespace Backend; class User extends Models\\BaseUser {}`,
+    );
+    (user as { extends?: string[] }).extends = ["Models\\BaseUser"];
+
+    vi.mocked(getCodeIndex).mockResolvedValue({
+      repo: "test",
+      root: "/tmp",
+      symbols: [otherBase, localBase, user],
+      files: [
+        { path: "common/BaseUser.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "backend/Models/BaseUser.php", language: "php", symbol_count: 1, last_modified: 0 },
+        { path: "backend/User.php", language: "php", symbol_count: 1, last_modified: 0 },
+      ],
+      created_at: 0,
+      updated_at: 0,
+      symbol_count: 3,
+      file_count: 3,
+    });
+
+    const r = await analyzeActiveRecord("test", { model_name: "User" });
+    expect(r.models).toHaveLength(1);
+    expect(r.models[0]!.file).toBe("backend/User.php");
+  });
+
   it("falls back to legacy regex when extends metadata is absent", async () => {
     // Backward-compat: indexes built before the v2.0.0 extractor bump have no
     // `extends` field on class symbols. analyzeActiveRecord should still work
