@@ -5,7 +5,17 @@ import { tmpdir } from "node:os";
 
 // Static import — handlePrecheckRead reads env vars at call time, not module load time,
 // so module caching in singleFork mode is not a problem.
-import { handlePrecheckRead, handlePrecheckBash, handlePostindexFile } from "../../src/cli/hooks.js";
+import {
+  handlePrecheckRead,
+  handlePrecheckBash,
+  handlePrecheckGlob,
+  handlePrecheckGrep,
+  handlePostindexFile,
+  handlePrecompactSnapshot,
+  handleSessionGate,
+  handleSentinelWriter,
+  handlePrecheckAgent,
+} from "../../src/cli/hooks.js";
 
 // ---------------------------------------------------------------------------
 // Mock indexFile so handlePostindexFile doesn't hit real storage
@@ -52,8 +62,9 @@ describe("handlePrecheckRead", () => {
       exitCode = code ?? 0;
       return undefined as never;
     });
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown, cb?: unknown) => {
       stdoutOutput += String(chunk);
+      if (typeof cb === "function") cb();
       return true;
     });
   });
@@ -496,8 +507,9 @@ describe("handlePrecheckBash", () => {
       exitCode = code ?? 0;
       return undefined as never;
     });
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown, cb?: unknown) => {
       stdoutOutput += String(chunk);
+      if (typeof cb === "function") cb();
       return true;
     });
   });
@@ -859,6 +871,283 @@ describe("handlePostindexFile", () => {
 
       expect(mockIndexFile).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe("additional hook handlers", () => {
+  let exitCode: number | undefined;
+  let stdoutOutput: string;
+  let dataDir: string;
+
+  beforeEach(() => {
+    exitCode = undefined;
+    stdoutOutput = "";
+    dataDir = mkdtempSync(join(tmpdir(), "codesift-extra-hooks-"));
+    process.env["CODESIFT_DATA_DIR"] = dataDir;
+    vi.spyOn(process, "exit").mockImplementation((code?: number) => {
+      exitCode = code ?? 0;
+      return undefined as never;
+    });
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown, cb?: unknown) => {
+      stdoutOutput += String(chunk);
+      if (typeof cb === "function") cb();
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env["HOOK_TOOL_INPUT"];
+    delete process.env["CODESIFT_DATA_DIR"];
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  function registerIndexedRepo(root = process.cwd()): void {
+    const indexPath = join(dataDir, "current.index.json");
+    writeFileSync(indexPath, "{}");
+    writeFileSync(
+      join(dataDir, "registry.json"),
+      JSON.stringify({
+        updated_at: Date.now(),
+        repos: {
+          "local/current": {
+            name: "local/current",
+            root,
+            index_path: indexPath,
+            symbol_count: 1,
+            file_count: 1,
+            updated_at: Date.now(),
+          },
+        },
+      }),
+    );
+  }
+
+  it("denies Glob with a CodeSift file-search redirect", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Glob",
+      tool_input: { pattern: "**/*.ts" },
+    });
+
+    await handlePrecheckGlob();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+    expect(stdoutOutput).toContain("get_file_tree");
+  });
+
+  it("denies Grep with a CodeSift text-search redirect", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Grep",
+      tool_input: { pattern: "handleRequest" },
+    });
+
+    await handlePrecheckGrep();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+    expect(stdoutOutput).toContain("search_text");
+  });
+
+  it("prints a PreCompact snapshot from the session sidecar", async () => {
+    const sessionId = "abc-123";
+    writeFileSync(
+      join(dataDir, `session-${sessionId}.json`),
+      JSON.stringify({
+        sessionId,
+        startedAt: Date.parse("2026-07-07T00:00:00.000Z"),
+        callCount: 3,
+        exploredSymbols: {
+          symbolA: {
+            symbolId: "symbolA",
+            name: "handlePrecheckRead",
+            file: "src/cli/hooks.ts",
+            firstSeen: 1,
+            lastSeen: 2,
+            accessCount: 1,
+          },
+        },
+        exploredFiles: {
+          "src/cli/hooks.ts": {
+            path: "src/cli/hooks.ts",
+            firstSeen: 1,
+            lastSeen: 2,
+            accessCount: 2,
+          },
+        },
+        queries: [
+          { tool: "search_text", query: "hooks", repo: "local/current", ts: 1, resultCount: 2 },
+        ],
+        negativeEvidence: [],
+        h10Emitted: false,
+      }),
+    );
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({ session_id: sessionId });
+
+    await handlePrecompactSnapshot();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain("session:abc-123");
+    expect(stdoutOutput).toContain("calls:3");
+    expect(stdoutOutput).toContain("hooks.ts");
+  });
+
+  it("precompact exits quietly when the session id is missing or invalid", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({});
+    await handlePrecompactSnapshot();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+
+    exitCode = undefined;
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({ session_id: "../bad" });
+    await handlePrecompactSnapshot();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("precompact exits quietly when the sidecar is missing or malformed", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({ session_id: "abc-456" });
+    await handlePrecompactSnapshot();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+
+    writeFileSync(join(dataDir, "session-abc-456.json"), "{ not-json");
+    exitCode = undefined;
+    await handlePrecompactSnapshot();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("session gate denies ordinary tools until sentinel writer marks the session ready", async () => {
+    const sessionId = `gate-${process.pid}-${Date.now()}`;
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      session_id: sessionId,
+      tool_name: "ShellTool",
+      tool_input: { command: "npm test" },
+    });
+
+    await handleSessionGate();
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+
+    stdoutOutput = "";
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({ session_id: sessionId });
+    await handleSentinelWriter();
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      session_id: sessionId,
+      tool_name: "ShellTool",
+      tool_input: { command: "npm test" },
+    });
+    await handleSessionGate();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("session gate allows CodeSift, infrastructure, and non-CodeSift MCP tools before sentinel", async () => {
+    for (const toolName of ["mcp__codesift__plan_turn", "Agent", "mcp__playwright__browser_navigate"]) {
+      exitCode = undefined;
+      stdoutOutput = "";
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        session_id: `allow-${toolName}`,
+        tool_name: toolName,
+      });
+
+      await handleSessionGate();
+
+      expect(exitCode).toBe(0);
+      expect(stdoutOutput).toBe("");
+    }
+  });
+
+  it("session gate exits quietly when hook input has no tool name", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({ session_id: "missing-tool" });
+
+    await handleSessionGate();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("agent gate denies indexed-repo Explore prompts that search code without CodeSift", async () => {
+    registerIndexedRepo();
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Agent",
+      tool_input: {
+        subagent_type: "Explore",
+        prompt: "Search the codebase and find where the hook handler function is implemented.",
+      },
+    });
+
+    await handlePrecheckAgent();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+    expect(stdoutOutput).toContain("search_text");
+  });
+
+  it("agent gate allows prompts that mention CodeSift tools", async () => {
+    registerIndexedRepo();
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Agent",
+      tool_input: {
+        subagent_type: "Explore",
+        prompt: "Search the codebase with search_text and report the matching symbols.",
+      },
+    });
+
+    await handlePrecheckAgent();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("agent gate allows non-code-search prompts and non-explore agents", async () => {
+    registerIndexedRepo();
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Agent",
+      tool_input: {
+        subagent_type: "general-purpose",
+        prompt: "Summarize this short note.",
+      },
+    });
+
+    await handlePrecheckAgent();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+
+    exitCode = undefined;
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Agent",
+      tool_input: {
+        subagent_type: "worker",
+        prompt: "Search the codebase and find where the hook handler function is implemented.",
+      },
+    });
+
+    await handlePrecheckAgent();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("agent gate exits quietly for malformed input and unindexed repos", async () => {
+    process.env["HOOK_TOOL_INPUT"] = "not-json";
+    await handlePrecheckAgent();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+
+    exitCode = undefined;
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Agent",
+      tool_input: {
+        subagent_type: "Explore",
+        prompt: "Search the codebase and find where the hook handler function is implemented.",
+      },
+    });
+
+    await handlePrecheckAgent();
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
   });
 });
 
