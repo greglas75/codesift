@@ -82,11 +82,15 @@ export async function resolvePhpService(
     // The key pattern accepts both bare names ("db") and FQCNs
     // ("app\\interfaces\\LoggerInterface") because container.singletons /
     // container.definitions almost always use FQCNs as keys.
-    const componentRe = /['"]([\w\\-]+)['"]\s*=>\s*\[\s*['"]class['"]\s*=>\s*['"]([\w\\]+)['"]/g;
+    const componentRe = /['"]([\w\\-]+)['"]\s*=>\s*\[/g;
     let match: RegExpExecArray | null;
     while ((match = componentRe.exec(source)) !== null) {
       const name = match[1]!;
-      const cls = match[2]!;
+      const openBracket = match.index + match[0].lastIndexOf("[");
+      const closeBracket = findMatchingPhpArrayBracket(source, openBracket);
+      if (closeBracket === -1) continue;
+      const cls = extractTopLevelClassValue(source.slice(openBracket + 1, closeBracket));
+      if (!cls) continue;
 
       if (options?.service_name && name !== options.service_name) continue;
 
@@ -159,6 +163,90 @@ export async function resolvePhpService(
   }
 
   return { services, total: services.length };
+}
+
+function findMatchingPhpArrayBracket(source: string, openBracket: number): number {
+  let depth = 0;
+  let i = openBracket;
+  while (i < source.length) {
+    const c = source[i]!;
+    if (c === "/" && source[i + 1] === "/") {
+      const nl = source.indexOf("\n", i);
+      i = nl === -1 ? source.length : nl + 1;
+      continue;
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (c === "#") {
+      const nl = source.indexOf("\n", i);
+      i = nl === -1 ? source.length : nl + 1;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      i = skipPhpString(source, i);
+      continue;
+    }
+    if (c === "[") depth++;
+    else if (c === "]") {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+function extractTopLevelClassValue(block: string): string | null {
+  let depth = 0;
+  let i = 0;
+  while (i < block.length) {
+    if (depth === 0) {
+      const match = /^\s*['"]class['"]\s*=>\s*(?:['"](\\?[\w\\]+)['"]|(\\?[\w\\]+)\s*::\s*class)/.exec(block.slice(i));
+      if (match) return match[1] ?? match[2]!;
+    }
+
+    const c = block[i]!;
+    if (c === "/" && block[i + 1] === "/") {
+      const nl = block.indexOf("\n", i);
+      i = nl === -1 ? block.length : nl + 1;
+      continue;
+    }
+    if (c === "/" && block[i + 1] === "*") {
+      const end = block.indexOf("*/", i + 2);
+      i = end === -1 ? block.length : end + 2;
+      continue;
+    }
+    if (c === "#") {
+      const nl = block.indexOf("\n", i);
+      i = nl === -1 ? block.length : nl + 1;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      i = skipPhpString(block, i);
+      continue;
+    }
+    if (c === "[") depth++;
+    else if (c === "]") depth--;
+    i++;
+  }
+  return null;
+}
+
+function skipPhpString(source: string, quoteIndex: number): number {
+  const quote = source[quoteIndex]!;
+  let i = quoteIndex + 1;
+  while (i < source.length) {
+    if (source[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (source[i] === quote) return i + 1;
+    i++;
+  }
+  return source.length;
 }
 
 /**

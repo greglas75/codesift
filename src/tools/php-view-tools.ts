@@ -3,13 +3,17 @@
  *
  * Implementation module extracted from the legacy php-tools facade.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { getCodeIndex } from "./index-tools.js";
 
 // 7d. find_php_views — render() → view file mapping
 // ---------------------------------------------------------------------------
+
+const MAX_RAW_VIEW_FILES = 5000;
+const MAX_RAW_VIEW_CANDIDATES = 20000;
+const MAX_RAW_VIEW_FILE_BYTES = 512 * 1024;
 
 export type PhpRenderKind = "full" | "partial" | "ajax" | "json" | "file";
 
@@ -109,6 +113,9 @@ export async function findPhpViews(
   // Resolve path aliases up-front. The map is consulted for every
   // render() / layout assignment / view file path that begins with `@`.
   const aliasMap = await resolvePathAliases(index);
+  const rawViewSources = includeWidgets || includeBundles
+    ? await readRawPhpViewSources(index)
+    : [];
 
   // Find action methods in controllers
   const controllers = index.symbols.filter(
@@ -129,7 +136,7 @@ export async function findPhpViews(
           controller: ctrl.name,
           action: null,
           layout: layoutName,
-          layout_file: resolveLayoutFile(layoutName, ctrl.name, aliasMap, index),
+          layout_file: resolveLayoutFile(layoutName, ctrl.name, ctrl.file, aliasMap, index),
           set_at_line: ctrl.start_line + (ctrl.source.slice(0, propMatch.index).match(/\n/g)?.length ?? 0),
         });
       }
@@ -157,6 +164,7 @@ export async function findPhpViews(
         const { file: viewFile, alias } = resolveViewFile(
           viewName,
           ctrl.name,
+          ctrl.file,
           aliasMap,
           index,
         );
@@ -185,7 +193,7 @@ export async function findPhpViews(
           controller: ctrl.name,
           action: action.name,
           layout: layoutName,
-          layout_file: resolveLayoutFile(layoutName, ctrl.name, aliasMap, index),
+          layout_file: resolveLayoutFile(layoutName, ctrl.name, ctrl.file, aliasMap, index),
           set_at_line: line,
         });
       }
@@ -195,12 +203,12 @@ export async function findPhpViews(
   // Widget references — scan ALL PHP symbols + all .php files at module
   // level (views are file-scope code, not symbols).
   if (includeWidgets) {
-    collectWidgetRefs(index, widgets);
+    collectWidgetRefs(index, widgets, rawViewSources);
   }
 
   // AssetBundle::register() — same scope.
   if (includeBundles) {
-    collectAssetBundleRefs(index, assetBundles);
+    collectAssetBundleRefs(index, assetBundles, rawViewSources);
   }
 
   return {
@@ -280,6 +288,7 @@ async function resolvePathAliases(index: {
 function resolveViewFile(
   viewName: string,
   controllerClass: string,
+  controllerFile: string,
   aliases: Map<string, string>,
   index: { files: Array<{ path: string }> },
 ): { file: string | null; alias: string | null } {
@@ -299,20 +308,27 @@ function resolveViewFile(
     }
   }
   // Path-style relative name: `subdir/foo` keeps the explicit subdir.
-  const isPath = viewName.includes("/");
+  // Yii absolute view names have distinct roots: `//x` is app-rooted,
+  // while `/x` is module-rooted when the controller lives under modules/.
+  const root = classifyYiiViewRoot(viewName);
+  const normalizedViewName = stripYiiViewRoot(viewName);
+  const isPath = normalizedViewName.includes("/");
   const controllerId = pascalToKebab(controllerClass.replace(/Controller$/, ""));
-  const candidate = isPath
-    ? `views/${viewName}.php`
-    : `views/${controllerId}/${viewName}.php`;
-  const exists = index.files.some(
-    (f) => f.path === candidate || f.path.endsWith("/" + candidate),
-  );
-  return { file: exists ? candidate : null, alias: null };
+  const candidates: string[] = [];
+  const moduleViewRoot = moduleViewsRootForController(controllerFile);
+  if (root === "module" && moduleViewRoot) {
+    candidates.push(`${moduleViewRoot}/${normalizedViewName}.php`);
+  }
+  candidates.push(isPath
+    ? `views/${normalizedViewName}.php`
+    : `views/${controllerId}/${normalizedViewName}.php`);
+  return { file: firstExistingPath(candidates, index), alias: null };
 }
 
 function resolveLayoutFile(
   layoutName: string,
   controllerClass: string,
+  controllerFile: string,
   aliases: Map<string, string>,
   index: { files: Array<{ path: string }> },
 ): string | null {
@@ -330,15 +346,21 @@ function resolveLayoutFile(
     }
     return null;
   }
-  const isPath = layoutName.includes("/");
-  const candidate = isPath
-    ? `views/${layoutName}.php`
-    : `views/layouts/${layoutName}.php`;
-  const exists = index.files.some(
-    (f) => f.path === candidate || f.path.endsWith("/" + candidate),
-  );
-  return exists ? candidate : null;
-  void controllerClass; // referenced for future per-module path resolution
+  const root = classifyYiiViewRoot(layoutName);
+  const normalizedLayoutName = stripYiiViewRoot(layoutName);
+  const isPath = normalizedLayoutName.includes("/");
+  const candidates: string[] = [];
+  const moduleViewRoot = moduleViewsRootForController(controllerFile);
+  if (root === "module" && moduleViewRoot) {
+    candidates.push(isPath
+      ? `${moduleViewRoot}/${normalizedLayoutName}.php`
+      : `${moduleViewRoot}/layouts/${normalizedLayoutName}.php`);
+  }
+  candidates.push(isPath
+    ? `views/${normalizedLayoutName}.php`
+    : `views/layouts/${normalizedLayoutName}.php`);
+  void controllerClass; // reserved for future per-controller layout conventions
+  return firstExistingPath(candidates, index);
 }
 
 function resolveAliasPrefix(
@@ -377,6 +399,7 @@ function collectWidgetRefs(
     }>;
   },
   out: PhpWidgetReference[],
+  rawSources: PhpRawViewSource[] = [],
 ): void {
   // Build a quick parentId → class name map so we can attribute widget
   // references to their containing class (when the widget lives inside
@@ -397,8 +420,9 @@ function collectWidgetRefs(
   // hundreds of widget classes but ~95% match this suffix family.
   const WIDGET_SUFFIXES = /(?:Form|View|Pjax|Menu|Pager|Breadcrumbs|Modal|GridView|ListView|DetailView|LinkPager|Captcha|Alert|Tabs|NavBar|Carousel|Dropdown|FileInput|DatePicker|RangeInput|Select2|TimePicker|Slider|MaskedInput|RadioButton|Tag)$/;
   const re = /\b([A-Z][\w]*?)::(begin|widget)\s*\(/g;
+  const seen = new Set<string>();
 
-  for (const sym of index.symbols) {
+  for (const sym of [...index.symbols, ...rawSources]) {
     if (!sym.source) continue;
     if (!sym.file.endsWith(".php")) continue;
 
@@ -413,6 +437,9 @@ function collectWidgetRefs(
       const line =
         sym.start_line +
         (sym.source.slice(0, m.index).match(/\n/g)?.length ?? 0);
+      const key = `${sym.file}:${line}:${widgetName}:${kindRaw}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
       out.push({
         widget: widgetName,
@@ -436,11 +463,13 @@ function collectAssetBundleRefs(
     }>;
   },
   out: PhpAssetBundleRef[],
+  rawSources: PhpRawViewSource[] = [],
 ): void {
   // `BundleClass::register($this)` — the canonical AssetBundle entry
   // point. We capture the class name (last segment for FQCN forms).
   const re = /\b([A-Z][\w\\]*?)::register\s*\(\s*\$this\b/g;
-  for (const sym of index.symbols) {
+  const seen = new Set<string>();
+  for (const sym of [...index.symbols, ...rawSources]) {
     if (!sym.source) continue;
     if (!sym.file.endsWith(".php")) continue;
     let m: RegExpExecArray | null;
@@ -455,12 +484,91 @@ function collectAssetBundleRefs(
       const line =
         sym.start_line +
         (sym.source.slice(0, m.index).match(/\n/g)?.length ?? 0);
+      const key = `${sym.file}:${line}:${last}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       out.push({ bundle: last, file: sym.file, line });
     }
   }
 }
 
 // ---------------------------------------------------------------------------
+
+interface PhpRawViewSource {
+  name: string;
+  kind: string;
+  file: string;
+  parent?: undefined;
+  source?: string;
+  start_line: number;
+}
+
+async function readRawPhpViewSources(index: {
+  root: string;
+  files: Array<{ path: string }>;
+}): Promise<PhpRawViewSource[]> {
+  const sources: PhpRawViewSource[] = [];
+  let considered = 0;
+  for (const file of index.files) {
+    if (!isViewLikePhpFile(file.path)) continue;
+    if (considered >= MAX_RAW_VIEW_CANDIDATES || sources.length >= MAX_RAW_VIEW_FILES) break;
+    considered++;
+    try {
+      const fullPath = join(index.root, file.path);
+      const info = await stat(fullPath);
+      if (info.size > MAX_RAW_VIEW_FILE_BYTES) continue;
+      sources.push({
+        name: file.path,
+        kind: "file",
+        file: file.path,
+        source: await readFile(fullPath, "utf-8"),
+        start_line: 1,
+      });
+    } catch {
+      continue;
+    }
+  }
+  return sources;
+}
+
+function isViewLikePhpFile(path: string): boolean {
+  if (!path.endsWith(".php")) return false;
+  if (/(^|\/)(vendor|node_modules|runtime|cache|tmp)\//.test(path)) return false;
+  return /(^|\/)(views|view|layouts|widgets)\//.test(path);
+}
+
+function classifyYiiViewRoot(viewName: string): "relative" | "module" | "app" {
+  if (viewName.startsWith("//")) return "app";
+  if (viewName.startsWith("/")) return "module";
+  return "relative";
+}
+
+function stripYiiViewRoot(viewName: string): string {
+  if (viewName.startsWith("//")) return viewName.slice(2);
+  if (viewName.startsWith("/")) return viewName.slice(1);
+  return viewName;
+}
+
+function moduleViewsRootForController(controllerFile: string): string | null {
+  const match = /^(?:(.*\/)?modules\/([^/]+)\/)controllers\//.exec(controllerFile);
+  if (!match) return null;
+  const prefix = match[1] ?? "";
+  const moduleId = match[2]!;
+  return `${prefix}modules/${moduleId}/views`;
+}
+
+function firstExistingPath(
+  candidates: string[],
+  index: { files: Array<{ path: string }> },
+): string | null {
+  for (const candidate of candidates) {
+    const existing = index.files.find(
+      (f) => f.path === candidate || f.path.endsWith("/" + candidate),
+    );
+    if (existing) return existing.path;
+  }
+  return null;
+}
 
 function pascalToKebab(s: string): string {
   return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();

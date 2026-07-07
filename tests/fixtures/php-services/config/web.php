@@ -13,6 +13,11 @@ return [
             'class' => 'app\components\Mailer',
             'useFileTransport' => true,
         ],
+        'formatter' => [
+            'options' => ['timezone' => 'UTC'],
+            'enabled' => true,
+            'class' => \app\components\Formatter :: class,
+        ],
         // Sprint 3: factory closure — produced class can't be resolved statically.
         'cacheBuilder' => function () {
             return new \yii\caching\FileCache();

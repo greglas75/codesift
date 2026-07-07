@@ -39,6 +39,8 @@ export interface PhpProjectAudit {
 }
 
 const AUDIT_TIMEOUT = 8000;
+const ALL_CHECKS = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots", "n_plus_one", "god_model", "yii_performance"] as const;
+const DEPRECATED_COMPAT_CHECKS = ["events", "views", "services", "namespace"] as const;
 
 export async function phpProjectAudit(
   repo: string,
@@ -46,8 +48,24 @@ export async function phpProjectAudit(
 ): Promise<PhpProjectAudit> {
   const startTime = Date.now();
   const gates: AuditGate[] = [];
-  const allChecks = ["security", "activerecord", "complexity", "dead_code", "patterns", "clones", "hotspots", "n_plus_one", "god_model", "yii_performance"];
-  const enabled = new Set(options?.checks ?? allChecks);
+  const requestedChecks = options?.checks ?? [...ALL_CHECKS];
+  const deprecatedChecks = requestedChecks.filter((check) => DEPRECATED_COMPAT_CHECKS.includes(check as typeof DEPRECATED_COMPAT_CHECKS[number]));
+  const unknownChecks = requestedChecks.filter((check) =>
+    !ALL_CHECKS.includes(check as typeof ALL_CHECKS[number]) &&
+    !DEPRECATED_COMPAT_CHECKS.includes(check as typeof DEPRECATED_COMPAT_CHECKS[number]));
+  if (unknownChecks.length > 0) {
+    throw new Error(`Unsupported php_project_audit check(s): ${unknownChecks.join(", ")}. Supported checks: ${ALL_CHECKS.join(", ")}`);
+  }
+  for (const check of deprecatedChecks) {
+    gates.push({
+      name: check,
+      status: "error",
+      findings_count: 0,
+      duration_ms: 0,
+      error: `Deprecated php_project_audit check "${check}" is no longer part of the compound audit. Use the dedicated PHP tool instead.`,
+    });
+  }
+  const enabled = new Set(requestedChecks.filter((check) => ALL_CHECKS.includes(check as typeof ALL_CHECKS[number])));
   const fp = options?.file_pattern ?? ".php";
   const secOpts: { file_pattern?: string } = {};
   if (options?.file_pattern) secOpts.file_pattern = options.file_pattern;

@@ -28,10 +28,10 @@ export async function resolvePhpNamespace(
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const composer = await readJsonSafe(join(index.root, "composer.json"));
-  const psr4: Record<string, string | string[]> = {
-    ...(composer?.autoload?.["psr-4"] ?? {}),
-    ...(composer?.["autoload-dev"]?.["psr-4"] ?? {}),
-  };
+  const psr4 = mergePsr4Maps(
+    composer?.autoload?.["psr-4"],
+    composer?.["autoload-dev"]?.["psr-4"],
+  );
 
   // Strip leading backslash
   const normalized = className.replace(/^\\/, "");
@@ -105,4 +105,22 @@ async function readJsonSafe(path: string): Promise<any> {
   } catch {
     return null;
   }
+}
+
+function mergePsr4Maps(
+  ...maps: Array<Record<string, string | string[]> | undefined>
+): Record<string, string[]> {
+  const merged: Record<string, string[]> = {};
+  for (const map of maps) {
+    if (!map) continue;
+    for (const [prefix, roots] of Object.entries(map)) {
+      const existing = merged[prefix] ?? [];
+      for (const root of Array.isArray(roots) ? roots : [roots]) {
+        if (!root || existing.includes(root)) continue;
+        existing.push(root);
+      }
+      merged[prefix] = existing;
+    }
+  }
+  return merged;
 }

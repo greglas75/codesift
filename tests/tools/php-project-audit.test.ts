@@ -100,6 +100,15 @@ describe("phpProjectAudit", () => {
     expect(names).toEqual(["patterns", "security"]);
   });
 
+  it("surfaces deprecated historical check names as error gates instead of an empty audit", async () => {
+    const r = await phpProjectAudit(REPO, { checks: ["views", "services"] });
+    expect(r.checks_run).toEqual([]);
+    expect(r.gates).toEqual([
+      expect.objectContaining({ name: "views", status: "error" }),
+      expect.objectContaining({ name: "services", status: "error" }),
+    ]);
+  });
+
   it("duration_ms reflects total wall time", async () => {
     const r = await phpProjectAudit(REPO);
     expect(r.duration_ms).toBeGreaterThan(0);

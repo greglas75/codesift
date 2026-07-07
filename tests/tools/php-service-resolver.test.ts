@@ -33,6 +33,14 @@ describe("resolvePhpService", () => {
     expect(mailer!.file).toContain("components/Mailer.php");
   });
 
+  it("parses component classes written as ClassName::class", async () => {
+    const r = await resolvePhpService(REPO);
+    const formatter = r.services.find((s) => s.name === "formatter");
+    expect(formatter).toBeDefined();
+    expect(formatter!.class).toBe("\\app\\components\\Formatter");
+    expect(formatter!.file).toContain("components/Formatter.php");
+  });
+
   it("returns null file for services whose class file is not in the index", async () => {
     const r = await resolvePhpService(REPO);
     // `db` points at yii\db\Connection which is NOT in the fixture index

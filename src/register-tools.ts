@@ -10,7 +10,7 @@ import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, f
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
 
 export type { ToolCategory, ToolDefinition } from "./register-tool-groups/shared.js";
-export { OutputSchemas, buildH11Hint } from "./register-tool-groups/shared.js";
+export { OutputSchemas, SYMBOL_TOOLS, buildH11Hint, zNum } from "./register-tool-groups/shared.js";
 export { detectAutoLoadTools, detectAutoLoadToolsCached } from "./register-tools/autoload.js";
 export {
   ALWAYS_VISIBLE_TOOL_NAMES,

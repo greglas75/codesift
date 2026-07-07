@@ -910,6 +910,120 @@ describe("findPhpViews — Sprint 8 extensions (kind, layout, widgets, asset bun
     expect(r.mappings[0]!.path_alias).toBe("@app");
   });
 
+  it("resolves Yii absolute view names under views/", async () => {
+    const ctrl = makeSym({
+      id: "ctrl-abs-view",
+      name: "SiteController",
+      kind: "class",
+      file: "controllers/SiteController.php",
+      start_line: 1,
+      end_line: 30,
+      source: `class SiteController extends Controller { }`,
+    });
+    const action = makeSym({
+      id: "act-abs-view",
+      name: "actionIndex",
+      kind: "method",
+      file: "controllers/SiteController.php",
+      start_line: 5,
+      end_line: 8,
+      source: `public function actionIndex() { return $this->render('/site/index'); }`,
+      parent: "ctrl-abs-view",
+    });
+    mockIndex([ctrl, action], [{ path: "views/site/index.php", language: "php" }]);
+
+    const r = await findPhpViews("test");
+    expect(r.mappings).toHaveLength(1);
+    expect(r.mappings[0]!.view_file).toBe("views/site/index.php");
+  });
+
+  it("returns the indexed file path when a view candidate matches by suffix", async () => {
+    const ctrl = makeSym({
+      id: "ctrl-nested-app-view",
+      name: "SiteController",
+      kind: "class",
+      file: "frontend/controllers/SiteController.php",
+      start_line: 1,
+      end_line: 30,
+      source: `class SiteController extends Controller { }`,
+    });
+    const action = makeSym({
+      id: "act-nested-app-view",
+      name: "actionIndex",
+      kind: "method",
+      file: "frontend/controllers/SiteController.php",
+      start_line: 5,
+      end_line: 8,
+      source: `public function actionIndex() { return $this->render('/site/index'); }`,
+      parent: "ctrl-nested-app-view",
+    });
+    mockIndex([ctrl, action], [{ path: "frontend/views/site/index.php", language: "php" }]);
+
+    const r = await findPhpViews("test");
+    expect(r.mappings).toHaveLength(1);
+    expect(r.mappings[0]!.view_file).toBe("frontend/views/site/index.php");
+  });
+
+  it("prefers module view roots for single-slash absolute view names", async () => {
+    const ctrl = makeSym({
+      id: "ctrl-module-view",
+      name: "ReportController",
+      kind: "class",
+      file: "modules/admin/controllers/ReportController.php",
+      start_line: 1,
+      end_line: 30,
+      source: `class ReportController extends Controller { }`,
+    });
+    const action = makeSym({
+      id: "act-module-view",
+      name: "actionIndex",
+      kind: "method",
+      file: "modules/admin/controllers/ReportController.php",
+      start_line: 5,
+      end_line: 8,
+      source: `public function actionIndex() { return $this->render('/report/index'); }`,
+      parent: "ctrl-module-view",
+    });
+    mockIndex(
+      [ctrl, action],
+      [
+        { path: "views/report/index.php", language: "php" },
+        { path: "modules/admin/views/report/index.php", language: "php" },
+      ],
+    );
+
+    const r = await findPhpViews("test");
+    expect(r.mappings).toHaveLength(1);
+    expect(r.mappings[0]!.view_file).toBe("modules/admin/views/report/index.php");
+  });
+
+  it("resolves single-segment module absolute view names against the module root", async () => {
+    const ctrl = makeSym({
+      id: "ctrl-module-index",
+      name: "ReportController",
+      kind: "class",
+      file: "modules/admin/controllers/ReportController.php",
+      start_line: 1,
+      end_line: 30,
+      source: `class ReportController extends Controller { }`,
+    });
+    const action = makeSym({
+      id: "act-module-index",
+      name: "actionIndex",
+      kind: "method",
+      file: "modules/admin/controllers/ReportController.php",
+      start_line: 5,
+      end_line: 8,
+      source: `public function actionIndex() { return $this->render('/index'); }`,
+      parent: "ctrl-module-index",
+    });
+    mockIndex([ctrl, action], [{ path: "modules/admin/views/index.php", language: "php" }]);
+
+    const r = await findPhpViews("test");
+    expect(r.mappings).toHaveLength(1);
+    expect(r.mappings[0]!.view_file).toBe("modules/admin/views/index.php");
+  });
+
   it("resolves the longest configured Yii path alias prefix", async () => {
     const root = await mkdtemp(join(tmpdir(), "codesift-php-views-"));
     try {
@@ -1052,6 +1166,41 @@ describe("findPhpViews — Sprint 8 extensions (kind, layout, widgets, asset bun
       "AdminAsset",
       "AppAsset",
     ]);
+  });
+
+  it("collects widgets and asset bundles from raw view files with no symbols", async () => {
+    const root = await mkdtemp(join(tmpdir(), "codesift-raw-php-views-"));
+    try {
+      await mkdir(join(root, "views", "site"), { recursive: true });
+      await writeFile(
+        join(root, "views", "site", "index.php"),
+        `<?php
+        ActiveForm::begin();
+        AppAsset::register($this);
+        ActiveForm::end();
+        `,
+      );
+      mockIndex([], [{ path: "views/site/index.php", language: "php" }], root);
+
+      const r = await findPhpViews("test");
+      expect(r.widgets).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            widget: "ActiveForm",
+            file: "views/site/index.php",
+            kind: "begin",
+          }),
+        ]),
+      );
+      expect(r.asset_bundles).toEqual([
+        expect.objectContaining({
+          bundle: "AppAsset",
+          file: "views/site/index.php",
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("respects include_widgets=false / include_asset_bundles=false flags", async () => {

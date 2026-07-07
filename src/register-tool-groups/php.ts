@@ -92,7 +92,7 @@ export const PHP_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       file_pattern: z.string().optional().describe("Glob pattern to filter analyzed files"),
-      checks: z.string().optional().describe("Comma-separated checks: n_plus_one, god_model, activerecord, security, events, views, services, namespace. Default: all"),
+      checks: z.string().optional().describe("Comma-separated checks: security, activerecord, complexity, dead_code, patterns, clones, hotspots, n_plus_one, god_model, yii_performance. Deprecated events/views/services/namespace return error gates. Default: all"),
     })),
     handler: async (args) => {
       const opts: { file_pattern?: string; checks?: string[] } = {};
