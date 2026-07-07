@@ -412,6 +412,80 @@ describe("reviewDiff orchestrator", () => {
     expect(checkNames).toContain("breaking");
   });
 
+  it("ignores unknown checks before dispatching adapters", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+    ]);
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      checks: "secrets,not-a-real-check,hotspots",
+    });
+
+    expect(result.checks.map((c) => c.check)).toEqual(["secrets", "hotspots"]);
+    expect(result.score).toBe(100);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("normalizes rejected check adapter promises into error check results", async () => {
+    mockedChangedSymbols.mockResolvedValue([
+      { file: "src/a.ts", symbols: ["foo"] },
+    ]);
+    mockedScanSecretsOrch.mockRejectedValue(new Error("secret scanner unavailable"));
+
+    const result = await reviewDiff("local/test-repo", {
+      repo: "local/test-repo",
+      since: "HEAD~1",
+      checks: "secrets",
+    });
+
+    expect(result.checks).toEqual([
+      expect.objectContaining({
+        check: "secrets",
+        status: "error",
+        findings: [],
+        summary: "Error: secret scanner unavailable",
+      }),
+    ]);
+    expect(result.score).toBe(97);
+    expect(result.verdict).toBe("pass");
+  });
+
+  it("normalizes slow check adapters into timeout check results", async () => {
+    vi.useFakeTimers();
+    try {
+      mockedChangedSymbols.mockResolvedValue([
+        { file: "src/a.ts", symbols: ["foo"] },
+      ]);
+      mockedScanSecretsOrch.mockReturnValue(new Promise(() => {}) as ReturnType<typeof scanSecrets>);
+
+      const resultPromise = reviewDiff("local/test-repo", {
+        repo: "local/test-repo",
+        since: "HEAD~1",
+        checks: "secrets",
+        check_timeout_ms: 5,
+      });
+
+      await vi.advanceTimersByTimeAsync(5);
+      const result = await resultPromise;
+
+      expect(result.checks).toEqual([
+        expect.objectContaining({
+          check: "secrets",
+          status: "timeout",
+          findings: [],
+          duration_ms: 5,
+          summary: "Timed out after 5ms",
+        }),
+      ]);
+      expect(result.score).toBe(100);
+      expect(result.verdict).toBe("pass");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // 5. Large diff
   it("adds T3 finding and sets files_capped when diff exceeds max_files", async () => {
     const manyFiles = Array.from({ length: 51 }, (_, i) => ({
