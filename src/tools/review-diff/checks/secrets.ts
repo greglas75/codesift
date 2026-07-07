@@ -1,5 +1,6 @@
 import { scanSecrets } from "../../secret-tools.js";
 import type { CodeIndex } from "../../../types.js";
+import { literalChangedFilePattern } from "../file-pattern.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 /**
@@ -11,10 +12,7 @@ export async function checkSecrets(
 ): Promise<CheckResult> {
   const start = Date.now();
   try {
-    const filePattern =
-      changedFiles.length === 1
-        ? changedFiles[0]!
-        : `{${changedFiles.join(",")}}`;
+    const filePattern = literalChangedFilePattern(changedFiles);
 
     const result = await scanSecrets(index.repo, { file_pattern: filePattern, min_confidence: "high" });
 

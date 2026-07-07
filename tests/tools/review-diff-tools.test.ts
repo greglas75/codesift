@@ -709,6 +709,24 @@ describe("check adapters — blast-radius, secrets, dead-code", () => {
     expect(typeof options.file_pattern).toBe("string");
   });
 
+  it("checkSecrets: escapes changed file paths before building the scan glob", async () => {
+    mockedScanSecrets.mockResolvedValue({
+      findings: [],
+      files_scanned: 3,
+      files_with_secrets: 0,
+      scan_coverage: "full",
+    });
+
+    await checkSecrets(makeFakeIndex(), [
+      "src/a,b.ts",
+      "src/[id].ts",
+      "src/literal*.ts",
+    ]);
+
+    const options = mockedScanSecrets.mock.calls[0]![1] as { file_pattern?: string };
+    expect(options.file_pattern).toBe("{src/a\\,b.ts,src/\\[id\\].ts,src/literal\\*.ts}");
+  });
+
   it("checkSecrets: 0 findings → status pass", async () => {
     mockedScanSecrets.mockResolvedValue({
       findings: [],
@@ -754,6 +772,23 @@ describe("check adapters — blast-radius, secrets, dead-code", () => {
     expect(result.findings[0]!.symbol).toBe("unused");
     expect(result.findings[1]!.symbol).toBe("old");
     expect(result.findings[2]!.symbol).toBe("stale");
+  });
+
+  it("checkDeadCode: escapes changed file paths before building the scan glob", async () => {
+    mockedFindDeadCode.mockResolvedValue({
+      candidates: [],
+      scanned_symbols: 0,
+      scanned_files: 0,
+    });
+
+    await checkDeadCode(makeFakeIndex(), [
+      "src/a,b.ts",
+      "src/[id].ts",
+      "src/literal*.ts",
+    ]);
+
+    const options = mockedFindDeadCode.mock.calls[0]![1] as { file_pattern?: string };
+    expect(options.file_pattern).toBe("{src/a\\,b.ts,src/\\[id\\].ts,src/literal\\*.ts}");
   });
 
   it("checkDeadCode: 0 candidates → status pass", async () => {
@@ -873,6 +908,24 @@ describe("check adapters — bug-patterns, hotspots, complexity", () => {
 
     // 9 mocked patterns minus 1 React-only (useEffect-no-cleanup) = 8
     expect(mockedSearchPatterns).toHaveBeenCalledTimes(8);
+  });
+
+  it("checkBugPatterns: escapes changed file paths before passing file_pattern to searchPatterns", async () => {
+    mockedSearchPatterns.mockResolvedValue({ matches: [], pattern: "x", scanned_symbols: 0 });
+
+    await checkBugPatterns(makeFakeIndex(), [
+      "src/a,b.ts",
+      "src/[id].ts",
+      "src/literal*.ts",
+    ]);
+
+    const options = mockedSearchPatterns.mock.calls[0]![2] as { file_pattern?: string };
+    expect(options.file_pattern).toBe("{src/a\\,b.ts,src/\\[id\\].ts,src/literal\\*.ts}");
+    expect(
+      mockedSearchPatterns.mock.calls.every(
+        (call) => (call[2] as { file_pattern?: string }).file_pattern === options.file_pattern,
+      ),
+    ).toBe(true);
   });
 
   it("checkBugPatterns: includes React patterns when .tsx file in diff (Item 12)", async () => {

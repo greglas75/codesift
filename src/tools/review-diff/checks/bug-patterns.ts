@@ -1,5 +1,6 @@
 import { listPatterns, searchPatterns } from "../../pattern-tools.js";
 import type { CodeIndex } from "../../../types.js";
+import { literalChangedFilePattern } from "../file-pattern.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 interface PatternMatch {
@@ -87,7 +88,7 @@ export async function checkBugPatterns(
     const searchOutputs = await runPatternSearches(
       index.repo,
       patterns,
-      changedFilePattern(changedFiles),
+      literalChangedFilePattern(changedFiles),
     );
     const findings = toPatternFindings(searchOutputs);
 
@@ -109,12 +110,6 @@ export async function checkBugPatterns(
       summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-}
-
-function changedFilePattern(changedFiles: string[]): string {
-  return changedFiles.length === 1
-    ? changedFiles[0]!
-    : `{${changedFiles.join(",")}}`;
 }
 
 function reviewablePatternNames(changedFiles: string[]): string[] {
