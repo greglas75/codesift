@@ -11,6 +11,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { nestLifecycleMap, nestModuleGraph, nestDIGraph, nestGuardChain, nestRouteInventory, nestAudit, detectCycles, nestRequestPipeline } from "../../src/tools/nest-tools.js";
+import * as nestTools from "../../src/tools/nest-tools.js";
 
 const mockedGetCodeIndex = vi.mocked(getCodeIndex);
 
@@ -31,6 +32,21 @@ function mockIndex(symbols: CodeSymbol[]): CodeIndex {
     symbols,
   } as unknown as CodeIndex;
 }
+
+describe("nest_tools facade", () => {
+  it("preserves public runtime exports", () => {
+    expect(Object.keys(nestTools).sort()).toEqual([
+      "detectCycles",
+      "nestAudit",
+      "nestDIGraph",
+      "nestGuardChain",
+      "nestLifecycleMap",
+      "nestModuleGraph",
+      "nestRequestPipeline",
+      "nestRouteInventory",
+    ].sort());
+  });
+});
 
 describe("nest_lifecycle_map", () => {
   beforeEach(() => {
