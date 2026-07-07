@@ -1,8 +1,89 @@
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { extname } from "node:path";
 import { CODE_EXTENSIONS, DEFAULT_MIN_LINES, denyTool, isCurrentRepoIndexed } from "./shared.js";
 import { parseHookInput, readRawInput } from "./input.js";
 import { tryLoadWikiSummary } from "./wiki.js";
+
+const DEFAULT_MAX_BYTES = 20_000;
+const MAX_READ_HOOK_MAX_BYTES = 1_000_000;
+
+function readHookMaxBytes(): number {
+  const raw = process.env["CODESIFT_READ_HOOK_MAX_BYTES"];
+  if (!raw) return DEFAULT_MAX_BYTES;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_BYTES;
+  return Math.min(parsed, MAX_READ_HOOK_MAX_BYTES);
+}
+
+function safeRelPath(filePath: string): string {
+  return filePath
+    .split(/[/\\]/)
+    .slice(-3)
+    .join("/")
+    .replace(/[\u0000-\u001f\u007f]/g, "?");
+}
+
+function readRedirectReason(filePath: string, lineCount: number | null, sizeBytes: number | null): string {
+  const relPath = safeRelPath(filePath);
+  const quotedRelPath = JSON.stringify(relPath);
+  const sizeReason = sizeBytes !== null ? ` and ${sizeBytes} bytes` : "";
+  const fileStats = lineCount === null ? `is ${sizeBytes} bytes` : `has ${lineCount} lines${sizeReason}`;
+  return (
+    `File ${quotedRelPath} ${fileStats}. Use CodeSift tools instead:\n` +
+    `  get_file_outline(repo, ${quotedRelPath}) for structure\n` +
+    `  search_text(repo, "query", file_pattern=${quotedRelPath}) for specific content\n` +
+    `  get_symbol(repo, "symbol_id") for a specific function\n` +
+    `  To EDIT this file: Read a bounded range (pass offset+limit) — bounded reads are always allowed.`
+  );
+}
+
+function unsupportedReadReason(filePath: string): string {
+  const quotedRelPath = JSON.stringify(safeRelPath(filePath));
+  return `File ${quotedRelPath} is not a regular file. Use CodeSift tools for indexed source files instead of reading special files.`;
+}
+
+function inspectFileWithCaps(filePath: string, maxBytes: number, minLines: number): {
+  lineCount: number | null;
+  bytesRead: number;
+  sizeBytes: number;
+  unsupported: boolean;
+} {
+  const pathStat = statSync(filePath);
+  if (!pathStat.isFile()) {
+    return { lineCount: null, bytesRead: 0, sizeBytes: pathStat.size, unsupported: true };
+  }
+
+  const fd = openSync(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const fileStat = fstatSync(fd);
+    if (!fileStat.isFile()) {
+      return { lineCount: null, bytesRead: 0, sizeBytes: 0, unsupported: true };
+    }
+    const sizeBytes = fileStat.size;
+    if (sizeBytes > maxBytes) {
+      return { lineCount: null, bytesRead: 0, sizeBytes, unsupported: false };
+    }
+
+    const buffer = Buffer.alloc(Math.min(8192, maxBytes + 1));
+    let bytesReadTotal = 0;
+    let lineCount = sizeBytes === 0 ? 0 : 1;
+
+    while (bytesReadTotal <= maxBytes && lineCount < minLines) {
+      const bytesToRead = Math.min(buffer.length, maxBytes + 1 - bytesReadTotal);
+      if (bytesToRead <= 0) break;
+      const bytesRead = readSync(fd, buffer, 0, bytesToRead, null);
+      if (bytesRead === 0) break;
+      bytesReadTotal += bytesRead;
+      for (let i = 0; i < bytesRead; i += 1) {
+        if (buffer[i] === 10) lineCount += 1;
+      }
+    }
+
+    return { lineCount, bytesRead: bytesReadTotal, sizeBytes, unsupported: false };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 export async function handlePrecheckRead(): Promise<void> {
   try {
@@ -12,7 +93,7 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
-    const { filePath } = parseHookInput(raw);
+    const { filePath, hasBoundedRange } = parseHookInput(raw);
     if (!filePath) {
       process.exit(0);
       return;
@@ -29,45 +110,38 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
-    try {
-      const ti = (JSON.parse(raw) as { tool_input?: Record<string, unknown> }).tool_input;
-      if (ti && (typeof ti["offset"] === "number" || typeof ti["limit"] === "number")) {
-        process.exit(0);
-        return;
-      }
-    } catch {
-      // malformed input falls through to the size check
+    if (hasBoundedRange) {
+      process.exit(0);
+      return;
     }
 
     const minLinesEnv = process.env["CODESIFT_READ_HOOK_MIN_LINES"];
     const parsed_min = minLinesEnv ? parseInt(minLinesEnv, 10) : NaN;
     const minLines = Number.isNaN(parsed_min) ? DEFAULT_MIN_LINES : parsed_min;
+    const maxBytes = readHookMaxBytes();
 
-    let content: string;
+    let readResult: { lineCount: number | null; bytesRead: number; sizeBytes: number; unsupported: boolean };
     try {
-      content = readFileSync(filePath, "utf-8");
+      readResult = inspectFileWithCaps(filePath, maxBytes, minLines);
     } catch {
       process.exit(0);
       return;
     }
 
-    const lineCount = content.split("\n").length;
-    if (lineCount >= minLines) {
-      const relPath = filePath.split("/").slice(-3).join("/");
-      const reason =
-        `File ${relPath} has ${lineCount} lines. Use CodeSift tools instead:\n` +
-        `  get_file_outline(repo, "${relPath}") for structure\n` +
-        `  search_text(repo, "query", file_pattern="${relPath}") for specific content\n` +
-        `  get_symbol(repo, "symbol_id") for a specific function\n` +
-        `  To EDIT this file: Read a bounded range (pass offset+limit) — bounded reads are always allowed.`;
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      }));
-      process.exit(0);
+    if (readResult.unsupported) {
+      denyTool(unsupportedReadReason(filePath));
+      return;
+    }
+
+    if (readResult.sizeBytes > maxBytes) {
+      denyTool(readRedirectReason(filePath, null, readResult.sizeBytes));
+      return;
+    }
+
+    const lineCount = readResult.lineCount ?? 1;
+    const contentBytes = Math.max(readResult.sizeBytes, readResult.bytesRead);
+    if (lineCount >= minLines || contentBytes > maxBytes) {
+      denyTool(readRedirectReason(filePath, lineCount, contentBytes));
       return;
     }
 
@@ -90,8 +164,8 @@ function isFileFindCommand(cmd: string): boolean {
 
 function isContentGrepCommand(cmd: string): boolean {
   const hasRecursiveGrep =
-    /\bgrep\b.*(?:\s-\w*[rR]\w*\s|--recursive)/.test(cmd) && !/\bgit\s+grep\b/.test(cmd);
-  const hasRg = /(?:^|[\s;&|])rg\s/.test(cmd);
+    /\bgrep\b.*(?:\s-\w*[rR]\w*(?:\s|$)|--recursive(?:\s|$))/.test(cmd) && !/\bgit\s+grep\b/.test(cmd);
+  const hasRg = /(?:^|[\s;&|"'`])(?:[./\w-]+\/)?rg(?=$|[\s;&|"'`])/.test(cmd);
   return hasRecursiveGrep || hasRg;
 }
 

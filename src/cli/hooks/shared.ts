@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix as pathPosix, win32 as pathWin32 } from "node:path";
 import { homedir } from "node:os";
 
 export const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -30,9 +30,10 @@ function getRegistryPath(): string {
 }
 
 export function isCwdInsideRepo(cwd: string, repoRoot: string): boolean {
-  if (cwd === repoRoot) return true;
-  const rootWithSep = repoRoot.endsWith("/") ? repoRoot : repoRoot + "/";
-  return cwd.startsWith(rootWithSep);
+  const pathApi = cwd.includes("\\") || repoRoot.includes("\\") ? pathWin32 : pathPosix;
+  const rel = pathApi.relative(repoRoot, cwd);
+  if (rel === "") return true;
+  return rel !== ".." && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(rel);
 }
 
 export function isCurrentRepoIndexed(): boolean {

@@ -1,13 +1,22 @@
 import { readFileSync } from "node:fs";
 
+const MAX_BOUNDED_READ_LIMIT = 5000;
+
 export interface HookInput {
   filePath: string | null;
   sessionId: string | null;
   command: string | null;
   toolName: string | null;
+  hasBoundedRange: boolean;
 }
 
-export const EMPTY_INPUT: HookInput = Object.freeze({ filePath: null, sessionId: null, command: null, toolName: null });
+export const EMPTY_INPUT: HookInput = Object.freeze({
+  filePath: null,
+  sessionId: null,
+  command: null,
+  toolName: null,
+  hasBoundedRange: false,
+});
 
 export function readRawInput(): string | null {
   const envInput = process.env["HOOK_TOOL_INPUT"];
@@ -24,6 +33,27 @@ export function readRawInput(): string | null {
   return null;
 }
 
+function parseBoundedInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function hasBoundedReadRange(input: Record<string, unknown>): boolean {
+  const offset = parseBoundedInteger(input["offset"]);
+  const limit = parseBoundedInteger(input["limit"]);
+  return (
+    offset !== null &&
+    limit !== null &&
+    offset >= 0 &&
+    limit > 0 &&
+    limit <= MAX_BOUNDED_READ_LIMIT
+  );
+}
+
 export function parseHookInput(raw: string): HookInput {
   let parsed: unknown;
   try {
@@ -36,10 +66,17 @@ export function parseHookInput(raw: string): HookInput {
 
   let filePath: string | null = null;
   let command: string | null = null;
+  let hasBoundedRange = false;
+
+  const useFileCandidate = (candidatePath: unknown, input: Record<string, unknown>): void => {
+    if (filePath !== null || typeof candidatePath !== "string") return;
+    filePath = candidatePath;
+    hasBoundedRange = hasBoundedReadRange(input);
+  };
 
   if (obj["tool_input"] && typeof obj["tool_input"] === "object") {
     const ti = obj["tool_input"] as Record<string, unknown>;
-    if (typeof ti["file_path"] === "string") filePath = ti["file_path"];
+    useFileCandidate(ti["file_path"], ti);
     if (typeof ti["command"] === "string") command = ti["command"];
   }
 
@@ -48,8 +85,8 @@ export function parseHookInput(raw: string): HookInput {
     if (tool["input"] && typeof tool["input"] === "object") {
       const input = tool["input"] as Record<string, unknown>;
       if (filePath === null) {
-        if (typeof input["path"] === "string") filePath = input["path"];
-        else if (typeof input["file_path"] === "string") filePath = input["file_path"];
+        useFileCandidate(input["path"], input);
+        useFileCandidate(input["file_path"], input);
       }
       if (command === null && typeof input["command"] === "string") command = input["command"];
     }
@@ -62,7 +99,7 @@ export function parseHookInput(raw: string): HookInput {
         if (hook["args"] && typeof hook["args"] === "object") {
           const args = hook["args"] as Record<string, unknown>;
           if (typeof args["file_path"] === "string") {
-            filePath = args["file_path"];
+            useFileCandidate(args["file_path"], args);
             break;
           }
         }
@@ -81,5 +118,5 @@ export function parseHookInput(raw: string): HookInput {
     if (typeof t["name"] === "string") toolName = t["name"];
   }
 
-  return { filePath, sessionId, command, toolName };
+  return { filePath, sessionId, command, toolName, hasBoundedRange };
 }

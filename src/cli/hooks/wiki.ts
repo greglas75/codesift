@@ -23,6 +23,27 @@ export function positiveIntEnv(name: string, fallback: number): number {
   return n;
 }
 
+type GraphemeSegment = { segment: string };
+type SegmenterLike = { segment(value: string): Iterable<GraphemeSegment> };
+
+function truncateGraphemes(value: string, maxChars: number): string {
+  const Segmenter = (Intl as unknown as {
+    Segmenter?: new (locale: string | undefined, options: { granularity: "grapheme" }) => SegmenterLike;
+  }).Segmenter;
+
+  if (Segmenter) {
+    const segments: string[] = [];
+    for (const part of new Segmenter(undefined, { granularity: "grapheme" }).segment(value)) {
+      if (segments.length >= maxChars) return segments.join("");
+      segments.push(part.segment);
+    }
+    return value;
+  }
+
+  const chars = Array.from(value);
+  return chars.length > maxChars ? chars.slice(0, maxChars).join("") : value;
+}
+
 export function findRepoRootFromDir(startDir: string): string | null {
   let dir = startDir;
   while (true) {
@@ -101,7 +122,7 @@ export function tryLoadWikiSummary(filePath: string): string | null {
     }
 
     const maxChars = wikiSummaryMaxChars();
-    return summary.length > maxChars ? summary.slice(0, maxChars) : summary;
+    return truncateGraphemes(summary, maxChars);
   } catch {
     return null;
   }
