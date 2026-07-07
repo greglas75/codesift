@@ -1,5 +1,6 @@
 import { initParser, getParser } from "../../src/parser/parser-manager.js";
 import { extractTypeScriptSymbols } from "../../src/parser/extractors/typescript.js";
+import * as typeScriptExtractor from "../../src/parser/extractors/typescript.js";
 
 beforeAll(async () => {
   await initParser();
@@ -498,5 +499,53 @@ describe("extractTypeScriptSymbols — is_exported (Task 4)", () => {
     const s = syms.find((sym) => sym.name === "x");
     expect(s).toBeDefined();
     expect(s!.is_exported).not.toBe(true);
+  });
+});
+
+describe("extractTypeScriptSymbols — facade contract", () => {
+  it("preserves public export surface and mixed-node extraction order", async () => {
+    expect(Object.keys(typeScriptExtractor)).toEqual(["extractTypeScriptSymbols"]);
+
+    const source = `
+const Local = () => {};
+export { Local };
+export { Remote as Alias } from "./remote";
+export * as bundle from "./bundle";
+
+declare module "pkg" {
+  export interface Config { enabled: boolean }
+}
+
+namespace LocalNs {
+  export function helper() {}
+}
+
+export default function() {}
+
+describe("suite", () => {
+  it("case", () => {});
+});
+`;
+    const parser = await getParser("typescript");
+    const tree = parser!.parse(source);
+    const syms = extractTypeScriptSymbols(tree, "mixed.ts", source, "test-repo");
+
+    expect(syms.map((s) => `${s.kind}:${s.name}`)).toEqual([
+      "function:Local",
+      "variable:Alias",
+      "namespace:bundle",
+      "namespace:pkg",
+      "interface:Config",
+      "namespace:LocalNs",
+      "function:helper",
+      "default_export:default",
+      "test_suite:suite",
+      "test_case:case",
+    ]);
+    expect(syms.find((s) => s.name === "Local")?.is_exported).toBe(true);
+    expect(syms.find((s) => s.name === "Config")?.is_exported).toBe(true);
+    expect(syms.find((s) => s.name === "case")?.parent).toBe(
+      syms.find((s) => s.name === "suite")?.id,
+    );
   });
 });
