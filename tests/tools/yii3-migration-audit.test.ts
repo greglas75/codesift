@@ -33,6 +33,30 @@ describe("yii3MigrationAudit", () => {
     expect(r.by_category.length).toBeGreaterThan(0);
   });
 
+  it("characterizes the complete category catalog and aggregate output", async () => {
+    const r = await yii3MigrationAudit(REPO);
+
+    expect({
+      scanned_files: r.scanned_files,
+      total_call_sites: r.total_call_sites,
+      categories: r.by_category.map(({ category, severity, count, effort_per_call }) => ({
+        category,
+        severity,
+        count,
+        effort_per_call,
+      })),
+      by_severity: r.by_severity,
+      blockers: r.blockers,
+      effort_estimate: {
+        hours_low: r.effort_estimate.hours_low,
+        hours_high: r.effort_estimate.hours_high,
+      },
+      decision_signal: r.decision_signal,
+      yii_version_detected: r.yii_version_detected,
+      php_version_required: r.php_version_required,
+    }).toMatchSnapshot();
+  });
+
   it("detects service-locator (Yii::$app->db etc.)", async () => {
     const r = await yii3MigrationAudit(REPO);
     const cat = r.by_category.find((c) => c.category === "service-locator");
