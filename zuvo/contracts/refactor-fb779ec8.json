@@ -43,7 +43,7 @@
     "findings_disposition": "No behavioral findings. Initial CQ11 finding was remediated by completing the split: every production module is now <=70L and the facade is 16L. First adversarial pass was clean; mandatory large-diff second pass was attempted twice but all external providers returned empty (infrastructure failure)."
   },
   "cq_after": { "score": "29/29", "critical_failures": [] },
-  "commits": [],
+  "commits": ["6e544d0"],
   "progress": [
     "phase-1 dependency map and existing-code scan complete",
     "phase-2 baseline 30 tests and TypeScript green",
