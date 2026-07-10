@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
@@ -165,5 +165,16 @@ describe("loadRegistrySync", () => {
   it("returns [] when repos key is missing", async () => {
     await writeFile(registryPath, JSON.stringify({ updated_at: 1 }));
     expect(loadRegistrySync(registryPath)).toEqual([]);
+  });
+
+  it("keeps caches isolated for registry files with the same mtime", async () => {
+    const secondPath = join(tmpDir, "registry-second.json");
+    await writeFile(registryPath, JSON.stringify({ repos: { first: { name: "first", root: "/first", symbol_count: 1, file_count: 1 } } }));
+    await writeFile(secondPath, JSON.stringify({ repos: { second: { name: "second", root: "/second", symbol_count: 1, file_count: 1 } } }));
+    const sameTime = new Date(1_700_000_000_000);
+    await Promise.all([utimes(registryPath, sameTime, sameTime), utimes(secondPath, sameTime, sameTime)]);
+
+    expect(loadRegistrySync(registryPath).map((repo) => repo.name)).toEqual(["first"]);
+    expect(loadRegistrySync(secondPath).map((repo) => repo.name)).toEqual(["second"]);
   });
 });

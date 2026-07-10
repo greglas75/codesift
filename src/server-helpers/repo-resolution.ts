@@ -18,18 +18,19 @@ interface RegistryRepoMeta {
   file_count: number;
 }
 
-let registryCache: { mtimeMs: number; entries: RegistryRepoMeta[] } | null = null;
+const registryCache = new Map<string, { mtimeMs: number; entries: RegistryRepoMeta[] }>();
 
 /** Read registry synchronously, cached by mtime to avoid disk hits in the hot path. */
 export function loadRegistrySync(registryPath: string = REGISTRY_PATH): RegistryRepoMeta[] {
   try {
     const st = statSync(registryPath);
-    if (registryCache && registryCache.mtimeMs === st.mtimeMs) {
-      return registryCache.entries;
+    const cached = registryCache.get(registryPath);
+    if (cached?.mtimeMs === st.mtimeMs) {
+      return cached.entries;
     }
     const parsed = JSON.parse(readFileSync(registryPath, "utf-8")) as { repos?: Record<string, RegistryRepoMeta> };
     const entries = Object.values(parsed.repos ?? {});
-    registryCache = { mtimeMs: st.mtimeMs, entries };
+    registryCache.set(registryPath, { mtimeMs: st.mtimeMs, entries });
     return entries;
   } catch {
     return [];
@@ -79,5 +80,5 @@ export function resolveToolRepoArgs(toolName: string, args: Record<string, unkno
 
 /** Test-only: drop the registry cache. */
 export function _resetRegistryCacheForTests(): void {
-  registryCache = null;
+  registryCache.clear();
 }
