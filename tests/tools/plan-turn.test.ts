@@ -19,6 +19,14 @@ vi.mock("../../src/storage/usage-stats.js", () => ({
   getUsageStats: vi.fn(),
 }));
 
+vi.mock("../../src/config.js", () => ({
+  loadConfig: vi.fn(() => ({ registryPath: "/tmp/registry.json" })),
+}));
+
+vi.mock("../../src/storage/registry.js", () => ({
+  resolveRegisteredRepoMeta: vi.fn(),
+}));
+
 vi.mock("../../src/register-tools.js", () => ({
   CORE_TOOL_NAMES: new Set([
     "search_text",
@@ -61,6 +69,7 @@ import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { rankTools, getToolEmbeddings } from "../../src/search/tool-ranker.js";
 import { getSessionState } from "../../src/storage/session-state.js";
 import { getUsageStats } from "../../src/storage/usage-stats.js";
+import { resolveRegisteredRepoMeta } from "../../src/storage/registry.js";
 import { detectAutoLoadToolsCached } from "../../src/register-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -233,6 +242,7 @@ const getCodeIndexMock = vi.mocked(getCodeIndex);
 const getSessionStateMock = vi.mocked(getSessionState);
 const getUsageStatsMock = vi.mocked(getUsageStats);
 const detectAutoLoadToolsMock = vi.mocked(detectAutoLoadToolsCached);
+const resolveRegisteredRepoMetaMock = vi.mocked(resolveRegisteredRepoMeta);
 
 function rec(
   name: string,
@@ -260,6 +270,7 @@ describe("planTurn", () => {
       latest_ts: 0,
     });
     detectAutoLoadToolsMock.mockResolvedValue([]);
+    resolveRegisteredRepoMetaMock.mockResolvedValue(null);
     getToolEmbeddingsMock.mockResolvedValue(null);
     rankToolsMock.mockReturnValue([]);
   });
@@ -421,6 +432,72 @@ describe("planTurn", () => {
     const result = await planTurn("test", "inspect apps/help astro config");
 
     expect(result.tools.map((t) => t.name)).toContain("astro_config_analyze");
+  });
+
+  it("10. recovers when registry, usage, framework, embeddings, and ranker fail", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    resolveRegisteredRepoMetaMock.mockRejectedValue(new Error("registry unavailable"));
+    getUsageStatsMock.mockRejectedValue(new Error("usage unavailable"));
+    detectAutoLoadToolsMock.mockRejectedValue(new Error("framework detection unavailable"));
+    getToolEmbeddingsMock.mockRejectedValue(new Error("embeddings unavailable"));
+    rankToolsMock.mockImplementation(() => { throw new Error("ranker unavailable"); });
+
+    const result = await planTurn("test", "find dead code");
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["discover_tools"]);
+    expect(result.metadata.embedding_available).toBe(false);
+    expect(result.metadata.cold_start).toBe(true);
+  });
+
+  it("11. keeps the strongest duplicate recommendation and reuses usage cache", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    getUsageStatsMock.mockResolvedValue({
+      total_calls: 3, total_sessions: 1, avg_calls_per_session: 3,
+      tools: [{ tool: "search_text", total_calls: 3, percentage: 100, avg_duration_ms: 1, total_tokens: 10 }],
+      top_repos: [], daily: [], query_types: [], earliest_ts: 1, latest_ts: 2,
+    });
+    rankToolsMock
+      .mockReturnValueOnce([rec("search_text", 0.4)])
+      .mockReturnValueOnce([rec("search_text", 0.9)])
+      .mockReturnValue([rec("search_text", 0.7)]);
+
+    const first = await planTurn("test", "audit deps AND refactor auth");
+    await planTurn("test", "find symbols");
+
+    expect(first.tools[0]?.confidence).toBe(0.9);
+    expect(getUsageStatsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("12. returns stable symbol/file recommendations and metadata flags", async () => {
+    const duplicate = { ...makeSym("createUser", "src/second.ts"), start_line: 7 };
+    const index = { ...makeIndex([makeSym("createUser"), duplicate]), files: [{ path: "src/auth.ts", hash: "x", size: 1, language: "typescript", updated_at: 1 }] };
+    getCodeIndexMock.mockResolvedValue(index);
+    detectAutoLoadToolsMock.mockResolvedValue(["astro_route_map"]);
+    rankToolsMock.mockReturnValue([rec("search_text", 0.8), rec("find_dead_code", 0.78, true)]);
+
+    const result = await planTurn("test", "review src/auth.ts missing.ts createUser react");
+
+    expect(result.symbols).toEqual([{ name: "createUser", file: "src/auth.ts", line: 1, kind: "function", score: 1 }]);
+    expect(result.files).toEqual([
+      { path: "src/auth.ts", score: 1, reason: "explicit file reference" },
+      { path: "missing.ts", score: 0.5, reason: "referenced in query" },
+    ]);
+    expect(result.metadata).toMatchObject({ low_discrimination: true, framework_mismatch: true, cold_start: true });
+  });
+
+  it("13. skip_session bypasses matching negative evidence and prior-tool dedup", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    getSessionStateMock.mockReturnValue(makeSessionState({
+      negativeEvidence: [{ tool: "search_text", query: "find dead code", repo: "test", ts: 1, stale: false }],
+      queries: [{ tool: "hidden_tool", query: "prior", repo: "test", ts: 1, resultCount: 1 }],
+    }) as unknown as ReturnType<typeof getSessionState>);
+    rankToolsMock.mockReturnValue([rec("hidden_tool", 0.9, true)]);
+
+    const result = await planTurn("test", "find dead code", { skip_session: true, max_results: 1 });
+
+    expect(result.gap_analysis).toBeUndefined();
+    expect(result.tools.map((tool) => tool.name)).toEqual(["hidden_tool"]);
+    expect(result.already_used).toEqual([]);
   });
 });
 
@@ -607,5 +684,24 @@ describe("formatPlanTurnResult", () => {
     });
     expect(out).toContain("─── Flags ───");
     expect(out).toContain("vague_query");
+  });
+
+  it("formats reveal, symbol, file, and every metadata flag section", () => {
+    const out = formatPlanTurnResult({
+      query: "trace createUser in src/auth.ts",
+      truncated: false,
+      confidence: 0.875,
+      tools: [{ name: "find_references", confidence: 0.875, reasoning: "symbol usage", is_hidden: true }],
+      symbols: [{ name: "createUser", file: "src/auth.ts", line: 12, kind: "function", score: 1 }],
+      files: [{ path: "src/auth.ts", score: 1, reason: "explicit file reference" }],
+      reveal_required: ["find_references"],
+      already_used: [],
+      metadata: { ...baseMeta, stale_index: true, framework_mismatch: true, cold_start: true },
+    });
+
+    expect(out).toContain("Reveal Required (1)");
+    expect(out).toContain("function createUser  src/auth.ts:12");
+    expect(out).toContain("src/auth.ts  score: 1.00  (explicit file reference)");
+    expect(out).toContain("stale_index, framework_mismatch, cold_start");
   });
 });
