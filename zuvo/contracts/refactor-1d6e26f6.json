@@ -1,10 +1,13 @@
 {
   "version": 3, "file": "src/parser/extractors/sql.ts", "type": "SPLIT_FILE",
-  "mode": "full", "stage": "PHASE_3_PROVED",
+  "mode": "full", "stage": "COMPLETE",
   "scope_fence": [
     "src/parser/extractors/sql.ts", "src/parser/extractors/sql-matchers.ts",
     "src/parser/extractors/sql-boundaries.ts", "src/parser/extractors/sql-columns.ts",
     "src/parser/extractors/sql-docstrings.ts", "src/parser/extractors/sql-jinja.ts",
+    "src/parser/extractors/sql-end-scanner.ts", "src/parser/extractors/sql-matcher-catalog.ts",
+    "src/parser/extractors/sql-offsets.ts", "src/parser/extractors/sql-parens.ts",
+    "src/parser/extractors/sql-symbols.ts", "tests/parser/extractors/sql-boundaries.test.ts",
     "zuvo/contracts/refactor-1d6e26f6.json"
   ],
   "backup_branch": "backup/refactor-sql-extractor-2026-07-10",
@@ -26,9 +29,12 @@
   },
   "prove": {
     "characterization": "existing:3 SQL extractor suites:green:8ebe14b:28 tests",
-    "blind_audit": "fix:CQ11 and single-line boundary",
-    "adversarial": "clean",
-    "findings_disposition": "Pure split preserves behavior. Fix-now follow-up: decompose facade/columns/boundaries under CQ11 and correct single-line -1 boundary with regression proof.",
-    "latest": { "baseline": "green: 28 tests; TypeScript green", "focused": "green: 28 tests", "build": "green", "adversarial": "clean" }
-  }
+    "blind_audit": "clean:strict",
+    "adversarial": "4findings:preserved",
+    "findings_disposition": "Fixed CQ11, restored the exact table-signature constraint matcher, and corrected the single-line -1 boundary with a red/green regression test. Final adversarial findings (BEGIN/END simplification, one-line field locations, matcher capture convention, malformed-DDL consumed fallback) are verified pre-existing behavior at 8ebe14b and preserved by this refactor.",
+    "regression_red": "red@b19fc52:green@working-tree:tests/parser/extractors/sql-boundaries.test.ts",
+    "latest": { "baseline": "green: 28 tests; TypeScript green", "focused": "green: 29 tests", "typecheck": "green", "build": "green", "blind_audit": "clean:strict", "adversarial": "4findings:preserved" }
+  },
+  "cq_after": { "score": "18/18", "critical_failures": [] },
+  "commits": ["b19fc52"]
 }
