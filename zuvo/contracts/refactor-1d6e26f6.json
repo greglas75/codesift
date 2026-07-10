@@ -36,5 +36,5 @@
     "latest": { "baseline": "green: 28 tests; TypeScript green", "focused": "green: 29 tests", "typecheck": "green", "build": "green", "blind_audit": "clean:strict", "adversarial": "4findings:preserved" }
   },
   "cq_after": { "score": "18/18", "critical_failures": [] },
-  "commits": ["b19fc52"]
+  "commits": ["b19fc52", "be9973b"]
 }
