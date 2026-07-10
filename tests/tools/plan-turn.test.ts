@@ -400,6 +400,16 @@ describe("planTurn", () => {
     expect(result.metadata.unindexed).toBe(true);
   });
 
+  it("reports truncation when an unindexed query exceeds the input cap", async () => {
+    getCodeIndexMock.mockResolvedValue(null);
+
+    const result = await planTurn("missing", "x".repeat(1_001));
+
+    expect(result.query).toHaveLength(1_000);
+    expect(result.truncated).toBe(true);
+    expect(result.metadata.truncated).toBe(true);
+  });
+
   it("5. hidden tools → reveal_required populated", async () => {
     getCodeIndexMock.mockResolvedValue(makeIndex());
     rankToolsMock.mockReturnValue([rec("find_dead_code", 0.9, true)]);

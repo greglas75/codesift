@@ -87,6 +87,7 @@ describe("new CLI commands — registration", () => {
     "communities",
     "patterns",
     "find-clones",
+    "cleanup-processes",
   ])("COMMAND_MAP contains '%s'", (cmd) => {
     expect(COMMAND_MAP[cmd]).toBeDefined();
     expect(typeof COMMAND_MAP[cmd]).toBe("function");
@@ -377,6 +378,17 @@ describe("handleSetup", () => {
   it("skips installGitHooks when --hooks false", async () => {
     await COMMAND_MAP["setup"]!(["claude"], { hooks: "false" });
     expect(mockInstallGitHooks).not.toHaveBeenCalled();
+  });
+
+  it("honors --no-hooks from the CLI parser", async () => {
+    await COMMAND_MAP["setup"]!(["claude"], { "no-hooks": true });
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ hooks: false }));
+    expect(mockInstallGitHooks).not.toHaveBeenCalled();
+  });
+
+  it("honors --no-rules from the CLI parser", async () => {
+    await COMMAND_MAP["setup"]!(["claude"], { "no-rules": true, "no-hooks": true });
+    expect(mockFormatSetupLines).toHaveBeenCalledWith("claude", expect.objectContaining({ rules: false }));
   });
 
   it("runs installGitHooks when only --git-hooks is set with hooks false", async () => {

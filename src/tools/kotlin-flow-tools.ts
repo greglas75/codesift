@@ -49,7 +49,7 @@ function collectFlowWarnings(source: string, operators: string[]): string[] {
     );
   }
   if (!operators.includes("stateIn")) return warnings;
-  const stateInIndex = source.indexOf(".stateIn(");
+  const stateInIndex = /\.stateIn\s*[({]/.exec(source)?.index ?? -1;
   const stateInContext = source.slice(stateInIndex, stateInIndex + 200);
   if (stateInIndex !== -1
     && !/\bscope\b|\bviewModelScope\b|\blifecycleScope\b|\bcoroutineScope\b/i.test(stateInContext)) {

@@ -325,7 +325,10 @@ export async function planTurn(
   const maxTools = resolveMaxTools(options?.max_results);
   const skipSession = options?.skip_session === true;
   const index = await getCodeIndex(repo, { skipFreshness: true });
-  if (!index) return buildUnindexedResult(capQuery(query), startedAt);
+  if (!index) {
+    const cappedQuery = capQuery(query);
+    return buildUnindexedResult(cappedQuery, startedAt, cappedQuery.length < query.length);
+  }
 
   const lastGitCommit = await readLastGitCommit(repo);
   const parsed = parseQuery(query, index);

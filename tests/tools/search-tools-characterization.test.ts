@@ -291,6 +291,28 @@ describe("search tools characterization", () => {
     }
   });
 
+  it("clamps invalid and oversized source character limits", async () => {
+    const source = `export function targetValue(): string { return "${"x".repeat(6_000)}"; }`;
+    const fixture = await loadNodeFallbackFixture({ source });
+    try {
+      const oversized = await fixture.searchSymbols(fixture.repo, "targetValue", {
+        top_k: 1,
+        include_source: true,
+        source_chars: Number.POSITIVE_INFINITY,
+      });
+      expect(oversized[0]?.symbol.source).toHaveLength(5_003);
+
+      const negative = await fixture.searchSymbols(fixture.repo, "targetValue", {
+        top_k: 1,
+        include_source: true,
+        source_chars: -100,
+      });
+      expect(negative[0]?.symbol.source).toHaveLength(4);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("clamps context lines to a bounded window", async () => {
     const source = [
       ...Array.from({ length: 25 }, (_, index) => `// before ${index}`),

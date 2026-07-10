@@ -4,6 +4,7 @@
 
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import type { Flags } from "./args.js";
 import type { CallNode } from "../types.js";
 import type { HttpServerHandle } from "../server.js";
@@ -231,6 +232,92 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
     freed_gb: +(bytes / 1e9).toFixed(2),
     kept_live_artifacts: kept,
     data_dir: dataDir,
+  }, flags);
+}
+
+type ProcessRow = { pid: number; ppid: number; rssKb: number; command: string };
+
+function listProcesses(): ProcessRow[] {
+  const raw = execFileSync("ps", ["-axo", "pid=,ppid=,rss=,command="], { encoding: "utf-8" });
+  const rows: ProcessRow[] = [];
+  for (const line of raw.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match) continue;
+    rows.push({
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      rssKb: Number(match[3]),
+      command: match[4] ?? "",
+    });
+  }
+  return rows;
+}
+
+function classifyCleanupTarget(command: string, includeGlobalCodesift: boolean): string | null {
+  if (command === "" || command.includes("codesift cleanup-processes")) return null;
+  if (command.startsWith("node /Users/") && command.includes("/DEV/codesift-mcp/dist/server.js")) {
+    return "legacy-dev-dist-server";
+  }
+  if (command.includes("npm exec chrome-devtools-mcp") || command === "chrome-devtools-mcp") {
+    return "chrome-devtools-mcp";
+  }
+  if (command.includes("chrome-devtools-mcp/") && command.includes("/watchdog/main.js")) {
+    return "chrome-devtools-watchdog";
+  }
+  if (command.includes("npm exec @sentry/mcp-server")) {
+    return "sentry-mcp";
+  }
+  if (command.includes("npm exec @playwright/mcp")) {
+    return "playwright-mcp";
+  }
+  if (includeGlobalCodesift && command.includes("/.npm-global/bin/codesift-mcp")) {
+    return "global-codesift-mcp";
+  }
+  return null;
+}
+
+async function handleCleanupProcesses(_args: string[], flags: Flags): Promise<void> {
+  const dryRun = getBoolFlag(flags, "dry-run") === true;
+  const includeGlobalCodesift = getBoolFlag(flags, "global-codesift") === true;
+  const rows = listProcesses();
+  const targets = rows
+    .map((row) => ({ ...row, reason: classifyCleanupTarget(row.command, includeGlobalCodesift) }))
+    .filter((row): row is ProcessRow & { reason: string } => row.reason !== null);
+
+  const beforeMb = targets.reduce((sum, row) => sum + row.rssKb, 0) / 1024;
+  const killed: Array<ProcessRow & { reason: string }> = [];
+  const failed: Array<ProcessRow & { reason: string; error: string }> = [];
+
+  if (!dryRun) {
+    for (const row of targets) {
+      try {
+        process.kill(row.pid, "SIGKILL");
+        killed.push(row);
+      } catch (err) {
+        failed.push({ ...row, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
+  const byReason: Record<string, { count: number; rss_mb: number }> = {};
+  for (const row of targets) {
+    byReason[row.reason] ??= { count: 0, rss_mb: 0 };
+    byReason[row.reason]!.count += 1;
+    byReason[row.reason]!.rss_mb += row.rssKb / 1024;
+  }
+  for (const value of Object.values(byReason)) {
+    value.rss_mb = Number(value.rss_mb.toFixed(1));
+  }
+
+  output({
+    dry_run: dryRun,
+    include_global_codesift: includeGlobalCodesift,
+    matched: targets.length,
+    killed: dryRun ? 0 : killed.length,
+    failed: failed.length,
+    matched_rss_mb: Number(beforeMb.toFixed(1)),
+    by_reason: byReason,
+    failed_pids: failed.map((row) => ({ pid: row.pid, reason: row.reason, error: row.error })),
   }, flags);
 }
 
@@ -632,8 +719,12 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
     return;
   }
 
-  const hooks = getBoolFlag(flags, "hooks") ?? true;
-  const rules = getBoolFlag(flags, "rules") ?? true;
+  const hooks = getBoolFlag(flags, "no-hooks")
+    ? false
+    : (getBoolFlag(flags, "hooks") ?? true);
+  const rules = getBoolFlag(flags, "no-rules")
+    ? false
+    : (getBoolFlag(flags, "rules") ?? true);
   const force = getBoolFlag(flags, "force") ?? false;
   // `--no-git-hooks` is a standalone boolean flag (parseArgs stores "no-git-hooks", not "git-hooks": false).
   const gitHooks = getBoolFlag(flags, "no-git-hooks")
@@ -701,6 +792,7 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "repos": handleRepos,
   "invalidate": handleInvalidate,
   "prune": handlePrune,
+  "cleanup-processes": handleCleanupProcesses,
   "serve": handleServe,
   "index-conversations": handleIndexConversations,
   "search": handleSearch,

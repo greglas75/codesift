@@ -24,6 +24,7 @@ export const BM25_FILTER_MIN_K = 200;
 export const IDENTIFIER_QUERY_RX = /^[A-Za-z_][A-Za-z0-9_]{2,}$/;
 export const DEFAULT_SOURCE_CHARS_NARROW = 200;
 export const DEFAULT_SOURCE_CHARS_WIDE = 500;
+export const MAX_SOURCE_CHARS = 5000;
 export const CHARS_PER_TOKEN = 3.5;
 export const DEFAULT_MAX_REGEX_RESULTS = 50;
 export const JSON_OVERHEAD_PER_MATCH = 40;

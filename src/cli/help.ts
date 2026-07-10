@@ -12,6 +12,7 @@ Commands:
   repos                           List all indexed repositories
   invalidate <repo>               Clear index cache for a repository
   prune [--dry-run]               Delete orphaned cache (embeddings/index of dead repos)
+  cleanup-processes [--dry-run]   Kill stale MCP helper processes that leak memory
   serve [--port N] [--host H]     Run one shared local daemon (embeddings load once for all windows)
   index-conversations [path]      Index Claude Code conversations for the current project
 
@@ -129,6 +130,24 @@ unreadable or empty.
 
 Flags:
   --dry-run    Report what would be freed without deleting`,
+
+  "cleanup-processes": `codesift cleanup-processes [--dry-run] [--global-codesift]
+
+Kill stale local MCP helper processes that commonly survive closed agent
+sessions and consume memory:
+  - node /Users/.../DEV/codesift-mcp/dist/server.js
+  - chrome-devtools-mcp and its watchdog
+  - npm exec @sentry/mcp-server
+  - npm exec @playwright/mcp
+
+By default this does NOT kill normal global codesift-mcp stdio servers, because
+those may belong to active Codex/Claude/Gemini sessions. Add --global-codesift
+when you want to reclaim every CodeSift MCP process and are ready to restart
+agent sessions.
+
+Flags:
+  --dry-run           Show matched processes and RSS without killing
+  --global-codesift   Also kill /Users/.../.npm-global/bin/codesift-mcp`,
 
   serve: `codesift serve [--port N] [--host H]
 

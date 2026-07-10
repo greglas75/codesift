@@ -1,0 +1,34 @@
+{
+  "files.watcherExclude": {
+    "**/tests/fixtures/**": true,
+    "**/.worktrees/**": true,
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/coverage/**": true,
+    "**/.codesift/**": true
+  },
+  "search.exclude": {
+    "**/tests/fixtures": true,
+    "**/.worktrees": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/coverage": true
+  },
+  "files.exclude": {
+    "**/tests/fixtures/turbo-pnpm-monorepo/packages/*/tsconfig.json": true,
+    "**/tests/fixtures/turbo-pnpm-monorepo/apps/*/tsconfig.json": true,
+    "**/tests/fixtures/tsconfig-monorepo/**/tsconfig.json": true
+  },
+  "typescript.tsserver.experimental.enableProjectDiagnostics": false,
+  "typescript.tsserver.useSyntaxServer": "auto",
+  "typescript.tsserver.maxTsServerMemory": 3072,
+  "typescript.disableAutomaticTypeAcquisition": true,
+  "typescript.preferences.includePackageJsonAutoImports": "off",
+  "typescript.tsserver.watchOptions": {
+    "watchFile": "useFsEventsOnParentDirectory",
+    "watchDirectory": "useFsEvents",
+    "fallbackPolling": "dynamicPriority",
+    "excludeDirectories": ["**/node_modules", "**/dist", "**/.git", "**/tests/fixtures"]
+  },
+  "git.autofetch": false
+}

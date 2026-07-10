@@ -7,7 +7,11 @@ export const MAX_TOOLS = 10;
 export const MAX_SYMBOLS = 20;
 export const MAX_FILES = 10;
 
-export function buildUnindexedResult(query: string, startedAt: number): PlanTurnResult {
+export function buildUnindexedResult(
+  query: string,
+  startedAt: number,
+  truncated = false,
+): PlanTurnResult {
   const indexFolderRecommendation: ToolRecommendation = {
     name: "index_folder",
     confidence: 1.0,
@@ -16,7 +20,7 @@ export function buildUnindexedResult(query: string, startedAt: number): PlanTurn
   };
   return {
     query,
-    truncated: false,
+    truncated,
     confidence: 1.0,
     tools: [indexFolderRecommendation],
     symbols: [],
@@ -31,6 +35,7 @@ export function buildUnindexedResult(query: string, startedAt: number): PlanTurn
       duration_ms: Date.now() - startedAt,
       unindexed: true,
       cold_start: true,
+      ...(truncated ? { truncated: true } : {}),
     },
   };
 }

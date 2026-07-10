@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Split Kotlin analysis tools into capability modules for extensions, sealed
+  hierarchies, suspend chains, multiplatform declarations, and Flow chains,
+  behind the existing `kotlin-tools.ts` compatibility facade.
 - Split `plan_turn` parsing, ranking, framework context, stale-index checks,
   and formatting into focused modules behind the existing compatibility facade.
 - Split `analyze_project` profile generation out of `src/tools/project-tools.ts`
@@ -17,6 +20,10 @@
 
 ### Fixed
 
+- Hardened Kotlin analysis for regex metacharacters and braces in sealed
+  hierarchies, concurrent file scanning, suspend overload and uppercase-callee
+  traversal, nested cancellation checks, depth validation, and spaced
+  `stateIn` calls.
 - Hardened `plan_turn` query/result limits, punctuation and case-sensitive
   parsing, repository-scoped framework detection, query-bounded index lookup
   allocations, usage cache expiry, and monorepo tool deduplication.

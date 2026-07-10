@@ -10,6 +10,7 @@ import {
   DEFAULT_SOURCE_CHARS_NARROW,
   DEFAULT_SOURCE_CHARS_WIDE,
   DEFAULT_TOP_K_WITH_SOURCE,
+  MAX_SOURCE_CHARS,
   MAX_SYMBOL_RESULTS,
   SERVER_AUTO_COMPACT_THRESHOLD,
 } from "./constants.js";
@@ -59,7 +60,11 @@ function resolveSourceCharacterLimit(
   includeSource: boolean,
   options?: Pick<SearchSymbolsOptions, "source_chars" | "file_pattern">,
 ): number | undefined {
-  if (options?.source_chars !== undefined) return options.source_chars;
+  if (options?.source_chars !== undefined) {
+    const requested = options.source_chars;
+    if (!Number.isFinite(requested)) return MAX_SOURCE_CHARS;
+    return Math.min(MAX_SOURCE_CHARS, Math.max(1, Math.floor(requested)));
+  }
   if (!includeSource || detail === "full") return undefined;
   return options?.file_pattern ? DEFAULT_SOURCE_CHARS_WIDE : DEFAULT_SOURCE_CHARS_NARROW;
 }

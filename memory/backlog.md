@@ -2,6 +2,11 @@
 
 <!-- fingerprint: file|rule|signature -->
 
+<!-- zuvo:review 2026-07-10 d453ab3..209c975 — all assistant commits -->
+- [ ] [MED] `src/tools/search-tools/text-search.ts|CQ3|sync-regex-fallback-redos` — isolate Node regex fallback in a worker/child with a hard kill deadline; the current denylist plus synchronous `RegExp.test()` cannot enforce the wall-clock contract. Defer reason: [structural-refactor (multi-file)].
+- [ ] [MED] `src/tools/kotlin-tools.ts|CQ6|unbounded-result-arrays` — add shared `max_results`/`truncated` handling across extension, KMP, and sealed-hierarchy capabilities plus registration schemas and large-index tests. Defer reason: [structural-refactor (multi-file)].
+- [ ] **B-review-incomplete-2026-07-10** — rerun `zuvo:review d453ab3..209c975` after external providers are authenticated/reachable; three `--multi` attempts returned zero valid adversarial reviews, so no content-keyed artifact or `reviewed/*` tags were created.
+
 <!-- zuvo:review 2026-05-05 ae96065^..ae96065 — consolidated fixes (Hono mounts, extractors, tools, CLI) -->
 - [ ] **R-0** `hono.ts|correctness|inflight-leak-on-throw` — MUST-FIX: `inFlight.delete(file)` outside `finally` in BOTH cache-hit (line ~150) and main-path (line ~239) branches; throw poisons cycle detection set [cross-provider CRITICAL]
 - [ ] **R-1** `tsconfig-paths.ts|perf|ancestor-cache-lost` — populate ancestor dirs in `dirToConfigCache` with new compound key (sibling lookups regressed from O(1) to O(N))

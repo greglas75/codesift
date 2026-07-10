@@ -51,7 +51,9 @@ codesift setup all              # Updates rules files to latest version
 codesift setup all --force      # Force-update even if you modified rules
 ```
 
-If you use `npx -y codesift-mcp` (the default), each platform automatically picks up the latest published version on next session start. Re-run `setup` to update rules files to the latest version.
+`setup` writes the absolute `codesift-mcp` bin path when available. This avoids
+per-session `npx` cache drift and stale `dist/server.js` paths. Re-run `setup`
+after updating to refresh rules files and repair old MCP config entries.
 
 ## Quick start
 
@@ -510,15 +512,16 @@ Add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.codesift]
-command = "npx"
-args = ["-y", "codesift-mcp"]
+command = "/Users/you/.npm-global/bin/codesift-mcp"
+args = []
 tool_timeout_sec = 120
+default_tools_approval_mode = "auto"
 ```
 
 You can also add it manually or via the Codex CLI:
 
 ```bash
-codex mcp add codesift -- npx -y codesift-mcp
+codex mcp add codesift -- /Users/you/.npm-global/bin/codesift-mcp
 ```
 
 ### Claude Code
@@ -529,8 +532,8 @@ Add this to `~/.claude/settings.json`:
 {
   "mcpServers": {
     "codesift": {
-      "command": "npx",
-      "args": ["-y", "codesift-mcp"]
+      "command": "/Users/you/.npm-global/bin/codesift-mcp",
+      "args": []
     }
   }
 }
@@ -542,8 +545,11 @@ With semantic search (OpenAI embeddings), add the env var manually:
 {
   "mcpServers": {
     "codesift": {
-      "command": "/bin/sh",
-      "args": ["-c", "CODESIFT_OPENAI_API_KEY='sk-...' exec codesift-mcp"]
+      "command": "/Users/you/.npm-global/bin/codesift-mcp",
+      "args": [],
+      "env": {
+        "CODESIFT_OPENAI_API_KEY": "sk-..."
+      }
     }
   }
 }
@@ -557,8 +563,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "codesift": {
-      "command": "node",
-      "args": ["/path/to/codesift-mcp/dist/server.js"]
+      "command": "/Users/you/.npm-global/bin/codesift-mcp",
+      "args": []
     }
   }
 }
@@ -572,8 +578,8 @@ Add this to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` in your project:
 {
   "mcpServers": {
     "codesift": {
-      "command": "npx",
-      "args": ["-y", "codesift-mcp"]
+      "command": "/Users/you/.npm-global/bin/codesift-mcp",
+      "args": []
     }
   }
 }
@@ -587,8 +593,8 @@ Add this to `~/.gemini/settings.json`, or to `.gemini/settings.json` in your pro
 {
   "mcpServers": {
     "codesift": {
-      "command": "npx",
-      "args": ["-y", "codesift-mcp"]
+      "command": "/Users/you/.npm-global/bin/codesift-mcp",
+      "args": []
     }
   }
 }
@@ -597,7 +603,7 @@ Add this to `~/.gemini/settings.json`, or to `.gemini/settings.json` in your pro
 You can also use the Gemini CLI:
 
 ```bash
-gemini mcp add codesift -s user npx -- -y codesift-mcp
+gemini mcp add codesift -s user /Users/you/.npm-global/bin/codesift-mcp
 ```
 
 ### Google Antigravity
@@ -608,8 +614,8 @@ Add this to `~/.gemini/antigravity/mcp_config.json`:
 {
   "mcpServers": {
     "codesift": {
-      "command": "npx",
-      "args": ["-y", "codesift-mcp"]
+      "command": "/Users/you/.npm-global/bin/codesift-mcp",
+      "args": []
     }
   }
 }
@@ -822,7 +828,8 @@ npm update -g codesift-mcp        # Update package
 codesift setup all                 # Update rules files to latest version
 ```
 
-If using `npx -y codesift-mcp` (the default in MCP config), the latest version is picked up automatically on next session start.
+`codesift setup all` rewrites old `npx` / `dist/server.js` MCP entries to the
+current absolute `codesift-mcp` bin path.
 
 ### Checklist before publishing
 
@@ -866,17 +873,26 @@ BSL-1.1
 
 ## Low-memory / multi-session (teams, 16–24GB machines)
 
-Each editor session (Claude Code/Cursor/Codex window) currently spawns its **own**
+Each editor session (Claude Code/Cursor/Codex window) can spawn its **own**
 stdio `codesift` server process, and each loads per-repo embeddings into its own
 RAM. On big repos (GB-scale embedding files) several windows can exhaust memory on
 smaller machines. Controls:
+
+```bash
+# Prefer one shared daemon for many editor windows.
+codesift serve
+codesift setup all --http
+
+# Clean up stale helper MCP processes left by closed sessions.
+codesift cleanup-processes
+codesift cleanup-processes --dry-run
+```
 
 | Env var | Effect | Default |
 |---------|--------|---------|
 | `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` | **Lite mode** — never load embeddings into RAM (semantic search off; `search_text` + `search_symbols` + tree-sitter still work). Footprint drops to hundreds of MB. Best for 16GB machines. | off |
 | `CODESIFT_MAX_EMBEDDING_MEM_MB` | Cap resident embedding RAM; least-recently-used repos are evicted (and lazily reloaded) above the budget. | `1024` |
 
-Set these in the `env` block of your MCP client config (e.g. `~/.claude.json`
-`mcpServers.codesift.env`). A shared HTTP daemon (`codesift serve`) that loads
-embeddings **once** for all windows is on the roadmap (eliminates the per-session
-duplication entirely).
+Set these in the `env` block of your MCP client config (e.g.
+`mcpServers.codesift.env`). The shared HTTP daemon (`codesift serve`) loads
+embeddings **once** for all windows and avoids per-session duplication.

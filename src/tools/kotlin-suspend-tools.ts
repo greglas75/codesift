@@ -85,9 +85,18 @@ function blockingWarning(
 }
 
 function cancellationWarning(symbol: CodeSymbol): SuspendWarning | undefined {
-  const match = /\bwhile\s*\(\s*true\s*\)\s*\{([\s\S]*?)\}/.exec(symbol.source ?? "");
+  const source = symbol.source ?? "";
+  const match = /\bwhile\s*\(\s*true\s*\)\s*\{/.exec(source);
   if (!match) return undefined;
-  const body = match[1] ?? "";
+  const bodyStart = match.index + match[0].length;
+  let depth = 1;
+  let bodyEnd = bodyStart;
+  for (let index = bodyStart; index < source.length && depth > 0; index++) {
+    if (source[index] === "{") depth++;
+    else if (source[index] === "}") depth--;
+    bodyEnd = index;
+  }
+  const body = source.slice(bodyStart, bodyEnd);
   const isCancellable = /\bensureActive\s*\(/.test(body)
     || /\bisActive\b/.test(body)
     || /\bcoroutineContext\.isActive\b/.test(body);
@@ -121,7 +130,7 @@ function analyzeSuspendBody(
 
 interface TraversalState {
   maxDepth: number;
-  suspendByName: Map<string, CodeSymbol>;
+  suspendByName: Map<string, CodeSymbol[]>;
   chain: string[];
   visited: Set<string>;
   warnings: SuspendWarning[];
@@ -137,15 +146,17 @@ function walkSuspendChain(symbol: CodeSymbol, level: number, state: TraversalSta
   state.transitions.push(...analysis.transitions);
   if (level === state.maxDepth) return;
 
-  const callPattern = /\b([a-z]\w*)\s*\(/g;
+  const callPattern = /\b([A-Za-z_]\w*)\s*\(/g;
+  const keywords = new Set(["catch", "for", "if", "try", "when", "while"]);
   const calleesSeen = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = callPattern.exec(symbol.source ?? "")) !== null) {
     const name = match[1]!;
-    if (name === symbol.name || calleesSeen.has(name)) continue;
+    if (name === symbol.name || keywords.has(name) || calleesSeen.has(name)) continue;
     calleesSeen.add(name);
-    const callee = state.suspendByName.get(name);
-    if (callee && callee.id !== symbol.id) walkSuspendChain(callee, level + 1, state);
+    for (const callee of state.suspendByName.get(name) ?? []) {
+      if (callee.id !== symbol.id) walkSuspendChain(callee, level + 1, state);
+    }
   }
 }
 
@@ -161,6 +172,9 @@ export async function traceSuspendChain(
   }
 
   const maxDepth = options?.depth ?? 3;
+  if (!Number.isInteger(maxDepth) || maxDepth < 0) {
+    throw new Error("depth must be a non-negative integer");
+  }
   const root = index.symbols.find(
     (symbol) => symbol.name === functionName
       && (symbol.kind === "function" || symbol.kind === "method"),
@@ -168,9 +182,12 @@ export async function traceSuspendChain(
   if (!root) throw new Error(`Suspend function "${functionName}" not found.`);
   if (!isSuspendFunction(root)) throw new Error(`"${functionName}" is not a suspend function.`);
 
-  const suspendByName = new Map<string, CodeSymbol>();
+  const suspendByName = new Map<string, CodeSymbol[]>();
   for (const symbol of index.symbols) {
-    if (isSuspendFunction(symbol)) suspendByName.set(symbol.name, symbol);
+    if (!isSuspendFunction(symbol)) continue;
+    const overloads = suspendByName.get(symbol.name) ?? [];
+    overloads.push(symbol);
+    suspendByName.set(symbol.name, overloads);
   }
 
   const state: TraversalState = {

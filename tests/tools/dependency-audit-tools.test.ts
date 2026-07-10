@@ -89,7 +89,7 @@ function makeFakeIndex(overrides: Partial<CodeIndex> = {}): CodeIndex {
 function installFs(files: Record<string, string | null>): void {
   mockStat.mockImplementation(async (path: string) => {
     if (path in files && files[path] !== null) {
-      return { size: 0, mtimeMs: Date.now() };
+      return { size: Buffer.byteLength(files[path] as string), mtimeMs: Date.now() };
     }
     throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
   });
@@ -433,5 +433,131 @@ describe("dependencyAudit", () => {
     const drift = result.lockfile.issues.find((i) => i.type === "drift");
     expect(drift).toBeDefined();
     expect(drift?.package).toBe("lodash");
+  });
+
+  it("reports malformed package-manager JSON as sub-check errors", async () => {
+    installFs({
+      "/test/repo/package-lock.json": "{}",
+      "/test/repo/package.json": JSON.stringify({ dependencies: {} }),
+    });
+    execFileHandler = () => ({ stdout: "not-json", stderr: "" });
+
+    const result = await dependencyAudit("test");
+
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "vulnerabilities: check failed",
+      "freshness: check failed",
+    ]));
+  });
+
+  it("reports an unreadable dependency manifest instead of returning a partial clean scan", async () => {
+    mockedGetCodeIndex.mockResolvedValue(makeFakeIndex({
+      files: [makeFile("node_modules/private-pkg/package.json")],
+    }));
+    installFs({
+      "/test/repo/package-lock.json": "{}",
+      "/test/repo/package.json": JSON.stringify({ dependencies: {} }),
+      "/test/repo/node_modules/private-pkg/package.json": null,
+    });
+
+    const result = await dependencyAudit("test");
+
+    expect(result.licenses.total).toBe(0);
+    expect(result.errors).toContain("licenses: check failed");
+  });
+
+  it("rethrows non-not-found stat failures", async () => {
+    mockStat.mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+
+    await expect(dependencyAudit("test")).rejects.toThrow("permission denied");
+  });
+
+  it("recognizes modern bun.lock during both detection and verification", async () => {
+    installFs({ "/test/repo/bun.lock": "lockfileVersion = 1" });
+
+    const result = await dependencyAudit("test");
+
+    expect(result.package_manager).toBe("bun");
+    expect(result.lockfile).toEqual({ present: true, issues: [] });
+  });
+
+  it("redacts raw subprocess error details", async () => {
+    installFs({
+      "/test/repo/package-lock.json": "{}",
+      "/test/repo/package.json": JSON.stringify({ dependencies: {} }),
+    });
+    execFileHandler = (command, args) => command === "npm" && args[0] === "audit"
+      ? new Error("registry https://user:secret@example.test failed in /private/workspace")
+      : { stdout: "{}", stderr: "" };
+
+    const result = await dependencyAudit("test");
+
+    expect(result.errors).toContain("vulnerabilities: check failed");
+    expect(result.errors.join(" ")).not.toMatch(/secret|private\/workspace/);
+  });
+
+  it("rejects oversized dependency manifests before reading them", async () => {
+    mockedGetCodeIndex.mockResolvedValue(makeFakeIndex({
+      files: [makeFile("node_modules/huge/package.json")],
+    }));
+    installFs({
+      "/test/repo/package-lock.json": "{}",
+      "/test/repo/package.json": JSON.stringify({ dependencies: {} }),
+      "/test/repo/node_modules/huge/package.json": "{}",
+    });
+    mockStat.mockImplementation(async (path: string) => ({
+      size: path.includes("node_modules/huge") ? 2 * 1024 * 1024 : 2,
+      mtimeMs: Date.now(),
+    }));
+
+    const result = await dependencyAudit("test");
+
+    expect(result.errors).toContain("licenses: check failed");
+    expect(mockReadFile).not.toHaveBeenCalledWith(
+      "/test/repo/node_modules/huge/package.json",
+      "utf-8",
+    );
+  });
+
+  it("clears timeout timers when checks finish before their deadlines", async () => {
+    vi.useFakeTimers();
+    try {
+      installFs({});
+      await dependencyAudit("test");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads license manifests concurrently", async () => {
+    const manifestPaths = ["a", "b", "c"].map((name) => `node_modules/${name}/package.json`);
+    mockedGetCodeIndex.mockResolvedValue(makeFakeIndex({ files: manifestPaths.map(makeFile) }));
+    installFs(Object.fromEntries([
+      ["/test/repo/package-lock.json", "{}"],
+      ["/test/repo/package.json", JSON.stringify({ dependencies: {} })],
+      ...manifestPaths.map((path) => [`/test/repo/${path}`, JSON.stringify({ license: "MIT" })]),
+    ]));
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    mockReadFile.mockImplementation(async (path: string) => {
+      if (!path.includes("node_modules/")) return path.endsWith("package-lock.json") ? "{}" : JSON.stringify({ dependencies: {} });
+      activeReads++;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await Promise.resolve();
+      activeReads--;
+      return JSON.stringify({ license: "MIT" });
+    });
+
+    const result = await dependencyAudit("test");
+
+    expect(result.licenses.total).toBe(3);
+    expect(maxActiveReads).toBeGreaterThan(1);
+  });
+
+  it("rejects an empty workspace override", async () => {
+    await expect(dependencyAudit("test", { workspace_path: "" })).rejects.toThrow(
+      "workspace_path must not be empty",
+    );
   });
 });

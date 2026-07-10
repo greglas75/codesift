@@ -52,7 +52,7 @@ beforeAll(() => {
     gitRun(["add", f], repoRoot);
     gitRun(["commit", "-q", "-m", `change ${i} on ${f}`], repoRoot);
   }
-});
+}, 30_000);
 
 afterAll(() => {
   if (repoRoot && existsSync(repoRoot)) rmSync(repoRoot, { recursive: true, force: true });

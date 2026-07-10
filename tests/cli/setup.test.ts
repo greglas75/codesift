@@ -19,6 +19,16 @@ vi.mock("node:os", async () => {
 const { setup, setupAll, formatSetupResult, formatSetupLines, SUPPORTED_PLATFORMS, setupClaudeHooks, setupCodexHooks, setupGeminiHooks, setupHooksForPlatform, installRules } =
   await import("../../src/cli/setup.js");
 
+function expectStdioCodesiftEntry(entry: unknown): void {
+  expect(entry).toEqual({
+    command: expect.stringMatching(/(?:codesift-mcp|npx)$/),
+    args: expect.any(Array),
+  });
+  const record = entry as { command: string; args: string[] };
+  expect(record.command.includes("dist/server.js")).toBe(false);
+  expect(record.args.some((arg) => arg.includes("dist/server.js"))).toBe(false);
+}
+
 // ---------------------------------------------------------------------------
 // Test helper: run setup and collect output lines
 // ---------------------------------------------------------------------------
@@ -85,8 +95,9 @@ describe("setup", () => {
 
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain("[mcp_servers.codesift]");
-      expect(content).toMatch(/command = ".*(?:node|npx)"/);
-      expect(content).toMatch(/args = \[.*codesift.*\]/);
+      expect(content).toMatch(/command = ".*(?:codesift-mcp|npx)"/);
+      expect(content).toContain("args = [");
+      expect(content).not.toContain("dist/server.js");
       expect(content).toContain("tool_timeout_sec = 120");
     });
 
@@ -120,7 +131,8 @@ describe("setup", () => {
       expect(result.status).toBe("updated");
 
       const content = await readFile(result.config_path, "utf-8");
-      expect(content).toContain('[mcp_servers.codesift]\ncommand = "npx"\n');
+      expect(content).toContain("[mcp_servers.codesift]");
+      expect(content).toMatch(/command = ".*(?:codesift-mcp|npx)"/);
       expect(content).toContain('default_tools_approval_mode = "auto"');
     });
 
@@ -129,7 +141,7 @@ describe("setup", () => {
       await mkdir(configDir, { recursive: true });
       await writeFile(
         join(configDir, "config.toml"),
-        '[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "auto"\n',
+        '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\ndefault_tools_approval_mode = "auto"\n',
         "utf-8",
       );
 
@@ -137,7 +149,24 @@ describe("setup", () => {
       expect(result.status).toBe("already_configured");
 
       const content = await readFile(result.config_path, "utf-8");
-      expect(content).toBe('[mcp_servers.codesift]\ncommand = "npx"\ndefault_tools_approval_mode = "auto"\n');
+      expect(content).toBe('[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\ndefault_tools_approval_mode = "auto"\n');
+    });
+
+    it("migrates legacy npx/dist-server codex entries to the stable wrapper shape", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "config.toml"),
+        '[mcp_servers.codesift]\ncommand = "node"\nargs = ["/Users/greglas/DEV/codesift-mcp/dist/server.js"]\ndefault_tools_approval_mode = "auto"\n',
+        "utf-8",
+      );
+
+      const result = await setup("codex");
+      expect(result.status).toBe("updated");
+
+      const content = await readFile(result.config_path, "utf-8");
+      expect(content).toMatch(/command = ".*(?:codesift-mcp|npx)"/);
+      expect(content).not.toContain("/DEV/codesift-mcp/dist/server.js");
     });
 
     it("strips per-tool approval_mode overrides on mcp_servers.codesift when already configured", async () => {
@@ -208,10 +237,7 @@ describe("setup", () => {
       expect(result.config_path).toBe(join(tempHome, ".claude", "settings.json"));
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("adds to existing settings.json preserving other keys", async () => {
@@ -229,10 +255,7 @@ describe("setup", () => {
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.theme).toBe("dark");
       expect(content.mcpServers.other.command).toBe("foo");
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("adds mcpServers key when missing from existing file", async () => {
@@ -248,21 +271,11 @@ describe("setup", () => {
       expect(result.status).toBe("updated");
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
+      expect(content.mcpServers.codesift.command).toMatch(/(?:codesift-mcp|npx)$/);
     });
 
     it("skips when already configured", async () => {
-      const configDir = join(tempHome, ".claude");
-      await mkdir(configDir, { recursive: true });
-      const original = {
-        mcpServers: { codesift: { command: expect.stringMatching(/node$|npx$/), args: expect.arrayContaining([expect.stringMatching(/codesift/)]) } },
-      };
-      await writeFile(
-        join(configDir, "settings.json"),
-        JSON.stringify(original),
-        "utf-8",
-      );
-
+      await setup("claude");
       const result = await setup("claude");
       expect(result.status).toBe("already_configured");
     });
@@ -284,7 +297,7 @@ describe("setup", () => {
       expect(result.status).toBe("updated");
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
+      expect(content.mcpServers.codesift.command).toMatch(/(?:codesift-mcp|npx)$/);
     });
   });
 
@@ -313,7 +326,7 @@ describe("setup", () => {
     it("stdio remains the default without the flag", async () => {
       const result = await setup("claude");
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.command).toMatch(/node$|npx$/);
+      expect(content.mcpServers.codesift.command).toMatch(/(?:codesift-mcp|npx)$/);
       expect(content.mcpServers.codesift.type).toBeUndefined();
     });
 
@@ -348,21 +361,11 @@ describe("setup", () => {
       expect(result.config_path).toBe(join(tempHome, ".cursor", "mcp.json"));
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("skips when already configured", async () => {
-      const configDir = join(tempHome, ".cursor");
-      await mkdir(configDir, { recursive: true });
-      await writeFile(
-        join(configDir, "mcp.json"),
-        JSON.stringify({ mcpServers: { codesift: { command: "npx" } } }),
-        "utf-8",
-      );
-
+      await setup("cursor");
       const result = await setup("cursor");
       expect(result.status).toBe("already_configured");
     });
@@ -381,10 +384,7 @@ describe("setup", () => {
       expect(result.config_path).toBe(join(tempHome, ".gemini", "settings.json"));
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("adds to existing settings.json preserving other keys", async () => {
@@ -402,21 +402,11 @@ describe("setup", () => {
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.theme).toBe("dark");
       expect(content.mcpServers.other.command).toBe("foo");
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("skips when already configured", async () => {
-      const configDir = join(tempHome, ".gemini");
-      await mkdir(configDir, { recursive: true });
-      await writeFile(
-        join(configDir, "settings.json"),
-        JSON.stringify({ mcpServers: { codesift: { command: "npx" } } }),
-        "utf-8",
-      );
-
+      await setup("gemini");
       const result = await setup("gemini");
       expect(result.status).toBe("already_configured");
     });
@@ -435,10 +425,7 @@ describe("setup", () => {
       expect(result.config_path).toBe(join(tempHome, ".gemini", "antigravity", "mcp_config.json"));
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("adds to existing mcp_config.json preserving other keys", async () => {
@@ -456,21 +443,11 @@ describe("setup", () => {
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.theme).toBe("dark");
       expect(content.mcpServers.other.command).toBe("foo");
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
     it("skips when already configured", async () => {
-      const configDir = join(tempHome, ".gemini", "antigravity");
-      await mkdir(configDir, { recursive: true });
-      await writeFile(
-        join(configDir, "mcp_config.json"),
-        JSON.stringify({ mcpServers: { codesift: { command: "npx" } } }),
-        "utf-8",
-      );
-
+      await setup("antigravity");
       const result = await setup("antigravity");
       expect(result.status).toBe("already_configured");
     });
@@ -484,10 +461,7 @@ describe("setup", () => {
       expect(result.status).toBe("updated");
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift).toEqual({
-        command: expect.stringMatching(/node$|npx$/),
-        args: expect.arrayContaining([expect.stringMatching(/codesift/)]),
-      });
+      expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
   });
 
@@ -627,6 +601,18 @@ describe("setup", () => {
       expect(lines.some((l) => l.includes("codesift.md"))).toBe(false);
       expect(lines.some((l) => l.toLowerCase().includes("hook"))).toBe(false);
     });
+
+    it.each(["cursor", "antigravity"])(
+      "%s with hooks enabled does not report an unconfigured hook installer",
+      async (platform) => {
+        const { lines } = await setupWithLines(platform, { hooks: true });
+
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/(?:mcp\.json|mcp_config\.json)/);
+        expect(lines.some((line) => line.toLowerCase().includes("hook"))).toBe(false);
+        expect(lines.some((line) => line.includes("wiki:"))).toBe(false);
+      },
+    );
   });
 
   // -------------------------------------------------------------------------

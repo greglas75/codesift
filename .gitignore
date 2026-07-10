@@ -26,3 +26,6 @@ benchmarks/results/cs-vs-jcm-*.json
 
 # Auto-managed local review queue
 docs/review-queue.md
+
+# zuvo session state (local runtime, not committed)
+zuvo/

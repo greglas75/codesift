@@ -3,6 +3,10 @@ import { join } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export interface SealedHierarchyResult {
   sealed_class: { name: string; file: string; start_line: number; kind: string };
   subtypes: Array<{ name: string; file: string; start_line: number; kind: string }>;
@@ -30,8 +34,9 @@ function collectSubtypes(
   index: CodeIndex,
   sealedClassName: string,
 ): SealedHierarchyResult["subtypes"] {
+  const escapedClassName = escapeRegExp(sealedClassName);
   const subtypePattern = new RegExp(
-    `:\\s*(?:[\\w<>,\\s]+,\\s*)?${sealedClassName}\\s*[({,)]|:\\s*${sealedClassName}\\s*$`,
+    `:\\s*(?:[\\w<>,\\s]+,\\s*)?${escapedClassName}\\s*[({,)]|:\\s*${escapedClassName}\\s*$`,
   );
   return index.symbols.flatMap((symbol) => {
     const isCandidate = (symbol.kind === "class" || symbol.kind === "interface")
@@ -47,9 +52,32 @@ function collectSubtypes(
 function findClosingBrace(source: string, blockStart: number): number {
   let depth = 1;
   let blockEnd = blockStart;
+  let quote: "\"" | "'" | null = null;
+  let lineComment = false;
+  let blockComment = false;
   for (let index = blockStart; index < source.length && depth > 0; index++) {
-    if (source[index] === "{") depth++;
-    else if (source[index] === "}") depth--;
+    const char = source[index]!;
+    const next = source[index + 1];
+    if (lineComment) {
+      if (char === "\n") lineComment = false;
+    } else if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        index++;
+      }
+    } else if (quote) {
+      if (char === "\\") index++;
+      else if (char === quote) quote = null;
+    } else if (char === "/" && next === "/") {
+      lineComment = true;
+      index++;
+    } else if (char === "/" && next === "*") {
+      blockComment = true;
+      index++;
+    } else if (char === "\"" || char === "'") {
+      quote = char;
+    } else if (char === "{") depth++;
+    else if (char === "}") depth--;
     blockEnd = index;
   }
   return blockEnd;
@@ -67,7 +95,7 @@ function analyzeWhenSource(
     const blockEnd = findClosingBrace(source, match.index + match[0].length);
     const blockContent = source.slice(match.index, blockEnd + 1);
     const branchesFound = [...subtypeNames].filter((subtypeName) =>
-      new RegExp(`\\b(?:is\\s+)?${subtypeName}\\b`).test(blockContent));
+      new RegExp(`\\b(?:is\\s+)?${escapeRegExp(subtypeName)}\\b`).test(blockContent));
     if (branchesFound.length === 0) continue;
     const branchesMissing = [...subtypeNames].filter(
       (subtypeName) => !branchesFound.includes(subtypeName),
@@ -87,17 +115,18 @@ async function collectWhenBlocks(
   index: CodeIndex,
   subtypeNames: Set<string>,
 ): Promise<SealedHierarchyResult["when_blocks"]> {
-  const whenBlocks: SealedHierarchyResult["when_blocks"] = [];
-  for (const file of index.files.filter((entry) => /\.kts?$/.test(entry.path))) {
+  const kotlinFiles = index.files.filter((entry) => /\.kts?$/.test(entry.path));
+  const blocksByFile = await Promise.all(kotlinFiles.map(async (file) => {
     let source: string;
     try {
       source = await readFile(join(index.root, file.path), "utf-8");
-    } catch {
-      continue;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to read indexed Kotlin file "${file.path}": ${message}`);
     }
-    whenBlocks.push(...analyzeWhenSource(source, file.path, subtypeNames));
-  }
-  return whenBlocks;
+    return analyzeWhenSource(source, file.path, subtypeNames);
+  }));
+  return blocksByFile.flat();
 }
 
 /** Analyze a sealed class/interface hierarchy and its when blocks. */

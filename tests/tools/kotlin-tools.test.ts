@@ -193,19 +193,17 @@ describe("analyzeSealedHierarchy", () => {
     }
   });
 
-  it("ignores a Kotlin file that cannot be read", async () => {
+  it("reports a Kotlin file that cannot be read", async () => {
     const index = makeIndex([
       makeSymbol({ name: "Result", kind: "class", source: "sealed class Result" }),
     ], [{ path: "missing.kt" }], "/definitely/missing");
     vi.mocked(getCodeIndex).mockResolvedValue(index);
 
-    const result = await analyzeSealedHierarchy("test", "Result");
-
-    expect(result.when_blocks).toEqual([]);
-    expect(result.all_exhaustive).toBe(false);
+    await expect(analyzeSealedHierarchy("test", "Result"))
+      .rejects.toThrow('Failed to read indexed Kotlin file "missing.kt"');
   });
 
-  it("propagates analysis errors after a Kotlin file is read", async () => {
+  it("handles regex metacharacters in subtype names", async () => {
     const root = mkdtempSync(join(tmpdir(), "kotlin-sealed-"));
     try {
       writeFileSync(join(root, "usage.kt"), "fun render(value: Result) = when (value) { is Success -> \"ok\" }");
@@ -215,7 +213,10 @@ describe("analyzeSealedHierarchy", () => {
       ], [{ path: "usage.kt" }], root);
       vi.mocked(getCodeIndex).mockResolvedValue(index);
 
-      await expect(analyzeSealedHierarchy("test", "Result")).rejects.toBeInstanceOf(SyntaxError);
+      const result = await analyzeSealedHierarchy("test", "Result");
+
+      expect(result.subtypes.map((subtype) => subtype.name)).toEqual(["("]);
+      expect(result.when_blocks).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -261,6 +262,44 @@ describe("analyzeSealedHierarchy", () => {
     expect(result.total_subtypes).toBe(2);
     expect(result.subtypes.map((s) => s.name).sort()).toEqual(["Error", "Success"]);
     expect(result.when_blocks).toHaveLength(0);
+  });
+
+  it("does not treat metacharacters in a sealed class name as regex syntax", async () => {
+    const index = makeIndex([
+      makeSymbol({ name: "Result.Value", kind: "class", source: "sealed class `Result.Value`" }),
+      makeSymbol({ name: "Exact", kind: "class", source: "class Exact : Result.Value()" }),
+      makeSymbol({ name: "NearMiss", kind: "class", source: "class NearMiss : ResultXValue()" }),
+    ], []);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeSealedHierarchy("test", "Result.Value");
+
+    expect(result.subtypes.map((subtype) => subtype.name)).toEqual(["Exact"]);
+  });
+
+  it("ignores braces inside strings when locating a when block boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kotlin-sealed-"));
+    try {
+      writeFileSync(join(root, "usage.kt"), `fun render(value: Result) = when (value) {
+  is Success -> "}"
+  is Error -> "error"
+}`);
+      vi.mocked(getCodeIndex).mockResolvedValue(makeIndex([
+        makeSymbol({ name: "Result", kind: "class", source: "sealed class Result" }),
+        makeSymbol({ name: "Success", kind: "class", source: "class Success : Result()" }),
+        makeSymbol({ name: "Error", kind: "class", source: "class Error : Result()" }),
+      ], [{ path: "usage.kt" }], root));
+
+      const result = await analyzeSealedHierarchy("test", "Result");
+
+      expect(result.when_blocks[0]).toMatchObject({
+        branches_found: ["Error", "Success"],
+        branches_missing: [],
+        is_exhaustive: true,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("throws for non-sealed class", async () => {
@@ -511,6 +550,27 @@ describe("traceSuspendChain", () => {
     expect(loopWarning).toBeUndefined();
   });
 
+  it("does not warn when ensureActive follows a nested block in while(true)", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "pollUpdates",
+        signature: "suspend (): Unit",
+        source: `suspend fun pollUpdates() {
+    while (true) {
+        if (paused) { delay(10) }
+        ensureActive()
+        process(api.poll())
+    }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "pollUpdates");
+
+    expect(result.warnings).toEqual([]);
+  });
+
   it("excludes non-suspend functions from the chain", async () => {
     const index = makeIndex([
       makeSymbol({
@@ -542,6 +602,44 @@ describe("traceSuspendChain", () => {
 
     expect(result.chain).toEqual(["rootCall", "childCall"]);
     expect(result.depth).toBe(1);
+  });
+
+  it("follows every suspend overload with the called name", async () => {
+    const index = makeIndex([
+      makeSymbol({ id: "root", name: "rootCall", signature: "suspend (): Unit", source: "suspend fun rootCall() { load() }" }),
+      makeSymbol({ id: "load-int", name: "load", signature: "suspend (id: Int): Unit", source: "suspend fun load(id: Int) { runBlocking {} }" }),
+      makeSymbol({ id: "load-list", name: "load", signature: "suspend (ids: List<Int>): Unit", source: "suspend fun load(ids: List<Int>) { Thread.sleep(1) }" }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "rootCall");
+
+    expect(result.warnings.map((warning) => warning.message)).toEqual(expect.arrayContaining([
+      "runBlocking inside a suspend function — deadlock risk on caller's dispatcher",
+      "Thread.sleep() in suspend function — blocks dispatcher thread, use delay() instead",
+    ]));
+  });
+
+  it("follows suspend callees whose names begin with uppercase letters", async () => {
+    const index = makeIndex([
+      makeSymbol({ name: "rootCall", signature: "suspend (): Unit", source: "suspend fun rootCall() { BuildReport() }" }),
+      makeSymbol({ name: "BuildReport", signature: "suspend (): Unit", source: "suspend fun BuildReport() { Thread.sleep(1) }" }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "rootCall");
+
+    expect(result.chain).toEqual(["rootCall", "BuildReport"]);
+  });
+
+  it.each([-1, 1.5, Number.POSITIVE_INFINITY])("rejects invalid depth %s", async (depth) => {
+    vi.mocked(getCodeIndex).mockResolvedValue(makeIndex([
+      makeSymbol({ name: "rootCall", signature: "suspend (): Unit", source: "suspend fun rootCall() {}" }),
+    ]));
+
+    await expect(traceSuspendChain("test", "rootCall", { depth })).rejects.toThrow(
+      "depth must be a non-negative integer",
+    );
   });
 
   it("throws for an unknown repository", async () => {
@@ -777,6 +875,23 @@ describe("traceFlowChain", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.has_terminal).toBe(false);
+  });
+
+  it("detects stateIn with whitespace before its arguments", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "usersFlow",
+        kind: "variable",
+        source: "val usersFlow = userDao.getAll().stateIn (initialValue = emptyList())",
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceFlowChain("test", "usersFlow");
+
+    expect(result.warnings).toContain(
+      ".stateIn without a lifecycle scope parameter — the StateFlow will never complete, causing a memory leak unless bound to viewModelScope/lifecycleScope",
+    );
   });
 
   it("throws for symbol without Flow usage", async () => {

@@ -1,0 +1,1 @@
+2026-07-10T18:25:17Z	review	codesift-mcp	0-critical	2-total	FAIL	-	5-commits	3 fixes; 2 structural; [VALIDITY GATE FAIL] adversarial unavailable	main	209c975	env-compat|quality-gates|cq-checklist|cq-patterns|testing|typescript|run-logger|retrospective|codesift-setup|agent-preamble|file-limits|cross-provider-review	DEEP

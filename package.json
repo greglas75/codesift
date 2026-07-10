@@ -1,13 +1,13 @@
 {
   "name": "codesift-mcp",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "MCP server for code intelligence — 146 tools for symbol search, call graph, semantic search, route tracing, community detection, LSP bridge, secret detection, conversation search, and Hono framework intelligence",
   "license": "BSL-1.1",
   "author": "Greg Laskowski",
   "type": "module",
   "bin": {
-    "codesift-mcp": "./dist/server.js",
-    "codesift": "./dist/cli.js"
+    "codesift-mcp": "dist/server.js",
+    "codesift": "dist/cli.js"
   },
   "main": "./dist/server.js",
   "files": [
@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && cp -r src/parser/languages dist/parser/",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && cp -r src/parser/languages dist/parser/ && chmod +x dist/cli.js dist/server.js",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
