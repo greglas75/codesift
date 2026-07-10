@@ -89,9 +89,9 @@ function getSimpleUserTypeName(node: Parser.SyntaxNode): string {
     for (const child of current.namedChildren) collect(child);
   }
   collect(node);
-  return (identifiers.at(-1) ?? node.text.split(".").at(-1) ?? node.text)
-    .trim()
-    .replace(/^`|`$/g, "");
+  const selected = identifiers.at(-1) ?? node.text;
+  const unescaped = selected.trim().replace(/^`|`$/g, "");
+  return unescaped.split(".").at(-1)?.trim() ?? unescaped;
 }
 
 /**
