@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, analyzeKmpDeclarations, traceFlowChain } from "../../src/tools/kotlin-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
@@ -23,10 +26,14 @@ function makeSymbol(overrides: Partial<CodeSymbol>): CodeSymbol {
   };
 }
 
-function makeIndex(symbols: CodeSymbol[], files?: Array<{ path: string }>): CodeIndex {
+function makeIndex(
+  symbols: CodeSymbol[],
+  files?: Array<{ path: string }>,
+  root = "/tmp/test",
+): CodeIndex {
   return {
     repo: "test",
-    root: "/tmp/test",
+    root,
     files: files ?? symbols
       .map((s) => s.file)
       .filter((f, i, a) => a.indexOf(f) === i)
@@ -46,7 +53,7 @@ describe("findExtensionFunctions", () => {
 
   it("finds extension functions matching receiver type", async () => {
     const index = makeIndex([
-      makeSymbol({ name: "toSlug", kind: "function", signature: "String.()", file: "utils.kt", start_line: 1 }),
+      makeSymbol({ name: "toSlug", kind: "function", signature: "String.()", docstring: "Slug docs", file: "utils.kt", start_line: 1 }),
       makeSymbol({ name: "capitalize", kind: "function", signature: "String.(): String", file: "utils.kt", start_line: 5 }),
       makeSymbol({ name: "first", kind: "function", signature: "List<T>.(): T", file: "collections.kt", start_line: 1 }),
       makeSymbol({ name: "greet", kind: "function", signature: "(name: String): String", file: "service.kt", start_line: 1 }),
@@ -57,6 +64,7 @@ describe("findExtensionFunctions", () => {
     expect(result.receiver_type).toBe("String");
     expect(result.total).toBe(2);
     expect(result.extensions.map((e) => e.name).sort()).toEqual(["capitalize", "toSlug"]);
+    expect(result.extensions[0]).toMatchObject({ name: "toSlug", signature: "String.()", docstring: "Slug docs" });
   });
 
   it("does not match non-extension functions", async () => {
@@ -118,6 +126,7 @@ describe("findExtensionFunctions", () => {
     vi.mocked(getCodeIndex).mockResolvedValue(null);
     await expect(findExtensionFunctions("missing", "String")).rejects.toThrow("not found");
   });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -127,6 +136,89 @@ describe("findExtensionFunctions", () => {
 describe("analyzeSealedHierarchy", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("reports an exhaustive when block from a Kotlin file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kotlin-sealed-"));
+    try {
+      writeFileSync(join(root, "usage.kt"), `fun render(value: Result) = when (value) {
+  is Success -> "ok"
+  is Error -> "error"
+}`);
+      const index = makeIndex([
+        makeSymbol({ name: "Result", kind: "class", source: "sealed class Result" }),
+        makeSymbol({ name: "Success", kind: "class", source: "class Success : Result()" }),
+        makeSymbol({ name: "Error", kind: "class", source: "class Error : Result()" }),
+      ], [{ path: "usage.kt" }], root);
+      vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+      const result = await analyzeSealedHierarchy("test", "Result");
+
+      expect(result.when_blocks).toEqual([{
+        file: "usage.kt",
+        line: 1,
+        branches_found: ["Error", "Success"],
+        branches_missing: [],
+        is_exhaustive: true,
+      }]);
+      expect(result.all_exhaustive).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports missing branches in an incomplete when block", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kotlin-sealed-"));
+    try {
+      writeFileSync(join(root, "usage.kt"), `fun render(value: Result) = when (value) {
+  is Success -> "ok"
+}`);
+      const index = makeIndex([
+        makeSymbol({ name: "Result", kind: "class", source: "sealed class Result" }),
+        makeSymbol({ name: "Success", kind: "class", source: "class Success : Result()" }),
+        makeSymbol({ name: "Error", kind: "class", source: "class Error : Result()" }),
+      ], [{ path: "usage.kt" }], root);
+      vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+      const result = await analyzeSealedHierarchy("test", "Result");
+
+      expect(result.when_blocks[0]).toMatchObject({
+        branches_found: ["Success"],
+        branches_missing: ["Error"],
+        is_exhaustive: false,
+      });
+      expect(result.all_exhaustive).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a Kotlin file that cannot be read", async () => {
+    const index = makeIndex([
+      makeSymbol({ name: "Result", kind: "class", source: "sealed class Result" }),
+    ], [{ path: "missing.kt" }], "/definitely/missing");
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await analyzeSealedHierarchy("test", "Result");
+
+    expect(result.when_blocks).toEqual([]);
+    expect(result.all_exhaustive).toBe(false);
+  });
+
+  it("propagates analysis errors after a Kotlin file is read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kotlin-sealed-"));
+    try {
+      writeFileSync(join(root, "usage.kt"), "fun render(value: Result) = when (value) { is Success -> \"ok\" }");
+      const index = makeIndex([
+        makeSymbol({ name: "Result", kind: "class", source: "sealed class Result" }),
+        makeSymbol({ name: "(", kind: "class", source: "class Invalid : Result()" }),
+      ], [{ path: "usage.kt" }], root);
+      vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+      await expect(analyzeSealedHierarchy("test", "Result")).rejects.toBeInstanceOf(SyntaxError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("finds subtypes of a sealed class", async () => {
@@ -297,6 +389,28 @@ describe("traceSuspendChain", () => {
     expect(kinds).toEqual(["Default", "Main"]);
   });
 
+  it("classifies unconfined and custom static dispatchers while ignoring non-dispatchers", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "switchContexts",
+        signature: "suspend (): Unit",
+        source: `suspend fun switchContexts() {
+    withContext(Dispatchers.Unconfined) { yield() }
+    withContext(Dispatchers.Custom) { work() }
+    withContext(coroutineContext) { finish() }
+}`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "switchContexts");
+
+    expect(result.dispatcher_transitions.map((transition) => transition.dispatcher)).toEqual([
+      "Unconfined",
+      "Custom",
+    ]);
+  });
+
   it("warns about runBlocking inside a suspend function", async () => {
     const index = makeIndex([
       makeSymbol({
@@ -316,8 +430,11 @@ describe("traceSuspendChain", () => {
     const runBlockingWarning = result.warnings.find((w) =>
       w.message.toLowerCase().includes("runblocking"),
     );
-    expect(runBlockingWarning).toBeDefined();
-    expect(runBlockingWarning!.function).toBe("doWork");
+    expect(runBlockingWarning).toMatchObject({
+      function: "doWork",
+      severity: "critical",
+      message: "runBlocking inside a suspend function — deadlock risk on caller's dispatcher",
+    });
   });
 
   it("warns about Thread.sleep inside a suspend function", async () => {
@@ -337,7 +454,11 @@ describe("traceSuspendChain", () => {
     const threadSleepWarning = result.warnings.find((w) =>
       w.message.toLowerCase().includes("thread.sleep"),
     );
-    expect(threadSleepWarning).toBeDefined();
+    expect(threadSleepWarning).toMatchObject({
+      function: "slowOp",
+      severity: "critical",
+      message: "Thread.sleep() in suspend function — blocks dispatcher thread, use delay() instead",
+    });
   });
 
   it("warns about while(true) loops without ensureActive/isActive", async () => {
@@ -361,7 +482,10 @@ describe("traceSuspendChain", () => {
       w.message.toLowerCase().includes("ensureactive") ||
       w.message.toLowerCase().includes("cancellable"),
     );
-    expect(loopWarning).toBeDefined();
+    expect(loopWarning).toMatchObject({
+      function: "pollUpdates",
+      severity: "warning",
+    });
   });
 
   it("does NOT warn about while(true) when ensureActive is present", async () => {
@@ -404,6 +528,28 @@ describe("traceSuspendChain", () => {
   it("throws when function is not found", async () => {
     vi.mocked(getCodeIndex).mockResolvedValue(makeIndex([]));
     await expect(traceSuspendChain("test", "nonExistent")).rejects.toThrow(/not found/i);
+  });
+
+  it("follows suspend callees only up to the requested depth", async () => {
+    const index = makeIndex([
+      makeSymbol({ name: "rootCall", signature: "suspend (): Unit", source: "suspend fun rootCall() { childCall() }" }),
+      makeSymbol({ name: "childCall", signature: "suspend (): Unit", source: "suspend fun childCall() { leafCall() }" }),
+      makeSymbol({ name: "leafCall", signature: "suspend (): Unit", source: "suspend fun leafCall() {}" }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceSuspendChain("test", "rootCall", { depth: 1 });
+
+    expect(result.chain).toEqual(["rootCall", "childCall"]);
+    expect(result.depth).toBe(1);
+  });
+
+  it("throws for an unknown repository", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue(null);
+
+    await expect(traceSuspendChain("missing", "rootCall")).rejects.toThrow(
+      'Repository "missing" not found',
+    );
   });
 });
 
@@ -519,6 +665,14 @@ describe("analyzeKmpDeclarations", () => {
     expect(result.missing_actuals).toHaveLength(0);
     expect(result.orphan_actuals).toHaveLength(0);
   });
+
+  it("throws for an unknown repository", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue(null);
+
+    await expect(analyzeKmpDeclarations("missing")).rejects.toThrow(
+      'Repository "missing" not found',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -545,7 +699,7 @@ describe("traceFlowChain", () => {
     expect(result.root).toBe("loadUsers");
     expect(result.operators).toContain("map");
     expect(result.operators).toContain("filter");
-    expect(result.operator_count).toBeGreaterThanOrEqual(2);
+    expect(result.operator_count).toBe(2);
   });
 
   it("warns about Flow.collect without catch", async () => {
@@ -564,8 +718,9 @@ describe("traceFlowChain", () => {
     vi.mocked(getCodeIndex).mockResolvedValue(index);
 
     const result = await traceFlowChain("test", "observeUsers");
-    const catchWarning = result.warnings.find((w) => w.includes("catch"));
-    expect(catchWarning).toBeDefined();
+    expect(result.warnings).toEqual([
+      ".collect without .catch — exceptions in the upstream flow propagate to the collector and crash the coroutine",
+    ]);
   });
 
   it("does NOT warn when .catch is present", async () => {
@@ -601,8 +756,27 @@ describe("traceFlowChain", () => {
     vi.mocked(getCodeIndex).mockResolvedValue(index);
 
     const result = await traceFlowChain("test", "usersFlow");
-    const stateInWarning = result.warnings.find((w) => w.includes("stateIn"));
-    expect(stateInWarning).toBeDefined();
+    expect(result.warnings).toEqual([
+      ".stateIn without a lifecycle scope parameter — the StateFlow will never complete, causing a memory leak unless bound to viewModelScope/lifecycleScope",
+    ]);
+  });
+
+  it("does not warn when stateIn is bound to viewModelScope", async () => {
+    const index = makeIndex([
+      makeSymbol({
+        name: "usersFlow",
+        kind: "variable",
+        source: `val usersFlow = userDao.getAll()
+    .map { it.toDomain() }
+    .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())`,
+      }),
+    ]);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+
+    const result = await traceFlowChain("test", "usersFlow");
+
+    expect(result.warnings).toEqual([]);
+    expect(result.has_terminal).toBe(false);
   });
 
   it("throws for symbol without Flow usage", async () => {
@@ -616,5 +790,21 @@ describe("traceFlowChain", () => {
     vi.mocked(getCodeIndex).mockResolvedValue(index);
 
     await expect(traceFlowChain("test", "plainFun")).rejects.toThrow(/no flow/i);
+  });
+
+  it("throws when the symbol is missing", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue(makeIndex([]));
+
+    await expect(traceFlowChain("test", "missingFlow")).rejects.toThrow(
+      'Symbol "missingFlow" not found',
+    );
+  });
+
+  it("throws for an unknown repository", async () => {
+    vi.mocked(getCodeIndex).mockResolvedValue(null);
+
+    await expect(traceFlowChain("missing", "usersFlow")).rejects.toThrow(
+      'Repository "missing" not found',
+    );
   });
 });
