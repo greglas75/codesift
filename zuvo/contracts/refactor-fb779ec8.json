@@ -1,0 +1,54 @@
+{
+  "version": 3,
+  "file": "src/search/tool-ranker.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "queue_file": null,
+  "queue_entry": null,
+  "cq_before": { "score": "28/29", "critical_failures": [] },
+  "scope_fence": [
+    "src/search/tool-ranker.ts",
+    "src/search/tool-ranker-signals.ts",
+    "src/search/tool-ranker-signal-math.ts",
+    "src/search/tool-ranker-types.ts",
+    "src/search/tool-ranker-bm25.ts",
+    "src/search/tool-ranker-reasoning.ts",
+    "src/search/tool-ranker-orchestrator.ts",
+    "src/search/tool-embedding-cache.ts",
+    "src/search/tool-embedding-storage.ts",
+    "tests/search/tool-ranker.test.ts",
+    "zuvo/contracts/refactor-fb779ec8.json"
+  ],
+  "backup_branch": "backup/refactor-tool-ranker-2026-07-11",
+  "plan": {
+    "summary": "Split the ranker into a public facade, five signal calculators, orchestration, BM25 cache, reasoning/calibration, and embedding cache/storage modules.",
+    "extractions": ["lexical", "identity", "semantic", "structural", "framework", "BM25 cache", "reasoning and calibration", "embedding cache"]
+  },
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {
+    "test_file": "tests/search/tool-ranker.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 5,
+    "units_covered": 5,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "existing:tests/search/tool-ranker.test.ts:green:8ebe14b:30 tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "clean",
+    "regression_red": "not_run",
+    "findings_disposition": "No behavioral findings. Initial CQ11 finding was remediated by completing the split: every production module is now <=70L and the facade is 16L. First adversarial pass was clean; mandatory large-diff second pass was attempted twice but all external providers returned empty (infrastructure failure)."
+  },
+  "cq_after": { "score": "29/29", "critical_failures": [] },
+  "commits": [],
+  "progress": [
+    "phase-1 dependency map and existing-code scan complete",
+    "phase-2 baseline 30 tests and TypeScript green",
+    "phase-3 78 focused and integration tests, TypeScript, and build green",
+    "blind CQ clean:strict",
+    "adversarial pass 1 clean; pass 2 infrastructure failure after two attempts"
+  ]
+}
