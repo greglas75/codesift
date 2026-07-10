@@ -5,45 +5,15 @@ import { collectImportEdges } from "../utils/import-graph.js";
 import { collectHeritageFileEdges } from "../utils/heritage-edges.js";
 import { getGraphPath, loadGraph, saveGraph, computeIndexHash } from "../storage/graph-store.js";
 import { getRepo } from "../storage/registry.js";
-import type { CodeSymbol, CodeIndex } from "../types.js";
+import type { CodeIndex } from "../types.js";
 import type { PersistentGraph } from "../storage/graph-store.js";
+import { assembleL0 } from "./context-levels/l0.js";
+import { assembleL1 } from "./context-levels/l1.js";
+import { assembleL2 } from "./context-levels/l2.js";
+import { assembleL3 } from "./context-levels/l3.js";
+import type { AssembleContextResult, ContextLevel } from "./context-levels/types.js";
 
-export type ContextLevel = "L0" | "L1" | "L2" | "L3";
-
-interface SymbolCompact {
-  id: string;
-  name: string;
-  kind: string;
-  file: string;
-  start_line: number;
-  signature?: string;
-  docstring?: string;
-}
-
-interface FileSummary {
-  path: string;
-  language: string;
-  exports: string[];
-  symbol_count: number;
-}
-
-interface DirectoryOverview {
-  path: string;
-  file_count: number;
-  symbol_count: number;
-  top_files: string[];
-}
-
-export interface AssembleContextResult {
-  symbols?: CodeSymbol[];
-  compact_symbols?: SymbolCompact[];
-  file_summaries?: FileSummary[];
-  directory_overview?: DirectoryOverview[];
-  level: ContextLevel;
-  total_tokens: number;
-  truncated: boolean;
-  result_count: number;
-}
+export type { AssembleContextResult, ContextLevel } from "./context-levels/types.js";
 
 export interface KnowledgeMapModule {
   path: string;
@@ -64,30 +34,6 @@ export interface KnowledgeMap {
   modules: KnowledgeMapModule[];
   edges: KnowledgeMapEdge[];
   circular_deps: CircularDep[];
-}
-
-/**
- * Estimate token count from source text.
- * Rough heuristic: ~4 characters per token.
- */
-function estimateTokens(source: string): number {
-  return Math.ceil(source.length / 4);
-}
-
-/**
- * Compress a symbol to L1 format (signatures only, no source).
- */
-function toCompact(sym: CodeSymbol): SymbolCompact {
-  const c: SymbolCompact = {
-    id: sym.id,
-    name: sym.name,
-    kind: sym.kind,
-    file: sym.file,
-    start_line: sym.start_line,
-  };
-  if (sym.signature) c.signature = sym.signature;
-  if (sym.docstring) c.docstring = sym.docstring;
-  return c;
 }
 
 /**
@@ -126,107 +72,10 @@ export async function assembleContext(
     results = await rerankResults(query, results);
   }
 
-  if (lvl === "L0") {
-    // Full source — current behavior
-    const symbols: CodeSymbol[] = [];
-    let totalTokens = 0;
-    let truncated = false;
-
-    for (const result of results) {
-      const source = result.symbol.source ?? "";
-      const tokens = estimateTokens(source);
-      if (totalTokens + tokens > budget) { truncated = true; break; }
-      symbols.push(result.symbol);
-      totalTokens += tokens;
-    }
-
-    return { symbols, level: lvl, total_tokens: totalTokens, truncated, result_count: symbols.length };
-  }
-
-  if (lvl === "L1") {
-    // Signatures only — 5-10x denser
-    const compact: SymbolCompact[] = [];
-    let totalTokens = 0;
-    let truncated = false;
-
-    for (const result of results) {
-      const c = toCompact(result.symbol);
-      const tokens = estimateTokens(JSON.stringify(c));
-      if (totalTokens + tokens > budget) { truncated = true; break; }
-      compact.push(c);
-      totalTokens += tokens;
-    }
-
-    return { compact_symbols: compact, level: lvl, total_tokens: totalTokens, truncated, result_count: compact.length };
-  }
-
-  if (lvl === "L2") {
-    // File-level summaries
-    const fileMap = new Map<string, { lang: string; exports: string[]; count: number }>();
-    for (const result of results) {
-      const sym = result.symbol;
-      let entry = fileMap.get(sym.file);
-      if (!entry) {
-        entry = { lang: "unknown", exports: [], count: 0 };
-        fileMap.set(sym.file, entry);
-      }
-      entry.exports.push(`${sym.name}(${sym.kind})`);
-      entry.count++;
-    }
-
-    // Enrich with language from index
-    const codeIndex = await getCodeIndex(repo);
-    if (codeIndex) {
-      for (const f of codeIndex.files) {
-        const entry = fileMap.get(f.path);
-        if (entry) entry.lang = f.language;
-      }
-    }
-
-    const summaries: FileSummary[] = [];
-    let totalTokens = 0;
-    let truncated = false;
-
-    for (const [path, entry] of fileMap) {
-      const summary: FileSummary = { path, language: entry.lang, exports: entry.exports, symbol_count: entry.count };
-      const tokens = estimateTokens(JSON.stringify(summary));
-      if (totalTokens + tokens > budget) { truncated = true; break; }
-      summaries.push(summary);
-      totalTokens += tokens;
-    }
-
-    return { file_summaries: summaries, level: lvl, total_tokens: totalTokens, truncated, result_count: summaries.length };
-  }
-
-  // L3 — Directory overview
-  const dirMap = new Map<string, { files: Set<string>; symbols: number }>();
-  for (const result of results) {
-    const file = result.symbol.file;
-    const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : ".";
-    let entry = dirMap.get(dir);
-    if (!entry) { entry = { files: new Set(), symbols: 0 }; dirMap.set(dir, entry); }
-    entry.files.add(file);
-    entry.symbols++;
-  }
-
-  const overviews: DirectoryOverview[] = [];
-  let totalTokens = 0;
-  let truncated = false;
-
-  for (const [path, entry] of [...dirMap.entries()].sort((a, b) => b[1].symbols - a[1].symbols)) {
-    const overview: DirectoryOverview = {
-      path,
-      file_count: entry.files.size,
-      symbol_count: entry.symbols,
-      top_files: [...entry.files].slice(0, 3),
-    };
-    const tokens = estimateTokens(JSON.stringify(overview));
-    if (totalTokens + tokens > budget) { truncated = true; break; }
-    overviews.push(overview);
-    totalTokens += tokens;
-  }
-
-  return { directory_overview: overviews, level: "L3", total_tokens: totalTokens, truncated, result_count: overviews.length };
+  if (lvl === "L0") return assembleL0(results, budget);
+  if (lvl === "L1") return assembleL1(results, budget);
+  if (lvl === "L2") return assembleL2(results, budget, await getCodeIndex(repo));
+  return assembleL3(results, budget);
 }
 
 // Import graph utilities moved to src/utils/import-graph.ts
