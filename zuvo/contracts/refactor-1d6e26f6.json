@@ -1,0 +1,34 @@
+{
+  "version": 3, "file": "src/parser/extractors/sql.ts", "type": "SPLIT_FILE",
+  "mode": "full", "stage": "PHASE_3_PROVED",
+  "scope_fence": [
+    "src/parser/extractors/sql.ts", "src/parser/extractors/sql-matchers.ts",
+    "src/parser/extractors/sql-boundaries.ts", "src/parser/extractors/sql-columns.ts",
+    "src/parser/extractors/sql-docstrings.ts", "src/parser/extractors/sql-jinja.ts",
+    "zuvo/contracts/refactor-1d6e26f6.json"
+  ],
+  "backup_branch": "backup/refactor-sql-extractor-2026-07-10",
+  "plan": {
+    "summary": "Split SQL extraction into matcher, boundary scanner, column formatter, docstring, and Jinja modules while preserving the facade.",
+    "extractions": [
+      { "unit": "DDL matcher registry", "destination": "sql-matchers.ts" },
+      { "unit": "construct boundary scanner", "destination": "sql-boundaries.ts" },
+      { "unit": "column/signature extraction", "destination": "sql-columns.ts" },
+      { "unit": "SQL docstrings", "destination": "sql-docstrings.ts" },
+      { "unit": "Jinja stripping", "destination": "sql-jinja.ts" }
+    ]
+  },
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {
+    "test_file": "sql.test.ts + sql-edge-cases.test.ts + sql-reference.test.ts",
+    "q7": 1, "q11": 1, "q13": 1, "units_total": 5, "units_covered": 5,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "existing:3 SQL extractor suites:green:8ebe14b:28 tests",
+    "blind_audit": "fix:CQ11 and single-line boundary",
+    "adversarial": "clean",
+    "findings_disposition": "Pure split preserves behavior. Fix-now follow-up: decompose facade/columns/boundaries under CQ11 and correct single-line -1 boundary with regression proof.",
+    "latest": { "baseline": "green: 28 tests; TypeScript green", "focused": "green: 28 tests", "build": "green", "adversarial": "clean" }
+  }
+}
