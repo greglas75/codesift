@@ -1,4 +1,5 @@
 import type { ToolRecommendation } from "../../search/tool-ranker.js";
+import { capQuery } from "./query-parser.js";
 import type { FileRecommendation, PlanTurnResult, SymbolRecommendation } from "./types.js";
 
 const FORMAT_TOOL_LIMIT = 10;
@@ -18,7 +19,7 @@ function resolveTools(result: PlanTurnResult): ToolRecommendation[] {
 function appendGapAnalysis(lines: string[], result: PlanTurnResult): boolean {
   if (!result.gap_analysis) return false;
   lines.push("\n⛔ STOP_AND_REPORT_GAP");
-  lines.push(`prior_query: ${result.gap_analysis.prior_query}`);
+  lines.push(`prior_query: ${capQuery(result.gap_analysis.prior_query)}`);
   lines.push(`prior_result_count: ${result.gap_analysis.prior_result_count}`);
   lines.push(`suggestion: ${result.gap_analysis.suggestion}`);
   return true;
@@ -74,7 +75,7 @@ function appendFlags(lines: string[], result: PlanTurnResult): void {
 
 export function formatPlanTurnResult(result: PlanTurnResult): string {
   const lines = [
-    `plan_turn: ${result.query}`,
+    `plan_turn: ${capQuery(result.query)}`,
     `confidence: ${result.confidence.toFixed(3)} | duration: ${result.metadata.duration_ms}ms`,
   ];
   if (appendGapAnalysis(lines, result)) return lines.join("\n");

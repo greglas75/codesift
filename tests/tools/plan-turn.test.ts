@@ -65,6 +65,7 @@ import {
   planTurn,
   _resetPlanTurnCaches,
 } from "../../src/tools/plan-turn-tools.js";
+import { collectFileRecommendations } from "../../src/tools/plan-turn/recommendations.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { rankTools, getToolEmbeddings } from "../../src/search/tool-ranker.js";
 import { getSessionState } from "../../src/storage/session-state.js";
@@ -186,14 +187,14 @@ describe("parseQuery", () => {
     expect(result.is_vague).toBe(true);
   });
 
-  it("6. truncation: 2000-char input → truncated: true, normalized length 1000", () => {
+  it("6. truncation: 2000-char input → stored and normalized input capped at 1000", () => {
     const index = makeIndex();
     const longInput = "a".repeat(2000);
     const result = parseQuery(longInput, index);
 
     expect(result.truncated).toBe(true);
     expect(result.normalized.length).toBe(1000);
-    expect(result.original.length).toBe(2000);
+    expect(result.original.length).toBe(1000);
   });
 
   it("7. empty string → empty intents, is_vague: true", () => {
@@ -212,6 +213,46 @@ describe("parseQuery", () => {
 
     expect(result.intents).toHaveLength(1);
     expect(result.intents[0]).toBe("analyze handleandgate behavior");
+  });
+
+  it("9. splits punctuation delimiters without surrounding whitespace", () => {
+    const result = parseQuery("find auth;trace route&&list refs", makeIndex());
+
+    expect(result.intents).toEqual(["find auth", "trace route", "list refs"]);
+  });
+
+  it("10. preserves case-sensitive file references", () => {
+    const result = parseQuery("review src/Foo.TSX", makeIndex());
+
+    expect(result.file_refs).toEqual(["src/Foo.TSX"]);
+  });
+
+  it("11. stops scanning symbols after all query references are found", () => {
+    const symbols = [makeSym("createUser")] as CodeSymbol[];
+    Object.defineProperty(symbols, 1, {
+      get: () => { throw new Error("symbol tail should not be read"); },
+    });
+    symbols.length = 2;
+
+    expect(parseQuery("createUser", makeIndex(symbols)).symbol_refs).toEqual(["createUser"]);
+  });
+
+  it("12. stops scanning files after all query references are found", () => {
+    const files = [{ path: "src/Foo.tsx", hash: "x", size: 1, language: "typescript", updated_at: 1 }];
+    Object.defineProperty(files, 1, {
+      get: () => { throw new Error("file tail should not be read"); },
+    });
+    files.length = 2;
+    const parsed = parseQuery("review src/Foo.tsx", makeIndex());
+    const index = { ...makeIndex(), files } as CodeIndex;
+
+    expect(collectFileRecommendations(parsed, index)).toEqual([
+      { path: "src/Foo.tsx", score: 1, reason: "explicit file reference" },
+    ]);
+  });
+
+  it("13. preserves symbols whose names are also command words", () => {
+    expect(parseQuery("get", makeIndex([makeSym("get")])).symbol_refs).toEqual(["get"]);
   });
 });
 
@@ -499,6 +540,109 @@ describe("planTurn", () => {
     expect(result.tools.map((tool) => tool.name)).toEqual(["hidden_tool"]);
     expect(result.already_used).toEqual([]);
   });
+
+  it("14. clamps invalid max_results instead of applying negative slice semantics", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    rankToolsMock.mockReturnValue([rec("search_text", 0.9), rec("find_dead_code", 0.8)]);
+
+    const negative = await planTurn("test", "find dead code", { max_results: -1 });
+    const zero = await planTurn("test", "find dead code", { max_results: 0 });
+    const fractional = await planTurn("test", "find dead code", { max_results: 1.9 });
+    const notANumber = await planTurn("test", "find dead code", { max_results: Number.NaN });
+    const infinite = await planTurn("test", "find dead code", { max_results: Number.POSITIVE_INFINITY });
+    const negativeInfinite = await planTurn("test", "find dead code", { max_results: Number.NEGATIVE_INFINITY });
+
+    expect(negative.tools.map((tool) => tool.name)).toEqual(["discover_tools"]);
+    expect(zero.tools.map((tool) => tool.name)).toEqual(["discover_tools"]);
+    expect(fractional.tools).toHaveLength(1);
+    expect(notANumber.tools).toHaveLength(2);
+    expect(infinite.tools).toHaveLength(2);
+    expect(negativeInfinite.tools.map((tool) => tool.name)).toEqual(["discover_tools"]);
+  });
+
+  it("15. expires cached usage statistics after the bounded reuse window", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      getCodeIndexMock.mockResolvedValue(makeIndex());
+      rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
+
+      await planTurn("test", "first query");
+      await planTurn("test", "second query");
+      expect(getUsageStatsMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      await planTurn("test", "third query");
+      expect(getUsageStatsMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("15b. backs off after a failed usage-stat refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      getCodeIndexMock.mockResolvedValue(makeIndex());
+      rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
+
+      await planTurn("test", "first query");
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      getUsageStatsMock.mockRejectedValue(new Error("usage unavailable"));
+      await planTurn("test", "refresh fails");
+      await planTurn("test", "cooldown reuses stale cache");
+
+      expect(getUsageStatsMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("16. detects framework tools from the planned repository root", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
+
+    await planTurn("test", "inspect react hooks");
+
+    expect(detectAutoLoadToolsMock).toHaveBeenCalledWith("/tmp/test");
+  });
+
+  it("17. keeps punctuation-sensitive queries distinct in negative evidence", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    getSessionStateMock.mockReturnValue(makeSessionState({
+      negativeEvidence: [{ tool: "search_text", query: "c++", repo: "test", ts: 1, stale: false }],
+    }) as unknown as ReturnType<typeof getSessionState>);
+    rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
+
+    const result = await planTurn("test", "c#");
+
+    expect(result.gap_analysis).toBeUndefined();
+    expect(result.tools.map((tool) => tool.name)).toEqual(["search_text"]);
+  });
+
+  it("18. deduplicates monorepo framework augmentation", async () => {
+    getCodeIndexMock.mockResolvedValue(makeMonorepoIndex());
+    detectAutoLoadToolsMock.mockResolvedValue(["list_workspaces"]);
+    let frameworkTools: string[] = [];
+    rankToolsMock.mockImplementation((context: ToolRankerContext) => {
+      frameworkTools = context.frameworkTools;
+      return [rec("search_text", 0.9)];
+    });
+
+    await planTurn("test", "inspect monorepo workspaces");
+
+    expect(frameworkTools.filter((name) => name === "list_workspaces")).toHaveLength(1);
+  });
+
+  it("19. caps the query echoed in plan results", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
+
+    const result = await planTurn("test", "a".repeat(2000));
+
+    expect(result.query).toHaveLength(1000);
+    expect(result.truncated).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -703,5 +847,17 @@ describe("formatPlanTurnResult", () => {
     expect(out).toContain("function createUser  src/auth.ts:12");
     expect(out).toContain("src/auth.ts  score: 1.00  (explicit file reference)");
     expect(out).toContain("stale_index, framework_mismatch, cold_start");
+  });
+
+  it("caps query text supplied directly to the formatter", () => {
+    const out = formatPlanTurnResult({
+      query: "a".repeat(2000),
+      truncated: true,
+      confidence: 0.3,
+      tools: [], symbols: [], files: [], reveal_required: [], already_used: [],
+      metadata: baseMeta,
+    });
+
+    expect(out.split("\n")[0]).toHaveLength("plan_turn: ".length + 1000);
   });
 });

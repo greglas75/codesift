@@ -1,12 +1,7 @@
 import { CORE_TOOL_NAMES } from "../../register-tools.js";
 import type { ToolRecommendation } from "../../search/tool-ranker.js";
 import type { CodeIndex } from "../../types.js";
-import type {
-  FileRecommendation,
-  ParsedQuery,
-  PlanTurnResult,
-  SymbolRecommendation,
-} from "./types.js";
+import type { FileRecommendation, ParsedQuery, PlanTurnResult, SymbolRecommendation } from "./types.js";
 
 export const MAX_TOOLS = 10;
 export const MAX_SYMBOLS = 20;
@@ -83,7 +78,12 @@ export function collectFileRecommendations(
   if (parsed.file_refs.length === 0) return [];
   const recommendations: FileRecommendation[] = [];
   const seen = new Set<string>();
-  const indexedFiles = new Set(index.files.map((file) => file.path));
+  const wantedFiles = new Set(parsed.file_refs.slice(0, MAX_FILES));
+  const indexedFiles = new Set<string>();
+  for (const file of index.files) {
+    if (wantedFiles.has(file.path)) indexedFiles.add(file.path);
+    if (indexedFiles.size === wantedFiles.size) break;
+  }
   for (const fileReference of parsed.file_refs) {
     if (seen.has(fileReference)) continue;
     seen.add(fileReference);

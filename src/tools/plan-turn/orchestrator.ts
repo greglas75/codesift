@@ -20,7 +20,7 @@ import {
   detectFrameworkMismatch,
   filterWorkspaceFrameworkTools,
 } from "./framework-context.js";
-import { parseQuery } from "./query-parser.js";
+import { capQuery, parseQuery } from "./query-parser.js";
 import {
   buildUnindexedResult,
   collectFileRecommendations,
@@ -43,6 +43,12 @@ type SessionState = ReturnType<typeof getSessionState>;
 type ToolDefinitions = ReturnType<typeof getToolDefinitions>;
 type ToolEmbeddings = Awaited<ReturnType<typeof getToolEmbeddings>>;
 
+const USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
+const SESSION_PRIMARY_SLOTS = 3;
+const LOW_DISCRIMINATION_DELTA = 0.05;
+const CONFIDENCE_PRECISION = 1000;
+const FRAMEWORK_CONTEXT_LIMIT = 5;
+
 interface LoadedRankerContext {
   toolDefinitions: ToolDefinitions;
   usageFrequency: Map<string, number>;
@@ -63,7 +69,6 @@ interface MetadataInput {
 }
 
 interface ResultInput {
-  query: string;
   parsed: ParsedQuery;
   index: CodeIndex;
   loadedContext: LoadedRankerContext;
@@ -73,9 +78,12 @@ interface ResultInput {
 }
 
 let usageFrequencyCache: Map<string, number> | null = null;
+let usageFrequencyCachedAt = 0;
 
 async function getUsageFrequency(): Promise<Map<string, number>> {
-  if (usageFrequencyCache) return usageFrequencyCache;
+  if (usageFrequencyCache && Date.now() - usageFrequencyCachedAt <= USAGE_CACHE_TTL_MS) {
+    return usageFrequencyCache;
+  }
   try {
     const usageStats = await getUsageStats();
     const usageFrequency = new Map<string, number>();
@@ -83,14 +91,19 @@ async function getUsageFrequency(): Promise<Map<string, number>> {
       usageFrequency.set(toolStats.tool, toolStats.total_calls ?? 0);
     }
     usageFrequencyCache = usageFrequency;
+    usageFrequencyCachedAt = Date.now();
     return usageFrequency;
   } catch {
-    return new Map();
+    const fallback = usageFrequencyCache ?? new Map<string, number>();
+    usageFrequencyCache = fallback;
+    usageFrequencyCachedAt = Date.now();
+    return fallback;
   }
 }
 
 export function _resetPlanTurnCaches(): void {
   usageFrequencyCache = null;
+  usageFrequencyCachedAt = 0;
 }
 
 async function readLastGitCommit(repo: string): Promise<string | undefined> {
@@ -104,7 +117,7 @@ async function readLastGitCommit(repo: string): Promise<string | undefined> {
 }
 
 function normalizeEvidenceQuery(query: string): string {
-  return query.toLowerCase().replace(/[^\w\s]/g, "").trim();
+  return query.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function findGapAnalysis(
@@ -165,7 +178,7 @@ async function loadRankerContext(
   const toolDefinitions = getToolDefinitions();
   const [usageFrequency, baseFrameworkTools, embeddings] = await Promise.all([
     getUsageFrequency(),
-    detectAutoLoadToolsCached(process.cwd()).catch(() => [] as string[]),
+    detectAutoLoadToolsCached(index.root).catch(() => [] as string[]),
     getToolEmbeddings(toolDefinitions).catch(() => null),
   ]);
   const scopedFrameworkTools = filterWorkspaceFrameworkTools(
@@ -225,7 +238,7 @@ function partitionSessionRecommendations(
   for (let index = 0; index < recommendations.length; index++) {
     const recommendation = recommendations[index];
     if (!recommendation) continue;
-    if (alreadyCalled.has(recommendation.name) && index >= 3) {
+    if (alreadyCalled.has(recommendation.name) && index >= SESSION_PRIMARY_SLOTS) {
       alreadyUsed.push(recommendation.name);
     } else {
       primary.push(recommendation);
@@ -245,6 +258,14 @@ function selectTools(primary: ToolRecommendation[], maxTools: number): ToolRecom
   }];
 }
 
+function resolveMaxTools(requested: number | undefined): number {
+  if (requested === undefined || Number.isNaN(requested) || requested === Number.POSITIVE_INFINITY) {
+    return MAX_TOOLS;
+  }
+  if (requested === Number.NEGATIVE_INFINITY) return 0;
+  return Math.min(MAX_TOOLS, Math.max(0, Math.trunc(requested)));
+}
+
 function collectRevealRequired(tools: ToolRecommendation[]): string[] {
   return tools
     .filter((tool) => tool.is_hidden && !CORE_TOOL_NAMES.has(tool.name))
@@ -255,7 +276,7 @@ function buildMetadata(input: MetadataInput): PlanTurnMetadata {
   const topConfidence = input.tools[0]?.confidence ?? 0;
   const secondConfidence = input.tools[1]?.confidence ?? 0;
   const hasLowDiscrimination = input.tools.length >= 2
-    && Math.abs(topConfidence - secondConfidence) < 0.05;
+    && Math.abs(topConfidence - secondConfidence) < LOW_DISCRIMINATION_DELTA;
   return {
     intents_detected: input.parsed.intents.length,
     bm25_candidates: input.batches.reduce((sum, batch) => sum + batch.length, 0),
@@ -275,9 +296,11 @@ function buildMetadata(input: MetadataInput): PlanTurnMetadata {
 
 function buildSuccessfulResult(input: ResultInput): PlanTurnResult {
   const result: PlanTurnResult = {
-    query: input.query,
+    query: input.parsed.original,
     truncated: input.parsed.truncated,
-    confidence: Math.round(Math.max(...input.tools.map((tool) => tool.confidence)) * 1000) / 1000,
+    confidence: Math.round(
+      Math.max(...input.tools.map((tool) => tool.confidence)) * CONFIDENCE_PRECISION,
+    ) / CONFIDENCE_PRECISION,
     tools: input.tools,
     symbols: collectSymbolRecommendations(input.parsed, input.index).slice(0, MAX_SYMBOLS),
     files: collectFileRecommendations(input.parsed, input.index).slice(0, MAX_FILES),
@@ -286,7 +309,9 @@ function buildSuccessfulResult(input: ResultInput): PlanTurnResult {
     metadata: input.metadata,
   };
   if (input.loadedContext.frameworkTools.length > 0) {
-    result.framework_context = input.loadedContext.frameworkTools.slice(0, 5).join(", ");
+    result.framework_context = input.loadedContext.frameworkTools
+      .slice(0, FRAMEWORK_CONTEXT_LIMIT)
+      .join(", ");
   }
   return result;
 }
@@ -297,16 +322,18 @@ export async function planTurn(
   options?: PlanTurnOptions,
 ): Promise<PlanTurnResult> {
   const startedAt = Date.now();
-  const maxTools = Math.min(MAX_TOOLS, options?.max_results ?? MAX_TOOLS);
+  const maxTools = resolveMaxTools(options?.max_results);
   const skipSession = options?.skip_session === true;
   const index = await getCodeIndex(repo, { skipFreshness: true });
-  if (!index) return buildUnindexedResult(query, startedAt);
+  if (!index) return buildUnindexedResult(capQuery(query), startedAt);
 
   const lastGitCommit = await readLastGitCommit(repo);
   const parsed = parseQuery(query, index);
   const sessionState = getSessionState();
   const gapAnalysis = findGapAnalysis(parsed, sessionState, skipSession);
-  if (gapAnalysis) return buildGapResult(query, parsed, gapAnalysis, sessionState, startedAt);
+  if (gapAnalysis) {
+    return buildGapResult(parsed.original, parsed, gapAnalysis, sessionState, startedAt);
+  }
 
   const loadedContext = await loadRankerContext(parsed, index);
   const batches = rankParsedIntents(parsed, loadedContext);
@@ -329,7 +356,6 @@ export async function planTurn(
     startedAt,
   });
   return buildSuccessfulResult({
-    query,
     parsed,
     index,
     loadedContext,

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Split `plan_turn` parsing, ranking, framework context, stale-index checks,
+  and formatting into focused modules behind the existing compatibility facade.
 - Split `analyze_project` profile generation out of `src/tools/project-tools.ts`
   into focused project-profile modules, keeping `project-tools.ts` as the thin
   orchestration layer and removing its static `index-tools` import cycle.
@@ -15,6 +17,9 @@
 
 ### Fixed
 
+- Hardened `plan_turn` query/result limits, punctuation and case-sensitive
+  parsing, repository-scoped framework detection, query-bounded index lookup
+  allocations, usage cache expiry, and monorepo tool deduplication.
 - Bounded search result/context limits, removed identifier-search shortlist
   false negatives, made ripgrep execution cancellable with JSON-safe path
   parsing, and preserved ranked/timeout result shapes across output modes.

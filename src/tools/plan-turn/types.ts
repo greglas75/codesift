@@ -1,4 +1,5 @@
 import type { ToolRecommendation } from "../../search/tool-ranker.js";
+import type { SymbolKind } from "../../types.js";
 
 export interface ParsedQuery {
   original: string;
@@ -14,14 +15,14 @@ export interface SymbolRecommendation {
   name: string;
   file: string;
   line: number;
-  kind: string;
+  kind: SymbolKind;
   score: number;
 }
 
 export interface FileRecommendation {
   path: string;
   score: number;
-  reason: string;
+  reason: "explicit file reference" | "referenced in query";
 }
 
 export interface GapAnalysis {
