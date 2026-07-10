@@ -116,12 +116,15 @@ export interface IntrospectPgOptions {
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** Per-connection + per-statement cap (ms). */
 const STATEMENT_TIMEOUT_MS = 5000;
+const MAX_TIMEOUT_MS = 60_000;
+const MAX_CATALOG_ROWS = 100_000;
 
 const COLUMNS_SQL = `
   SELECT table_name, column_name, data_type, is_nullable
   FROM information_schema.columns
   WHERE table_schema = $1
-  ORDER BY table_name, ordinal_position`;
+  ORDER BY table_name, ordinal_position
+  LIMIT 100001`;
 
 const PK_SQL = `
   SELECT kcu.table_name, kcu.column_name
@@ -131,13 +134,15 @@ const PK_SQL = `
    AND tc.table_schema = kcu.table_schema
   WHERE tc.constraint_type = 'PRIMARY KEY'
     AND tc.table_schema = $1
-  ORDER BY kcu.table_name, kcu.ordinal_position`;
+  ORDER BY kcu.table_name, kcu.ordinal_position
+  LIMIT 100001`;
 
 const INDEX_SQL = `
   SELECT tablename AS table_name, indexname AS index_name
   FROM pg_catalog.pg_indexes
   WHERE schemaname = $1
-  ORDER BY tablename, indexname`;
+  ORDER BY tablename, indexname
+  LIMIT 100001`;
 
 const FK_SQL = `
   SELECT
@@ -154,7 +159,8 @@ const FK_SQL = `
    AND rc.unique_constraint_schema = ccu.table_schema
    AND kcu.ordinal_position = ccu.ordinal_position
   WHERE rc.constraint_schema = $1
-  ORDER BY kcu.table_name, kcu.column_name`;
+  ORDER BY kcu.table_name, kcu.column_name
+  LIMIT 100001`;
 
 /**
  * Replace every occurrence of the connection string — and, separately, its
@@ -177,6 +183,11 @@ export function redactConnStr(text: string, connStr: string): string {
       const url = new URL(connStr);
       if (url.password) {
         out = out.split(url.password).join("[REDACTED]");
+        try {
+          out = out.split(decodeURIComponent(url.password)).join("[REDACTED]");
+        } catch {
+          // Keep the encoded-token redaction above when decoding is malformed.
+        }
       }
       // Also scrub a bare user:pass@ authority fragment if present in text.
       if (url.username && url.password) {
@@ -185,11 +196,26 @@ export function redactConnStr(text: string, connStr: string): string {
     } catch {
       // Non-URL conn string (e.g. libpq keyword form). Best-effort: pull a
       // password=... token out and scrub its value.
-      const m = /password=([^\s]+)/i.exec(connStr);
-      if (m?.[1]) out = out.split(m[1]).join("[REDACTED]");
+      const password = extractLibpqPassword(connStr);
+      if (password) out = out.split(password).join("[REDACTED]");
     }
   }
   return out;
+}
+
+function extractLibpqPassword(connStr: string): string | undefined {
+  const match = /password\s*=\s*/i.exec(connStr);
+  if (!match) return undefined;
+  let index = match.index + match[0].length;
+  const quote = connStr[index] === "'" || connStr[index] === '"' ? connStr[index++] : undefined;
+  let value = "";
+  while (index < connStr.length) {
+    const char = connStr[index++];
+    if (char === "\\" && index < connStr.length) value += connStr[index++];
+    else if (quote ? char === quote : /\s/.test(char ?? "")) break;
+    else value += char;
+  }
+  return value || undefined;
 }
 
 /** Coerce any thrown value to a message string, then redact it. */
@@ -215,70 +241,97 @@ export async function introspectPgSchema(
   connStr: string,
   opts: IntrospectPgOptions = {},
 ): Promise<PgIntrospectResult | PgIntrospectError> {
-  // ── Input validation (CQ3) — before ANY Client construction ──────────────
-  if (typeof connStr !== "string" || connStr.trim() === "") {
-    return { error: "connStr is required and must be a non-empty string" };
-  }
+  const prepared = await prepareIntrospection(connStr, opts);
+  if ("error" in prepared) return prepared;
+  return runWithTimeout(prepared.client, connStr, prepared.schema, prepared.timeoutMs);
+}
 
-  const schema = opts.schema && opts.schema.trim() !== "" ? opts.schema : "public";
-  const timeoutMs =
-    typeof opts.timeoutMs === "number" && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
-
-  // Resolve the Client constructor (injected seam or real pg).
-  let ClientCtor: PgClientCtor["ClientCtor"];
-  if (opts._clientCtor) {
-    ClientCtor = opts._clientCtor;
-  } else {
+async function prepareIntrospection(
+  connStr: string,
+  opts: IntrospectPgOptions,
+): Promise<{ client: PgClientLike; schema: string; timeoutMs: number } | PgIntrospectError> {
+  const validated = validateOptions(connStr, opts);
+  if ("error" in validated) return validated;
+  let ClientCtor = opts._clientCtor;
+  if (!ClientCtor) {
     const loaded = await loadPgClient();
     if ("error" in loaded) return { error: loaded.error };
     ClientCtor = loaded.ClientCtor;
   }
+  return createClient(ClientCtor, connStr, validated.schema, validated.timeoutMs);
+}
 
-  // Construct the client up-front so the timeout path can also close it.
-  // (runIntrospection's own finally cannot run while it is hung on a query —
-  // so the wall-clock race owns cleanup for the timeout case.)
-  const client = new ClientCtor({
-    connectionString: connStr,
-    connectionTimeoutMillis: STATEMENT_TIMEOUT_MS,
-  });
+function validateOptions(
+  connStr: string,
+  opts: IntrospectPgOptions,
+): { schema: string; timeoutMs: number } | PgIntrospectError {
+  if (typeof connStr !== "string" || connStr.trim() === "") {
+    return { error: "connStr is required and must be a non-empty string" };
+  }
+  const schema = opts.schema && opts.schema.trim() !== "" ? opts.schema : "public";
+  if (!/^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(schema)) {
+    return { error: "schema must be a valid PostgreSQL identifier" };
+  }
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.min(opts.timeoutMs, MAX_TIMEOUT_MS)
+      : DEFAULT_TIMEOUT_MS;
 
-  // Race the whole introspection against a wall-clock timeout.
+  return { schema, timeoutMs };
+}
+
+function createClient(
+  ClientCtor: PgClientCtor["ClientCtor"], connStr: string,
+  schema: string, timeoutMs: number,
+) {
+  try {
+    const client = new ClientCtor({
+      connectionString: connStr,
+      connectionTimeoutMillis: STATEMENT_TIMEOUT_MS,
+    });
+    return { client, schema, timeoutMs };
+  } catch (err) {
+    redactError(err, connStr);
+    return { error: "PostgreSQL introspection failed" };
+  }
+}
+
+async function runWithTimeout(
+  client: PgClientLike,
+  connStr: string,
+  schema: string,
+  timeoutMs: number,
+): Promise<PgIntrospectResult | PgIntrospectError> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
-      // Static message (no secret), but redact defensively anyway.
       reject(new Error("pg introspection timed out"));
     }, timeoutMs);
   });
-
-  // Hold a reference so we can silence any late rejection on the orphaned
-  // promise when timeout wins the race (otherwise Node fires unhandledRejection
-  // when the hung query later rejects — e.g. after client.end() tears the socket).
   const introspectionPromise = runIntrospection(client, connStr, schema);
-
   try {
-    const result = await Promise.race([introspectionPromise, timeout]);
-    return result;
+    return await Promise.race([introspectionPromise, timeout]);
   } catch (err) {
-    return { error: redactError(err, connStr) };
+    const message = redactError(err, connStr);
+    return { error: message.includes("timed out") ? "pg introspection timed out" : "PostgreSQL introspection failed" };
   } finally {
     if (timer) clearTimeout(timer);
-    // On the timeout path runIntrospection is still hung, so its finally never
-    // ran — close the client here. On the normal path runIntrospection already
-    // closed it; a second end() is harmless (and swallowed).
     if (timedOut) {
-      // Swallow any future rejection from the orphaned introspection promise so
-      // Node never fires unhandledRejection after client.end() destroys the socket.
       introspectionPromise.catch(() => undefined);
-      try {
-        await client.end();
-      } catch {
-        /* best-effort cleanup; never leak the conn string */
-      }
+      await settleCleanup(client);
     }
   }
+}
+
+async function settleCleanup(client: PgClientLike): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, 100);
+  });
+  await Promise.race([closeClient(client), deadline]);
+  if (timer) clearTimeout(timer);
 }
 
 /**
@@ -296,16 +349,7 @@ async function runIntrospection(
     // FIRST query after connect — bound every subsequent statement.
     await client.query(`SET statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
 
-    const [columnsRes, pkRes, indexRes, fkRes] = await Promise.all([
-      client.query(COLUMNS_SQL, [schema]),
-      client.query(PK_SQL, [schema]),
-      client.query(INDEX_SQL, [schema]),
-      client.query(FK_SQL, [schema]),
-    ]);
-
-    const tables = buildTables(columnsRes.rows, pkRes.rows, indexRes.rows);
-    const relationships = buildRelationships(fkRes.rows);
-    return { tables, relationships, warnings: [] };
+    return await queryCatalog(client, schema);
   } catch (err) {
     // Redact before the error escapes runIntrospection so the caller's catch
     // (and the timeout race) never sees raw connection material.
@@ -313,10 +357,39 @@ async function runIntrospection(
   } finally {
     // Always close — connect-success, query-failure, or connect-failure paths.
     // end() itself may throw; swallow + redact so cleanup never leaks secrets.
-    try {
-      await client.end();
-    } catch {
-      /* best-effort cleanup; nothing actionable, never leak the conn string */
-    }
+    await closeClient(client);
+  }
+}
+
+async function queryCatalog(client: PgClientLike, schema: string): Promise<PgIntrospectResult> {
+  const results = await Promise.all([
+    client.query(COLUMNS_SQL, [schema]), client.query(PK_SQL, [schema]),
+    client.query(INDEX_SQL, [schema]), client.query(FK_SQL, [schema]),
+  ]);
+  if (results.some(({ rows }) => rows.length > MAX_CATALOG_ROWS)) {
+    throw new Error(`pg introspection exceeded ${MAX_CATALOG_ROWS} catalog rows`);
+  }
+  const [columns, primaryKeys, indexes, foreignKeys] = results;
+  if (!columns || !primaryKeys || !indexes || !foreignKeys) {
+    throw new Error("PostgreSQL catalog query returned an incomplete result set");
+  }
+  return {
+    tables: buildTables(columns.rows, primaryKeys.rows, indexes.rows),
+    relationships: buildRelationships(foreignKeys.rows), warnings: [],
+  };
+}
+
+const closePromises = new WeakMap<PgClientLike, Promise<void>>();
+function closeClient(client: PgClientLike): Promise<void> {
+  const existing = closePromises.get(client);
+  if (existing) return existing;
+  try {
+    const closing = client.end().catch(() => undefined);
+    closePromises.set(client, closing);
+    return closing;
+  } catch {
+    const completed = Promise.resolve();
+    closePromises.set(client, completed);
+    return completed;
   }
 }

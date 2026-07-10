@@ -165,6 +165,33 @@ function routeQuery(
 describe("introspectPgSchema", () => {
   const CONN = "postgres://user:secret@host:5432/db";
 
+  it("contains and redacts errors thrown by the Client constructor", async () => {
+    class ThrowingClient {
+      constructor() { throw new Error(`constructor rejected ${CONN}`); }
+    }
+    const result = await introspectPgSchema(CONN, {
+      _clientCtor: ThrowingClient as unknown as PgClientCtor["ClientCtor"],
+    });
+    expect(result).toEqual({ error: "PostgreSQL introspection failed" });
+  });
+
+  it("returns after the wall timeout even when cleanup never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = makeMockClient({
+        query: (sql) => sql.includes("SET statement_timeout")
+          ? Promise.resolve({ rows: [] })
+          : new Promise(() => undefined),
+        end: () => new Promise(() => undefined),
+      });
+      const promise = introspectPgSchema(CONN, { _clientCtor: handle.ctor, timeoutMs: 10 });
+      await vi.advanceTimersByTimeAsync(111);
+      await expect(promise).resolves.toMatchObject({ error: expect.stringMatching(/timed out/i) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("maps fixture rows for 3 tables + 2 FKs + indexes into TableInfo[]/Relationship[]", async () => {
     const handle = makeMockClient({
       query: routeQuery([
@@ -270,7 +297,7 @@ describe("introspectPgSchema", () => {
     // serialized form must be scrubbed.
     const serialized = JSON.stringify(result);
 
-    expect(serialized).toContain("[REDACTED]");
+    expect(serialized).toContain("PostgreSQL introspection failed");
     // Negative assertion: no part of the connection string survives.
     expect(serialized).not.toContain("secret");
     expect(serialized).not.toContain(CONN);
@@ -413,6 +440,15 @@ describe("redactConnStr", () => {
     const out = redactConnStr(`password "s3cretPass" rejected`, conn);
     expect(out).not.toContain("s3cretPass");
     expect(out).toContain("[REDACTED]");
+  });
+
+  it("redacts decoded URL passwords and quoted libpq passwords", () => {
+    expect(redactConnStr("password p@ss rejected", "postgres://u:p%40ss@host/db"))
+      .toBe("password [REDACTED] rejected");
+    expect(redactConnStr("bad two words", "host=db password='two words' user=u"))
+      .toBe("bad [REDACTED]");
+    expect(redactConnStr("bad a'b", "host=db password='a\\'b' user=u"))
+      .toBe("bad [REDACTED]");
   });
 
   it("is a no-op-safe pass-through for empty conn string", () => {

@@ -3,10 +3,12 @@
   "file": "src/tools/pg-introspect-tools.ts",
   "type": "SPLIT_FILE",
   "mode": "full",
-  "stage": "PHASE_3_PROVED",
+  "stage": "COMPLETE",
   "scope_fence": [
     "src/tools/pg-introspect-tools.ts", "src/tools/pg-introspection.ts",
     "src/tools/pg-introspect-formatters.ts", "src/tools/pg-drift.ts",
+    "src/tools/pg-drift-types.ts", "src/tools/pg-drift-schema.ts",
+    "src/tools/pg-drift-compare.ts",
     "tests/tools/pg-introspect-tools.test.ts", "zuvo/contracts/refactor-e1de07b9.json"
   ],
   "backup_branch": "backup/refactor-pg-introspect-2026-07-10",
@@ -26,9 +28,15 @@
   },
   "prove": {
     "characterization": "green:8ebe14b:5u:31 focused tests + 4 integration smoke tests",
-    "blind_audit": "fix:critical lifecycle and CQ11 findings",
-    "adversarial": "3findings:preserved",
-    "findings_disposition": "Pure split preserves behavior. Fix-now: constructor throw containment, bounded cleanup, decoded/quoted credential redaction, and extracted-module CQ11 cleanup. SSRF and _clientCtor findings are false positives because registration accepts DSN only from server environment and JSON cannot carry constructors.",
-    "latest": { "baseline": "green: 32 tests before added characterization; 31 focused after 3 added cases; TypeScript green" }
+    "blind_audit": "clean:strict",
+    "adversarial": "clean after remediation: final security pass NO ISSUES FOUND",
+    "regression_red": "red@08497d1:green@working-tree:tests/tools/pg-introspect-tools.test.ts",
+    "findings_disposition": "Fixed constructor containment, bounded idempotent cleanup, generic external errors, decoded/escaped password redaction, bounded catalog queries, strict row validation, CQ11 decomposition, and O(n) drift mapping. SSRF/_clientCtor findings false positive: registration reads DSN only from server environment and JSON cannot carry constructors.",
+    "latest": {
+      "baseline": "green: 32 tests before added characterization; 31 focused after 3 added cases; TypeScript green",
+      "focused_after_fix": "green: 38 tests",
+      "typecheck_after_fix": "green", "build_after_fix": "green",
+      "blind_audit": "clean:strict", "adversarial": "NO ISSUES FOUND"
+    }
   }
 }

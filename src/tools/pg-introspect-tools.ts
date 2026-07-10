@@ -16,4 +16,4 @@ export type {
   PgTableInfo,
 } from "./pg-introspection.js";
 export { pgDriftCheck } from "./pg-drift.js";
-export type { PgColumnMismatch, PgDriftResult, SqlSymbol } from "./pg-drift.js";
+export type { PgColumnMismatch, PgDriftResult, SqlSymbol } from "./pg-drift-types.js";

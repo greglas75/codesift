@@ -8,8 +8,8 @@ export function buildTables(
 ): PgTableInfo[] {
   const pkByTable = new Map<string, string[]>();
   for (const r of pkRows) {
-    const t = String(r["table_name"]);
-    const c = String(r["column_name"]);
+    const t = requiredString(r, "table_name");
+    const c = requiredString(r, "column_name");
     const list = pkByTable.get(t) ?? [];
     list.push(c);
     pkByTable.set(t, list);
@@ -17,8 +17,8 @@ export function buildTables(
 
   const idxByTable = new Map<string, string[]>();
   for (const r of indexRows) {
-    const t = String(r["table_name"]);
-    const i = String(r["index_name"]);
+    const t = requiredString(r, "table_name");
+    const i = requiredString(r, "index_name");
     const list = idxByTable.get(t) ?? [];
     list.push(i);
     idxByTable.set(t, list);
@@ -27,15 +27,17 @@ export function buildTables(
   const tableOrder: string[] = [];
   const colsByTable = new Map<string, PgColumn[]>();
   for (const r of columnRows) {
-    const t = String(r["table_name"]);
+    const t = requiredString(r, "table_name");
     if (!colsByTable.has(t)) {
       colsByTable.set(t, []);
       tableOrder.push(t);
     }
-    colsByTable.get(t)!.push({
-      name: String(r["column_name"]),
-      type: String(r["data_type"]),
-      nullable: String(r["is_nullable"]).toUpperCase() === "YES",
+    const columns = colsByTable.get(t);
+    if (!columns) continue;
+    columns.push({
+      name: requiredString(r, "column_name"),
+      type: requiredString(r, "data_type"),
+      nullable: parseNullable(r),
     });
   }
 
@@ -47,12 +49,28 @@ export function buildTables(
   }));
 }
 
+function parseNullable(row: Record<string, unknown>): boolean {
+  const value = requiredString(row, "is_nullable").toUpperCase();
+  if (value !== "YES" && value !== "NO") {
+    throw new Error("Invalid PostgreSQL catalog row: is_nullable must be YES or NO");
+  }
+  return value === "YES";
+}
+
 /** Map raw FK rows into {@link PgRelationship}[]. */
 export function buildRelationships(fkRows: Record<string, unknown>[]): PgRelationship[] {
   return fkRows.map((r) => ({
-    from_table: String(r["from_table"]),
-    from_column: String(r["from_column"]),
-    to_table: String(r["to_table"]),
-    to_column: String(r["to_column"]),
+    from_table: requiredString(r, "from_table"),
+    from_column: requiredString(r, "from_column"),
+    to_table: requiredString(r, "to_table"),
+    to_column: requiredString(r, "to_column"),
   }));
+}
+
+function requiredString(row: Record<string, unknown>, field: string): string {
+  const value = row[field];
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`Invalid PostgreSQL catalog row: ${field} must be a non-empty string`);
+  }
+  return value;
 }
