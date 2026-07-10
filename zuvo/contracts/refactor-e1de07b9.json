@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "file": "src/tools/pg-introspect-tools.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "PHASE_3_PROVED",
+  "scope_fence": [
+    "src/tools/pg-introspect-tools.ts", "src/tools/pg-introspection.ts",
+    "src/tools/pg-introspect-formatters.ts", "src/tools/pg-drift.ts",
+    "tests/tools/pg-introspect-tools.test.ts", "zuvo/contracts/refactor-e1de07b9.json"
+  ],
+  "backup_branch": "backup/refactor-pg-introspect-2026-07-10",
+  "plan": {
+    "summary": "Keep a compatibility facade while separating live PG I/O, raw-row formatting, and pure drift comparison.",
+    "extractions": [
+      { "unit": "load/redact/introspect lifecycle", "destination": "src/tools/pg-introspection.ts" },
+      { "unit": "buildTables + buildRelationships", "destination": "src/tools/pg-introspect-formatters.ts" },
+      { "unit": "pgDriftCheck + normalization", "destination": "src/tools/pg-drift.ts" }
+    ]
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/pg-introspect-tools.test.ts + smoke-four-features.test.ts",
+    "q7": 1, "q11": 1, "q13": 1,
+    "units_total": 5, "units_covered": 5, "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:8ebe14b:5u:31 focused tests + 4 integration smoke tests",
+    "blind_audit": "fix:critical lifecycle and CQ11 findings",
+    "adversarial": "3findings:preserved",
+    "findings_disposition": "Pure split preserves behavior. Fix-now: constructor throw containment, bounded cleanup, decoded/quoted credential redaction, and extracted-module CQ11 cleanup. SSRF and _clientCtor findings are false positives because registration accepts DSN only from server environment and JSON cannot carry constructors.",
+    "latest": { "baseline": "green: 32 tests before added characterization; 31 focused after 3 added cases; TypeScript green" }
+  }
+}

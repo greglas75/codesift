@@ -418,6 +418,13 @@ describe("redactConnStr", () => {
   it("is a no-op-safe pass-through for empty conn string", () => {
     expect(redactConnStr("nothing to hide here", "")).toBe("nothing to hide here");
   });
+
+  it("redacts password values from libpq keyword connection strings", () => {
+    const conn = "host=db.internal user=admin password=keywordSecret dbname=app";
+    expect(redactConnStr("password keywordSecret rejected", conn)).toBe(
+      "password [REDACTED] rejected",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -510,6 +517,33 @@ describe("pgDriftCheck", () => {
     const result = pgDriftCheck(liveWithExtra, baseSymbols);
     expect(result.missing_tables_live_only).toContain("audit_log");
     expect(result.missing_tables_migrations_only).toHaveLength(0);
+  });
+
+  it("reports migration-only tables and live-only columns", () => {
+    const symbols = [
+      ...baseSymbols,
+      makeTableSymbol("archived", "repo:migrations/002.sql:archived:1"),
+    ];
+    const live = {
+      ...baseLive,
+      tables: baseLive.tables.map((table) => table.name === "users"
+        ? { ...table, columns: [...table.columns, { name: "legacy", type: "text", nullable: true }] }
+        : table),
+    };
+    const result = pgDriftCheck(live, symbols);
+    expect(result.missing_tables_migrations_only).toContain("archived");
+    expect(result.column_mismatches).toContainEqual({
+      table: "users", column: "legacy", kind: "missing_migrations", live_type: "text",
+    });
+  });
+
+  it("treats SQL type modifiers as formatting-equivalent", () => {
+    const id = "repo:migrations/001.sql:users:1";
+    const symbols = [makeTableSymbol("users", id), makeFieldSymbol("id", id, "integer NOT NULL")];
+    const live = { ...baseLive, tables: [baseLive.tables[0]!] };
+    expect(pgDriftCheck(live, symbols).column_mismatches).toEqual([
+      { table: "users", column: "email", kind: "missing_migrations", live_type: "text" },
+    ]);
   });
 
   it("migration-only column reported as missing_live in column_mismatches", () => {
