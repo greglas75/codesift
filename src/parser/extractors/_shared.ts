@@ -1,6 +1,6 @@
 import type Parser from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
-import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
+import { tokenizeIdentifier, makeSymbolId } from "../symbol-utils.js";
 
 export const MAX_SOURCE_LENGTH = 5000;
 

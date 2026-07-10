@@ -8,6 +8,8 @@ import { extractJavaScriptSymbols } from "./extractors/javascript.js";
 import { extractKotlinSymbols } from "./extractors/kotlin.js";
 import { extractGradleKtsSymbols } from "./extractors/gradle-kts.js";
 import { extractPhpSymbols } from "./extractors/php.js";
+import { makeSymbolId, tokenizeIdentifier } from "./symbol-utils.js";
+export { makeSymbolId, tokenizeIdentifier } from "./symbol-utils.js";
 
 // --- Public API ---
 
@@ -68,41 +70,6 @@ export { extractConversationSymbols } from "./extractors/conversation.js";
  *   HTMLParser    → ["html", "parser"]
  *   fetchAPIData  → ["fetch", "api", "data"]
  */
-export function tokenizeIdentifier(name: string): string[] {
-  // Step 1: split on underscores
-  const parts = name.split("_").filter(Boolean);
-
-  const tokens: string[] = [];
-
-  for (const part of parts) {
-    // Step 2: split camelCase / PascalCase
-    // Insert boundary between:
-    //   lowercase→uppercase  (get|User)
-    //   uppercase sequence→uppercase+lowercase  (HTM|L→P|arser → HTML|Parser)
-    const subParts = part
-      .replace(/([a-z0-9])([A-Z])/g, "$1\0$2")
-      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1\0$2")
-      .split("\0");
-
-    for (const sub of subParts) {
-      if (sub.length > 0) {
-        tokens.push(sub.toLowerCase());
-      }
-    }
-  }
-
-  return tokens;
-}
-
-export function makeSymbolId(
-  repo: string,
-  file: string,
-  name: string,
-  startLine: number,
-): string {
-  return `${repo}:${file}:${name}:${startLine}`;
-}
-
 // --- Generic extraction (fallback for unsupported languages) ---
 
 const GENERIC_NODE_KIND_MAP: Record<string, SymbolKind> = {

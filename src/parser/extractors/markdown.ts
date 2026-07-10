@@ -9,7 +9,7 @@
  */
 
 import type { CodeSymbol } from "../../types.js";
-import { tokenizeIdentifier, makeSymbolId } from "../symbol-extractor.js";
+import { tokenizeIdentifier, makeSymbolId } from "../symbol-utils.js";
 
 const MAX_SOURCE_LENGTH = 5000;
 

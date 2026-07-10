@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "file": "src/tools/route-tools.ts + src/parser/symbol-extractor.ts",
+  "type": "BREAK_CIRCULAR",
+  "mode": "full",
+  "stage": "PHASE_3_PROVED",
+  "scope_fence": [
+    "src/tools/route-tools.ts", "src/tools/astro-routes.ts", "src/tools/route-shared.ts",
+    "src/parser/symbol-extractor.ts", "src/parser/symbol-utils.ts",
+    "src/parser/extractors/_shared.ts", "src/parser/extractors/astro.ts",
+    "src/parser/extractors/markdown.ts", "src/parser/extractors/prisma.ts",
+    "src/parser/extractors/conversation.ts", "src/parser/extractors/sql.ts",
+    "tests/parser/prisma-extractor.test.ts", "zuvo/contracts/refactor-0af28788.json"
+  ],
+  "backup_branch": "backup/refactor-route-extractor-cycles-2026-07-10",
+  "plan": {
+    "summary": "Move route matching and symbol identity helpers into dependency-leaf shared modules while retaining facade re-exports.",
+    "extractions": [
+      { "unit": "matchPath", "destination": "src/tools/route-shared.ts" },
+      { "unit": "tokenizeIdentifier + makeSymbolId", "destination": "src/parser/symbol-utils.ts" }
+    ]
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "focused route and parser suites + tests/parser/prisma-extractor.test.ts",
+    "q7": 1, "q11": 1, "q13": 1,
+    "units_total": 3, "units_covered": 3, "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:8ebe14b:3u:132 existing tests + prisma characterization",
+    "blind_audit": "clean:strict",
+    "adversarial": "2findings:preserved",
+    "findings_disposition": "Catch-all matching is a fix-now historical bug in moved code and will be fixed separately. Case-insensitive normalization is preserved as existing cross-framework product semantics; changing it requires a product decision and would violate this refactor contract.",
+    "latest": {
+      "baseline": "green: 7 focused files / 132 tests plus prisma characterization 1 test",
+      "cycle_classification": "route cycle and extractor reverse imports are runtime; sql is wrong-direction runtime edge but not direct SCC",
+      "focused": "green: 8 files / 133 tests",
+      "typecheck": "green",
+      "build": "green",
+      "blind_audit": "clean:strict",
+      "adversarial": "catch-all bug fix-now; case normalization preserved by safe product default"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 import type { CodeSymbol } from "../../types.js";
-import { makeSymbolId, tokenizeIdentifier } from "../symbol-extractor.js";
+import { makeSymbolId, tokenizeIdentifier } from "../symbol-utils.js";
 import { parseAstroTemplate } from "../astro-template.js";
 
 /**
