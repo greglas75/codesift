@@ -3,7 +3,7 @@
   "file": "src/tools/yii3-migration-tools.ts",
   "type": "SPLIT_FILE",
   "mode": "full",
-  "stage": "PHASE_3_PROVED",
+  "stage": "COMPLETE",
   "scope_fence": [
     "src/tools/yii3-migration-tools.ts",
     "src/tools/yii3-migration-types.ts",
@@ -42,15 +42,19 @@
   "prove": {
     "characterization": "green:8ebe14b:4u:tests/tools/yii3-migration-audit.test.ts",
     "blind_audit": "clean:strict",
-    "adversarial": "1findings:preserved",
-    "findings_disposition": "Security warning: indexed traversal/symlink paths can read outside root. Pure split preserves existing behavior; fix-now remediation follows in a separate commit.",
+    "adversarial": "clean after remediation: final security pass reported NO ISSUES FOUND",
+    "regression_red": "red@3c584c1:green@working-tree:tests/tools/yii3-migration-audit.test.ts",
+    "findings_disposition": "Fixed indexed path disclosure: lexical traversal, symlink/parent-symlink races, inode swaps, and hard links are rejected before content is processed.",
     "latest": {
       "baseline": "green before refactor: 20 tests passed; 1 characterization snapshot written",
       "focused": "green after refactor: 20 tests passed",
       "typecheck": "green: npm run lint",
       "build": "green: npm run build",
       "blind_audit": "clean:strict",
-      "adversarial": "one warning: repository-boundary validation required for indexed paths"
+      "adversarial": "final security pass clean after repository-boundary remediation",
+      "focused_after_fix": "green: 21 tests passed",
+      "typecheck_after_fix": "green: npm run lint",
+      "build_after_fix": "green: npm run build"
     }
   },
   "progress": [

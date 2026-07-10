@@ -10,8 +10,10 @@
  * adding more idioms to the fixture in future doesn't break the suite.
  */
 import { describe, it, expect, beforeAll } from "vitest";
+import { link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { indexFolder } from "../../src/tools/index-tools.js";
+import { getCodeIndex, indexFolder } from "../../src/tools/index-tools.js";
 import { yii3MigrationAudit } from "../../src/tools/yii3-migration-tools.js";
 
 const FIXTURE_ROOT = resolve(
@@ -196,6 +198,30 @@ describe("yii3MigrationAudit", () => {
     expect(r.scanned_files).toBe(0);
     expect(r.total_call_sites).toBe(0);
     expect(r.by_category).toEqual([]);
+  });
+
+  it("does not scan an indexed path outside the repository root", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "yii3-boundary-"));
+    const root = join(parent, "repo");
+    await writeFile(join(parent, "outside.php"), "<?php Yii::t('app', 'secret');");
+    await mkdir(root);
+    try {
+      const indexed = await indexFolder(root);
+      const index = await getCodeIndex(indexed.repo);
+      if (!index) throw new Error("Expected the temporary repository index");
+      await symlink(join(parent, "outside.php"), join(root, "linked.php"));
+      await link(join(parent, "outside.php"), join(root, "hardlinked.php"));
+      index.files.push({ path: "../outside.php", hash: "injected" });
+      index.files.push({ path: "linked.php", hash: "injected-link" });
+      index.files.push({ path: "hardlinked.php", hash: "injected-hardlink" });
+
+      const result = await yii3MigrationAudit(indexed.repo);
+
+      expect(result.scanned_files).toBe(2);
+      expect(result.total_call_sites).toBe(0);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 
   it("category findings are sorted by severity then count", async () => {

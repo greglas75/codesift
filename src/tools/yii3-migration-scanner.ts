@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { open, realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { CATEGORIES } from "./yii3-migration-categories.js";
 import type { Yii3MigrationCategoryName } from "./yii3-migration-types.js";
 
@@ -36,6 +37,7 @@ export async function scanYii3MigrationSources(
   const sampleLimit = options?.max_samples_per_category ?? SAMPLE_LIMIT;
   const phpFiles = index.files.filter(({ path }) =>
     path.endsWith(".php") &&
+    isPathWithinRoot(index.root, path) &&
     (options?.include_vendor || !VENDOR_RE.test(path)) &&
     (!options?.file_pattern || path.includes(options.file_pattern)),
   );
@@ -43,15 +45,42 @@ export async function scanYii3MigrationSources(
   for (const cat of CATEGORIES) {
     buckets.set(cat.category, { count: 0, samples: [], files: new Set() });
   }
-  const reads = await Promise.allSettled(phpFiles.map(async ({ path }) => ({
-    path,
-    content: await readFile(join(index.root, path), "utf-8"),
-  })));
+  const canonicalRoot = await realpath(index.root);
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const reads = await Promise.allSettled(phpFiles.map(async ({ path }) => {
+    const requestedPath = resolve(index.root, path);
+    const handle = await open(
+      requestedPath,
+      constants.O_RDONLY | noFollow,
+    );
+    try {
+      const opened = await handle.stat();
+      const canonicalPath = await realpath(requestedPath);
+      const current = await stat(canonicalPath);
+      if (!isResolvedWithinRoot(canonicalRoot, canonicalPath) ||
+          opened.dev !== current.dev || opened.ino !== current.ino ||
+          opened.nlink > 1) {
+        throw new Error(`Indexed path escapes repository root: ${path}`);
+      }
+      return { path, content: await handle.readFile("utf-8") };
+    } finally {
+      await handle.close();
+    }
+  }));
   for (const read of reads) {
     if (read.status !== "fulfilled") continue;
     collectSourceHits(read.value.path, read.value.content, sampleLimit, buckets);
   }
   return { scannedFiles: phpFiles.length, buckets };
+}
+
+function isPathWithinRoot(root: string, path: string): boolean {
+  return !isAbsolute(path) && isResolvedWithinRoot(resolve(root), resolve(root, path));
+}
+
+function isResolvedWithinRoot(root: string, path: string): boolean {
+  const fromRoot = relative(root, path);
+  return fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot);
 }
 
 function collectSourceHits(
