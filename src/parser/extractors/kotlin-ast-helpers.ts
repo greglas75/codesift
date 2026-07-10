@@ -82,6 +82,18 @@ export function getKmpModifier(node: Parser.SyntaxNode): "expect" | "actual" | n
   return null;
 }
 
+function getSimpleUserTypeName(node: Parser.SyntaxNode): string {
+  const identifiers: string[] = [];
+  function collect(current: Parser.SyntaxNode): void {
+    if (current.type === "identifier") identifiers.push(current.text);
+    for (const child of current.namedChildren) collect(child);
+  }
+  collect(node);
+  return (identifiers.at(-1) ?? node.text.split(".").at(-1) ?? node.text)
+    .trim()
+    .replace(/^`|`$/g, "");
+}
+
 /**
  * Gets annotation names from a node's modifiers.
  * Annotation structure: modifiers → annotation → @ + user_type → identifier
@@ -95,15 +107,13 @@ export function getAnnotations(node: Parser.SyntaxNode): string[] {
     .map((a) => {
       const userType = a.namedChildren.find((c) => c.type === "user_type");
       if (userType) {
-        const ident = userType.namedChildren.find((c) => c.type === "identifier");
-        return ident?.text ?? userType.text;
+        return getSimpleUserTypeName(userType);
       }
       // Fallback: constructor_invocation for annotations with args
       const ctorInvoc = a.namedChildren.find((c) => c.type === "constructor_invocation");
       if (ctorInvoc) {
         const ut = ctorInvoc.namedChildren.find((c) => c.type === "user_type");
-        const ident = ut?.namedChildren.find((c) => c.type === "identifier");
-        return ident?.text ?? ut?.text ?? a.text.replace(/^@/, "");
+        return ut ? getSimpleUserTypeName(ut) : a.text.replace(/^@/, "");
       }
       return a.text.replace(/^@/, "");
     });

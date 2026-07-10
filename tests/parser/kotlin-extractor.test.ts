@@ -432,6 +432,19 @@ class UserServiceTest {
     expect(test!.kind).toBe("test_case");
   });
 
+  it("detects a fully qualified @Test annotation", async () => {
+    const symbols = await parseKotlin(`
+class UserServiceTest {
+    @org.junit.jupiter.api.Test
+    fun testQualifiedLogin() {}
+}
+`);
+    const test = symbols.find((s) => s.name === "testQualifiedLogin");
+    expect(test).toBeDefined();
+    expect(test!.kind).toBe("test_case");
+    expect(test!.decorators).toContain("Test");
+  });
+
   it("detects @BeforeEach as test_hook", async () => {
     const symbols = await parseKotlin(`
 import org.junit.jupiter.api.BeforeEach
