@@ -10,6 +10,7 @@ import {
   DEFAULT_SOURCE_CHARS_NARROW,
   DEFAULT_SOURCE_CHARS_WIDE,
   DEFAULT_TOP_K_WITH_SOURCE,
+  MAX_SYMBOL_RESULTS,
   SERVER_AUTO_COMPACT_THRESHOLD,
 } from "./constants.js";
 import type { DetailLevel, SearchSymbolsOptions } from "./types.js";
@@ -101,10 +102,13 @@ function collectSearchResults(
   fieldWeights: ReturnType<typeof loadConfig>["bm25FieldWeights"],
 ): SearchResult[] {
   if (!query.trim()) {
-    return [...index.symbols.values()]
-      .filter((symbol) => matchesSymbolFilters(symbol, options))
-      .slice(0, topK)
-      .map((symbol) => ({ symbol, score: 0 }));
+    const results: SearchResult[] = [];
+    for (const symbol of index.symbols.values()) {
+      if (!matchesSymbolFilters(symbol, options)) continue;
+      results.push({ symbol, score: 0 });
+      if (results.length >= topK) break;
+    }
+    return results;
   }
   const hasFilters = !!options?.kind || !!options?.file_pattern || !!options?.decorator;
   const searchTopK = hasFilters ? Math.max(topK * BM25_FILTER_MULTIPLIER, BM25_FILTER_MIN_K) : topK;
@@ -142,8 +146,12 @@ function resolveTopK(
   includeSource: boolean,
   options: SearchSymbolsOptions | undefined,
 ): number {
-  if (options?.top_k !== undefined) return options.top_k;
-  return includeSource && !options?.file_pattern ? DEFAULT_TOP_K_WITH_SOURCE : configuredTopK;
+  const defaultTopK = includeSource && !options?.file_pattern
+    ? DEFAULT_TOP_K_WITH_SOURCE
+    : configuredTopK;
+  const requestedTopK = options?.top_k ?? defaultTopK;
+  if (!Number.isFinite(requestedTopK)) return MAX_SYMBOL_RESULTS;
+  return Math.min(Math.max(Math.trunc(requestedTopK), 0), MAX_SYMBOL_RESULTS);
 }
 
 async function rerankSearchResults(

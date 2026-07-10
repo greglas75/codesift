@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { join } from "node:path";
 import type { TextMatch } from "../../types.js";
-import { MAX_LINE_CHARS, RG_EXCLUDE_DIRS, SEARCH_TIMEOUT_MS } from "./constants.js";
+import { MAX_LINE_CHARS, RG_EXCLUDE_DIRS, RIPGREP_TIMEOUT_MS } from "./constants.js";
 
 interface RipgrepOptions {
   regex?: boolean;
@@ -9,25 +9,27 @@ interface RipgrepOptions {
   maxResults: number;
   contextLines: number;
   candidateFiles?: readonly string[] | undefined;
+  signal?: AbortSignal | undefined;
 }
 
-let ripgrepAvailable: boolean | null = null;
+let ripgrepAvailability: Promise<boolean> | null = null;
 
-export function hasRipgrep(): boolean {
-  if (ripgrepAvailable !== null) return ripgrepAvailable;
-  try {
-    execFileSync("rg", ["--version"], { stdio: "pipe", timeout: 2000 });
-    ripgrepAvailable = true;
-  } catch {
-    ripgrepAvailable = false;
-  }
-  return ripgrepAvailable;
+function detectRipgrep(): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("rg", ["--version"], { encoding: "utf-8", timeout: 2000 }, (error) => {
+      resolve(error === null);
+    });
+  });
+}
+
+export function hasRipgrep(): Promise<boolean> {
+  ripgrepAvailability ??= detectRipgrep();
+  return ripgrepAvailability;
 }
 
 function buildRipgrepArgs(root: string, query: string, options: RipgrepOptions): string[] {
   const args = [
-    "-n",
-    "--no-heading",
+    "--json",
     "--max-columns", String(MAX_LINE_CHARS),
     "--max-columns-preview",
     "--max-count", String(Math.min(options.maxResults * 2, 5000)),
@@ -49,49 +51,26 @@ function buildRipgrepArgs(root: string, query: string, options: RipgrepOptions):
   return args;
 }
 
-function executeRipgrep(args: string[]): string {
-  try {
-    return execFileSync("rg", args, {
+function executeRipgrep(args: string[], signal: AbortSignal | undefined): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("rg", args, {
       encoding: "utf-8",
       maxBuffer: 20 * 1024 * 1024,
-      timeout: SEARCH_TIMEOUT_MS,
+      timeout: RIPGREP_TIMEOUT_MS,
+      signal,
+    }, (error, stdout) => {
+      if (!error) return resolve(stdout);
+      const exitCode = (error as Error & { code?: number | string }).code;
+      if (exitCode === 1 || exitCode === "1") return resolve("");
+      reject(error);
     });
-  } catch (error: unknown) {
-    if (!error || typeof error !== "object" || !("status" in error)) return "";
-    if ((error as { status: number }).status === 1) return "";
-    if ("stdout" in error && typeof (error as { stdout: unknown }).stdout === "string") {
-      return (error as { stdout: string }).stdout;
-    }
-    return "";
-  }
+  });
 }
 
 function relativePath(absolutePath: string, rootPrefix: string): string {
   return absolutePath.startsWith(rootPrefix)
     ? absolutePath.slice(rootPrefix.length)
     : absolutePath;
-}
-
-function parseFlatMatches(
-  blocks: string[],
-  rootPrefix: string,
-  maxResults: number,
-): TextMatch[] {
-  const matches: TextMatch[] = [];
-  for (const block of blocks) {
-    if (matches.length >= maxResults) break;
-    for (const rawLine of block.split("\n").filter(Boolean)) {
-      if (matches.length >= maxResults) break;
-      const parsed = rawLine.match(/^(.+?):(\d+):(.*)/);
-      if (!parsed?.[1] || !parsed[2] || parsed[3] === undefined) continue;
-      matches.push({
-        file: relativePath(parsed[1], rootPrefix),
-        line: Number.parseInt(parsed[2], 10),
-        content: parsed[3],
-      });
-    }
-  }
-  return matches;
 }
 
 interface ParsedRipgrepLine {
@@ -101,32 +80,37 @@ interface ParsedRipgrepLine {
   isMatch: boolean;
 }
 
-function parseMatchedLine(rawLine: string, rootPrefix: string): ParsedRipgrepLine | null {
-  const matchLine = rawLine.match(/^(.+?):(\d+):(.*)/);
-  if (matchLine?.[1] && matchLine[2] && matchLine[3] !== undefined) {
-    return {
-      path: relativePath(matchLine[1], rootPrefix),
-      line: Number.parseInt(matchLine[2], 10),
-      content: matchLine[3],
-      isMatch: true,
-    };
-  }
-  return null;
-}
-
-function parseSurroundingLine(rawLine: string, rootPrefix: string): ParsedRipgrepLine | null {
-  const contextLine = rawLine.match(/^(.+?)-(\d+)-(.*)/);
-  if (!contextLine?.[1] || !contextLine[2] || contextLine[3] === undefined) return null;
-  return {
-    path: relativePath(contextLine[1], rootPrefix),
-    line: Number.parseInt(contextLine[2], 10),
-    content: contextLine[3],
-    isMatch: false,
+interface RipgrepJsonEvent {
+  type?: string;
+  data?: {
+    path?: { text?: string };
+    lines?: { text?: string };
+    line_number?: number;
   };
 }
 
-function parseContextLine(rawLine: string, rootPrefix: string): ParsedRipgrepLine | null {
-  return parseMatchedLine(rawLine, rootPrefix) ?? parseSurroundingLine(rawLine, rootPrefix);
+function stripLineEnding(content: string): string {
+  return content.replace(/\r?\n$/, "");
+}
+
+function parseJsonEvent(rawLine: string, rootPrefix: string): ParsedRipgrepLine | null {
+  let event: RipgrepJsonEvent;
+  try {
+    event = JSON.parse(rawLine) as RipgrepJsonEvent;
+  } catch {
+    return null;
+  }
+  if (event.type !== "match" && event.type !== "context") return null;
+  const path = event.data?.path?.text;
+  const line = event.data?.line_number;
+  const content = event.data?.lines?.text;
+  if (!path || line === undefined || content === undefined) return null;
+  return {
+    path: relativePath(path, rootPrefix),
+    line,
+    content: stripLineEnding(content),
+    isMatch: event.type === "match",
+  };
 }
 
 function buildContextMatch(
@@ -136,12 +120,16 @@ function buildContextMatch(
 ): TextMatch {
   const matchedLine = parsedLines[matchIndex]!;
   const contextBefore = parsedLines
-    .slice(Math.max(0, matchIndex - contextLines), matchIndex)
-    .filter((line) => !line.isMatch)
+    .slice(0, matchIndex)
+    .filter((line) => !line.isMatch
+      && line.path === matchedLine.path
+      && line.line >= matchedLine.line - contextLines)
     .map((line) => line.content);
   const contextAfter = parsedLines
-    .slice(matchIndex + 1, matchIndex + contextLines + 1)
-    .filter((line) => !line.isMatch)
+    .slice(matchIndex + 1)
+    .filter((line) => !line.isMatch
+      && line.path === matchedLine.path
+      && line.line <= matchedLine.line + contextLines)
     .map((line) => line.content);
   const match: TextMatch = {
     file: matchedLine.path,
@@ -153,39 +141,32 @@ function buildContextMatch(
   return match;
 }
 
-function parseRipgrepContextBlocks(
+function parseRipgrepOutput(
   stdout: string,
   rootPrefix: string,
   maxResults: number,
   contextLines: number,
 ): TextMatch[] {
   const matches: TextMatch[] = [];
-  for (const block of stdout.split(/^--$/m)) {
+  const parsedLines = stdout.split("\n")
+    .filter(Boolean)
+    .map((line) => parseJsonEvent(line, rootPrefix))
+    .filter((line): line is ParsedRipgrepLine => line !== null);
+  for (let index = 0; index < parsedLines.length; index++) {
     if (matches.length >= maxResults) break;
-    const parsedLines = block.split("\n")
-      .filter(Boolean)
-      .map((line) => parseContextLine(line, rootPrefix))
-      .filter((line): line is ParsedRipgrepLine => line !== null);
-    for (let index = 0; index < parsedLines.length; index++) {
-      if (matches.length >= maxResults) break;
-      if (parsedLines[index]!.isMatch) {
-        matches.push(buildContextMatch(parsedLines, index, contextLines));
-      }
+    if (parsedLines[index]!.isMatch) {
+      matches.push(buildContextMatch(parsedLines, index, contextLines));
     }
   }
   return matches;
 }
 
-export function searchWithRipgrep(
+export async function searchWithRipgrep(
   root: string,
   query: string,
   options: RipgrepOptions,
-): TextMatch[] {
-  const stdout = executeRipgrep(buildRipgrepArgs(root, query, options));
+): Promise<TextMatch[]> {
+  const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), options.signal);
   const rootPrefix = root.endsWith("/") ? root : `${root}/`;
-  const blocks = options.contextLines > 0 ? stdout.split(/^--$/m) : [stdout];
-  const matches = parseFlatMatches(blocks, rootPrefix, options.maxResults);
-  return options.contextLines > 0 && blocks.length > 1
-    ? parseRipgrepContextBlocks(stdout, rootPrefix, options.maxResults, options.contextLines)
-    : matches;
+  return parseRipgrepOutput(stdout, rootPrefix, options.maxResults, options.contextLines);
 }

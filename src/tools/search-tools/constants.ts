@@ -8,15 +8,19 @@ export const SEARCH_TEXT_WALL_CLOCK_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
 })();
 
+export const RIPGREP_TIMEOUT_MS = Math.min(SEARCH_TIMEOUT_MS, SEARCH_TEXT_WALL_CLOCK_MS);
+
 export const AUTO_GROUP_THRESHOLD = 50;
 export const SERVER_AUTO_GROUP_THRESHOLD = 30;
 export const MAX_RESPONSE_CHARS = 80_000;
+export const MAX_SYMBOL_RESULTS = 1000;
+export const MAX_TEXT_RESULTS = 1000;
+export const MAX_CONTEXT_LINES = 20;
 export const MAX_FIRST_MATCH_CHARS = 300;
 export const MAX_LINE_CHARS = 500;
 export const DEFAULT_TOP_K_WITH_SOURCE = 10;
 export const BM25_FILTER_MULTIPLIER = 5;
 export const BM25_FILTER_MIN_K = 200;
-export const BM25_FILE_SHORTLIST_K = 60;
 export const IDENTIFIER_QUERY_RX = /^[A-Za-z_][A-Za-z0-9_]{2,}$/;
 export const DEFAULT_SOURCE_CHARS_NARROW = 200;
 export const DEFAULT_SOURCE_CHARS_WIDE = 500;

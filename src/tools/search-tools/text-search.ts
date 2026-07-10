@@ -1,8 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getBM25Index, getCodeIndex } from "../index-tools.js";
-import { searchBM25 } from "../../search/bm25.js";
-import { loadConfig } from "../../config.js";
 import { walkDirectory } from "../../utils/walk.js";
 import { matchFilePattern } from "../../utils/glob.js";
 import { raceWallClock } from "../../utils/wall-clock.js";
@@ -10,14 +8,15 @@ import type { CodeIndex, TextMatch, TextMatchGroup } from "../../types.js";
 import {
   AUTO_GROUP_THRESHOLD,
   BINARY_EXTENSIONS,
-  BM25_FILE_SHORTLIST_K,
   DEFAULT_MAX_REGEX_RESULTS,
   DEFAULT_MAX_TEXT_MATCHES,
   IDENTIFIER_QUERY_RX,
   JSON_OVERHEAD_PER_MATCH,
   MAX_FIRST_MATCH_CHARS,
+  MAX_CONTEXT_LINES,
   MAX_LINE_CHARS,
   MAX_RESPONSE_CHARS,
+  MAX_TEXT_RESULTS,
   MAX_WALK_FILES,
   REDOS_PATTERNS,
   SEARCH_TEXT_WALL_CLOCK_MS,
@@ -48,6 +47,8 @@ interface FileSearchOptions {
   regex: RegExp | null;
   contextLines: number;
   maxMatches: number;
+  deadline: number;
+  signal: AbortSignal;
 }
 
 function searchFileForMatches(options: FileSearchOptions): TextMatch[] {
@@ -55,6 +56,7 @@ function searchFileForMatches(options: FileSearchOptions): TextMatch[] {
   const matches: TextMatch[] = [];
   for (let index = 0; index < lines.length; index++) {
     if (matches.length >= options.maxMatches) break;
+    if (options.signal.aborted || Date.now() >= options.deadline) break;
     const line = lines[index];
     if (line === undefined) continue;
     const isMatch = options.regex ? options.regex.test(line) : line.includes(options.query);
@@ -91,36 +93,10 @@ function groupMatchesByFile(matches: TextMatch[]): TextMatchGroup[] {
   return [...groups.values()];
 }
 
-async function shortlistCandidateFiles(
-  repo: string,
-  query: string,
-  useRegex: boolean,
-  filePattern: string | undefined,
-): Promise<string[] | undefined> {
-  if (useRegex || filePattern || !IDENTIFIER_QUERY_RX.test(query)) return undefined;
-  try {
-    const bm25Index = await getBM25Index(repo);
-    if (!bm25Index) return undefined;
-    const config = loadConfig();
-    const hits = searchBM25(
-      bm25Index,
-      query,
-      BM25_FILE_SHORTLIST_K,
-      config.bm25FieldWeights,
-    );
-    if (hits.length === 0) return undefined;
-    return [...new Set(hits.map(({ symbol }) => symbol.file))];
-  } catch {
-    return undefined;
-  }
-}
-
 async function resolveFallbackFiles(
   index: CodeIndex,
-  candidateFiles: string[] | undefined,
   filePattern: string | undefined,
 ): Promise<string[]> {
-  if (candidateFiles && candidateFiles.length > 0) return [...candidateFiles];
   if (filePattern) return index.files.map((file) => file.path);
   return walkDirectory(index.root, {
     fileFilter: (extension) => !BINARY_EXTENSIONS.has(extension),
@@ -130,28 +106,30 @@ async function resolveFallbackFiles(
 }
 
 interface MatchCollectionOptions {
-  repo: string;
   index: CodeIndex;
   query: string;
   useRegex: boolean;
   filePattern: string | undefined;
   maxResults: number;
   contextLines: number;
-  candidateFiles: string[] | undefined;
+  deadline: number;
+  signal: AbortSignal;
 }
 
 async function searchWithNodeFallback(options: MatchCollectionOptions): Promise<TextMatch[]> {
   const regex = options.useRegex ? compileSearchRegex(options.query) : null;
-  const files = await resolveFallbackFiles(options.index, options.candidateFiles, options.filePattern);
+  const files = await resolveFallbackFiles(options.index, options.filePattern);
   const matches: TextMatch[] = [];
-  const searchStartedAt = Date.now();
   for (const filePath of files) {
     if (matches.length >= options.maxResults) break;
-    if (Date.now() - searchStartedAt > SEARCH_TIMEOUT_MS) break;
+    if (options.signal.aborted || Date.now() >= options.deadline) break;
     if (options.filePattern && !matchFilePattern(filePath, options.filePattern)) continue;
     let content: string;
     try {
-      content = await readFile(join(options.index.root, filePath), "utf-8");
+      content = await readFile(join(options.index.root, filePath), {
+        encoding: "utf-8",
+        signal: options.signal,
+      });
     } catch {
       continue;
     }
@@ -162,20 +140,27 @@ async function searchWithNodeFallback(options: MatchCollectionOptions): Promise<
       regex,
       contextLines: options.contextLines,
       maxMatches: options.maxResults - matches.length,
+      deadline: options.deadline,
+      signal: options.signal,
     }));
   }
   return matches;
 }
 
 async function collectMatches(options: MatchCollectionOptions): Promise<TextMatch[]> {
-  if (!hasRipgrep()) return searchWithNodeFallback(options);
-  return searchWithRipgrep(options.index.root, options.query, {
-    regex: options.useRegex,
-    filePattern: options.filePattern,
-    maxResults: options.maxResults,
-    contextLines: options.contextLines,
-    candidateFiles: options.candidateFiles,
-  });
+  if (!await hasRipgrep()) return searchWithNodeFallback(options);
+  try {
+    return await searchWithRipgrep(options.index.root, options.query, {
+      regex: options.useRegex,
+      filePattern: options.filePattern,
+      maxResults: options.maxResults,
+      contextLines: options.contextLines,
+      signal: options.signal,
+    });
+  } catch {
+    if (options.signal.aborted) return [];
+    return searchWithNodeFallback(options);
+  }
 }
 
 function callerOmittedGrouping(options: SearchTextOptions | undefined): boolean {
@@ -271,16 +256,25 @@ function resolveMaximumResults(
   useRegex: boolean,
   filePattern: string | undefined,
 ): number {
-  if (options?.max_results !== undefined) return options.max_results;
-  if (useRegex && !filePattern) return DEFAULT_MAX_REGEX_RESULTS;
-  return DEFAULT_MAX_TEXT_MATCHES;
+  const defaultMaximum = useRegex && !filePattern
+    ? DEFAULT_MAX_REGEX_RESULTS
+    : DEFAULT_MAX_TEXT_MATCHES;
+  const requestedMaximum = options?.max_results ?? defaultMaximum;
+  if (!Number.isFinite(requestedMaximum)) return MAX_TEXT_RESULTS;
+  return Math.min(Math.max(Math.trunc(requestedMaximum), 0), MAX_TEXT_RESULTS);
+}
+
+function resolveContextLines(options: SearchTextOptions | undefined): number {
+  const requestedLines = options?.context_lines ?? 0;
+  if (!Number.isFinite(requestedLines)) return MAX_CONTEXT_LINES;
+  return Math.min(Math.max(Math.trunc(requestedLines), 0), MAX_CONTEXT_LINES);
 }
 
 function resolveTextSearchOptions(options: SearchTextOptions | undefined): ResolvedTextSearchOptions {
   const useRegex = options?.regex ?? false;
   const filePattern = options?.file_pattern;
   const maxResults = resolveMaximumResults(options, useRegex, filePattern);
-  return { useRegex, filePattern, maxResults, contextLines: options?.context_lines ?? 0 };
+  return { useRegex, filePattern, maxResults, contextLines: resolveContextLines(options) };
 }
 
 function shouldRankMatches(
@@ -297,26 +291,31 @@ async function searchTextInner(
   repo: string,
   query: string,
   options?: SearchTextOptions,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<SearchTextResult> {
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   const { useRegex, filePattern, maxResults, contextLines } = resolveTextSearchOptions(options);
   if (useRegex) compileSearchRegex(query);
-  const candidateFiles = await shortlistCandidateFiles(repo, query, useRegex, filePattern);
   const matches = await collectMatches({
-    repo,
     index,
     query,
     useRegex,
     filePattern,
     maxResults,
     contextLines,
-    candidateFiles,
+    deadline: Date.now() + Math.min(SEARCH_TIMEOUT_MS, SEARCH_TEXT_WALL_CLOCK_MS),
+    signal,
   });
   const omittedGrouping = callerOmittedGrouping(options);
-  return shouldRankMatches(query, options, useRegex, omittedGrouping) && matches.length > 0
-    ? rankMatches(repo, index, matches)
-    : formatMatches(matches, options, contextLines, omittedGrouping);
+  if (shouldRankMatches(query, options, useRegex, omittedGrouping) && matches.length > 0) {
+    const rankedMatches = await rankMatches(repo, index, matches);
+    if (options?.group_by_file === true || options?.compact === true) {
+      return formatMatches(rankedMatches, options, contextLines, false);
+    }
+    return rankedMatches;
+  }
+  return formatMatches(matches, options, contextLines, omittedGrouping);
 }
 
 export async function searchText(
@@ -339,15 +338,24 @@ export async function searchText(
   query: string,
   options?: SearchTextOptions,
 ): Promise<SearchTextResult> {
+  const controller = new AbortController();
+  const timeoutMessage = `search exceeded ${SEARCH_TEXT_WALL_CLOCK_MS}ms — narrow scope with file_pattern (e.g. "src/**/*.ts") or use search_symbols for identifier lookup. Ranked mode runs after the regex scan and does not speed it up.`;
   return raceWallClock(
-    searchTextInner(repo, query, options),
+    searchTextInner(repo, query, options, controller.signal),
     SEARCH_TEXT_WALL_CLOCK_MS,
-    () => [{
-      file: "<truncated>",
-      line: 0,
-      content: `search exceeded ${SEARCH_TEXT_WALL_CLOCK_MS}ms — narrow scope with file_pattern (e.g. "src/**/*.ts") or use search_symbols for identifier lookup. Ranked mode runs after the regex scan and does not speed it up.`,
-      truncated: true,
-      hint: "narrow scope with file_pattern, or use search_symbols for identifier lookup",
-    }] as TextMatch[],
+    () => {
+      controller.abort();
+      if (options?.group_by_file) {
+        return [{ file: "<truncated>", count: 1, lines: [0], first_match: timeoutMessage }];
+      }
+      if (options?.compact) return `<truncated>:0: ${timeoutMessage}`;
+      return [{
+        file: "<truncated>",
+        line: 0,
+        content: timeoutMessage,
+        truncated: true,
+        hint: "narrow scope with file_pattern, or use search_symbols for identifier lookup",
+      }] as TextMatch[];
+    },
   );
 }

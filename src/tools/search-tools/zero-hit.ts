@@ -30,11 +30,9 @@ function boundedEditDistance(a: string, b: string, max: number): number {
 
 function suggestFromVocabulary(query: string, names: Iterable<string>): string[] {
   const normalizedQuery = query.toLowerCase();
-  const scored: Array<{ name: string; score: number }> = [];
-  const seen = new Set<string>();
+  const bestCandidates: Array<{ name: string; score: number }> = [];
   for (const name of names) {
-    if (seen.has(name)) continue;
-    seen.add(name);
+    if (bestCandidates.some((candidate) => candidate.name === name)) continue;
     const normalizedName = name.toLowerCase();
     if (normalizedName === normalizedQuery) continue;
     let score: number;
@@ -45,10 +43,13 @@ function suggestFromVocabulary(query: string, names: Iterable<string>): string[]
       if (distance > ZERO_HIT_EDIT_DISTANCE_MAX) continue;
       score = 10 + distance;
     }
-    scored.push({ name, score });
+    bestCandidates.push({ name, score });
+    bestCandidates.sort((left, right) =>
+      left.score - right.score || left.name.length - right.name.length,
+    );
+    if (bestCandidates.length > ZERO_HIT_SUGGESTION_CAP) bestCandidates.pop();
   }
-  scored.sort((left, right) => left.score - right.score || left.name.length - right.name.length);
-  return scored.slice(0, ZERO_HIT_SUGGESTION_CAP).map(({ name }) => name);
+  return bestCandidates.map(({ name }) => name);
 }
 
 export async function zeroHitFallback(

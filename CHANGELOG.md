@@ -15,6 +15,9 @@
 
 ### Fixed
 
+- Bounded search result/context limits, removed identifier-search shortlist
+  false negatives, made ripgrep execution cancellable with JSON-safe path
+  parsing, and preserved ranked/timeout result shapes across output modes.
 - Hardened project profile extraction around root entrypoints, Python
   `pyproject.toml` detection, Hono source precedence, importer counting, git
   remote sanitization, and atomic profile writes.
