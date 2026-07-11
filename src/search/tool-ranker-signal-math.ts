@@ -23,6 +23,7 @@ export function cosine(left: number[], right: number[]): number {
   for (let index = 0; index < left.length; index++) {
     const leftValue = left[index] ?? 0;
     const rightValue = right[index] ?? 0;
+    if (!Number.isFinite(leftValue) || !Number.isFinite(rightValue)) return 0;
     dot += leftValue * rightValue;
     leftNorm += leftValue * leftValue;
     rightNorm += rightValue * rightValue;

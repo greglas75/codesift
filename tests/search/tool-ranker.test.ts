@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { z } from "zod";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   rankTools,
@@ -17,6 +20,8 @@ import {
 // take the *type* from it and build synthetic ToolDefinition fixtures
 // locally. This keeps the tool-ranker tests hermetic and fast.
 import type { ToolDefinition } from "../../src/register-tools.js";
+import { readToolEmbeddingCache } from "../../src/search/tool-embedding-storage.js";
+import { cosine } from "../../src/search/tool-ranker-signal-math.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -395,6 +400,35 @@ describe("generateReasoning", () => {
 // ---------------------------------------------------------------------------
 
 describe("getToolEmbeddings", () => {
+  it("rejects a cache whose embeddings value is null", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: null }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cache entries that are not finite numeric vectors", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: { tool: "invalid" } }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+      await writeFile(path, '{"fingerprint":"valid","embeddings":{"tool":[1e999]}}');
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("treats non-finite embedding values as zero similarity", () => {
+    expect(cosine([1, Number.POSITIVE_INFINITY], [1, 2])).toBe(0);
+    expect(cosine([1, 2], [1, Number.NaN])).toBe(0);
+  });
+
   it("returns null when no embedding provider is configured", async () => {
     // Stash env vars so we run offline regardless of host setup.
     const saved = {

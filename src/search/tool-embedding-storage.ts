@@ -18,9 +18,18 @@ export async function readToolEmbeddingCache(path: string): Promise<CachedToolEm
     const parsed: unknown = JSON.parse(await readFile(path, "utf-8"));
     if (typeof parsed !== "object" || parsed === null) return null;
     const record = parsed as Record<string, unknown>;
-    if (typeof record["fingerprint"] !== "string" || typeof record["embeddings"] !== "object") {
+    if (
+      typeof record["fingerprint"] !== "string"
+      || typeof record["embeddings"] !== "object"
+      || record["embeddings"] === null
+      || Array.isArray(record["embeddings"])
+    ) {
       return null;
     }
+    const embeddings = record["embeddings"] as Record<string, unknown>;
+    if (Object.values(embeddings).some(
+      (value) => !Array.isArray(value) || value.some((entry) => !Number.isFinite(entry)),
+    )) return null;
     return parsed as CachedToolEmbeddings;
   } catch {
     return null;
