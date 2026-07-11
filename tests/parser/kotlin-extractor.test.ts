@@ -445,6 +445,19 @@ class UserServiceTest {
     expect(test!.decorators).toContain("Test");
   });
 
+  it("detects an escaped @Test annotation name", async () => {
+    const symbols = await parseKotlin(`
+class EscapedAnnotationTest {
+    @\`Test\`
+    fun testEscapedName() {}
+}
+`);
+    const test = symbols.find((s) => s.name === "testEscapedName");
+    expect(test).toBeDefined();
+    expect(test!.kind).toBe("test_case");
+    expect(test!.decorators).toContain("Test");
+  });
+
   it("detects @BeforeEach as test_hook", async () => {
     const symbols = await parseKotlin(`
 import org.junit.jupiter.api.BeforeEach
