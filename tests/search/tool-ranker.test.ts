@@ -232,6 +232,47 @@ describe("rankTools — structural signal", () => {
     const recs = rankTools(ctx);
     expect(recs[0]?.name).toBe("twin_bravo");
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "ignores non-finite usage value %s on unrelated tools",
+    (invalidUsage) => {
+      const twinDefs: ToolDefinition[] = [
+        makeDef("twin_alpha", "perform a shared generic action", "shared generic action"),
+        makeDef("twin_bravo", "perform a shared generic action", "shared generic action"),
+      ];
+      const ctx = makeCtx({
+        query: "perform a shared generic action",
+        toolDefs: twinDefs,
+        usageFrequency: new Map([
+          ["invalid_history", invalidUsage],
+          ["twin_alpha", 1],
+          ["twin_bravo", 100],
+        ]),
+      });
+
+      expect(rankTools(ctx)[0]?.name).toBe("twin_bravo");
+    },
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "treats non-finite usage value %s on a ranked tool as zero",
+    (invalidUsage) => {
+      const twinDefs: ToolDefinition[] = [
+        makeDef("twin_alpha", "perform a shared generic action", "shared generic action"),
+        makeDef("twin_bravo", "perform a shared generic action", "shared generic action"),
+      ];
+      const ctx = makeCtx({
+        query: "perform a shared generic action",
+        toolDefs: twinDefs,
+        usageFrequency: new Map([
+          ["twin_alpha", 1],
+          ["twin_bravo", invalidUsage],
+        ]),
+      });
+
+      expect(rankTools(ctx)[0]?.name).toBe("twin_alpha");
+    },
+  );
 });
 
 describe("rankTools — framework signal", () => {

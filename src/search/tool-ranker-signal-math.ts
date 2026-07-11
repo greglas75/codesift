@@ -33,9 +33,11 @@ export function cosine(left: number[], right: number[]): number {
 
 export function normaliseUsage(usage: Map<string, number>, toolName: string): number {
   const value = usage.get(toolName) ?? 0;
-  if (value <= 0) return 0;
+  if (!Number.isFinite(value) || value <= 0) return 0;
   let maximum = 0;
-  for (const candidate of usage.values()) maximum = Math.max(maximum, candidate);
+  for (const candidate of usage.values()) {
+    if (Number.isFinite(candidate) && candidate > maximum) maximum = candidate;
+  }
   return maximum > 0 ? Math.min(1, value / maximum) : 0;
 }
 
