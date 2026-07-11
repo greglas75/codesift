@@ -32,14 +32,23 @@ export function tryReadUrlArgument(context: LexerContext): UrlLiteral | null {
   if (position >= context.length) return null;
   const quote = context.source[position]!;
   if (quote === '"' || quote === "'") {
-    context.index = position + 1;
+    consumeWhitespace(context, position);
+    context.index++;
     return { kind: "string", raw: readStringContent(context, quote) };
   }
   if (quote === "`") {
-    context.index = position + 1;
+    consumeWhitespace(context, position);
+    context.index++;
     return { kind: "template", raw: readTemplateContent(context) };
   }
   return null;
+}
+
+function consumeWhitespace(context: LexerContext, end: number): void {
+  while (context.index < end) {
+    if (context.current() === "\n") context.line++;
+    context.emit();
+  }
 }
 
 export function peekNextCodeToken(context: LexerContext): string {

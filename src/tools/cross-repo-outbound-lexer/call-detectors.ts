@@ -9,7 +9,10 @@ export function isIdentifierCharacter(char: string): boolean {
 }
 
 function emitThrough(context: LexerContext, end: number): void {
-  while (context.index < end) context.emit();
+  while (context.index < end) {
+    if (context.current() === "\n") context.line++;
+    context.emit();
+  }
 }
 
 function detectMethod(context: LexerContext): string | null {

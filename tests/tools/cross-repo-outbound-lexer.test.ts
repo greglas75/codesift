@@ -24,4 +24,24 @@ describe("findOutboundCalls lexer states", () => {
       expect.objectContaining({ line: 3, urlLiteral: { kind: "string", raw: "/visible" } }),
     ]);
   });
+
+  it("counts newlines skipped before a URL literal", () => {
+    const source = "fetch(\n  '/first'\n);\nfetch('/second');";
+    expect(findOutboundCalls(source).map((call) => call.line)).toEqual([1, 4]);
+  });
+
+  it("does not detect call-looking text inside a regex after return", () => {
+    const source = `function pattern() { return /fetch\\(\"https:\\/\\/hidden\"\\)/; }\nfetch('/visible');`;
+    expect(findOutboundCalls(source)).toEqual([
+      expect.objectContaining({ line: 2, urlLiteral: { kind: "string", raw: "/visible" } }),
+    ]);
+  });
+
+  it("reads nested templates and regex braces inside URL interpolation", () => {
+    const source = "fetch(`${`inner-${value}`}/${/}/.source}/x`);\nfetch('/after');";
+    expect(findOutboundCalls(source)).toEqual([
+      expect.objectContaining({ line: 1, urlLiteral: { kind: "template", raw: "${`inner-${value}`}/${/}/.source}/x" } }),
+      expect.objectContaining({ line: 2, urlLiteral: { kind: "string", raw: "/after" } }),
+    ]);
+  });
 });
