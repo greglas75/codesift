@@ -217,7 +217,8 @@ describe("yii3MigrationAudit", () => {
 
       const result = await yii3MigrationAudit(indexed.repo);
 
-      expect(result.scanned_files).toBe(2);
+      expect(result.scanned_files).toBe(0);
+      expect(result.read_failures).toBe(2);
       expect(result.total_call_sites).toBe(0);
     } finally {
       await rm(parent, { recursive: true, force: true });

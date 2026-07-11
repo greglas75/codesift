@@ -16,6 +16,7 @@ export async function buildYii3MigrationReport(
   return {
     repo,
     scanned_files: scan.scannedFiles,
+    read_failures: scan.readFailures,
     total_call_sites: totals.totalCalls,
     by_category: byCategory,
     by_severity: totals.bySeverity,

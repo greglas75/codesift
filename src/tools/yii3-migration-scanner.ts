@@ -27,6 +27,7 @@ export interface CategoryBucket {
 
 export interface MigrationScanResult {
   scannedFiles: number;
+  readFailures: number;
   buckets: Map<Yii3MigrationCategoryName, CategoryBucket>;
 }
 
@@ -71,7 +72,11 @@ export async function scanYii3MigrationSources(
     if (read.status !== "fulfilled") continue;
     collectSourceHits(read.value.path, read.value.content, sampleLimit, buckets);
   }
-  return { scannedFiles: phpFiles.length, buckets };
+  return {
+    scannedFiles: reads.filter((read) => read.status === "fulfilled").length,
+    readFailures: reads.filter((read) => read.status === "rejected").length,
+    buckets,
+  };
 }
 
 function isPathWithinRoot(root: string, path: string): boolean {

@@ -55,6 +55,7 @@ export interface CategoryFinding {
 export interface Yii3MigrationAudit {
   repo: string;
   scanned_files: number;
+  read_failures: number;
   total_call_sites: number;
   by_category: CategoryFinding[];
   by_severity: Record<Severity, number>;
