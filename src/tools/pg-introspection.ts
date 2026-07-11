@@ -304,18 +304,20 @@ async function runWithTimeout(
 ): Promise<PgIntrospectResult | PgIntrospectError> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
+  const timeoutError = new Error("pg introspection timed out");
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
-      reject(new Error("pg introspection timed out"));
+      reject(timeoutError);
     }, timeoutMs);
   });
   const introspectionPromise = runIntrospection(client, connStr, schema);
   try {
     return await Promise.race([introspectionPromise, timeout]);
   } catch (err) {
-    const message = redactError(err, connStr);
-    return { error: message.includes("timed out") ? "pg introspection timed out" : "PostgreSQL introspection failed" };
+    redactError(err, connStr);
+    if (err === timeoutError) return { error: "pg introspection timed out" };
+    return { error: "PostgreSQL introspection failed" };
   } finally {
     if (timer) clearTimeout(timer);
     if (timedOut) {
