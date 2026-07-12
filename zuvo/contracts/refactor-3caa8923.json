@@ -3,8 +3,8 @@
   "file": "src/formatters.ts",
   "type": "GOD_CLASS",
   "mode": "full",
-  "stage": "PHASE-3.5",
-  "commits": [],
+  "stage": "COMPLETE",
+  "commits": ["5c89e773cfd33a5e5bf2fcde8c99b799bf04039d"],
   "queue_file": null,
   "queue_entry": "formatters.ts: split formatters by domain and centralize tool formatter dispatch",
   "pre_refactor_sha": "4cad382ecea82e2b90d5216cd50e2cc85de7bf7e",
@@ -101,6 +101,14 @@
     "findings_disposition": "preserved:6 moved-verbatim hardening observations; no behavior changes; one earlier provider found the same class of pre-existing formatter risks",
     "cycle_check": "FORMATTER_CYCLES_NONE",
     "export_parity": "37/37 runtime exports preserved"
+  },
+  "verification": {
+    "lint": "PASS",
+    "build": "PASS",
+    "focused": "PASS: 10 files / 272 tests",
+    "full_suite_initial": "WARN: 323 files passed, 1 timing failure in untouched tests/tools/event-loop-yields.test.ts; isolated rerun PASS",
+    "full_suite_rerun": "WARN: 4 unrelated integration timeouts under environment load; 320 files passed, 4833 tests passed, 10 skipped",
+    "degraded_tools": "CodeSift hidden dead-code/clone/cycle tools unavailable; machine audit plus native cycle/export checks and independent auditor used"
   },
   "progress": [
     {
