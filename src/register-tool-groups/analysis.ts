@@ -1,5 +1,5 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, formatAuditScan, type ToolDefinitionEntry, type ToolCategory } from "./shared.js";
-import { findDeadCode, analyzeComplexity, findClones, analyzeHotspots, crossRepoSearchSymbols, crossRepoFindReferences, searchPatterns, listPatterns, generateReport, scanSecrets, frequencyAnalysis, reviewDiff, auditScan, testImpactAnalysis, dependencyAudit, migrationLint, analyzePrismaSchema, findPerfHotspots, fanInFanOut, coChangeAnalysis, architectureSummary, nestAudit, explainQuery, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatSecrets, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, type AuditScanOptions, type SecretSeverity, type SymbolKind } from "./deps.js";
+import { findDeadCode, analyzeComplexity, findClones, analyzeHotspots, crossRepoSearchSymbols, crossRepoFindReferences, searchPatterns, listPatterns, generateReport, scanSecrets, frequencyAnalysis, reviewDiff, auditScan, testImpactAnalysis, dependencyAudit, migrationLint, analyzePrismaSchema, findPerfHotspots, fanInFanOut, coChangeAnalysis, architectureSummary, nestAudit, explainQuery, dispatchFormatter, type AuditScanOptions, type SecretSeverity, type SymbolKind } from "./deps.js";
 
 export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Analysis ---
@@ -19,7 +19,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         file_pattern: args.file_pattern as string | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      const output = formatDeadCode(result as never);
+      const output = dispatchFormatter("find_dead_code", result);
       const isEmpty = !result || ((result as { candidates: unknown[] }).candidates?.length ?? 0) === 0;
       const hint = await checkTextStubHint(args.repo as string, "find_dead_code", isEmpty);
       return hint ? hint + output : output;
@@ -71,7 +71,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         min_complexity: args.min_complexity as number | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      const output = formatComplexity(result as never);
+      const output = dispatchFormatter("analyze_complexity", result);
       const isEmpty = !result || ((result as { functions: unknown[] }).functions?.length ?? 0) === 0;
       const hint = await checkTextStubHint(args.repo as string, "analyze_complexity", isEmpty);
       return hint ? hint + output : output;
@@ -97,7 +97,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         min_lines: args.min_lines as number | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      return formatClones(result as never);
+      return dispatchFormatter("find_clones", result);
     },
   } },
   { order: 2219, definition: {
@@ -143,7 +143,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         top_n: args.top_n as number | undefined,
         file_pattern: args.file_pattern as string | undefined,
       });
-      return formatHotspots(result as never);
+      return dispatchFormatter("analyze_hotspots", result);
     },
   } },
   // --- Cross-repo ---
@@ -200,7 +200,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         include_tests: args.include_tests as boolean | undefined,
         max_results: args.max_results as number | undefined,
       });
-      return formatSearchPatterns(result as never);
+      return dispatchFormatter("search_patterns", result);
     },
   } },
   { order: 2324, definition: {
@@ -319,7 +319,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         exclude_tests: args.exclude_tests as boolean | undefined,
         severity: args.severity as SecretSeverity | undefined,
       });
-      return formatSecrets(result as never);
+      return dispatchFormatter("scan_secrets", result);
     },
   } },
   // --- Review diff ---
@@ -356,7 +356,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.max_files != null) opts.max_files = args.max_files as number;
       if (args.check_timeout_ms != null) opts.check_timeout_ms = args.check_timeout_ms as number;
       const result = await reviewDiff(args.repo as string, opts);
-      return formatReviewDiff(result);
+      return dispatchFormatter("review_diff", result);
     },
   } },
   // --- Composite tools ---
@@ -403,7 +403,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.include_tests != null) opts!.include_tests = args.include_tests as boolean;
       if (args.max_results != null) opts!.max_results = args.max_results as number;
       const result = await findPerfHotspots(args.repo as string, opts);
-      return formatPerfHotspots(result);
+      return dispatchFormatter("find_perf_hotspots", result);
     },
   } },
   { order: 3806, definition: {
@@ -425,7 +425,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.min_fan_in != null) opts!.min_fan_in = args.min_fan_in as number;
       if (args.min_fan_out != null) opts!.min_fan_out = args.min_fan_out as number;
       const result = await fanInFanOut(args.repo as string, opts);
-      return formatFanInFanOut(result);
+      return dispatchFormatter("fan_in_fan_out", result);
     },
   } },
   { order: 3828, definition: {
@@ -449,7 +449,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.path != null) opts!.path = args.path as string;
       if (args.top_n != null) opts!.top_n = args.top_n as number;
       const result = await coChangeAnalysis(args.repo as string, opts);
-      return formatCoChange(result);
+      return dispatchFormatter("co_change_analysis", result);
     },
   } },
   { order: 3852, definition: {
@@ -469,7 +469,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.output_format != null) opts!.output_format = args.output_format as "text" | "mermaid";
       if (args.token_budget != null) opts!.token_budget = args.token_budget as number;
       const result = await architectureSummary(args.repo as string, opts);
-      return formatArchitectureSummary(result);
+      return dispatchFormatter("architecture_summary", result);
     },
   } },
   { order: 3872, definition: {

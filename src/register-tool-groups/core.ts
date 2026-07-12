@@ -1,5 +1,5 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, detectAutoLoadToolsCached, enableToolByName, type ToolDefinitionEntry } from "./shared.js";
-import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, searchSymbols, searchText, semanticSearch, getFileTree, getFileOutline, getRepoOutline, suggestQueries, getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, traceCallChain, impactAnalysis, traceRoute, detectCommunities, assembleContext, getKnowledgeMap, diffOutline, changedSymbols, generateClaudeMd, codebaseRetrieval, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, formatSearchSymbols, formatFileTree, formatFileOutline, formatRepoOutline, formatSuggestQueries, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, type SymbolKind, type Direction } from "./deps.js";
+import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, searchSymbols, searchText, semanticSearch, getFileTree, getFileOutline, getRepoOutline, suggestQueries, getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, traceCallChain, impactAnalysis, traceRoute, detectCommunities, assembleContext, getKnowledgeMap, diffOutline, changedSymbols, generateClaudeMd, codebaseRetrieval, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, dispatchFormatter, type SymbolKind, type Direction } from "./deps.js";
 
 export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Indexing ---
@@ -115,7 +115,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         token_budget: args.token_budget as number | undefined,
         rerank: args.rerank as boolean | undefined,
       });
-      const output = formatSearchSymbols(results);
+      const output = dispatchFormatter("search_symbols", results);
       const hint = await checkTextStubHint(args.repo as string, "search_symbols", results.length === 0);
       return hint ? hint + output : output;
     },
@@ -250,7 +250,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         compact: args.compact as boolean | undefined,
         min_symbols: args.min_symbols as number | undefined,
       });
-      return formatFileTree(result as never);
+      return dispatchFormatter("get_file_tree", result);
     },
   } },
   { order: 1407, definition: {
@@ -265,7 +265,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await getFileOutline(args.repo as string, args.file_path as string);
-      const output = formatFileOutline(result as never);
+      const output = dispatchFormatter("get_file_outline", result);
       const isEmpty = !result || (Array.isArray(result) && result.length === 0);
       const hint = await checkTextStubHint(args.repo as string, "get_file_outline", isEmpty);
       return hint ? hint + output : output;
@@ -281,7 +281,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await getRepoOutline(args.repo as string);
-      return formatRepoOutline(result as never);
+      return dispatchFormatter("get_repo_outline", result);
     },
   } },
   { order: 1439, definition: {
@@ -294,7 +294,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await suggestQueries(args.repo as string);
-      return formatSuggestQueries(result as never);
+      return dispatchFormatter("suggest_queries", result);
     },
   } },
   // --- Symbol retrieval ---
@@ -456,7 +456,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         output_format: args.output_format as "json" | "mermaid" | undefined,
         filter_react_hooks: args.filter_react_hooks as boolean | undefined,
       });
-      const output = formatCallTree(result as never);
+      const output = dispatchFormatter("trace_call_chain", result);
       const isEmpty = typeof result === "object" && result != null && "children" in result && Array.isArray((result as { children: unknown[] }).children) && (result as { children: unknown[] }).children.length === 0;
       const hint = await checkTextStubHint(args.repo as string, "trace_call_chain", isEmpty);
       return hint ? hint + output : output;
@@ -481,7 +481,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         until: args.until as string | undefined,
         include_source: args.include_source as boolean | undefined,
       });
-      return formatImpactAnalysis(result as never);
+      return dispatchFormatter("impact_analysis", result);
     },
   } },
   { order: 1761, definition: {
@@ -496,7 +496,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await traceRoute(args.repo as string, args.path as string, args.output_format as "json" | "mermaid" | undefined);
-      return formatTraceRoute(result as never);
+      return dispatchFormatter("trace_route", result);
     },
   } },
   { order: 1777, definition: {
@@ -638,7 +638,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         args.resolution as number | undefined,
         args.output_format as "json" | "mermaid" | undefined,
       );
-      return formatCommunities(result as never);
+      return dispatchFormatter("detect_communities", result);
     },
   } },
   { order: 1924, definition: {
@@ -711,7 +711,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         include_tests: args.include_tests as boolean | undefined,
         top_n: args.top_n as number | undefined,
       });
-      return formatRoles(result as never);
+      return dispatchFormatter("classify_roles", result);
     },
   } },
   // --- Context & knowledge ---
@@ -735,7 +735,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         args.level as "L0" | "L1" | "L2" | "L3" | undefined,
         args.rerank as boolean | undefined,
       );
-      return formatAssembleContext(result as never);
+      return dispatchFormatter("assemble_context", result);
     },
   } },
   { order: 2022, definition: {
@@ -751,7 +751,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await getKnowledgeMap(args.repo as string, args.focus as string | undefined, args.depth as number | undefined, args.output_format as "json" | "mermaid" | undefined);
-      return formatKnowledgeMap(result as never);
+      return dispatchFormatter("get_knowledge_map", result);
     },
   } },
   // --- Diff ---
@@ -767,7 +767,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await diffOutline(args.repo as string, args.since as string, args.until as string | undefined);
-      return formatDiffOutline(result as never);
+      return dispatchFormatter("diff_outline", result);
     },
   } },
   { order: 2055, definition: {
@@ -785,7 +785,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       const opts: { include_diff?: boolean } = {};
       if (args.include_diff === true) opts.include_diff = true;
       const result = await changedSymbols(args.repo as string, args.since as string, args.until as string | undefined, opts);
-      return formatChangedSymbols(result as never);
+      return dispatchFormatter("changed_symbols", result);
     },
   } },
   // --- Generation ---
