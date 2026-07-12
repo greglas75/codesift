@@ -266,7 +266,7 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       const stats = await getUsageStats(filters);
       const { createRequire } = await import("node:module");
       const req = createRequire(import.meta.url);
-      const pkgVersion: string = (req("../package.json") as { version: string }).version;
+      const pkgVersion: string = (req("../../package.json") as { version: string }).version;
       return { version: pkgVersion, filters: args, stats, report: formatUsageReport(stats) };
     },
   } },
