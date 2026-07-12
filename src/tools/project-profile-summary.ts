@@ -10,7 +10,7 @@ import type {
   ProjectProfile,
   PythonConventions,
   ReactConventions,
-} from "./project-tools.js";
+} from "./project-profile-types.js";
 
 export interface ProfileSummary {
   status: ProjectProfile["status"];

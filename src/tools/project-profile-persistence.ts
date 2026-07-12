@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ProjectProfile } from "./project-tools.js";
+import type { ProjectProfile } from "./project-profile-types.js";
 
 export async function writeProfileToDisk(projectRoot: string, profile: ProjectProfile): Promise<string> {
   const zuvoDir = join(projectRoot, ".zuvo");
