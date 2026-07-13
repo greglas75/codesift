@@ -3,8 +3,8 @@ import type { Island, SectionLandmark } from "./types.js";
 const SECTION_LANDMARKS = new Set<SectionLandmark>(["header", "footer", "aside", "nav", "main"]);
 const FW_HINTS = ["react", "vue", "svelte", "solid", "preact", "lit"] as const;
 const EXT_TO_FW: Record<string, Island["framework_hint"]> = {
-  ".tsx": "react", ".jsx": "react", ".vue": "vue",
-  ".svelte": "svelte", ".solid.tsx": "solid", ".solid.jsx": "solid", ".lit.ts": "lit",
+  ".solid.tsx": "solid", ".solid.jsx": "solid", ".lit.ts": "lit",
+  ".tsx": "react", ".jsx": "react", ".vue": "vue", ".svelte": "svelte",
 };
 
 export function isSectionLandmark(tag: string): boolean { return SECTION_LANDMARKS.has(tag as SectionLandmark); }

@@ -1,6 +1,8 @@
 import type { AstroTemplateParse, ComponentUsage, Directive, Island, SectionLandmark, Slot } from "./types.js";
 import { asSectionLandmark, isSectionLandmark } from "./resolution.js";
 
+const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+
 export class TemplateState {
   private readonly tagStack: string[] = [];
   private readonly sectionStack: SectionLandmark[] = [];
@@ -21,7 +23,7 @@ export class TemplateState {
   }
 
   open(tag: string, selfClose: boolean): void {
-    if (selfClose) return;
+    if (selfClose || VOID_TAGS.has(tag)) return;
     this.tagStack.push(tag);
     if (isSectionLandmark(tag)) this.sectionStack.push(asSectionLandmark(tag));
   }

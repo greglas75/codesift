@@ -2,7 +2,7 @@ import type { Island } from "./types.js";
 import { findExprStart, hasSlotContent, inferClientOnlyFramework, lineColAt, resolveImport } from "./resolution.js";
 import { TemplateState } from "./state.js";
 
-const DIRECTIVE_RE = /(client:(?:load|idle|visible|media|only)|server:defer)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g;
+const DIRECTIVE_RE = /(?:^|\s)(client:(?:load|idle|visible|media|only)|server:defer)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([^}]*)\}))?/g;
 
 export function processTag(
   full: string,
@@ -96,7 +96,7 @@ function readDirective(
   let match: RegExpExecArray | null;
   while ((match = DIRECTIVE_RE.exec(attrs)) !== null) {
     directive = match[1] as Island["directive"];
-    value = match[2] ?? match[3] ?? undefined;
+    value = match[2] ?? match[3] ?? (match[4] === undefined ? undefined : `{${match[4]}}`);
     state.addDirective({ name: directive, value, line, target_tag: tag });
   }
   return directive ? (value === undefined ? { name: directive } : { name: directive, value }) : null;
