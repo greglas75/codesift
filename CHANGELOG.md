@@ -17,6 +17,8 @@
   `BUILTIN_PATTERNS`, `searchPatterns`, and `listPatterns` exports.
 - Split the PHP/Yii implementation file into per-tool modules while keeping
   `src/tools/php-tools.ts` as the compatibility facade for existing callers.
+- Split Astro template parsing into preprocessing, resolution, state, scanning,
+  and tag-processing modules behind the existing parser facade.
 
 ### Fixed
 
@@ -33,6 +35,9 @@
 - Hardened project profile extraction around root entrypoints, Python
   `pyproject.toml` detection, Hono source precedence, importer counting, git
   remote sanitization, and atomic profile writes.
+- Hardened Astro template parsing for quoted tag values, framework-specific
+  extensions, comparison text, expression directives, directive boundaries, and
+  void elements.
 
 ## [0.7.0] — 2026-05-08
 

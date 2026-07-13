@@ -3,8 +3,8 @@
   "file": "src/parser/astro-template.ts",
   "type": "SPLIT_FILE",
   "mode": "full",
-  "stage": "PHASE-3.5",
-  "commits": ["c38de97"],
+  "stage": "COMPLETE",
+  "commits": ["c38de97", "1687403"],
   "queue_file": null,
   "queue_entry": "parser/astro-template.ts: separate parser states",
   "pre_refactor_sha": "f77ad894cfd5729ff7b964a32b7437544fb27adf",
@@ -17,6 +17,7 @@
     "src/parser/astro-template/scanner.ts",
     "src/parser/astro-template/tag-processor.ts",
     "tests/parser/astro-template.test.ts",
+    "CHANGELOG.md",
     "zuvo/contracts/refactor-fc3569d5.json"
   ],
   "backup_branch": "backup/refactor-astro-template-2026-07-13",
@@ -57,17 +58,17 @@
   "prove": {
     "characterization": "green:f77ad89:5u:tests/parser/astro-template.test.ts",
     "blind_audit": "clean:strict",
-    "adversarial": "9warnings:4fixed;5preserved",
-    "regression_red": "red@c38de97:green@working-tree:tests/parser/astro-template.test.ts",
+    "adversarial": "multi-pass:7fixed;4preserved",
+    "regression_red": "red@c38de97:green@1687403:tests/parser/astro-template.test.ts",
     "findings_disposition": "fixed: quoted tag values, specific framework extensions, comparison text, expression directives, directive boundaries, and void parents; preserved: frontmatter/brace-depth/slot and malformed-expression semantics"
   },
   "cq_after": {
-    "score": "5/5 machine checks applicable",
+    "score": "4/5 machine checks pass; CQ11 improved from CC59 to max CC17",
     "critical_failures": [],
     "notes": [
-      "Scoped CQ8, CQ11, CQ13, CQ14, and CQ17 scan passes after re-indexing",
+      "Scoped CQ8, CQ14, and CQ17 pass; CQ11 is materially reduced but CodeSift still warns on scanner CC17; CQ13 reports private-module false positives",
       "Independent CQ auditor PASS: no critical or FIX-NOW findings; public exports and scoped import graph preserved",
-      "Adversarial review found nine warnings across passes; six mechanical parser issues were fixed with regression tests, five legacy semantics remain documented"
+      "Adversarial review found repeated warnings across passes; seven mechanical parser issues were fixed with regression tests, four legacy semantics remain documented"
     ]
   },
   "verification": {
@@ -82,6 +83,7 @@
     { "stage": "PHASE-1", "status": "pre-scan-completed", "command": "analyze_complexity; analyze_hotspots; audit_scan; dependency mapping", "result": "parseAstroTemplate CC59/nesting 11; public callers identified; no hotspot" },
     { "stage": "PHASE-2", "status": "characterization-green", "command": "npm test -- --maxWorkers=2 tests/parser/astro-template.test.ts", "result": "25 tests passed before production edits" },
     { "stage": "PHASE-3", "status": "split-green", "command": "split preprocess, resolution, state, scanner, and tag processor; npm run lint; npm run build", "result": "thin facade, scanner CC7, focused parser/extractor/islands tests green" },
-    { "stage": "PHASE-3.5", "status": "remediated", "command": "independent refactor-cq-auditor; adversarial-review passes; regression red/green", "result": "CQ auditor PASS; six mechanical findings fixed in separate commit path; five legacy warnings preserved" }
+    { "stage": "PHASE-3.5", "status": "remediated", "command": "independent refactor-cq-auditor; adversarial-review passes; regression red/green", "result": "CQ auditor PASS; six mechanical findings fixed in separate commit path; four legacy semantics preserved" },
+    { "stage": "PHASE-4", "status": "complete", "command": "lint; build; focused tests; full-suite verification; final index and self-check", "result": "Targeted verification green; full suite had two unrelated load-sensitive failures that passed in isolation" }
   ]
 }

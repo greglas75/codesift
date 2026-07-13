@@ -11,18 +11,48 @@ export function scanTemplate(template: string, startLine: number, imports?: Map<
       cursor = start + 1;
       continue;
     }
-    const end = findTagEnd(template, start);
-    if (end < 0) break;
-    const full = template.slice(start, end + 1);
-    const match = full.match(/^<\/?([A-Za-z][A-Za-z0-9._-]*)([\s\S]*?)(\/?)>$/);
-    if (match) {
-      const tag = match[1] ?? "";
-      const attrs = match[2] ?? "";
-      processTag(full, tag, attrs, match[3] === "/" || full.endsWith("/"), start, end + 1, template, startLine, imports, state);
+    const next = readTag(template, start);
+    if (!next) break;
+    if (next.kind === "skip") {
+      cursor = next.afterPos;
+      continue;
     }
-    cursor = end + 1;
+    processTag(next.full, next.tag, next.attrs, next.selfClose, next.start, next.afterPos, template, startLine, imports, state);
+    cursor = next.afterPos;
   }
   return state.result();
+}
+
+interface ScannedTag {
+  kind: "tag";
+  full: string;
+  tag: string;
+  attrs: string;
+  selfClose: boolean;
+  start: number;
+  afterPos: number;
+}
+
+interface SkippedTag {
+  kind: "skip";
+  afterPos: number;
+}
+
+function readTag(template: string, start: number): ScannedTag | SkippedTag | null {
+  const end = findTagEnd(template, start);
+  if (end < 0) return null;
+  const full = template.slice(start, end + 1);
+  const match = full.match(/^<\/?([A-Za-z][A-Za-z0-9._-]*)([\s\S]*?)(\/?)>$/);
+  if (!match) return { kind: "skip", afterPos: end + 1 };
+  return {
+    kind: "tag",
+    full,
+    tag: match[1] ?? "",
+    attrs: match[2] ?? "",
+    selfClose: match[3] === "/" || full.endsWith("/"),
+    start,
+    afterPos: end + 1,
+  };
 }
 
 function findTagEnd(template: string, start: number): number {
