@@ -1,0 +1,100 @@
+{
+  "version": 3,
+  "file": "src/tools/python-audit.ts",
+  "type": "GOD_CLASS/SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "commits": [],
+  "queue_file": null,
+  "queue_entry": "python-audit.ts: split per-check execution and aggregation",
+  "pre_refactor_sha": "aa2026f0f34dbda63b46cc937f9a8210e567d76b",
+  "scope_fence": [
+    "src/tools/python-audit.ts",
+    "src/tools/python-audit/types.ts",
+    "src/tools/python-audit/runner.ts",
+    "src/tools/python-audit/checks/circular-imports.ts",
+    "src/tools/python-audit/checks/django-settings.ts",
+    "src/tools/python-audit/checks/anti-patterns.ts",
+    "src/tools/python-audit/checks/framework-wiring.ts",
+    "src/tools/python-audit/checks/celery.ts",
+    "src/tools/python-audit/checks/pytest-fixtures.ts",
+    "src/tools/python-audit/checks/dependencies.ts",
+    "src/tools/python-audit/checks/dead-code.ts",
+    "src/tools/python-audit/aggregate.ts",
+    "tests/tools/python-audit.test.ts",
+    "zuvo/contracts/refactor-f2aafa85.json"
+  ],
+  "backup_branch": "backup/refactor-python-audit-2026-07-13",
+  "cq_before": {
+    "score": "to be completed",
+    "critical_failures": [],
+    "notes": [
+      "pythonAudit is 322 LOC overall; the pythonAudit function is 152 LOC with CC68 and mixes eight check adapters, timeout handling, aggregation, scoring, and risk prioritization",
+      "CodeSift audit reports CQ11 CC68 and private-symbol CQ13 warnings; CQ8, CQ14, and CQ17 pass",
+      "Focused baseline and characterization suite pass: 8 tests"
+    ]
+  },
+  "plan": {
+    "classification": "GOD_CLASS/SPLIT_FILE",
+    "summary": "Keep the public python-audit.ts export path stable; move each audit check into its own adapter, centralize timeout execution and aggregation, and leave a thin orchestrator for index detection and scheduling.",
+    "extractions": [
+      { "unit": "shared public result and internal check types", "destination": "src/tools/python-audit/types.ts" },
+      { "unit": "per-check timeout/error boundary", "destination": "src/tools/python-audit/runner.ts" },
+      { "unit": "circular imports", "destination": "src/tools/python-audit/checks/circular-imports.ts" },
+      { "unit": "Django settings", "destination": "src/tools/python-audit/checks/django-settings.ts" },
+      { "unit": "Python anti-pattern catalog and execution", "destination": "src/tools/python-audit/checks/anti-patterns.ts" },
+      { "unit": "framework wiring", "destination": "src/tools/python-audit/checks/framework-wiring.ts" },
+      { "unit": "Celery", "destination": "src/tools/python-audit/checks/celery.ts" },
+      { "unit": "pytest fixtures", "destination": "src/tools/python-audit/checks/pytest-fixtures.ts" },
+      { "unit": "pyproject dependencies", "destination": "src/tools/python-audit/checks/dependencies.ts" },
+      { "unit": "dead code", "destination": "src/tools/python-audit/checks/dead-code.ts" },
+      { "unit": "gate aggregation, scoring, and top risks", "destination": "src/tools/python-audit/aggregate.ts" },
+      { "unit": "public facade and thin orchestration", "destination": "src/tools/python-audit.ts" }
+    ],
+    "dependency_impact": "Existing register-tool-groups, lazy loader, and tests import pythonAudit from the facade. Keep named exports and Parameters<typeof pythonAudit> compatible.",
+    "existing_reuse": "Reuse existing source tools and their return shapes; no new audit semantics or parallelism policy.",
+    "test_strategy": "Keep existing suite, add characterization for secondary aggregation branches, then verify focused suite, lint, build, import-cycle/export parity, and full tests as environment allows."
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/python-audit.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 12,
+    "units_covered": 12,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:aa2026f:8tests:tests/tools/python-audit.test.ts",
+    "blind_audit": "clean:degraded; independent agent timed out, machine CQ scan passed 5/5",
+    "adversarial": "4warnings:preserved",
+    "regression_red": "not_run",
+    "findings_disposition": "preserved: anti-pattern scanner fallback, root settings detection, Django count fallback, and global-only file_pattern behavior are pre-existing semantics outside this split"
+  },
+  "cq_after": {
+    "score": "5/5 machine checks applicable",
+    "critical_failures": [],
+    "notes": [
+      "Scoped CQ8, CQ11, CQ13, CQ14, and CQ17 scan passes after re-indexing",
+      "Public pythonAudit facade path, named export, options shape, and lazy loader remain unchanged",
+      "The independent CQ agent did not return within the review window; adversarial review completed with no critical/high-severity findings"
+    ]
+  },
+  "verification": {
+    "lint": "PASS",
+    "build": "PASS",
+    "focused": "PASS: 2 files / 90 tests",
+    "full_suite": "WARN: 325 files passed, 4852 tests passed, 3 skipped; unrelated timing assertion failed in tests/tools/event-loop-yields.test.ts",
+    "full_suite_isolated_failure_rerun": "PASS: tests/tools/event-loop-yields.test.ts",
+    "runtime_exports": "PASS: pythonAudit export present",
+    "degraded_tools": "Hidden CQ auditor agent timed out; CodeSift audit scan and adversarial provider used"
+  },
+  "progress": [
+    { "stage": "PHASE-0", "status": "bootstrapped", "command": "plan_turn; index_status; analyze_project; compute-preload", "result": "CodeSift indexed; TypeScript/Vitest/npm detected; external safety-gate installer unavailable" },
+    { "stage": "PHASE-1", "status": "pre-scan-completed", "command": "analyze_complexity; analyze_hotspots; audit_scan; dependency mapping", "result": "pythonAudit function CC68; public facade consumers identified; hidden niche checks require degraded fallbacks" },
+    { "stage": "PHASE-2", "status": "characterization-green", "command": "npm test -- --maxWorkers=2 tests/tools/python-audit.test.ts", "result": "8 tests passed before production edits" },
+    { "stage": "PHASE-3", "status": "split-green", "command": "split per-check adapters; runner; aggregate; facade; npm run lint; npm run build", "result": "43-line facade, 8 check modules, focused tests/lint/build green" },
+    { "stage": "PHASE-3.5", "status": "reviewed-no-fix", "command": "scoped CQ audit; adversarial-review --single --provider codex-5.3 --mode code", "result": "CQ 5/5 pass; 4 pre-existing warnings preserved; no critical/high findings" }
+  ]
+}
