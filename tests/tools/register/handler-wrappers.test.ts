@@ -121,6 +121,43 @@ describe("withCache", () => {
     await expect(cached({ id: 1 })).resolves.toEqual({ ok: true });
     expect(spy).toHaveBeenCalledTimes(2);
   });
+
+  it("(d) shouldCache=false evicts resolved-but-uncacheable results (retried, not sticky)", async () => {
+    let attempt = 0;
+    const spy = vi.fn(async (_args: { id: number }) => {
+      attempt += 1;
+      // First call RESOLVES an error (not a rejection); second resolves success.
+      return attempt === 1 ? { isError: true } : { ok: true };
+    });
+    const cached = withCache(
+      spy,
+      (args: { id: number }) => stableStringify(args),
+      256,
+      (res: { isError?: boolean }) => res.isError !== true,
+    );
+
+    const first = await cached({ id: 1 });
+    expect(first).toEqual({ isError: true });
+    // Same key → NOT served from cache because the resolved error was evicted.
+    const second = await cached({ id: 1 });
+    expect(second).toEqual({ ok: true });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("(e) shouldCache=true retains a successful result (served from cache on hit)", async () => {
+    const spy = vi.fn(async (args: { id: number }) => ({ value: args.id, isError: false }));
+    const cached = withCache(
+      spy,
+      (args: { id: number }) => stableStringify(args),
+      256,
+      (res: { isError?: boolean }) => res.isError !== true,
+    );
+
+    const r1 = await cached({ id: 1 });
+    const r2 = await cached({ id: 1 });
+    expect(r2).toBe(r1); // same cached reference
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("stableStringify", () => {

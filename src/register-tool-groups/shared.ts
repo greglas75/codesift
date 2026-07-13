@@ -92,6 +92,24 @@ export interface ToolDefinition {
    * no .py files exist. Checked at server startup against process.cwd().
    */
   requiresLanguage?: "python" | "php" | "kotlin";
+  /**
+   * Opt-in response memoization. When true the bind site wraps the handler in
+   * an index+git-version-aware LRU cache (see registerToolDefinition): identical
+   * calls against the same repo are served without re-running the handler. The
+   * cache key folds in the repo's on-disk index version AND its git state (HEAD
+   * + dirty), so an index change, commit, or branch switch invalidates the
+   * entry — within a short bounded staleness window (the per-repo version token
+   * is memoized for CODESIFT_TOOL_CACHE_TTL_MS, default ~2s, to avoid spawning
+   * git on every hot-path call), NOT instantaneously. Only set on deterministic,
+   * expensive-to-recompute analysis tools where a ~2s freshness lag is fine.
+   */
+  cacheable?: boolean;
+  /**
+   * Per-tool client-facing timeout budget in milliseconds. Overrides the
+   * universal default (env CODESIFT_TOOL_TIMEOUT_MS, else 90s). Ignored for
+   * the timeout-exempt long-op allowlist (index_folder/index_file/…).
+   */
+  timeoutMs?: number;
 }
 
 export interface ToolDefinitionEntry {

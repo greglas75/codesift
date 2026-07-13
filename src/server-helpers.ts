@@ -537,34 +537,50 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
   return { content: [{ type: "text" as const, text }] };
 }
 
-export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn: () => Promise<T>): () => Promise<ToolResponse> {
+export function wrapTool<T>(
+  toolName: string,
+  args: Record<string, unknown>,
+  fn: () => Promise<T>,
+  opts?: { bypassCache?: boolean },
+): () => Promise<ToolResponse> {
+  // When bypassing, wrapTool does NOT read/write its inner (args-only) response
+  // cache and does NOT join the in-flight dedup map — it only executes the
+  // handler and shapes the ToolResponse (error handling, usage tracking, timing
+  // are all preserved). Used by the runtime wiring for `cacheable` tools, whose
+  // sole cache is the outer index-version-aware withCache; letting the inner
+  // args-only cache also serve them would leak stale data after an
+  // out-of-process re-index (the inner cache is invalidated only by an
+  // in-session index_file).
+  const bypassCache = opts?.bypassCache === true;
   return () => {
     resolveRepo(toolName, args);
     const cacheKey = getCacheKey(toolName, args);
 
-    // 1. Return completed cache hit
-    const cached = getCached(cacheKey);
-    if (cached) {
-      trackSequentialCalls(toolName);
-      recordCacheHit(toolName, args);
-      scheduleSidecarFlush();
-      return Promise.resolve({
-        content: [{
-          type: "text" as const,
-          text: cached + "\n⚡ cached",
-        }],
-      });
-    }
+    if (!bypassCache) {
+      // 1. Return completed cache hit
+      const cached = getCached(cacheKey);
+      if (cached) {
+        trackSequentialCalls(toolName);
+        recordCacheHit(toolName, args);
+        scheduleSidecarFlush();
+        return Promise.resolve({
+          content: [{
+            type: "text" as const,
+            text: cached + "\n⚡ cached",
+          }],
+        });
+      }
 
-    // 2. Coalesce with in-flight request (parallel dedup)
-    const pending = inflight.get(cacheKey);
-    if (pending) {
-      return pending.then((response) => ({
-        content: [{
-          type: "text" as const,
-          text: (response.content[0]?.text ?? "") + "\n⚡ deduped",
-        }],
-      }));
+      // 2. Coalesce with in-flight request (parallel dedup)
+      const pending = inflight.get(cacheKey);
+      if (pending) {
+        return pending.then((response) => ({
+          content: [{
+            type: "text" as const,
+            text: (response.content[0]?.text ?? "") + "\n⚡ deduped",
+          }],
+        }));
+      }
     }
 
     // 3. Execute and cache
@@ -586,7 +602,7 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         // TTL would serve stale results after an edit.
         if (INDEX_MUTATING_TOOLS.has(toolName)) {
           invalidateResponseCache();
-        } else {
+        } else if (!bypassCache) {
           setCache(cacheKey, text);
         }
         const response = formatResponse(text, toolName, args, data);
@@ -604,11 +620,11 @@ export function wrapTool<T>(toolName: string, args: Record<string, unknown>, fn:
         scheduleSidecarFlush();
         return errorResult(message);
       } finally {
-        inflight.delete(cacheKey);
+        if (!bypassCache) inflight.delete(cacheKey);
       }
     })();
 
-    inflight.set(cacheKey, promise);
+    if (!bypassCache) inflight.set(cacheKey, promise);
     return promise;
   };
 }

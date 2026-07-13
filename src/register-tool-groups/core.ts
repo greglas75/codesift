@@ -273,6 +273,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 1425, definition: {
     name: "get_repo_outline",
+    cacheable: true,
     category: "outline",
     searchHint: "repository outline overview directory structure high-level",
     description: "Get a high-level outline of the entire repository grouped by directory",
@@ -622,6 +623,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 1902, definition: {
     name: "detect_communities",
+    cacheable: true,
     category: "architecture",
     searchHint: "community detection clusters modules Louvain import graph boundaries",
     description: "Louvain community detection on import graph. Discovers module boundaries.",
@@ -643,6 +645,7 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 1924, definition: {
     name: "find_circular_deps",
+    cacheable: true,
     category: "architecture",
     searchHint: "circular dependency cycle import loop detection",
     description: "Detect circular dependencies in the import graph via DFS. Returns file-level cycles.",

@@ -53,6 +53,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 2170, definition: {
     name: "analyze_complexity",
+    cacheable: true,
     category: "analysis",
     searchHint: "complexity cyclomatic nesting refactoring functions",
     outputSchema: OutputSchemas.complexity,
@@ -362,6 +363,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Composite tools ---
   { order: 3709, definition: {
     name: "audit_scan",
+    cacheable: true,
     category: "analysis",
     searchHint: "audit scan code quality CQ gates dead code clones complexity patterns",
     description: "Run 5 analysis tools in parallel, return findings keyed by CQ gate. One call replaces sequential find_dead_code + search_patterns + find_clones + analyze_complexity + analyze_hotspots. Returns: CQ8 (empty catch), CQ11 (complexity), CQ13 (dead code), CQ14 (clones), CQ17 (perf anti-patterns).",
@@ -408,6 +410,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 3806, definition: {
     name: "fan_in_fan_out",
+    cacheable: true,
     category: "architecture",
     searchHint: "fan-in fan-out coupling dependencies imports hub afferent efferent instability threshold",
     description: "Analyze import graph to find most-imported files (fan-in), most-dependent files (fan-out), and hub files (high both — instability risk). Returns coupling score 0-100. Use min_fan_in/min_fan_out for threshold-based audits ('all files with fan_in > 50') instead of top_n cap.",
@@ -454,6 +457,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 3852, definition: {
     name: "architecture_summary",
+    cacheable: true,
     category: "architecture",
     searchHint: "architecture summary overview structure stack framework communities coupling circular dependencies entry points",
     description: "One-call architecture profile: stack detection, module communities, coupling hotspots, circular dependencies, LOC distribution, and entry points. Runs 5 analyses in parallel. Supports Mermaid diagram output.",
@@ -506,6 +510,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- NestJS analysis tools (sub-tools absorbed into nest_audit) ---
   { order: 3904, definition: {
     name: "nest_audit",
+    cacheable: true,
     category: "nestjs",
     searchHint: "nestjs audit analysis comprehensive module di guard route lifecycle pattern graphql websocket schedule typeorm microservice hook onModuleInit onApplicationBootstrap shutdown dependency graph circular import boundary injection provider constructor inject cycle interceptor pipe filter middleware chain security endpoint api map inventory list all params resolver query mutation subscription apollo gateway subscribemessage socketio realtime event cron interval timeout scheduled job task onevent listener entity relation onetomany manytoone database schema messagepattern eventpattern kafka rabbitmq nats transport request pipeline handler execution flow visualization bull bullmq queue processor process background worker scope transient singleton performance escalation swagger openapi documentation apiproperty apioperation apiresponse contract extract workspace monorepo",
     description: "One-call NestJS architecture audit: modules, DI, guards, routes, lifecycle, patterns, GraphQL, WebSocket, schedule, TypeORM, microservices. Pass workspace=<name|path> in monorepos to scope to a single workspace.",
