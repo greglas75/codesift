@@ -45,54 +45,84 @@ export function extractSchemaFields(schemaNode: Parser.SyntaxNode): ParsedField[
   return fields;
 }
 
-function parseInlineArray(value: string): string[] {
-  return value
-    .slice(1, -1)
-    .split(",")
-    .map((item) => item.trim().replace(/^["']|["']$/g, ""))
-    .filter((item) => item.length > 0);
-}
+export type StructuredEntryParseResult =
+  | { kind: "data"; entries: Record<string, unknown>[] }
+  | { kind: "read-error" }
+  | { kind: "parse-error" };
 
-function parseFrontmatterValue(value: string): unknown {
-  if (value === "") return "";
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (value === "null" || value === "~") return null;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  if (value.startsWith("[") && value.endsWith("]")) return parseInlineArray(value);
-  return value.replace(/^["']|["']$/g, "");
-}
+type YamlParser = (source: string) => unknown;
 
-export function parseFrontmatter(source: string): Record<string, unknown> | null {
-  const match = source.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (!match) return null;
-  const body = match[1]!;
-  const out: Record<string, unknown> = {};
-  for (const raw of body.split(/\r?\n/)) {
-    const line = raw.replace(/\t/g, "  ");
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-    if (/^\s/.test(line)) continue;
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
-    if (!kv) continue;
-    const key = kv[1]!;
-    out[key] = parseFrontmatterValue(kv[2]!.trim());
+let cachedYamlParser: YamlParser | null = null;
+
+async function loadYamlParser(): Promise<YamlParser | null> {
+  if (cachedYamlParser) return cachedYamlParser;
+  try {
+    cachedYamlParser = (await import("yaml")).parse;
+    return cachedYamlParser;
+  } catch {
+    return null;
   }
-  return out;
 }
 
-export async function parseJsonEntry(absPath: string): Promise<Record<string, unknown> | null> {
+function normalizeStructuredEntries(value: unknown): StructuredEntryParseResult {
+  let values: unknown[];
+  if (Array.isArray(value)) {
+    values = value;
+  } else if (value && typeof value === "object") {
+    const mappedValues = Object.values(value);
+    const isObjectMap = mappedValues.length > 0
+      && mappedValues.every((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
+    values = isObjectMap ? mappedValues : [value];
+  } else {
+    values = [value];
+  }
+  if (values.length === 0) return { kind: "data", entries: [] };
+  if (values.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+    return { kind: "parse-error" };
+  }
+  return { kind: "data", entries: values as Record<string, unknown>[] };
+}
+
+async function parseYamlSource(source: string): Promise<StructuredEntryParseResult> {
+  const parser = await loadYamlParser();
+  if (!parser) return { kind: "parse-error" };
+  try {
+    return normalizeStructuredEntries(parser(source));
+  } catch {
+    return { kind: "parse-error" };
+  }
+}
+
+export async function parseFrontmatter(
+  source: string,
+): Promise<StructuredEntryParseResult | null> {
+  const match = source.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  return match ? parseYamlSource(match[1]!) : null;
+}
+
+async function readStructuredEntry(
+  absPath: string,
+  parser: (source: string) => Promise<StructuredEntryParseResult>,
+): Promise<StructuredEntryParseResult> {
   let raw: string;
   try {
     raw = await readFile(absPath, "utf-8");
   } catch {
-    return null;
+    return { kind: "read-error" };
   }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
+  return parser(raw);
+}
+
+export async function parseJsonEntry(absPath: string): Promise<StructuredEntryParseResult> {
+  return readStructuredEntry(absPath, async (raw) => {
+    try {
+      return normalizeStructuredEntries(JSON.parse(raw) as unknown);
+    } catch {
+      return { kind: "parse-error" };
+    }
+  });
+}
+
+export async function parseYamlEntry(absPath: string): Promise<StructuredEntryParseResult> {
+  return readStructuredEntry(absPath, parseYamlSource);
 }

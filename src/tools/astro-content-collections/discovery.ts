@@ -23,7 +23,7 @@ async function findFirstConfig(
 ): Promise<DiscoveredConfig | null> {
   for (const relPath of candidates) {
     const absPath = join(root, relPath);
-    if ((await readTextFile(absPath)) != null) {
+    if ((await readTextFile(absPath)) !== null) {
       return { abs_path: absPath, rel_path: relPath, version };
     }
   }

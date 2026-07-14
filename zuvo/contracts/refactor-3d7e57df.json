@@ -59,9 +59,9 @@
   "prove": {
     "characterization": "green:a6df1c3:3u:tests/tools/astro-content-collections.test.ts:11 tests",
     "blind_audit": "clean:strict",
-    "adversarial": "3findings",
-    "regression_red": "not_run",
-    "findings_disposition": "triaged:3-in-fence-bugs; stacked-remediation-required"
+    "adversarial": "20findings",
+    "regression_red": "red@a5f07e4:green@27-tests:tests/tools/astro-content-collections.test.ts",
+    "findings_disposition": "fixed:all-in-fence-adversarial-and-cq-findings"
   },
   "cq_after": {"score": "15/15 applicable", "critical_failures": []},
   "documentation": "[DOC: N/A -- internal-only refactor; public handler and result contracts preserved]",
@@ -69,6 +69,8 @@
     {"stage": "PHASE-0", "status": "bootstrapped", "result": "TypeScript/Vitest; CodeSift indexed; hidden role/cycle tools unavailable"},
     {"stage": "PHASE-1", "status": "baseline-green", "result": "8 existing public-handler tests passed"},
     {"stage": "PHASE-2", "status": "characterization-locked", "result": "11 public-handler tests passed on pre-refactor a6df1c3; discovery/schema/diagnostics all covered"},
-    {"stage": "PHASE-3", "status": "implementation-green", "result": "Facade 101 LOC; modules 68-208 LOC; max CC reduced 35->14; 34 scoped Astro tests and tsc passed"}
+    {"stage": "PHASE-3", "status": "implementation-green", "result": "Facade 101 LOC; modules 68-208 LOC; max CC reduced 35->14; 34 scoped Astro tests and tsc passed"},
+    {"stage": "PHASE-3.5", "status": "regressions-demonstrated", "result": "20 regression assertions failed across pre-fix iterations; final 27/27 scoped and 50/50 Astro integration tests passed"},
+    {"stage": "PHASE-3.5", "status": "verification-green", "result": "lint and build passed; full suite 4895 passed/3 skipped/1 unrelated timeout, isolated timeout suite passed 20/20"}
   ]
 }

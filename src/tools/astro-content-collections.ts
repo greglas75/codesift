@@ -61,6 +61,23 @@ function emptyResult(
   };
 }
 
+function configErrorResult(
+  configFile: string,
+  version: ContentCollectionsResult["config_version"],
+  message: string,
+): ContentCollectionsResult {
+  const result = emptyResult(configFile, version);
+  result.validation_issues.push({
+    collection: "$config",
+    file: configFile,
+    field: "$config",
+    message,
+    severity: "error",
+  });
+  result.summary.collections_with_issues = 1;
+  return result;
+}
+
 async function resolveProjectRoot(args: ContentCollectionsArgs): Promise<string | null> {
   if (args.project_root) return args.project_root;
   const index = await getCodeIndex(args.repo ?? "");
@@ -86,13 +103,21 @@ export async function astroContentCollections(
   const discovered = await findConfig(projectRoot);
   if (!discovered) return emptyResult(null, "not-found");
   const source = await readTextFile(discovered.abs_path);
-  if (source == null) return emptyResult(discovered.rel_path, "not-found");
+  if (source === null) return emptyResult(discovered.rel_path, "not-found");
   const parsed = await parseConfigSource(source);
   if (parsed.status === "parser-unavailable") {
-    return emptyResult(discovered.rel_path, "not-found");
+    return configErrorResult(
+      discovered.rel_path,
+      discovered.version,
+      "JavaScript parser unavailable",
+    );
   }
   if (parsed.status === "parse-error") {
-    return emptyResult(discovered.rel_path, discovered.version);
+    return configErrorResult(
+      discovered.rel_path,
+      discovered.version,
+      "Unable to parse content collection config",
+    );
   }
   const diagnostics = await buildCollectionDiagnostics(
     projectRoot,

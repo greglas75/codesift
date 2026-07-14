@@ -1,12 +1,18 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { initParser } from "../../src/parser/parser-manager.js";
+import * as parserManager from "../../src/parser/parser-manager.js";
 import { astroContentCollections } from "../../src/tools/astro-content-collections.js";
+import * as indexTools from "../../src/tools/index-tools.js";
 
 beforeAll(async () => {
   await initParser();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 /** Create a tmp project and run the tool against it. */
@@ -374,6 +380,381 @@ export const collections = { blog };
         const result = await astroContentCollections({ project_root: root });
         expect(result.orphaned_files).toEqual(["src/content/blog/no-frontmatter.md"]);
         expect(result.validation_issues).toEqual([]);
+        expect(result.collections[0]!.entry_count).toBe(0);
+      },
+    );
+  });
+
+  it("12. glob loaders count only files matching their pattern", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { glob } from "astro/loaders";
+
+const blog = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: "./src/content/blog" }),
+  schema: z.object({ title: z.string() }),
+});
+
+export const collections = { blog };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/blog/post.md": "---\ntitle: Post\n---\n",
+        "src/content/blog/metadata.json": JSON.stringify({ title: "Metadata" }),
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(1);
+        expect(result.summary.total_entries).toBe(1);
+      },
+    );
+  });
+
+  it("13. file loaders inspect only the configured file", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { file } from "astro/loaders";
+
+const authors = defineCollection({
+  loader: file("src/content/authors.json"),
+  schema: z.object({ name: z.string() }),
+});
+
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.json": JSON.stringify({ name: "Ada" }),
+        "src/content/unrelated.json": JSON.stringify({ slug: "wrong collection" }),
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(1);
+        expect(result.validation_issues).toEqual([]);
+      },
+    );
+  });
+
+  it("14. loader bases outside the project are not traversed", async () => {
+    const outsideRoot = await mkdtemp(join(tmpdir(), "astro-cc-outside-"));
+    try {
+      await writeFile(
+        join(outsideRoot, "external.md"),
+        "---\ntitle: External\n---\n",
+        "utf-8",
+      );
+      const config = `
+import { defineCollection, z } from "astro:content";
+import { glob } from "astro/loaders";
+
+const blog = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: ${JSON.stringify(outsideRoot)} }),
+  schema: z.object({ title: z.string() }),
+});
+
+export const collections = { blog };
+`;
+      await withProject(
+        { "src/content.config.ts": config },
+        async (root) => {
+          const result = await astroContentCollections({ project_root: root });
+          expect(result.collections[0]!.entry_count).toBe(0);
+          expect(result.summary.total_entries).toBe(0);
+        },
+      );
+    } finally {
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("15. malformed JSON entries produce a validation diagnostic", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { file } from "astro/loaders";
+
+const authors = defineCollection({
+  loader: file("src/content/authors.json"),
+  schema: z.object({ name: z.string() }),
+});
+
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.json": "{ invalid json",
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.validation_issues).toEqual([
+          {
+            collection: "authors",
+            file: "src/content/authors.json",
+            field: "$",
+            message: "Invalid JSON content entry",
+            severity: "error",
+          },
+        ]);
+        expect(result.collections[0]!.entry_count).toBe(0);
+      },
+    );
+  });
+
+  it("16. resolves the project root from the indexed repo", async () => {
+    await withProject(
+      {
+        "src/content.config.ts": `
+import { defineCollection } from "astro:content";
+export const collections = { blog: defineCollection({ type: "content" }) };
+`,
+      },
+      async (root) => {
+        vi.spyOn(indexTools, "getCodeIndex").mockResolvedValue({ root } as Awaited<
+          ReturnType<typeof indexTools.getCodeIndex>
+        >);
+        const result = await astroContentCollections({ repo: "local/example" });
+        expect(indexTools.getCodeIndex).toHaveBeenCalledWith("local/example");
+        expect(result.config_file).toBe("src/content.config.ts");
+        expect(result.collections[0]!.name).toBe("blog");
+      },
+    );
+  });
+
+  it("17. validates YAML data entries", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { file } from "astro/loaders";
+const authors = defineCollection({
+  loader: file("src/content/authors.yaml"),
+  schema: z.object({ name: z.string() }),
+});
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.yaml": "slug: ada\n",
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.validation_issues[0]).toMatchObject({
+          field: "name",
+          message: "Missing required field 'name' (string)",
+        });
+      },
+    );
+  });
+
+  it("18. validates each object in a JSON array", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { file } from "astro/loaders";
+const authors = defineCollection({
+  loader: file("src/content/authors.json"),
+  schema: z.object({ name: z.string() }),
+});
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.json": JSON.stringify([{ name: "Ada" }, { slug: "grace" }]),
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.validation_issues).toEqual([
+          expect.objectContaining({ field: "[1].name" }),
+        ]);
+      },
+    );
+  });
+
+  it("19. matches project-relative glob patterns when base is omitted", async () => {
+    const config = `
+import { defineCollection } from "astro:content";
+import { glob } from "astro/loaders";
+const blog = defineCollection({ loader: glob({ pattern: "src/content/blog/**/*.md" }) });
+export const collections = { blog };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/blog/post.md": "---\ntitle: Post\n---\n",
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(1);
+      },
+    );
+  });
+
+  it("20. reports parser unavailability without claiming the config is missing", async () => {
+    vi.spyOn(parserManager, "getParser").mockResolvedValue(null);
+    await withProject(
+      { "src/content.config.ts": "export const collections = {};" },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.config_version).toBe("v5+");
+        expect(result.validation_issues[0]).toMatchObject({
+          field: "$config",
+          message: "JavaScript parser unavailable",
+        });
+      },
+    );
+  });
+
+  it("21. reports config parse failures", async () => {
+    const parser = await parserManager.getParser("javascript");
+    expect(parser).not.toBeNull();
+    vi.spyOn(parserManager, "getParser").mockResolvedValue({
+      parse: () => {
+        throw new Error("parse failed");
+      },
+    } as unknown as NonNullable<typeof parser>);
+    await withProject(
+      { "src/content.config.ts": "export const collections = {};" },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.config_version).toBe("v5+");
+        expect(result.validation_issues[0]).toMatchObject({
+          field: "$config",
+          message: "Unable to parse content collection config",
+        });
+      },
+    );
+  });
+
+  it("22. treats empty required values as missing", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+const blog = defineCollection({
+  type: "content",
+  schema: z.object({ title: z.string() }),
+});
+export const collections = { blog };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/blog/empty.md": "---\ntitle: \n---\n",
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.validation_issues[0]).toMatchObject({ field: "title" });
+      },
+    );
+  });
+
+  it("23. treats id-keyed JSON objects as multiple entries", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { file } from "astro/loaders";
+const authors = defineCollection({
+  loader: file("src/content/authors.json"),
+  schema: z.object({ name: z.string() }),
+});
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.json": JSON.stringify({
+          ada: { name: "Ada" },
+          grace: { name: "Grace" },
+        }),
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(2);
+        expect(result.validation_issues).toEqual([]);
+      },
+    );
+  });
+
+  it("24. counts entries inside a file-loader JSON array", async () => {
+    const config = `
+import { defineCollection } from "astro:content";
+import { file } from "astro/loaders";
+const authors = defineCollection({ loader: file("src/content/authors.json") });
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.json": JSON.stringify([{ name: "Ada" }, { name: "Grace" }]),
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(2);
+        expect(result.summary.total_entries).toBe(2);
+      },
+    );
+  });
+
+  it("25. rejects file-loader symlinks that escape the project", async () => {
+    const outsideRoot = await mkdtemp(join(tmpdir(), "astro-cc-symlink-"));
+    const outsideFile = join(outsideRoot, "authors.json");
+    await writeFile(outsideFile, JSON.stringify({ name: "External" }), "utf-8");
+    try {
+      const config = `
+import { defineCollection } from "astro:content";
+import { file } from "astro/loaders";
+const authors = defineCollection({ loader: file("src/content/authors.json") });
+export const collections = { authors };
+`;
+      await withProject(
+        { "src/content.config.ts": config },
+        async (root) => {
+          await mkdir(join(root, "src/content"), { recursive: true });
+          await symlink(outsideFile, join(root, "src/content/authors.json"));
+          const result = await astroContentCollections({ project_root: root });
+          expect(result.collections[0]!.entry_count).toBe(0);
+        },
+      );
+    } finally {
+      await rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("26. prunes dependency directories for base-less glob loaders", async () => {
+    const config = `
+import { defineCollection } from "astro:content";
+import { glob } from "astro/loaders";
+const blog = defineCollection({ loader: glob({ pattern: "**/*.md" }) });
+export const collections = { blog };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/blog/post.md": "---\ntitle: Post\n---\n",
+        "node_modules/example/noise.md": "dependency docs",
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(1);
+      },
+    );
+  });
+
+  it("27. preserves logical paths for in-project symlinked glob roots", async () => {
+    const config = `
+import { defineCollection } from "astro:content";
+import { glob } from "astro/loaders";
+const blog = defineCollection({ loader: glob({ pattern: "src/content/blog/**/*.md" }) });
+export const collections = { blog };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "content-real/post.md": "---\ntitle: Linked\n---\n",
+      },
+      async (root) => {
+        await mkdir(join(root, "src/content"), { recursive: true });
+        await symlink(join(root, "content-real"), join(root, "src/content/blog"));
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]!.entry_count).toBe(1);
       },
     );
   });
