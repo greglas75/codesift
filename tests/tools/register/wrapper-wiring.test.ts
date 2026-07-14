@@ -10,9 +10,12 @@ import {
   getRepoIndexVersion,
   getRepoGitVersion,
   getRepoVersionToken,
-  _resetRepoVersionTokenCache,
+  toolTimeoutMs,
+  TIMEOUT_EXEMPT_TOOLS,
 } from "../../../src/register-tools/runtime.js";
+import { TOOL_DEFINITION_MAP } from "../../../src/register-tools/discovery.js";
 import { resetSessionState } from "../../../src/server-helpers.js";
+import { getCallCount } from "../../../src/storage/session-state.js";
 import {
   indexFolder,
   indexFile,
@@ -94,7 +97,7 @@ let symCounter = 1;
 
 const origDataDir = process.env["CODESIFT_DATA_DIR"];
 const origDisableEmb = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
-const origTtlMs = process.env["CODESIFT_TOOL_CACHE_TTL_MS"];
+const origTimeoutMs = process.env["CODESIFT_TOOL_TIMEOUT_MS"];
 
 /** Add one more symbol and re-index the file — an index_file-style mutation. */
 async function bumpIndex(): Promise<void> {
@@ -111,11 +114,9 @@ beforeAll(async () => {
   process.env["CODESIFT_DATA_DIR"] = dataDir;
   // Hermetic + fast: BM25 + symbols only (we only need the on-disk index file).
   process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = "1";
-  // Deterministic invalidation: TTL=0 forces the per-repo version token to be
-  // recomputed on every cacheKeyFor call, so an index_file-style / git mutation is
-  // reflected immediately (no 2s memo window to race). The TTL memo itself is
-  // proven separately, with a positive TTL, in the "TTL memo" test below.
-  process.env["CODESIFT_TOOL_CACHE_TTL_MS"] = "0";
+  // Invalidation is INSTANT by construction: the per-repo version token is
+  // recomputed (statSync only, no memo, no TTL) on every cacheKeyFor call, so an
+  // index_file-style / git mutation is reflected on the very next call.
   resetIndexFolderRedundancyForTesting();
 
   repoRoot = await mkdtemp(join(tmpdir(), "cs-wrapwire-repo-"));
@@ -141,8 +142,8 @@ afterAll(async () => {
   else process.env["CODESIFT_DATA_DIR"] = origDataDir;
   if (origDisableEmb === undefined) delete process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
   else process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = origDisableEmb;
-  if (origTtlMs === undefined) delete process.env["CODESIFT_TOOL_CACHE_TTL_MS"];
-  else process.env["CODESIFT_TOOL_CACHE_TTL_MS"] = origTtlMs;
+  if (origTimeoutMs === undefined) delete process.env["CODESIFT_TOOL_TIMEOUT_MS"];
+  else process.env["CODESIFT_TOOL_TIMEOUT_MS"] = origTimeoutMs;
 });
 
 beforeEach(() => {
@@ -266,6 +267,123 @@ describe("register wrapper wiring", () => {
     expect(second.content?.[0]?.text ?? "").toContain("ok2");
   });
 
+  // (a-degraded) FIX 3: an UNKNOWN repo has no observable index version, so its
+  // cache key would carry no version component — the entry could NEVER invalidate
+  // and would live for the whole process ("unknown version = cache forever").
+  // Such a call must not be memoized at all: the handler runs every time.
+  it("(a) cacheable tool: an unregistered repo (no observable version) is NOT cached", async () => {
+    let calls = 0;
+    const handler: Handler = async () => { calls += 1; return `r${calls}`; };
+    const call = bind(fakeDef("__fake_cacheable_unknown__", handler, { cacheable: true }));
+    const args = { repo: "no/such/repo", foo: 1 };
+
+    const first = (await call(args)) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(1);
+    expect(first.content?.[0]?.text ?? "").toContain("r1");
+
+    // bypassCache is on for cacheable tools, so nothing else could serve this.
+    const second = (await call(args)) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(2); // RE-INVOKED — never memoized under an unversioned key
+    expect(second.content?.[0]?.text ?? "").toContain("r2");
+    expect(second.content?.[0]?.text ?? "").not.toContain("⚡ cached");
+  });
+
+  // (a-hit-telemetry) FIX 6: on a HIT the base (wrapTool) never runs, so the hit
+  // itself must record the usage/session telemetry — otherwise every repeat call to
+  // a cacheable tool vanishes from usage_stats / the session snapshot, i.e. the
+  // optimization corrupts the feed used to measure it. The served text also carries
+  // the `⚡ cached` marker (same convention as wrapTool's inner cache).
+  it("(a) cacheable tool: a cache HIT still records telemetry and marks the response `⚡ cached`", async () => {
+    let calls = 0;
+    const handler: Handler = async () => { calls += 1; return `payload${calls}`; };
+    const call = bind(fakeDef("__fake_cache_hit_telemetry__", handler, { cacheable: true }));
+    const args = { repo: repoName, foo: 123 };
+
+    resetSessionState(); // callCount starts at 0 for this test
+    const first = (await call(args)) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(1);
+    expect(getCallCount()).toBe(1); // miss → recorded by wrapTool
+    expect(first.content?.[0]?.text ?? "").not.toContain("⚡ cached");
+
+    const second = (await call(args)) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(1);                              // served from cache
+    expect(second.content?.[0]?.text ?? "").toContain("payload1");
+    expect(second.content?.[0]?.text ?? "").toContain("⚡ cached"); // agent-visible marker
+    expect(getCallCount()).toBe(2);                    // HIT recorded (recordCacheHit)
+
+    // The memoized entry must NOT have been mutated by the marker append —
+    // a 3rd hit carries exactly one marker, not two.
+    const third = (await call(args)) as { content?: Array<{ text?: string }> };
+    const markers = (third.content?.[0]?.text ?? "").split("⚡ cached").length - 1;
+    expect(markers).toBe(1);
+    expect(getCallCount()).toBe(3);
+
+    // …and the hit reached the usage log (usage_stats / usage_hotspots feed).
+    const usagePath = join(dataDir, "usage.jsonl");
+    await expect.poll(async () => {
+      const raw = await readFile(usagePath, "utf-8").catch(() => "");
+      let n = 0;
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry["tool"] === "__fake_cache_hit_telemetry__") n += 1;
+      }
+      return n;
+    }, { timeout: 2000 }).toBe(3); // 1 miss + 2 hits — no call vanishes
+  });
+
+  // (a-brick) FIX 5: a handler that NEVER settles leaves its pending promise in the
+  // cache. Without eviction every later identical call joins that dead promise,
+  // waits the full timeout and returns `timed_out` — the key is bricked for the life
+  // of the process. The timeout path must evict it so the next call re-invokes.
+  it("(a) cacheable tool: a never-settling handler does not brick the cache key", async () => {
+    let calls = 0;
+    const handler: Handler = (): Promise<unknown> => {
+      calls += 1;
+      // 1st invocation hangs forever; a later invocation resolves normally.
+      if (calls === 1) return new Promise<unknown>(() => {});
+      return Promise.resolve(`recovered${calls}`);
+    };
+    const call = bind(fakeDef("__fake_cacheable_hang__", handler, { cacheable: true, timeoutMs: 20 }));
+    const args = { repo: repoName, foo: 555 };
+
+    const first = await call(args);
+    expect(calls).toBe(1);
+    expect(isTimeoutMarker(first)).toBe(true); // hung → client-facing timeout
+
+    const second = (await call(args)) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(2); // RE-INVOKED — the dead pending promise was evicted
+    expect(isTimeoutMarker(second)).toBe(false);
+    expect(second.content?.[0]?.text ?? "").toContain("recovered2");
+  });
+
+  // (a-brick-mutated-args) The eviction key must be computed from the args as they
+  // were BEFORE the call. wrapTool's resolveRepo MUTATES the args object mid-call
+  // (it fills in `repo` when the client omits it — the common case), and the cache
+  // key is content-derived, so evicting with the post-call object would compute a
+  // DIFFERENT key and silently miss, leaving the dead promise in place. Simulated
+  // here with a handler that mutates its args exactly the way resolveRepo does.
+  it("(a) cacheable tool: eviction uses the PRE-call args — a handler that mutates args cannot brick the key", async () => {
+    let calls = 0;
+    const handler: Handler = (args) => {
+      calls += 1;
+      args["injected_mid_call"] = calls; // same object identity the wrappers hold
+      if (calls === 1) return new Promise<unknown>(() => {}); // never settles
+      return Promise.resolve(`recovered${calls}`);
+    };
+    const call = bind(fakeDef("__fake_cacheable_mutating_hang__", handler, { cacheable: true, timeoutMs: 20 }));
+
+    const first = await call({ repo: repoName, foo: 99 });
+    expect(calls).toBe(1);
+    expect(isTimeoutMarker(first)).toBe(true);
+
+    // Fresh args object with identical content — exactly what the MCP layer hands us.
+    const second = (await call({ repo: repoName, foo: 99 })) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(2); // evicted under the RIGHT key → re-invoked
+    expect(isTimeoutMarker(second)).toBe(false);
+    expect(second.content?.[0]?.text ?? "").toContain("recovered2");
+  });
+
   // (b) a handler overrunning its timeout returns the timed-out marker.
   it("(b) overrunning handler returns the timed-out marker", async () => {
     const handler: Handler = async () => { await sleep(60); return "late"; };
@@ -338,6 +456,61 @@ describe("register wrapper wiring", () => {
     // real ToolResponse envelope with the completed payload
     const text = (res as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "";
     expect(text).toContain("done-exempt");
+  });
+
+  // (d-index_repo) FIX 4: index_repo clones AND indexes a remote repo — routinely
+  // way past 90s. It was missing from the exempt set, so it always returned
+  // `timed_out` while the clone kept running and succeeded in the background.
+  it("(d) index_repo is timeout-exempt — a long clone+index is not cut off", async () => {
+    expect(TIMEOUT_EXEMPT_TOOLS.has("index_repo")).toBe(true);
+
+    const handler: Handler = async () => { await sleep(50); return "cloned-and-indexed"; };
+    const call = bind(fakeDef("index_repo", handler, { timeoutMs: 5 }));
+
+    const res = await call({ repo: repoName });
+    expect(isTimeoutMarker(res)).toBe(false);
+    const text = (res as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "";
+    expect(text).toContain("cloned-and-indexed");
+  });
+
+  // (d-names) FIX 4: the exempt set is an allowlist of TOOL NAMES — a name that no
+  // tool actually has is dead weight that hides a real gap (the set used to carry
+  // "index-conversations" and "serve", neither of which is a registered tool).
+  it("(d) every timeout-exempt name is a REAL registered tool name", () => {
+    for (const name of TIMEOUT_EXEMPT_TOOLS) {
+      expect(TOOL_DEFINITION_MAP.has(name), `${name} is not a registered tool`).toBe(true);
+    }
+    expect([...TIMEOUT_EXEMPT_TOOLS].sort()).toEqual([
+      "index_conversations", "index_file", "index_folder", "index_repo",
+    ]);
+  });
+
+  // (e) FIX 2: setTimeout's delay is a signed 32-bit int — an unclamped value above
+  // 2^31-1 wraps and fires after ~1ms, so EVERY non-exempt tool would instantly
+  // return `timed_out` (total outage). Both the env default and the per-tool budget
+  // must be clamped.
+  it("(e) an out-of-range timeout is clamped (no 32-bit overflow → no instant timeout)", async () => {
+    const prev = process.env["CODESIFT_TOOL_TIMEOUT_MS"];
+    process.env["CODESIFT_TOOL_TIMEOUT_MS"] = "2147483648"; // 2^31 — overflows setTimeout
+    try {
+      // Unit: the clamp caps at 10 min for BOTH inputs.
+      expect(toolTimeoutMs({ name: "x", description: "", schema: {}, handler: async () => "" }))
+        .toBe(600_000);
+      expect(toolTimeoutMs({ name: "x", description: "", schema: {}, handler: async () => "", timeoutMs: 2147483648 }))
+        .toBe(600_000);
+
+      // Behavioural: a normal handler under the overflowing env value still returns
+      // its result. Pre-fix the timer fired after ~1ms and this came back timed_out.
+      const handler: Handler = async () => { await sleep(30); return "not-timed-out"; };
+      const call = bind(fakeDef("__fake_overflow_timeout__", handler));
+      const res = await call({ repo: repoName });
+      expect(isTimeoutMarker(res)).toBe(false);
+      expect((res as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "")
+        .toContain("not-timed-out");
+    } finally {
+      if (prev === undefined) delete process.env["CODESIFT_TOOL_TIMEOUT_MS"];
+      else process.env["CODESIFT_TOOL_TIMEOUT_MS"] = prev;
+    }
   });
 
   // (3) tool_timeout telemetry is written to the usage log on a timeout.
@@ -432,16 +605,22 @@ describe("register wrapper wiring — git-state cache invalidation", () => {
     await rm(gitRepoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  // Unit: exception-safe coarse fallback ("") for unknown / non-git repos; a real
-  // HEAD:dirty-flag token for a git repo.
-  it("getRepoGitVersion: '' for unknown/non-git repo, HEAD token for a git repo", () => {
+  // Unit: exception-safe coarse fallback ("") for unknown / non-git repos; a
+  // git-dir stat token (mtimeMs:size per HEAD / index / logs-HEAD) for a git repo.
+  // NOTE: no git subprocess is spawned — `execFileSync("git", …)` had no timeout and
+  // no maxBuffer (a stalled git blocked the event loop; many untracked files →
+  // ENOBUFS → a dirty tree silently reported clean).
+  it("getRepoGitVersion: '' for unknown/non-git repo, a stat token for a git repo", () => {
     // Unknown repo id → not in registry → coarse fallback, never throws.
     expect(getRepoGitVersion("no/such/repo")).toBe("");
     expect(getRepoGitVersion("")).toBe("");
     // The outer fixture repo root is a plain (non-git) temp dir → "".
     expect(getRepoGitVersion(repoName)).toBe("");
-    // A real git repo → `${headSha}:${c|d}` token.
-    expect(getRepoGitVersion(gitRepoName)).toMatch(/^[0-9a-f]{7,}:[cd]$/);
+    // A real git repo → one `mtimeMs:size` field per git-state file, comma-joined.
+    const token = getRepoGitVersion(gitRepoName);
+    const fields = token.split(",");
+    expect(fields).toHaveLength(3); // HEAD, index, logs/HEAD
+    for (const f of fields) expect(f).toMatch(/^[\d.]+:\d+$/);
   });
 
   // A cacheable tool must be RE-INVOKED when git HEAD changes even though the
@@ -473,49 +652,61 @@ describe("register wrapper wiring — git-state cache invalidation", () => {
     expect(calls).toBe(2); // MISS — git-state is in the cache key → fresh compute
   });
 
-  // TTL memo: the per-repo version token is REUSED within the TTL window (no git
-  // re-spawn / recompute), then recomputed after the window elapses — picking up a
-  // git change made in between. This is the whole point of the fix: cacheKeyFor
-  // runs on every call (incl. cache HITS), so without the memo each call would
-  // spawn `git rev-parse` + `git status`. Proven with a POSITIVE TTL (the
-  // surrounding suite runs at TTL=0 for deterministic immediate invalidation);
-  // env is restored afterwards.
-  it("TTL memo: version token is reused within the window, recomputed after TTL", () => {
-    const prev = process.env["CODESIFT_TOOL_CACHE_TTL_MS"];
-    process.env["CODESIFT_TOOL_CACHE_TTL_MS"] = "60000"; // long window
-    _resetRepoVersionTokenCache();
-    try {
-      // First read populates the memo. Capture the raw git token as ground truth.
-      const t1 = getRepoVersionToken(gitRepoName);
-      expect(t1).toMatch(/\|[0-9a-f]{7,}:[cd]$/); // real `index|git` token
-      const gitBefore = getRepoGitVersion(gitRepoName);
-      expect(t1).toContain(gitBefore);
+  // INSTANT freshness (replaces the old short-TTL memo, deleted with the git
+  // subprocesses it existed to throttle). The version token is recomputed from
+  // statSync on EVERY call — there is no memo window in which a cacheable tool can
+  // serve pre-change analysis. That window was a real hazard: index_file runs on a
+  // post-edit hook, so a ≤2s stale token could hand an agent PRE-EDIT results.
+  it("version token is recomputed on every call — a git change is visible immediately", () => {
+    const t1 = getRepoVersionToken(gitRepoName);
+    expect(t1).toBe(`${getRepoIndexVersion(gitRepoName)}|${getRepoGitVersion(gitRepoName)}`);
+    expect(t1).not.toBe("|"); // both halves observable for an indexed git repo
 
-      // Move git HEAD. A RECOMPUTE would now yield a different token; the raw
-      // (un-memoized) getRepoGitVersion confirms the ground truth actually moved.
-      commit("memo-empty", true);
-      const gitAfter = getRepoGitVersion(gitRepoName);
-      expect(gitAfter).not.toBe(gitBefore);
+    // Empty commit: git state moves, indexed source (and the {hash}.index.json) does not.
+    const before = head();
+    commit("instant-empty", true);
+    expect(head()).not.toBe(before);
 
-      // Within the window: the memoized token is REUSED — NOT recomputed. Had the
-      // git computation run again it would fold in gitAfter; it does not.
-      const t2 = getRepoVersionToken(gitRepoName);
-      expect(t2).toBe(t1);
-      expect(t2).not.toContain(gitAfter);
-
-      // TTL expiry (via TTL=0) → recompute → picks up the moved HEAD (correctness
-      // contract preserved: a real change is reflected once the window elapses).
-      process.env["CODESIFT_TOOL_CACHE_TTL_MS"] = "0";
-      const t3 = getRepoVersionToken(gitRepoName);
-      expect(t3).not.toBe(t1);
-      expect(t3).toContain(gitAfter);
-      expect(t3).toBe(
-        `${getRepoIndexVersion(gitRepoName)}|${getRepoGitVersion(gitRepoName)}`,
-      );
-    } finally {
-      if (prev === undefined) delete process.env["CODESIFT_TOOL_CACHE_TTL_MS"];
-      else process.env["CODESIFT_TOOL_CACHE_TTL_MS"] = prev;
-      _resetRepoVersionTokenCache();
-    }
+    // NO waiting, no cache reset: the very next read already reflects it.
+    const t2 = getRepoVersionToken(gitRepoName);
+    expect(t2).not.toBe(t1);
+    expect(t2).toBe(`${getRepoIndexVersion(gitRepoName)}|${getRepoGitVersion(gitRepoName)}`);
   });
+
+  // Degraded-token contract: an unknown repo has no index half → the token is the
+  // constant "|", which cacheKeyFor treats as "do not cache" (FIX 3 above), never
+  // as "cache forever".
+  it("unknown repo yields the degenerate '|' token (never a stable cacheable key)", () => {
+    expect(getRepoVersionToken("no/such/repo")).toBe("|");
+  });
+
+  // A git WORKTREE (and a submodule) has a `.git` FILE — `gitdir: <path>` — not a
+  // `.git` directory. Naively statting `<root>/.git/HEAD` returns "" there, which
+  // would silently disable git-state invalidation for every worktree checkout
+  // (CodeSift itself is routinely developed in one).
+  it("resolves the .git FILE form (worktree) — git state is still observable", async () => {
+    const wtParent = await mkdtemp(join(tmpdir(), "cs-wrapwire-wt-"));
+    const wtRoot = join(wtParent, "wt");
+    try {
+      execFileSync("git", ["-C", gitRepoRoot, "worktree", "add", "-q", "-b", "wtbranch", wtRoot], {
+        stdio: "ignore",
+      });
+      await indexFolder(wtRoot, { watch: false });
+
+      const reg = JSON.parse(await readFile(join(dataDir, "registry.json"), "utf-8")) as {
+        repos?: Record<string, { name: string; root: string }>;
+      };
+      const entry = Object.values(reg.repos ?? {}).find((r) => basename(r.root) === "wt");
+      if (!entry) throw new Error("worktree was not registered after indexFolder");
+
+      const token = getRepoGitVersion(entry.name);
+      expect(token, "worktree .git FILE must resolve to the real gitdir").not.toBe("");
+      expect(token.split(",")[1]).toMatch(/^[\d.]+:\d+$/); // the worktree's own index
+    } finally {
+      execFileSync("git", ["-C", gitRepoRoot, "worktree", "remove", "--force", wtRoot], {
+        stdio: "ignore",
+      });
+      await rm(wtParent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30_000);
 });

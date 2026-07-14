@@ -78,4 +78,59 @@ describe("find_references — capped by default", () => {
     expect(raised, "explicit high max_refs must not truncate").not.toContain("more (pass max_refs to see more)");
     expect(raised.length, "uncapped output must be larger than the capped one").toBeGreaterThan(capped.length);
   });
+
+  // max_refs reaches the handler as any finite number (zNum only guarantees finite).
+  // Unvalidated, -1 made `refs.slice(0, -1)` silently DROP the last reference while
+  // reporting `+${len+1} more`, and 2.5 printed `+7.5 more`. Clamp to a whole ≥ 0.
+  it("clamps a negative / fractional max_refs instead of corrupting the output", async () => {
+    const handler = handlerFor("find_references");
+    const overflowCount = (s: string): number => {
+      const m = /\+(\S+) more \(pass max_refs to see more\)/.exec(s);
+      if (!m?.[1]) throw new Error(`no overflow note in output: ${s.slice(0, 200)}`);
+      return Number(m[1]);
+    };
+    // formatRefsCompact renders either grouped ("  <line>: ctx" under a file header)
+    // or flat ("file:line: ctx") when every file has exactly one ref.
+    const shownRefs = (s: string): number =>
+      s.split("\n").filter((l) => /^ {2}\d+: /.test(l) || /^\S+:\d+: /.test(l)).length;
+
+    const neg = String(await handler({ repo, symbol_name: "widget", max_refs: -1 }));
+    const zero = String(await handler({ repo, symbol_name: "widget", max_refs: 0 }));
+    const frac = String(await handler({ repo, symbol_name: "widget", max_refs: 2.5 }));
+    const two = String(await handler({ repo, symbol_name: "widget", max_refs: 2 }));
+
+    // -1 clamps to 0: show nothing, report the TRUE total. Pre-fix, slice(0, -1)
+    // silently dropped the last ref and the note read `+${total + 1} more`.
+    expect(shownRefs(neg)).toBe(0);
+    expect(overflowCount(neg)).toBe(overflowCount(zero));
+
+    // 2.5 floors to 2: exactly 2 refs shown, and no `+7.5 more` nonsense.
+    // (Only the COUNTS are compared — findReferences does not guarantee a stable
+    // ref order across calls, so the specific 2 refs may differ run to run.)
+    expect(shownRefs(frac)).toBe(2);
+    expect(shownRefs(frac)).toBe(shownRefs(two));
+    expect(overflowCount(frac)).toBe(overflowCount(two));
+
+    for (const [label, out] of [["neg", neg], ["frac", frac]] as const) {
+      const n = overflowCount(out);
+      expect(Number.isInteger(n), `${label}: overflow count must be a whole number`).toBe(true);
+      expect(n, `${label}: overflow count must be positive`).toBeGreaterThan(0);
+    }
+    // The true total is reported when nothing is shown; showing 2 hides exactly 2 fewer.
+    expect(overflowCount(zero) - overflowCount(two)).toBe(2);
+  });
+
+  // The batch path fans out over MANY symbols — it used to return before any cap ran,
+  // so max_refs was silently ignored on exactly the path that produces the most output.
+  it("applies max_refs on the symbol_names BATCH path too (per symbol)", async () => {
+    const handler = handlerFor("find_references");
+
+    const batch = (await handler({ repo, symbol_names: ["widget"], max_refs: 3 })) as Record<string, unknown[]>;
+    expect(Array.isArray(batch["widget"])).toBe(true);
+    expect(batch["widget"]!.length).toBe(3); // fixture has >50 — capped per symbol
+
+    // Default cap still applies with no explicit max_refs (fixture has >50 refs).
+    const defaulted = (await handler({ repo, symbol_names: ["widget"] })) as Record<string, unknown[]>;
+    expect(defaulted["widget"]!.length).toBe(50);
+  });
 });

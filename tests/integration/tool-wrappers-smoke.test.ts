@@ -1,13 +1,16 @@
 /**
  * Whole-feature smoke suite (tool-runtime-opt plan, Task 5) — proves Tasks 1-4
  * work end to end through the REAL bind path (registerToolDefinition + wrapTool),
- * not just as isolated unit tests. Every assertion is deterministic (invocation
- * counts, marker shape, output shape) — NONE gate on wall-clock thresholds.
+ * not just as isolated unit tests. Assertions are deterministic (invocation
+ * counts, marker shape, output shape); the only wall-clock dependence is SMOKE3,
+ * which deliberately races a 60ms handler against a 15ms timeout — a timing gap
+ * wide enough that it is not a threshold gate in practice.
  *
  *  SMOKE1 — usage_stats returns a version, no `Cannot find module` (Task 1).
- *  SMOKE2 — a cacheable tool is served from cache on the 2nd identical call:
- *           the underlying handler is invoked exactly once across two calls
- *           (Task 3).
+ *  SMOKE2 — a cacheable tool against a REAL indexed repo is served from cache on
+ *           the 2nd identical call (handler invoked exactly once across two
+ *           calls, response marked `⚡ cached`), and MISSES once the repo's index
+ *           changes — the cache is index-version-keyed, not permanent (Task 3).
  *  SMOKE3 — a handler slower than its timeout yields a valid ToolResponse
  *           envelope (`content:[{type:"text",...}]`, `isError:true`) whose
  *           parsed text has `status:"timed_out"`; the abandoned handler
@@ -17,7 +20,7 @@
  *           still returns the nested tree (Task 4).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -30,6 +33,13 @@ import { resetSessionState } from "../../src/server-helpers.js";
 import { META_TOOL_ENTRIES } from "../../src/register-tool-groups/meta.js";
 import { CORE_TOOL_ENTRIES } from "../../src/register-tool-groups/core.js";
 import { indexFolder } from "../../src/register-tool-groups/deps.js";
+import {
+  indexFolder as indexFolderDirect,
+  indexFile as indexFileDirect,
+  clearLastIndexedStateForTesting,
+  stopAllWatchersForTesting,
+  resetIndexFolderRedundancyForTesting,
+} from "../../src/tools/index-tools.js";
 import type { ToolDefinition } from "../../src/register-tool-groups/shared.js";
 import type { ProjectLanguages } from "../../src/utils/language-detect.js";
 
@@ -84,42 +94,80 @@ describe("SMOKE1 — usage_stats returns a version (Task 1)", () => {
 // ---------------------------------------------------------------------------
 describe("SMOKE2 — cacheable tool served from cache on 2nd identical call (Task 3)", () => {
   const origDataDir = process.env["CODESIFT_DATA_DIR"];
+  const origDisableEmb = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
   let dataDir: string;
+  let repoRoot: string;
+  let filePath: string;
+  let repoName: string;
 
   beforeAll(async () => {
-    // Isolate wrapTool's usage-tracking writes from the real ~/.codesift dir.
+    // Isolate wrapTool's usage-tracking writes + the registry from the real
+    // ~/.codesift dir. The cache is keyed on the repo's on-disk index version, so
+    // this smoke MUST run against a REAL indexed repo: an unregistered repo has no
+    // observable version and is (correctly) never cached at all.
     dataDir = await mkdtemp(join(tmpdir(), "cs-smoke-cache-data-"));
     process.env["CODESIFT_DATA_DIR"] = dataDir;
-  });
+    process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = "1"; // hermetic + fast
+    resetIndexFolderRedundancyForTesting();
+
+    repoRoot = await mkdtemp(join(tmpdir(), "cs-smoke-cache-repo-"));
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    filePath = join(repoRoot, "src", "a.ts");
+    await writeFile(filePath, "export function fn0() { return 0; }\n");
+    await indexFolderDirect(repoRoot, { watch: false });
+
+    const reg = JSON.parse(await readFile(join(dataDir, "registry.json"), "utf-8")) as {
+      repos?: Record<string, { name: string }>;
+    };
+    const first = Object.values(reg.repos ?? {})[0];
+    if (!first) throw new Error("repo was not registered after indexFolder");
+    repoName = first.name;
+  }, 60_000);
 
   afterAll(async () => {
+    await stopAllWatchersForTesting();
     if (origDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
     else process.env["CODESIFT_DATA_DIR"] = origDataDir;
+    if (origDisableEmb === undefined) delete process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
+    else process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = origDisableEmb;
+    await rm(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it("invokes the underlying handler exactly once across two identical calls", async () => {
+  it("invokes the handler exactly once across two identical calls, then MISSES after the index changes", async () => {
     let calls = 0;
     const handler: Handler = async () => {
       calls += 1;
       return `r${calls}`;
     };
-    // An unregistered repo name resolves to a stable, empty index/git version
-    // token deterministically (no real indexing needed) — see getRepoIndexVersion
-    // / getRepoGitVersion's exception-safe "" fallback for an unknown repo.
     const call = bind(fakeDef("__smoke_cacheable__", handler, { cacheable: true }));
-    const args = { repo: "smoke/unregistered-repo", foo: 1 };
+    const args = { repo: repoName, foo: 1 };
 
+    resetSessionState();
     const first = (await call(args)) as { content?: Array<{ text?: string }> };
     expect(calls).toBe(1);
     expect(first.content?.[0]?.text ?? "").toContain("r1");
 
-    resetSessionState(); // drop wrapTool's inner (args-only) cache — only the
-    // outer index-version-aware withCache can serve the 2nd call now.
+    // 2nd identical call at the SAME index version → served from the outer cache.
+    // (cacheable tools bypass wrapTool's inner args-only cache, so this can only be
+    // the index-version-aware outer cache.)
     const second = (await call(args)) as { content?: Array<{ text?: string }> };
-    expect(calls).toBe(1); // NOT re-invoked — served from the outer cache
+    expect(calls).toBe(1); // NOT re-invoked
     expect(second.content?.[0]?.text ?? "").toContain("r1");
-  });
+    expect(second.content?.[0]?.text ?? "").toContain("⚡ cached"); // hit is visible to the agent
+
+    // Now CHANGE the repo (re-index) — the version component of the key moves, so
+    // the entry must be invalidated immediately (no TTL window). Without this the
+    // memoized answer would outlive the code it describes.
+    await writeFile(filePath, "export function fn0() { return 0; }\nexport function fn1() { return 1; }\n");
+    clearLastIndexedStateForTesting();
+    await indexFileDirect(filePath);
+
+    const third = (await call(args)) as { content?: Array<{ text?: string }> };
+    expect(calls).toBe(2); // MISS — re-invoked against the new index version
+    expect(third.content?.[0]?.text ?? "").toContain("r2");
+    expect(third.content?.[0]?.text ?? "").not.toContain("⚡ cached");
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------

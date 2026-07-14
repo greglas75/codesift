@@ -158,6 +158,54 @@ describe("withCache", () => {
     expect(r2).toBe(r1); // same cached reference
     expect(spy).toHaveBeenCalledTimes(1);
   });
+
+  // A null key means "this call is not cacheable" — used when the caller cannot
+  // observe a version for the repo. Memoizing under a key with no version component
+  // would pin the entry for the life of the process ("unknown version = cache
+  // forever"), so such a call must never be memoized.
+  it("(f) keyFn returning null bypasses the cache entirely (never memoized)", async () => {
+    const spy = vi.fn(async (args: { id: number }) => ({ value: args.id }));
+    const cached = withCache(spy, (args: { id: number }) => (args.id === 0 ? null : `k${args.id}`));
+
+    await cached({ id: 0 });
+    await cached({ id: 0 });
+    expect(spy).toHaveBeenCalledTimes(2); // re-invoked — nothing memoized
+    expect(cached.has({ id: 0 })).toBe(false);
+    expect(() => cached.evict({ id: 0 })).not.toThrow(); // no-op, not a crash
+
+    // A keyable call still memoizes.
+    await cached({ id: 1 });
+    await cached({ id: 1 });
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(cached.has({ id: 1 })).toBe(true);
+  });
+
+  // An entry is inserted BEFORE the handler settles. A handler that NEVER settles
+  // would otherwise pin its dead promise forever and every later identical call
+  // would join it — the key bricked for the process's life. `evict` is the escape
+  // hatch the timeout owner uses; `has` lets the caller tell a hit from a miss (on a
+  // hit the handler never runs, so only the caller can emit hit telemetry).
+  it("(g) has() reports hits and evict() frees a key pinned by a never-settling handler", async () => {
+    let calls = 0;
+    const handler = (args: { id: number }): Promise<string> => {
+      calls += 1;
+      if (calls === 1) return new Promise<string>(() => {}); // never settles
+      return Promise.resolve(`ok${args.id}`);
+    };
+    const cached = withCache(handler, (args: { id: number }) => `k${args.id}`);
+
+    expect(cached.has({ id: 1 })).toBe(false); // cold
+    void cached({ id: 1 });                    // in-flight, never settles
+    expect(cached.has({ id: 1 })).toBe(true);  // a 2nd call would join the dead promise
+    expect(calls).toBe(1);
+
+    cached.evict({ id: 1 });
+    expect(cached.has({ id: 1 })).toBe(false);
+
+    await expect(cached({ id: 1 })).resolves.toBe("ok1"); // re-invoked, not bricked
+    expect(calls).toBe(2);
+    expect(cached.has({ id: 1 })).toBe(true); // the good result is memoized
+  });
 });
 
 describe("stableStringify", () => {

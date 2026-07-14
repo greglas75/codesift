@@ -51,10 +51,39 @@ export function withTimeout<A extends AnyArgs, R>(
 }
 
 /**
+ * A memoizing handler plus the two controls its caller needs to keep the cache
+ * honest: `has` (was this call served from cache?) and `evict` (drop the entry
+ * for these args).
+ */
+export interface CachedHandler<A extends AnyArgs, R> {
+  (...args: A): Promise<R>;
+  /**
+   * True iff a call with these args would be served WITHOUT invoking the
+   * handler (a completed entry, or an in-flight promise it would join). Lets a
+   * caller emit cache-hit telemetry / markers the handler itself can no longer
+   * emit (it never runs on a hit). Always false when `keyFn` returns null.
+   */
+  has: (...args: A) => boolean;
+  /**
+   * Drop the entry for these args. Needed because an entry is inserted BEFORE
+   * the handler settles: a handler that never settles would otherwise pin its
+   * pending promise forever, and every later identical call would join it and
+   * hang. The caller (which owns the timeout) evicts on timeout so the next call
+   * re-invokes. No-op when `keyFn` returns null or nothing is cached.
+   */
+  evict: (...args: A) => void;
+}
+
+/**
  * Bounded LRU cache keyed by `keyFn(...args)`. A HIT invokes the handler zero
  * extra times; concurrent same-key calls share ONE in-flight promise (single
  * execution); rejections are NOT cached (entry removed on failure) so failures
  * are retryable, not sticky.
+ *
+ * `keyFn` may return **null** to mean "this call is not cacheable" — the handler
+ * is invoked directly and the result is never memoized. Used when the caller
+ * cannot compute a trustworthy version component for the key: memoizing under a
+ * key that can never change would pin the entry for the life of the process.
  *
  * `shouldCache` (optional) additionally evicts *resolved* results that must not
  * be memoized — e.g. an error response that a handler RESOLVES rather than
@@ -65,13 +94,15 @@ export function withTimeout<A extends AnyArgs, R>(
  */
 export function withCache<A extends AnyArgs, R>(
   handler: (...args: A) => Promise<R>,
-  keyFn: (...args: A) => string,
+  keyFn: (...args: A) => string | null,
   maxEntries = 256,
   shouldCache?: (result: R) => boolean,
-): (...args: A) => Promise<R> {
+): CachedHandler<A, R> {
   const cache = new Map<string, Promise<R>>();
-  return (...args: A): Promise<R> => {
+
+  const call = (...args: A): Promise<R> => {
     const key = keyFn(...args);
+    if (key === null) return handler(...args); // uncacheable call — never memoized
     const hit = cache.get(key);
     if (hit !== undefined) {
       // Refresh recency (LRU): re-insert at the end of Map order.
@@ -101,6 +132,17 @@ export function withCache<A extends AnyArgs, R>(
     }
     return pending;
   };
+
+  return Object.assign(call, {
+    has: (...args: A): boolean => {
+      const key = keyFn(...args);
+      return key !== null && cache.has(key);
+    },
+    evict: (...args: A): void => {
+      const key = keyFn(...args);
+      if (key !== null) cache.delete(key);
+    },
+  });
 }
 
 /** Deterministic JSON with recursively sorted object keys (for stable cache keys). */

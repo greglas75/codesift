@@ -7,6 +7,17 @@ import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, searc
 // higher max_refs opts out.
 const DEFAULT_MAX_REFS = 50;
 
+/**
+ * Sanitize a client-supplied `max_refs` into a usable slice length. zNum() only
+ * guarantees a finite number, so -1 or 2.5 reach the handler as-is: `slice(0, -1)`
+ * silently DROPS the last reference (and reports a nonsense `+${len+1} more`),
+ * and a fractional cap prints `+7.5 more`. Clamp to a whole number ≥ 0.
+ */
+function normalizeMaxRefs(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_MAX_REFS;
+  return Math.max(0, Math.floor(raw));
+}
+
 export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Indexing ---
   { order: 1154, definition: {
@@ -424,22 +435,29 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     category: "graph",
     searchHint: "find references usages callers who uses symbol",
     outputSchema: OutputSchemas.references,
-    description: "Find all references to a symbol. Pass symbol_names array for batch search. Capped at max_refs (default 50); pass a higher value to see more.",
+    description: "Find all references to a symbol. Pass symbol_names array for batch search. Capped at max_refs (default 50) — per symbol in batch mode; pass a higher value to see more.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
       symbol_names: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional()
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
-      max_refs: zNum().describe("Maximum number of references to return (default 50). Pass a higher value to see more."),
+      max_refs: zNum().describe("Maximum number of references to return, per symbol (default 50). Negative/fractional values are clamped to a whole number ≥ 0."),
     })),
     handler: async (args) => {
+      const maxRefs = normalizeMaxRefs(args.max_refs);
       const names = args.symbol_names as string[] | undefined;
       if (names && names.length > 0) {
-        return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
+        // The batch path fans out over MANY symbols — it is the one that most
+        // needs the cap, so apply it per symbol (return shape unchanged).
+        const batch = await findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
+        for (const name of Object.keys(batch)) {
+          const refs = batch[name];
+          if (refs && refs.length > maxRefs) batch[name] = refs.slice(0, maxRefs);
+        }
+        return batch;
       }
       const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
-      const maxRefs = args.max_refs === undefined ? DEFAULT_MAX_REFS : (args.max_refs as number);
       const truncated = refs.length > maxRefs;
       const shown = truncated ? refs.slice(0, maxRefs) : refs;
       const output = await formatRefsCompact(shown);

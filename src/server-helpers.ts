@@ -219,8 +219,12 @@ function setCache(key: string, text: string): void {
  * Tool calls that mutate the index — must invalidate the response cache so
  * the next search/symbol read sees fresh data (otherwise the 30s-5min TTL
  * serves stale results for up to several minutes after an edit).
+ *
+ * Exported because the registration runtime derives its timeout-exempt allowlist
+ * from it (indexing is legitimately long-running — index_repo clones + indexes a
+ * remote repo — so it must never be cut off by the client-facing timeout).
  */
-const INDEX_MUTATING_TOOLS = new Set([
+export const INDEX_MUTATING_TOOLS: ReadonlySet<string> = new Set<string>([
   "index_file",
   "index_folder",
   "index_repo",

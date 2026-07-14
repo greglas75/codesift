@@ -1,11 +1,17 @@
 import { statSync, readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { wrapTool, resolveRepoFromCwd, type ToolResponse } from "../server-helpers.js";
-import { withTimeout, withCache, stableStringify, type TimeoutResult } from "../register-tool-groups/handler-wrappers.js";
-import { trackUsage, getSessionId, getLocalHostTag, type UsageEntry } from "../storage/usage-tracker.js";
+import {
+  wrapTool,
+  resolveRepoFromCwd,
+  trackSequentialCalls,
+  INDEX_MUTATING_TOOLS,
+  type ToolResponse,
+} from "../server-helpers.js";
+import { withTimeout, withCache, stableStringify, type CachedHandler, type TimeoutResult } from "../register-tool-groups/handler-wrappers.js";
+import { trackUsage, trackToolCall, getSessionId, getLocalHostTag, type UsageEntry } from "../storage/usage-tracker.js";
+import { recordCacheHit, scheduleSidecarFlush } from "../storage/session-state.js";
 import type { ProjectLanguages } from "../utils/language-detect.js";
 import type { ToolDefinition } from "../register-tool-groups/shared.js";
 import { TOOL_DEFINITION_MAP } from "./discovery.js";
@@ -55,13 +61,31 @@ function isToolLanguageEnabled(tool: ToolDefinition, languages: ProjectLanguages
 
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
-/** Legitimately-long operations that must never be cut off by the timeout. */
-const TIMEOUT_EXEMPT_TOOLS = new Set([
-  "index_folder",
-  "index_file",
+/**
+ * Upper bound on any timeout budget (10 min). setTimeout's delay is a SIGNED
+ * 32-bit int: anything above 2_147_483_647 overflows and Node fires the timer
+ * after ~1ms (with a TimeoutOverflowWarning) — i.e. an unclamped
+ * CODESIFT_TOOL_TIMEOUT_MS=2147483648 (or a fat-fingered per-tool timeoutMs)
+ * would make EVERY non-exempt tool return `timed_out` instantly. Clamping both
+ * inputs makes that unrepresentable.
+ */
+const MAX_TOOL_TIMEOUT_MS = 600_000;
+
+/**
+ * Legitimately-long operations that must never be cut off by the timeout.
+ *
+ * Derived from the index-mutating set in server-helpers (index_file /
+ * index_folder / index_repo — a clone+index of a remote repo routinely runs for
+ * minutes) so the two lists cannot drift apart, plus index_conversations (full
+ * conversation-history scan). invalidate_cache is index-mutating but trivially
+ * fast, so it keeps the normal timeout. Every entry MUST be a real registered
+ * tool name — a typo here silently re-arms the timeout on a long op
+ * (tests/tools/register/wrapper-wiring.test.ts pins the names against
+ * TOOL_DEFINITION_MAP).
+ */
+export const TIMEOUT_EXEMPT_TOOLS: ReadonlySet<string> = new Set<string>([
+  ...[...INDEX_MUTATING_TOOLS].filter((name) => name !== "invalidate_cache"),
   "index_conversations",
-  "index-conversations",
-  "serve",
 ]);
 
 /** Upper bound on distinct memoized responses per cacheable tool. */
@@ -146,154 +170,194 @@ export function getRepoIndexVersion(repo: string): string {
 }
 
 /**
+ * Resolve a repo root's git directory. Handles the plain `.git/` directory AND
+ * the `.git` FILE form used by worktrees/submodules (`gitdir: <path>`, possibly
+ * relative to the root). Returns null when there is no git dir (plain folder) or
+ * anything is unreadable — never throws.
+ */
+function gitDirFor(root: string): string | null {
+  const dotGit = join(root, ".git");
+  try {
+    const st = statSync(dotGit);
+    if (st.isDirectory()) return dotGit;
+    if (!st.isFile()) return null;
+    const match = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf-8"));
+    const target = match?.[1]?.trim();
+    if (!target) return null;
+    return isAbsolute(target) ? target : resolve(root, target);
+  } catch {
+    return null;
+  }
+}
+
+/** Files inside the git dir whose (mtime,size) move whenever git state moves. */
+const GIT_STATE_FILES = [
+  "HEAD",      // branch switch / detached-HEAD move rewrites this file
+  "index",     // add / commit / checkout / reset / stash all rewrite the index
+  "logs/HEAD", // reflog — appended on every commit, checkout, reset, merge, rebase
+] as const;
+
+/**
  * Per-repo git-state token for cache keying. Some cacheable tools read GIT state,
  * not just the code index: audit_scan bundles analyze_hotspots (git churn), and
  * architecture_summary surfaces git-derived entry-point/hotspot data. After a
  * `git commit` or branch checkout the on-disk {hash}.index.json can be UNCHANGED,
  * so the index-version token alone would keep serving STALE pre-commit git
- * metrics for the life of a long-lived (daemon) process. Folding HEAD + a dirty
- * flag into the cache version makes a commit / branch-switch / working-tree change
- * bump the key → cache miss → fresh compute.
+ * metrics for the life of a long-lived (daemon) process. Folding the git-dir
+ * state into the cache version makes a commit / branch switch / staged change bump
+ * the key → cache miss → fresh compute.
  *
- * Returns `${headSha}:${dirty ? "d" : "c"}`. Exception-safe: any failure (not a
- * git repo, git missing, unknown/unindexed repo) returns "" — the same coarse
- * fallback contract as getRepoIndexVersion (never throws). The repo → working-tree
- * root is resolved from the same registry the index-path lookup uses. This is the
- * un-memoized source of truth: it spawns git on every call. cacheKeyFor no longer
- * calls it directly — it goes through getRepoVersionToken's short-TTL memo, so the
- * spawn is bounded to ~once per repo per TTL window on the hot path. Exported for
- * the wiring test.
+ * Implementation: pure `statSync` on the git dir's HEAD / index / logs/HEAD
+ * (~0.1ms each, no subprocess). It deliberately does NOT shell out to git:
+ * `execFileSync("git", …)` has no timeout and no maxBuffer, so a stalled git (slow
+ * network FS, held index.lock) would block the WHOLE event loop indefinitely, and a
+ * repo with many untracked files would blow the default 1MB buffer (ENOBUFS →
+ * caught → a dirty tree silently reported clean). `git status` also walks the whole
+ * worktree — pathological in a monorepo. The stat token has none of those failure
+ * modes and is cheap enough to compute fresh on every call (no memo needed).
+ *
+ * Trade-off vs the old `git status --porcelain` dirty flag: an UNSTAGED edit no
+ * longer bumps this token on its own. That is fine — a source edit that matters to
+ * a cacheable tool bumps the INDEX-version token (the file gets re-indexed via
+ * index_file / the watcher), and everything git-derived (churn, hotspots, blame)
+ * only reflects committed history anyway.
+ *
+ * Returns `mtimeMs:size` per existing file joined by ",", or "" when the repo is
+ * unknown/not a git repo (the same coarse, never-throws contract as
+ * getRepoIndexVersion). Exported for the wiring test.
  */
 export function getRepoGitVersion(repo: string): string {
   if (!repo) return "";
   const root = repoRoots().get(repo);
   if (!root) return "";
-  try {
-    const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (!head) return "";
-    // Non-empty `git status --porcelain` → working tree differs (staged, unstaged,
-    // or untracked). A cheap, complete dirty signal; failure is treated as clean
-    // ("c") since HEAD already captured the committed state.
-    let dirty = false;
+  const gitDir = gitDirFor(root);
+  if (!gitDir) return "";
+  const parts: string[] = [];
+  for (const rel of GIT_STATE_FILES) {
     try {
-      const porcelain = execFileSync("git", ["-C", root, "status", "--porcelain"], {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      dirty = porcelain.trim().length > 0;
+      const st = statSync(join(gitDir, rel));
+      parts.push(`${st.mtimeMs}:${st.size}`);
     } catch {
-      dirty = false;
+      parts.push(""); // file absent (e.g. reflog disabled, fresh clone) — tolerate
     }
-    return `${head}:${dirty ? "d" : "c"}`;
+  }
+  return parts.some((p) => p !== "") ? parts.join(",") : "";
+}
+
+/**
+ * Combined `indexVersion|gitVersion` token for `repo` — the version component of
+ * the response-cache key.
+ *
+ * Computed FRESH on every call, on purpose. It used to be memoized behind a ~2s
+ * TTL because the git half spawned two synchronous git subprocesses; that memo is
+ * gone with the subprocesses (see getRepoGitVersion). What remains is 4 statSync
+ * calls (~0.3ms total), so memoizing would buy nothing and cost correctness: the
+ * TTL delayed index invalidation by up to 2s, and index_file runs on a post-edit
+ * hook — an agent could get PRE-EDIT analysis back from the cache. Freshness is now
+ * instant.
+ *
+ * Never throws: a degraded/unknown repo yields "" for the affected half.
+ * Exported for the wiring test.
+ */
+export function getRepoVersionToken(repo: string): string {
+  try {
+    return `${getRepoIndexVersion(repo)}|${getRepoGitVersion(repo)}`;
   } catch {
     return "";
   }
 }
 
-// ---------------------------------------------------------------------------
-// Short-TTL memoization of the per-repo version token.
-//
-// cacheKeyFor runs on EVERY cacheable-tool invocation — including cache HITS
-// (withCache's keyFn runs each call). Computing the token means a statSync
-// (getRepoIndexVersion) PLUS two synchronous git subprocesses (getRepoGitVersion:
-// `rev-parse HEAD` + `status --porcelain`). Under a long-lived daemon with
-// concurrent MCP clients that is a subprocess storm blocking the event loop on the
-// exact hot path the cache exists to speed up — a self-DoS.
-//
-// Fix: memoize the combined `indexVersion|gitVersion` token per repo for a short
-// window (TOKEN_TTL_MS). Repeated cacheable calls within the window reuse the token
-// (a Map lookup + Date.now() compare — NO git spawn); once the window elapses the
-// token is recomputed. This bounds git-state staleness to the TTL (~2s — fine for
-// git-derived metrics) and caps git spawns to ~1 per repo per window regardless of
-// call volume, WITHOUT changing the correctness contract: a real index or git
-// change is still picked up within the TTL (≤ TTL_MS).
-// ---------------------------------------------------------------------------
-
-/** Default staleness bound for the memoized per-repo version token (ms). */
-const TOKEN_TTL_MS = 2000;
 /**
- * Hard cap on the env override. The token TTL is a deliberate freshness/perf
- * trade-off: cached analysis for a repo can reflect an index/git change up to
- * this many ms late (in exchange for not spawning git on every hot-path call).
- * The cap stops a pathological CODESIFT_TOOL_CACHE_TTL_MS (e.g. hours) from
- * making cacheable tools serve badly stale results.
+ * Effective client-facing timeout for a tool, clamped to MAX_TOOL_TIMEOUT_MS so a
+ * value above setTimeout's 32-bit limit can never wrap around into an ~instant
+ * timeout. Per-tool `timeoutMs` wins over the env default.
  */
-const TOKEN_TTL_MAX_MS = 60_000;
-
-/**
- * Effective TTL: a numeric CODESIFT_TOOL_CACHE_TTL_MS override (incl. 0 = always
- * recompute) wins, clamped to [0, TOKEN_TTL_MAX_MS]; otherwise the default.
- */
-function tokenTtlMs(): number {
-  const env = Number(process.env["CODESIFT_TOOL_CACHE_TTL_MS"]);
-  return Number.isFinite(env) && env >= 0 ? Math.min(env, TOKEN_TTL_MAX_MS) : TOKEN_TTL_MS;
-}
-
-/** repo → { token, ts } — short-TTL memo so cacheKeyFor doesn't re-spawn git each call. */
-const repoVersionTokenCache = new Map<string, { token: string; ts: number }>();
-
-/**
- * Memoized `indexVersion|gitVersion` token for `repo`. Recomputes (calling the
- * source-of-truth getRepoIndexVersion + getRepoGitVersion) only when the entry is
- * missing or older than the TTL; otherwise returns the cached token. A TTL of 0
- * (env override) forces recompute every call. Exception-safe — never throws: on
- * any failure it falls back to a fresh recompute, and if that also throws, "".
- * Exported for the wiring / TTL tests.
- */
-export function getRepoVersionToken(repo: string): string {
-  try {
-    const now = Date.now();
-    const ttl = tokenTtlMs();
-    const entry = repoVersionTokenCache.get(repo);
-    if (entry && now - entry.ts < ttl) return entry.token;
-    const token = `${getRepoIndexVersion(repo)}|${getRepoGitVersion(repo)}`;
-    repoVersionTokenCache.set(repo, { token, ts: now });
-    return token;
-  } catch {
-    try {
-      return `${getRepoIndexVersion(repo)}|${getRepoGitVersion(repo)}`;
-    } catch {
-      return "";
-    }
+export function toolTimeoutMs(tool: ToolDefinition): number {
+  if (typeof tool.timeoutMs === "number" && tool.timeoutMs > 0) {
+    return Math.min(tool.timeoutMs, MAX_TOOL_TIMEOUT_MS);
   }
-}
-
-/** Test-only: drop all memoized version tokens (deterministic TTL-expiry simulation). */
-export function _resetRepoVersionTokenCache(): void {
-  repoVersionTokenCache.clear();
-}
-
-function toolTimeoutMs(tool: ToolDefinition): number {
-  if (typeof tool.timeoutMs === "number" && tool.timeoutMs > 0) return tool.timeoutMs;
   const env = Number(process.env["CODESIFT_TOOL_TIMEOUT_MS"]);
-  return Number.isFinite(env) && env > 0 ? env : DEFAULT_TOOL_TIMEOUT_MS;
+  return Number.isFinite(env) && env > 0
+    ? Math.min(env, MAX_TOOL_TIMEOUT_MS)
+    : DEFAULT_TOOL_TIMEOUT_MS;
 }
 
 function isTimeoutResult(value: unknown): value is TimeoutResult {
   return typeof value === "object" && value !== null && (value as { status?: unknown }).status === "timed_out";
 }
 
+/** The repo a call targets: explicit `repo` arg, else resolved from CWD (as wrapTool does). */
+function repoForArgs(args: Record<string, unknown>): string {
+  const explicit = args["repo"];
+  return typeof explicit === "string" && explicit ? explicit : resolveRepoFromCwd(process.cwd());
+}
+
 /**
- * Cache key: tool name + resolved repo + repo version + stable args. The version
- * component combines the on-disk index-version AND a git-state token, so a change
- * to EITHER the code index (in- or out-of-process re-index) OR git state (commit /
- * branch-switch / working-tree change) bumps the key → cache miss → fresh compute.
- * The git token closes a freshness gap for cacheable tools that read git state
- * (audit_scan's hotspots, architecture_summary) where the index file is unchanged.
+ * Cache key: tool name + resolved repo + repo version + stable args — or **null**
+ * (= do not cache this call at all; see withCache).
  *
- * The version component is fetched through getRepoVersionToken's short-TTL memo, so
- * this keyFn (which runs on every call, including cache HITS) does NOT re-spawn git
- * per invocation — it costs a Map lookup + Date.now() compare in the common case.
+ * The version component combines the on-disk index-version AND a git-state token,
+ * so a change to EITHER the code index (in- or out-of-process re-index) OR git
+ * state (commit / branch switch / staged change) bumps the key → cache miss →
+ * fresh compute. Both halves are recomputed on every call (4 statSync, ~0.3ms), so
+ * invalidation is instant.
+ *
+ * Degraded contract: when the INDEX half is empty — repo not in the registry, or
+ * the registry/index file is unreadable — the key would carry no version component
+ * at all, and the entry could then NEVER be invalidated (it would live for the
+ * whole process). Rather than "unknown version = cache forever", such a call is
+ * declared uncacheable (null): the handler runs every time. Correctness beats a
+ * cache hit on a repo whose freshness we cannot observe.
  */
-function cacheKeyFor(toolName: string, args: Record<string, unknown>): string {
-  const repo = typeof args["repo"] === "string" && args["repo"]
-    ? (args["repo"] as string)
-    : resolveRepoFromCwd(process.cwd());
+function cacheKeyFor(toolName: string, args: Record<string, unknown>): string | null {
+  const repo = repoForArgs(args);
   const version = getRepoVersionToken(repo);
+  const indexVersion = version.split("|")[0] ?? "";
+  if (indexVersion === "") return null; // unobservable freshness → never memoize
   return stableStringify([toolName, repo, version, args]);
+}
+
+/** Suffix appended to a response served from the outer cache (mirrors wrapTool's inner cache). */
+const CACHED_MARKER = "\n⚡ cached";
+
+/** Copy of `res` with the cache marker appended — never mutates the memoized object. */
+function withCachedMarker(res: ToolResponse): ToolResponse {
+  const [first, ...rest] = res.content;
+  if (!first) return res;
+  return {
+    ...res,
+    content: [{ type: "text" as const, text: first.text + CACHED_MARKER }, ...rest],
+  };
+}
+
+/**
+ * Telemetry for an outer-cache HIT. On a hit the base (wrapTool) never runs, so
+ * NOTHING would otherwise be recorded — every repeat call to a cacheable tool would
+ * vanish from usage_stats / usage_hotspots / the session snapshot, i.e. the
+ * optimization would corrupt the very feed used to measure it. Records the same
+ * helpers wrapTool's inner cache-hit branch records, plus the usage-log entry so
+ * hits stay visible to usage_stats. Never throws (telemetry must not affect the
+ * tool path); no double-counting — this runs ONLY when the handler did not.
+ */
+function recordOuterCacheHit(
+  toolName: string,
+  args: Record<string, unknown>,
+  res: ToolResponse,
+): void {
+  try {
+    const text = res.content[0]?.text ?? "";
+    trackSequentialCalls(toolName);
+    recordCacheHit(toolName, args);
+    scheduleSidecarFlush();
+    const trackArgs = typeof args["repo"] === "string" && args["repo"]
+      ? args
+      : { ...args, repo: repoForArgs(args) };
+    trackToolCall(toolName, trackArgs, text, text, 0, {
+      sentChars: text.length + CACHED_MARKER.length,
+    });
+  } catch {
+    // Telemetry must never affect the tool path.
+  }
 }
 
 /** Record a tool_timeout event on the usage log (reuses the usage-tracker append). */
@@ -346,7 +410,7 @@ export function registerToolDefinition(
 
   // Opt-in memoization INSIDE the timeout: a timeout marker is never cached, and
   // work abandoned by the client-facing timeout still populates the cache.
-  const cacheableBase: (args: Record<string, unknown>) => Promise<ToolResponse> =
+  const cached: CachedHandler<[Record<string, unknown>], ToolResponse> | null =
     tool.cacheable === true
       ? withCache(
           base,
@@ -358,7 +422,19 @@ export function registerToolDefinition(
           // until the index-version changed. Cache only successful results.
           (res) => res.isError !== true,
         )
-      : base;
+      : null;
+
+  // A cache HIT skips the base handler entirely — so the hit is what records the
+  // telemetry (and marks the response) that the base would have recorded.
+  const cacheableBase: (args: Record<string, unknown>) => Promise<ToolResponse> = cached
+    ? async (args) => {
+        const wasHit = cached.has(args);
+        const res = await cached(args);
+        if (!wasHit) return res;
+        recordOuterCacheHit(tool.name, args, res);
+        return withCachedMarker(res);
+      }
+    : base;
 
   // Universal timeout except the long-op allowlist.
   const timed: (args: Record<string, unknown>) => Promise<ToolResponse | TimeoutResult> =
@@ -371,9 +447,23 @@ export function registerToolDefinition(
     tool.description,
     tool.schema,
     async (args): Promise<ToolResponse> => {
-      const res = await timed(args as Record<string, unknown>);
+      const callArgs = args as Record<string, unknown>;
+      // Snapshot the args BEFORE the call: wrapTool's resolveRepo MUTATES this
+      // object (it fills in `repo` when the client omitted it), and the cache key is
+      // computed from the args' content. Keying eviction off the post-call (mutated)
+      // object would compute a DIFFERENT key than the one the entry was inserted
+      // under, so the eviction below would silently miss on exactly the calls that
+      // omit `repo` — the common case.
+      const keyArgs: Record<string, unknown> | null = cached ? { ...callArgs } : null;
+      const res = await timed(callArgs);
       if (isTimeoutResult(res)) {
-        logToolTimeout(tool.name, args as Record<string, unknown>, timeoutMs);
+        // The abandoned call's promise is still sitting in the cache under its key.
+        // If that handler NEVER settles, every later identical call would join the
+        // dead promise and time out too — the key would be bricked for the life of
+        // the process. Evicting on timeout keeps in-flight coalescing for the normal
+        // case while guaranteeing the next call re-invokes.
+        if (cached && keyArgs) cached.evict(keyArgs);
+        logToolTimeout(tool.name, callArgs, timeoutMs);
         // Return a valid ToolResponse envelope. The bare { status: "timed_out" }
         // marker has no `content` array, so the MCP SDK can reject it as an
         // invalid CallToolResult — turning a clean timeout into a JSON-RPC error.
