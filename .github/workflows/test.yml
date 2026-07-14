@@ -1,0 +1,63 @@
+name: test
+
+# GitHub-hosted CI (public repo → free minutes; NOT self-hosted — a self-hosted
+# runner would execute arbitrary fork-PR code as a docker-group user).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22] # engines: >=20; the npm publish (release.yml) ships on 22
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Plain `npm ci` (matches release.yml). The package's own postinstall runs
+      # `node ./dist/cli.js setup all`, but dist/ does not exist yet at install
+      # time, so its `2>/dev/null || echo` fallback makes it a harmless no-op —
+      # while dependency install scripts (native binaries) still run.
+      - name: Install dependencies
+        run: npm ci
+
+      # tree-sitter WASM grammars are NOT committed (see scripts/download-wasm.ts);
+      # cache them so we don't re-npm-install every run. Keyed on the script so a
+      # grammar-set change busts the cache.
+      - name: Cache tree-sitter WASM grammars
+        uses: actions/cache@v4
+        with:
+          path: src/parser/languages
+          key: wasm-${{ runner.os }}-${{ hashFiles('scripts/download-wasm.ts') }}
+
+      - name: Download WASM grammars
+        run: npm run download-wasm
+
+      # `npm run build` = rm dist + tsc (full typecheck + emit) + copy the WASM
+      # grammars into dist + chmod the bins. Validates the exact artifact the
+      # release publishes, and the tsc pass is the typecheck (npm run lint).
+      - name: Build
+        run: npm run build
+
+      # vitest forces CODESIFT_DISABLE_LOCAL_EMBEDDINGS=true in vitest.config.ts
+      # (onnxruntime crashes in vitest's VM), so no ~100MB embedding model is
+      # fetched — BM25 + tree-sitter symbol paths are exercised.
+      - name: Test
+        run: npm test
