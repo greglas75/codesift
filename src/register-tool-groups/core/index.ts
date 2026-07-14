@@ -1,5 +1,6 @@
 import { z, zBool, lazySchema, OutputSchemas, detectAutoLoadToolsCached, enableToolByName, type ToolDefinitionEntry } from "../shared.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache } from "../deps.js";
+import { zJsonArray } from "./schema.js";
 
 export const CORE_INDEX_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Indexing ---
@@ -11,7 +12,10 @@ export const CORE_INDEX_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     schema: lazySchema(() => ({
       path: z.string().describe("Absolute path to the folder to index"),
       incremental: zBool().describe("Only re-index changed files"),
-      include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
+      include_paths: z.union([
+        z.array(z.string().trim().min(1)),
+        zJsonArray(z.string().trim().min(1)),
+      ]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
       max_files: z.number().int().positive().optional().describe("Cap on files indexed. Default 50000 (or CODESIFT_MAX_FILES env). Walker stops at this count and returns partial results — protects against OOM on huge repos. Use include_paths to scope instead of raising this for large vendored trees."),
       watch: zBool().describe("Whether to set up a chokidar file watcher for incremental updates after indexing. Default true. Pass false for bulk/CI indexing scenarios — file watchers consume system file descriptors (1+ per repo on macOS FSEvents); indexing many repos with watchers active can exhaust the system file table (ENFILE)."),
     })),
@@ -38,7 +42,10 @@ export const CORE_INDEX_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     schema: lazySchema(() => ({
       url: z.string().describe("Git clone URL"),
       branch: z.string().optional().describe("Branch to checkout"),
-      include_paths: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
+      include_paths: z.union([
+        z.array(z.string().trim().min(1)),
+        zJsonArray(z.string().trim().min(1)),
+      ]).optional().describe("Glob patterns to include. Can be passed as JSON string."),
     })),
     handler: (args) => indexRepo(args.url as string, {
       branch: args.branch as string | undefined,

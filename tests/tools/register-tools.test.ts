@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -96,6 +97,48 @@ describe("register-tools — always-visible tools", () => {
     expect(CORE_TOOL_ENTRIES.map((entry) => entry.definition.name)).toEqual(
       EXPECTED_CORE_TOOL_NAMES,
     );
+  });
+
+  it.each([
+    ["index_folder", "include_paths", JSON.stringify({ path: "src" })],
+    ["index_repo", "include_paths", JSON.stringify("src")],
+    ["get_symbols", "symbol_ids", JSON.stringify({ id: "symbol" })],
+    ["find_references", "symbol_names", JSON.stringify("symbol")],
+    ["check_boundaries", "rules", JSON.stringify({ from: "src" })],
+    ["codebase_retrieval", "queries", JSON.stringify({ type: "text" })],
+  ])("rejects non-array JSON for %s.%s", (toolName, fieldName, input) => {
+    const definition = CORE_TOOL_ENTRIES.find(
+      (entry) => entry.definition.name === toolName,
+    )!.definition;
+
+    expect(definition.schema[fieldName]!.safeParse(input).success).toBe(false);
+  });
+
+  it.each([
+    ["index_folder", "include_paths"],
+    ["index_repo", "include_paths"],
+    ["get_symbols", "symbol_ids"],
+  ])("rejects blank values for %s.%s", (toolName, fieldName) => {
+    const definition = CORE_TOOL_ENTRIES.find(
+      (entry) => entry.definition.name === toolName,
+    )!.definition;
+
+    expect(definition.schema[fieldName]!.safeParse(["   "]).success).toBe(false);
+    expect(definition.schema[fieldName]!.safeParse(JSON.stringify([""])).success).toBe(false);
+  });
+
+  it("rejects find_references calls without a symbol selector", async () => {
+    const definition = CORE_TOOL_ENTRIES.find(
+      (entry) => entry.definition.name === "find_references",
+    )!.definition;
+
+    await expect(definition.handler({})).rejects.toThrow(
+      "symbol_name or symbol_names is required",
+    );
+    expect(definition.schema.symbol_name!.safeParse("   ").success).toBe(false);
+    expect(definition.schema.symbol_names!.safeParse([""]).success).toBe(false);
+    expect(definition.schema.symbol_names!.safeParse(JSON.stringify(["   "])).success).toBe(false);
+    expect(z.object(definition.schema).safeParse({ symbol_name: "entry" }).success).toBe(true);
   });
 
   it("keeps usage-critical tools in CORE_TOOL_NAMES", () => {

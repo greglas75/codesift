@@ -1,5 +1,6 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type ToolDefinitionEntry } from "../shared.js";
 import { getSymbol, getSymbols, findAndShow, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, findReferences, findReferencesBatch, traceCallChain, impactAnalysis, traceRoute, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, dispatchFormatter, type Direction } from "../deps.js";
+import { zJsonArray } from "./schema.js";
 
 export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Symbol retrieval ---
@@ -46,8 +47,8 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_ids: z.union([
-        z.array(z.string()),
-        z.string().transform((s) => JSON.parse(s) as string[]),
+        z.array(z.string().trim().min(1)),
+        zJsonArray(z.string().trim().min(1)),
       ]).describe("Array of symbol identifiers. Can be passed as JSON string."),
     })),
     handler: async (args) => {
@@ -121,8 +122,11 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     description: "Find all references to a symbol. Pass symbol_names array for batch search.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
-      symbol_names: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional()
+      symbol_name: z.string().trim().min(1).optional().describe("Name of the symbol to find references for"),
+      symbol_names: z.union([
+        z.array(z.string().trim().min(1)),
+        zJsonArray(z.string().trim().min(1)),
+      ]).optional()
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
     })),
@@ -130,6 +134,9 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       const names = args.symbol_names as string[] | undefined;
       if (names && names.length > 0) {
         return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
+      }
+      if (typeof args.symbol_name !== "string" || args.symbol_name.trim().length === 0) {
+        throw new Error("symbol_name or symbol_names is required");
       }
       const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
       const output = await formatRefsCompact(refs);

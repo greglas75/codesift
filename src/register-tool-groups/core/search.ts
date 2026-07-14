@@ -1,5 +1,6 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type ToolDefinitionEntry } from "../shared.js";
 import { searchSymbols, searchText, semanticSearch, getFileTree, getFileOutline, getRepoOutline, suggestQueries, codebaseRetrieval, dispatchFormatter, type SymbolKind } from "../deps.js";
+import { zJsonArray } from "./schema.js";
 
 export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Search ---
@@ -231,7 +232,7 @@ export const CORE_BATCH_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       queries: z
         .union([
           z.array(z.object({ type: z.string() }).passthrough()),
-          z.string().transform((s) => JSON.parse(s) as Array<{ type: string } & Record<string, unknown>>),
+          zJsonArray(z.object({ type: z.string().trim().min(1) }).passthrough()),
         ])
         .describe("Sub-queries array (symbols/text/file_tree/outline/references/call_chain/impact/context/knowledge_map). JSON string OK."),
       token_budget: zNum().describe("Maximum total tokens across all sub-query results"),

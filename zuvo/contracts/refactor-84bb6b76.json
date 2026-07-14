@@ -3,7 +3,7 @@
   "file": "src/register-tool-groups/core.ts",
   "type": "GOD_CLASS",
   "mode": "full",
-  "stage": "PHASE-3-PROVED",
+  "stage": "PHASE-3.5-PROVED",
   "commits": [],
   "queue_file": null,
   "queue_entry": "register-tool-groups/core.ts: symbols, search, index, and meta groups",
@@ -14,6 +14,7 @@
     "src/register-tool-groups/core/search.ts",
     "src/register-tool-groups/core/symbols.ts",
     "src/register-tool-groups/core/meta.ts",
+    "src/register-tool-groups/core/schema.ts",
     "tests/tools/register-tools.test.ts",
     "zuvo/contracts/refactor-84bb6b76.json"
   ],
@@ -59,9 +60,9 @@
   "prove": {
     "characterization": "green:aa93174:4u:tests/tools/register-tools.test.ts:83 tests",
     "blind_audit": "clean:strict",
-    "adversarial": "4findings:preserved",
-    "regression_red": "",
-    "findings_disposition": "pure-refactor preserved; remediation triaged separately"
+    "adversarial": "4findings:remediated;final-clean",
+    "regression_red": "red@30fcbea:green@113-tests:tests/tools/register-tools.test.ts",
+    "findings_disposition": "3fix-now validated; 1false-positive; 1out-of-fence deferred; final pass clean"
   },
   "cq_after": {"score": "13/13 applicable", "critical_failures": []},
   "documentation": "[DOC: N/A -- internal-only refactor; public tool catalog and import path preserved]",

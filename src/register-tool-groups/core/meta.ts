@@ -1,5 +1,6 @@
 import { z, zBool, zNum, lazySchema, type ToolDefinitionEntry } from "../shared.js";
 import { detectCommunities, assembleContext, getKnowledgeMap, diffOutline, changedSymbols, generateClaudeMd, dispatchFormatter } from "../deps.js";
+import { zJsonArray } from "./schema.js";
 
 export const CORE_META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   { order: 1902, definition: {
@@ -62,7 +63,11 @@ export const CORE_META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
           cannot_import: z.array(z.string()).optional().describe("Path patterns that matched files must NOT import"),
           can_only_import: z.array(z.string()).optional().describe("Path patterns that matched files may ONLY import (allowlist)"),
         })),
-        z.string().transform((s) => JSON.parse(s) as Array<{ from: string; cannot_import?: string[]; can_only_import?: string[] }>),
+        zJsonArray(z.object({
+          from: z.string().trim().min(1),
+          cannot_import: z.array(z.string().trim().min(1)).optional(),
+          can_only_import: z.array(z.string().trim().min(1)).optional(),
+        })),
       ]).describe("Array of boundary rules to check. JSON string OK."),
       file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
     })),
