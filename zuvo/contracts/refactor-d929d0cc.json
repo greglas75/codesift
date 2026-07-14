@@ -48,9 +48,9 @@
   "prove": {
     "characterization": "existing:tests/utils/walk.test.ts + tests/utils/walk-backup-exclusion.test.ts:green:aa93174:22 tests",
     "blind_audit": "clean:strict",
-    "adversarial": "1findings",
-    "regression_red": "",
-    "findings_disposition": "separate-corrective-commit-planned:null-options-regression"
+    "adversarial": "1findings; fix-revalidation-clean",
+    "regression_red": "red@bcd9e88:green@targeted-24-of-24:tests/utils/walk.test.ts",
+    "findings_disposition": "fix:null-options-regression-applied; revalidation-clean"
   },
   "cq_after": {"score": "29/29; all active critical gates pass; max complexity CC12", "critical_failures": []},
   "documentation": "[DOC: N/A -- internal-only refactor; public walk API and behavior preserved]",
@@ -59,6 +59,7 @@
     {"stage": "PHASE-1", "status": "characterization-green", "command": "npm test -- --maxWorkers=2 tests/utils/walk.test.ts tests/utils/walk-backup-exclusion.test.ts", "result": "2 files passed; 22 tests passed before production edits"},
     {"stage": "PHASE-2", "status": "implemented", "command": "split facade into types, filters, limits, errors, and traversal modules", "result": "walk.ts reduced from 215 to 34 lines; stable facade exports preserved"},
     {"stage": "PHASE-3", "status": "verification-green", "command": "focused tests; npm run lint; npm run build", "result": "22 focused tests passed; typecheck and build passed"},
-    {"stage": "PHASE-3", "status": "prove-complete-with-finding", "command": "independent CQ audit; full test suite; adversarial rotate pass 1", "result": "blind audit clean:strict; targeted 23/23; build and typecheck pass; full suite 4895 pass + 3 skip + one unrelated timeout that passed 20/20 isolated; adversarial found null-options runtime regression for separate corrective commit"}
+    {"stage": "PHASE-3", "status": "prove-complete-with-finding", "command": "independent CQ audit; full test suite; adversarial rotate pass 1", "result": "blind audit clean:strict; targeted 23/23; build and typecheck pass; full suite 4895 pass + 3 skip + one unrelated timeout that passed 20/20 isolated; adversarial found null-options runtime regression for separate corrective commit"},
+    {"stage": "PHASE-3.5", "status": "regression-fixed", "command": "run null-options regression red at bcd9e88; normalize options; targeted tests; lint; build; full suite; isolated flaky test; adversarial fix revalidation", "result": "regression test failed 1/24 before fix and passed 24/24 after fix; lint and build passed; full suite 4896 pass + 3 skip with the known unrelated llm-client timeout passing 20/20 isolated; adversarial revalidation returned zero findings"}
   ]
 }

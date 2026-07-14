@@ -10,21 +10,22 @@ export type { WalkOptions } from "./walk/types.js";
 
 export async function walkDirectory(
   rootPath: string,
-  options: WalkOptions = {},
+  options?: WalkOptions,
 ): Promise<string[]> {
+  const normalizedOptions = options ?? {};
   const files: string[] = [];
-  const limits = new WalkLimits(options.maxFileSize, options.maxFiles);
-  const filters = createFileFilter(rootPath, options);
+  const limits = new WalkLimits(normalizedOptions.maxFileSize, normalizedOptions.maxFiles);
+  const filters = createFileFilter(rootPath, normalizedOptions);
 
   await traverseDirectory(rootPath, {
-    followSymlinks: options.followSymlinks ?? false,
+    followSymlinks: normalizedOptions.followSymlinks ?? false,
     shouldSkipDirectory: filters.shouldSkipDirectory,
     onFile: async ({ fullPath, entry, stats }) => {
       if (!filters.shouldIncludeFile(fullPath, entry.name)) return true;
       const fileStats = stats ?? (await readStats(fullPath));
       if (!fileStats || fileStats.size > limits.maxFileSize) return true;
 
-      files.push(options.relative ? relative(rootPath, fullPath) : fullPath);
+      files.push(normalizedOptions.relative ? relative(rootPath, fullPath) : fullPath);
       limits.acceptFile();
       return limits.canContinue;
     },
