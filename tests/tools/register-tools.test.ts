@@ -50,6 +50,18 @@ const EXPECTED_CORE_TOOL_NAMES = [
   "generate_claude_md", "codebase_retrieval",
 ] as const;
 
+const EXPECTED_ANALYSIS_TOOL_NAMES = [
+  "find_dead_code", "find_unused_imports", "analyze_complexity", "find_clones",
+  "frequency_analysis", "analyze_hotspots", "cross_repo_search", "cross_repo_refs",
+  "search_patterns", "list_patterns", "generate_report", "list_workspaces",
+  "workspace_graph", "affected_workspaces", "workspace_boundaries", "scan_secrets",
+  "review_diff", "audit_scan", "find_perf_hotspots", "fan_in_fan_out",
+  "co_change_analysis", "architecture_summary", "explain_query", "nest_audit",
+  "test_impact_analysis", "dependency_audit", "migration_lint",
+  "analyze_prisma_schema", "repo_group", "match_group_contracts",
+  "find_endpoint_consumers",
+] as const;
+
 // All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
   "astro_analyze_islands",
@@ -96,6 +108,12 @@ describe("register-tools — always-visible tools", () => {
   it("preserves the exact core tool catalog and registration order", () => {
     expect(CORE_TOOL_ENTRIES.map((entry) => entry.definition.name)).toEqual(
       EXPECTED_CORE_TOOL_NAMES,
+    );
+  });
+
+  it("preserves the exact analysis tool catalog and registration order", () => {
+    expect(ANALYSIS_TOOL_ENTRIES.map((entry) => entry.definition.name)).toEqual(
+      EXPECTED_ANALYSIS_TOOL_NAMES,
     );
   });
 
