@@ -87,10 +87,12 @@ const GRAMMARS: GrammarDef[] = [
     pkg: "tree-sitter-php@0.23.12",
     wasmPaths: ["tree-sitter-php.wasm", "tree-sitter-php_only.wasm"],
   },
-  {
-    pkg: "tree-sitter-markdown",
-    wasmPaths: ["tree-sitter-markdown.wasm"],
-  },
+  // tree-sitter-markdown ships NO prebuilt .wasm in any published package
+  // (raw `tree-sitter-markdown` needs a node-gyp build we skip; the scoped
+  // `@tree-sitter-grammars/tree-sitter-markdown` carries none either). It has
+  // never resolved here, so the grammar was already absent at runtime — its
+  // entry only made `download-wasm` exit 1 on every clean run. Re-add with a
+  // working prebuilt-wasm source if markdown tree-sitter support is needed.
   {
     pkg: "tree-sitter-css",
     wasmPaths: ["tree-sitter-css.wasm"],
@@ -184,8 +186,12 @@ async function main(): Promise<void> {
       log(`Downloading ${grammar.pkg}...`);
 
       try {
-        // Install the package into temp dir
-        execSync(`npm install --prefix "${tmpDir}" ${grammar.pkg}`, {
+        // Install the package into temp dir. --ignore-scripts skips each
+        // grammar's node-gyp `rebuild` (it builds the native .node addon, which
+        // we don't need — the .wasm ships prebuilt in the package). Without it,
+        // a grammar whose native binding fails to compile on the host toolchain
+        // (e.g. `-fexceptions` on CI gcc) aborts the whole download.
+        execSync(`npm install --ignore-scripts --prefix "${tmpDir}" ${grammar.pkg}`, {
           stdio: "pipe",
           timeout: 120_000,
         });
