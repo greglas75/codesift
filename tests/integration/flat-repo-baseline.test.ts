@@ -16,7 +16,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopAllWatchersForTesting();
-  if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
+  // maxRetries: rm walks the tree while an index write into CODESIFT_DATA_DIR
+  // may still be landing, so rmdir can hit ENOTEMPTY (seen on CI, Node 22).
+  // fs.rm retries exactly this class of error (ENOTEMPTY/EBUSY/EPERM).
+  if (tmpHome) await rm(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   delete process.env.CODESIFT_DATA_DIR;
   resetConfigCache();
 });
