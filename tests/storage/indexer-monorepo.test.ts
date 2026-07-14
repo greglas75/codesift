@@ -25,7 +25,7 @@ describe("indexer monorepo wiring (Task 7)", () => {
 
   afterAll(async () => {
     await stopAllWatchersForTesting();
-    if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
+    if (tmpHome) await rm(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     delete process.env.CODESIFT_DATA_DIR;
     delete process.env.CODESIFT_DISABLE_MONOREPO;
     resetConfigCache();
@@ -55,7 +55,7 @@ describe("indexer monorepo wiring (Task 7)", () => {
       const index = await loadIndexFor(flatRoot);
       expect(index?.workspaces).toBeUndefined();
     } finally {
-      await rm(flatRoot, { recursive: true, force: true });
+      await rm(flatRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -71,7 +71,7 @@ describe("indexer monorepo wiring (Task 7)", () => {
         const index = await loadIndexFor(copyRoot);
         expect(index?.workspaces).toBeUndefined();
       } finally {
-        await rm(copyRoot, { recursive: true, force: true });
+        await rm(copyRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     } finally {
       delete process.env.CODESIFT_DISABLE_MONOREPO;

@@ -16,7 +16,7 @@ let tmpDir: string | undefined;
 afterEach(async () => {
   delete process.env["CODESIFT_DATA_DIR"];
   resetConfigCache();
-  if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+  if (tmpDir) await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   tmpDir = undefined;
 });
 

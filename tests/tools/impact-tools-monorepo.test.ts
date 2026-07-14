@@ -23,7 +23,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await stopAllWatchersForTesting();
   gitFixture?.cleanup();
-  if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
+  if (tmpHome) await rm(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   delete process.env.CODESIFT_DATA_DIR;
   resetConfigCache();
 });
