@@ -1,6 +1,12 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, detectAutoLoadToolsCached, enableToolByName, type ToolDefinitionEntry } from "./shared.js";
 import { indexFolder, indexFile, indexRepo, listAllRepos, invalidateCache, searchSymbols, searchText, semanticSearch, getFileTree, getFileOutline, getRepoOutline, suggestQueries, getSymbol, getSymbols, findAndShow, findReferences, findReferencesBatch, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, traceCallChain, impactAnalysis, traceRoute, detectCommunities, assembleContext, getKnowledgeMap, diffOutline, changedSymbols, generateClaudeMd, codebaseRetrieval, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, formatSearchSymbols, formatFileTree, formatFileOutline, formatRepoOutline, formatSuggestQueries, formatRoles, formatAssembleContext, formatCommunities, formatCallTree, formatTraceRoute, formatKnowledgeMap, formatImpactAnalysis, formatDiffOutline, formatChangedSymbols, type SymbolKind, type Direction } from "./deps.js";
 
+// Token diet (2026-07-10 tool-runtime-opt plan, Task 4): find_references' default
+// result cap. Telemetry showed find_references as the #2 token sink (605 calls /
+// 909K tok), most of it unbounded result sets on common symbol names. An explicit
+// higher max_refs opts out.
+const DEFAULT_MAX_REFS = 50;
+
 export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Indexing ---
   { order: 1154, definition: {
@@ -233,21 +239,25 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     category: "outline",
     searchHint: "file tree directory structure listing files symbols",
     outputSchema: OutputSchemas.fileTree,
-    description: "File tree with symbol counts. compact=true for flat list (10-50x less output). Cached 5min.",
+    description: "File tree with symbol counts. Defaults to a flat compact list (10-50x less output); pass compact:false for the nested tree. Cached 5min.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
       name_pattern: z.string().optional().describe("Glob pattern to filter file names"),
       depth: zNum().describe("Maximum directory depth to traverse"),
-      compact: zBool().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
+      compact: zBool().describe("Return flat list of {path, symbols} instead of nested tree (much less output). Default: true — pass false for the nested tree."),
       min_symbols: zNum().describe("Only include files with at least this many symbols"),
     })),
     handler: async (args) => {
+      // Default to compact when the caller omits the arg — the biggest token sink in
+      // telemetry (1.1M tok over 881 calls) came from agents rarely passing compact=true.
+      // An explicit compact:false still returns the full nested tree.
+      const compact = args.compact === undefined ? true : (args.compact as boolean);
       const result = await getFileTree(args.repo as string, {
         path_prefix: args.path_prefix as string | undefined,
         name_pattern: args.name_pattern as string | undefined,
         depth: args.depth as number | undefined,
-        compact: args.compact as boolean | undefined,
+        compact,
         min_symbols: args.min_symbols as number | undefined,
       });
       return formatFileTree(result as never);
@@ -414,13 +424,14 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     category: "graph",
     searchHint: "find references usages callers who uses symbol",
     outputSchema: OutputSchemas.references,
-    description: "Find all references to a symbol. Pass symbol_names array for batch search.",
+    description: "Find all references to a symbol. Pass symbol_names array for batch search. Capped at max_refs (default 50); pass a higher value to see more.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().optional().describe("Name of the symbol to find references for"),
       symbol_names: z.union([z.array(z.string()), z.string().transform((s) => JSON.parse(s) as string[])]).optional()
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
+      max_refs: zNum().describe("Maximum number of references to return (default 50). Pass a higher value to see more."),
     })),
     handler: async (args) => {
       const names = args.symbol_names as string[] | undefined;
@@ -428,9 +439,13 @@ export const CORE_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         return findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
       }
       const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
-      const output = await formatRefsCompact(refs);
+      const maxRefs = args.max_refs === undefined ? DEFAULT_MAX_REFS : (args.max_refs as number);
+      const truncated = refs.length > maxRefs;
+      const shown = truncated ? refs.slice(0, maxRefs) : refs;
+      const output = await formatRefsCompact(shown);
+      const overflow = truncated ? `\n… +${refs.length - maxRefs} more (pass max_refs to see more)` : "";
       const hint = await checkTextStubHint(args.repo as string, "find_references", refs.length === 0);
-      return hint ? hint + output : output;
+      return (hint ? hint + output : output) + overflow;
     },
   } },
   { order: 1589, definition: {
