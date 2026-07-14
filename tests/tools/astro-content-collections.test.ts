@@ -285,4 +285,96 @@ export const collections = { blog };
       expect(result.summary.total_collections).toBe(0);
     });
   });
+
+  it("9. direct collection export falls back to the discovered local definition", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+
+export const blog = defineCollection({
+  type: "content",
+  schema: z.object({ title: z.string() }),
+});
+`;
+    await withProject(
+      { "src/content.config.ts": config },
+      async (root) => {
+        const result = await astroContentCollections({
+          project_root: root,
+          validate_entries: false,
+        });
+        expect(result.collections).toEqual([
+          expect.objectContaining({
+            name: "blog",
+            loader: "glob",
+            schema_fields: [
+              expect.objectContaining({ name: "title", type: "string", required: true }),
+            ],
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("10. file loader validates JSON entries against required schema fields", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { file } from "astro/loaders";
+
+const authors = defineCollection({
+  loader: file("src/content/authors.json"),
+  schema: z.object({ name: z.string() }),
+});
+
+export const collections = { authors };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/authors.json": JSON.stringify({ slug: "ada" }),
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.collections[0]).toMatchObject({
+          name: "authors",
+          loader: "file",
+          loader_pattern: "src/content/authors.json",
+          entry_count: 1,
+        });
+        expect(result.validation_issues).toEqual([
+          {
+            collection: "authors",
+            file: "src/content/authors.json",
+            field: "name",
+            message: "Missing required field 'name' (string)",
+            severity: "error",
+          },
+        ]);
+      },
+    );
+  });
+
+  it("11. content without frontmatter is reported as an orphaned file", async () => {
+    const config = `
+import { defineCollection, z } from "astro:content";
+import { glob } from "astro/loaders";
+
+const blog = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: "./src/content/blog" }),
+  schema: z.object({ title: z.string() }),
+});
+
+export const collections = { blog };
+`;
+    await withProject(
+      {
+        "src/content.config.ts": config,
+        "src/content/blog/no-frontmatter.md": "Plain markdown",
+      },
+      async (root) => {
+        const result = await astroContentCollections({ project_root: root });
+        expect(result.orphaned_files).toEqual(["src/content/blog/no-frontmatter.md"]);
+        expect(result.validation_issues).toEqual([]);
+      },
+    );
+  });
 });

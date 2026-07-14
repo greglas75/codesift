@@ -1,0 +1,74 @@
+{
+  "version": 3,
+  "file": "src/tools/astro-content-collections.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "PHASE-3",
+  "commits": [],
+  "queue_file": null,
+  "queue_entry": "astro-content-collections.ts: discovery, schema parsing, diagnostics",
+  "pre_refactor_sha": "a6df1c336d1c2c0b63afce649b84f5ae07fc6f31",
+  "scope_fence": [
+    "src/tools/astro-content-collections.ts",
+    "src/tools/astro-content-collections/discovery.ts",
+    "src/tools/astro-content-collections/schema.ts",
+    "src/tools/astro-content-collections/diagnostics.ts",
+    "src/tools/astro-content-collections/types.ts",
+    "tests/tools/astro-content-collections.test.ts",
+    "zuvo/contracts/refactor-3d7e57df.json"
+  ],
+  "backup_branch": "backup/refactor-astro-content-collections-2026-07-14",
+  "cq_before": {
+    "score": "13/15 applicable",
+    "critical_failures": [],
+    "other_failures": [
+      "CQ11: 588 LOC; CC35 orchestrator, CC31 discovery, CC30 frontmatter parser",
+      "CQ12: discovery, parsing, validation, graph construction and result assembly share one module"
+    ]
+  },
+  "plan": {
+    "classification": "SPLIT/SPLIT_FILE",
+    "facade": "Keep src/tools/astro-content-collections.ts exporting astroContentCollections and the four public result interfaces.",
+    "extractions": [
+      {"unit": "config and collection discovery", "destination": "src/tools/astro-content-collections/discovery.ts"},
+      {"unit": "Zod schema and entry parsing", "destination": "src/tools/astro-content-collections/schema.ts"},
+      {"unit": "entry enumeration, validation and reference diagnostics", "destination": "src/tools/astro-content-collections/diagnostics.ts"},
+      {"unit": "shared public and internal data contracts", "destination": "src/tools/astro-content-collections/types.ts"}
+    ],
+    "test_strategy": "Strengthen the public-handler suite before production edits, then run it after each extraction plus lint, build and full tests."
+  },
+  "test_mode": "IMPROVE_TESTS",
+  "test_audit_before": {
+    "test_file": "tests/tools/astro-content-collections.test.ts",
+    "q7": 0,
+    "q11": 0,
+    "q13": 1,
+    "units_total": 3,
+    "units_covered": 3,
+    "uncovered_units": []
+  },
+  "test_audit_after": {
+    "test_file": "tests/tools/astro-content-collections.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 3,
+    "units_covered": 3,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:a6df1c3:3u:tests/tools/astro-content-collections.test.ts:11 tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "3findings",
+    "regression_red": "not_run",
+    "findings_disposition": "triaged:3-in-fence-bugs; stacked-remediation-required"
+  },
+  "cq_after": {"score": "15/15 applicable", "critical_failures": []},
+  "documentation": "[DOC: N/A -- internal-only refactor; public handler and result contracts preserved]",
+  "progress": [
+    {"stage": "PHASE-0", "status": "bootstrapped", "result": "TypeScript/Vitest; CodeSift indexed; hidden role/cycle tools unavailable"},
+    {"stage": "PHASE-1", "status": "baseline-green", "result": "8 existing public-handler tests passed"},
+    {"stage": "PHASE-2", "status": "characterization-locked", "result": "11 public-handler tests passed on pre-refactor a6df1c3; discovery/schema/diagnostics all covered"},
+    {"stage": "PHASE-3", "status": "implementation-green", "result": "Facade 101 LOC; modules 68-208 LOC; max CC reduced 35->14; 34 scoped Astro tests and tsc passed"}
+  ]
+}
