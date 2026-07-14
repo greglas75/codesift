@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Split the core tool catalog into indexing, search, symbol, and metadata
+  registration modules behind the existing `CORE_TOOL_ENTRIES` facade.
 - Split Kotlin analysis tools into capability modules for extensions, sealed
   hierarchies, suspend chains, multiplatform declarations, and Flow chains,
   behind the existing `kotlin-tools.ts` compatibility facade.
@@ -22,6 +24,8 @@
 
 ### Fixed
 
+- Validate JSON-array tool arguments and reject missing or blank
+  `find_references` selectors before dispatching core tool handlers.
 - Hardened Kotlin analysis for regex metacharacters and braces in sealed
   hierarchies, concurrent file scanning, suspend overload and uppercase-callee
   traversal, nested cancellation checks, depth validation, and spaced

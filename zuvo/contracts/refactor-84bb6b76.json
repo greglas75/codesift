@@ -3,8 +3,8 @@
   "file": "src/register-tool-groups/core.ts",
   "type": "GOD_CLASS",
   "mode": "full",
-  "stage": "PHASE-3.5-PROVED",
-  "commits": [],
+  "stage": "COMPLETE",
+  "commits": ["30fcbea", "47f3216"],
   "queue_file": null,
   "queue_entry": "register-tool-groups/core.ts: symbols, search, index, and meta groups",
   "pre_refactor_sha": "aa931746c2d993d8f1c106055703ef7f2da73a20",
@@ -65,11 +65,13 @@
     "findings_disposition": "3fix-now validated; 1false-positive; 1out-of-fence deferred; final pass clean"
   },
   "cq_after": {"score": "13/13 applicable", "critical_failures": []},
-  "documentation": "[DOC: N/A -- internal-only refactor; public tool catalog and import path preserved]",
+  "documentation": "CHANGELOG.md — core catalog split and selector validation",
   "progress": [
     {"stage": "PHASE-0", "status": "bootstrapped", "result": "TypeScript/Vitest; CodeSift indexed; external gate unavailable; backup branch created"},
     {"stage": "PHASE-1", "status": "baseline-green", "result": "4 registration suites passed; 105 tests before characterization"}
     ,{"stage": "PHASE-2", "status": "characterization-locked", "result": "Exact 35-name CORE_TOOL_ENTRIES order passed on pre-refactor aa93174; 83 tests"}
     ,{"stage": "PHASE-3", "status": "proved", "result": "106 targeted tests, 4866 full tests, build, CodeSift audit scan, blind CQ audit PASS; adversarial triage: 2 remediation candidates, 1 false positive, 1 out-of-fence"}
+    ,{"stage": "PHASE-3.5", "status": "remediated", "result": "Regression red demonstrated on 30fcbea; 116 targeted tests and type-check green; final adversarial pass clean"}
+    ,{"stage": "COMPLETE", "status": "recorded", "result": "Commits 30fcbea and 47f3216; full suite has one unrelated concurrent timeout while its isolated 20-test suite passes"}
   ]
 }
