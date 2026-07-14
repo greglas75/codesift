@@ -37,6 +37,18 @@ const ALL_TOOL_GROUP_ENTRIES = [
   ...NEXTJS_TOOL_ENTRIES,
 ];
 
+const EXPECTED_CORE_TOOL_NAMES = [
+  "index_folder", "index_repo", "list_repos", "invalidate_cache", "index_file",
+  "search_symbols", "ast_query", "semantic_search", "search_text",
+  "get_file_tree", "get_file_outline", "get_repo_outline", "suggest_queries",
+  "get_symbol", "get_symbols", "find_and_show", "get_context_bundle",
+  "find_references", "trace_call_chain", "impact_analysis", "trace_route",
+  "go_to_definition", "get_type_info", "rename_symbol", "get_call_hierarchy",
+  "detect_communities", "find_circular_deps", "check_boundaries", "classify_roles",
+  "assemble_context", "get_knowledge_map", "diff_outline", "changed_symbols",
+  "generate_claude_md", "codebase_retrieval",
+] as const;
+
 // All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
   "astro_analyze_islands",
@@ -80,6 +92,12 @@ function createMockServer() {
 }
 
 describe("register-tools — always-visible tools", () => {
+  it("preserves the exact core tool catalog and registration order", () => {
+    expect(CORE_TOOL_ENTRIES.map((entry) => entry.definition.name)).toEqual(
+      EXPECTED_CORE_TOOL_NAMES,
+    );
+  });
+
   it("keeps usage-critical tools in CORE_TOOL_NAMES", () => {
     for (const toolName of ALWAYS_VISIBLE_TOOL_NAMES) {
       expect(CORE_TOOL_NAMES.has(toolName), `${toolName} must stay core`).toBe(true);
