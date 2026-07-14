@@ -3,8 +3,11 @@
   "file": "src/tools/astro-content-collections.ts",
   "type": "SPLIT_FILE",
   "mode": "full",
-  "stage": "PHASE-3",
-  "commits": [],
+  "stage": "COMPLETE",
+  "commits": [
+    "a5f07e41620eff7d5dfdfc75c5f76be9a0b2ca03",
+    "cf227138e83b908e907e6fd19102effc4d760180"
+  ],
   "queue_file": null,
   "queue_entry": "astro-content-collections.ts: discovery, schema parsing, diagnostics",
   "pre_refactor_sha": "a6df1c336d1c2c0b63afce649b84f5ae07fc6f31",
@@ -15,7 +18,9 @@
     "src/tools/astro-content-collections/diagnostics.ts",
     "src/tools/astro-content-collections/types.ts",
     "tests/tools/astro-content-collections.test.ts",
-    "zuvo/contracts/refactor-3d7e57df.json"
+    "zuvo/contracts/refactor-3d7e57df.json",
+    "docs/astro-content-collections.md",
+    "memory/reviews/a6df1c3..cf22713-astro-content-collections-split.md"
   ],
   "backup_branch": "backup/refactor-astro-content-collections-2026-07-14",
   "cq_before": {
@@ -64,7 +69,7 @@
     "findings_disposition": "fixed:all-in-fence-adversarial-and-cq-findings"
   },
   "cq_after": {"score": "15/15 applicable", "critical_failures": []},
-  "documentation": "[DOC: N/A -- internal-only refactor; public handler and result contracts preserved]",
+  "documentation": "docs/astro-content-collections.md -- module ownership and corrected diagnostic semantics",
   "progress": [
     {"stage": "PHASE-0", "status": "bootstrapped", "result": "TypeScript/Vitest; CodeSift indexed; hidden role/cycle tools unavailable"},
     {"stage": "PHASE-1", "status": "baseline-green", "result": "8 existing public-handler tests passed"},
