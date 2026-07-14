@@ -1,0 +1,54 @@
+version: 2
+updates:
+  # GitHub Actions — keep CI action versions current (test.yml + release.yml).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Warsaw"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
+
+  # npm — single root entry. No workspaces here, one package-lock.json at the root.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      timezone: "Europe/Warsaw"
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "chore"
+    # One PR per concern instead of one per package.
+    groups:
+      typescript-tooling:
+        patterns:
+          - "typescript"
+          - "tsx"
+      test-tooling:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+      graphology:
+        patterns:
+          - "graphology"
+          - "graphology-*"
+      types:
+        patterns:
+          - "@types/*"
+    ignore:
+      # web-tree-sitter majors change the WASM ABI: every grammar in
+      # scripts/download-wasm.ts has to be re-pinned and re-verified against the
+      # new runtime, and src/parser/extractors/* walk the resulting node types.
+      # That is a migration, not a bot bump — do it deliberately.
+      - dependency-name: "web-tree-sitter"
+        update-types: ["version-update:semver-major"]
