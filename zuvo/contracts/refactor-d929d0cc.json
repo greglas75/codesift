@@ -3,8 +3,8 @@
   "file": "src/utils/walk.ts",
   "type": "SPLIT_FILE",
   "mode": "full",
-  "stage": "PHASE-3.5",
-  "commits": [],
+  "stage": "COMPLETE",
+  "commits": ["bcd9e88", "8d68d95"],
   "queue_file": null,
   "queue_entry": "utils/walk.ts: split traversal, filters, limits, and error policy",
   "pre_refactor_sha": "aa931746c2d993d8f1c106055703ef7f2da73a20",
@@ -60,6 +60,7 @@
     {"stage": "PHASE-2", "status": "implemented", "command": "split facade into types, filters, limits, errors, and traversal modules", "result": "walk.ts reduced from 215 to 34 lines; stable facade exports preserved"},
     {"stage": "PHASE-3", "status": "verification-green", "command": "focused tests; npm run lint; npm run build", "result": "22 focused tests passed; typecheck and build passed"},
     {"stage": "PHASE-3", "status": "prove-complete-with-finding", "command": "independent CQ audit; full test suite; adversarial rotate pass 1", "result": "blind audit clean:strict; targeted 23/23; build and typecheck pass; full suite 4895 pass + 3 skip + one unrelated timeout that passed 20/20 isolated; adversarial found null-options runtime regression for separate corrective commit"},
-    {"stage": "PHASE-3.5", "status": "regression-fixed", "command": "run null-options regression red at bcd9e88; normalize options; targeted tests; lint; build; full suite; isolated flaky test; adversarial fix revalidation", "result": "regression test failed 1/24 before fix and passed 24/24 after fix; lint and build passed; full suite 4896 pass + 3 skip with the known unrelated llm-client timeout passing 20/20 isolated; adversarial revalidation returned zero findings"}
+    {"stage": "PHASE-3.5", "status": "regression-fixed", "command": "run null-options regression red at bcd9e88; normalize options; targeted tests; lint; build; full suite; isolated flaky test; adversarial fix revalidation", "result": "regression test failed 1/24 before fix and passed 24/24 after fix; lint and build passed; full suite 4896 pass + 3 skip with the known unrelated llm-client timeout passing 20/20 isolated; adversarial revalidation returned zero findings"},
+    {"stage": "PHASE-4", "status": "complete", "command": "record refactor and corrective commit SHAs", "result": "refactor bcd9e88; fix 8d68d95; all in-fence findings resolved"}
   ]
 }
