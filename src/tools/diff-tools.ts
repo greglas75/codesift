@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
-import { validateGitRef } from "../utils/git-validation.js";
+import { buildGitDiffArgs } from "../utils/git-validation.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface DiffOutlineResult {
@@ -97,13 +97,10 @@ function symbolOverlapsHunks(symbol: CodeSymbol, hunks: DiffHunk[]): boolean {
  * Run git diff and return the raw output.
  */
 function runGitDiff(repoRoot: string, since: string, until: string, nameOnly: boolean): string {
-  validateGitRef(since);
-  validateGitRef(until);
-
-  // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern
-  const args = nameOnly
-    ? ["diff", "--name-only", `${since}..${until}`]
-    : ["diff", `${since}..${until}`];
+  // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern.
+  // buildGitDiffArgs validates refs and translates the WORKING/STAGED pseudo-refs
+  // (uncommitted diffs) that a bare `${since}..${until}` would feed git as unknown revisions.
+  const args = buildGitDiffArgs(since, until, nameOnly);
   try {
     return execFileSync("git", args, {
       cwd: repoRoot,

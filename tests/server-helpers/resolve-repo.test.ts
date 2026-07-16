@@ -6,6 +6,7 @@ import {
   resolveRepoFromCwd,
   isAncestorOrEqual,
   loadRegistrySync,
+  canonicalizeRepoName,
   _resetRegistryCacheForTests,
 } from "../../src/server-helpers.js";
 
@@ -138,6 +139,55 @@ describe("resolveRepoFromCwd", () => {
       { name: "local/repo", root: "/Users/g/DEV/repo", symbol_count: 100, file_count: 10 },
     ]);
     expect(resolveRepoFromCwd("/Users/g/DEV/repo-clone", registryPath)).toBe("local/repo-clone");
+  });
+});
+
+describe("canonicalizeRepoName (BUG A — case-insensitive repo key)", () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-canon-"));
+    registryPath = join(tmpDir, "registry.json");
+    _resetRegistryCacheForTests();
+  });
+
+  afterEach(async () => {
+    _resetRegistryCacheForTests();
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("rewrites on-disk casing to the canonical registered name", async () => {
+    // Repo folder on disk is `Rewards-API` but it's registered lower-cased.
+    // Agents pass the on-disk casing; case-sensitive getters (getBM25Index) missed.
+    await writeRegistry([
+      { name: "local/rewards-api", root: "/Users/g/DEV/Rewards-API", symbol_count: 500, file_count: 40 },
+    ]);
+    expect(canonicalizeRepoName("local/Rewards-API", registryPath)).toBe("local/rewards-api");
+    expect(canonicalizeRepoName("LOCAL/REWARDS-API", registryPath)).toBe("local/rewards-api");
+  });
+
+  it("returns an exactly-registered name untouched (fast path)", async () => {
+    await writeRegistry([
+      { name: "local/rewards-api", root: "/Users/g/DEV/Rewards-API", symbol_count: 500, file_count: 40 },
+    ]);
+    expect(canonicalizeRepoName("local/rewards-api", registryPath)).toBe("local/rewards-api");
+  });
+
+  it("passes an unregistered name through unchanged (async fallbacks apply downstream)", async () => {
+    await writeRegistry([
+      { name: "local/rewards-api", root: "/Users/g/DEV/Rewards-API", symbol_count: 500, file_count: 40 },
+    ]);
+    expect(canonicalizeRepoName("thepopebot", registryPath)).toBe("thepopebot");
+    expect(canonicalizeRepoName("local/unknown", registryPath)).toBe("local/unknown");
+  });
+
+  it("passes absolute paths through untouched (resolved by path downstream)", async () => {
+    await writeRegistry([
+      { name: "local/rewards-api", root: "/Users/g/DEV/Rewards-API", symbol_count: 500, file_count: 40 },
+    ]);
+    expect(canonicalizeRepoName("/Users/g/DEV/Rewards-API", registryPath)).toBe("/Users/g/DEV/Rewards-API");
+  });
+
+  it("returns input unchanged when the registry is missing", () => {
+    expect(canonicalizeRepoName("local/Rewards-API", "/no/such/registry.json")).toBe("local/Rewards-API");
   });
 });
 

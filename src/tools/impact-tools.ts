@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, stripSource } from "./graph-tools.js";
-import { validateGitRef } from "../utils/git-validation.js";
+import { buildGitDiffArgs } from "../utils/git-validation.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, CodeIndex, AffectedTest, RiskScore, ImpactResult } from "../types.js";
 import type { AdjacencyIndex } from "./graph-tools.js";
@@ -97,12 +97,13 @@ function buildFileDependencyGraph(
  * Run git diff to find changed files between two refs.
  */
 function getChangedFiles(repoRoot: string, since: string, until: string): string[] {
-  validateGitRef(since);
-  validateGitRef(until);
+  // buildGitDiffArgs validates refs and translates the WORKING/STAGED pseudo-refs
+  // (uncommitted diffs) — a bare `${since}..${until}` fails git for those.
+  const args = buildGitDiffArgs(since, until, true);
 
   try {
     // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern
-    const output = execFileSync("git", ["diff", "--name-only", `${since}..${until}`], {
+    const output = execFileSync("git", args, {
       cwd: repoRoot,
       encoding: "utf-8",
       timeout: 10_000,

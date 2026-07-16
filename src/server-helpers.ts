@@ -1,7 +1,7 @@
 import { trackToolCall, addSavings, extractResultChunks } from "./storage/usage-tracker.js";
 import { recordToolCall as recordSessionCall, recordCacheHit, getCallCount, getSessionState, resetSession, scheduleSidecarFlush } from "./storage/session-state.js";
 import { writeFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { join, basename, sep } from "node:path";
+import { join, basename, sep, isAbsolute } from "node:path";
 import { tmpdir, homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
@@ -75,9 +75,47 @@ export function resolveRepoFromCwd(cwd: string, registryPath: string = REGISTRY_
   return candidates[0]!.name;
 }
 
+/**
+ * Canonicalize a repo name to its registered casing via a case-insensitive
+ * exact-name match. Agents frequently pass the on-disk basename casing
+ * (`local/Rewards-API`) while the repo is registered under its canonical
+ * name (`local/rewards-api`). Case-sensitive index getters — getBM25Index /
+ * ensureIndexFresh, which look up the registry with exact `getRepo` — then miss
+ * and the tool errors. Telemetry (2026-07): find_and_show failed 73/74 calls
+ * whose repo had an uppercase letter, and 0/532 lowercase calls.
+ *
+ * Only rewrites on a case-insensitive *exact* name match. Absolute paths, bare
+ * names, and unmatched inputs pass through untouched so the async
+ * resolveRegisteredRepoMeta fallbacks (absolute-path / suffix / basename) still
+ * apply downstream.
+ */
+export function canonicalizeRepoName(
+  repoName: string,
+  registryPath: string = REGISTRY_PATH,
+): string {
+  if (isAbsolute(repoName)) return repoName; // resolved by path downstream
+  const lower = repoName.toLowerCase();
+  let ciMatch: string | null = null;
+  for (const r of loadRegistrySync(registryPath)) {
+    if (typeof r.name !== "string") continue;
+    if (r.name === repoName) return repoName; // already canonical — fast path
+    if (ciMatch === null && r.name.toLowerCase() === lower) ciMatch = r.name;
+  }
+  return ciMatch ?? repoName;
+}
+
 function resolveRepo(toolName: string, args: Record<string, unknown>): void {
-  if (TOOLS_WITHOUT_REPO.has(toolName) || args["repo"]) return;
-  args["repo"] = resolveRepoFromCwd(process.cwd());
+  if (TOOLS_WITHOUT_REPO.has(toolName)) return;
+  const provided = args["repo"];
+  if (typeof provided === "string" && provided.length > 0) {
+    // Normalize caller-supplied casing so downstream case-sensitive getters and
+    // the response cache key all agree on the canonical name.
+    args["repo"] = canonicalizeRepoName(provided);
+    return;
+  }
+  if (!provided) {
+    args["repo"] = resolveRepoFromCwd(process.cwd());
+  }
 }
 
 /** Test-only: drop the registry cache. */
