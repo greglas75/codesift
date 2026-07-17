@@ -1,0 +1,42 @@
+{
+  "version": 3,
+  "file": "src/tools/pg-introspect-tools.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "scope_fence": [
+    "src/tools/pg-introspect-tools.ts", "src/tools/pg-introspection.ts",
+    "src/tools/pg-introspect-formatters.ts", "src/tools/pg-drift.ts",
+    "src/tools/pg-drift-types.ts", "src/tools/pg-drift-schema.ts",
+    "src/tools/pg-drift-compare.ts",
+    "tests/tools/pg-introspect-tools.test.ts", "zuvo/contracts/refactor-e1de07b9.json"
+  ],
+  "backup_branch": "backup/refactor-pg-introspect-2026-07-10",
+  "plan": {
+    "summary": "Keep a compatibility facade while separating live PG I/O, raw-row formatting, and pure drift comparison.",
+    "extractions": [
+      { "unit": "load/redact/introspect lifecycle", "destination": "src/tools/pg-introspection.ts" },
+      { "unit": "buildTables + buildRelationships", "destination": "src/tools/pg-introspect-formatters.ts" },
+      { "unit": "pgDriftCheck + normalization", "destination": "src/tools/pg-drift.ts" }
+    ]
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/pg-introspect-tools.test.ts + smoke-four-features.test.ts",
+    "q7": 1, "q11": 1, "q13": 1,
+    "units_total": 5, "units_covered": 5, "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:8ebe14b:5u:31 focused tests + 4 integration smoke tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "clean after remediation: final security pass NO ISSUES FOUND",
+    "regression_red": "red@08497d1:green@working-tree:tests/tools/pg-introspect-tools.test.ts",
+    "findings_disposition": "Fixed constructor containment, bounded idempotent cleanup, generic external errors, decoded/escaped password redaction, bounded catalog queries, strict row validation, CQ11 decomposition, and O(n) drift mapping. SSRF/_clientCtor findings false positive: registration reads DSN only from server environment and JSON cannot carry constructors.",
+    "latest": {
+      "baseline": "green: 32 tests before added characterization; 31 focused after 3 added cases; TypeScript green",
+      "focused_after_fix": "green: 38 tests",
+      "typecheck_after_fix": "green", "build_after_fix": "green",
+      "blind_audit": "clean:strict", "adversarial": "NO ISSUES FOUND"
+    }
+  }
+}
