@@ -46,6 +46,30 @@ describe("buildArgsSummary", () => {
       expect(s["compact"]).toBe(false);
     });
   });
+  describe("describe_tools names (regression: previously logged {})", () => {
+    it("captures the requested tool names and count", () => {
+      const s = buildArgsSummary("describe_tools", { names: ["find_dead_code", "rename_symbol"] });
+      expect(s["names"]).toEqual(["find_dead_code", "rename_symbol"]);
+      expect(s["name_count"]).toBe(2);
+    });
+
+    it("captures the reveal flag when present", () => {
+      const s = buildArgsSummary("describe_tools", { names: ["find_dead_code"], reveal: true });
+      expect(s["reveal"]).toBe(true);
+    });
+
+    it("caps names at 30 but keeps the full count", () => {
+      const names = Array.from({ length: 50 }, (_, i) => `tool_${i}`);
+      const s = buildArgsSummary("describe_tools", { names });
+      expect((s["names"] as string[]).length).toBe(30);
+      expect(s["name_count"]).toBe(50);
+    });
+
+    it("drops non-string entries defensively", () => {
+      const s = buildArgsSummary("describe_tools", { names: ["ok", 123, null, "fine"] });
+      expect(s["names"]).toEqual(["ok", "fine"]);
+    });
+  });
 });
 
 describe("extractResultChunks", () => {

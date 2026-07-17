@@ -30,6 +30,21 @@ const BRANCH_PATTERNS = [
 // Patterns that increase nesting
 const NESTING_OPENERS = /\b(if|for|foreach|while|switch|try|when|match)\s*[\({]/g;
 
+/**
+ * Cooperative wall-clock budget for the synchronous per-symbol scan. This loop
+ * runs regexes over every symbol's source (up to ~77k symbols on large repos);
+ * raceWallClock cannot interrupt a synchronous loop, so instead we check elapsed
+ * time inside it and return partial — but still useful, since results are ranked
+ * top-N by complexity — output with a `truncated` flag. Telemetry (2026-07):
+ * analyze_complexity had a 1,006,938ms (~16 min) max that blocked the agent.
+ * Override via CODESIFT_COMPLEXITY_CAP_MS.
+ */
+const COMPLEXITY_WALL_CLOCK_MS = (() => {
+  const env = process.env["CODESIFT_COMPLEXITY_CAP_MS"];
+  const parsed = env ? Number(env) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
+})();
+
 export interface ComplexityInfo {
   name: string;
   kind: SymbolKind;
@@ -56,6 +71,12 @@ export interface ComplexityResult {
     max_complexity: number;
     max_nesting: number;
     above_threshold: number;
+    /** Set when the per-symbol scan hit COMPLEXITY_WALL_CLOCK_MS and stopped early. */
+    truncated?: boolean;
+    /** Symbols actually scanned before truncation (present only when truncated). */
+    analyzed_symbols?: number;
+    /** Total candidate symbols that would have been scanned (present only when truncated). */
+    total_symbols?: number;
   };
 }
 
@@ -193,7 +214,16 @@ export async function analyzeComplexity(
 
   const results: ComplexityInfo[] = [];
 
+  const scanStart = Date.now();
+  let scanned = 0;
+  let truncated = false;
   for (const sym of symbols) {
+    // Cooperative time budget — checked every 512 symbols so the check itself is
+    // negligible. Stops a pathological huge-repo scan from hanging the agent.
+    if ((scanned++ & 0x1ff) === 0 && Date.now() - scanStart > COMPLEXITY_WALL_CLOCK_MS) {
+      truncated = true;
+      break;
+    }
     const source = sym.source!;
     const lines = source.split("\n").length;
     const branches = countBranches(source);
@@ -253,6 +283,9 @@ export async function analyzeComplexity(
       max_complexity: maxComplexity,
       max_nesting: maxNesting,
       above_threshold: aboveThreshold,
+      ...(truncated
+        ? { truncated: true, analyzed_symbols: scanned - 1, total_symbols: symbols.length }
+        : {}),
     },
   };
 }
