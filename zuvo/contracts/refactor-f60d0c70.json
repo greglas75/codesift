@@ -3,7 +3,8 @@
   "file": "src/tools/project-tools.ts",
   "type": "SPLIT_FILE",
   "mode": "full",
-  "stage": "PHASE-4",
+  "stage": "COMPLETE",
+  "commits": ["b5fbc75"],
   "queue_file": null,
   "queue_entry": "tools/project-tools.ts: analyze_project composite; decompose per-analysis modules and resolve index-tools cycle",
   "cq_before": {
@@ -15,6 +16,14 @@
       "Runtime import graph target check found no static project-tools/index-tools cycle after replacing the index-tools static import with a dynamic boundary"
     ]
   },
+  "cq_after": {
+    "score": "16/19 applicable; 3 carry-forward findings",
+    "critical_failures": [],
+    "notes": [
+      "Independent CQ auditor ran across all 15 scoped files; strict CQ11/CQ17/CQ23 findings are inherited or moved verbatim, with CQ23 confined to the untouched analyzeProject cache unit",
+      "No split-induced critical regression; public export parity matched 47/47 names and runtime parity matched 19/19 exports"
+    ]
+  },
   "scope_fence": [
     "CHANGELOG.md",
     "src/tools/project-tools.ts",
@@ -24,19 +33,30 @@
     "src/tools/project-profile-persistence.ts",
     "src/tools/project-profile-summary.ts",
     "tests/tools/project-profile-boundaries.test.ts",
-    "tests/tools/project-tools.test.ts"
+    "tests/tools/project-tools.test.ts",
+    "tests/tools/php-tools.test.ts",
+    "tests/tools/project-profile-conventions.test.ts",
+    "src/tools/project-profile-types.ts",
+    "src/tools/project-profile-stack.ts",
+    "src/tools/project-profile-hono.ts",
+    "src/tools/project-profile-nest.ts",
+    "src/tools/project-profile-next.ts",
+    "src/tools/project-profile-express.ts",
+    "src/tools/project-profile-react.ts",
+    "src/tools/project-profile-python.ts",
+    "src/tools/project-profile-php.ts"
   ],
-  "backup_branch": null,
+  "backup_branch": "backup/refactor-project-tools-2026-07-12",
   "plan": {
-    "summary": "Split analyze_project profile extraction, persistence, summary, fs, and import-count helpers out of project-tools.ts while preserving the public tool facade and removing the static index-tools dependency.",
+    "summary": "Finish splitting project profile analysis by moving stack detection, framework convention extractors, and shared profile types behind the stable project-tools facade.",
     "pre_scan": {
       "codesift": "indexed",
-      "loc_before": 2380,
-      "loc_after": 1986,
+      "loc_before": 1939,
+      "loc_after": null,
       "complex_hotspots": [
-        "detectStack CC71",
+        "detectStack CC69",
+        "buildConventionsSummary CC77",
         "extractReactConventions CC68",
-        "extractTestConventions CC45",
         "extractNestConventions CC36",
         "analyzeProject CC34"
       ]
@@ -65,31 +85,58 @@
       {
         "unit": "public analyze_project orchestration and framework-specific extractors",
         "destination": "src/tools/project-tools.ts"
+      },
+      {
+        "unit": "shared project profile interfaces and exported convention types",
+        "destination": "src/tools/project-profile-types.ts"
+      },
+      {
+        "unit": "stack and workspace detection",
+        "destination": "src/tools/project-profile-stack.ts"
+      },
+      {
+        "unit": "Hono conventions and AST/legacy adapter",
+        "destination": "src/tools/project-profile-hono.ts"
+      },
+      {
+        "unit": "NestJS conventions and middleware chain parser",
+        "destination": "src/tools/project-profile-nest.ts"
+      },
+      {
+        "unit": "Next.js, Express, React, Python, PHP, and Yii2 conventions",
+        "destination": "src/tools/project-profile-{next,express,react,python,php}.ts"
+      },
+      {
+        "unit": "convention summary dispatch helpers",
+        "destination": "src/tools/project-profile-summary.ts"
       }
     ]
   },
-  "test_mode": "CHARACTERIZATION_PLUS_REGRESSION",
+  "test_mode": "CHARACTERIZE_GAP",
   "test_audit_before": {
     "test_file": "tests/tools/project-tools.test.ts",
     "q7": 1,
     "q11": 1,
     "q13": 1,
-    "units_total": 9,
-    "units_covered": 9,
+    "units_total": 8,
+    "units_covered": 8,
     "uncovered_units": [],
-    "added_characterization": "project-profile-boundaries suite covers dynamic index boundary, summary construction, convention summaries, dependency graph, identity sanitization, atomic persistence, import counting, dependency health, gotchas, and test-convention sampling"
+    "added_characterization": "project-profile-conventions.test.ts pins Next.js, Express, and Python extractors; existing project-tools, react-conventions, php-tools, and yii2-conventions suites cover stack, Hono, Nest, React, PHP/Yii2, and parser branches"
   },
   "prove": {
-    "blind_audit": "clean:strict via independent CQ auditor after test strengthening; no actionable findings remained in the scoped boundary tests",
-    "adversarial": "completed: adversarial-review.sh --rotate --mode code on staged diff; earlier critical/warning findings drove fixes for importer counting, pyproject detection, root entrypoints, Hono source precedence, git remote sanitization, atomic writes, import parsing, shortlog isolation, and summary/test-path resilience",
-    "findings_disposition": "fixed: high/critical issues introduced or exposed inside the refactor fence. preserved/accepted: readJson remains graceful on malformed JSON to preserve pre-refactor behavior; extractDependencyGraph keeps a sync default for exported API compatibility while analyzeProject passes the async full-file importer count; broader non-JS/PHP/Python dependency graph semantics remain out of this split's scope.",
+    "characterization": "green:9520267:8u:tests/tools/project-tools.test.ts,tests/tools/project-profile-conventions.test.ts,tests/tools/react-conventions.test.ts,tests/tools/php-tools.test.ts,tests/tools/yii2-conventions.test.ts",
+    "blind_audit": "clean:degraded via independent CQ auditor; hidden CodeSift machine checks were unavailable, and CQ11/CQ17/CQ23 findings were pre-existing or moved verbatim; no split-induced critical regression",
+    "adversarial": "5findings:preserved",
+    "findings_disposition": "preserved/deferred: adversarial 5 pre-existing findings moved verbatim or confined to untouched classifyFiles; CQ auditor CQ11 legacy function/file-size complexity, CQ17 serial filesystem reads, and CQ23 analyzeProject cache policy are carry-forward debt. No split-induced critical regression; deferred items will be persisted to memory/backlog.md.",
     "latest": {
-      "focused": "green: npm test -- tests/tools/project-tools.test.ts tests/tools/project-profile-boundaries.test.ts tests/tools/index-shared.test.ts; 3 files passed, 90 tests passed",
+      "focused": "green: npm test -- --maxWorkers=2 project profile suites; 6 files passed, 150 tests passed",
       "typecheck": "green: npm run lint",
       "build": "green: npm run build",
-      "full_suite": "green: npm test -- --maxWorkers=2; 319 files passed, 4638 tests passed, 3 skipped",
-      "cycle_check": "green: projectToolsImportsIndexTools=false, targetCycles=[]",
-      "diff_check": "green: git diff --check on scoped files"
+      "full_suite": "green: npm test -- --maxWorkers=2; 322 files passed, 4802 tests passed, 3 skipped",
+      "cycle_check": "green: NO_PROJECT_PROFILE_CYCLES; STATIC_PROJECT_TOOLS_IMPORTS=",
+      "export_parity": "green: runtime_exports=19; missing=none",
+      "diff_check": "green: git diff --cached --check on scoped files",
+      "adversarial": "green: adversarial-review.sh --rotate --mode code; codex-5.3; 5 pre-existing findings preserved"
     }
   },
   "progress": [
@@ -152,6 +199,24 @@
       "status": "index-updated",
       "command": "mcp__codesift.index_file for scoped source and test files",
       "result": "all scoped edited/new source and test files re-indexed; CodeSift secret warnings were heuristic false-positives on detector/test strings"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "characterization-green",
+      "command": "npm test -- --maxWorkers=2 tests/tools/project-tools.test.ts tests/tools/project-profile-boundaries.test.ts tests/tools/react-conventions.test.ts tests/tools/php-tools.test.ts tests/tools/yii2-conventions.test.ts tests/tools/project-profile-conventions.test.ts",
+      "result": "6 files passed, 150 tests passed on PRE_REFACTOR_SHA=9520267; coverage gap closed for Next.js, Express, and Python convention extractors"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "extraction-green",
+      "command": "npm run lint; npm test -- --maxWorkers=2 <project-profile-suite>; npm run build",
+      "result": "typecheck, focused tests (150/150), build, runtime export parity (19/19), and import-cycle check passed"
+    },
+    {
+      "stage": "PHASE-4",
+      "status": "adversarial-completed",
+      "command": "staged context | ~/.codex/scripts/adversarial-review.sh --rotate --mode code",
+      "result": "codex-5.3 returned 5 pre-existing moved-verbatim/untouched-unit warnings; no split-induced regression"
     }
   ]
 }

@@ -214,14 +214,14 @@ describe("extractYii2Conventions — Yii2-specific patterns", () => {
 
 describe("Yii2 language detection", () => {
   it("detects Yii2 from composer.json yiisoft/yii2 dependency", async () => {
-    // This tests the fix in project-tools.ts line 306
+    // This tests the stack detector after its extraction from project-tools.ts
     // where "yii2" was added to the PHP framework list
     const { detectStack } = await import("../../src/tools/project-tools.js");
 
     // We can't easily mock composer.json reading, but we can verify
     // the code path exists by checking the source
     const { readFileSync } = await import("node:fs");
-    const source = readFileSync("src/tools/project-tools.ts", "utf-8");
+    const source = readFileSync("src/tools/project-profile-stack.ts", "utf-8");
     expect(source).toContain('"laravel", "symfony", "yii2"');
   });
 });

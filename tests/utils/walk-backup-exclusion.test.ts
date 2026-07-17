@@ -14,6 +14,7 @@ describe("BACKUP_FILE_PATTERNS", () => {
     ["buffer.swp", true],
     ["buffer.swo", true],
     [".DS_Store", true],
+    [".ds_store", false],
     ["User.php", false],
     ["UserController.php", false],
     ["index.ts", false],
@@ -56,6 +57,6 @@ describe("walkDirectory — backup exclusion integration", () => {
 
     process.env.CODESIFT_INCLUDE_BACKUPS = "1";
     const files = await walkDirectory(tmpDir, { relative: true });
-    expect(files.length).toBe(3);
+    expect(files).toHaveLength(3);
   });
 });

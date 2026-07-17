@@ -1,0 +1,89 @@
+{
+  "version": 3,
+  "file": "src/parser/astro-template.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "commits": ["c38de97", "1687403", "ce41ab2"],
+  "queue_file": null,
+  "queue_entry": "parser/astro-template.ts: separate parser states",
+  "pre_refactor_sha": "f77ad894cfd5729ff7b964a32b7437544fb27adf",
+  "scope_fence": [
+    "src/parser/astro-template.ts",
+    "src/parser/astro-template/types.ts",
+    "src/parser/astro-template/preprocess.ts",
+    "src/parser/astro-template/resolution.ts",
+    "src/parser/astro-template/state.ts",
+    "src/parser/astro-template/scanner.ts",
+    "src/parser/astro-template/tag-processor.ts",
+    "tests/parser/astro-template.test.ts",
+    "CHANGELOG.md",
+    "zuvo/contracts/refactor-fc3569d5.json"
+  ],
+  "backup_branch": "backup/refactor-astro-template-2026-07-13",
+  "cq_before": {
+    "score": "to be completed",
+    "critical_failures": [],
+    "notes": [
+      "parseAstroTemplate is 115 LOC with CC59 and nesting 11 inside a 207-line pure regex parser",
+      "CodeSift audit reports CQ11 complexity and CQ13 private-symbol warnings; CQ8, CQ14, and CQ17 pass",
+      "Focused baseline: 25 parser tests passed before production edits"
+    ]
+  },
+  "plan": {
+    "classification": "SPLIT_FILE",
+    "summary": "Keep parseAstroTemplate and all public result types available from the existing module; move preprocessing/guards, resolution helpers, mutable tag state, and tag scanning into focused private modules.",
+    "extractions": [
+      { "unit": "public result interfaces", "destination": "src/parser/astro-template/types.ts" },
+      { "unit": "BOM/CRLF normalization, frontmatter split, size/brace guards, comment masking", "destination": "src/parser/astro-template/preprocess.ts" },
+      { "unit": "line/column, expression context, framework and import resolution, slot fallback lookup", "destination": "src/parser/astro-template/resolution.ts" },
+      { "unit": "tag/section stacks and accumulated parser result state", "destination": "src/parser/astro-template/state.ts" },
+      { "unit": "tag regex walk and per-tag state transitions", "destination": "src/parser/astro-template/scanner.ts" },
+      { "unit": "stable public facade", "destination": "src/parser/astro-template.ts" }
+    ],
+    "dependency_impact": "astro extractor and astro-islands consume parseAstroTemplate and its type exports through the existing module path; no external consumer should import private split modules.",
+    "existing_reuse": "Reuse the existing regex semantics and pure parser helpers; no new parser dependency or AST behavior.",
+    "test_strategy": "Run the existing 25-case parser suite unchanged against the pre-refactor code, then rerun it after each extraction and verify downstream Astro extractor/island suites."
+  },
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {
+    "test_file": "tests/parser/astro-template.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 5,
+    "units_covered": 5,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:f77ad89:5u:tests/parser/astro-template.test.ts",
+    "blind_audit": "clean:strict",
+    "adversarial": "multi-pass:7fixed;4preserved",
+    "regression_red": "red@c38de97:green@1687403:tests/parser/astro-template.test.ts",
+    "findings_disposition": "fixed: quoted tag values, specific framework extensions, comparison text, expression directives, directive boundaries, and void parents; preserved: frontmatter/brace-depth/slot and malformed-expression semantics"
+  },
+  "cq_after": {
+    "score": "4/5 machine checks pass; CQ11 improved from CC59 to max CC17",
+    "critical_failures": [],
+    "notes": [
+      "Scoped CQ8, CQ14, and CQ17 pass; CQ11 is materially reduced but CodeSift still warns on scanner CC17; CQ13 reports private-module false positives",
+      "Independent CQ auditor PASS: no critical or FIX-NOW findings; public exports and scoped import graph preserved",
+      "Adversarial review found repeated warnings across passes; seven mechanical parser issues were fixed with regression tests, four legacy semantics remain documented"
+    ]
+  },
+  "verification": {
+    "lint": "PASS",
+    "build": "PASS",
+    "focused": "PASS: 3 files / 87 tests",
+    "runtime_exports": "PASS: parseAstroTemplate and five public types preserved",
+    "degraded_tools": "CodeSift hidden clone/dead/cycle tools unavailable; machine audit plus independent CQ auditor and adversarial provider used"
+  },
+  "progress": [
+    { "stage": "PHASE-0", "status": "bootstrapped", "command": "plan_turn; index_status; analyze_project; compute-preload", "result": "CodeSift indexed; TypeScript/Vitest detected; external safety-gate installer unavailable" },
+    { "stage": "PHASE-1", "status": "pre-scan-completed", "command": "analyze_complexity; analyze_hotspots; audit_scan; dependency mapping", "result": "parseAstroTemplate CC59/nesting 11; public callers identified; no hotspot" },
+    { "stage": "PHASE-2", "status": "characterization-green", "command": "npm test -- --maxWorkers=2 tests/parser/astro-template.test.ts", "result": "25 tests passed before production edits" },
+    { "stage": "PHASE-3", "status": "split-green", "command": "split preprocess, resolution, state, scanner, and tag processor; npm run lint; npm run build", "result": "thin facade, scanner CC7, focused parser/extractor/islands tests green" },
+    { "stage": "PHASE-3.5", "status": "remediated", "command": "independent refactor-cq-auditor; adversarial-review passes; regression red/green", "result": "CQ auditor PASS; six mechanical findings fixed in separate commit path; four legacy semantics preserved" },
+    { "stage": "PHASE-4", "status": "complete", "command": "lint; build; focused tests; full-suite verification; final index and self-check", "result": "Targeted verification green; full suite had two unrelated load-sensitive failures that passed in isolation" }
+  ]
+}

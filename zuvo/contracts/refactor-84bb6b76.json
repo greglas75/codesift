@@ -1,0 +1,77 @@
+{
+  "version": 3,
+  "file": "src/register-tool-groups/core.ts",
+  "type": "GOD_CLASS",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "commits": ["30fcbea", "47f3216"],
+  "queue_file": null,
+  "queue_entry": "register-tool-groups/core.ts: symbols, search, index, and meta groups",
+  "pre_refactor_sha": "aa931746c2d993d8f1c106055703ef7f2da73a20",
+  "scope_fence": [
+    "src/register-tool-groups/core.ts",
+    "src/register-tool-groups/core/index.ts",
+    "src/register-tool-groups/core/search.ts",
+    "src/register-tool-groups/core/symbols.ts",
+    "src/register-tool-groups/core/meta.ts",
+    "src/register-tool-groups/core/schema.ts",
+    "tests/tools/register-tools.test.ts",
+    "zuvo/contracts/refactor-84bb6b76.json"
+  ],
+  "backup_branch": "backup/refactor-register-tool-groups-core-2026-07-13",
+  "cq_before": {
+    "score": "16/18 applicable",
+    "critical_failures": [],
+    "other_failures": ["CQ11: 836 LOC", "CQ12: indexing/search/outline/symbol/graph/LSP/architecture/context/diff/reporting responsibilities"],
+    "notes": ["CodeSift found no clone, dead-code, error-handling, or performance findings in the declarative catalog."]
+  },
+  "plan": {
+    "classification": "SPLIT/GOD_CLASS",
+    "facade": "Keep src/register-tool-groups/core.ts exporting CORE_TOOL_ENTRIES in the exact historical order.",
+    "extractions": [
+      {"unit": "indexing definitions", "destination": "src/register-tool-groups/core/index.ts"},
+      {"unit": "search, outline, and batch retrieval definitions", "destination": "src/register-tool-groups/core/search.ts"},
+      {"unit": "symbol, reference, graph, and LSP definitions", "destination": "src/register-tool-groups/core/symbols.ts"},
+      {"unit": "architecture, context, diff, and reporting definitions", "destination": "src/register-tool-groups/core/meta.ts"}
+    ],
+    "dependency_impact": "Only src/register-tool-groups/index.ts and registration tests import the core facade; no consumer import changes planned.",
+    "existing_reuse": "Reuse the existing ToolDefinitionEntry conventions and shared/deps facades; avoid collision with sibling register-tool-groups/meta.ts by nesting under core/.",
+    "test_strategy": "Pin the exact 35-name facade order on pre-refactor code, then run registration, lazy-loading, discovery, and language-gate suites."
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/register-tools.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 4,
+    "units_covered": 0,
+    "uncovered_units": ["index", "search", "symbols", "meta"]
+  },
+  "test_audit_after": {
+    "test_file": "tests/tools/register-tools.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 4,
+    "units_covered": 4,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:aa93174:4u:tests/tools/register-tools.test.ts:83 tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "4findings:remediated;final-clean",
+    "regression_red": "red@30fcbea:green@113-tests:tests/tools/register-tools.test.ts",
+    "findings_disposition": "3fix-now validated; 1false-positive; 1out-of-fence deferred; final pass clean"
+  },
+  "cq_after": {"score": "13/13 applicable", "critical_failures": []},
+  "documentation": "CHANGELOG.md — core catalog split and selector validation",
+  "progress": [
+    {"stage": "PHASE-0", "status": "bootstrapped", "result": "TypeScript/Vitest; CodeSift indexed; external gate unavailable; backup branch created"},
+    {"stage": "PHASE-1", "status": "baseline-green", "result": "4 registration suites passed; 105 tests before characterization"}
+    ,{"stage": "PHASE-2", "status": "characterization-locked", "result": "Exact 35-name CORE_TOOL_ENTRIES order passed on pre-refactor aa93174; 83 tests"}
+    ,{"stage": "PHASE-3", "status": "proved", "result": "106 targeted tests, 4866 full tests, build, CodeSift audit scan, blind CQ audit PASS; adversarial triage: 2 remediation candidates, 1 false positive, 1 out-of-fence"}
+    ,{"stage": "PHASE-3.5", "status": "remediated", "result": "Regression red demonstrated on 30fcbea; 116 targeted tests and type-check green; final adversarial pass clean"}
+    ,{"stage": "COMPLETE", "status": "recorded", "result": "Commits 30fcbea and 47f3216; full suite has one unrelated concurrent timeout while its isolated 20-test suite passes"}
+  ]
+}

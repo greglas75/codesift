@@ -424,7 +424,7 @@ describe("indexFolder persistent snapshot diff", () => {
     } finally {
       warnSpy.mockRestore();
       // Clean up the directory so afterEach rm -rf succeeds cleanly.
-      await rm(snapPath, { recursive: true, force: true });
+      await rm(snapPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 

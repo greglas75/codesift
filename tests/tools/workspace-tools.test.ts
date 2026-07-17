@@ -40,8 +40,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await stopAllWatchersForTesting();
   gitFixture?.cleanup();
-  if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true });
-  if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
+  if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (tmpHome) await rm(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   delete process.env.CODESIFT_DATA_DIR;
   resetConfigCache();
 });
@@ -144,7 +144,7 @@ describe("affected_workspaces (Task 10)", () => {
       expect(result.error).toBe("not_a_git_repository");
       expect(result.affected).toEqual([]);
     } finally {
-      await rm(noGitRoot, { recursive: true, force: true });
+      await rm(noGitRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 

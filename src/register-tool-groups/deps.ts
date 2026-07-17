@@ -191,3 +191,4 @@ export type { AuditDimension } from "../tools/nextjs-framework-audit-tools.js";
 export type { AuditScanOptions, AuditScanResult } from "../tools/audit-tools.js";
 export type { SecretSeverity } from "../tools/secret-tools.js";
 export type { SymbolKind, Direction } from "../types.js";
+export { dispatchFormatter } from "../formatter-dispatch.js";

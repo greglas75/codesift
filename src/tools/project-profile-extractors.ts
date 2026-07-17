@@ -13,7 +13,7 @@ import type {
   KnownGotchas,
   ProjectIdentity,
   TestConventions,
-} from "./project-tools.js";
+} from "./project-profile-types.js";
 
 const execFileAsync = promisify(execFile);
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -36,6 +37,30 @@ const ALL_TOOL_GROUP_ENTRIES = [
   ...HONO_TOOL_ENTRIES,
   ...NEXTJS_TOOL_ENTRIES,
 ];
+
+const EXPECTED_CORE_TOOL_NAMES = [
+  "index_folder", "index_repo", "list_repos", "invalidate_cache", "index_file",
+  "search_symbols", "ast_query", "semantic_search", "search_text",
+  "get_file_tree", "get_file_outline", "get_repo_outline", "suggest_queries",
+  "get_symbol", "get_symbols", "find_and_show", "get_context_bundle",
+  "find_references", "trace_call_chain", "impact_analysis", "trace_route",
+  "go_to_definition", "get_type_info", "rename_symbol", "get_call_hierarchy",
+  "detect_communities", "find_circular_deps", "check_boundaries", "classify_roles",
+  "assemble_context", "get_knowledge_map", "diff_outline", "changed_symbols",
+  "generate_claude_md", "codebase_retrieval",
+] as const;
+
+const EXPECTED_ANALYSIS_TOOL_NAMES = [
+  "find_dead_code", "find_unused_imports", "analyze_complexity", "find_clones",
+  "frequency_analysis", "analyze_hotspots", "cross_repo_search", "cross_repo_refs",
+  "search_patterns", "list_patterns", "generate_report", "list_workspaces",
+  "workspace_graph", "affected_workspaces", "workspace_boundaries", "scan_secrets",
+  "review_diff", "audit_scan", "find_perf_hotspots", "fan_in_fan_out",
+  "co_change_analysis", "architecture_summary", "explain_query", "nest_audit",
+  "test_impact_analysis", "dependency_audit", "migration_lint",
+  "analyze_prisma_schema", "repo_group", "match_group_contracts",
+  "find_endpoint_consumers",
+] as const;
 
 // All Astro tools (registered in TOOL_DEFINITIONS)
 const ASTRO_TOOL_NAMES = [
@@ -80,6 +105,60 @@ function createMockServer() {
 }
 
 describe("register-tools — always-visible tools", () => {
+  it("preserves the exact core tool catalog and registration order", () => {
+    expect(CORE_TOOL_ENTRIES.map((entry) => entry.definition.name)).toEqual(
+      EXPECTED_CORE_TOOL_NAMES,
+    );
+  });
+
+  it("preserves the exact analysis tool catalog and registration order", () => {
+    expect(ANALYSIS_TOOL_ENTRIES.map((entry) => entry.definition.name)).toEqual(
+      EXPECTED_ANALYSIS_TOOL_NAMES,
+    );
+  });
+
+  it.each([
+    ["index_folder", "include_paths", JSON.stringify({ path: "src" })],
+    ["index_repo", "include_paths", JSON.stringify("src")],
+    ["get_symbols", "symbol_ids", JSON.stringify({ id: "symbol" })],
+    ["find_references", "symbol_names", JSON.stringify("symbol")],
+    ["check_boundaries", "rules", JSON.stringify({ from: "src" })],
+    ["codebase_retrieval", "queries", JSON.stringify({ type: "text" })],
+  ])("rejects non-array JSON for %s.%s", (toolName, fieldName, input) => {
+    const definition = CORE_TOOL_ENTRIES.find(
+      (entry) => entry.definition.name === toolName,
+    )!.definition;
+
+    expect(definition.schema[fieldName]!.safeParse(input).success).toBe(false);
+  });
+
+  it.each([
+    ["index_folder", "include_paths"],
+    ["index_repo", "include_paths"],
+    ["get_symbols", "symbol_ids"],
+  ])("rejects blank values for %s.%s", (toolName, fieldName) => {
+    const definition = CORE_TOOL_ENTRIES.find(
+      (entry) => entry.definition.name === toolName,
+    )!.definition;
+
+    expect(definition.schema[fieldName]!.safeParse(["   "]).success).toBe(false);
+    expect(definition.schema[fieldName]!.safeParse(JSON.stringify([""])).success).toBe(false);
+  });
+
+  it("rejects find_references calls without a symbol selector", async () => {
+    const definition = CORE_TOOL_ENTRIES.find(
+      (entry) => entry.definition.name === "find_references",
+    )!.definition;
+
+    await expect(definition.handler({})).rejects.toThrow(
+      "symbol_name or symbol_names is required",
+    );
+    expect(definition.schema.symbol_name!.safeParse("   ").success).toBe(false);
+    expect(definition.schema.symbol_names!.safeParse([""]).success).toBe(false);
+    expect(definition.schema.symbol_names!.safeParse(JSON.stringify(["   "])).success).toBe(false);
+    expect(z.object(definition.schema).safeParse({ symbol_name: "entry" }).success).toBe(true);
+  });
+
   it("keeps usage-critical tools in CORE_TOOL_NAMES", () => {
     for (const toolName of ALWAYS_VISIBLE_TOOL_NAMES) {
       expect(CORE_TOOL_NAMES.has(toolName), `${toolName} must stay core`).toBe(true);

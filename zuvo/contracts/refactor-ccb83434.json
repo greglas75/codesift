@@ -1,0 +1,72 @@
+{
+  "version": 3,
+  "file": "src/register-tool-groups/analysis.ts",
+  "type": "GOD_CLASS",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "commits": ["2e69810"],
+  "queue_file": null,
+  "queue_entry": "register-tool-groups/analysis.ts: cross-repo, review, and workspace groups",
+  "pre_refactor_sha": "0397dda0a2f48b1fee7c79433f509242134c4581",
+  "scope_fence": [
+    "src/register-tool-groups/analysis.ts",
+    "src/register-tool-groups/analysis/cross-repo.ts",
+    "src/register-tool-groups/analysis/review.ts",
+    "src/register-tool-groups/analysis/workspace.ts",
+    "tests/tools/register-tools.test.ts",
+    "zuvo/contracts/refactor-ccb83434.json"
+  ],
+  "backup_branch": "backup/refactor-register-tool-groups-analysis-2026-07-14",
+  "cq_before": {
+    "score": "11/13 applicable",
+    "critical_failures": [],
+    "other_failures": ["CQ11: 758 LOC", "CQ12: analysis/cross-repo/workspace/review/security/architecture responsibilities"]
+  },
+  "plan": {
+    "classification": "SPLIT/GOD_CLASS",
+    "facade": "Keep src/register-tool-groups/analysis.ts exporting ANALYSIS_TOOL_ENTRIES in the exact historical order.",
+    "extractions": [
+      {"unit": "cross-repo registrations", "destination": "src/register-tool-groups/analysis/cross-repo.ts"},
+      {"unit": "workspace registrations", "destination": "src/register-tool-groups/analysis/workspace.ts"},
+      {"unit": "review and audit registrations", "destination": "src/register-tool-groups/analysis/review.ts"}
+    ],
+    "test_strategy": "Pin the exact 31-name ANALYSIS_TOOL_ENTRIES order before moving definitions, then run registration, review-diff, workspace, docs, full tests and build."
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/register-tools.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 3,
+    "units_covered": 0,
+    "uncovered_units": ["cross-repo", "review", "workspace"]
+  },
+  "test_audit_after": {
+    "test_file": "tests/tools/register-tools.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 3,
+    "units_covered": 3,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "green:0397dda:3u:tests/tools/register-tools.test.ts:94 tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "4findings:preserved",
+    "regression_red": "",
+    "findings_disposition": "preserved: four pre-existing observations concerned verbatim-moved or untouched behavior (numeric bounds, explicit false propagation, output sanitization, list normalization); no regression or move-created defect"
+  },
+  "cq_after": {"score": "13/13 applicable", "critical_failures": []},
+  "documentation": "[DOC: N/A -- internal-only refactor; public catalog and facade preserved]",
+  "progress": [
+    {"stage": "PHASE-0", "status": "bootstrapped", "result": "TypeScript/Vitest; CodeSift indexed; external gate unavailable"},
+    {"stage": "PHASE-1", "status": "baseline-green", "result": "116 targeted tests across registration/review/workspace/docs"},
+    {"stage": "PHASE-2", "status": "characterization-locked", "result": "Exact 31-name ANALYSIS_TOOL_ENTRIES order passed on pre-refactor 0397dda; 94 tests"},
+    {"stage": "PHASE-3", "status": "implementation-green", "result": "Facade 500 LOC; domain modules 79-105 LOC; 117 targeted tests, lint and build passed"},
+    {"stage": "PHASE-3", "status": "audited", "result": "CodeSift CQ8/CQ11/CQ13/CQ14/CQ17 clean; independent CQ auditor PASS; adversarial 4 preserved pre-existing observations"},
+    {"stage": "PHASE-3", "status": "full-suite-degraded", "result": "Full suite completed broad run but Vitest process remained open; isolated known tests/tools/journal/llm-client.test.ts passed 20/20"},
+    {"stage": "PHASE-4", "status": "complete", "result": "Pure refactor committed as 2e69810; impact analysis found expected catalog/test consumers and no broken facade references"}
+  ]
+}

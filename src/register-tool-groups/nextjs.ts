@@ -1,5 +1,5 @@
 import { z, lazySchema, type ToolDefinitionEntry, type ToolCategory } from "./shared.js";
-import { nextjsRouteMap, nextjsMetadataAudit, frameworkAudit, formatNextjsRouteMap, formatNextjsMetadataAudit, formatFrameworkAudit, type AuditDimension } from "./deps.js";
+import { nextjsRouteMap, nextjsMetadataAudit, frameworkAudit, dispatchFormatter, type AuditDimension } from "./deps.js";
 
 export const NEXTJS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Next.js framework tools ---
@@ -22,7 +22,7 @@ export const NEXTJS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.include_metadata != null) opts.include_metadata = args.include_metadata as boolean;
       if (args.max_routes != null) opts.max_routes = args.max_routes as number;
       const result = await nextjsRouteMap(args.repo as string ?? "", opts);
-      return formatNextjsRouteMap(result);
+      return dispatchFormatter("nextjs_route_map", result);
     },
   } },
   { order: 4580, definition: {
@@ -40,7 +40,7 @@ export const NEXTJS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.workspace != null) opts.workspace = args.workspace as string;
       if (args.max_routes != null) opts.max_routes = args.max_routes as number;
       const result = await nextjsMetadataAudit(args.repo as string ?? "", opts);
-      return formatNextjsMetadataAudit(result);
+      return dispatchFormatter("nextjs_metadata_audit", result);
     },
   } },
   { order: 4598, definition: {
@@ -62,7 +62,7 @@ export const NEXTJS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.mode != null) opts.mode = args.mode as "full" | "priority";
       if (args.priority_limit != null) opts.priority_limit = args.priority_limit as number;
       const result = await frameworkAudit(args.repo as string ?? "", opts);
-      return formatFrameworkAudit(result);
+      return dispatchFormatter("framework_audit", result);
     },
   } },
 ];

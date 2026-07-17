@@ -24,8 +24,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopAllWatchersForTesting();
-  if (monoRoot) await rm(monoRoot, { recursive: true, force: true });
-  if (tmpHome) await rm(tmpHome, { recursive: true, force: true });
+  if (monoRoot) await rm(monoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (tmpHome) await rm(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   delete process.env.CODESIFT_DATA_DIR;
   resetConfigCache();
 });

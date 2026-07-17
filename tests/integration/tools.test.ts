@@ -1314,9 +1314,14 @@ describe("analyze_hotspots", () => {
     // First index it in a temp dir
     await mkdir(join(fixtureDir, "src"), { recursive: true });
     await writeFile(join(fixtureDir, "src", "index.ts"), `export const x = 1;\n`);
-    // Init a git repo
+    // Init a git repo. Set an identity on the fixture repo — a fresh CI runner
+    // has no global user.email/user.name, so `git commit` aborts with "Author
+    // identity unknown" and the test only passes on a dev box that happens to
+    // have one configured. Same convention as index-repo/ast-query/journal-e2e.
     const { execFileSync } = await import("node:child_process");
     execFileSync("git", ["init"], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: fixtureDir, stdio: "pipe" });
     execFileSync("git", ["add", "."], { cwd: fixtureDir, stdio: "pipe" });
     execFileSync("git", ["commit", "-m", "init", "--no-gpg-sign"], { cwd: fixtureDir, stdio: "pipe" });
 

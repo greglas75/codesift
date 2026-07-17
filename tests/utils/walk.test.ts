@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { walkDirectory } from "../../src/utils/walk.js";
+import type { WalkOptions } from "../../src/utils/walk.js";
 
 let tmpDir: string;
 
@@ -55,6 +56,18 @@ describe.skipIf(process.platform === "win32")("walkDirectory symlinks", () => {
     const result = await walkDirectory(tmpDir, { followSymlinks: true, relative: true });
     expect(result).toContain("real.ts");
     // Should not throw
+  });
+});
+
+describe("walkDirectory runtime option normalization", () => {
+  it("treats null options like omitted options", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "codesift-walk-null-options-"));
+    const filePath = join(tmpDir, "file.ts");
+    await writeFile(filePath, "export const value = 1;");
+
+    const files = await walkDirectory(tmpDir, null as unknown as WalkOptions);
+
+    expect(files).toEqual([filePath]);
   });
 });
 
