@@ -6,7 +6,7 @@
  */
 
 import type { CodeSymbol } from "../../types.js";
-import { makeSymbolId } from "../symbol-extractor.js";
+import { makeSymbolId } from "../symbol-utils.js";
 import { tokenizeText } from "../../search/bm25.js";
 
 const MAX_SOURCE_LENGTH = 5000;

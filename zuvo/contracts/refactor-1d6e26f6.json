@@ -1,0 +1,40 @@
+{
+  "version": 3, "file": "src/parser/extractors/sql.ts", "type": "SPLIT_FILE",
+  "mode": "full", "stage": "COMPLETE",
+  "scope_fence": [
+    "src/parser/extractors/sql.ts", "src/parser/extractors/sql-matchers.ts",
+    "src/parser/extractors/sql-boundaries.ts", "src/parser/extractors/sql-columns.ts",
+    "src/parser/extractors/sql-docstrings.ts", "src/parser/extractors/sql-jinja.ts",
+    "src/parser/extractors/sql-end-scanner.ts", "src/parser/extractors/sql-matcher-catalog.ts",
+    "src/parser/extractors/sql-offsets.ts", "src/parser/extractors/sql-parens.ts",
+    "src/parser/extractors/sql-symbols.ts", "tests/parser/extractors/sql-boundaries.test.ts",
+    "zuvo/contracts/refactor-1d6e26f6.json"
+  ],
+  "backup_branch": "backup/refactor-sql-extractor-2026-07-10",
+  "plan": {
+    "summary": "Split SQL extraction into matcher, boundary scanner, column formatter, docstring, and Jinja modules while preserving the facade.",
+    "extractions": [
+      { "unit": "DDL matcher registry", "destination": "sql-matchers.ts" },
+      { "unit": "construct boundary scanner", "destination": "sql-boundaries.ts" },
+      { "unit": "column/signature extraction", "destination": "sql-columns.ts" },
+      { "unit": "SQL docstrings", "destination": "sql-docstrings.ts" },
+      { "unit": "Jinja stripping", "destination": "sql-jinja.ts" }
+    ]
+  },
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {
+    "test_file": "sql.test.ts + sql-edge-cases.test.ts + sql-reference.test.ts",
+    "q7": 1, "q11": 1, "q13": 1, "units_total": 5, "units_covered": 5,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "existing:3 SQL extractor suites:green:8ebe14b:28 tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "4findings:preserved",
+    "findings_disposition": "Fixed CQ11, restored the exact table-signature constraint matcher, and corrected the single-line -1 boundary with a red/green regression test. Final adversarial findings (BEGIN/END simplification, one-line field locations, matcher capture convention, malformed-DDL consumed fallback) are verified pre-existing behavior at 8ebe14b and preserved by this refactor.",
+    "regression_red": "red@b19fc52:green@working-tree:tests/parser/extractors/sql-boundaries.test.ts",
+    "latest": { "baseline": "green: 28 tests; TypeScript green", "focused": "green: 29 tests", "typecheck": "green", "build": "green", "blind_audit": "clean:strict", "adversarial": "4findings:preserved" }
+  },
+  "cq_after": { "score": "18/18", "critical_failures": [] },
+  "commits": ["b19fc52", "be9973b"]
+}

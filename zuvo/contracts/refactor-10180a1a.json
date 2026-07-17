@@ -1,0 +1,68 @@
+{
+  "version": 3,
+  "file": "src/tools/yii3-migration-tools.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "scope_fence": [
+    "src/tools/yii3-migration-tools.ts",
+    "src/tools/yii3-migration-types.ts",
+    "src/tools/yii3-migration-scanner.ts",
+    "src/tools/yii3-migration-report.ts",
+    "src/tools/yii3-migration-categories.ts",
+    "src/tools/yii3-migration-categories-runtime.ts",
+    "src/tools/yii3-migration-categories-application.ts",
+    "src/tools/yii3-migration-categories-model-view.ts",
+    "src/tools/yii3-migration-categories-infrastructure.ts",
+    "tests/tools/yii3-migration-audit.test.ts",
+    "tests/tools/__snapshots__/yii3-migration-audit.test.ts.snap",
+    "zuvo/contracts/refactor-10180a1a.json"
+  ],
+  "backup_branch": "backup/refactor-yii3-migrations-2026-07-10",
+  "plan": {
+    "summary": "Extract the public DTOs and static migration rule catalog while preserving yii3-migration-tools.ts as the public facade and audit orchestrator.",
+    "extractions": [
+      { "unit": "public migration audit types", "destination": "src/tools/yii3-migration-types.ts" },
+      { "unit": "21-category catalog and effort tariff", "destination": "src/tools/yii3-migration-categories.ts" }
+      ,{ "unit": "PHP source scan and regex hit collection", "destination": "src/tools/yii3-migration-scanner.ts" }
+      ,{ "unit": "report aggregation and decision signal", "destination": "src/tools/yii3-migration-report.ts" }
+    ]
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/yii3-migration-audit.test.ts",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 4,
+    "units_covered": 4,
+    "uncovered_units": [],
+    "added_characterization": "Exact inline snapshot of all detected category metadata/counts plus aggregates, blockers, effort, decision signal, and Composer metadata."
+  },
+  "prove": {
+    "characterization": "green:8ebe14b:4u:tests/tools/yii3-migration-audit.test.ts",
+    "blind_audit": "clean:strict",
+    "adversarial": "clean after remediation: final security pass reported NO ISSUES FOUND",
+    "regression_red": "red@3c584c1:green@working-tree:tests/tools/yii3-migration-audit.test.ts",
+    "findings_disposition": "Fixed indexed path disclosure: lexical traversal, symlink/parent-symlink races, inode swaps, and hard links are rejected before content is processed.",
+    "latest": {
+      "baseline": "green before refactor: 20 tests passed; 1 characterization snapshot written",
+      "focused": "green after refactor: 20 tests passed",
+      "typecheck": "green: npm run lint",
+      "build": "green: npm run build",
+      "blind_audit": "clean:strict",
+      "adversarial": "final security pass clean after repository-boundary remediation",
+      "focused_after_fix": "green: 21 tests passed",
+      "typecheck_after_fix": "green: npm run lint",
+      "build_after_fix": "green: npm run build"
+    }
+  },
+  "progress": [
+    {
+      "stage": "PHASE-2",
+      "status": "characterization-green",
+      "command": "npm test -- --run tests/tools/yii3-migration-audit.test.ts -u",
+      "result": "20 tests passed on pre-refactor commit 8ebe14b"
+    }
+  ]
+}

@@ -217,6 +217,13 @@ async function createIndexedFixture(files: Record<string, string>): Promise<stri
 // ---------------------------------------------------------------------------
 
 describe("matchPath", () => {
+  it("matches required and optional catch-all tails", () => {
+    expect(matchPath("/docs/[...slug]", "/docs/a/b")).toBe(true);
+    expect(matchPath("/docs/[[...slug]]", "/docs")).toBe(true);
+    expect(matchPath("/docs/[[...slug]]", "/docs/a/b")).toBe(true);
+    expect(matchPath("/docs/[...slug]", "/docs")).toBe(false);
+  });
+
   it("matches static paths", () => {
     expect(matchPath("/blog/hello", "/blog/hello")).toBe(true);
   });
