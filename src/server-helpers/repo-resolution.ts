@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { join, basename, sep } from "node:path";
+import { join, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 // ---------------------------------------------------------------------------
 // Auto-resolve repo from CWD — eliminates mandatory list_repos on session start
@@ -23,14 +23,19 @@ const registryCache = new Map<string, { mtimeMs: number; entries: RegistryRepoMe
 /** Read registry synchronously, cached by mtime to avoid disk hits in the hot path. */
 export function loadRegistrySync(registryPath: string = REGISTRY_PATH): RegistryRepoMeta[] {
   try {
-    const st = statSync(registryPath);
-    const cached = registryCache.get(registryPath);
+    // Key the cache on the resolved path. The default is already absolute, so
+    // this changes nothing for production callers — it stops a relative path
+    // ("registry.json") from keying two different physical files to one entry
+    // once the process chdir's, which would serve repo A's registry for repo B.
+    const key = resolve(registryPath);
+    const st = statSync(key);
+    const cached = registryCache.get(key);
     if (cached?.mtimeMs === st.mtimeMs) {
       return cached.entries;
     }
-    const parsed = JSON.parse(readFileSync(registryPath, "utf-8")) as { repos?: Record<string, RegistryRepoMeta> };
+    const parsed = JSON.parse(readFileSync(key, "utf-8")) as { repos?: Record<string, RegistryRepoMeta> };
     const entries = Object.values(parsed.repos ?? {});
-    registryCache.set(registryPath, { mtimeMs: st.mtimeMs, entries });
+    registryCache.set(key, { mtimeMs: st.mtimeMs, entries });
     return entries;
   } catch {
     return [];

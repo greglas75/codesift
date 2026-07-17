@@ -27,9 +27,23 @@ export async function readToolEmbeddingCache(path: string): Promise<CachedToolEm
       return null;
     }
     const embeddings = record["embeddings"] as Record<string, unknown>;
-    if (Object.values(embeddings).some(
-      (value) => !Array.isArray(value) || value.some((entry) => !Number.isFinite(entry)),
-    )) return null;
+    const vectors = Object.values(embeddings);
+    // A cache with no vectors at all is a half-written file, not a valid empty
+    // catalog — the fingerprint it carries was computed from real tool defs.
+    if (vectors.length === 0) return null;
+    let dimension: number | null = null;
+    for (const value of vectors) {
+      // `[].some()` is vacuously false, so an empty vector slips through a
+      // bare some()-check — it has to be rejected on length explicitly.
+      if (!Array.isArray(value) || value.length === 0) return null;
+      if (value.some((entry) => !Number.isFinite(entry))) return null;
+      // Every vector comes from one provider+model, so a dimension mismatch
+      // means the file is corrupt or was written across a provider switch.
+      // Left unchecked, cosine() returns 0 for the odd ones out and those
+      // tools silently vanish from semantic ranking with no error.
+      dimension ??= value.length;
+      if (value.length !== dimension) return null;
+    }
     return parsed as CachedToolEmbeddings;
   } catch {
     return null;

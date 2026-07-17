@@ -424,6 +424,59 @@ describe("getToolEmbeddings", () => {
     }
   });
 
+  // The shapes above are the ones a bare `.some(...)` check already caught.
+  // These three slipped through it: `[].some()` is vacuously false, so an empty
+  // vector passed the very check meant to reject it; `Object.values({}).some()`
+  // likewise; and nothing compared vectors against each other. Each one made
+  // its tool silently drop out of semantic ranking with no error.
+  it("rejects a cache holding an empty vector", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: { tool: [] } }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cache with no vectors at all", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: {} }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cache whose vectors disagree on dimension", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ fingerprint: "valid", embeddings: { a: [1, 2], b: [1, 2, 3] } }),
+      );
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("still accepts a well-formed cache", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      const cache = { fingerprint: "valid", embeddings: { a: [1, 2], b: [3, 4] } };
+      await writeFile(path, JSON.stringify(cache));
+      await expect(readToolEmbeddingCache(path)).resolves.toEqual(cache);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("treats non-finite embedding values as zero similarity", () => {
     expect(cosine([1, Number.POSITIVE_INFINITY], [1, 2])).toBe(0);
     expect(cosine([1, 2], [1, Number.NaN])).toBe(0);
