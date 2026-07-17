@@ -92,6 +92,32 @@ export interface ToolDefinition {
    * no .py files exist. Checked at server startup against process.cwd().
    */
   requiresLanguage?: "python" | "php" | "kotlin";
+  /**
+   * Opt-in response memoization. When true the bind site wraps the handler in
+   * an index+git-version-aware LRU cache (see registerToolDefinition): identical
+   * calls against the same repo are served without re-running the handler, and
+   * the served response carries a `⚡ cached` marker.
+   *
+   * The cache key folds in the repo's on-disk index version AND its git-dir state
+   * (HEAD / index / reflog mtimes), both recomputed fresh on every call (statSync
+   * only, no subprocess), so an index change, commit, or branch switch invalidates
+   * the entry IMMEDIATELY — there is no TTL / staleness window.
+   *
+   * Degraded contract: if the repo's index version cannot be observed (repo not in
+   * the registry, registry or index file unreadable) the call is NOT cached at all
+   * — the handler runs every time. An entry keyed without a version component could
+   * never be invalidated, so "unknown version" means "do not memoize", never "cache
+   * forever".
+   *
+   * Only set on deterministic, expensive-to-recompute analysis tools.
+   */
+  cacheable?: boolean;
+  /**
+   * Per-tool client-facing timeout budget in milliseconds. Overrides the
+   * universal default (env CODESIFT_TOOL_TIMEOUT_MS, else 90s). Ignored for
+   * the timeout-exempt long-op allowlist (index_folder/index_file/…).
+   */
+  timeoutMs?: number;
 }
 
 export interface ToolDefinitionEntry {
