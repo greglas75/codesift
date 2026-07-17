@@ -50,7 +50,7 @@ jobs:
       # cache them so we don't re-npm-install every run. Keyed on the script so a
       # grammar-set change busts the cache.
       - name: Cache tree-sitter WASM grammars
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: src/parser/languages
           key: wasm-${{ runner.os }}-${{ hashFiles('scripts/download-wasm.ts') }}
