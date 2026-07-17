@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { wrapTool, resetSessionState, registerShortener, resetShorteningRegistry } from "../../src/server-helpers.js";
+import { wrapTool, resetSessionState, registerShortener, resetShorteningRegistry, resolveRepoFromCwd } from "../../src/server-helpers.js";
 
 let tmpDir: string;
 
@@ -45,6 +45,32 @@ describe("formatResponse behavior (via wrapTool)", () => {
     await wrapTool("list_repos", {}, fn)();
     // list_repos is a SESSION_PERMANENT_TOOLS entry — second call should be cached
     expect(callCount).toBe(1);
+  });
+
+  it("coalesces identical in-flight calls and marks the follower", async () => {
+    let callCount = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fn = async () => { callCount++; await gate; return "shared"; };
+
+    const first = wrapTool("test_tool", { repo: "local/test", query: "same" }, fn)();
+    const second = wrapTool("test_tool", { repo: "local/test", query: "same" }, fn)();
+    release();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(callCount).toBe(1);
+    expect(firstResult.content[0].text).toContain("shared");
+    expect(secondResult.content[0].text).toContain("deduped");
+  });
+
+  it("injects a fallback repo without replacing an explicit repo", async () => {
+    const implicitArgs: Record<string, unknown> = {};
+    await wrapTool("test_tool_with_repo", implicitArgs, async () => "ok")();
+    expect(implicitArgs["repo"]).toBe(resolveRepoFromCwd(process.cwd()));
+
+    const explicitArgs: Record<string, unknown> = { repo: "local/explicit" };
+    await wrapTool("test_tool_with_repo", explicitArgs, async () => "ok")();
+    expect(explicitArgs["repo"]).toBe("local/explicit");
   });
 });
 
