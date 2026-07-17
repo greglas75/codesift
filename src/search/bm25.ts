@@ -1,4 +1,4 @@
-import { tokenizeIdentifier } from "../parser/symbol-extractor.js";
+import { tokenizeIdentifier } from "../parser/symbol-utils.js";
 import { isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, SearchResult } from "../types.js";
 

@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "file": "src/search/bm25.ts",
+  "type": "BREAK_CIRCULAR",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "scope_fence": ["src/search/bm25.ts", "zuvo/contracts/refactor-87ca4add.json"],
+  "backup_branch": "backup/refactor-route-extractor-cycles-2026-07-10",
+  "plan": {
+    "summary": "Redirect BM25 identifier tokenization to the dependency-leaf symbol-utils module, removing the remaining conversation pipeline SCC without registry injection.",
+    "extractions": [{ "unit": "tokenizeIdentifier dependency", "destination": "src/parser/symbol-utils.ts" }]
+  },
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {
+    "test_file": "BM25 + conversation extractor/pipeline + symbol extractor suites",
+    "q7": 1, "q11": 1, "q13": 1,
+    "units_total": 1, "units_covered": 1, "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "existing:4 focused suites:green:75851d0",
+    "blind_audit": "clean:strict",
+    "adversarial": "clean",
+    "findings_disposition": "No findings. Registry injection was unnecessary; the dependency-leaf import removes the only remaining runtime SCC.",
+    "latest": {
+      "baseline": "green: 4 files / 58 tests; TypeScript green",
+      "focused": "green: 4 files / 58 tests",
+      "typecheck": "green",
+      "build": "green",
+      "cycle_verification": "symbol-extractor -> conversation -> bm25 -> symbol-utils; no return edge",
+      "blind_audit": "clean:strict",
+      "adversarial": "NO ISSUES FOUND"
+    }
+  }
+}
