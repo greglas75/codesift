@@ -686,6 +686,37 @@ describe("context_tools", () => {
       );
       expect(hasPaymentRelated).toBe(true);
     });
+
+    it("returns compact signatures for L1", async () => {
+      const repo = await indexFixture();
+      const result = await assembleContext(repo, "user", 5000, "L1");
+
+      expect(result.level).toBe("L1");
+      expect(result.compact_symbols?.length).toBeGreaterThan(0);
+      expect(result.symbols).toBeUndefined();
+      expect(result.compact_symbols?.every((symbol) => !("source" in symbol))).toBe(true);
+    });
+
+    it("returns language-enriched file summaries for L2", async () => {
+      const repo = await indexFixture();
+      const result = await assembleContext(repo, "user", 5000, "L2");
+
+      expect(result.level).toBe("L2");
+      expect(result.file_summaries?.length).toBeGreaterThan(0);
+      expect(result.file_summaries?.some((summary) => summary.language !== "unknown")).toBe(true);
+      expect(result.file_summaries?.every((summary) => summary.exports.length > 0)).toBe(true);
+    });
+
+    it("returns symbol-ranked directory overviews for L3", async () => {
+      const repo = await indexFixture();
+      const result = await assembleContext(repo, "user", 5000, "L3");
+
+      expect(result.level).toBe("L3");
+      expect(result.directory_overview?.length).toBeGreaterThan(0);
+      const counts = result.directory_overview?.map((directory) => directory.symbol_count) ?? [];
+      expect(counts).toEqual([...counts].sort((a, b) => b - a));
+      expect(result.directory_overview?.every((directory) => directory.top_files.length <= 3)).toBe(true);
+    });
   });
 });
 
