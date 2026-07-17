@@ -225,4 +225,36 @@ import Counter from "./Counter.tsx";
     expect(result.component_usages).toHaveLength(0);
     expect(result.directives).toHaveLength(0);
   });
+
+  it("preserves directive values containing a greater-than sign", () => {
+    const result = parseAstroTemplate(`---\n---\n<Widget client:media=\"(width > 600px)\" />`);
+    expect(result.islands[0].directive_value).toBe("(width > 600px)");
+  });
+
+  it("prefers the Solid framework hint for specific Solid extensions", () => {
+    const imports = new Map([["Widget", "src/components/Widget.solid.tsx"]]);
+    const result = parseAstroTemplate(`---\n---\n<Widget client:load />`, imports);
+    expect(result.islands[0].framework_hint).toBe("solid");
+  });
+
+  it("does not let comparison text hide a following island", () => {
+    const result = parseAstroTemplate(`---\n---\n1 < 2 <Widget client:load />`);
+    expect(result.islands).toHaveLength(1);
+  });
+
+  it("preserves expression-valued directives", () => {
+    const result = parseAstroTemplate(`---\n---\n<Widget client:only={framework} />`);
+    expect(result.islands[0].directive_value).toBe("{framework}");
+  });
+
+  it("does not treat directive text inside another attribute as a directive", () => {
+    const result = parseAstroTemplate(`---\n---\n<Widget data-label=\"client:load\" />`);
+    expect(result.islands).toHaveLength(0);
+    expect(result.directives).toHaveLength(0);
+  });
+
+  it("does not keep HTML void elements as island parents", () => {
+    const result = parseAstroTemplate(`---\n---\n<img><Widget client:load />`);
+    expect(result.islands[0].parent_tag).toBeUndefined();
+  });
 });

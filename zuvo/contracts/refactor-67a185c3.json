@@ -1,0 +1,16 @@
+{
+  "version":3,
+  "file":"src/server-helpers.ts",
+  "type":"SPLIT_FILE",
+  "mode":"full",
+  "stage":"COMPLETE",
+  "scope_fence":["src/server-helpers.ts","src/server-helpers/repo-resolution.ts","src/server-helpers/response-hints.ts","tests/server-helpers/format-response.test.ts"],
+  "backup_branch":"backup/refactor-server-helpers-2026-07-10",
+  "plan":{"summary":"Extract repo resolution and response hints behind the stable server-helpers facade to reduce conflict rate in central runtime glue."},
+  "test_mode":"CHARACTERIZE_GAP",
+  "test_audit_before":{"test_file":"tests/server-helpers/*.test.ts + tests/tools/response-hints.test.ts","q7":1,"q11":1,"q13":1,"units_total":3,"units_covered":3,"uncovered_units":[]},
+  "prove":{"characterization":"green:8ebe14b:3u:93tests","blind_audit":"clean:strict","adversarial":"6findings:1-remediated:others-preserved","regression_red":"red@87656a7:green@6cc4a0a:tests/server-helpers/resolve-repo.test.ts","findings_disposition":"registry-path cache bug fixed; runtime cache findings are byte-identical outside moved units; path normalization requires cross-platform contract"},
+  "progress":[{"stage":"BASELINE","status":"passed","result":"91 existing + 2 new characterization tests passed before production move"},{"stage":"VERIFY","status":"passed","result":"93 tests and tsc passed after split"},{"stage":"AUDIT","status":"passed","result":"independent CQ clean:strict; adversarial findings triaged against original source"}],
+  "cq_after":{"score":"critical gates pass","critical_failures":[]},
+  "commits":["87656a7","6cc4a0a"]
+}

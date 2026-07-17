@@ -180,4 +180,28 @@ describe("pythonAudit", () => {
     const otherGates = result.gates.filter((g) => g.name !== "circular_imports" && g.status === "ok");
     expect(otherGates.length).toBeGreaterThan(0);
   });
+
+  it("aggregates anti-patterns, unpinned dependencies, and dead code", async () => {
+    mockedGetCodeIndex.mockResolvedValue(makeIndex(["app.py"]));
+    mockedPatterns.mockResolvedValue({
+      matches: [{ file: "app.py", line: 4, message: "mutable default" }],
+      pattern: "mutable-default",
+      scanned_symbols: 1,
+    } as never);
+    mockedPyproject.mockResolvedValue({
+      dependencies: [{ name: "requests", version: "*" }, { name: "click", version: "8.1" }],
+    } as never);
+    mockedDeadCode.mockResolvedValue({ candidates: ["unused_one", "unused_two"], total: 2 } as never);
+
+    const result = await pythonAudit("test", {
+      checks: ["anti_patterns", "dependencies", "dead_code"],
+    });
+
+    expect(result.findings.anti_patterns).toBe(11);
+    expect(result.findings.unpinned_deps).toBe(1);
+    expect(result.findings.dead_code).toBe(2);
+    expect(result.summary.medium).toBe(11);
+    expect(result.summary.low).toBe(3);
+    expect(result.summary.top_risks).toContain("11 Python anti-pattern matches");
+  });
 });

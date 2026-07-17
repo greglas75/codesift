@@ -1,0 +1,21 @@
+{
+  "version":3,
+  "file":"src/tools/context-tools.ts",
+  "type":"SPLIT_FILE",
+  "mode":"full",
+  "stage":"COMPLETE",
+  "scope_fence":["src/tools/context-tools.ts","src/tools/context-levels/types.ts","src/tools/context-levels/shared.ts","src/tools/context-levels/l0.ts","src/tools/context-levels/l1.ts","src/tools/context-levels/l2.ts","src/tools/context-levels/l3.ts","tests/integration/tools.test.ts","tests/tools/context-levels.test.ts"],
+  "backup_branch":"backup/refactor-context-tools-2026-07-10",
+  "plan":{"summary":"Extract assemble_context L0-L3 result construction into per-level modules while preserving context-tools API."},
+  "test_mode":"CHARACTERIZE_GAP",
+  "test_audit_before":{"test_file":"tests/integration/tools.test.ts","q7":1,"q11":1,"q13":1,"units_total":4,"units_covered":4,"uncovered_units":[]},
+  "prove":{"characterization":"green:8ebe14b:4u:tests/integration/tools.test.ts:87tests","blind_audit":"clean:strict","adversarial":"3findings:preserved","regression_red":"not_run","findings_disposition":"preserved semantics: L0 budgets source by documented contract; indexed paths are normalized POSIX; L2 break-on-first-overflow is characterized behavior"},
+  "progress":[
+    {"stage":"BASELINE","status":"passed","result":"87 tests including new L1-L3 characterization passed on pre-refactor 8ebe14b"},
+    {"stage":"VERIFY","status":"passed","result":"90 tests, tsc, and build passed"},
+    {"stage":"CQ_AUDIT","status":"passed","result":"clean:strict after exact per-level tests were staged"},
+    {"stage":"ADVERSARIAL","status":"passed-preserved","result":"three behavior-change suggestions reviewed; all describe intentional pre-existing contracts, not extraction regressions"}
+  ],
+  "cq_after":{"score":"29/29","critical_failures":[]},
+  "commits":[]
+}

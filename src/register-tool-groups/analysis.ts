@@ -1,5 +1,8 @@
-import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, formatAuditScan, type ToolDefinitionEntry, type ToolCategory } from "./shared.js";
-import { findDeadCode, analyzeComplexity, findClones, analyzeHotspots, crossRepoSearchSymbols, crossRepoFindReferences, searchPatterns, listPatterns, generateReport, scanSecrets, frequencyAnalysis, reviewDiff, auditScan, testImpactAnalysis, dependencyAudit, migrationLint, analyzePrismaSchema, findPerfHotspots, fanInFanOut, coChangeAnalysis, architectureSummary, nestAudit, explainQuery, formatSearchPatterns, formatDeadCode, formatComplexity, formatClones, formatHotspots, formatSecrets, formatReviewDiff, formatPerfHotspots, formatFanInFanOut, formatCoChange, formatArchitectureSummary, type AuditScanOptions, type SecretSeverity, type SymbolKind } from "./deps.js";
+import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type ToolDefinitionEntry } from "./shared.js";
+import { findDeadCode, analyzeComplexity, findClones, analyzeHotspots, searchPatterns, listPatterns, generateReport, frequencyAnalysis, testImpactAnalysis, dependencyAudit, migrationLint, analyzePrismaSchema, findPerfHotspots, fanInFanOut, coChangeAnalysis, architectureSummary, nestAudit, explainQuery, dispatchFormatter } from "./deps.js";
+import { CROSS_REPO_CONTRACT_TOOL_ENTRIES, CROSS_REPO_TOOL_ENTRIES } from "./analysis/cross-repo.js";
+import { REVIEW_TOOL_ENTRIES } from "./analysis/review.js";
+import { WORKSPACE_TOOL_ENTRIES } from "./analysis/workspace.js";
 
 export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Analysis ---
@@ -19,7 +22,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         file_pattern: args.file_pattern as string | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      const output = formatDeadCode(result as never);
+      const output = dispatchFormatter("find_dead_code", result);
       const isEmpty = !result || ((result as { candidates: unknown[] }).candidates?.length ?? 0) === 0;
       const hint = await checkTextStubHint(args.repo as string, "find_dead_code", isEmpty);
       return hint ? hint + output : output;
@@ -72,7 +75,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         min_complexity: args.min_complexity as number | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      const output = formatComplexity(result as never);
+      const output = dispatchFormatter("analyze_complexity", result);
       const isEmpty = !result || ((result as { functions: unknown[] }).functions?.length ?? 0) === 0;
       const hint = await checkTextStubHint(args.repo as string, "analyze_complexity", isEmpty);
       return hint ? hint + output : output;
@@ -98,7 +101,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         min_lines: args.min_lines as number | undefined,
         include_tests: args.include_tests as boolean | undefined,
       });
-      return formatClones(result as never);
+      return dispatchFormatter("find_clones", result);
     },
   } },
   { order: 2219, definition: {
@@ -144,44 +147,10 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         top_n: args.top_n as number | undefined,
         file_pattern: args.file_pattern as string | undefined,
       });
-      return formatHotspots(result as never);
+      return dispatchFormatter("analyze_hotspots", result);
     },
   } },
-  // --- Cross-repo ---
-  { order: 2267, definition: {
-    name: "cross_repo_search",
-    category: "cross-repo",
-    searchHint: "cross-repo search symbols across all repositories monorepo microservice",
-    description: "Search symbols across ALL indexed repositories. Useful for monorepos and microservice architectures.",
-    schema: lazySchema(() => ({
-      query: z.string().describe("Symbol search query"),
-      repo_pattern: z.string().optional().describe("Filter repos by name pattern (e.g. 'local/tgm')"),
-      kind: z.string().optional().describe("Filter by symbol kind"),
-      top_k: zNum().describe("Max results per repo (default: 10)"),
-      include_source: zBool().describe("Include source code"),
-    })),
-    handler: (args) => crossRepoSearchSymbols(args.query as string, {
-      repo_pattern: args.repo_pattern as string | undefined,
-      kind: args.kind as SymbolKind | undefined,
-      top_k: args.top_k as number | undefined,
-      include_source: args.include_source as boolean | undefined,
-    }),
-  } },
-  { order: 2286, definition: {
-    name: "cross_repo_refs",
-    category: "cross-repo",
-    searchHint: "cross-repo references symbol across all repositories",
-    description: "Find references to a symbol across ALL indexed repositories.",
-    schema: lazySchema(() => ({
-      symbol_name: z.string().describe("Symbol name to find references for"),
-      repo_pattern: z.string().optional().describe("Filter repos by name pattern"),
-      file_pattern: z.string().optional().describe("Filter files by glob pattern"),
-    })),
-    handler: (args) => crossRepoFindReferences(args.symbol_name as string, {
-      repo_pattern: args.repo_pattern as string | undefined,
-      file_pattern: args.file_pattern as string | undefined,
-    }),
-  } },
+  ...CROSS_REPO_TOOL_ENTRIES,
   // --- Patterns ---
   { order: 2303, definition: {
     name: "search_patterns",
@@ -201,7 +170,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         include_tests: args.include_tests as boolean | undefined,
         max_results: args.max_results as number | undefined,
       });
-      return formatSearchPatterns(result as never);
+      return dispatchFormatter("search_patterns", result);
     },
   } },
   { order: 2324, definition: {
@@ -223,166 +192,8 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: (args) => generateReport(args.repo as string),
   } },
-  // --- Monorepo Workspaces (Tasks 8-11 of monorepo workspace intelligence plan) ---
-  { order: 2452, definition: {
-    name: "list_workspaces",
-    category: "analysis",
-    searchHint: "monorepo workspace list packages turbo pnpm yarn npm",
-    description: "List workspace packages for a JS/TS monorepo (Turbo / pnpm / yarn / npm / Nx). Returns shape-stable empty result on flat repos.",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-    })),
-    handler: async (args) => {
-      const { listWorkspacesHandler } = await import("../tools/workspace-tools.js");
-      return listWorkspacesHandler(args.repo ? { repo: args.repo as string } : {});
-    },
-  } },
-  { order: 2465, definition: {
-    name: "workspace_graph",
-    category: "analysis",
-    searchHint: "monorepo workspace dependency graph turbo nx mermaid dot",
-    description: "Build the workspace-to-workspace dependency DAG of a monorepo. Output formats: json (default), mermaid, dot.",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      format: z.enum(["json", "mermaid", "dot"]).optional().describe("Output format (default: json)"),
-    })),
-    handler: async (args) => {
-      const { workspaceGraphHandler } = await import("../tools/workspace-tools.js");
-      const opts: Parameters<typeof workspaceGraphHandler>[0] = {};
-      if (args.repo) opts.repo = args.repo as string;
-      if (args.format) opts.format = args.format as "json" | "mermaid" | "dot";
-      return workspaceGraphHandler(opts);
-    },
-  } },
-  { order: 2482, definition: {
-    name: "affected_workspaces",
-    category: "analysis",
-    searchHint: "monorepo affected workspaces git diff impact transitive turbo nx",
-    description: "Compute affected workspaces for a git diff. File changes -> containing workspace -> reverse-dep walk. Lockfile-only commits surface separately and never fan out.",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      since: z.string().describe("Git ref to diff against (e.g. HEAD~1, main, <sha>)"),
-      include_transitive: zBool().describe("Include transitive reverse-deps (default: true)"),
-    })),
-    handler: async (args) => {
-      const { affectedWorkspacesHandler } = await import("../tools/workspace-tools.js");
-      const opts: Parameters<typeof affectedWorkspacesHandler>[0] = {
-        since: args.since as string,
-      };
-      if (args.repo) opts.repo = args.repo as string;
-      if (args.include_transitive !== undefined) opts.include_transitive = args.include_transitive as boolean;
-      return affectedWorkspacesHandler(opts);
-    },
-  } },
-  { order: 2502, definition: {
-    name: "workspace_boundaries",
-    category: "analysis",
-    searchHint: "monorepo boundary rules workspace import violations enforce",
-    description: "Enforce workspace-level import boundaries. Walks ALL cross-workspace import edges (relative + bare/tsconfig-alias) and reports rule violations.",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      rules: z
-        .array(
-          z.object({
-            from_workspace: z.string().describe("Workspace name OR glob (e.g. 'apps/*')"),
-            cannot_import_workspaces: z.array(z.string()).describe("Names, globs, or negation entries"),
-          }),
-        )
-        .describe("Workspace boundary rules"),
-    })),
-    handler: async (args) => {
-      const { workspaceBoundariesHandler } = await import("../tools/workspace-tools.js");
-      const opts: Parameters<typeof workspaceBoundariesHandler>[0] = {
-        rules: args.rules as Array<{ from_workspace: string; cannot_import_workspaces: string[] }>,
-      };
-      if (args.repo) opts.repo = args.repo as string;
-      return workspaceBoundariesHandler(opts);
-    },
-  } },
-  // --- Security ---
-  { order: 2529, definition: {
-    name: "scan_secrets",
-    category: "security",
-    searchHint: "scan secrets API keys tokens passwords credentials security",
-    outputSchema: OutputSchemas.secrets,
-    description: "Scan for hardcoded secrets (API keys, tokens, passwords). ~1,100 rules.",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Glob pattern to filter scanned files"),
-      min_confidence: z.enum(["high", "medium", "low"]).optional().describe("Minimum confidence level (default: medium)"),
-      exclude_tests: zBool().describe("Exclude test file findings (default: true)"),
-      severity: z.enum(["critical", "high", "medium", "low"]).optional().describe("Minimum severity level"),
-    })),
-    handler: async (args) => {
-      const result = await scanSecrets(args.repo as string, {
-        file_pattern: args.file_pattern as string | undefined,
-        min_confidence: args.min_confidence as "high" | "medium" | "low" | undefined,
-        exclude_tests: args.exclude_tests as boolean | undefined,
-        severity: args.severity as SecretSeverity | undefined,
-      });
-      return formatSecrets(result as never);
-    },
-  } },
-  // --- Review diff ---
-  { order: 3487, definition: {
-    name: "review_diff",
-    category: "diff",
-    searchHint: "review diff static analysis git changes secrets breaking-changes complexity dead-code blast-radius",
-    description: "Run 9 parallel static analysis checks on a git diff: secrets, breaking changes, coupling gaps, complexity, dead-code, blast-radius, bug-patterns, test-gaps, hotspots. Returns a scored verdict (pass/warn/fail) with tiered findings.",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      since: z.string().optional().describe("Base git ref (default: HEAD~1)"),
-      until: z.string().optional().describe("Target ref. Default: HEAD. Special: WORKING, STAGED"),
-      checks: z.string().optional().describe("Comma-separated check names (default: all)"),
-      exclude_patterns: z.string().optional().describe("Comma-separated globs to exclude"),
-      token_budget: zNum().describe("Max tokens (default: 15000)"),
-      max_files: zNum().describe("Warn above N files (default: 50)"),
-      check_timeout_ms: zNum().describe("Per-check timeout ms (default: 8000)"),
-    })),
-    handler: async (args) => {
-      const checksArr = args.checks
-        ? (args.checks as string).split(",").map((c) => c.trim()).filter(Boolean)
-        : undefined;
-      const excludeArr = args.exclude_patterns
-        ? (args.exclude_patterns as string).split(",").map((p) => p.trim()).filter(Boolean)
-        : undefined;
-      const opts: import("../tools/review-diff-tools.js").ReviewDiffOptions = {
-        repo: args.repo as string,
-      };
-      if (args.since != null) opts.since = args.since as string;
-      if (args.until != null) opts.until = args.until as string;
-      if (checksArr != null) opts.checks = checksArr.join(",");
-      if (excludeArr != null) opts.exclude_patterns = excludeArr;
-      if (args.token_budget != null) opts.token_budget = args.token_budget as number;
-      if (args.max_files != null) opts.max_files = args.max_files as number;
-      if (args.check_timeout_ms != null) opts.check_timeout_ms = args.check_timeout_ms as number;
-      const result = await reviewDiff(args.repo as string, opts);
-      return formatReviewDiff(result);
-    },
-  } },
-  // --- Composite tools ---
-  { order: 3709, definition: {
-    name: "audit_scan",
-    cacheable: true,
-    category: "analysis",
-    searchHint: "audit scan code quality CQ gates dead code clones complexity patterns",
-    description: "Run 5 analysis tools in parallel, return findings keyed by CQ gate. One call replaces sequential find_dead_code + search_patterns + find_clones + analyze_complexity + analyze_hotspots. Returns: CQ8 (empty catch), CQ11 (complexity), CQ13 (dead code), CQ14 (clones), CQ17 (perf anti-patterns).",
-    schema: lazySchema(() => ({
-      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_pattern: z.string().optional().describe("Filter to files matching this path substring"),
-      include_tests: zBool().describe("Include test files (default: false)"),
-      checks: z.string().optional().describe("Comma-separated CQ gates to check (default: all). E.g. 'CQ8,CQ11,CQ14'"),
-    })),
-    handler: async (args) => {
-      const checks = args.checks ? (args.checks as string).split(",").map(s => s.trim()) : undefined;
-      const opts: AuditScanOptions = {};
-      if (args.file_pattern) opts.file_pattern = args.file_pattern as string;
-      if (args.include_tests) opts.include_tests = args.include_tests as boolean;
-      if (checks) opts.checks = checks;
-      const result = await auditScan(args.repo as string, opts);
-      return formatAuditScan(result);
-    },
-  } },
+  ...WORKSPACE_TOOL_ENTRIES,
+  ...REVIEW_TOOL_ENTRIES,
   { order: 3781, definition: {
     name: "find_perf_hotspots",
     category: "analysis",
@@ -405,7 +216,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.include_tests != null) opts!.include_tests = args.include_tests as boolean;
       if (args.max_results != null) opts!.max_results = args.max_results as number;
       const result = await findPerfHotspots(args.repo as string, opts);
-      return formatPerfHotspots(result);
+      return dispatchFormatter("find_perf_hotspots", result);
     },
   } },
   { order: 3806, definition: {
@@ -428,7 +239,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.min_fan_in != null) opts!.min_fan_in = args.min_fan_in as number;
       if (args.min_fan_out != null) opts!.min_fan_out = args.min_fan_out as number;
       const result = await fanInFanOut(args.repo as string, opts);
-      return formatFanInFanOut(result);
+      return dispatchFormatter("fan_in_fan_out", result);
     },
   } },
   { order: 3828, definition: {
@@ -452,7 +263,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.path != null) opts!.path = args.path as string;
       if (args.top_n != null) opts!.top_n = args.top_n as number;
       const result = await coChangeAnalysis(args.repo as string, opts);
-      return formatCoChange(result);
+      return dispatchFormatter("co_change_analysis", result);
     },
   } },
   { order: 3852, definition: {
@@ -473,7 +284,7 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (args.output_format != null) opts!.output_format = args.output_format as "text" | "mermaid";
       if (args.token_budget != null) opts!.token_budget = args.token_budget as number;
       const result = await architectureSummary(args.repo as string, opts);
-      return formatArchitectureSummary(result);
+      return dispatchFormatter("architecture_summary", result);
     },
   } },
   { order: 3872, definition: {
@@ -507,7 +318,6 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       return parts.join("\n");
     },
   } },
-  // --- NestJS analysis tools (sub-tools absorbed into nest_audit) ---
   { order: 3904, definition: {
     name: "nest_audit",
     cacheable: true,
@@ -677,7 +487,6 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         parts.push(`\n─── Warnings (${result.warnings.length}) ───`);
         for (const w of result.warnings.slice(0, 20)) parts.push(`  ⚠ ${w}`);
       }
-      // List models with audit issues
       const auditModels = result.models.filter((m) => m.fk_columns_without_index.length > 0 || m.status_like_string_fields.length > 0);
       if (auditModels.length > 0) {
         parts.push(`\n─── Models with issues (${auditModels.length}) ───`);
@@ -691,73 +500,5 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       return parts.join("\n");
     },
   } },
-  // --- Cross-repo contract groups (F1) ---
-  { order: 4859, definition: {
-    name: "repo_group",
-    category: "architecture" as ToolCategory,
-    searchHint: "repo group multi-repo cross-repo service group create list remove register contract",
-    description: "Manage named groups of indexed repos for cross-service contract analysis. action='create' (name + repos[] required, optional description), 'list', or 'remove' (name required). Groups are stored in groups.json under the data dir.",
-    schema: lazySchema(() => ({
-      action: z.enum(["create", "list", "remove"]).describe("create | list | remove"),
-      name: z.string().optional().describe("Group name (required for create/remove)"),
-      repos: z.array(z.string()).optional().describe("Repo identifiers in the group (required for create)"),
-      description: z.string().optional().describe("Optional human description (create only)"),
-    })),
-    handler: async (args) => {
-      const { loadConfig } = await import("../config.js");
-      const reg = await import("../storage/group-registry.js");
-      const registryPath = reg.getGroupRegistryPath(loadConfig().dataDir);
-      const action = args.action as string;
-      if (action === "list") {
-        return { groups: await reg.listGroups(registryPath) };
-      }
-      if (action === "create") {
-        const name = args.name as string | undefined;
-        const repos = args.repos as string[] | undefined;
-        if (!name || !repos) return { error: "create requires name and repos[]" };
-        const input: { name: string; repos: string[]; description?: string } = { name, repos };
-        if (typeof args.description === "string") input.description = args.description;
-        // registerGroup returns void — read the persisted group back so the
-        // caller gets a non-empty confirmation (name/repos) instead of `{}`.
-        // Fail loud if the read-back misses (corruption / concurrent delete)
-        // rather than returning an empty group a caller would retry on.
-        await reg.registerGroup(registryPath, input);
-        const created = await reg.getGroup(registryPath, name);
-        if (!created) return { error: "group persisted but read-back failed" };
-        return { group: created };
-      }
-      // remove
-      const name = args.name as string | undefined;
-      if (!name) return { error: "remove requires name" };
-      return { removed: await reg.removeGroup(registryPath, name) };
-    },
-  } },
-  { order: 4899, definition: {
-    name: "match_group_contracts",
-    category: "architecture" as ToolCategory,
-    searchHint: "cross-repo contract match who calls endpoint producer consumer fetch axios downstream break group",
-    description: "Match producer HTTP endpoints to cross-repo consumer calls (fetch/axios/got) across every indexed repo in a group. Returns ContractMatch[] (exact + partial), plus warnings for unindexed/failed repos. Answers 'who calls this endpoint' across services.",
-    schema: lazySchema(() => ({
-      group: z.string().describe("Repo group name (created via repo_group)"),
-    })),
-    handler: async (args) => {
-      const { matchGroupContracts } = await import("../tools/cross-repo-contract-tools.js");
-      return matchGroupContracts(args.group as string);
-    },
-  } },
-  { order: 4912, definition: {
-    name: "find_endpoint_consumers",
-    category: "architecture" as ToolCategory,
-    searchHint: "who calls endpoint consumers downstream impact contract change break group cross-repo",
-    description: "Find every cross-repo consumer of a specific producer endpoint within a group — 'who calls GET /users/{id}'. Method is case-insensitive; path params in any style (:id, {id}, [id]) are normalised. Answers 'what breaks downstream if I change this contract'.",
-    schema: lazySchema(() => ({
-      group: z.string().describe("Repo group name"),
-      method: z.string().describe("HTTP method (GET/POST/...) — case-insensitive"),
-      path: z.string().describe("Producer path, any param style (e.g. /users/{id} or /users/:id)"),
-    })),
-    handler: async (args) => {
-      const { findEndpointConsumers } = await import("../tools/cross-repo-contract-tools.js");
-      return findEndpointConsumers(args.group as string, args.method as string, args.path as string);
-    },
-  } },
+  ...CROSS_REPO_CONTRACT_TOOL_ENTRIES,
 ];

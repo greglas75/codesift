@@ -1,0 +1,145 @@
+{
+  "version": 3,
+  "file": "src/formatters.ts",
+  "type": "GOD_CLASS",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "commits": ["5c89e773cfd33a5e5bf2fcde8c99b799bf04039d"],
+  "queue_file": null,
+  "queue_entry": "formatters.ts: split formatters by domain and centralize tool formatter dispatch",
+  "pre_refactor_sha": "4cad382ecea82e2b90d5216cd50e2cc85de7bf7e",
+  "scope_fence": [
+    "src/formatters.ts",
+    "src/formatters-core.ts",
+    "src/formatters-graph.ts",
+    "src/formatters-analysis.ts",
+    "src/formatters-nextjs.ts",
+    "src/formatter-dispatch.ts",
+    "src/register-tool-groups/deps.ts",
+    "src/register-tool-groups/core.ts",
+    "src/register-tool-groups/analysis.ts",
+    "src/register-tool-groups/nextjs.ts",
+    "src/register-tool-groups/meta.ts",
+    "tests/formatters/formatters-characterization.test.ts",
+    "tests/formatters/formatter-dispatch.test.ts",
+    "zuvo/contracts/refactor-3caa8923.json"
+  ],
+  "backup_branch": "backup/refactor-formatters-2026-07-12",
+  "cq_before": {
+    "score": "to be completed",
+    "critical_failures": [],
+    "notes": [
+      "formatters.ts is 1180 LOC with 37 exported formatter units spanning table/core output, graph/diff output, analysis reports, and Next.js reports",
+      "CodeSift complexity: formatReviewDiff CC29, formatTraceRoute CC15, formatTable CC14; hotspot score 14454 with 2 commits and 33 changed lines in 90 days",
+      "CodeSift audit_scan found CQ11 size/complexity findings but no CQ8, CQ13, CQ14, or CQ17 findings; hidden dead-code/clone/cycle tools were unavailable and will be covered by fallbacks"
+    ]
+  },
+  "plan": {
+    "classification": "GOD_CLASS/SPLIT_FILE",
+    "summary": "Split formatters.ts into domain modules and use a typed tool-name dispatch map while preserving the formatters.ts facade and all existing exports.",
+    "pre_scan": {
+      "codesift": "indexed with partial project profile",
+      "loc_before": 1180,
+      "loc_after": 55,
+      "complex_hotspots": [
+        "formatReviewDiff CC29",
+        "formatTraceRoute CC15",
+        "formatTable CC14",
+        "formatArchitectureSummary CC10",
+        "formatNextjsComponents CC10"
+      ],
+      "hotspot": "14454; 2 commits / 33 changed lines in 90 days"
+    },
+    "extractions": [
+      { "unit": "table, search, outline, repository, context, and general analysis formatters", "destination": "src/formatters-core.ts" },
+      { "unit": "call graph, route, diff, impact, knowledge map, and community formatters", "destination": "src/formatters-graph.ts" },
+      { "unit": "review, performance, coupling, and architecture formatters", "destination": "src/formatters-analysis.ts" },
+      { "unit": "Next.js component, route, metadata, security, API, boundary, data-flow, middleware, framework, and link formatters", "destination": "src/formatters-nextjs.ts" },
+      { "unit": "tool-name to formatter-function registry and dispatch helper", "destination": "src/formatter-dispatch.ts" },
+      { "unit": "stable compatibility facade and domain re-exports", "destination": "src/formatters.ts" }
+    ],
+    "dependency_impact": "formatters.ts has direct importers in register-tool-groups/deps.ts, retrieval/codebase-retrieval.ts, formatters-shortening.ts, and storage/usage-stats.ts; facade re-exports preserve these paths. Core/analysis/nextjs handlers will use the dispatch helper.",
+    "existing_reuse": "formatTable remains the shared table primitive; formatters-shortening.ts remains separate and continues importing the facade.",
+    "test_strategy": "Add pre-refactor characterization coverage for every exported formatter unit and dispatch-map key, then run existing formatter/review tests unchanged."
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/formatters/format-table.test.ts; tests/formatters/nextjs-formatter.test.ts; tests/formatters/nextjs-metadata-formatter.test.ts; tests/formatters/route-formatter.test.ts; tests/tools/review-diff-tools.test.ts",
+    "q7": 1,
+    "q11": 0,
+    "q13": 1,
+    "units_total": 37,
+    "units_covered": 10,
+    "uncovered_units": [
+      "formatSearchSymbols", "formatFileTree", "formatFileOutline", "formatSearchPatterns", "formatDeadCode", "formatRepoOutline", "formatSuggestQueries", "formatSecrets", "formatConversations", "formatRoles", "formatAssembleContext", "formatCallTree", "formatDiffOutline", "formatChangedSymbols", "formatImpactAnalysis", "formatKnowledgeMap", "formatCommunities", "formatPerfHotspots", "formatFanInFanOut", "formatCoChange", "formatArchitectureSummary", "formatNextjsAuditServerActions", "formatNextjsApiContract", "formatNextjsDataFlow", "formatNextjsMiddlewareCoverage", "formatFrameworkAudit", "formatNextjsLinkIntegrity"
+    ]
+  },
+  "test_audit_after": {
+    "test_file": "tests/formatters/formatters-characterization.test.ts; tests/formatters/formatter-dispatch.test.ts; existing formatter/review suites",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 37,
+    "units_covered": 37,
+    "uncovered_units": [],
+    "command": "npm test -- --maxWorkers=2 tests/formatters/formatters-characterization.test.ts tests/formatters/formatter-dispatch.test.ts tests/formatters/format-table.test.ts tests/formatters/nextjs-formatter.test.ts tests/formatters/nextjs-metadata-formatter.test.ts tests/formatters/route-formatter.test.ts tests/formatters/shortening.test.ts tests/tools/review-diff-tools.test.ts tests/retrieval/codebase-retrieval.test.ts tests/tools/register-tools.test.ts",
+    "result": "272 tests passed after the split; formatter facade, dispatch, retrieval, and registration compatibility covered"
+  },
+  "cq_after": {
+    "score": "9/11 applicable (81.8%)",
+    "critical_failures": [],
+    "notes": [
+      "Independent CQ auditor: facade/export compatibility 37/37, no normalized formatter-body differences, changed dispatch call sites complete, scoped formatter graph acyclic",
+      "CQ10 and CQ11 deductions are non-blocking: the generic dispatcher boundary uses data as never, and several moved formatter functions retain legacy complexity/size",
+      "Machine audit: CQ8, CQ13, CQ14, and CQ17 pass; CQ11 reports five pre-existing complexity findings in moved formatter bodies"
+    ]
+  },
+  "prove": {
+    "characterization": "green:4cad382:37u:tests/formatters/formatters-characterization.test.ts",
+    "blind_audit": "clean:degraded",
+    "adversarial": "6findings:preserved",
+    "findings_disposition": "preserved:6 moved-verbatim hardening observations; no behavior changes; one earlier provider found the same class of pre-existing formatter risks",
+    "cycle_check": "FORMATTER_CYCLES_NONE",
+    "export_parity": "37/37 runtime exports preserved"
+  },
+  "verification": {
+    "lint": "PASS",
+    "build": "PASS",
+    "focused": "PASS: 10 files / 272 tests",
+    "full_suite_initial": "WARN: 323 files passed, 1 timing failure in untouched tests/tools/event-loop-yields.test.ts; isolated rerun PASS",
+    "full_suite_rerun": "WARN: 4 unrelated integration timeouts under environment load; 320 files passed, 4833 tests passed, 10 skipped",
+    "degraded_tools": "CodeSift hidden dead-code/clone/cycle tools unavailable; machine audit plus native cycle/export checks and independent auditor used"
+  },
+  "progress": [
+    {
+      "stage": "PHASE-0",
+      "status": "bootstrapped",
+      "command": "plan_turn; index_status; analyze_project; compute-preload",
+      "result": "CodeSift indexed; project profile partial; TypeScript and Vitest confirmed from repository files; safety gate installer unavailable"
+    },
+    {
+      "stage": "PHASE-1",
+      "status": "pre-scan-completed",
+      "command": "analyze_complexity; analyze_hotspots; audit_scan; find_references",
+      "result": "37 exported units mapped; domain split and dispatch map planned; hidden niche tools require degraded fallbacks"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "characterization-green",
+      "command": "npm test -- --maxWorkers=2 formatter characterization and existing formatter/review suites",
+      "result": "7 files passed, 175 tests passed on PRE_REFACTOR_SHA=4cad382; all 37 exported formatter units exercised before production edits"
+    },
+    {
+      "stage": "PHASE-3",
+      "status": "split-green",
+      "command": "split formatter domains; add formatter-dispatch; route core/analysis/nextjs handlers through dispatch map",
+      "result": "formatters.ts reduced to 55 LOC; focused suites passed 10 files / 272 tests; npm run lint passed"
+    },
+    {
+      "stage": "PHASE-3.5",
+      "status": "reviewed-no-fix",
+      "command": "independent refactor-cq-auditor; adversarial-review --provider codex-5.3 --mode code",
+      "result": "CQ PASS with 9/11 applicable; adversarial 6 preserved findings; no fix-now items; meta conversation handlers also routed through dispatch"
+    }
+  ]
+}

@@ -1,127 +1,169 @@
 {
   "version": 3,
   "file": "src/tools/pattern-tools.ts",
-  "type": "SPLIT",
+  "type": "GOD_CLASS",
   "mode": "full",
-  "stage": "COMPLETE",
+  "stage": "PHASE-3.5",
+  "commits": [],
   "queue_file": null,
-  "queue_entry": null,
+  "queue_entry": "pattern-tools.ts + pattern-registry.ts: split catalog, execution, and language adapters",
+  "pre_refactor_sha": "02b434d7a4310d9ef29330311443aca4b0d24989",
   "scope_fence": [
     "src/tools/pattern-tools.ts",
     "src/tools/pattern-registry.ts",
-    "tests/tools/pattern-tools.test.ts",
-    "CHANGELOG.md"
+    "src/tools/patterns/types.ts",
+    "src/tools/patterns/catalog.ts",
+    "src/tools/patterns/execution.ts",
+    "src/tools/patterns/adapters/common.ts",
+    "src/tools/patterns/adapters/react.ts",
+    "src/tools/patterns/adapters/kotlin.ts",
+    "src/tools/patterns/adapters/php.ts",
+    "src/tools/patterns/adapters/nest.ts",
+    "src/tools/patterns/adapters/astro.ts",
+    "src/tools/patterns/adapters/nextjs.ts",
+    "src/tools/patterns/adapters/hono.ts",
+    "src/tools/patterns/adapters/database.ts",
+    "src/tools/patterns/adapters/python.ts",
+    "tests/tools/pattern-refactor-characterization.test.ts",
+    "zuvo/contracts/refactor-1abd2e36.json"
   ],
-  "plan": {
-    "summary": "Split the built-in pattern registry out of pattern-tools while preserving the public pattern-tools facade and search engine behavior.",
-    "pre_scan": {
-      "hotspot": "src/tools/pattern-tools.ts is the large, churny pattern catalog and search engine module.",
-      "public_contract": "Preserve BUILTIN_PATTERNS, searchPatterns, listPatterns, PatternMatch, and PatternResult from src/tools/pattern-tools.ts.",
-      "dependency_impact": "Existing imports from pattern-tools remain valid; new registry module owns the catalog and definition type."
-    },
-    "extractions": [
-      {
-        "unit": "built-in pattern registry",
-        "destination": "src/tools/pattern-registry.ts",
-        "signature": "BUILTIN_PATTERNS: Record<string, BuiltinPatternDefinition>"
-      },
-      {
-        "unit": "pattern search engine and facade",
-        "destination": "src/tools/pattern-tools.ts",
-        "signature": "searchPatterns(repo, pattern, options), listPatterns(), re-exported BUILTIN_PATTERNS"
-      }
-    ],
-    "test_strategy": "Run baseline and post-change pattern tests, importer/integration tests, lint, and build; add a registry boundary test for exact object re-export and list order."
-  },
-  "test_mode": "RUN_EXISTING_PLUS_TARGETED",
-  "progress": [
-    {
-      "stage": "BASELINE",
-      "status": "passed",
-      "command": "npm test -- tests/tools/pattern-tools.test.ts tests/tools/pattern-tools-python.test.ts tests/tools/react-conventions.test.ts",
-      "result": "3 files passed; 302 tests passed before production edit"
-    },
-    {
-      "stage": "IMPLEMENT",
-      "status": "completed",
-      "command": "mechanical extraction + apply_patch",
-      "result": "Moved BUILTIN_PATTERNS and BuiltinPatternDefinition to src/tools/pattern-registry.ts; pattern-tools imports and re-exports the registry"
-    },
-    {
-      "stage": "VERIFY",
-      "status": "passed",
-      "command": "npm test -- tests/tools/pattern-tools.test.ts tests/tools/pattern-tools-python.test.ts tests/tools/react-conventions.test.ts",
-      "result": "3 files passed; 303 tests passed after adding registry boundary coverage"
-    },
-    {
-      "stage": "VERIFY",
-      "status": "passed",
-      "command": "npm run lint",
-      "result": "tsc --noEmit passed"
-    },
-    {
-      "stage": "VERIFY",
-      "status": "passed",
-      "command": "npm run build",
-      "result": "tsc build and dist asset copy passed"
-    },
-    {
-      "stage": "VERIFY",
-      "status": "passed",
-      "command": "npm test -- tests/integration/tools.test.ts tests/integration/react-tier5-baseline.test.ts tests/tools/php-tools.test.ts tests/tools/python-audit.test.ts tests/tools/review-diff-tools.test.ts",
-      "result": "5 files passed; 207 tests passed; 1 skipped"
-    },
-    {
-      "stage": "VERIFY",
-      "status": "passed",
-      "command": "npm test -- --maxWorkers=2",
-      "result": "319 files passed; 4639 tests passed; 3 skipped"
-    },
-    {
-      "stage": "AUDIT",
-      "status": "deferred",
-      "command": "~/.codex/scripts/blind-audit-codex.sh --protocol ~/.codex/shared/includes/blind-coverage-audit.md --production src/tools/pattern-tools.ts --production src/tools/pattern-registry.ts --test tests/tools/pattern-tools.test.ts --timeout 240",
-      "result": "Strict audit returned FIX for broad pre-existing per-pattern fixture coverage gaps across the 168-entry registry; split-specific boundary coverage is present"
-    },
-    {
-      "stage": "AUDIT",
-      "status": "deferred",
-      "command": "~/.codex/scripts/adversarial-review.sh --single --mode code --files <scope>",
-      "result": "Reported pre-existing searchPatterns engine behavior risks: first-match postFilter, file-level fallback suppression, silent read skips, max_results normalization, and file_pattern substring semantics"
-    },
-    {
-      "stage": "AUDIT",
-      "status": "passed-with-known-false-positives",
-      "command": "mcp__codesift.audit_scan(file_pattern='src/tools/pattern', checks='CQ11,CQ13,CQ14,CQ17')",
-      "result": "CQ11/CQ14/CQ17 passed; CQ13 repeated local-helper false positives that tsc/tests cover"
-    }
-  ],
-  "prove": {
-    "blind_audit": "deferred: broad pre-existing registry fixture debt, not introduced by split",
-    "adversarial": "deferred: pre-existing searchPatterns engine behavior risks, not introduced by split",
-    "findings_disposition": "This task is a structural split. Behavior-changing searchPatterns fixes and full per-pattern fixture matrix are intentionally left for separate tasks."
-  },
-  "cq_after": {
-    "score": "CQ11/CQ14/CQ17 pass, CQ13 false positives",
+  "backup_branch": "backup/refactor-pattern-tools-2026-07-12",
+  "cq_before": {
+    "score": "to be completed",
     "critical_failures": [],
     "notes": [
-      "src/tools/pattern-tools.ts reduced from 1297 LOC to 322 LOC.",
-      "src/tools/pattern-registry.ts owns the 979-line static pattern catalog and BuiltinPatternDefinition.",
-      "audit_scan CQ13 reports internal helpers/types as unused despite local usage; TypeScript compilation and full tests passed."
+      "src/tools/pattern-tools.ts is 322 LOC with execution, scan filters, file/symbol matching, and public search/list APIs",
+      "src/tools/pattern-registry.ts is 979 LOC with 168 built-in patterns across common, React, Kotlin, PHP/Yii, NestJS, Astro, Next.js, Hono, DB/ORM, and Python families",
+      "CodeSift complexity max=9 and hotspot scores: pattern-tools 1153776 (12 commits/1849 changed lines), pattern-registry 1958 (1 commit/979 lines)",
+      "Machine audit reports no CQ8/CQ11/CQ14/CQ17 findings and 31 CQ13 findings for private implementation symbols; hidden dead-code/clone/cycle tools unavailable"
     ]
   },
-  "test_audit_after": {
-    "test_file": "tests/tools/pattern-tools.test.ts",
+  "plan": {
+    "classification": "GOD_CLASS/SPLIT_FILE",
+    "summary": "Keep pattern-tools.ts and pattern-registry.ts as compatibility facades; move catalog assembly, generic execution, shared types, and ten language/domain adapter registries into src/tools/patterns/.",
+    "extractions": [
+      {
+        "unit": "shared pattern definition types",
+        "destination": "src/tools/patterns/types.ts"
+      },
+      {
+        "unit": "catalog merge and stable insertion order",
+        "destination": "src/tools/patterns/catalog.ts"
+      },
+      {
+        "unit": "generic indexed symbol/file scan execution and public search/list behavior",
+        "destination": "src/tools/patterns/execution.ts"
+      },
+      {
+        "unit": "common language-agnostic patterns",
+        "destination": "src/tools/patterns/adapters/common.ts"
+      },
+      {
+        "unit": "React/TypeScript patterns",
+        "destination": "src/tools/patterns/adapters/react.ts"
+      },
+      {
+        "unit": "Kotlin, Kotest, and Compose patterns",
+        "destination": "src/tools/patterns/adapters/kotlin.ts"
+      },
+      {
+        "unit": "PHP/Yii patterns",
+        "destination": "src/tools/patterns/adapters/php.ts"
+      },
+      {
+        "unit": "NestJS patterns",
+        "destination": "src/tools/patterns/adapters/nest.ts"
+      },
+      {
+        "unit": "Astro patterns",
+        "destination": "src/tools/patterns/adapters/astro.ts"
+      },
+      {
+        "unit": "Next.js patterns",
+        "destination": "src/tools/patterns/adapters/nextjs.ts"
+      },
+      {
+        "unit": "Hono patterns",
+        "destination": "src/tools/patterns/adapters/hono.ts"
+      },
+      {
+        "unit": "DB/ORM/migration patterns",
+        "destination": "src/tools/patterns/adapters/database.ts"
+      },
+      {
+        "unit": "Python patterns",
+        "destination": "src/tools/patterns/adapters/python.ts"
+      },
+      {
+        "unit": "stable public facades",
+        "destination": "src/tools/pattern-tools.ts + src/tools/pattern-registry.ts"
+      }
+    ],
+    "dependency_impact": "Existing imports and lazy loaders target pattern-tools.ts and pattern-registry.ts. Facades preserve those paths and runtime exports; execution imports catalog directly to avoid a facade cycle. No external consumer should import adapter files.",
+    "existing_reuse": "Reuse existing source-stripper, test-file classifier, index-tools CodeIndex types, and current registry definition type; no new scan semantics.",
+    "test_strategy": "Add pre-refactor characterization for registry identity/order, all ten adapter family counts, and generic search execution; run existing pattern, integration, audit, and registration suites unchanged."
+  },
+  "test_mode": "CHARACTERIZE_GAP",
+  "test_audit_before": {
+    "test_file": "tests/tools/pattern-tools.test.ts; tests/tools/pattern-tools-python.test.ts; tests/integration/tools.test.ts; tests/integration/react-tier5-baseline.test.ts; tests/tools/php-tools.test.ts; tests/tools/python-audit.test.ts; tests/tools/review-diff-tools.test.ts; tests/tools/register-tools.test.ts",
     "q7": 1,
     "q11": 1,
     "q13": 1,
-    "units_total": 2,
-    "units_covered": 2,
+    "units_total": 12,
+    "units_covered": 12,
+    "uncovered_units": []
+  },
+  "test_audit_after": {
+    "test_file": "tests/tools/pattern-refactor-characterization.test.ts; existing pattern/integration suites",
+    "q7": 1,
+    "q11": 1,
+    "q13": 1,
+    "units_total": 12,
+    "units_covered": 12,
     "uncovered_units": [],
+    "command": "npm test -- --maxWorkers=2 tests/tools/pattern-refactor-characterization.test.ts",
+    "result": "2 tests passed on PRE_REFACTOR_SHA=02b434d; registry identity/order, 168 catalog entries, all ten adapter families, and generic execution exercised"
+  },
+  "prove": {
+    "characterization": "green:02b434d:12u:tests/tools/pattern-refactor-characterization.test.ts",
+    "blind_audit": "fix:4",
+    "adversarial": "4findings",
+    "regression_red": "not_run",
+    "findings_disposition": "planned-remediation:4 execution hardening findings; catalog ownership, comments, and full-order proof resolved"
+  },
+  "cq_after": {
+    "score": "5/5 machine checks applicable",
+    "critical_failures": [],
     "notes": [
-      "Added explicit coverage that pattern-tools re-exports the exact registry object.",
-      "Added listPatterns order/completeness coverage against Object.keys(BUILTIN_PATTERNS)."
+      "Post-audit CQ8, CQ11, CQ13, CQ14, and CQ17 pass on the split modules",
+      "Independent auditor verified facade identity, exact 168-key order, mutation compatibility, lazy-loader compatibility, and no cycles after remediation",
+      "Adversarial findings are reserved for the separate post-refactor execution hardening commit"
     ]
   },
-  "commits": []
+  "progress": [
+    {
+      "stage": "PHASE-0",
+      "status": "bootstrapped",
+      "command": "plan_turn; index_status; analyze_project; compute-preload; gate self-install",
+      "result": "CodeSift indexed; TypeScript/Vitest/npm detected; external gate installer unavailable"
+    },
+    {
+      "stage": "PHASE-1",
+      "status": "pre-scan-completed",
+      "command": "analyze_complexity; analyze_hotspots; audit_scan; find_references",
+      "result": "10 adapter families and execution/catalog boundaries identified; hidden niche tools unavailable; baseline focused suite green"
+    },
+    {
+      "stage": "PHASE-2",
+      "status": "characterization-green",
+      "command": "npm test -- --maxWorkers=2 tests/tools/pattern-refactor-characterization.test.ts",
+      "result": "2 tests passed on PRE_REFACTOR_SHA=02b434d; coverage gap closed for 12 planned units before production edits"
+    },
+    {
+      "stage": "PHASE-3.5",
+      "status": "pure-split-ready",
+      "command": "npm run lint; focused pattern suites; native cycle/export checks; independent CQ audit; adversarial review",
+      "result": "facades/catalog/execution/adapters split is green; four execution hardening findings remain for separate fix commit"
+    }
+  ]
 }

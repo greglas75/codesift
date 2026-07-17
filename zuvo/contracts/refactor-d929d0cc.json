@@ -1,0 +1,66 @@
+{
+  "version": 3,
+  "file": "src/utils/walk.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "commits": ["bcd9e88", "8d68d95"],
+  "queue_file": null,
+  "queue_entry": "utils/walk.ts: split traversal, filters, limits, and error policy",
+  "pre_refactor_sha": "aa931746c2d993d8f1c106055703ef7f2da73a20",
+  "scope_fence": [
+    "src/utils/walk.ts",
+    "src/utils/walk/types.ts",
+    "src/utils/walk/filters.ts",
+    "src/utils/walk/limits.ts",
+    "src/utils/walk/errors.ts",
+    "src/utils/walk/traversal.ts",
+    "tests/utils/walk.test.ts",
+    "tests/utils/walk-backup-exclusion.test.ts",
+    "zuvo/contracts/refactor-d929d0cc.json"
+  ],
+  "backup_branch": "backup/refactor-walk-2026-07-13",
+  "cq_before": {
+    "score": "CQ8/CQ14/CQ17 pass; CQ11 critical on walkDirectory CC43 and nested walk CC25",
+    "critical_failures": ["CQ11: walkDirectory CC43, nesting 10, 117L"],
+    "notes": ["CQ13 reported local implementation variables and unused facade helpers; public exports are consumed by callers or compatibility tests."]
+  },
+  "plan": {
+    "facade": "Keep src/utils/walk.ts as the stable public API for walkDirectory, WalkOptions, IGNORE_DIRS, toIgnorePatterns, and BACKUP_FILE_PATTERNS.",
+    "extractions": [
+      {"unit": "WalkOptions and traversal entry types", "destination": "src/utils/walk/types.ts"},
+      {"unit": "directory, backup, include, and exclude filters", "destination": "src/utils/walk/filters.ts"},
+      {"unit": "file-size and file-count limits", "destination": "src/utils/walk/limits.ts"},
+      {"unit": "filesystem error policy for directory/stat reads", "destination": "src/utils/walk/errors.ts"},
+      {"unit": "recursive traversal and symlink cycle handling", "destination": "src/utils/walk/traversal.ts"}
+    ],
+    "dependency_impact": "Direct consumers import the facade; no consumer imports internal modules.",
+    "existing_reuse": "No equivalent shared traversal core found; nextjs-audit-cache delegates to the facade and remains unchanged.",
+    "test_strategy": "Run existing 22-case walk characterization suite before and after the split, then run lint, build, and scoped adversarial review."
+  },
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {
+    "test_file": "tests/utils/walk.test.ts + tests/utils/walk-backup-exclusion.test.ts",
+    "units_total": 5,
+    "units_covered": 5,
+    "uncovered_units": []
+  },
+  "prove": {
+    "characterization": "existing:tests/utils/walk.test.ts + tests/utils/walk-backup-exclusion.test.ts:green:aa93174:22 tests",
+    "blind_audit": "clean:strict",
+    "adversarial": "1findings; fix-revalidation-clean",
+    "regression_red": "red@bcd9e88:green@targeted-24-of-24:tests/utils/walk.test.ts",
+    "findings_disposition": "fix:null-options-regression-applied; revalidation-clean"
+  },
+  "cq_after": {"score": "29/29; all active critical gates pass; max complexity CC12", "critical_failures": []},
+  "documentation": "[DOC: N/A -- internal-only refactor; public walk API and behavior preserved]",
+  "progress": [
+    {"stage": "PHASE-0", "status": "bootstrapped", "command": "plan_turn; index_status; analyze_complexity; audit_scan; backup branch", "result": "TypeScript/Vitest detected; repository indexed; backup/refactor-walk-2026-07-13 created"},
+    {"stage": "PHASE-1", "status": "characterization-green", "command": "npm test -- --maxWorkers=2 tests/utils/walk.test.ts tests/utils/walk-backup-exclusion.test.ts", "result": "2 files passed; 22 tests passed before production edits"},
+    {"stage": "PHASE-2", "status": "implemented", "command": "split facade into types, filters, limits, errors, and traversal modules", "result": "walk.ts reduced from 215 to 34 lines; stable facade exports preserved"},
+    {"stage": "PHASE-3", "status": "verification-green", "command": "focused tests; npm run lint; npm run build", "result": "22 focused tests passed; typecheck and build passed"},
+    {"stage": "PHASE-3", "status": "prove-complete-with-finding", "command": "independent CQ audit; full test suite; adversarial rotate pass 1", "result": "blind audit clean:strict; targeted 23/23; build and typecheck pass; full suite 4895 pass + 3 skip + one unrelated timeout that passed 20/20 isolated; adversarial found null-options runtime regression for separate corrective commit"},
+    {"stage": "PHASE-3.5", "status": "regression-fixed", "command": "run null-options regression red at bcd9e88; normalize options; targeted tests; lint; build; full suite; isolated flaky test; adversarial fix revalidation", "result": "regression test failed 1/24 before fix and passed 24/24 after fix; lint and build passed; full suite 4896 pass + 3 skip with the known unrelated llm-client timeout passing 20/20 isolated; adversarial revalidation returned zero findings"},
+    {"stage": "PHASE-4", "status": "complete", "command": "record refactor and corrective commit SHAs", "result": "refactor bcd9e88; fix 8d68d95; all in-fence findings resolved"}
+  ]
+}

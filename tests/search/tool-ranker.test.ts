@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { z } from "zod";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   rankTools,
@@ -17,6 +20,8 @@ import {
 // take the *type* from it and build synthetic ToolDefinition fixtures
 // locally. This keeps the tool-ranker tests hermetic and fast.
 import type { ToolDefinition } from "../../src/register-tools.js";
+import { readToolEmbeddingCache } from "../../src/search/tool-embedding-storage.js";
+import { cosine } from "../../src/search/tool-ranker-signal-math.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -232,6 +237,47 @@ describe("rankTools — structural signal", () => {
     const recs = rankTools(ctx);
     expect(recs[0]?.name).toBe("twin_bravo");
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "ignores non-finite usage value %s on unrelated tools",
+    (invalidUsage) => {
+      const twinDefs: ToolDefinition[] = [
+        makeDef("twin_alpha", "perform a shared generic action", "shared generic action"),
+        makeDef("twin_bravo", "perform a shared generic action", "shared generic action"),
+      ];
+      const ctx = makeCtx({
+        query: "perform a shared generic action",
+        toolDefs: twinDefs,
+        usageFrequency: new Map([
+          ["invalid_history", invalidUsage],
+          ["twin_alpha", 1],
+          ["twin_bravo", 100],
+        ]),
+      });
+
+      expect(rankTools(ctx)[0]?.name).toBe("twin_bravo");
+    },
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "treats non-finite usage value %s on a ranked tool as zero",
+    (invalidUsage) => {
+      const twinDefs: ToolDefinition[] = [
+        makeDef("twin_alpha", "perform a shared generic action", "shared generic action"),
+        makeDef("twin_bravo", "perform a shared generic action", "shared generic action"),
+      ];
+      const ctx = makeCtx({
+        query: "perform a shared generic action",
+        toolDefs: twinDefs,
+        usageFrequency: new Map([
+          ["twin_alpha", 1],
+          ["twin_bravo", invalidUsage],
+        ]),
+      });
+
+      expect(rankTools(ctx)[0]?.name).toBe("twin_alpha");
+    },
+  );
 });
 
 describe("rankTools — framework signal", () => {
@@ -354,6 +400,88 @@ describe("generateReasoning", () => {
 // ---------------------------------------------------------------------------
 
 describe("getToolEmbeddings", () => {
+  it("rejects a cache whose embeddings value is null", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: null }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cache entries that are not finite numeric vectors", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: { tool: "invalid" } }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+      await writeFile(path, '{"fingerprint":"valid","embeddings":{"tool":[1e999]}}');
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  // The shapes above are the ones a bare `.some(...)` check already caught.
+  // These three slipped through it: `[].some()` is vacuously false, so an empty
+  // vector passed the very check meant to reject it; `Object.values({}).some()`
+  // likewise; and nothing compared vectors against each other. Each one made
+  // its tool silently drop out of semantic ranking with no error.
+  it("rejects a cache holding an empty vector", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: { tool: [] } }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cache with no vectors at all", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(path, JSON.stringify({ fingerprint: "valid", embeddings: {} }));
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cache whose vectors disagree on dimension", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ fingerprint: "valid", embeddings: { a: [1, 2], b: [1, 2, 3] } }),
+      );
+      await expect(readToolEmbeddingCache(path)).resolves.toBeNull();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("still accepts a well-formed cache", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tool-ranker-cache-"));
+    const path = join(directory, "cache.json");
+    try {
+      const cache = { fingerprint: "valid", embeddings: { a: [1, 2], b: [3, 4] } };
+      await writeFile(path, JSON.stringify(cache));
+      await expect(readToolEmbeddingCache(path)).resolves.toEqual(cache);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("treats non-finite embedding values as zero similarity", () => {
+    expect(cosine([1, Number.POSITIVE_INFINITY], [1, 2])).toBe(0);
+    expect(cosine([1, 2], [1, Number.NaN])).toBe(0);
+  });
+
   it("returns null when no embedding provider is configured", async () => {
     // Stash env vars so we run offline regardless of host setup.
     const saved = {

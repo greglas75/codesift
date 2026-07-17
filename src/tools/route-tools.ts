@@ -6,6 +6,8 @@ import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
 import type { CodeSymbol, CodeIndex, CallNode, RouteFramework } from "../types.js";
 import { findAstroHandlers } from "./astro-routes.js";
+import { matchPath } from "./route-shared.js";
+export { matchPath } from "./route-shared.js";
 import { deriveUrlPath, computeLayoutChain, traceMiddleware, scanDirective } from "../utils/nextjs.js";
 import type { MiddlewareTraceResult } from "../utils/nextjs.js";
 import { join } from "node:path";
@@ -56,28 +58,6 @@ export interface RouteTraceResult {
 }
 
 type RouteCallNode = RouteTraceResult["call_chain"][number];
-
-/**
- * Match a URL path pattern against a route definition.
- * Handles :param, [param], [...param], [[...param]], <type:name> (Flask/Django),
- * {name} (FastAPI) as wildcards.
- */
-export function matchPath(routePath: string, searchPath: string): boolean {
-  const normalize = (p: string) => p.replace(/^\/|\/$/g, "").toLowerCase();
-  const routeParts = normalize(routePath).split("/");
-  const searchParts = normalize(searchPath).split("/");
-
-  if (routeParts.length !== searchParts.length) return false;
-
-  for (let i = 0; i < routeParts.length; i++) {
-    const rp = routeParts[i]!;
-    const sp = searchParts[i]!;
-    // Dynamic segments: :id, [id], [...slug], [[...slug]], <type:name>, {name}
-    if (rp.startsWith(":") || rp.startsWith("[") || rp.startsWith("<") || rp.startsWith("{")) continue;
-    if (rp !== sp) return false;
-  }
-  return true;
-}
 
 /**
  * Find NestJS route handlers via @Controller + @Get/@Post/etc. decorators.

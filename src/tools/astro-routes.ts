@@ -3,7 +3,7 @@
  * Exports findAstroHandlers (for traceRoute) and astroRouteMap (tool handler).
  */
 import type { CodeIndex, CodeSymbol, RouteFramework } from "../types.js";
-import { matchPath } from "./route-tools.js";
+import { matchPath } from "./route-shared.js";
 import { getCodeIndex } from "./index-tools.js";
 
 export interface AstroRouteHandler {

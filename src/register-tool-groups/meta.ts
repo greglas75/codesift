@@ -1,5 +1,5 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, enableToolByName, type ToolDefinitionEntry } from "./shared.js";
-import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol, consolidateMemories, readMemory, usageHotspots, usageTraceSession, retrosList, retrosAnalyze, memoryCandidateExtract, optimizationCandidates, popeInsightsPushCandidates, createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans, analyzeProject, getExtractorVersions, indexStatus, auditAgentConfig, planTurn, formatPlanTurnResult, generateWiki, getUsageStats, formatUsageReport, formatSnapshot, getContext, getSessionState, formatConversations } from "./deps.js";
+import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol, consolidateMemories, readMemory, usageHotspots, usageTraceSession, retrosList, retrosAnalyze, memoryCandidateExtract, optimizationCandidates, popeInsightsPushCandidates, createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans, analyzeProject, getExtractorVersions, indexStatus, auditAgentConfig, planTurn, formatPlanTurnResult, generateWiki, getUsageStats, formatUsageReport, formatSnapshot, getContext, getSessionState, dispatchFormatter } from "./deps.js";
 
 export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   { order: 2345, definition: {
@@ -72,7 +72,7 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await searchConversations(args.query as string, args.project as string | undefined, args.limit as number | undefined);
-      return formatConversations(result as never);
+      return dispatchFormatter("search_conversations", result);
     },
   } },
   { order: 2420, definition: {
@@ -87,7 +87,7 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await findConversationsForSymbol(args.symbol_name as string, args.repo as string, args.limit as number | undefined);
-      return formatConversations(result as never);
+      return dispatchFormatter("find_conversations_for_symbol", result);
     },
   } },
   { order: 2436, definition: {
@@ -101,7 +101,7 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     })),
     handler: async (args) => {
       const result = await searchAllConversations(args.query as string, args.limit as number | undefined);
-      return formatConversations(result as never);
+      return dispatchFormatter("search_all_conversations", result);
     },
   } },
   // --- Memory consolidation ---

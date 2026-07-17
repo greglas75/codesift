@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Split the core tool catalog into indexing, search, symbol, and metadata
+  registration modules behind the existing `CORE_TOOL_ENTRIES` facade.
 - Split Kotlin analysis tools into capability modules for extensions, sealed
   hierarchies, suspend chains, multiplatform declarations, and Flow chains,
   behind the existing `kotlin-tools.ts` compatibility facade.
@@ -17,9 +19,13 @@
   `BUILTIN_PATTERNS`, `searchPatterns`, and `listPatterns` exports.
 - Split the PHP/Yii implementation file into per-tool modules while keeping
   `src/tools/php-tools.ts` as the compatibility facade for existing callers.
+- Split Astro template parsing into preprocessing, resolution, state, scanning,
+  and tag-processing modules behind the existing parser facade.
 
 ### Fixed
 
+- Validate JSON-array tool arguments and reject missing or blank
+  `find_references` selectors before dispatching core tool handlers.
 - Hardened Kotlin analysis for regex metacharacters and braces in sealed
   hierarchies, concurrent file scanning, suspend overload and uppercase-callee
   traversal, nested cancellation checks, depth validation, and spaced
@@ -33,6 +39,9 @@
 - Hardened project profile extraction around root entrypoints, Python
   `pyproject.toml` detection, Hono source precedence, importer counting, git
   remote sanitization, and atomic profile writes.
+- Hardened Astro template parsing for quoted tag values, framework-specific
+  extensions, comparison text, expression directives, directive boundaries, and
+  void elements.
 
 ## [0.7.0] — 2026-05-08
 

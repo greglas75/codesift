@@ -165,6 +165,33 @@ function routeQuery(
 describe("introspectPgSchema", () => {
   const CONN = "postgres://user:secret@host:5432/db";
 
+  it("contains and redacts errors thrown by the Client constructor", async () => {
+    class ThrowingClient {
+      constructor() { throw new Error(`constructor rejected ${CONN}`); }
+    }
+    const result = await introspectPgSchema(CONN, {
+      _clientCtor: ThrowingClient as unknown as PgClientCtor["ClientCtor"],
+    });
+    expect(result).toEqual({ error: "PostgreSQL introspection failed" });
+  });
+
+  it("returns after the wall timeout even when cleanup never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = makeMockClient({
+        query: (sql) => sql.includes("SET statement_timeout")
+          ? Promise.resolve({ rows: [] })
+          : new Promise(() => undefined),
+        end: () => new Promise(() => undefined),
+      });
+      const promise = introspectPgSchema(CONN, { _clientCtor: handle.ctor, timeoutMs: 10 });
+      await vi.advanceTimersByTimeAsync(111);
+      await expect(promise).resolves.toMatchObject({ error: expect.stringMatching(/timed out/i) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("maps fixture rows for 3 tables + 2 FKs + indexes into TableInfo[]/Relationship[]", async () => {
     const handle = makeMockClient({
       query: routeQuery([
@@ -270,7 +297,7 @@ describe("introspectPgSchema", () => {
     // serialized form must be scrubbed.
     const serialized = JSON.stringify(result);
 
-    expect(serialized).toContain("[REDACTED]");
+    expect(serialized).toContain("PostgreSQL introspection failed");
     // Negative assertion: no part of the connection string survives.
     expect(serialized).not.toContain("secret");
     expect(serialized).not.toContain(CONN);
@@ -415,8 +442,24 @@ describe("redactConnStr", () => {
     expect(out).toContain("[REDACTED]");
   });
 
+  it("redacts decoded URL passwords and quoted libpq passwords", () => {
+    expect(redactConnStr("password p@ss rejected", "postgres://u:p%40ss@host/db"))
+      .toBe("password [REDACTED] rejected");
+    expect(redactConnStr("bad two words", "host=db password='two words' user=u"))
+      .toBe("bad [REDACTED]");
+    expect(redactConnStr("bad a'b", "host=db password='a\\'b' user=u"))
+      .toBe("bad [REDACTED]");
+  });
+
   it("is a no-op-safe pass-through for empty conn string", () => {
     expect(redactConnStr("nothing to hide here", "")).toBe("nothing to hide here");
+  });
+
+  it("redacts password values from libpq keyword connection strings", () => {
+    const conn = "host=db.internal user=admin password=keywordSecret dbname=app";
+    expect(redactConnStr("password keywordSecret rejected", conn)).toBe(
+      "password [REDACTED] rejected",
+    );
   });
 });
 
@@ -510,6 +553,33 @@ describe("pgDriftCheck", () => {
     const result = pgDriftCheck(liveWithExtra, baseSymbols);
     expect(result.missing_tables_live_only).toContain("audit_log");
     expect(result.missing_tables_migrations_only).toHaveLength(0);
+  });
+
+  it("reports migration-only tables and live-only columns", () => {
+    const symbols = [
+      ...baseSymbols,
+      makeTableSymbol("archived", "repo:migrations/002.sql:archived:1"),
+    ];
+    const live = {
+      ...baseLive,
+      tables: baseLive.tables.map((table) => table.name === "users"
+        ? { ...table, columns: [...table.columns, { name: "legacy", type: "text", nullable: true }] }
+        : table),
+    };
+    const result = pgDriftCheck(live, symbols);
+    expect(result.missing_tables_migrations_only).toContain("archived");
+    expect(result.column_mismatches).toContainEqual({
+      table: "users", column: "legacy", kind: "missing_migrations", live_type: "text",
+    });
+  });
+
+  it("treats SQL type modifiers as formatting-equivalent", () => {
+    const id = "repo:migrations/001.sql:users:1";
+    const symbols = [makeTableSymbol("users", id), makeFieldSymbol("id", id, "integer NOT NULL")];
+    const live = { ...baseLive, tables: [baseLive.tables[0]!] };
+    expect(pgDriftCheck(live, symbols).column_mismatches).toEqual([
+      { table: "users", column: "email", kind: "missing_migrations", live_type: "text" },
+    ]);
   });
 
   it("migration-only column reported as missing_live in column_mismatches", () => {

@@ -1,0 +1,150 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`yii3MigrationAudit > characterizes the complete category catalog and aggregate output 1`] = `
+{
+  "blockers": [],
+  "by_severity": {
+    "critical": 6,
+    "high": 31,
+    "low": 2,
+    "medium": 5,
+  },
+  "categories": [
+    {
+      "category": "service-locator",
+      "count": 4,
+      "effort_per_call": "small",
+      "severity": "critical",
+    },
+    {
+      "category": "module",
+      "count": 1,
+      "effort_per_call": "large",
+      "severity": "critical",
+    },
+    {
+      "category": "active-record",
+      "count": 1,
+      "effort_per_call": "medium",
+      "severity": "critical",
+    },
+    {
+      "category": "rbac",
+      "count": 7,
+      "effort_per_call": "medium",
+      "severity": "high",
+    },
+    {
+      "category": "view",
+      "count": 4,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "logger",
+      "count": 3,
+      "effort_per_call": "trivial",
+      "severity": "high",
+    },
+    {
+      "category": "request",
+      "count": 2,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "user-identity",
+      "count": 2,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "validators",
+      "count": 2,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "widgets",
+      "count": 2,
+      "effort_per_call": "medium",
+      "severity": "high",
+    },
+    {
+      "category": "url-manager",
+      "count": 2,
+      "effort_per_call": "medium",
+      "severity": "high",
+    },
+    {
+      "category": "console",
+      "count": 2,
+      "effort_per_call": "medium",
+      "severity": "high",
+    },
+    {
+      "category": "object-factory",
+      "count": 1,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "aliases",
+      "count": 1,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "i18n",
+      "count": 1,
+      "effort_per_call": "trivial",
+      "severity": "high",
+    },
+    {
+      "category": "response",
+      "count": 1,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "form-model",
+      "count": 1,
+      "effort_per_call": "small",
+      "severity": "high",
+    },
+    {
+      "category": "application-props",
+      "count": 3,
+      "effort_per_call": "trivial",
+      "severity": "medium",
+    },
+    {
+      "category": "session",
+      "count": 1,
+      "effort_per_call": "trivial",
+      "severity": "medium",
+    },
+    {
+      "category": "queue",
+      "count": 1,
+      "effort_per_call": "small",
+      "severity": "medium",
+    },
+    {
+      "category": "migrations",
+      "count": 2,
+      "effort_per_call": "trivial",
+      "severity": "low",
+    },
+  ],
+  "decision_signal": "consider-yii3",
+  "effort_estimate": {
+    "hours_high": 70,
+    "hours_low": 23,
+  },
+  "php_version_required": ">=7.2.0",
+  "scanned_files": 8,
+  "total_call_sites": 44,
+  "yii_version_detected": "2.0.17",
+}
+`;
