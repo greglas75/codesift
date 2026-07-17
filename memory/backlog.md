@@ -2,6 +2,13 @@
 
 <!-- fingerprint: file|rule|signature -->
 
+<!-- zuvo:review 2026-07-11 — 25 commits across 11 refactor branches -->
+- [ ] [MED] `src/parser/extractors/sql-symbols.ts|integration|symbol-utils-dependency` — when integrating SQL extractor + cycle branches, import shared helpers from `../symbol-utils.js` in both SQL leaf modules and run SQL/cycle tests. Defer reason: [structural-refactor (multi-file/cross-branch)].
+- [ ] [MED] `src/tools/pg-introspection.ts|CQ11|driver-lifecycle-split` — extract driver discovery/loading from connection and catalog-query lifecycle; characterize loader failure and cleanup. Defer reason: [structural-refactor (multi-file)].
+- [ ] [MED] `src/tools/conversation-search-tools.ts|CQ11|search-fusion-symbol-split` — extract result fusion/loading and symbol lookup behind the existing facade while preserving cache identity. Defer reason: [structural-refactor (multi-file)].
+- [ ] [MED] `src/server-helpers/response-hints.ts|CQ11|hint-rule-table` — split `buildResponseHint` into ordered per-hint detectors plus a rule table with first-match tests. Defer reason: [structural-refactor (multi-file)].
+- [ ] [MED] `src/parser/extractors/kotlin-test-symbols.ts|CQ11|kotlin-helper-split` — split annotation/type-name helpers and Kotest suite/test traversal into bounded modules with facade compatibility. Defer reason: [structural-refactor (multi-file)].
+
 <!-- zuvo:review 2026-07-10 d453ab3..209c975 — all assistant commits -->
 - [ ] [MED] `src/tools/search-tools/text-search.ts|CQ3|sync-regex-fallback-redos` — isolate Node regex fallback in a worker/child with a hard kill deadline; the current denylist plus synchronous `RegExp.test()` cannot enforce the wall-clock contract. Defer reason: [structural-refactor (multi-file)].
 - [ ] [MED] `src/tools/kotlin-tools.ts|CQ6|unbounded-result-arrays` — add shared `max_results`/`truncated` handling across extension, KMP, and sealed-hierarchy capabilities plus registration schemas and large-index tests. Defer reason: [structural-refactor (multi-file)].
