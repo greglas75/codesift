@@ -28,7 +28,7 @@ jobs:
       contents: read
       id-token: write   # OIDC credential for npm trusted publishing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history: prepublishOnly runs `npm test`, and
           # scripts/journal-citation-check.ts grounds citations against

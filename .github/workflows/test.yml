@@ -24,7 +24,7 @@ jobs:
       matrix:
         node: [20, 22] # engines: >=20; the npm publish (release.yml) ships on 22
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history (not the default shallow fetch-depth: 1). scripts/
           # journal-citation-check.ts grounds citations against `git log --all`
