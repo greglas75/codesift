@@ -51,6 +51,14 @@ describe("getLanguageForExtension", () => {
   it("returns sql for .sql", () => {
     expect(getLanguageForExtension(".sql")).toBe("sql");
   });
+
+  it("returns text_stub for .html (full-text indexed, no symbol extraction)", () => {
+    expect(getLanguageForExtension(".html")).toBe("text_stub");
+  });
+
+  it("returns text_stub for .htm", () => {
+    expect(getLanguageForExtension(".htm")).toBe("text_stub");
+  });
 });
 
 describe("parseFile error recovery", () => {

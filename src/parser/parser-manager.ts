@@ -52,6 +52,11 @@ const EXTENSION_MAP: Record<string, string> = {
   ".nim": "text_stub",   // Nim
   ".gradle": "text_stub", // Gradle build scripts
   ".sbt": "text_stub",   // SBT build scripts
+  // Markup / templates — no symbol extraction, but full-text indexed so
+  // search_text / scan_secrets / get_file_tree cover them (SEO/content/GEO work
+  // lives in these files; previously they were dropped from the index entirely).
+  ".html": "text_stub",  // HTML
+  ".htm": "text_stub",   // HTML
   // --- SQL (regex extractor, no tree-sitter) ---
   ".sql": "sql",          // SQL DDL/DML
 };
