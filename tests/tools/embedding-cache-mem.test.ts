@@ -30,6 +30,10 @@ describe("getEmbeddingCache — lite mode + LRU memory bound", () => {
     }
     writeFileSync(join(dir, "registry.json"), JSON.stringify({ updated_at: 1, repos }));
     process.env.CODESIFT_DATA_DIR = dir;
+    // Force embeddings ON by default. "unset" now auto-decides by total RAM, so
+    // on ~16 GB CI runners the LRU tests below would get null. The explicit
+    // lite-mode test sets "1" itself, overriding this.
+    process.env.CODESIFT_DISABLE_LOCAL_EMBEDDINGS = "0";
     resetConfigCache();
   });
   afterEach(() => {

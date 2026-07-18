@@ -63,7 +63,11 @@ describe("SMOKE — shared daemon loads once, bounded memory, lite mode", () => 
     }
     writeFileSync(join(dir, "registry.json"), JSON.stringify({ updated_at: 1, repos }));
     process.env.CODESIFT_DATA_DIR = dir;
-    delete process.env.CODESIFT_DISABLE_LOCAL_EMBEDDINGS;
+    // Force embeddings ON regardless of the runner's RAM. "unset" no longer
+    // means "on" — it means "auto-decide by total RAM", and CI runners are
+    // ~16 GB so auto-lite would (correctly) disable the local model and this
+    // suite (which exercises embedding-cache loading + eviction) needs them on.
+    process.env.CODESIFT_DISABLE_LOCAL_EMBEDDINGS = "0";
     delete process.env.CODESIFT_MAX_EMBEDDING_MEM_MB;
     resetConfigCache();
     _resetEmbeddingLoadCountForTesting();
