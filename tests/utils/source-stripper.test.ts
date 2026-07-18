@@ -76,6 +76,18 @@ describe("stripCommentsAndStrings — interaction edge cases", () => {
     const result = stripCommentsAndStrings(input);
     expect(result).toBe("const a = x / y;");
   });
+
+  it("preserves compound division assignment", () => {
+    const input = "let x = 8; x /= 2; const y = 1;";
+    expect(stripCommentsAndStrings(input)).toBe(input);
+  });
+
+  it("strips regex immediately after a keyword", () => {
+    const input = "const x = typeof/foo/.test(value); const y = 1;";
+    const result = stripCommentsAndStrings(input);
+    expect(result.includes("foo")).toBe(false);
+    expect(result.includes("const y = 1;")).toBe(true);
+  });
 });
 
 describe("stripCommentsAndStrings — preserves character positions", () => {
@@ -151,6 +163,13 @@ describe("stripCommentsAndStrings — adversarial Run-1 fixes", () => {
     expect(result.includes(";")).toBe(true);
   });
 
+  it("strips the unicode sets regex flag v", () => {
+    const input = "const r = /[\\p{ASCII}]/v; const y = 1;";
+    const result = stripCommentsAndStrings(input);
+    expect(result.includes("ASCII")).toBe(false);
+    expect(result.includes("const y = 1;")).toBe(true);
+  });
+
   it("template literal ${expr} expression preserves code inside", () => {
     // Adversarial Run 1: ${...} contents were stripped opaque, hiding code.
     // Now ${} content is processed as code, so console.log inside is detected.
@@ -164,6 +183,20 @@ describe("stripCommentsAndStrings — adversarial Run-1 fixes", () => {
     const input = "const x = `a ${ `b ${ c } d` } e`;";
     // Should round-trip without breaking — code positions preserved
     expect(stripCommentsAndStrings(input).length).toBe(input.length);
+  });
+
+  it("resumes template stripping after interpolation closes", () => {
+    const input = "const x = `before ${value} // hidden`; const y = 1;";
+    const result = stripCommentsAndStrings(input);
+    expect(result.includes("hidden")).toBe(false);
+    expect(result.includes("const y = 1;")).toBe(true);
+  });
+
+  it("keeps template mode across multiple interpolations with braces", () => {
+    const input = "const x = `a ${fn({value: 1})} b ${other} // hidden`; const y = 1;";
+    const result = stripCommentsAndStrings(input);
+    expect(result.includes("hidden")).toBe(false);
+    expect(result.includes("const y = 1;")).toBe(true);
   });
 
   it("template literal with no interpolation still strips contents", () => {

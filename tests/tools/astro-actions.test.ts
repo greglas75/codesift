@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
@@ -12,11 +12,9 @@ import { auditAstroActionsFromIndex } from "../../src/tools/astro-actions.js";
 
 const TMP_ROOT = join(tmpdir(), "codesift-astro-actions-test");
 
-let fixtureCounter = 0;
-
 function createFixtureDir(files: Record<string, string>): string {
-  const dir = join(TMP_ROOT, `run-${Date.now()}-${fixtureCounter++}`);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(TMP_ROOT, { recursive: true });
+  const dir = mkdtempSync(join(TMP_ROOT, "run-"));
   for (const [relPath, content] of Object.entries(files)) {
     const abs = join(dir, relPath);
     mkdirSync(join(abs, ".."), { recursive: true });
@@ -243,7 +241,7 @@ export function UploadForm() {
     const result = await auditAstroActionsFromIndex(index);
 
     const aa04 = result.issues.filter((i) => i.code === "AA04");
-    expect(aa04.length).toBeGreaterThanOrEqual(1);
+    expect(aa04).toHaveLength(1);
     expect(aa04[0]!.severity).toBe("error");
     expect(aa04[0]!.action).toBe("upload");
     expect(aa04[0]!.file).toBe("src/components/UploadForm.tsx");
@@ -353,8 +351,69 @@ const r2 = await actions.a1({ x: "y" });
     const errors = result.issues.filter((i) => i.severity === "error");
     const warnings = result.issues.filter((i) => i.severity === "warning");
 
-    expect(errors.length).toBe(2);
-    expect(warnings.length).toBe(3);
+    expect(errors).toHaveLength(2);
+    expect(warnings).toHaveLength(3);
     expect(result.summary.score).toBe("C");
+  });
+
+  it("9. expression-bodied handlers count as returning a value", async () => {
+    const actions = `
+import { defineAction } from "astro:actions";
+export const server = {
+  greet: defineAction({ handler: async () => ({ message: "hello" }) }),
+};
+`;
+    const root = createFixtureDir({ "src/actions/index.ts": actions });
+    const result = await auditAstroActionsFromIndex(
+      makeIndex(root, ["src/actions/index.ts"]),
+    );
+
+    expect(result.issues.filter((entry) => entry.code === "AA01")).toEqual([]);
+    expect(result.actions[0]?.name).toBe("greet");
+  });
+
+  it("10. a return inside a nested callback does not satisfy the action handler", async () => {
+    const actions = `
+import { defineAction } from "astro:actions";
+export const server = {
+  broken: defineAction({
+    handler: async () => {
+      [1].map(() => { return "nested"; });
+    },
+  }),
+};
+`;
+    const root = createFixtureDir({ "src/actions/index.ts": actions });
+    const result = await auditAstroActionsFromIndex(
+      makeIndex(root, ["src/actions/index.ts"]),
+    );
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({ code: "AA01", action: "broken", severity: "error" }),
+    ]);
+  });
+
+  it("11. severity=errors excludes warnings and recomputes the summary", async () => {
+    const actions = `
+import { defineAction } from "astro:actions";
+import { z } from "astro:schema";
+export const server = {
+  broken: defineAction({ handler: async () => { console.log("missing return"); } }),
+  loose: defineAction({
+    input: z.object({ id: z.string() }).passthrough(),
+    handler: async () => ({ ok: true }),
+  }),
+};
+`;
+    const root = createFixtureDir({ "src/actions/index.ts": actions });
+    const result = await auditAstroActionsFromIndex(
+      makeIndex(root, ["src/actions/index.ts"]),
+      "errors",
+    );
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({ code: "AA01", action: "broken" }),
+    ]);
+    expect(result.summary).toEqual({ total_actions: 2, total_issues: 1, score: "C" });
   });
 });
