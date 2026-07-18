@@ -34,8 +34,11 @@ describe("shared embedding cache across connections (Task 8)", () => {
     }
     writeFileSync(join(dir, "registry.json"), JSON.stringify({ updated_at: 1, repos }));
     process.env.CODESIFT_DATA_DIR = dir;
-    // Neutralize any ambient lite-mode / budget the shell may export.
-    delete process.env.CODESIFT_DISABLE_LOCAL_EMBEDDINGS;
+    // Force embeddings ON regardless of runner RAM. "unset" now means
+    // "auto-decide by total RAM", and CI runners (~16 GB) would auto-lite and
+    // disable the embedding cache this suite asserts on. Also neutralize any
+    // ambient budget the shell may export.
+    process.env.CODESIFT_DISABLE_LOCAL_EMBEDDINGS = "0";
     delete process.env.CODESIFT_MAX_EMBEDDING_MEM_MB;
     resetConfigCache();
     _resetEmbeddingLoadCountForTesting();
