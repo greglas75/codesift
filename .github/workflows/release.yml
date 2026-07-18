@@ -29,6 +29,14 @@ jobs:
       id-token: write   # OIDC credential for npm trusted publishing
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: prepublishOnly runs `npm test`, and
+          # scripts/journal-citation-check.ts grounds citations against
+          # `git log --all`. A shallow clone (the default) only has HEAD, so
+          # every historical SHA reads as ungrounded and the journal-citation
+          # test fails — exactly what blocked the v0.9.10 publish. Same fix as
+          # test.yml.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
