@@ -53,6 +53,37 @@ process.on("unhandledRejection", (reason: unknown) => {
   );
 });
 
+/**
+ * Exit when the client (Claude/Codex) that spawned us goes away.
+ *
+ * A stdio MCP server has no reason to outlive its parent — the only client is
+ * on the other end of the pipe. But background timers keep the event loop
+ * alive (the chokidar index watcher, auto-index, conversation discovery), so
+ * when the parent dies the process does NOT drain and exit on its own: it gets
+ * reparented to launchd/init (ppid 1) and lingers forever, holding its
+ * indexes + embeddings (often 1-4 GB) and, if the watcher is churning, burning
+ * a core. Across ~10 concurrent Claude/Codex sessions that leaked 50+ orphans
+ * eating tens of GB and multiple cores — "codesift is killing my machine".
+ *
+ * The fixes below all converge on the same action: as soon as the transport
+ * closes OR stdin hits EOF OR we get a termination signal, exit hard. `exit`
+ * fires the sidecar cleanup above; chokidar/fds are released by process teardown.
+ * Idempotent so overlapping triggers (stdin close + transport close) don't double-log.
+ */
+let shuttingDown = false;
+function shutdownOnParentGone(reason: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`[codesift] parent gone (${reason}) — exiting`);
+  process.exit(0);
+}
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  process.on(sig, () => shutdownOnParentGone(sig));
+}
+// NOTE: stdin EOF handlers are attached ONLY in the stdio path (see runStdio),
+// never globally — the HTTP daemon (`codesift serve`) is meant to outlive its
+// launcher and must not exit just because its stdin was closed at spawn.
+
 loadConfig();
 
 /** Build a fully-configured codesift McpServer (tools registered, not connected). */
@@ -264,12 +295,21 @@ async function main(): Promise<void> {
     return;
   }
 
+  // stdio only: stdin EOF/close is the canonical "parent died" signal. Attached
+  // here (not globally) so the HTTP daemon path is unaffected.
+  process.stdin.on("end", () => shutdownOnParentGone("stdin end"));
+  process.stdin.on("close", () => shutdownOnParentGone("stdin close"));
+
   const transport = new StdioServerTransport();
   // Diagnostic transport hooks. Primary fix for "-32000: Connection closed" is
   // event-loop yielding inside heavy tools (perf-tools, hotspot-tools, project-tools);
   // these handlers leave a stderr trace if any residual transport drop occurs.
   transport.onclose = () => {
     console.error(`[codesift] transport closed at uptime=${Date.now() - startTs}ms`);
+    // The client disconnected — do NOT keep running as an orphan. Background
+    // timers (watcher/auto-index) would otherwise hold the event loop open and
+    // the process would linger under launchd forever. See shutdownOnParentGone.
+    shutdownOnParentGone("transport close");
   };
   transport.onerror = (err: Error) => {
     console.error(`[codesift] transport error at uptime=${Date.now() - startTs}ms:`, err.message);
