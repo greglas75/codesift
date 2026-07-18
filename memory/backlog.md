@@ -118,3 +118,19 @@
 - [ ] [LOW] `cross-repo-contract-tools.ts|CQ17|sequential-repo-resolve` — collectGroupData awaits resolver(repo) one at a time across up to 20 repos; parallelize with bounded concurrency (p-limit 4) — resolvers are independent (CQ-3). Source: CQ auditor.
 - [ ] [NIT] `cross-repo-outbound-lexer.ts|CQ3|nested-backtick-in-interp` — readTemplateContent tracks "/' inside `${}` but not a nested template literal's backtick; `` `/api/${`${id}`}` `` corrupts raw → false-negative dropped fetch (CQ-4). Source: CQ auditor.
 - [ ] [LOW] `index-tools.ts|behavior|snapshot-watcher-cold-start-tax` — saveIncremental (watcher edits) bumps updated_at but not the snapshot; next cold start's staleness guard discards it → full re-parse (BEHAV-4). Correct-and-safe by design; revisit only if cold-start cost matters. Source: Behavior auditor.
+
+<!-- zuvo:refactor 2026-07-12 b5fbc75 — project profile split carry-forward -->
+- [ ] [MED] `project-profile-stack.ts|CQ11|legacy-stack-complexity` — detectStack remains a large legacy helper after verbatim extraction; split framework, workspace, and build-tool phases in a follow-up. Source: independent CQ auditor.
+- [ ] [MED] `project-profile-nest.ts|CQ11|legacy-nest-complexity` — Nest convention parsing remains over the utility/function limit after verbatim extraction; split module/provider and middleware parsing in a follow-up. Source: independent CQ auditor.
+- [ ] [MED] `project-profile-summary.ts|CQ11|summary-dispatch-complexity` — buildConventionsSummary remains high-complexity; use table/handler dispatch in a follow-up. Source: independent CQ auditor.
+- [ ] [MED] `project-profile-stack.ts|CQ17|serial-workspace-reads` — workspace package and tsconfig reads remain sequential; parallelize with bounded concurrency in a follow-up. Source: independent CQ auditor.
+- [ ] [MED] `project-profile-extractors.ts|CQ17|serial-convention-reads` — test setup and sample convention reads remain sequential; parallelize safely in a follow-up. Source: independent CQ auditor.
+- [ ] [MED] `project-tools.ts|CQ23|analyze-cache-ttl` — analyzeProject's process-global cache lacks TTL/eviction; inherited untouched behavior and outside this stack/convention split. Source: independent CQ auditor.
+- [ ] [MED] `project-profile-extractors.ts|coverage|git-health-test` — extractGitHealth lacks a direct scoped characterization test. Source: independent CQ auditor.
+- [ ] [MED] `project-tools.ts|coverage|extractor-error-path` — analyzeProject's partial `*_extractor_error` path lacks a direct scoped characterization test. Source: independent CQ auditor.
+
+<!-- zuvo:refactor 2026-07-14 30fcbea..47f3216 — core tool groups -->
+- [ ] [MED] `registry.ts|CQ6|invalidate-cache-auto-repo` — `invalidate_cache` advertises optional repository auto-detection, but `invalidateCache` looks up the raw undefined key. Resolve through `resolveRegisteredRepoMeta` in the index registry; deferred because the implementation is outside this refactor's registration scope. Source: adversarial review.
+
+<!-- zuvo:review 2026-07-14 8ebe14b..77e76f1 — all refactor commits -->
+- [ ] [LOW] `formatters-nextjs.ts|CQ11|domain-formatter-size` — [below-threshold, 46/100] 449-line Next.js formatter domain still contains three >50-line formatters. Resolution recipe: (1) extract component/route formatters, (2) extract audit/diagnostic formatters, (3) retain `formatters-nextjs.ts` as the domain export facade and verify dispatch characterization tests. Defer-reason: [structural-refactor (multi-file)]. Source: confidence-rescored review.
