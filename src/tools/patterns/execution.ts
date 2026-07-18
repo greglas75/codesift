@@ -1,6 +1,6 @@
 /** Generic indexed pattern execution engine. */
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { relative, resolve, sep, win32 } from "node:path";
 import { getCodeIndex } from "../index-tools.js";
 import { BUILTIN_PATTERNS } from "./catalog.js";
 import { stripCommentsAndStrings } from "../../utils/source-stripper.js";
@@ -65,6 +65,7 @@ interface PatternExecutionConfig {
   key: string;
   regex: RegExp;
   patternName: string;
+  sourceOnlyFileScan: boolean;
   fileExcludePattern?: RegExp;
   fileIncludePattern?: RegExp;
   postFilter?: (match: string) => boolean;
@@ -97,16 +98,26 @@ const SYMBOL_SCAN_FILTERS: readonly SymbolScanFilter[] = [
 ];
 
 const FILE_SCAN_FILTERS: readonly FileScanFilter[] = [
+  (fileEntry, { settings }) => settings.includeTests || !isTestFile(fileEntry.path),
   (fileEntry, { config }) => config.fileIncludePattern?.test(fileEntry.path) === true,
   (fileEntry, { settings }) => !settings.filePattern || fileEntry.path.includes(settings.filePattern),
   (fileEntry, { config }) => !config.fileExcludePattern?.test(fileEntry.path),
-  (fileEntry, { matches }) => !matches.some((match) => match.file === fileEntry.path),
 ];
+
+const MAX_PATTERN_RESULTS = 1000;
+
+function normalizeMaxResults(maxResults: number | undefined): number {
+  if (maxResults === undefined) return 50;
+  if (!Number.isFinite(maxResults) || !Number.isInteger(maxResults) || maxResults <= 0) {
+    throw new Error("max_results must be a positive finite integer");
+  }
+  return Math.min(maxResults, MAX_PATTERN_RESULTS);
+}
 
 function normalizeSearchPatternOptions(options: SearchPatternOptions | undefined): SearchPatternSettings {
   return {
     includeTests: options?.include_tests ?? false,
-    maxResults: options?.max_results ?? 50,
+    maxResults: normalizeMaxResults(options?.max_results),
     ...(options?.file_pattern ? { filePattern: options.file_pattern } : {}),
   };
 }
@@ -116,8 +127,9 @@ function resolvePatternConfig(pattern: string): PatternExecutionConfig {
   if (builtin) {
     return {
       key: pattern,
-      regex: builtin.regex,
+      regex: new RegExp(builtin.regex.source, builtin.regex.flags),
       patternName: `${pattern}: ${builtin.description}`,
+      sourceOnlyFileScan: true,
       ...(builtin.fileExcludePattern ? { fileExcludePattern: builtin.fileExcludePattern } : {}),
       ...(builtin.fileIncludePattern ? { fileIncludePattern: builtin.fileIncludePattern } : {}),
       ...(builtin.postFilter ? { postFilter: builtin.postFilter } : {}),
@@ -130,6 +142,7 @@ function resolvePatternConfig(pattern: string): PatternExecutionConfig {
       key: pattern,
       regex: new RegExp(pattern),
       patternName: pattern,
+      sourceOnlyFileScan: false,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -142,16 +155,46 @@ function hasMatchCapacity(context: PatternSearchContext): boolean {
 }
 
 function sourceForPatternScan(source: string, preprocess: PatternExecutionConfig["preprocess"]): string {
-  return preprocess === "strip-comments-strings"
+  const scanSource = preprocess === "strip-comments-strings"
     ? stripCommentsAndStrings(source)
     : source;
+  if (scanSource.length !== source.length) {
+    throw new Error("Pattern scan preprocessing must preserve source offsets");
+  }
+  return scanSource;
 }
 
-function findAcceptedMatch(config: PatternExecutionConfig, source: string): RegExpExecArray | null {
+function findAcceptedMatch(
+  config: PatternExecutionConfig,
+  source: string,
+  sourceOnly = false,
+): RegExpExecArray | null {
   const scanSource = sourceForPatternScan(source, config.preprocess);
-  const match = config.regex.exec(scanSource);
-  if (!match) return null;
-  return shouldKeepPostFilterMatch(config.key, match[0], config.postFilter) ? match : null;
+  const scanRegex = sourceOnly && !config.regex.global && !config.regex.sticky
+    ? new RegExp(config.regex.source, `${config.regex.flags}g`)
+    : config.regex;
+  scanRegex.lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = scanRegex.exec(scanSource))) {
+    if (
+      shouldKeepPostFilterMatch(config.key, match[0], config.postFilter)
+      && (!sourceOnly || startsInSourceCode(source, match))
+    ) {
+      return match;
+    }
+    if (!scanRegex.global && !scanRegex.sticky) return null;
+    if (match[0].length === 0) scanRegex.lastIndex++;
+  }
+  return null;
+}
+
+function startsInSourceCode(source: string, match: RegExpExecArray): boolean {
+  const sourceWithoutCommentsAndStrings = stripCommentsAndStrings(source);
+  const originalStart = source[match.index];
+  return originalStart !== undefined
+    && originalStart.trim().length > 0
+    && sourceWithoutCommentsAndStrings[match.index] === originalStart;
 }
 
 function matchLineNumber(source: string, matchIndex: number): number {
@@ -191,11 +234,55 @@ function shouldScanFile(fileEntry: IndexedFileEntry, context: PatternSearchConte
 }
 
 async function readIndexedFile(index: CodeIndex, fileEntry: IndexedFileEntry): Promise<string | undefined> {
-  try {
-    return await readFile(join(index.root, fileEntry.path), "utf-8");
-  } catch {
+  const filePath = resolveIndexedFilePath(index.root, fileEntry.path);
+  if (!filePath) {
+    console.warn(`[search_patterns] skipped indexed path outside repository root: ${fileEntry.path}`);
     return undefined;
   }
+
+  try {
+    const [rootPath, resolvedFilePath] = await Promise.all([
+      realpath(index.root),
+      realpath(filePath),
+    ]);
+    if (!isPathWithinRoot(rootPath, resolvedFilePath)) {
+      console.warn(`[search_patterns] skipped indexed symlink outside repository root: ${fileEntry.path}`);
+      return undefined;
+    }
+    return await readFile(resolvedFilePath, "utf-8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[search_patterns] failed to read indexed file ${fileEntry.path}: ${message}`);
+    return undefined;
+  }
+}
+
+/** Resolve an indexed path without allowing reads outside the repository root. */
+export function resolveIndexedFilePath(root: string, indexedPath: string): string | undefined {
+  if (
+    indexedPath.startsWith("/")
+    || indexedPath.startsWith("\\")
+    || /^[A-Za-z]:/.test(indexedPath)
+    || win32.isAbsolute(indexedPath)
+  ) {
+    return undefined;
+  }
+
+  const rootPath = resolve(root);
+  const candidate = resolve(rootPath, indexedPath);
+  return isPathWithinRoot(rootPath, candidate) ? candidate : undefined;
+}
+
+function isPathWithinRoot(rootPath: string, candidate: string): boolean {
+  const relativePath = relative(rootPath, candidate);
+  return relativePath === ""
+    || (
+      !win32.isAbsolute(relativePath)
+      && !relativePath.startsWith("/")
+      && !relativePath.startsWith("\\")
+      && relativePath !== ".."
+      && !relativePath.startsWith(`..${sep}`)
+    );
 }
 
 function toFilePatternMatch(
@@ -203,7 +290,7 @@ function toFilePatternMatch(
   content: string,
   config: PatternExecutionConfig,
 ): PatternMatch | undefined {
-  const match = findAcceptedMatch(config, content);
+  const match = findAcceptedMatch(config, content, config.sourceOnlyFileScan);
   if (!match) return undefined;
 
   const linesBefore = matchLineNumber(content, match.index);
@@ -235,7 +322,14 @@ async function scanFileEntry(
   if (content === undefined) return undefined;
 
   context.scanned++;
-  return toFilePatternMatch(fileEntry, content, context.config);
+  const match = toFilePatternMatch(fileEntry, content, context.config);
+  if (!match) return undefined;
+
+  return context.matches.some(
+    (existing) => existing.file === match.file && existing.start_line === match.start_line,
+  )
+    ? undefined
+    : match;
 }
 
 function scanIndexedSymbols(context: PatternSearchContext): void {

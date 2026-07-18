@@ -21,7 +21,7 @@ export function stripCodesiftToolApprovalOverrides(
   };
 }
 
-export function ensureCodesiftDefaultToolsApprovalAuto(
+export function ensureCodesiftDefaultToolsApprovalApprove(
   content: string,
 ): { content: string; changed: boolean } {
   const header = "[mcp_servers.codesift]";
@@ -36,7 +36,7 @@ export function ensureCodesiftDefaultToolsApprovalAuto(
   if (approvalExpression.test(block)) {
     const updatedBlock = block.replace(
       approvalExpression,
-      'default_tools_approval_mode = "auto"',
+      'default_tools_approval_mode = "approve"',
     );
     return updatedBlock === block
       ? { content, changed: false }
@@ -48,7 +48,38 @@ export function ensureCodesiftDefaultToolsApprovalAuto(
   return {
     content:
       prefix +
-      'default_tools_approval_mode = "auto"' +
+      'default_tools_approval_mode = "approve"' +
+      (suffix.startsWith("\n") || suffix === "" ? "" : "\n") +
+      suffix,
+    changed: true,
+  };
+}
+
+function ensureCodesiftRequired(
+  content: string,
+): { content: string; changed: boolean } {
+  const header = "[mcp_servers.codesift]";
+  const start = content.indexOf(header);
+  if (start === -1) return { content, changed: false };
+
+  const afterHeader = start + header.length;
+  const nextTableOffset = content.slice(afterHeader).search(/\n\[[^\]]+\]/);
+  const end = nextTableOffset === -1 ? content.length : afterHeader + nextTableOffset;
+  const block = content.slice(start, end);
+  const requiredExpression = /^required[\t ]*=[\t ]*(?:true|false)[\t ]*$/m;
+  if (requiredExpression.test(block)) {
+    const updatedBlock = block.replace(requiredExpression, "required = true");
+    return updatedBlock === block
+      ? { content, changed: false }
+      : { content: content.slice(0, start) + updatedBlock + content.slice(end), changed: true };
+  }
+
+  const prefix = content.slice(0, end).replace(/\n?$/, "\n");
+  const suffix = content.slice(end);
+  return {
+    content:
+      prefix +
+      "required = true" +
       (suffix.startsWith("\n") || suffix === "" ? "" : "\n") +
       suffix,
     changed: true,
@@ -77,7 +108,7 @@ function getCodexTomlBlock(options?: SetupOptions): string {
   return (
     "\n[mcp_servers.codesift]\n" +
     getCodexServerEntryLines(options) +
-    '\ntool_timeout_sec = 120\ndefault_tools_approval_mode = "auto"\n'
+    '\ntool_timeout_sec = 120\nrequired = true\ndefault_tools_approval_mode = "approve"\n'
   );
 }
 
@@ -152,15 +183,16 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   const original = await readFile(configPath, "utf-8");
   const { content: cleaned, removed } = stripCodesiftToolApprovalOverrides(original);
   const normalizedEntry = normalizeCodesiftTomlServerEntry(cleaned, options);
-  const normalized = ensureCodesiftDefaultToolsApprovalAuto(normalizedEntry.content);
-  const content = normalized.content;
+  const normalized = ensureCodesiftDefaultToolsApprovalApprove(normalizedEntry.content);
+  const required = ensureCodesiftRequired(normalized.content);
+  const content = required.content;
   const noteFields =
     removed > 0
       ? { note: "removed " + removed + " per-tool approval override" + (removed === 1 ? "" : "s") + " on mcp_servers.codesift" }
       : {};
 
   if (content.includes("[mcp_servers.codesift]")) {
-    if (removed > 0 || normalized.changed || normalizedEntry.changed) {
+    if (removed > 0 || normalized.changed || normalizedEntry.changed || required.changed) {
       await writeFile(configPath, content, "utf-8");
       return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
     }

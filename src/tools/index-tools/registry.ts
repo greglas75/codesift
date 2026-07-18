@@ -82,20 +82,27 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
 }
 
 export async function getBM25Index(repoName: string): Promise<BM25Index | null> {
-  await ensureIndexFresh(repoName);
-
-  const cached = bm25Indexes.get(repoName);
-  if (cached) return cached;
-
+  // Resolve through the case-insensitive registry resolver (mirrors
+  // getCodeIndex) so `local/Rewards-API` finds `local/rewards-api` and the
+  // freshness check + cache key all use the canonical name. Previously this
+  // used exact `getRepo`, so any casing/bare-name mismatch returned null and
+  // BM25-backed tools (search_text, search_symbols, find_and_show,
+  // search_patterns) errored.
   const config = loadConfig();
-  const meta = await getRepo(config.registryPath, repoName);
-  if (!meta) return null;
+  const resolved = await resolveRegisteredRepoMeta(config.registryPath, repoName);
+  if (!resolved) return null;
+  const { resolvedName, meta } = resolved;
+
+  await ensureIndexFresh(resolvedName);
+
+  const cached = bm25Indexes.get(resolvedName);
+  if (cached) return cached;
 
   const index = await loadIndex(meta.index_path);
   if (!index) return null;
 
   const bm25 = buildBM25Index(index.symbols);
-  bm25Indexes.set(repoName, bm25);
+  bm25Indexes.set(resolvedName, bm25);
   return bm25;
 }
 

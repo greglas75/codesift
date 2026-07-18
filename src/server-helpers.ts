@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveToolRepoArgs } from "./server-helpers/repo-resolution.js";
 import { buildResponseHint, resetHintState, trackSequentialCalls } from "./server-helpers/response-hints.js";
-export { loadRegistrySync, isAncestorOrEqual, resolveRepoFromCwd, _resetRegistryCacheForTests } from "./server-helpers/repo-resolution.js";
+export { loadRegistrySync, isAncestorOrEqual, resolveRepoFromCwd, canonicalizeRepoName, _resetRegistryCacheForTests } from "./server-helpers/repo-resolution.js";
 export { buildResponseHint, trackSequentialCalls } from "./server-helpers/response-hints.js";
 /** ~3.5 chars/token for compact JSON + text formatters. Matches retrieval-constants.ts (3). */
 const CHARS_PER_TOKEN = 3.5;

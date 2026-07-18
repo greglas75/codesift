@@ -1,2 +1,3 @@
 # v2 DATE	SKILL	PROJECT	CODE_TYPE	FRICTION_CATEGORY	MISSING_TEMPLATE	CONTEXT_GAP	TURNS_WASTED	TOOL_CALLS	FILES_READ	FILES_MODIFIED	BRANCH	SHA7	BLIND_AUDIT	ADVERSARIAL	CODESIFT	ROUTING_STATUS
 RETRO: 2026-07-10T18:24:38Z	review	codesift-mcp	MIXED	infra-failure	-	no-env	4	62	38	10	main	209c975	fix:3	2findings	indexed	routing-failed
+RETRO: 2026-07-10T19:10:22Z	refactor	codesift-mcp	MIXED	infra-failure	bounded-audit-result	no-env	2	55	20	13	main	8ebe14b	fix:8	blocked	indexed	same-model-fallback

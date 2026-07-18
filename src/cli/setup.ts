@@ -12,7 +12,7 @@ import {
   setupCodex,
   setupCodexHooks,
   stripCodesiftToolApprovalOverrides,
-  ensureCodesiftDefaultToolsApprovalAuto,
+  ensureCodesiftDefaultToolsApprovalApprove,
 } from "./setup/codex.js";
 import { setupCursor } from "./setup/cursor.js";
 import { setupAntigravity, setupGemini, setupGeminiHooks } from "./setup/gemini.js";
@@ -27,7 +27,7 @@ export type { InstallRulesResult, SetupOptions, SetupResult } from "./setup/type
 export {
   buildJsonServerEntry,
   daemonHttpUrl,
-  ensureCodesiftDefaultToolsApprovalAuto,
+  ensureCodesiftDefaultToolsApprovalApprove,
   installRules,
   setupClaudeHooks,
   setupCodexHooks,

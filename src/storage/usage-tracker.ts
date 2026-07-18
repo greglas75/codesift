@@ -121,6 +121,16 @@ export function buildArgsSummary(
   } else if (tool === "get_symbols") {
     const ids = args["symbol_ids"];
     if (Array.isArray(ids)) summary["symbol_count"] = ids.length;
+  } else if (tool === "describe_tools") {
+    // Capture which tool schemas were requested — previously logged as {} , which
+    // hid repeat-fetch volume (920 calls / 1.8M tokens with no visibility into
+    // whether the same schemas were re-requested and could be cached).
+    const names = args["names"];
+    if (Array.isArray(names)) {
+      summary["names"] = names.filter((n) => typeof n === "string").slice(0, 30);
+      summary["name_count"] = names.length;
+    }
+    if (typeof args["reveal"] === "boolean") summary["reveal"] = args["reveal"];
   }
 
   // Data-driven extraction for all standard tools

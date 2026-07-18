@@ -515,7 +515,7 @@ Add this to `~/.codex/config.toml`:
 command = "/Users/you/.npm-global/bin/codesift-mcp"
 args = []
 tool_timeout_sec = 120
-default_tools_approval_mode = "auto"
+default_tools_approval_mode = "approve"
 ```
 
 You can also add it manually or via the Codex CLI:
