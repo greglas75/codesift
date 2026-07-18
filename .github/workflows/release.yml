@@ -40,6 +40,14 @@ jobs:
 
       - run: npm ci
 
+      # The tree-sitter WASM grammars are NOT committed (see scripts/download-wasm.ts),
+      # but `npm run build` — invoked by the prepublishOnly hook below — copies
+      # src/parser/languages into dist. Without this step the build fails with
+      # `cp: cannot stat 'src/parser/languages'` and the publish never happens
+      # (this is exactly why v0.9.6–v0.9.9 never reached npm).
+      - name: Download WASM grammars
+        run: npm run download-wasm
+
       # Guard: the pushed tag must match package.json — a mismatched tag
       # publishing the wrong version is worse than a failed run.
       - name: Verify tag matches package.json version
