@@ -153,21 +153,25 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     category: "outline",
     searchHint: "file tree directory structure listing files symbols",
     outputSchema: OutputSchemas.fileTree,
-    description: "File tree with symbol counts. compact=true for flat list (10-50x less output). Cached 5min.",
+    description: "File tree with symbol counts. Defaults to a flat compact list (10-50x less output); pass compact:false for the nested tree. Cached 5min.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       path_prefix: z.string().optional().describe("Filter to a subtree by path prefix"),
       name_pattern: z.string().optional().describe("Glob pattern to filter file names"),
       depth: zNum().describe("Maximum directory depth to traverse"),
-      compact: zBool().describe("Return flat list of {path, symbols} instead of nested tree (much less output)"),
+      compact: zBool().describe("Return flat list of {path, symbols} instead of nested tree (much less output). Default: true — pass false for the nested tree."),
       min_symbols: zNum().describe("Only include files with at least this many symbols"),
     })),
     handler: async (args) => {
+      // Default to compact when the caller omits the arg — the biggest token sink in
+      // telemetry (1.1M tok over 881 calls) came from agents rarely passing compact=true.
+      // An explicit compact:false still returns the full nested tree.
+      const compact = args.compact === undefined ? true : (args.compact as boolean);
       const result = await getFileTree(args.repo as string, {
         path_prefix: args.path_prefix as string | undefined,
         name_pattern: args.name_pattern as string | undefined,
         depth: args.depth as number | undefined,
-        compact: args.compact as boolean | undefined,
+        compact,
         min_symbols: args.min_symbols as number | undefined,
       });
       return dispatchFormatter("get_file_tree", result);
@@ -193,6 +197,7 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 1425, definition: {
     name: "get_repo_outline",
+    cacheable: true,
     category: "outline",
     searchHint: "repository outline overview directory structure high-level",
     description: "Get a high-level outline of the entire repository grouped by directory",

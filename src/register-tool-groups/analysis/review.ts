@@ -63,6 +63,7 @@ export const REVIEW_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   } },
   { order: 3709, definition: {
     name: "audit_scan",
+    cacheable: true,
     category: "analysis",
     searchHint: "audit scan code quality CQ gates dead code clones complexity patterns",
     description: "Run 5 analysis tools in parallel, return findings keyed by CQ gate. One call replaces sequential find_dead_code + search_patterns + find_clones + analyze_complexity + analyze_hotspots. Returns: CQ8 (empty catch), CQ11 (complexity), CQ13 (dead code), CQ14 (clones), CQ17 (perf anti-patterns).",

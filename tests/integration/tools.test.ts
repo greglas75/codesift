@@ -686,6 +686,37 @@ describe("context_tools", () => {
       );
       expect(hasPaymentRelated).toBe(true);
     });
+
+    it("returns compact signatures for L1", async () => {
+      const repo = await indexFixture();
+      const result = await assembleContext(repo, "user", 5000, "L1");
+
+      expect(result.level).toBe("L1");
+      expect(result.compact_symbols?.length).toBeGreaterThan(0);
+      expect(result.symbols).toBeUndefined();
+      expect(result.compact_symbols?.every((symbol) => !("source" in symbol))).toBe(true);
+    });
+
+    it("returns language-enriched file summaries for L2", async () => {
+      const repo = await indexFixture();
+      const result = await assembleContext(repo, "user", 5000, "L2");
+
+      expect(result.level).toBe("L2");
+      expect(result.file_summaries?.length).toBeGreaterThan(0);
+      expect(result.file_summaries?.some((summary) => summary.language !== "unknown")).toBe(true);
+      expect(result.file_summaries?.every((summary) => summary.exports.length > 0)).toBe(true);
+    });
+
+    it("returns symbol-ranked directory overviews for L3", async () => {
+      const repo = await indexFixture();
+      const result = await assembleContext(repo, "user", 5000, "L3");
+
+      expect(result.level).toBe("L3");
+      expect(result.directory_overview?.length).toBeGreaterThan(0);
+      const counts = result.directory_overview?.map((directory) => directory.symbol_count) ?? [];
+      expect(counts).toEqual([...counts].sort((a, b) => b - a));
+      expect(result.directory_overview?.every((directory) => directory.top_files.length <= 3)).toBe(true);
+    });
   });
 });
 
@@ -1314,9 +1345,14 @@ describe("analyze_hotspots", () => {
     // First index it in a temp dir
     await mkdir(join(fixtureDir, "src"), { recursive: true });
     await writeFile(join(fixtureDir, "src", "index.ts"), `export const x = 1;\n`);
-    // Init a git repo
+    // Init a git repo. Set an identity on the fixture repo — a fresh CI runner
+    // has no global user.email/user.name, so `git commit` aborts with "Author
+    // identity unknown" and the test only passes on a dev box that happens to
+    // have one configured. Same convention as index-repo/ast-query/journal-e2e.
     const { execFileSync } = await import("node:child_process");
     execFileSync("git", ["init"], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: fixtureDir, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: fixtureDir, stdio: "pipe" });
     execFileSync("git", ["add", "."], { cwd: fixtureDir, stdio: "pipe" });
     execFileSync("git", ["commit", "-m", "init", "--no-gpg-sign"], { cwd: fixtureDir, stdio: "pipe" });
 

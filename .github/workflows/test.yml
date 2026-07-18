@@ -25,6 +25,14 @@ jobs:
         node: [20, 22] # engines: >=20; the npm publish (release.yml) ships on 22
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history (not the default shallow fetch-depth: 1). scripts/
+          # journal-citation-check.ts grounds citations against `git log --all`
+          # — a shallow clone only has HEAD, so every historical SHA/date in
+          # tests/fixtures/journal/citation-golden.md reads as "ungrounded"
+          # (Grounded: 0/20 instead of 15/20). This repo is small (~60MB .git),
+          # so a full clone costs negligible extra CI time.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:

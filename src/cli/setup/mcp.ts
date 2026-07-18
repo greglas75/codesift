@@ -55,6 +55,19 @@ function serverEntryKind(entry: unknown): "http" | "stdio" {
   return "stdio";
 }
 
+/**
+ * A stdio entry that must be REPLACED regardless of how it compares to the
+ * desired one — i.e. the old direct-node invocation of a checked-out dev build
+ * (`node /path/to/dist/server.js`), which silently pins a stale checkout.
+ *
+ * `npx -y codesift-mcp` is NOT legacy — it is exactly what resolveMcpServerEntry
+ * produces when the binary is not globally installed (the documented npx install
+ * path). Treating every `npx` command (and every `codesift-mcp` arg) as legacy
+ * made serverEntriesEquivalent always return false for the desired entry, so
+ * setup could never report `already_configured` and rewrote the config on every
+ * single run. A genuinely different entry is still rewritten — the exact
+ * command+args comparison below catches it.
+ */
 function isLegacyStdioEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
   const record = entry as Record<string, unknown>;
@@ -63,10 +76,9 @@ function isLegacyStdioEntry(entry: unknown): boolean {
     ? record["args"].filter((arg): arg is string => typeof arg === "string")
     : [];
   return (
-    /\bnpx$|\/npx$/.test(command) ||
-    command === "npx" ||
+    command === "node" ||
     command.endsWith("/node") ||
-    args.some((arg) => arg === "codesift-mcp" || arg.includes("dist/server.js"))
+    args.some((arg) => arg.includes("dist/server.js"))
   );
 }
 

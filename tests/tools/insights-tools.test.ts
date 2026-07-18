@@ -19,7 +19,7 @@ async function makeTmp(): Promise<string> {
 }
 
 afterEach(async () => {
-  if (tmp) await rm(tmp, { recursive: true, force: true });
+  if (tmp) await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   tmp = null;
   delete process.env["CODESIFT_DATA_DIR"];
 });

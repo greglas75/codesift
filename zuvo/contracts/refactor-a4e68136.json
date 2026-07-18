@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "file": "src/parser/extractors/kotlin.ts",
+  "type": "SPLIT_FILE",
+  "mode": "full",
+  "stage": "COMPLETE",
+  "queue_file": null,
+  "queue_entry": null,
+  "cq_before": {"score":"pass","critical_failures":[]},
+  "scope_fence": [
+    "src/parser/extractors/kotlin.ts",
+    "src/parser/extractors/kotlin-ast-helpers.ts",
+    "src/parser/extractors/kotlin-test-symbols.ts"
+  ],
+  "backup_branch": "backup/refactor-kotlin-extractor-2026-07-10",
+  "plan": {"summary":"Extract Kotlin AST metadata helpers and Kotlin test/Kotest symbol handling while preserving extractKotlinSymbols and its import path."},
+  "test_mode": "RUN_EXISTING",
+  "test_audit_before": {"test_file":"tests/parser/kotlin-extractor.test.ts","q7":1,"q11":1,"q13":1,"units_total":3,"units_covered":3,"uncovered_units":[]},
+  "prove": {
+    "characterization":"existing:tests/parser/kotlin-extractor.test.ts+tests/integration/kotlin-wave-2.test.ts:green:8ebe14b:66tests",
+    "blind_audit":"clean:strict",
+    "adversarial":"clean:codex-5.3;second-pass-timeout",
+    "regression_red":"not_run",
+    "findings_disposition":"none; CQ11 pre-existing structural observation preserved"
+  },
+  "progress": [
+    {"stage":"BASELINE","status":"passed","result":"2 files, 66 tests passed on pre-refactor 8ebe14b"},
+    {"stage":"VERIFY","status":"passed","result":"2 files, 66 tests; tsc; build"},
+    {"stage":"CQ_AUDIT","status":"passed","result":"clean:strict; no FIX-NOW"},
+    {"stage":"ADVERSARIAL","status":"passed","result":"codex-5.3 found no issues; diversity pass attempted and timed out"}
+  ],
+  "cq_after": {"score":"28/29","critical_failures":[]},
+  "commits": []
+}

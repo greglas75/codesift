@@ -135,8 +135,20 @@ function normalizeCodesiftTomlServerEntry(
   const block = found.block;
   const hasHttp = /^url[\t ]*=/m.test(block);
   const hasStdio = /^(command|args)[\t ]*=/m.test(block);
-  const hasLegacyNpx = /^command[\t ]*=[\t ]*"[^"]*npx"/m.test(block);
   const hasDistServer = /dist\/server\.js/.test(block);
+
+  // An npx command is only LEGACY when it does not carry the package in args.
+  // `command = "npx"` + `args = ["-y", "codesift-mcp"]` is precisely what
+  // getCodexServerEntryLines emits when the binary is not globally installed
+  // (the documented npx install path). The old regex matched any npx command,
+  // so it flagged the desired entry as legacy — setup rewrote config.toml on
+  // every single run and never reported `already_configured`. Only the
+  // argument-less legacy form (`command = "npx"`, no codesift-mcp in args) is
+  // still migrated.
+  const hasNpxCommand = /^command[\t ]*=[\t ]*"[^"]*npx"/m.test(block);
+  const argsCarryPackage = /^args[\t ]*=.*codesift-mcp/m.test(block);
+  const hasLegacyNpx = hasNpxCommand && !argsCarryPackage;
+
   const shouldRewrite =
     desiredHttp !== hasHttp ||
     (desiredHttp ? hasStdio : hasHttp || hasLegacyNpx || hasDistServer);
