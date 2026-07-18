@@ -1,7 +1,65 @@
-import { homedir } from "node:os";
+import { homedir, totalmem } from "node:os";
 import { join } from "node:path";
 
 export type EmbeddingProvider = "voyage" | "openai" | "ollama" | "local" | null;
+
+const GIB = 1024 ** 3;
+
+/**
+ * Below this much TOTAL system RAM, the on-device embedding model
+ * (nomic-embed-text via onnxruntime, ~1-1.5 GB resident) is NOT loaded by
+ * default — the exact "lite mode for 16-24 GB machines" the docs recommend,
+ * made automatic so codesift stops OOM-ing small machines out of the box.
+ * BM25 + tree-sitter symbols still work; only semantic embeddings go dark.
+ * Fully overridable: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on,
+ * a remote provider (Voyage/OpenAI/Ollama) sidesteps it entirely.
+ */
+const AUTO_LITE_MAX_TOTAL_RAM = 24 * GIB;
+
+let autoLiteLogged = false;
+
+/**
+ * Whether the LOCAL embedding model should be skipped. Explicit env wins in
+ * both directions ("1"/"true" → skip, "0"/"false" → force load); when unset,
+ * auto-skip on low-RAM machines. Only gates the local model — remote providers
+ * are unaffected.
+ */
+export function localEmbeddingsDisabled(): boolean {
+  const v = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
+  if (v === "1" || v === "true") return true;
+  if (v === "0" || v === "false") return false;
+  const total = totalmem();
+  if (total < AUTO_LITE_MAX_TOTAL_RAM) {
+    if (!autoLiteLogged) {
+      autoLiteLogged = true;
+      console.error(
+        `[codesift] lite mode: ${Math.round(total / GIB)} GB RAM < 24 GB — ` +
+          `local embedding model not loaded (saves ~1.5 GB). BM25 + symbols still work. ` +
+          `Set CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0 to force it on.`,
+      );
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resident embedding-CACHE RAM budget in bytes. Explicit
+ * `CODESIFT_MAX_EMBEDDING_MEM_MB` wins; otherwise scale to total RAM so a 16 GB
+ * machine doesn't hold a full 1 GB of embedding vectors on top of everything
+ * else. This is pure eviction pressure — semantic search still works, it just
+ * keeps fewer repos resident.
+ */
+export function embeddingMemBudgetBytes(): number {
+  const raw = process.env["CODESIFT_MAX_EMBEDDING_MEM_MB"];
+  const n = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isNaN(n) && n > 0) return n * 1024 * 1024;
+  const total = totalmem();
+  // Inclusive boundaries: a 16 GB machine reports ~16·GiB, and it must get the
+  // small budget, not the next tier up.
+  const mb = total <= 16 * GIB ? 256 : total <= 32 * GIB ? 512 : 1024;
+  return mb * 1024 * 1024;
+}
 
 export interface Config {
   // Storage
@@ -49,7 +107,7 @@ export function loadConfig(): Config {
   const openaiApiKey = process.env["CODESIFT_OPENAI_API_KEY"] ?? null;
   const ollamaUrl = process.env["CODESIFT_OLLAMA_URL"] ?? null;
   const localModel = process.env["CODESIFT_LOCAL_MODEL"] ?? null;
-  const localDisabled = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] === "true";
+  const localDisabled = localEmbeddingsDisabled();
   const explicitProvider = process.env["CODESIFT_EMBEDDING_PROVIDER"] ?? null;
 
   let embeddingProvider: EmbeddingProvider = null;
