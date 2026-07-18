@@ -99,6 +99,7 @@ describe("setup", () => {
       expect(content).toContain("args = [");
       expect(content).not.toContain("dist/server.js");
       expect(content).toContain("tool_timeout_sec = 120");
+      expect(content).toContain("required = true");
     });
 
     it("appends to existing config.toml", async () => {
@@ -133,7 +134,8 @@ describe("setup", () => {
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain("[mcp_servers.codesift]");
       expect(content).toMatch(/command = ".*(?:codesift-mcp|npx)"/);
-      expect(content).toContain('default_tools_approval_mode = "auto"');
+      expect(content).toContain('default_tools_approval_mode = "approve"');
+      expect(content).toContain("required = true");
     });
 
     it("skips when already configured with default tool approval", async () => {
@@ -141,7 +143,7 @@ describe("setup", () => {
       await mkdir(configDir, { recursive: true });
       await writeFile(
         join(configDir, "config.toml"),
-        '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\ndefault_tools_approval_mode = "auto"\n',
+        '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nrequired = true\ndefault_tools_approval_mode = "approve"\n',
         "utf-8",
       );
 
@@ -149,7 +151,24 @@ describe("setup", () => {
       expect(result.status).toBe("already_configured");
 
       const content = await readFile(result.config_path, "utf-8");
-      expect(content).toBe('[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\ndefault_tools_approval_mode = "auto"\n');
+      expect(content).toBe('[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nrequired = true\ndefault_tools_approval_mode = "approve"\n');
+    });
+
+    it("forces an existing CodeSift server to be required", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "config.toml"),
+        '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nrequired = false\ndefault_tools_approval_mode = "approve"\n',
+        "utf-8",
+      );
+
+      const result = await setup("codex");
+      expect(result.status).toBe("updated");
+
+      const content = await readFile(result.config_path, "utf-8");
+      expect(content).toContain("required = true");
+      expect(content).not.toContain("required = false");
     });
 
     it("migrates legacy npx/dist-server codex entries to the stable wrapper shape", async () => {
@@ -194,7 +213,7 @@ describe("setup", () => {
 
       const content = await readFile(result.config_path, "utf-8");
       expect(content).not.toMatch(/mcp_servers\.codesift\.tools\./);
-      expect(content).toContain('default_tools_approval_mode = "auto"');
+      expect(content).toContain('default_tools_approval_mode = "approve"');
       // Non-codesift overrides preserved
       expect(content).toContain("[mcp_servers.chrome-devtools.tools.fill]");
       // Main block preserved
