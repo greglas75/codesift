@@ -5,7 +5,7 @@
 // guard that fails loudly (in tests / dev) if a forbidden key ever leaks in.
 import { TELEMETRY_SCHEMA_VERSION } from "./config.js";
 import type { EnvProfile } from "./env-profile.js";
-import type { ToolAggregate } from "./aggregator.js";
+import type { ToolAggregate, HintEmission } from "./aggregator.js";
 
 export interface Level1Payload {
   schema_version: number;
@@ -13,6 +13,7 @@ export interface Level1Payload {
   anon_id: string;
   env: EnvProfile;
   tools: Level1ToolMetric[];
+  hints: Level1HintEmission[];
 }
 
 export interface Level1ToolMetric {
@@ -24,6 +25,13 @@ export interface Level1ToolMetric {
   max_ms: number;
   error_rate: number;
   empty_result_rate: number;
+  cache_hit_rate: number;
+}
+
+export interface Level1HintEmission {
+  day: string;
+  hint_code: string;
+  count: number;
 }
 
 /** Explicitly pick ONLY allowlisted fields from an aggregate. */
@@ -37,7 +45,12 @@ function pickToolMetric(a: ToolAggregate): Level1ToolMetric {
     max_ms: a.max_ms,
     error_rate: a.error_rate,
     empty_result_rate: a.empty_result_rate,
+    cache_hit_rate: a.cache_hit_rate,
   };
+}
+
+function pickHint(h: HintEmission): Level1HintEmission {
+  return { day: h.day, hint_code: h.hint_code, count: h.count };
 }
 
 /** Explicitly pick ONLY allowlisted env fields (no hostname/paths). */
@@ -59,6 +72,7 @@ export function buildLevel1Payload(input: {
   anonId: string;
   env: EnvProfile;
   tools: ToolAggregate[];
+  hints?: HintEmission[];
   now: number;
 }): Level1Payload {
   return {
@@ -67,6 +81,7 @@ export function buildLevel1Payload(input: {
     anon_id: input.anonId,
     env: pickEnv(input.env),
     tools: input.tools.map(pickToolMetric),
+    hints: (input.hints ?? []).map(pickHint),
   };
 }
 

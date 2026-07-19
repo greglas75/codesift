@@ -8,12 +8,19 @@ import { getUsagePath } from "../usage-tracker.js";
 export interface ToolAggregate {
   tool: string;
   day: string; // YYYY-MM-DD (UTC)
-  count: number;
+  count: number; // total invocations (executed + cache-served)
   p50_ms: number;
   p95_ms: number;
   max_ms: number;
-  error_rate: number; // 0..1, rounded to 3dp
-  empty_result_rate: number; // 0..1, fraction with result_chunks === 0
+  error_rate: number; // 0..1 over EXECUTED calls
+  empty_result_rate: number; // 0..1 over executed calls (result_chunks === 0)
+  cache_hit_rate: number; // 0..1 fraction served from the response cache
+}
+
+export interface HintEmission {
+  day: string; // YYYY-MM-DD (UTC)
+  hint_code: string; // "H1".."H18"
+  count: number;
 }
 
 function dayOf(ts: number): string {
@@ -35,14 +42,17 @@ interface Bucket {
   latencies: number[];
   errors: number;
   empties: number;
-  count: number;
+  executed: number; // calls that actually ran (not cache-served)
+  cacheHits: number;
 }
 
 /**
  * Pure aggregation over a set of usage entries. Groups by (tool, day) and
- * derives count, latency p50/p95/max, error_rate and empty_result_rate.
+ * derives count, latency p50/p95/max, error_rate, empty_result_rate and
+ * cache_hit_rate. Cache-served calls (`cache_hit === true`) are counted only
+ * toward cache_hit_rate — never latency/error/empty (they didn't execute).
  * `empty_result_rate` uses result_chunks===0 — a query/path-free "did this
- * call find anything" signal that already exists on the entry.
+ * call find anything" signal already on the entry.
  */
 export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
   const buckets = new Map<string, Bucket>();
@@ -53,10 +63,14 @@ export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
     const key = `${e.tool}\0${day}`;
     let b = buckets.get(key);
     if (!b) {
-      b = { tool: e.tool, day, latencies: [], errors: 0, empties: 0, count: 0 };
+      b = { tool: e.tool, day, latencies: [], errors: 0, empties: 0, executed: 0, cacheHits: 0 };
       buckets.set(key, b);
     }
-    b.count++;
+    if (e.cache_hit === true) {
+      b.cacheHits++;
+      continue;
+    }
+    b.executed++;
     if (typeof e.elapsed_ms === "number" && Number.isFinite(e.elapsed_ms)) {
       b.latencies.push(e.elapsed_ms);
     }
@@ -67,19 +81,45 @@ export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
   const out: ToolAggregate[] = [];
   for (const b of buckets.values()) {
     const sorted = b.latencies.slice().sort((a, c) => a - c);
+    const total = b.executed + b.cacheHits;
     out.push({
       tool: b.tool,
       day: b.day,
-      count: b.count,
+      count: total,
       p50_ms: percentile(sorted, 0.5),
       p95_ms: percentile(sorted, 0.95),
       max_ms: sorted.length ? sorted[sorted.length - 1]! : 0,
-      error_rate: round3(b.errors / b.count),
-      empty_result_rate: round3(b.empties / b.count),
+      error_rate: b.executed ? round3(b.errors / b.executed) : 0,
+      empty_result_rate: b.executed ? round3(b.empties / b.executed) : 0,
+      cache_hit_rate: total ? round3(b.cacheHits / total) : 0,
     });
   }
   // Deterministic order (day desc, then tool) — stable payloads, easier diffing.
   out.sort((a, c) => (a.day === c.day ? a.tool.localeCompare(c.tool) : c.day.localeCompare(a.day)));
+  return out;
+}
+
+/**
+ * Count response-hint emissions per (day, code). Answers "which hints fire and
+ * how often" (first half of hint efficacy — spec §1). Codes only, never text.
+ */
+export function aggregateHintEmissions(entries: UsageEntry[]): HintEmission[] {
+  const counts = new Map<string, number>(); // `${day}\0${code}` -> count
+  for (const e of entries) {
+    if (!e || typeof e.ts !== "number" || !Array.isArray(e.hints_emitted)) continue;
+    const day = dayOf(e.ts);
+    for (const code of e.hints_emitted) {
+      if (typeof code !== "string") continue;
+      const key = `${day}\0${code}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  const out: HintEmission[] = [];
+  for (const [key, count] of counts) {
+    const [day, code] = key.split("\0");
+    out.push({ day: day!, hint_code: code!, count });
+  }
+  out.sort((a, c) => (a.day === c.day ? a.hint_code.localeCompare(c.hint_code) : c.day.localeCompare(a.day)));
   return out;
 }
 

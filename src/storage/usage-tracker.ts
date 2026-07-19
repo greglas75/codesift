@@ -38,6 +38,12 @@ export interface UsageEntry {
   result_tokens_sent?: number;
   /** True when the handler threw — the logged result is the error message. */
   error?: boolean;
+  /** True when served from the response cache — excluded from latency/error/empty
+   *  aggregation, counted only toward cache_hit_rate. */
+  cache_hit?: boolean;
+  /** Response-hint codes emitted on this call (e.g. ["H1","H12"]) — powers the
+   *  hint-efficacy funnel. Codes only, never the hint text. */
+  hints_emitted?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +248,10 @@ export function trackToolCall(
     sentChars?: number;
     /** The handler threw — resultText is the error message. */
     error?: boolean;
+    /** Served from the response cache (excluded from latency/error/empty stats). */
+    cacheHit?: boolean;
+    /** Response-hint codes emitted on this call, e.g. ["H1","H12"]. */
+    hintsEmitted?: string[];
   },
 ): void {
   const resultTokens = Math.ceil(resultText.length / 4);
@@ -258,6 +268,8 @@ export function trackToolCall(
     host: HOST,
     ...(sentTokens !== undefined && sentTokens !== resultTokens ? { result_tokens_sent: sentTokens } : {}),
     ...(extra?.error ? { error: true } : {}),
+    ...(extra?.cacheHit ? { cache_hit: true } : {}),
+    ...(extra?.hintsEmitted && extra.hintsEmitted.length ? { hints_emitted: extra.hintsEmitted } : {}),
   };
 
   // Fire and forget — never block the tool response

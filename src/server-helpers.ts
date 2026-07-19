@@ -248,6 +248,9 @@ export function wrapTool<T>(
       if (cached) {
         trackSequentialCalls(toolName);
         recordCacheHit(toolName, args);
+        // Log the cache hit so cache_hit_rate is measurable (excluded from
+        // latency/error/empty aggregation by the telemetry aggregator).
+        trackToolCall(toolName, args, cached, {}, 0, { cacheHit: true });
         scheduleSidecarFlush();
         return Promise.resolve({
           content: [{
@@ -294,8 +297,12 @@ export function wrapTool<T>(
         const response = formatResponse(text, toolName, args, data);
         // Track AFTER formatting so telemetry can record both the raw size
         // and what was actually sent post-cascade (result_tokens_sent).
-        const sentChars = response.content[0]?.text?.length ?? 0;
-        trackToolCall(toolName, args, text, data, elapsed, { sentChars });
+        const sentText = response.content[0]?.text ?? "";
+        const sentChars = sentText.length;
+        // Response-hint codes (H1..H18) are prepended to the sent text by
+        // formatResponse; capture just the codes for the hint-efficacy funnel.
+        const hintsEmitted = [...new Set(sentText.match(/\bH\d+/g) ?? [])];
+        trackToolCall(toolName, args, text, data, elapsed, { sentChars, hintsEmitted });
         return response;
       } catch (err: unknown) {
         const elapsed = performance.now() - start;

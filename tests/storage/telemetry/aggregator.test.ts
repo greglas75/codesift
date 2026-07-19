@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { aggregateToolMetrics } from "../../../src/storage/telemetry/aggregator.js";
+import { aggregateToolMetrics, aggregateHintEmissions } from "../../../src/storage/telemetry/aggregator.js";
 import type { UsageEntry } from "../../../src/storage/usage-tracker.js";
 
 const DAY = Date.UTC(2026, 6, 19, 12, 0, 0); // 2026-07-19
@@ -42,6 +42,30 @@ describe("aggregateToolMetrics", () => {
     expect(key("a", "2026-07-19")!.count).toBe(1);
     expect(key("a", "2026-07-20")!.count).toBe(1);
     expect(key("b", "2026-07-19")!.count).toBe(1);
+  });
+
+  it("counts cache hits toward cache_hit_rate but excludes them from latency/error/empty", () => {
+    const aggs = aggregateToolMetrics([
+      entry({ tool: "t", ts: DAY, elapsed_ms: 40, result_chunks: 2, error: false }),
+      entry({ tool: "t", ts: DAY, cache_hit: true, elapsed_ms: 0, result_chunks: 0 }),
+      entry({ tool: "t", ts: DAY, cache_hit: true, elapsed_ms: 0, result_chunks: 0 }),
+    ]);
+    const a = aggs[0]!;
+    expect(a.count).toBe(3); // total invocations
+    expect(a.cache_hit_rate).toBeCloseTo(2 / 3, 3);
+    expect(a.max_ms).toBe(40); // only the executed call
+    expect(a.empty_result_rate).toBe(0); // cache hits NOT counted as empty
+    expect(a.error_rate).toBe(0);
+  });
+
+  it("aggregateHintEmissions counts hint codes per day", () => {
+    const hints = aggregateHintEmissions([
+      entry({ tool: "t", ts: DAY, hints_emitted: ["H1", "H12"] }),
+      entry({ tool: "t", ts: DAY, hints_emitted: ["H1"] }),
+    ]);
+    const h1 = hints.find((h) => h.hint_code === "H1")!;
+    expect(h1.count).toBe(2);
+    expect(hints.find((h) => h.hint_code === "H12")!.count).toBe(1);
   });
 
   it("ignores malformed entries (missing tool/ts)", () => {

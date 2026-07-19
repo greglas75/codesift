@@ -1,6 +1,6 @@
 // Convenience assembly used by `codesift telemetry show` and (Phase 3) the
 // uploader: local usage → aggregates → sanitized Level-1 payload.
-import { readLocalUsageEntries, aggregateToolMetrics } from "./aggregator.js";
+import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintEmissions } from "./aggregator.js";
 import { buildEnvProfile } from "./env-profile.js";
 import { getAnonId } from "./anon-id.js";
 import { buildLevel1Payload, assertSanitized, type Level1Payload } from "./sanitizer.js";
@@ -13,8 +13,9 @@ import { buildLevel1Payload, assertSanitized, type Level1Payload } from "./sanit
 export async function buildCurrentLevel1Payload(now: number, sinceTs = 0): Promise<Level1Payload> {
   const entries = await readLocalUsageEntries(sinceTs);
   const tools = aggregateToolMetrics(entries);
+  const hints = aggregateHintEmissions(entries);
   const env = buildEnvProfile();
-  const payload = buildLevel1Payload({ anonId: getAnonId(), env, tools, now });
+  const payload = buildLevel1Payload({ anonId: getAnonId(), env, tools, hints, now });
   assertSanitized(payload); // throws if the allowlist was ever violated
   return payload;
 }
