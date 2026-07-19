@@ -91,6 +91,37 @@ export function writeStoredTelemetryLevel(level: TelemetryLevel): void {
   renameSync(tmp, path);
 }
 
+function noticePath(): string {
+  return join(dataDir(), "telemetry-notice-shown");
+}
+
+/**
+ * Print the one-time consent notice to STDERR (spec §4). Shown once per machine
+ * when telemetry is anon, then a marker file suppresses it. STDERR so it never
+ * corrupts the MCP stdio protocol. Best-effort — never throws.
+ */
+export function maybePrintFirstRunNotice(): void {
+  try {
+    if (resolveTelemetryLevel() !== "anon") return;
+    const marker = noticePath();
+    try {
+      readFileSync(marker, "utf-8");
+      return; // already shown
+    } catch {
+      /* not shown yet */
+    }
+    process.stderr.write(
+      "[codesift] Anonymous usage stats are ON (tool names, latencies, error/empty rates,\n" +
+      "  bucketed env — NO queries, paths, repo names or code). See exactly what is sent:\n" +
+      "  `codesift telemetry show`.  Opt out: CODESIFT_TELEMETRY=off (or DO_NOT_TRACK=1).\n",
+    );
+    mkdirSync(dataDir(), { recursive: true });
+    writeFileSync(marker, String(Date.now()) + "\n", "utf-8");
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Human-readable reason for the current level — powers `codesift telemetry show`. */
 export function telemetrySource(): { level: TelemetryLevel; reason: string } {
   if (isTruthyEnv(process.env["DO_NOT_TRACK"])) {

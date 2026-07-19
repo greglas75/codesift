@@ -4,6 +4,7 @@
 // reverse proxy in front. Writes JSONL per namespace per UTC day. Never stores
 // client IPs in the data files (IP lives only in the proxy access log).
 import http from "node:http";
+import { gunzipSync } from "node:zlib";
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -75,7 +76,10 @@ const server = http.createServer((req, res) => {
     if (res.writableEnded) return;
     let payload;
     try {
-      payload = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      let buf = Buffer.concat(chunks);
+      const enc = String(req.headers["content-encoding"] ?? "");
+      if (enc.includes("gzip")) buf = gunzipSync(buf);
+      payload = JSON.parse(buf.toString("utf-8"));
     } catch {
       return send(res, 400, { error: "invalid json" });
     }

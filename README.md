@@ -674,6 +674,29 @@ All configuration is via environment variables.
 | `CODESIFT_DEFAULT_TOP_K` | Default max results for search | `50` |
 | `CODESIFT_EMBEDDING_BATCH_SIZE` | Symbols per embedding API call | `128` |
 | `CODESIFT_SECRET_SCAN` | Enable/disable secret scanning | `true` (set `false` to disable) |
+| `CODESIFT_TELEMETRY` | Telemetry level: `off` \| `anon` \| `full` | `anon` (opt-out) |
+| `CODESIFT_TELEMETRY_URL` | Collector endpoint (push happens only when set) | unset (no push) |
+
+## Anonymous usage telemetry
+
+CodeSift sends **anonymous, aggregate** usage stats so the tool can be improved based on how it's actually used. It is **opt-out** and sends **only** the fields below — never your queries, file paths, repo/file/symbol names, code, hostname, username, or IP.
+
+**Exactly what is sent (allowlist):** a random per-install id (not derived from your machine); bucketed environment (OS, arch, RAM bucket, cores, Node & CodeSift version, repo-size bucket, top-3 file extensions); and per-tool-per-day aggregates (call count, latency p50/p95/max, error rate, empty-result rate, cache-hit rate) plus response-hint emission counts. The allowlist is enforced in code — see [`src/storage/telemetry/sanitizer.ts`](src/storage/telemetry/sanitizer.ts).
+
+**See the exact payload** that would be sent from your machine:
+
+```bash
+codesift telemetry show
+```
+
+**Opt out** (any one of):
+
+```bash
+export CODESIFT_TELEMETRY=off      # or the DO_NOT_TRACK=1 standard
+codesift telemetry off             # persists in ~/.codesift/config.json
+```
+
+`full` is opt-in only (sends full local usage entries incl. queries/paths — intended for your own fleet). Push only happens when `CODESIFT_TELEMETRY_URL` is configured.
 
 ## How it works
 

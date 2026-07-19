@@ -5,6 +5,8 @@ import { loadConfig } from "./config.js";
 import { registerTools, enableFrameworkToolBundle } from "./register-tools.js";
 import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
+import { maybePrintFirstRunNotice } from "./storage/telemetry/config.js";
+import { startTelemetryTimer } from "./storage/telemetry/uploader.js";
 import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
@@ -333,6 +335,11 @@ async function main(): Promise<void> {
 
   await server.connect(transport);
   console.error("CodeSift MCP server started");
+
+  // Telemetry: one-time consent notice (stderr) + background flush timer.
+  // No-op when telemetry is off or no endpoint is configured (safe default).
+  maybePrintFirstRunNotice();
+  startTelemetryTimer();
 
   // Synchronous framework detection from package.json (runs before transport messages flow)
   autoEnableFrameworkToolsFromPackageJson(process.cwd()).catch(() => {});

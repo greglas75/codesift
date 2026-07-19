@@ -123,8 +123,12 @@ export function aggregateHintEmissions(entries: UsageEntry[]): HintEmission[] {
   return out;
 }
 
-/** Read + parse the local usage.jsonl (best-effort — skips malformed lines). */
-export async function readLocalUsageEntries(sinceTs = 0): Promise<UsageEntry[]> {
+/**
+ * Read + parse the local usage.jsonl (best-effort — skips malformed lines).
+ * `afterTs` is EXCLUSIVE (strictly greater) so it composes with an upload
+ * watermark (the max ts already sent) without re-sending the boundary entry.
+ */
+export async function readLocalUsageEntries(afterTs = 0): Promise<UsageEntry[]> {
   let raw: string;
   try {
     raw = await readFile(getUsagePath(), "utf-8");
@@ -136,7 +140,7 @@ export async function readLocalUsageEntries(sinceTs = 0): Promise<UsageEntry[]> 
     if (!line) continue;
     try {
       const e = JSON.parse(line) as UsageEntry;
-      if (typeof e.ts === "number" && e.ts >= sinceTs) entries.push(e);
+      if (typeof e.ts === "number" && e.ts > afterTs) entries.push(e);
     } catch {
       /* skip torn/partial line */
     }
