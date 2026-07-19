@@ -820,6 +820,10 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "patterns": handlePatterns,
   "find-clones": handleFindClones,
   "setup": handleSetup,
+  "telemetry": async (args: string[], _flags: Flags) => {
+    const { handleTelemetry } = await import("./telemetry-commands.js");
+    await handleTelemetry(args);
+  },
   "wiki-generate": async (args: string[], flags: Flags) => {
     const { handleWikiGenerate } = await import("./wiki-commands.js");
     await handleWikiGenerate(args, flags);
