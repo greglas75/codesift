@@ -1,0 +1,24 @@
+# systemd unit for the codesift+zuvo telemetry collector on coding-vps.
+# Runs as `gha` (never root), binds loopback only, TLS handled by nginx in front.
+# Install: see docs/runbook/telemetry-collector.md
+[Unit]
+Description=codesift+zuvo telemetry collector
+After=network.target
+
+[Service]
+Type=simple
+User=gha
+# EnvironmentFile holds CODESIFT_COLLECTOR_TOKEN + optional COLLECTOR_PORT/DATA_DIR.
+EnvironmentFile=/home/gha/telemetry-collector/collector.env
+ExecStart=/usr/bin/node /home/gha/telemetry-collector/server.mjs
+Restart=on-failure
+RestartSec=5
+# Hardening — the service only needs to write its own data dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/gha/telemetry-collector
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
