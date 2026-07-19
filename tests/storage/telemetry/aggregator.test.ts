@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { aggregateToolMetrics, aggregateHintEmissions } from "../../../src/storage/telemetry/aggregator.js";
+import { aggregateToolMetrics, aggregateHintFunnel, aggregatePlanTurnFunnel } from "../../../src/storage/telemetry/aggregator.js";
 import type { UsageEntry } from "../../../src/storage/usage-tracker.js";
 
 const DAY = Date.UTC(2026, 6, 19, 12, 0, 0); // 2026-07-19
@@ -58,14 +58,32 @@ describe("aggregateToolMetrics", () => {
     expect(a.error_rate).toBe(0);
   });
 
-  it("aggregateHintEmissions counts hint codes per day", () => {
-    const hints = aggregateHintEmissions([
-      entry({ tool: "t", ts: DAY, hints_emitted: ["H1", "H12"] }),
-      entry({ tool: "t", ts: DAY, hints_emitted: ["H1"] }),
+  it("aggregateHintFunnel counts emitted vs applied via next-call correlation", () => {
+    // H1 emitted on call 1; call 2 (same session) uses group_by_file → applied.
+    // H4 emitted on call 2; call 3 does NOT add file_pattern → emitted-not-applied.
+    const hints = aggregateHintFunnel([
+      entry({ tool: "search_text", ts: DAY, session_id: "s", hints_emitted: ["H1"] }),
+      entry({ tool: "search_text", ts: DAY + 1, session_id: "s", hints_emitted: ["H4"], args_summary: { group_by_file: true } }),
+      entry({ tool: "search_symbols", ts: DAY + 2, session_id: "s", args_summary: {} }),
     ]);
     const h1 = hints.find((h) => h.hint_code === "H1")!;
-    expect(h1.count).toBe(2);
-    expect(hints.find((h) => h.hint_code === "H12")!.count).toBe(1);
+    expect(h1.emitted).toBe(1);
+    expect(h1.applied).toBe(1); // next call had group_by_file:true
+    const h4 = hints.find((h) => h.hint_code === "H4")!;
+    expect(h4.emitted).toBe(1);
+    expect(h4.applied).toBe(0); // next call lacked file_pattern
+  });
+
+  it("aggregatePlanTurnFunnel counts recommended vs used", () => {
+    const pt = aggregatePlanTurnFunnel([
+      entry({ tool: "plan_turn", ts: DAY, session_id: "s", recommended_tools: ["search_text", "get_symbol"] }),
+      entry({ tool: "search_text", ts: DAY + 1, session_id: "s" }), // used a recommendation
+      entry({ tool: "plan_turn", ts: DAY + 2, session_id: "s", recommended_tools: ["trace_route"] }),
+      entry({ tool: "search_text", ts: DAY + 3, session_id: "s" }), // did NOT use recommendation
+    ]);
+    expect(pt).toHaveLength(1);
+    expect(pt[0]!.recommended).toBe(2);
+    expect(pt[0]!.used).toBe(1);
   });
 
   it("ignores malformed entries (missing tool/ts)", () => {

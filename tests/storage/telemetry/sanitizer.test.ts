@@ -27,7 +27,7 @@ describe("sanitizer allowlist (spec §1 — the leak guarantee)", () => {
     }
     expect(() => assertSanitized(payload)).not.toThrow();
     // only allowlisted top-level keys
-    expect(Object.keys(payload).sort()).toEqual(["anon_id", "env", "hints", "schema_version", "tools", "ts"]);
+    expect(Object.keys(payload).sort()).toEqual(["anon_id", "env", "hints", "plan_turn", "schema_version", "tools", "ts"]);
   });
 
   it("assertSanitized throws when a forbidden KEY appears anywhere", () => {

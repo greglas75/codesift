@@ -5,7 +5,7 @@
 // guard that fails loudly (in tests / dev) if a forbidden key ever leaks in.
 import { TELEMETRY_SCHEMA_VERSION } from "./config.js";
 import type { EnvProfile } from "./env-profile.js";
-import type { ToolAggregate, HintEmission } from "./aggregator.js";
+import type { ToolAggregate, HintEmission, PlanTurnFunnel } from "./aggregator.js";
 
 export interface Level1Payload {
   schema_version: number;
@@ -14,6 +14,7 @@ export interface Level1Payload {
   env: EnvProfile;
   tools: Level1ToolMetric[];
   hints: Level1HintEmission[];
+  plan_turn: Level1PlanTurn[];
 }
 
 export interface Level1ToolMetric {
@@ -31,7 +32,14 @@ export interface Level1ToolMetric {
 export interface Level1HintEmission {
   day: string;
   hint_code: string;
-  count: number;
+  emitted: number;
+  applied: number;
+}
+
+export interface Level1PlanTurn {
+  day: string;
+  recommended: number;
+  used: number;
 }
 
 /** Explicitly pick ONLY allowlisted fields from an aggregate. */
@@ -50,7 +58,11 @@ function pickToolMetric(a: ToolAggregate): Level1ToolMetric {
 }
 
 function pickHint(h: HintEmission): Level1HintEmission {
-  return { day: h.day, hint_code: h.hint_code, count: h.count };
+  return { day: h.day, hint_code: h.hint_code, emitted: h.emitted, applied: h.applied };
+}
+
+function pickPlanTurn(p: PlanTurnFunnel): Level1PlanTurn {
+  return { day: p.day, recommended: p.recommended, used: p.used };
 }
 
 /** Explicitly pick ONLY allowlisted env fields (no hostname/paths). */
@@ -73,6 +85,7 @@ export function buildLevel1Payload(input: {
   env: EnvProfile;
   tools: ToolAggregate[];
   hints?: HintEmission[];
+  planTurn?: PlanTurnFunnel[];
   now: number;
 }): Level1Payload {
   return {
@@ -82,6 +95,7 @@ export function buildLevel1Payload(input: {
     env: pickEnv(input.env),
     tools: input.tools.map(pickToolMetric),
     hints: (input.hints ?? []).map(pickHint),
+    plan_turn: (input.planTurn ?? []).map(pickPlanTurn),
   };
 }
 

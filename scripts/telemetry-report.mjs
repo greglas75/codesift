@@ -48,7 +48,8 @@ const installs = new Set();
 const versionInstalls = new Map();     // version -> Set(anon_id)
 const tool = new Map();                // name -> {count, errW, emptyW, cacheW, maxP95}
 const latByBucket = new Map();         // name -> Map(bucket -> {p95Sum, n})
-const hint = new Map();                // code -> count
+const hint = new Map();                // code -> {emitted, applied}
+const planTurn = { recommended: 0, used: 0 };
 
 for (const p of payloads) {
   const anon = String(p.anon_id ?? "?");
@@ -73,7 +74,13 @@ for (const p of payloads) {
     const e = lb.get(bucket);
     e.p95Sum += t.p95_ms ?? 0; e.n += 1;
   }
-  for (const h of p.hints ?? []) hint.set(h.hint_code, (hint.get(h.hint_code) ?? 0) + (h.count ?? 0));
+  for (const h of p.hints ?? []) {
+    const a = hint.get(h.hint_code) ?? { emitted: 0, applied: 0 };
+    a.emitted += h.emitted ?? h.count ?? 0; // tolerate old {count} shape
+    a.applied += h.applied ?? 0;
+    hint.set(h.hint_code, a);
+  }
+  for (const pt of p.plan_turn ?? []) { planTurn.recommended += pt.recommended ?? 0; planTurn.used += pt.used ?? 0; }
 }
 
 const pct = (n) => `${(n * 100).toFixed(1)}%`;
@@ -107,14 +114,17 @@ for (const [ver, set] of [...versionInstalls.entries()].sort((a, b) => b[1].size
   L.push(`| ${ver} | ${set.size} |`);
 }
 
-L.push(`\n## 3. Hint efficacy — which hints fire (H1–H18)`);
+L.push(`\n## 3. Hint efficacy — do agents act on hints? (H1–H18)`);
 if (hint.size === 0) { L.push(`\n_No hint emissions recorded._`); }
 else {
-  L.push(`\n| hint | emissions |`);
-  L.push(`|------|----------:|`);
-  for (const [code, n] of [...hint.entries()].sort((a, b) => b[1] - a[1])) L.push(`| ${code} | ${n} |`);
+  L.push(`\n| hint | emitted | applied | applied% |`);
+  L.push(`|------|--------:|--------:|---------:|`);
+  for (const [code, a] of [...hint.entries()].sort((x, y) => y[1].emitted - x[1].emitted)) {
+    L.push(`| ${code} | ${a.emitted} | ${a.applied} | ${a.emitted ? pct(a.applied / a.emitted) : "—"} |`);
+  }
 }
-L.push(`\n_(hint-APPLIED and plan_turn recommended→used funnels pending client capture.)_`);
+L.push(`\n**plan_turn router**: recommended ${planTurn.recommended} · next-call used a recommendation ${planTurn.used}` +
+  (planTurn.recommended ? ` (${pct(planTurn.used / planTurn.recommended)})` : ""));
 
 L.push(`\n## 4. Latency vs repo size — where it scales badly`);
 L.push(`\n| tool | repo bucket | avg p95 (ms) | samples |`);

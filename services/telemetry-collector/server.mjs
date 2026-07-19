@@ -11,7 +11,11 @@ import { homedir } from "node:os";
 
 const HOST = process.env.COLLECTOR_HOST ?? "127.0.0.1"; // loopback-only by default
 const PORT = Number(process.env.COLLECTOR_PORT ?? 5599);
-const TOKEN = process.env.CODESIFT_COLLECTOR_TOKEN ?? "";
+// Secret token gates the FLEET / full-detail data and the zuvo namespace.
+// Anonymous codesift ingest is intentionally open (validated + rate-limited)
+// so the public install-base can send the allowlisted aggregate without a
+// shared secret baked into the npm package.
+const SECRET = process.env.CODESIFT_COLLECTOR_TOKEN ?? "";
 const DATA_DIR = process.env.COLLECTOR_DATA_DIR ?? join(homedir(), "telemetry-collector", "data");
 const MAX_BODY = Number(process.env.COLLECTOR_MAX_BODY ?? 262_144); // 256 KB
 const NAMESPACES = new Set(["codesift", "zuvo"]);
@@ -58,9 +62,6 @@ const server = http.createServer((req, res) => {
   const namespace = m[1];
   if (!NAMESPACES.has(namespace)) return send(res, 404, { error: "unknown namespace" });
 
-  // Auth: constant-ish comparison. Empty configured token => refuse all (safe default).
-  if (!TOKEN || req.headers["x-api-key"] !== TOKEN) return send(res, 401, { error: "unauthorized" });
-
   let size = 0;
   const chunks = [];
   req.on("data", (c) => {
@@ -87,6 +88,16 @@ const server = http.createServer((req, res) => {
     const anonId = payload && typeof payload.anon_id === "string" ? payload.anon_id : "";
     if (rateLimited(anonId, now)) return send(res, 429, { error: "rate limited" });
 
+    // Authorize: zuvo + full-detail codesift require the secret; anonymous
+    // codesift ingest is open but must look like an allowlisted L1 aggregate.
+    const key = req.headers["x-api-key"] ?? "";
+    const isFull = payload && payload.level === "full";
+    if (namespace === "zuvo" || isFull) {
+      if (!SECRET || key !== SECRET) return send(res, 401, { error: "unauthorized" });
+    } else if (!payload || !Array.isArray(payload.tools)) {
+      return send(res, 400, { error: "not an anonymous L1 payload" });
+    }
+
     // Schema-tolerant: accept unknown fields & unknown schema_version (forward-compat).
     if (payload && typeof payload.schema_version === "number" && payload.schema_version > 1) {
       console.log(`[collector] ${namespace}: newer schema_version=${payload.schema_version} (accepted)`);
@@ -106,5 +117,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[collector] listening on ${HOST}:${PORT} → ${DATA_DIR} (namespaces: ${[...NAMESPACES].join(", ")})`);
-  if (!TOKEN) console.error("[collector] WARNING: CODESIFT_COLLECTOR_TOKEN unset — all ingest requests will 401.");
+  if (!SECRET) console.error("[collector] WARNING: CODESIFT_COLLECTOR_TOKEN unset — zuvo + full-detail ingest will 401 (anonymous codesift stays open).");
 });

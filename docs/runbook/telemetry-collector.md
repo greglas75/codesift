@@ -37,12 +37,40 @@ ssh root@100.110.133.83 '
 '
 ```
 
-## Public HTTPS exposure — DELIBERATE, fronts production
-The reverse proxy is **traefik in docker** (`bot-traefik-1`, compose project `bot` = popebot stack) serving 80/443. It fronts ~20 services. Do NOT edit existing routes. Two additive, reversible options:
+## Public HTTPS exposure — LIVE (2026-07-19)
+Reachable at **`https://coding.tgmedit.com/ingest/{codesift,zuvo}`**. The reverse
+proxy is **traefik in docker** (`bot-traefik-1`, compose project `bot`) serving
+80/443 with a Let's Encrypt cert for `coding.tgmedit.com` (already used by the
+event-handler router). Exposure is fully **additive + reversible** — no existing
+route or the `bot` compose was touched:
 
-**A. Tailnet-only (fleet, no traefik change) — lowest risk.** Set `COLLECTOR_HOST=100.110.133.83` (tailscale IP) in `collector.env`, restart. Fleet machines on tailscale push directly (WireGuard-encrypted); token still required. Public npm installs cannot reach it — use this for Level-2 fleet data first.
+1. Collector runs as a **docker container** `telemetry-collector` on network
+   `bot_default` (image built from `Dockerfile`, restart=unless-stopped, runs as
+   the `gha` uid, `-v /home/gha/telemetry-collector/data:/data`). Traefik reaches
+   it by name — no host↔bridge firewall in play (the earlier host-loopback +
+   gateway approach 504'd; that's why it's containerized). The systemd unit is
+   `disable`d (kept as fallback).
+2. Isolated traefik file-provider route `/root/bot/traefik-config/telemetry.yml`:
+   router `Host(\`coding.tgmedit.com\`) && PathPrefix(\`/ingest\`)` (more specific
+   than the event-handler's bare Host, so `/ingest/*` goes to the collector and
+   everything else is unchanged) → service `http://telemetry-collector:5599`,
+   `entryPoints: [websecure]`, `tls.certResolver: letsencrypt`.
 
-**B. Public via traefik (needed for Level-1 public install-base).** Add the collector as a NEW labelled container joined to traefik's docker network (does not touch the `bot` compose file), OR add a file-provider dynamic route. Router: `Host(\`<telemetry-host>\`) && PathPrefix(\`/ingest\`)` → `http://<collector>:5599`, TLS via the existing certresolver. **Rollback:** remove the added container/file; existing routes untouched. Confirm certresolver + entrypoint names from the running traefik before applying.
+**Two-tier auth**: `/ingest/codesift` anonymous L1 is **open** (no token — validated
+as an L1 shape + rate-limited) so the public install-base can send; `/ingest/zuvo`
+and any `level:"full"` codesift payload require the secret (`CODESIFT_COLLECTOR_TOKEN`).
+
+**Rollback:** `rm /root/bot/traefik-config/telemetry.yml` (route gone in seconds) +
+`docker rm -f telemetry-collector`. Existing routes/services untouched throughout.
+
+**Deploy/update the container:**
+```bash
+scp services/telemetry-collector/{server.mjs,Dockerfile} root@100.110.133.83:/home/gha/telemetry-collector/
+ssh root@100.110.133.83 'cd /home/gha/telemetry-collector && docker build -q -t telemetry-collector:latest . && \
+  docker rm -f telemetry-collector; TOKEN=$(. collector.env; echo $CODESIFT_COLLECTOR_TOKEN); \
+  docker run -d --name telemetry-collector --restart unless-stopped --network bot_default \
+    --user $(id -u gha):$(id -g gha) -e CODESIFT_COLLECTOR_TOKEN="$TOKEN" -v /home/gha/telemetry-collector/data:/data telemetry-collector:latest'
+```
 
 ## Retention (~180 days) — cron reaper
 ```bash

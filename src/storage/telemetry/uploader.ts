@@ -9,7 +9,7 @@ import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveTelemetryLevel } from "./config.js";
-import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintEmissions } from "./aggregator.js";
+import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintFunnel, aggregatePlanTurnFunnel } from "./aggregator.js";
 import { buildEnvProfile } from "./env-profile.js";
 import { getAnonId } from "./anon-id.js";
 import { buildLevel1Payload, assertSanitized } from "./sanitizer.js";
@@ -42,12 +42,15 @@ function writeWatermark(ts: number): void {
   }
 }
 
-/** Endpoint config — push is a no-op unless BOTH are set. */
-function endpoint(): { url: string; token: string } | null {
-  const url = process.env["CODESIFT_TELEMETRY_URL"];
+/** Baked default collector — anonymous ingest needs NO token (the endpoint is
+ *  open + validated + rate-limited). Full/fleet sets CODESIFT_TELEMETRY_TOKEN.
+ *  Both are env-overridable. */
+const DEFAULT_TELEMETRY_URL = "https://coding.tgmedit.com";
+
+function endpoint(): { url: string; token: string } {
+  const url = (process.env["CODESIFT_TELEMETRY_URL"] ?? DEFAULT_TELEMETRY_URL).replace(/\/$/, "");
   const token = process.env["CODESIFT_TELEMETRY_TOKEN"] ?? "";
-  if (!url) return null;
-  return { url: url.replace(/\/$/, ""), token };
+  return { url, token };
 }
 
 async function postGzip(url: string, token: string, body: unknown): Promise<boolean> {
@@ -79,13 +82,11 @@ async function postGzip(url: string, token: string, body: unknown): Promise<bool
  * payload, POSTs once (with a single retry), and advances the watermark ONLY on
  * success. Best-effort; never throws.
  */
-export async function flushTelemetry(now: number): Promise<"off" | "no-endpoint" | "empty" | "sent" | "failed"> {
+export async function flushTelemetry(now: number): Promise<"off" | "empty" | "sent" | "failed"> {
   const level = resolveTelemetryLevel();
   if (level === "off") return "off";
 
   const ep = endpoint();
-  if (!ep) return "no-endpoint";
-
   const since = readWatermark();
   const entries = await readLocalUsageEntries(since);
   if (entries.length === 0) return "empty";
@@ -104,7 +105,8 @@ export async function flushTelemetry(now: number): Promise<"off" | "no-endpoint"
       anonId: getAnonId(),
       env: buildEnvProfile(),
       tools: aggregateToolMetrics(entries),
-      hints: aggregateHintEmissions(entries),
+      hints: aggregateHintFunnel(entries),
+      planTurn: aggregatePlanTurnFunnel(entries),
       now,
     });
     assertSanitized(payload); // never send an unsanitized L1 payload
@@ -125,7 +127,7 @@ let timer: NodeJS.Timeout | null = null;
  *  telemetry is off or no endpoint is configured. */
 export function startTelemetryTimer(): void {
   if (timer) return;
-  if (resolveTelemetryLevel() === "off" || !endpoint()) return;
+  if (resolveTelemetryLevel() === "off") return;
   const tick = () => { void flushTelemetry(Date.now()); };
   setTimeout(tick, INITIAL_FLUSH_DELAY_MS).unref();
   timer = setInterval(tick, FLUSH_INTERVAL_MS);

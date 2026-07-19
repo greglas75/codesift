@@ -20,7 +20,14 @@ export interface ToolAggregate {
 export interface HintEmission {
   day: string; // YYYY-MM-DD (UTC)
   hint_code: string; // "H1".."H18"
-  count: number;
+  emitted: number; // times emitted on a call that had a following call (checkable)
+  applied: number; // subset where the next call followed the hint's advice
+}
+
+export interface PlanTurnFunnel {
+  day: string;
+  recommended: number; // plan_turn calls (with a following call) that recommended >=1 tool
+  used: number; // subset where the next call used a recommended tool
 }
 
 function dayOf(ts: number): string {
@@ -99,27 +106,91 @@ export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
   return out;
 }
 
-/**
- * Count response-hint emissions per (day, code). Answers "which hints fire and
- * how often" (first half of hint efficacy — spec §1). Codes only, never text.
- */
-export function aggregateHintEmissions(entries: UsageEntry[]): HintEmission[] {
-  const counts = new Map<string, number>(); // `${day}\0${code}` -> count
+/** Group entries into per-session chains sorted by ts, for next-call correlation. */
+function sessionChains(entries: UsageEntry[]): UsageEntry[][] {
+  const bySession = new Map<string, UsageEntry[]>();
   for (const e of entries) {
-    if (!e || typeof e.ts !== "number" || !Array.isArray(e.hints_emitted)) continue;
-    const day = dayOf(e.ts);
-    for (const code of e.hints_emitted) {
-      if (typeof code !== "string") continue;
-      const key = `${day}\0${code}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!e || typeof e.ts !== "number") continue;
+    const s = typeof e.session_id === "string" ? e.session_id : "?";
+    (bySession.get(s) ?? bySession.set(s, []).get(s)!).push(e);
+  }
+  for (const chain of bySession.values()) chain.sort((a, b) => a.ts - b.ts);
+  return [...bySession.values()];
+}
+
+const has = (e: UsageEntry, k: string): boolean =>
+  e.args_summary != null && typeof e.args_summary === "object" && k in e.args_summary;
+
+/** Did the follow-up call `n` act on hint `code`? Codes without a rule are
+ *  counted as emitted but never applied (honest under-report). */
+const HINT_APPLIED: Record<string, (n: UsageEntry) => boolean> = {
+  H1: (n) => has(n, "group_by_file") && n.args_summary["group_by_file"] === true,
+  H2: (n) => n.tool === "get_symbols" || n.tool === "codebase_retrieval",
+  H3: (n) => n.tool !== "list_repos",
+  H4: (n) => has(n, "file_pattern"),
+  H5: (n) => n.tool !== "get_file_tree",
+  H6: (n) => has(n, "detail_level"),
+  H7: (n) => n.tool === "get_context_bundle",
+  H8: (n) => n.tool === "assemble_context",
+  H9: (n) => n.tool === "semantic_search" || n.tool === "codebase_retrieval",
+  H10: (n) => n.tool === "get_session_snapshot",
+  H12: (n) => n.tool === "codebase_retrieval",
+};
+
+/**
+ * Hint efficacy funnel (spec §1): per (day, code), how often a hint was emitted
+ * on a call that had a follow-up, and how often that follow-up actually acted on
+ * it. Correlation is per session, in ts order, and reads only args_summary keys
+ * locally — the wire payload carries just the counts.
+ */
+export function aggregateHintFunnel(entries: UsageEntry[]): HintEmission[] {
+  const acc = new Map<string, { emitted: number; applied: number }>();
+  for (const chain of sessionChains(entries)) {
+    for (let i = 0; i < chain.length - 1; i++) {
+      const e = chain[i]!;
+      const next = chain[i + 1]!;
+      if (!Array.isArray(e.hints_emitted)) continue;
+      const day = dayOf(e.ts);
+      for (const code of e.hints_emitted) {
+        if (typeof code !== "string") continue;
+        const key = `${day}\0${code}`;
+        const a = acc.get(key) ?? { emitted: 0, applied: 0 };
+        a.emitted++;
+        if (HINT_APPLIED[code]?.(next)) a.applied++;
+        acc.set(key, a);
+      }
     }
   }
   const out: HintEmission[] = [];
-  for (const [key, count] of counts) {
+  for (const [key, v] of acc) {
     const [day, code] = key.split("\0");
-    out.push({ day: day!, hint_code: code!, count });
+    out.push({ day: day!, hint_code: code!, emitted: v.emitted, applied: v.applied });
   }
   out.sort((a, c) => (a.day === c.day ? a.hint_code.localeCompare(c.hint_code) : c.day.localeCompare(a.day)));
+  return out;
+}
+
+/**
+ * Discovery funnel (spec §1): per day, how often plan_turn recommended >=1 tool
+ * (on a call with a follow-up) and how often the next call used one of them —
+ * i.e. is the router's advice actually taken?
+ */
+export function aggregatePlanTurnFunnel(entries: UsageEntry[]): PlanTurnFunnel[] {
+  const acc = new Map<string, { recommended: number; used: number }>();
+  for (const chain of sessionChains(entries)) {
+    for (let i = 0; i < chain.length - 1; i++) {
+      const e = chain[i]!;
+      if (e.tool !== "plan_turn" || !Array.isArray(e.recommended_tools) || e.recommended_tools.length === 0) continue;
+      const day = dayOf(e.ts);
+      const a = acc.get(day) ?? { recommended: 0, used: 0 };
+      a.recommended++;
+      if (e.recommended_tools.includes(chain[i + 1]!.tool)) a.used++;
+      acc.set(day, a);
+    }
+  }
+  const out: PlanTurnFunnel[] = [];
+  for (const [day, v] of acc) out.push({ day, recommended: v.recommended, used: v.used });
+  out.sort((a, c) => c.day.localeCompare(a.day));
   return out;
 }
 

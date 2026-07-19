@@ -44,6 +44,9 @@ export interface UsageEntry {
   /** Response-hint codes emitted on this call (e.g. ["H1","H12"]) — powers the
    *  hint-efficacy funnel. Codes only, never the hint text. */
   hints_emitted?: string[];
+  /** Tool names plan_turn recommended on this call — powers the discovery funnel
+   *  (was a recommended tool actually used next?). Names only. */
+  recommended_tools?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +236,21 @@ export async function trackUsage(entry: UsageEntry): Promise<void> {
   }
 }
 
+/** Extract recommended tool names from a plan_turn result (names only, capped). */
+function extractRecommendedTools(resultData: unknown): string[] {
+  if (!resultData || typeof resultData !== "object") return [];
+  const tools = (resultData as Record<string, unknown>)["tools"];
+  if (!Array.isArray(tools)) return [];
+  const names: string[] = [];
+  for (const t of tools) {
+    if (t && typeof t === "object") {
+      const n = (t as Record<string, unknown>)["tool"] ?? (t as Record<string, unknown>)["name"];
+      if (typeof n === "string" && n) names.push(n);
+    }
+  }
+  return names.slice(0, 10);
+}
+
 /**
  * High-level helper: track a completed tool call.
  * Called at the end of each tool handler after the result is computed.
@@ -256,6 +274,7 @@ export function trackToolCall(
 ): void {
   const resultTokens = Math.ceil(resultText.length / 4);
   const sentTokens = extra?.sentChars !== undefined ? Math.ceil(extra.sentChars / 4) : undefined;
+  const recommended = tool === "plan_turn" ? extractRecommendedTools(resultData) : [];
   const entry: UsageEntry = {
     ts: Date.now(),
     tool,
@@ -270,6 +289,7 @@ export function trackToolCall(
     ...(extra?.error ? { error: true } : {}),
     ...(extra?.cacheHit ? { cache_hit: true } : {}),
     ...(extra?.hintsEmitted && extra.hintsEmitted.length ? { hints_emitted: extra.hintsEmitted } : {}),
+    ...(recommended.length ? { recommended_tools: recommended } : {}),
   };
 
   // Fire and forget — never block the tool response
