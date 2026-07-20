@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { EXTRACTOR_VERSIONS } from "./index-shared.js";
+import { getCodesiftVersion } from "../storage/telemetry/env-profile.js";
 import type { CodeIndex } from "../types.js";
 import { extractAstroConventions } from "./astro-config.js";
 import type { AstroConventions } from "./astro-config.js";
@@ -475,6 +476,9 @@ export const TEXT_STUB_LANGUAGES = [
 ] as const;
 
 export interface ExtractorVersionsResponse {
+  /** Single product version of the codesift-mcp server (from package.json) —
+   *  the one "product number". Distinct from the per-component extractor versions. */
+  codesift_version: string;
   /** Tree-sitter language parsers — affect symbol-based tools only */
   parser_languages: readonly string[];
   /** Indexed (file listing + text search) but no symbol extraction yet */
@@ -493,6 +497,7 @@ export interface ExtractorVersionsResponse {
 
 export function getExtractorVersions(): ExtractorVersionsResponse {
   return {
+    codesift_version: getCodesiftVersion(),
     parser_languages: PARSER_LANGUAGES,
     text_stub_languages: TEXT_STUB_LANGUAGES,
     profile_frameworks: { ...EXTRACTOR_VERSIONS },

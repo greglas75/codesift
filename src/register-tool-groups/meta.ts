@@ -419,7 +419,7 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     name: "get_extractor_versions",
     category: "meta",
     searchHint: "extractor version cache invalidation profile parser languages",
-    description: "Return parser_languages (tree-sitter symbol extractors) and profile_frameworks (analyze_project detectors). Text tools (search_text, get_file_tree) work on ALL files regardless — use this only for cache invalidation or to check symbol support for a specific language.",
+    description: "Return codesift_version (the single product version of the codesift-mcp server), parser_languages (tree-sitter symbol extractors) and profile_frameworks (analyze_project detectors). Text tools (search_text, get_file_tree) work on ALL files regardless — use this for the product version, cache invalidation, or to check symbol support for a specific language.",
     schema: lazySchema(() => ({})),
     handler: async () => getExtractorVersions(),
   } },
