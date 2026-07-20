@@ -933,6 +933,26 @@ export async function findDeadCode(
   const allFilePaths = new Set(fileContents.keys());
   const reExportedFiles = collectReExportedFiles(fileContents, allFilePaths);
 
+  // Reference index, built in ONE pass over file contents. Previously this scan
+  // was O(exportedSymbols x files): a `\b<name>\b` regex over every file's full
+  // text for every exported symbol. On a healthy repo (few dead symbols) the
+  // early-exit never fires, so the full product ran — telemetry (2026-07-20)
+  // measured a 1,066,401 ms (~17.8 min) p95 for find_dead_code.
+  //
+  // Tokenising on [^A-Za-z0-9_]+ mirrors the \b\w boundary semantics of the old
+  // regex. Per token we only need "is it mentioned outside its defining file",
+  // so we keep the first file that mentioned it plus a multi-file flag — O(1)
+  // memory per unique token instead of a file set, and O(1) lookup per symbol.
+  const tokenIndex = new Map<string, { first: string; multi: boolean }>();
+  for (const [filePath, content] of fileContents) {
+    for (const token of new Set(content.split(/[^A-Za-z0-9_]+/))) {
+      if (!token) continue;
+      const entry = tokenIndex.get(token);
+      if (!entry) tokenIndex.set(token, { first: filePath, multi: false });
+      else if (!entry.multi && entry.first !== filePath) entry.multi = true;
+    }
+  }
+
   const candidates: DeadCodeCandidate[] = [];
 
   for (const sym of exportedSymbols) {
@@ -941,18 +961,11 @@ export async function findDeadCode(
     // Re-export reachability — barrel forwards skip the textual-mention check.
     if (reExportedFiles.has(sym.file)) continue;
 
-    const pattern = wordBoundaryPattern(sym.name);
+    // Mentioned in any file other than the one defining it => not dead.
+    const seen = tokenIndex.get(sym.name);
+    const hasExternalRef = !!seen && (seen.multi || seen.first !== sym.file);
 
-    let externalRefs = 0;
-    for (const [filePath, content] of fileContents) {
-      if (filePath === sym.file) continue; // Skip own file
-      if (pattern.test(content)) {
-        externalRefs++;
-        break; // One external ref is enough — not dead
-      }
-    }
-
-    if (externalRefs === 0) {
+    if (!hasExternalRef) {
       candidates.push({
         name: sym.name,
         kind: sym.kind,
