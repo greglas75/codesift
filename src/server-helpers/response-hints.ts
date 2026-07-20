@@ -11,6 +11,7 @@ const fileTreePaths = new Set<string>();
 let sessionSearchSymbolsCalled = false;
 let sessionGetSymbolCount = 0;
 const sessionSearchTextPatterns = new Set<string>(); // H12: track distinct file_patterns in search_text
+let h12Emitted = false; // H12 is a one-shot nudge, not a per-call banner
 /** Track sequential calls + session-level state. Exported for testing. */
 export function trackSequentialCalls(toolName: string): void {
   if (toolName === lastToolName && BATCHABLE_TOOLS.has(toolName)) {
@@ -94,7 +95,10 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
     }
   }
 
-  if (consecutiveCount >= SEQUENTIAL_HINT_THRESHOLD && BATCHABLE_TOOLS.has(toolName)) {
+  // Fire ONCE per streak (=== not >=). With >= it re-fired on the 4th, 5th, 6th…
+  // consecutive call, turning advice into wallpaper — telemetry (2026-07-20):
+  // H2 emitted 73×, applied 1× (1.4%).
+  if (consecutiveCount === SEQUENTIAL_HINT_THRESHOLD && BATCHABLE_TOOLS.has(toolName)) {
     const batchTool = toolName === "get_symbol" ? "get_symbols" : "codebase_retrieval";
     hints.push(`⚡H2(${consecutiveCount},${batchTool})`);
   }
@@ -225,8 +229,14 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
   if (toolName === "search_text") {
     const fp = (args["file_pattern"] as string | undefined) ?? "__none__";
     sessionSearchTextPatterns.add(fp);
-    if (sessionSearchTextPatterns.size >= SEQUENTIAL_HINT_THRESHOLD) {
-      hints.push(`⚡H12(${sessionSearchTextPatterns.size}) ${sessionSearchTextPatterns.size}× search_text with different file_patterns → batch into codebase_retrieval(queries=[...])`);
+    // Fire ONCE per session. This counted DISTINCT file_patterns across the whole
+    // session, so past the threshold it fired on every subsequent search_text
+    // forever — telemetry (2026-07-20): H12 emitted 117×, applied 2× (1.7%).
+    // It also advised batching calls that had ALREADY happened, which is not
+    // actionable; as a one-shot nudge it lands while the pattern is still live.
+    if (!h12Emitted && sessionSearchTextPatterns.size >= SEQUENTIAL_HINT_THRESHOLD) {
+      h12Emitted = true;
+      hints.push(`⚡H12(${sessionSearchTextPatterns.size}) ${sessionSearchTextPatterns.size} scopes searched separately → next time batch them: codebase_retrieval(queries=[{type:"text",...}, ...])`);
     }
   }
 
@@ -241,4 +251,5 @@ export function resetHintState(): void {
   sessionSearchSymbolsCalled = false;
   sessionGetSymbolCount = 0;
   sessionSearchTextPatterns.clear();
+  h12Emitted = false;
 }
