@@ -76,7 +76,16 @@ const server = http.createServer((req, res) => {
     const now = Date.now();
     // Rate-limit on the proxy-observed client IP, never on the client-supplied
     // anon_id (omit/rotate = bypass on the open endpoint). No-IP → shared bucket.
-    if (limiter.hit(clientKey(req), now)) return send(res, 429, { error: "rate limited" });
+    const _ck = clientKey(req);
+    // Diagnostic (stdout only, NOT persisted to the data files): who hits the open
+    // endpoint. Log the best-available origin — CF-Connecting-IP (truest when behind
+    // Cloudflare), the full X-Forwarded-For chain, and the raw socket peer.
+    console.log(
+      `[collector] ${namespace} anon=${payload && typeof payload.anon_id === "string" ? payload.anon_id : "(none)"}` +
+      ` tools=${Array.isArray(payload?.tools) ? payload.tools.length : "?"}` +
+      ` cf=${req.headers["cf-connecting-ip"] ?? "-"} xff=${req.headers["x-forwarded-for"] ?? "-"} peer=${req.socket?.remoteAddress ?? "-"} key=${_ck}`,
+    );
+    if (limiter.hit(_ck, now)) return send(res, 429, { error: "rate limited" });
 
     // Authorize: zuvo + full-detail codesift require the secret; anonymous
     // codesift ingest is open but must look like an allowlisted L1 aggregate.
@@ -84,7 +93,13 @@ const server = http.createServer((req, res) => {
     const isFull = payload && payload.level === "full";
     if (namespace === "zuvo" || isFull) {
       if (!SECRET || key !== SECRET) return send(res, 401, { error: "unauthorized" });
-    } else if (!payload || !Array.isArray(payload.tools)) {
+    } else if (
+      !payload ||
+      typeof payload.anon_id !== "string" || !payload.anon_id ||
+      !Array.isArray(payload.tools) || payload.tools.length === 0
+    ) {
+      // Reject noise: a real client always carries anon_id + >=1 tool aggregate
+      // (it never POSTs an empty flush). Empty/anon-less bodies are scanners.
       return send(res, 400, { error: "not an anonymous L1 payload" });
     }
 
