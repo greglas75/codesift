@@ -8,6 +8,7 @@ import { gunzipSync } from "node:zlib";
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { clientKey, RateLimiter } from "./ratelimit.mjs";
 
 const HOST = process.env.COLLECTOR_HOST ?? "127.0.0.1"; // loopback-only by default
 const PORT = Number(process.env.COLLECTOR_PORT ?? 5599);
@@ -20,26 +21,14 @@ const DATA_DIR = process.env.COLLECTOR_DATA_DIR ?? join(homedir(), "telemetry-co
 const MAX_BODY = Number(process.env.COLLECTOR_MAX_BODY ?? 262_144); // 256 KB
 const NAMESPACES = new Set(["codesift", "zuvo"]);
 
-// Simple per-anon_id rate limit: max N accepted requests per rolling window.
+// Per-CLIENT-IP rate limit (see ratelimit.mjs). Keyed on the proxy-observed IP,
+// NOT the client-supplied anon_id — an id-keyed limit was trivially bypassed by
+// omitting/rotating anon_id on the open endpoint.
 const RL_MAX = Number(process.env.COLLECTOR_RL_MAX ?? 120);
 const RL_WINDOW_MS = Number(process.env.COLLECTOR_RL_WINDOW_MS ?? 60_000);
-const rl = new Map(); // anon_id -> { count, resetAt }
-
-function rateLimited(anonId, now) {
-  if (!anonId) return false; // unknown id → don't block (schema-tolerant)
-  let e = rl.get(anonId);
-  if (!e || now > e.resetAt) {
-    e = { count: 0, resetAt: now + RL_WINDOW_MS };
-    rl.set(anonId, e);
-  }
-  e.count++;
-  return e.count > RL_MAX;
-}
+const limiter = new RateLimiter({ max: RL_MAX, windowMs: RL_WINDOW_MS });
 // Opportunistic cleanup so the map can't grow unbounded.
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of rl) if (now > v.resetAt) rl.delete(k);
-}, RL_WINDOW_MS).unref();
+setInterval(() => limiter.sweep(Date.now()), RL_WINDOW_MS).unref();
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -85,8 +74,9 @@ const server = http.createServer((req, res) => {
       return send(res, 400, { error: "invalid json" });
     }
     const now = Date.now();
-    const anonId = payload && typeof payload.anon_id === "string" ? payload.anon_id : "";
-    if (rateLimited(anonId, now)) return send(res, 429, { error: "rate limited" });
+    // Rate-limit on the proxy-observed client IP, never on the client-supplied
+    // anon_id (omit/rotate = bypass on the open endpoint). No-IP → shared bucket.
+    if (limiter.hit(clientKey(req), now)) return send(res, 429, { error: "rate limited" });
 
     // Authorize: zuvo + full-detail codesift require the secret; anonymous
     // codesift ingest is open but must look like an allowlisted L1 aggregate.

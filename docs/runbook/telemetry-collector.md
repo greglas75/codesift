@@ -8,9 +8,11 @@ Spec: `docs/specs/2026-07-19-telemetry-spec.md` §5. Source: `services/telemetry
 - **Loopback-only** (`127.0.0.1:5599`) — never bind a public interface directly.
 - `POST /ingest/codesift`, `POST /ingest/zuvo`, `GET /health`.
 - Auth: `x-api-key` == token in `collector.env`. Writes `data/<ns>/<UTC-day>.jsonl`.
-- Rate-limit per `anon_id` (120/min default), body cap 256 KB, **no client IP persisted**
-  (IP only in the proxy access log). Schema-tolerant: unknown fields + newer
-  `schema_version` accepted and logged.
+- Rate-limit per **client IP** (from the trusted proxy's `X-Forwarded-For`, 120/min default;
+  logic in `ratelimit.mjs`) — NOT per `anon_id`, which a caller can omit/rotate on the open
+  endpoint to bypass an id-keyed limit. No-IP requests share one limited `unknown` bucket.
+  Body cap 256 KB, **no client IP persisted** (IP only in the proxy access log / RL memory).
+  Schema-tolerant: unknown fields + newer `schema_version` accepted and logged.
 
 ## Deployed layout (already provisioned 2026-07-19)
 ```
@@ -23,7 +25,7 @@ Port **127.0.0.1:5599** is recorded in `~/.claude/rules/self-hosted-ci-runner.md
 
 ## Deploy / update
 ```bash
-scp services/telemetry-collector/server.mjs root@100.110.133.83:/home/gha/telemetry-collector/server.mjs
+scp services/telemetry-collector/{server.mjs,ratelimit.mjs} root@100.110.133.83:/home/gha/telemetry-collector/
 ssh root@100.110.133.83 'chown gha:gha /home/gha/telemetry-collector/server.mjs && systemctl restart telemetry-collector'
 ```
 
@@ -65,7 +67,7 @@ and any `level:"full"` codesift payload require the secret (`CODESIFT_COLLECTOR_
 
 **Deploy/update the container:**
 ```bash
-scp services/telemetry-collector/{server.mjs,Dockerfile} root@100.110.133.83:/home/gha/telemetry-collector/
+scp services/telemetry-collector/{server.mjs,ratelimit.mjs,Dockerfile} root@100.110.133.83:/home/gha/telemetry-collector/
 ssh root@100.110.133.83 'cd /home/gha/telemetry-collector && docker build -q -t telemetry-collector:latest . && \
   docker rm -f telemetry-collector; TOKEN=$(. collector.env; echo $CODESIFT_COLLECTOR_TOKEN); \
   docker run -d --name telemetry-collector --restart unless-stopped --network bot_default \
