@@ -163,12 +163,37 @@ export async function nestAudit(
     );
   }
 
-  const settled = await Promise.all(tasks);
+  // Per-check wall clock. Previously this was a bare Promise.all, so ONE slow
+  // sub-check held the entire audit open — telemetry (2026-07-20) measured a
+  // 1,046,984 ms (~17.5 min) p95 for nest_audit, the worst tail in the fleet.
+  // A timed-out check resolves to a placeholder; the audit returns with the
+  // checks that did finish and names the ones that didn't.
+  const NEST_CHECK_TIMEOUT_MS = Number(process.env["CODESIFT_NEST_CHECK_TIMEOUT_MS"] ?? 15_000);
+  const TIMED_OUT = "__timed_out__" as NestCheck;
+  const settled = await Promise.all(
+    tasks.map((p) =>
+      Promise.race<CheckResult>([
+        p,
+        new Promise<CheckResult>((ok) =>
+          setTimeout(() => ok({ name: TIMED_OUT }), NEST_CHECK_TIMEOUT_MS).unref?.(),
+        ),
+      ]),
+    ),
+  );
 
   // Aggregate
   const auditErrors: Array<{ check: string; reason: string }> = [];
   const warnings: NestToolError[] = [];
   const truncatedChecks: string[] = [];
+
+  // Attribute timeouts: any enabled check with no settled result is the one that
+  // blew the budget (the placeholder carries no name of its own).
+  const completedChecks = new Set(settled.map((s) => s.name));
+  for (const check of enabledChecks) {
+    if (!completedChecks.has(check)) {
+      auditErrors.push({ check, reason: `check timed out after ${NEST_CHECK_TIMEOUT_MS}ms` });
+    }
+  }
 
   let lifecycleResult: NestLifecycleMapResult | undefined;
   let moduleResult: NestModuleGraphResult | undefined;
@@ -183,6 +208,7 @@ export async function nestAudit(
   let microserviceResult: import("./nest-ext-tools.js").NestMicroserviceMapResult | undefined;
 
   for (const item of settled) {
+    if (item.name === TIMED_OUT) continue; // already recorded above
     if (item.error) {
       auditErrors.push({ check: item.name, reason: item.error });
       continue;
