@@ -1,4 +1,5 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, enableToolByName, type ToolDefinitionEntry } from "./shared.js";
+import { setPlanTurnRecommendations } from "../storage/usage-tracker.js";
 import { indexConversations, searchConversations, searchAllConversations, findConversationsForSymbol, consolidateMemories, readMemory, usageHotspots, usageTraceSession, retrosList, retrosAnalyze, memoryCandidateExtract, optimizationCandidates, popeInsightsPushCandidates, createAnalysisPlan, writeScratchpad, readScratchpad, listScratchpad, updateStepStatus, getPlan, listPlans, analyzeProject, getExtractorVersions, indexStatus, auditAgentConfig, planTurn, formatPlanTurnResult, generateWiki, getUsageStats, formatUsageReport, formatSnapshot, getContext, getSessionState, dispatchFormatter } from "./deps.js";
 
 export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
@@ -544,6 +545,10 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       for (const name of result.reveal_required) {
         enableToolByName(name);
       }
+      // Hand the recommended tool names to telemetry BEFORE formatting — the
+      // formatted string that this handler returns would otherwise hide them,
+      // leaving the discovery funnel (recommended → used) permanently empty.
+      setPlanTurnRecommendations(result.tools.map((t) => t.name));
       return formatPlanTurnResult(result);
     },
   } },

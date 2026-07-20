@@ -236,6 +236,26 @@ export async function trackUsage(entry: UsageEntry): Promise<void> {
   }
 }
 
+/**
+ * Recommendations stashed by the plan_turn handler. Needed because that handler
+ * returns a FORMATTED STRING (formatPlanTurnResult), so the structured
+ * PlanTurnResult never reaches trackToolCall — which silently produced an empty
+ * discovery funnel (telemetry 2026-07-20: 1821 plan_turn calls, 0 recommendations
+ * recorded). Set immediately before the handler returns; consumed by the very
+ * next trackToolCall in the same tool-call flow.
+ */
+let pendingPlanTurnRecommendations: string[] = [];
+
+export function setPlanTurnRecommendations(names: string[]): void {
+  pendingPlanTurnRecommendations = names.filter((n) => typeof n === "string" && n).slice(0, 10);
+}
+
+function takePlanTurnRecommendations(): string[] {
+  const out = pendingPlanTurnRecommendations;
+  pendingPlanTurnRecommendations = [];
+  return out;
+}
+
 /** Extract recommended tool names from a plan_turn result (names only, capped). */
 function extractRecommendedTools(resultData: unknown): string[] {
   if (!resultData || typeof resultData !== "object") return [];
@@ -274,7 +294,15 @@ export function trackToolCall(
 ): void {
   const resultTokens = Math.ceil(resultText.length / 4);
   const sentTokens = extra?.sentChars !== undefined ? Math.ceil(extra.sentChars / 4) : undefined;
-  const recommended = tool === "plan_turn" ? extractRecommendedTools(resultData) : [];
+  // Prefer the handler-supplied names (the plan_turn handler returns a formatted
+  // string); fall back to structured extraction if a caller returns raw data.
+  const recommended =
+    tool === "plan_turn"
+      ? (() => {
+          const stashed = takePlanTurnRecommendations();
+          return stashed.length ? stashed : extractRecommendedTools(resultData);
+        })()
+      : [];
   const entry: UsageEntry = {
     ts: Date.now(),
     tool,
