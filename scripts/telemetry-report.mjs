@@ -50,6 +50,8 @@ const tool = new Map();                // name -> {count, errW, emptyW, cacheW, 
 const latByBucket = new Map();         // name -> Map(bucket -> {p95Sum, n})
 const hint = new Map();                // code -> {emitted, applied}
 const planTurn = { recommended: 0, used: 0 };
+const verTool = new Map();             // name -> Map(version -> {count, errW, emptyW, maxP95})
+const verHint = new Map();             // version -> Map(code -> {emitted, applied})
 
 for (const p of payloads) {
   const anon = String(p.anon_id ?? "?");
@@ -73,12 +75,28 @@ for (const p of payloads) {
     if (!lb.has(bucket)) lb.set(bucket, { p95Sum: 0, n: 0 });
     const e = lb.get(bucket);
     e.p95Sum += t.p95_ms ?? 0; e.n += 1;
+
+    // Per-version, so a fix landing in version N is visible against older ones.
+    if (!verTool.has(t.tool)) verTool.set(t.tool, new Map());
+    const vm = verTool.get(t.tool);
+    let va = vm.get(ver);
+    if (!va) { va = { count: 0, errW: 0, emptyW: 0, maxP95: 0 }; vm.set(ver, va); }
+    va.count += t.count ?? 0;
+    va.errW += (t.error_rate ?? 0) * (t.count ?? 0);
+    va.emptyW += (t.empty_result_rate ?? 0) * (t.count ?? 0);
+    va.maxP95 = Math.max(va.maxP95, t.p95_ms ?? 0);
   }
   for (const h of p.hints ?? []) {
     const a = hint.get(h.hint_code) ?? { emitted: 0, applied: 0 };
     a.emitted += h.emitted ?? h.count ?? 0; // tolerate old {count} shape
     a.applied += h.applied ?? 0;
     hint.set(h.hint_code, a);
+    if (!verHint.has(ver)) verHint.set(ver, new Map());
+    const vh = verHint.get(ver);
+    const vha = vh.get(h.hint_code) ?? { emitted: 0, applied: 0 };
+    vha.emitted += h.emitted ?? h.count ?? 0;
+    vha.applied += h.applied ?? 0;
+    vh.set(h.hint_code, vha);
   }
   for (const pt of p.plan_turn ?? []) { planTurn.recommended += pt.recommended ?? 0; planTurn.used += pt.used ?? 0; }
 }
@@ -134,6 +152,41 @@ for (const r of rows.slice(0, 12)) {
   if (!lb) continue;
   for (const [bucket, e] of [...lb.entries()].sort()) {
     L.push(`| ${r.name} | ${bucket} | ${Math.round(e.p95Sum / e.n)} | ${e.n} |`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Fix tracking — did a fix that shipped in a version actually land?
+// The all-time tables above keep the worst-ever p95 and cumulative error% for
+// good, so a fix is invisible there. Here every metric is split by codesift_ver,
+// so "find_dead_code p95: 0.9.10=18min vs 0.10.1=2s" pops out directly.
+// ---------------------------------------------------------------------------
+const versions = [...versionInstalls.keys()].sort();
+// Tools worth tracking: anything flagged all-time (error/empty/slow) + a small
+// watchlist of the ones we've been fixing.
+const WATCH = new Set(["find_dead_code", "nest_audit", "review_diff", "impact_analysis", "find_and_show", "analyze_complexity", "search_conversations"]);
+const tracked = rows.filter((r) => WATCH.has(r.name) || r.err > 0.1 || r.empty > 0.5 || r.maxP95 > 30_000)
+  .map((r) => r.name);
+
+L.push(`\n## 5. Fix tracking — key tools by version`);
+L.push(`\n_worst p95 (ms) · error% · calls, per codesift_ver — a fix in version N shows as a drop vs older N._`);
+for (const name of tracked) {
+  const vm = verTool.get(name);
+  if (!vm || vm.size < 1) continue;
+  const cells = versions
+    .filter((v) => vm.has(v))
+    .map((v) => { const a = vm.get(v); return `${v}: p95 ${a.maxP95} · err ${pct(a.count ? a.errW / a.count : 0)} · n ${a.count}`; });
+  if (cells.length) L.push(`- **${name}** — ${cells.join("  |  ")}`);
+}
+
+// Hint apply% by version (did the H2/H12 one-shot change help?).
+const hintVersions = versions.filter((v) => verHint.has(v));
+if (hintVersions.length) {
+  L.push(`\n**Hint apply% by version** (emitted → applied):`);
+  for (const v of hintVersions) {
+    const vh = verHint.get(v);
+    const parts = [...vh.entries()].sort().map(([code, a]) => `${code} ${a.emitted}→${a.applied}${a.emitted ? ` (${pct(a.applied / a.emitted)})` : ""}`);
+    if (parts.length) L.push(`- ${v}: ${parts.join(" · ")}`);
   }
 }
 
