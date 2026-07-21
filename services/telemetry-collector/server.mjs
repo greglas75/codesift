@@ -5,10 +5,19 @@
 // client IPs in the data files (IP lives only in the proxy access log).
 import http from "node:http";
 import { gunzipSync } from "node:zlib";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { clientKey, RateLimiter } from "./ratelimit.mjs";
+
+// Namespaces whose payload is a full STATE SNAPSHOT (latest-wins), not an event
+// stream. These are stored per-host and OVERWRITTEN each run instead of appended
+// to a per-day file — otherwise a snapshot pushed hourly accumulates unbounded
+// (the backlog namespace was doing ~25 MB/day → ~4.5 GB/month for what is only
+// the current fleet state). A multi-batch run (batch 0..N-1, same run_id) starts
+// fresh on batch 0 and appends the rest, so the file always holds exactly one
+// snapshot per host.
+const SNAPSHOT_NAMESPACES = new Set(["backlog"]);
 
 const HOST = process.env.COLLECTOR_HOST ?? "127.0.0.1"; // loopback-only by default
 const PORT = Number(process.env.COLLECTOR_PORT ?? 5599);
@@ -19,7 +28,7 @@ const PORT = Number(process.env.COLLECTOR_PORT ?? 5599);
 const SECRET = process.env.CODESIFT_COLLECTOR_TOKEN ?? "";
 const DATA_DIR = process.env.COLLECTOR_DATA_DIR ?? join(homedir(), "telemetry-collector", "data");
 const MAX_BODY = Number(process.env.COLLECTOR_MAX_BODY ?? 262_144); // 256 KB
-const NAMESPACES = new Set(["codesift", "zuvo"]);
+const NAMESPACES = new Set(["codesift", "zuvo", "backlog"]);
 
 // Per-CLIENT-IP rate limit (see ratelimit.mjs). Keyed on the proxy-observed IP,
 // NOT the client-supplied anon_id — an id-keyed limit was trivially bypassed by
@@ -36,11 +45,34 @@ function send(res, code, obj) {
   res.end(body);
 }
 
-async function appendRecord(namespace, record) {
-  const day = new Date().toISOString().slice(0, 10);
+function hostSlug(h) {
+  return String(h || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
+}
+
+async function storeRecord(namespace, record) {
   const dir = join(DATA_DIR, namespace);
   await mkdir(dir, { recursive: true });
-  await appendFile(join(dir, `${day}.jsonl`), JSON.stringify(record) + "\n", "utf-8");
+  const line = JSON.stringify(record) + "\n";
+
+  if (SNAPSHOT_NAMESPACES.has(namespace)) {
+    // Per-host, overwrite-on-new-run. File = data/<ns>/host-<slug>.jsonl holds
+    // ONLY the latest snapshot for that host (constant size, no day growth).
+    const p = payloadOf(record);
+    const file = join(dir, `host-${hostSlug(p.host)}.jsonl`);
+    // batch 0 (or a single-shot push with no batch field) truncates; later
+    // batches of the same run append. Reader keeps newest run_id per host anyway.
+    if (!p.batch) await writeFile(file, line, "utf-8");
+    else await appendFile(file, line, "utf-8");
+    return;
+  }
+
+  // Default: append to a per-UTC-day file (event stream).
+  const day = new Date().toISOString().slice(0, 10);
+  await appendFile(join(dir, `${day}.jsonl`), line, "utf-8");
+}
+
+function payloadOf(record) {
+  return (record && record.payload) || {};
 }
 
 const server = http.createServer((req, res) => {
@@ -87,11 +119,13 @@ const server = http.createServer((req, res) => {
     );
     if (limiter.hit(_ck, now)) return send(res, 429, { error: "rate limited" });
 
-    // Authorize: zuvo + full-detail codesift require the secret; anonymous
-    // codesift ingest is open but must look like an allowlisted L1 aggregate.
+    // Authorize: ONLY the anonymous codesift L1 aggregate is open. Every other
+    // namespace (zuvo runs.log, backlog snapshots — both carry repo names and
+    // debt text) and any full-detail payload requires the secret. Deny-by-default
+    // on namespace: adding one to NAMESPACES must never silently open it.
     const key = req.headers["x-api-key"] ?? "";
     const isFull = payload && payload.level === "full";
-    if (namespace === "zuvo" || isFull) {
+    if (namespace !== "codesift" || isFull) {
       if (!SECRET || key !== SECRET) return send(res, 401, { error: "unauthorized" });
     } else if (
       !payload ||
@@ -110,7 +144,7 @@ const server = http.createServer((req, res) => {
     // Store server-side receipt time; NO ip persisted.
     const record = { received_at: now, namespace, payload };
     try {
-      await appendRecord(namespace, record);
+      await storeRecord(namespace, record);
     } catch (err) {
       console.error(`[collector] append failed: ${err?.message ?? err}`);
       return send(res, 500, { error: "write failed" });

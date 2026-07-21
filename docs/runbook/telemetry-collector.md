@@ -74,7 +74,22 @@ ssh root@100.110.133.83 'cd /home/gha/telemetry-collector && docker build -q -t 
     --user $(id -u gha):$(id -g gha) -e CODESIFT_COLLECTOR_TOKEN="$TOKEN" -v /home/gha/telemetry-collector/data:/data telemetry-collector:latest'
 ```
 
-## Retention (~180 days) — cron reaper
+## Storage model — event streams vs state snapshots
+
+- **Event-stream namespaces** (`codesift`, `zuvo`): append to a per-UTC-day file
+  `data/<ns>/<day>.jsonl`. Growth is bounded by the 180-day reaper below.
+- **Snapshot namespaces** (`SNAPSHOT_NAMESPACES` in `server.mjs`, currently
+  `backlog`): the payload is the FULL current state, re-pushed hourly. Stored
+  **per host, overwritten each run** at `data/<ns>/host-<slug>.jsonl` — a
+  multi-batch run truncates on `batch 0` and appends the rest, so the file always
+  holds exactly ONE snapshot per host. **Constant size** (~current fleet state,
+  a few MB), independent of push frequency. Do NOT let a snapshot namespace append
+  per-day: backlog was doing ~25 MB/day → ~4.5 GB/month before this fix
+  (2026-07-21). Adding a snapshot namespace = add it to `SNAPSHOT_NAMESPACES`.
+
+## Retention (~180 days) — cron reaper (event streams only)
+Snapshot namespaces self-bound (overwrite), so the reaper is only load-bearing
+for `codesift`/`zuvo` per-day files.
 ```bash
 ssh root@100.110.133.83 'crontab -u gha -l 2>/dev/null; echo "17 4 * * * find /home/gha/telemetry-collector/data -name \"*.jsonl\" -mtime +180 -delete" | crontab -u gha -'
 ```
