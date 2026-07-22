@@ -108,25 +108,33 @@ main()
     // (`codesift search ... > out.json`) doesn't get truncated when there's
     // pending data in the buffer.
     if (keepProcessAlive) return;
+
+    // Terminate the tree-sitter parser worker pool.
+    //
+    // This is what made `codesift index` exit 134. The pool's Worker threads
+    // outlive the command (process._getActiveHandles() showed the surviving
+    // MessagePorts), so the process could never exit on its own and had to be
+    // force-exited — and forcing an exit while an onnxruntime session is loaded
+    // aborts in native teardown: `libc++abi ... mutex lock failed`, exit 134.
+    // The abort was the symptom; the un-terminated pool was the cause.
+    // shutdownPool() already existed — nothing ever called it from the CLI.
+    try {
+      const { shutdownPool } = await import("./parser/parser-pool.js");
+      await shutdownPool();
+    } catch { /* best-effort — never block exit on teardown */ }
+
     try {
       const { disposeLocalPipelines } = await import("./search/semantic.js");
       await disposeLocalPipelines();
-    } catch { /* disposal is best-effort — never block exit on it */ }
+    } catch { /* best-effort */ }
 
-    // Let the process exit NATURALLY — do not call process.exit()/reallyExit().
+    // Now exit NATURALLY. Do not call process.exit(): with ORT loaded it is
+    // exactly what triggers the abort above. Measured over 2,400 embeddings —
+    // natural exit 0, process.exit() 134, reallyExit() 134.
     //
-    // With an onnxruntime session loaded, a forced exit aborts during native
-    // teardown: `libc++abi ... mutex lock failed: Invalid argument`, exit 134.
-    // Measured on 2,400 embeddings, all three variants:
-    //   natural exit  → 0     (clean)
-    //   process.exit  → 134   (abort)
-    //   reallyExit    → 134   (abort)
-    // The abort happens after every file is written, so no data is lost — but
-    // 134 makes every caller believe the command failed.
-    //
-    // ORT does not hold the event loop open, so natural exit terminates
-    // promptly. The unref'd timer is a backstop for some OTHER leaked handle;
-    // being unref'd it cannot keep the process alive on its own.
+    // The unref'd timer is a backstop for any handle we still fail to close; it
+    // cannot keep the process alive by itself, so it only fires if something
+    // else already is.
     process.exitCode = 0;
     setTimeout(() => process.exit(0), 10_000).unref();
   })

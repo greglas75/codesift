@@ -81,6 +81,21 @@ function getTaskTimeoutMs(): number {
 function spawnWorker(): PoolWorker {
   const workerPath = resolve(__dirname, "parse-worker.js");
   const worker = new Worker(workerPath);
+
+  // Do not let a pool worker hold the event loop open.
+  //
+  // These threads live for the whole process, so a one-shot `codesift index`
+  // could never exit on its own — process._getActiveHandles() still showed
+  // their MessagePorts after the command was done, and terminate() did not
+  // release them promptly. That forced a hard exit, and forcing an exit with an
+  // onnxruntime session loaded aborts in native teardown (`libc++abi ... mutex
+  // lock failed`, exit 134) — which is why indexing "failed" while having
+  // written every file correctly.
+  //
+  // unref() only removes the thread from the loop's liveness count; it keeps
+  // running and still delivers messages. Each in-flight parse is awaited by its
+  // caller, and those awaits are what keep the process alive while work remains.
+  worker.unref();
   const pw: PoolWorker = {
     worker,
     pendingTasks: new Map(),
