@@ -135,7 +135,11 @@ export async function handleSemanticQuery(
 
   const embeddings = await getEmbeddingCache(repo);
   if (!embeddings) {
-    throw new Error(`No embeddings for "${repo}". Run index_folder with an embedding provider configured.`);
+    throw new Error(
+      `No usable embeddings for "${repo}". Either none were built, or they were built with a ` +
+      `different embedding model than the one now active (a model change makes stored vectors ` +
+      `incomparable — see the server log). Re-index the repo to rebuild them with the current model.`,
+    );
   }
 
   const sourceLimit = query.source_chars ?? DEFAULT_SOURCE_CHARS;

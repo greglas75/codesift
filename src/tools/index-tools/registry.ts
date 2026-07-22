@@ -273,6 +273,32 @@ export async function getEmbeddingCache(
     if (!meta) return null;
 
     const embeddingPath = getEmbeddingPath(meta.index_path);
+
+    // Embeddings from a DIFFERENT model are not merely stale — they are
+    // incomparable, and every downstream path drops them silently (unequal
+    // vector lengths → skipped / similarity 0), so semantic search returns an
+    // empty result that looks like "nothing matched". Across this machine that
+    // was 266 of 336 repos and 72 GB of embeddings that could never produce a
+    // single hit, held over from an OpenAI key that is no longer configured.
+    //
+    // Treat a model change as cache invalidation, mirroring the existing
+    // per-language extractor_version rule. Checking the tiny meta file first
+    // also avoids reading (and briefly holding) a GB-scale ndjson we cannot use.
+    const { getEmbeddingMetaPath, loadEmbeddingMeta } = await import("../../storage/embedding-store.js");
+    const { expectedEmbeddingModel } = await import("../../search/semantic.js");
+    const embMeta = await loadEmbeddingMeta(getEmbeddingMetaPath(meta.index_path));
+    if (embMeta && config.embeddingProvider) {
+      const want = expectedEmbeddingModel(config.embeddingProvider, config.localModel);
+      if (embMeta.model !== want) {
+        console.error(
+          `[codesift] ${repoName}: embeddings were built with "${embMeta.model}" but the active ` +
+            `provider uses "${want}" — not loading them (they cannot be compared). ` +
+            `Re-index to rebuild embeddings with the current model.`,
+        );
+        return null;
+      }
+    }
+
     embeddingLoadCount++;
     // Bound the load to the RAM budget. A repo whose embeddings exceed it is not
     // loaded at all (loadEmbeddings returns empty) — semantic degrades to BM25 for

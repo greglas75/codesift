@@ -281,6 +281,25 @@ export class OllamaProvider implements EmbeddingProvider {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_LOCAL_MODEL = "nomic-ai/nomic-embed-text-v1.5";
+
+/**
+ * Model name the resolved provider WOULD produce — without constructing it.
+ *
+ * Constructing a provider to learn its model is not free (the local one loads a
+ * ~140 MB ONNX model), and the caller needs this answer on the cheap path,
+ * before deciding whether to read a possibly-GB embedding file at all.
+ */
+export function expectedEmbeddingModel(
+  provider: "voyage" | "openai" | "ollama" | "local",
+  localModel?: string | null,
+): string {
+  switch (provider) {
+    case "voyage": return "voyage-code-3";
+    case "openai": return "text-embedding-3-small";
+    case "ollama": return "nomic-embed-text";
+    case "local": return localModel ?? DEFAULT_LOCAL_MODEL;
+  }
+}
 const DEFAULT_LOCAL_DIMS = 768;
 const STATIC_EMBEDDING_MODEL_PREFIX = "minishlab/potion";
 const STATIC_EMBEDDING_MODEL_SUBSTRING = "model2vec";
