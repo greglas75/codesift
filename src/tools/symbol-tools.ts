@@ -31,6 +31,57 @@ function isNoisePath(filePath: string): boolean {
  * calls return zero results). Extracts a name candidate from the requested
  * ID and returns up to `limit` symbols whose name matches case-insensitively.
  */
+/**
+ * Resolve a non-canonical symbol reference to a real symbol ID when it is
+ * UNAMBIGUOUS.
+ *
+ * Symbol IDs are `repo:file:name:line` — they embed the declaration line, so no
+ * caller can construct one by hand. Agents therefore pass a bare name
+ * ("getOptions") or a half-remembered path, and the lookup returns null; the
+ * measured miss rate was 24% of get_symbol calls and 26% of get_symbols. The old
+ * behaviour answered with a suggestion list, which is a second round trip for a
+ * question we can already answer.
+ *
+ * Only an EXACT, SINGLE name match resolves. Two symbols named `handler` must
+ * stay ambiguous — silently picking one would return the wrong source with no
+ * signal, which is worse than the miss it replaces.
+ */
+/**
+ * Best-effort symbol NAME out of whatever the caller passed.
+ *
+ * Symbol IDs end in the declaration line (`repo:file:name:LINE`), so naively
+ * taking the last segment yields "42" and matches nothing — every suggestion for
+ * a well-formed-but-stale id was silently useless. Skip trailing numeric
+ * segments, then fall back to the last non-empty one.
+ */
+export function extractSymbolNameGuess(requestedId: string): string {
+  const parts = requestedId.split(/[:#/.]/).map((p) => p.trim()).filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i] as string;
+    if (!/^\d+$/.test(p)) return p;
+  }
+  return requestedId.trim();
+}
+
+export async function resolveSymbolIdExact(
+  repo: string,
+  requestedId: string,
+): Promise<string | null> {
+  const nameGuess = extractSymbolNameGuess(requestedId);
+  if (!nameGuess) return null;
+
+  const index = await getCodeIndex(repo, { skipFreshness: true });
+  if (!index) return null;
+
+  let match: string | null = null;
+  for (const s of index.symbols) {
+    if (s.name !== nameGuess) continue;
+    if (match) return null; // ambiguous — let the caller show suggestions
+    match = s.id;
+  }
+  return match;
+}
+
 export async function findSimilarSymbols(
   repo: string,
   requestedId: string,
@@ -39,8 +90,7 @@ export async function findSimilarSymbols(
   const index = await getCodeIndex(repo, { skipFreshness: true });
   if (!index) return [];
 
-  // Extract probable name from id: last segment after :: : # / .
-  const nameGuess = requestedId.split(/[:#/.]/).pop()?.trim() ?? requestedId;
+  const nameGuess = extractSymbolNameGuess(requestedId);
   if (!nameGuess) return [];
   const lower = nameGuess.toLowerCase();
 
