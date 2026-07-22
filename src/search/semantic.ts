@@ -71,6 +71,44 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
  * Search embeddings by cosine similarity (linear scan).
  * Returns top-k results sorted by similarity descending.
  */
+/**
+ * Detect stored embeddings that cannot be compared against the current query
+ * vector because they were produced by a different model.
+ *
+ * Both comparison paths drop mismatched vectors WITHOUT a signal —
+ * `searchSemantic` does `continue`, `cosineSimilarity` returns 0 — so a repo
+ * whose embeddings were built by one provider and queried under another returns
+ * "no results" that is indistinguishable from "nothing matched". This repo hit
+ * exactly that: 30,010 symbols / 886 MB embedded with OpenAI
+ * text-embedding-3-small (1536d), then queried with the local nomic model
+ * (768d) after the API key went away. Every vector was skipped, every semantic
+ * query came back empty, and nothing anywhere said why.
+ *
+ * Returns the stored dimensionality when it disagrees with the query, else null.
+ */
+export function detectDimensionMismatch(
+  queryDim: number,
+  embeddings: Map<string, Float32Array>,
+): { storedDim: number } | null {
+  for (const vec of embeddings.values()) {
+    // Embeddings in one file are uniform — the first entry is representative.
+    return vec.length === queryDim ? null : { storedDim: vec.length };
+  }
+  return null; // empty map is "no embeddings", a different condition
+}
+
+/** Actionable message for a detected mismatch. */
+export function dimensionMismatchMessage(queryDim: number, storedDim: number): string {
+  return (
+    `Semantic search unavailable: stored embeddings are ${storedDim}-dimensional but the ` +
+    `active embedding provider produces ${queryDim}-dimensional vectors, so none of them are ` +
+    `comparable. The index was embedded with a different model than is configured now.\n` +
+    `Fix: re-embed with the current provider (index_folder with force_embeddings), or restore ` +
+    `the original provider's API key (e.g. CODESIFT_OPENAI_API_KEY).\n` +
+    `Falling back to BM25 keyword search (search_text) is a reasonable workaround meanwhile.`
+  );
+}
+
 export function searchSemantic(
   queryEmbedding: Float32Array,
   embeddings: Map<string, Float32Array>,

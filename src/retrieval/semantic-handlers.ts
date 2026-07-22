@@ -100,8 +100,16 @@ export async function handleSemanticQuery(
 ): Promise<SubQueryResult> {
   const ctx = await loadSemanticContext(repo, query);
 
+  const { detectDimensionMismatch, dimensionMismatchMessage } = await import("../search/semantic.js");
+  const queryDim = ctx.vecs[0]?.length ?? 0;
+
   // Chunk-level semantic search (preferred path)
   if (ctx.chunks && ctx.chunkEmbeddings) {
+    const mismatch = queryDim > 0 ? detectDimensionMismatch(queryDim, ctx.chunkEmbeddings) : null;
+    if (mismatch) {
+      const text = dimensionMismatchMessage(queryDim, mismatch.storedDim);
+      return { type: "semantic", data: text, tokens: estimateTokens(text) };
+    }
     const rrfScores = computeRRFScores(ctx.vecs, ctx.filteredEmbeddings, ctx.cosineSimilarity);
     const topIds = [...rrfScores.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -137,6 +145,12 @@ export async function handleSemanticQuery(
 
   const primaryVec = ctx.vecs[0];
   if (!primaryVec) throw new Error("Embedding provider returned no vector");
+
+  const symbolMismatch = detectDimensionMismatch(primaryVec.length, filteredEmbeddings);
+  if (symbolMismatch) {
+    const text = dimensionMismatchMessage(primaryVec.length, symbolMismatch.storedDim);
+    return { type: "semantic", data: text, tokens: estimateTokens(text) };
+  }
 
   const results = searchSemantic(new Float32Array(primaryVec), filteredEmbeddings, symbolMap, ctx.topK);
   // Truncate source then format as text (avoid double JSON serialization)
