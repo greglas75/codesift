@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { extname } from "node:path";
-import { CODE_EXTENSIONS, DEFAULT_MIN_LINES, denyTool, isCurrentRepoIndexed } from "./shared.js";
+import { CODE_EXTENSIONS, DEFAULT_MIN_LINES, denyTool, isCodesiftServerRunning, isCurrentRepoIndexed } from "./shared.js";
 import { parseHookInput, readRawInput } from "./input.js";
 import { tryLoadWikiSummary } from "./wiki.js";
 
@@ -105,7 +105,7 @@ export async function handlePrecheckRead(): Promise<void> {
       return;
     }
 
-    if (!isCurrentRepoIndexed()) {
+    if (!isCurrentRepoIndexed() || !isCodesiftServerRunning()) {
       process.exit(0);
       return;
     }
@@ -189,7 +189,7 @@ export async function handlePrecheckBash(): Promise<void> {
       return;
     }
 
-    if (!isCurrentRepoIndexed()) {
+    if (!isCurrentRepoIndexed() || !isCodesiftServerRunning()) {
       process.exit(0);
       return;
     }
@@ -223,6 +223,13 @@ export async function handlePrecheckGlob(): Promise<void> {
       process.exit(0);
       return;
     }
+    // "CodeSift is available" must be true before we say it. This denied
+    // unconditionally, so a dead server left callers with neither Glob nor the
+    // tools it advertised.
+    if (!isCodesiftServerRunning()) {
+      process.exit(0);
+      return;
+    }
     denyTool(
       `CodeSift is available. Use CodeSift instead of Glob:\n` +
         `  get_file_tree(compact=true, name_pattern="*.ts") — find files\n` +
@@ -237,6 +244,11 @@ export async function handlePrecheckGrep(): Promise<void> {
   try {
     const raw = readRawInput();
     if (!raw) {
+      process.exit(0);
+      return;
+    }
+    // Same as Glob above: never redirect to tools the caller cannot reach.
+    if (!isCodesiftServerRunning()) {
       process.exit(0);
       return;
     }
