@@ -274,7 +274,10 @@ export async function getEmbeddingCache(
 
     const embeddingPath = getEmbeddingPath(meta.index_path);
     embeddingLoadCount++;
-    const embeddings = await loadEmbeddings(embeddingPath);
+    // Bound the load to the RAM budget. A repo whose embeddings exceed it is not
+    // loaded at all (loadEmbeddings returns empty) — semantic degrades to BM25 for
+    // THAT repo instead of ballooning the process to the file's full size (5+ GB).
+    const embeddings = await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes());
     if (embeddings.size === 0) return null;
 
     // Pin-on-access: this repo is the one being served, so eviction never drops
