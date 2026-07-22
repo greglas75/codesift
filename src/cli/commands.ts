@@ -152,6 +152,14 @@ async function handleIndex(args: string[], flags: Flags): Promise<void> {
     include_paths: parseCommaSeparated(flags, "include-paths"),
     watch: getBoolFlag(flags, "no-watch") === true ? false : undefined,
   });
+
+  // Embedding runs detached so an MCP call can return immediately. For a
+  // one-shot CLI run that is a silent data-loss bug: main() force-exits once
+  // this resolves, killing the chain mid-flight and leaving the repo with no
+  // embeddings and no error. Wait for it here.
+  const { awaitPendingEmbeddings } = await import("../tools/index-tools/folder-indexer.js");
+  await awaitPendingEmbeddings();
+
   output(result, flags);
 }
 

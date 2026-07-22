@@ -282,6 +282,56 @@ export class OllamaProvider implements EmbeddingProvider {
 
 const DEFAULT_LOCAL_MODEL = "nomic-ai/nomic-embed-text-v1.5";
 
+/** Hard per-input sequence cap handed to the tokenizer. */
+const MAX_EMBED_TOKENS = 2048;
+/** ~4 chars per token — enough to bucket batches without tokenizing twice. */
+const CHARS_PER_TOKEN = 4;
+/** Total padded tokens allowed in one forward pass (batch × longest member). */
+const BATCH_TOKEN_BUDGET = 8192;
+
+/**
+ * Split texts into forward passes bounded by TOTAL padded tokens.
+ *
+ * A transformer batch is padded to its longest member and attention costs
+ * O(seq²), so batching by ITEM COUNT makes cost depend on the worst input in
+ * the group. Measured on this repo: median chunk 88 chars, p99 4 KB, max 45 KB
+ * (~11 K tokens). One such chunk in a 96-item batch padded all 96 rows to 11 K
+ * tokens — tens of GB of activations for 10 MB of text, which is how a single
+ * indexing run jumped from 9 GB to 31 GB in one step.
+ *
+ * Budgeting on `count × longest` instead keeps every pass the same size: short
+ * chunks still batch by the hundred, an oversized one runs nearly alone.
+ * Order is preserved — callers map results back positionally.
+ */
+export function groupByTokenBudget(
+  texts: string[],
+  budget = BATCH_TOKEN_BUDGET,
+  maxTokens = MAX_EMBED_TOKENS,
+): Array<{ texts: string[] }> {
+  const maxChars = maxTokens * CHARS_PER_TOKEN;
+  const groups: Array<{ texts: string[] }> = [];
+  let current: string[] = [];
+  let longest = 0;
+
+  for (const raw of texts) {
+    // Hard cap per input. The pipeline ignores tokenizer options, so this slice
+    // is the only thing standing between a 45 KB chunk and an 11 K-token row.
+    const text = raw.length > maxChars ? raw.slice(0, maxChars) : raw;
+    const tokens = Math.ceil(text.length / CHARS_PER_TOKEN);
+    const nextLongest = Math.max(longest, tokens);
+    if (current.length > 0 && nextLongest * (current.length + 1) > budget) {
+      groups.push({ texts: current });
+      current = [text];
+      longest = tokens;
+      continue;
+    }
+    current.push(text);
+    longest = nextLongest;
+  }
+  if (current.length > 0) groups.push({ texts: current });
+  return groups;
+}
+
 /**
  * Model name the resolved provider WOULD produce — without constructing it.
  *
@@ -355,6 +405,26 @@ type FeatureExtractor = (
 ) => Promise<{ data: Float32Array | number[]; dims: number[] }>;
 
 const localPipelineCache = new Map<string, FeatureExtractor>();
+const localPipelineDisposers = new Map<string, () => Promise<void>>();
+
+/**
+ * Release loaded ONNX sessions.
+ *
+ * One-shot processes must call this before exiting. `main()` force-exits via
+ * process.exit(), and tearing the process down while onnxruntime's background
+ * threads are still live aborts the whole process:
+ *   libc++abi: terminating ... system_error: mutex lock failed: Invalid argument
+ * exit code 134. That abort predates the arena change (it reproduces with
+ * CODESIFT_ONNX_MEM_ARENA=1 and =0 alike) and could land mid-write, which is
+ * how a full `codesift index` run finished with no embeddings on disk and no
+ * error printed.
+ */
+export async function disposeLocalPipelines(): Promise<void> {
+  const disposers = [...localPipelineDisposers.values()];
+  localPipelineDisposers.clear();
+  localPipelineCache.clear();
+  await Promise.allSettled(disposers.map((d) => d()));
+}
 const failedLocalModels = new Set<string>();
 let localLoadWarned = false;
 let firstLoadAnnounced = false;
@@ -376,11 +446,31 @@ async function loadLocalPipeline(model: string): Promise<FeatureExtractor | null
 
     // `dtype: "q8"` is the @huggingface/transformers v3 way to request the
     // INT8-quantized ONNX weights (the v2 `{ quantized: true }` flag is gone).
+    //
+    // `enableCpuMemArena: false` is the difference between bounded and unbounded
+    // memory. onnxruntime's CPU arena caches every allocation it ever makes and
+    // never returns it, so RSS grew ~1.5 MB per embedded text and no amount of
+    // GC or tensor .dispose() reclaimed it — the JS heap stayed at 16-42 MB
+    // while RSS climbed into the gigabytes. Measured over 10,000 texts:
+    //   arena on  →  2,000 texts = 3,681 MB, still climbing
+    //   arena off → 10,000 texts =   777 MB, flat (peaks ~1.2 GB, then returns)
+    // At this repo's ~57K symbol+chunk texts that is the difference between
+    // ~85 GB and under 1 GB. It is the root cause behind an indexing process
+    // that reached 163 GB RSS.
+    // Escape hatch: CODESIFT_ONNX_MEM_ARENA=1 restores the old arena behaviour
+    // if a runtime/platform turns out to need it.
+    const memArena = process.env["CODESIFT_ONNX_MEM_ARENA"] === "1";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const extractor = await pipelineFn("feature-extraction", model, { dtype: "q8" }) as any;
+    const extractor = await pipelineFn("feature-extraction", model, {
+      dtype: "q8",
+      session_options: { enableCpuMemArena: memArena },
+    }) as any;
 
     const fn: FeatureExtractor = (texts, opts) => extractor(texts, opts);
     localPipelineCache.set(model, fn);
+    localPipelineDisposers.set(model, async () => {
+      if (typeof extractor?.dispose === "function") await extractor.dispose();
+    });
     return fn;
   } catch (err) {
     failedLocalModels.add(model);
@@ -412,15 +502,20 @@ export class LocalProvider implements EmbeddingProvider {
     const prefix = getPrefix(this.model, mode);
     const prefixed = prefix ? texts.map((t) => prefix + t) : texts;
 
-    const output = await extractor(prefixed, { pooling: "mean", normalize: true });
-    const data = output.data instanceof Float32Array ? output.data : Float32Array.from(output.data);
-    const dims = output.dims;
-    const dim = dims[dims.length - 1] ?? this.dimensions;
-
     const results: number[][] = [];
-    for (let i = 0; i < texts.length; i++) {
-      const start = i * dim;
-      results.push(Array.from(data.subarray(start, start + dim)));
+    for (const group of groupByTokenBudget(prefixed)) {
+      // Truncation happens on the TEXT (groupByTokenBudget already sliced it):
+      // the feature-extraction pipeline accepts only pooling/normalize, so a
+      // `truncation: true` option here would be silently ignored — the cap has
+      // to be applied before the tokenizer ever sees the string.
+      const output = await extractor(group.texts, { pooling: "mean", normalize: true });
+      const data = output.data instanceof Float32Array ? output.data : Float32Array.from(output.data);
+      const dims = output.dims;
+      const dim = dims[dims.length - 1] ?? this.dimensions;
+      for (let i = 0; i < group.texts.length; i++) {
+        const start = i * dim;
+        results.push(Array.from(data.subarray(start, start + dim)));
+      }
     }
     return results;
   }

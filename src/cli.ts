@@ -101,16 +101,34 @@ async function main(): Promise<void> {
 }
 
 main()
-  .then(() => {
+  .then(async () => {
     // Force a clean exit for one-shot commands so leaked handles (embedding
     // workers, etc.) can't keep the process hanging. Watch mode opts out.
     // Drain stdout+stderr first via empty-write callbacks so piped output
     // (`codesift search ... > out.json`) doesn't get truncated when there's
     // pending data in the buffer.
     if (keepProcessAlive) return;
-    process.stdout.write("", () => {
-      process.stderr.write("", () => process.exit(0));
-    });
+    try {
+      const { disposeLocalPipelines } = await import("./search/semantic.js");
+      await disposeLocalPipelines();
+    } catch { /* disposal is best-effort — never block exit on it */ }
+
+    // Let the process exit NATURALLY — do not call process.exit()/reallyExit().
+    //
+    // With an onnxruntime session loaded, a forced exit aborts during native
+    // teardown: `libc++abi ... mutex lock failed: Invalid argument`, exit 134.
+    // Measured on 2,400 embeddings, all three variants:
+    //   natural exit  → 0     (clean)
+    //   process.exit  → 134   (abort)
+    //   reallyExit    → 134   (abort)
+    // The abort happens after every file is written, so no data is lost — but
+    // 134 makes every caller believe the command failed.
+    //
+    // ORT does not hold the event loop open, so natural exit terminates
+    // promptly. The unref'd timer is a backstop for some OTHER leaked handle;
+    // being unref'd it cannot keep the process alive on its own.
+    process.exitCode = 0;
+    setTimeout(() => process.exit(0), 10_000).unref();
   })
   .catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
