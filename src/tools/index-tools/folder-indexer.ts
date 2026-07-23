@@ -29,6 +29,52 @@ export type { IndexFolderResult } from "./types.js";
 const INDEX_FOLDER_REDUNDANT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_FILES = 50_000;
 
+/**
+ * In-flight background embedding runs, keyed by repo.
+ *
+ * The embedding chain is deliberately not awaited by indexFolder (it can take
+ * minutes and must not block an MCP response), but nothing used to stop a
+ * SECOND run from starting while the first was still going. With a file watcher
+ * attached, every save spawned another detached chain, each holding the parsed
+ * symbol set, every file's chunk text, and a second copy of that text inside
+ * batchEmbed — concurrently. One observed `codesift index` process reached
+ * 163 GB RSS this way; the single-run cost is ~8 GB.
+ *
+ * Runs for a repo are now serialised: a request that arrives while one is
+ * active chains onto it instead of running beside it. Peak memory becomes the
+ * cost of ONE run regardless of how often files change.
+ */
+const embeddingRuns = new Map<string, Promise<void>>();
+
+function scheduleEmbedding(repoName: string, run: () => Promise<void>): Promise<void> {
+  const prev = embeddingRuns.get(repoName);
+  const next = (prev ?? Promise.resolve())
+    .then(run, run) // a failed predecessor must not cancel the follow-up
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] Background embedding failed for ${repoName}: ${msg}`);
+    })
+    .finally(() => {
+      // Only clear if we are still the newest run for this repo.
+      if (embeddingRuns.get(repoName) === next) embeddingRuns.delete(repoName);
+    });
+  embeddingRuns.set(repoName, next);
+  return next;
+}
+
+/**
+ * Await every background embedding run still in flight.
+ *
+ * One-shot callers (the CLI) must call this before exiting: `main()` force-exits
+ * on completion, which killed the detached chain mid-flight and left the repo
+ * with NO embeddings written and no error reported.
+ */
+export async function awaitPendingEmbeddings(): Promise<void> {
+  while (embeddingRuns.size > 0) {
+    await Promise.allSettled([...embeddingRuns.values()]);
+  }
+}
+
 function getDefaultMaxFiles(): number {
   const envVal = process.env.CODESIFT_MAX_FILES;
   if (envVal) {
@@ -371,14 +417,21 @@ export async function indexFolder(
     console.warn(`[codesift] hash-snapshot save failed for ${repoName} (non-fatal): ${msg}`);
   }
 
-  // Embed symbols and chunks in background (non-fatal, don't block MCP response)
-  // Large repos (71K symbols) can take minutes — fire-and-forget to prevent timeout
-  embedSymbols(mergedSymbols, indexPath, repoName, config)
-    .then(() => embedChunks(mergedEntries, rootPath, repoName, indexPath, config, mergedSymbols))
-    .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[codesift] Background embedding failed for ${repoName}: ${msg}`);
+  // Embed symbols and chunks in the background (non-fatal, must not block the
+  // MCP response — large repos take minutes). Serialised per repo so repeated
+  // watcher events queue instead of piling up concurrently; see embeddingRuns.
+  //
+  // The CLI opts out via CODESIFT_EMBED_OUT_OF_PROCESS and runs the same work in
+  // a child process instead, so that a short-lived command never loads
+  // onnxruntime — see src/cli/embed-child.ts for why that matters. The
+  // long-lived MCP server keeps embedding in-process: it does not exit, so the
+  // teardown conflict cannot arise there.
+  if (process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
+    scheduleEmbedding(repoName, async () => {
+      await embedSymbols(mergedSymbols, indexPath, repoName, config);
+      await embedChunks(mergedEntries, rootPath, repoName, indexPath, config, mergedSymbols);
     });
+  }
 
   // Register in the global registry. If a stale entry exists with the same
   // root but a different name (e.g. `local/workspace` from before the git

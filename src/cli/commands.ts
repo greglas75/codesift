@@ -143,15 +143,81 @@ const EXCLUDE_TESTS_QUERY_TYPES: ReadonlySet<string> = new Set(["semantic", "hyb
 // Index commands
 // ---------------------------------------------------------------------------
 
+/**
+ * Run the embedding phase in a separate process and wait for it.
+ *
+ * The child's EXIT CODE is deliberately not trusted. Once onnxruntime has run,
+ * the process aborts during native teardown (`mutex lock failed`, exit 134)
+ * even though every file was written correctly first — so the child prints a
+ * marker after its last successful write and that marker, not the status, is
+ * what decides success. See src/cli/embed-child.ts.
+ *
+ * Failures here are reported but never fatal: BM25 and symbol search work
+ * without embeddings, and the index itself is already committed to disk.
+ */
+async function runEmbeddingChild(repoName: string, rootPath: string): Promise<void> {
+  const { getIndexPath } = await import("../storage/index-store.js");
+  const { loadConfig } = await import("../config.js");
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, join } = await import("node:path");
+
+  const config = loadConfig();
+  if (!config.embeddingProvider) return; // lite mode — nothing to embed
+
+  const indexPath = getIndexPath(config.dataDir, rootPath);
+  const childScript = join(dirname(fileURLToPath(import.meta.url)), "embed-child.js");
+  const { EMBED_CHILD_OK_MARKER } = await import("./embed-child-marker.js");
+
+  await new Promise<void>((resolve) => {
+    const child = spawn(process.execPath, [childScript, indexPath, repoName, rootPath], {
+      stdio: ["ignore", "pipe", "inherit"],
+      env: { ...process.env, CODESIFT_EMBED_OUT_OF_PROCESS: "0" },
+    });
+
+    let sawMarker = false;
+    child.stdout.on("data", (buf: Buffer) => {
+      if (buf.toString().includes(EMBED_CHILD_OK_MARKER)) sawMarker = true;
+    });
+    child.on("error", (err) => {
+      process.stderr.write(`[codesift] embedding skipped: ${err.message}\n`);
+      resolve();
+    });
+    child.on("close", (code, signal) => {
+      if (!sawMarker) {
+        process.stderr.write(
+          `[codesift] embedding did not complete (exit ${code ?? signal}) — ` +
+            `search falls back to BM25 for this repo.\n`,
+        );
+      }
+      resolve();
+    });
+  });
+}
+
 async function handleIndex(args: string[], flags: Flags): Promise<void> {
   const path = requireArg(args, 0, "path");
   const { indexFolder } = await import("../tools/index-tools.js");
+
+  // Keep onnxruntime out of THIS process; the embedding runs in a child below.
+  process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] = "1";
 
   const result = await indexFolder(path, {
     incremental: getBoolFlag(flags, "incremental"),
     include_paths: parseCommaSeparated(flags, "include-paths"),
     watch: getBoolFlag(flags, "no-watch") === true ? false : undefined,
   });
+
+  // Any in-process embedding scheduled before the opt-out (or by another code
+  // path) still has to finish before we exit, or the command reports success
+  // having written nothing.
+  const { awaitPendingEmbeddings } = await import("../tools/index-tools/folder-indexer.js");
+  await awaitPendingEmbeddings();
+
+  const repo = (result as { repo?: string } | null)?.repo;
+  const root = (result as { root?: string } | null)?.root;
+  if (repo && root) await runEmbeddingChild(repo, root);
+
   output(result, flags);
 }
 

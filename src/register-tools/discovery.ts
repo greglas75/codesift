@@ -22,6 +22,14 @@ export const CORE_TOOL_NAMES = new Set([
   "get_symbol",
   "search_patterns",
   "index_conversations",
+  // Semantic search was excluded because telemetry showed 0 calls — but that
+  // number was an artifact of THIS list, not of the tool's value: it was hidden,
+  // so no agent could call it, so it stayed at 0 and stayed hidden. A
+  // self-fulfilling prophecy. Worse, search_text's own description tells agents
+  // "For conceptual queries use semantic_search" — pointing at a tool they could
+  // not see. Made visible so intent-based queries have a reachable answer
+  // instead of degrading to keyword search.
+  "semantic_search",
   // --- Direct-use: agents call these without discovery ---
   "assemble_context",        // 64 calls, 21 sessions, 100% direct
   "get_symbols",             // 69 calls — batch symbol reads

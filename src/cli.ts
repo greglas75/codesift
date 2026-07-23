@@ -101,16 +101,42 @@ async function main(): Promise<void> {
 }
 
 main()
-  .then(() => {
+  .then(async () => {
     // Force a clean exit for one-shot commands so leaked handles (embedding
     // workers, etc.) can't keep the process hanging. Watch mode opts out.
     // Drain stdout+stderr first via empty-write callbacks so piped output
     // (`codesift search ... > out.json`) doesn't get truncated when there's
     // pending data in the buffer.
     if (keepProcessAlive) return;
-    process.stdout.write("", () => {
-      process.stderr.write("", () => process.exit(0));
-    });
+
+    // Terminate the tree-sitter parser worker pool.
+    //
+    // This is what made `codesift index` exit 134. The pool's Worker threads
+    // outlive the command (process._getActiveHandles() showed the surviving
+    // MessagePorts), so the process could never exit on its own and had to be
+    // force-exited — and forcing an exit while an onnxruntime session is loaded
+    // aborts in native teardown: `libc++abi ... mutex lock failed`, exit 134.
+    // The abort was the symptom; the un-terminated pool was the cause.
+    // shutdownPool() already existed — nothing ever called it from the CLI.
+    try {
+      const { shutdownPool } = await import("./parser/parser-pool.js");
+      await shutdownPool();
+    } catch { /* best-effort — never block exit on teardown */ }
+
+    try {
+      const { disposeLocalPipelines } = await import("./search/semantic.js");
+      await disposeLocalPipelines();
+    } catch { /* best-effort */ }
+
+    // Now exit NATURALLY. Do not call process.exit(): with ORT loaded it is
+    // exactly what triggers the abort above. Measured over 2,400 embeddings —
+    // natural exit 0, process.exit() 134, reallyExit() 134.
+    //
+    // The unref'd timer is a backstop for any handle we still fail to close; it
+    // cannot keep the process alive by itself, so it only fires if something
+    // else already is.
+    process.exitCode = 0;
+    setTimeout(() => process.exit(0), 10_000).unref();
   })
   .catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);

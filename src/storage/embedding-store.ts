@@ -29,6 +29,7 @@ interface EmbeddingLine {
  */
 export async function loadEmbeddings(
   embeddingPath: string,
+  maxBytes: number = Number.POSITIVE_INFINITY,
 ): Promise<Map<string, Float32Array>> {
   const embeddings = new Map<string, Float32Array>();
 
@@ -36,13 +37,45 @@ export async function loadEmbeddings(
   // embedding files are GB-scale (e.g. 4.5GB), so a single slurp spikes the heap
   // by the full file size at load. readline keeps peak memory to one line plus
   // the resident Float32Array map.
-  const { createReadStream, existsSync } = await import("node:fs");
+  const { createReadStream, existsSync, statSync } = await import("node:fs");
   const { createInterface } = await import("node:readline");
 
   // Missing file → empty map (mirrors prior readFile catch). Guarding here avoids
   // an async ENOENT surfacing as an unhandled stream/readline error.
   if (!existsSync(embeddingPath)) return embeddings;
 
+  // HARD memory bound. The streaming above only stops the *file text* from being
+  // slurped in one shot — it still built the full resident Float32Array map, so a
+  // 5.5 GB embedding file became 5.5 GB of live heap PER REPO, and the cross-repo
+  // eviction can never drop the pinned (just-loaded) repo. That is exactly how one
+  // MCP server ballooned to 20+ GB. Refuse to hold more than the budget:
+  //
+  //  1. Cheap up-front skip for files that cannot possibly fit. The ndjson text is
+  //     roughly 3x the Float32Array it decodes to (each float is ~12 chars of JSON
+  //     vs 4 bytes binary), so only a file several times the budget is hopeless.
+  //     The factor is deliberately generous (4x): under-rejecting is free — the
+  //     exact resident-byte guard below still bounds memory — while over-rejecting
+  //     would refuse repos that comfortably fit and silently kill their semantic
+  //     search. Skipping here just avoids streaming a 5 GB file to learn that.
+  const FILE_TO_RESIDENT_RATIO = 4;
+  try {
+    const size = statSync(embeddingPath).size;
+    if (size > maxBytes * FILE_TO_RESIDENT_RATIO) {
+      console.error(
+        `[codesift] embeddings skipped (${(size / 1e9).toFixed(1)} GB > ` +
+          `${(maxBytes / 1e6).toFixed(0)} MB budget) — semantic falls back to BM25. ` +
+          `Raise CODESIFT_MAX_EMBEDDING_MEM_MB to load it.`,
+      );
+      return embeddings;
+    }
+  } catch { /* stat failed — the streaming guard below still bounds resident bytes */ }
+
+  // 2. Streaming guard — bound resident bytes even for a file that stat couldn't
+  //    size or whose vectors are unexpectedly wide. A partial map covers an
+  //    arbitrary symbol subset (misleading semantic hits), so on overflow we drop
+  //    everything and fall back to BM25 rather than serving half an index.
+  let residentBytes = 0;
+  let overBudget = false;
   await new Promise<void>((resolve) => {
     let stream: import("node:fs").ReadStream;
     try {
@@ -55,12 +88,23 @@ export async function loadEmbeddings(
     const rl = createInterface({ input: stream, crlfDelay: Infinity });
     rl.on("error", () => resolve());
     rl.on("line", (line) => {
+      if (overBudget) return;
       const trimmed = line.trim();
       if (!trimmed) return;
       try {
         const entry = JSON.parse(trimmed) as EmbeddingLine;
         if (entry.id && Array.isArray(entry.vec)) {
-          embeddings.set(entry.id, new Float32Array(entry.vec));
+          const vec = new Float32Array(entry.vec);
+          residentBytes += vec.byteLength + entry.id.length * 2 + 48; // vector + key + Map overhead
+          if (residentBytes > maxBytes) {
+            overBudget = true;
+            embeddings.clear();
+            rl.close();
+            stream.destroy();
+            resolve();
+            return;
+          }
+          embeddings.set(entry.id, vec);
         }
       } catch {
         // Skip malformed lines
@@ -69,6 +113,12 @@ export async function loadEmbeddings(
     rl.on("close", () => resolve());
   });
 
+  if (overBudget) {
+    console.error(
+      `[codesift] embeddings skipped (exceeded ${(maxBytes / 1e6).toFixed(0)} MB ` +
+        `budget mid-load) — semantic falls back to BM25.`,
+    );
+  }
   return embeddings;
 }
 

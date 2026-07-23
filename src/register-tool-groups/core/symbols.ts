@@ -29,14 +29,29 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     description: "Get symbol by ID with source. Auto-prefetches children for classes. For batch: get_symbols. For context: get_context_bundle.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      symbol_id: z.string().describe("Unique symbol identifier"),
+      symbol_id: z.string().describe(
+        "Symbol ID, format 'repo:file:name:line' (e.g. 'myrepo:src/api.ts:getUser:42') — copy it from " +
+        "search_symbols/get_file_outline results, it cannot be constructed by hand (it embeds the " +
+        "declaration line). A bare symbol name is also accepted when it is unique in the repo.",
+      ),
       include_related: zBool().describe("Include children/related symbols (default: true)"),
     })),
     handler: async (args) => {
       const opts: { include_related?: boolean } = {};
       if (args.include_related != null) opts.include_related = args.include_related as boolean;
       const symbolId = args.symbol_id as string;
-      const result = await getSymbol(args.repo as string, symbolId, opts);
+      let result = await getSymbol(args.repo as string, symbolId, opts);
+      let resolvedNote = "";
+      if (!result) {
+        // Bare name / stale line number → resolve when unambiguous instead of
+        // spending a round trip on a suggestion list.
+        const { resolveSymbolIdExact } = await import("../../tools/symbol-tools.js");
+        const exact = await resolveSymbolIdExact(args.repo as string, symbolId);
+        if (exact && exact !== symbolId) {
+          result = await getSymbol(args.repo as string, exact, opts);
+          if (result) resolvedNote = `(resolved "${symbolId}" → ${exact})\n`;
+        }
+      }
       if (!result) {
         // Telemetry: 24% of get_symbol calls return null (hallucinated IDs).
         // Suggest closest matches by name so the agent doesn't burn turns guessing.
@@ -49,7 +64,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         const hint = await checkTextStubHint(args.repo as string, "get_symbol", true);
         return hint ?? `Symbol "${symbolId}" not found. Use search_symbols(query=...) to discover available IDs.`;
       }
-      let text = await formatSymbolCompact(result.symbol);
+      let text = resolvedNote + await formatSymbolCompact(result.symbol);
       if (result.related && result.related.length > 0) {
         text += "\n\n--- children ---\n" + result.related.map((s) => `${s.kind} ${s.name}${s.signature ? s.signature : ""} [${s.file}:${s.start_line}]`).join("\n");
       }
@@ -66,17 +81,44 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       symbol_ids: z.union([
         z.array(z.string().trim().min(1)),
         zJsonArray(z.string().trim().min(1)),
-      ]).describe("Array of symbol identifiers. Can be passed as JSON string."),
+      ]).describe(
+        "Array of symbol IDs, format 'repo:file:name:line' — copy from search_symbols/get_file_outline " +
+        "results rather than constructing them. Bare symbol names are accepted when unique. " +
+        "Can be passed as a JSON string.",
+      ),
     })),
     handler: async (args) => {
       const ids = args.symbol_ids as string[];
-      const syms = await getSymbols(args.repo as string, ids);
+      let syms = await getSymbols(args.repo as string, ids);
+
+      // Retry the misses through unambiguous name resolution before reporting
+      // them as not-found (same reason as get_symbol above). `resolved` records
+      // which REQUESTED ids were satisfied under a different canonical id — the
+      // suggestion block below keys off the requested ids, so without it every
+      // successfully-resolved name would still be reported as missing.
+      const resolved = new Set<string>();
+      if (syms.length < ids.length) {
+        const foundIds = new Set(syms.map((s) => s.id));
+        const { resolveSymbolIdExact } = await import("../../tools/symbol-tools.js");
+        const retry: string[] = [];
+        for (const id of ids) {
+          if (foundIds.has(id)) continue;
+          const exact = await resolveSymbolIdExact(args.repo as string, id);
+          if (exact && !foundIds.has(exact)) {
+            retry.push(exact);
+            resolved.add(id);
+          }
+        }
+        if (retry.length > 0) {
+          syms = [...syms, ...await getSymbols(args.repo as string, retry)];
+        }
+      }
       const output = await formatSymbolsCompact(syms);
       // Surface fuzzy suggestions for missing IDs (telemetry: 26% zero rate).
       let suggestions = "";
       if (syms.length < ids.length) {
         const foundIds = new Set(syms.map((s) => s.id));
-        const missing = ids.filter((id) => !foundIds.has(id));
+        const missing = ids.filter((id) => !foundIds.has(id) && !resolved.has(id));
         if (missing.length > 0) {
           const { findSimilarSymbols } = await import("../../tools/symbol-tools.js");
           const lines: string[] = [];

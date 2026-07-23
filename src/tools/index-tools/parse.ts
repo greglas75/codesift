@@ -10,6 +10,7 @@ import {
 import { runTreeSitterParse } from "../../parser/parser-pool.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../../parser/extractors/sql.js";
 import { getLanguageForPath } from "../../parser/parser-manager.js";
+import { embeddingMemBudgetBytes } from "../../config.js";
 import { buildSymbolText, createEmbeddingProvider } from "../../search/semantic.js";
 import {
   loadEmbeddings,
@@ -231,7 +232,7 @@ export async function embedSymbols(
   try {
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
-    const existing = await loadEmbeddings(embeddingPath);
+    const existing = await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes());
     const embeddings = await batchEmbed(symbolTexts, existing, (texts) => provider.embed(texts, "document"), config.embeddingBatchSize, repoName);
     await saveEmbeddings(embeddingPath, embeddings);
     await saveEmbeddingMeta(metaPath, {

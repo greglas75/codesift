@@ -59,6 +59,12 @@ const DEFAULT_TASK_TIMEOUT_MS = 60_000;
 let pool: PoolWorker[] = [];
 let nextTaskId = 1;
 let initialized = false;
+// Set while shutdownPool() is tearing the pool down. terminate() makes a worker
+// exit with code 1, which the exit handler would otherwise treat as a crash and
+// respawn — spawning a fresh worker mid-shutdown that nothing then closes, so
+// its MessagePort keeps the event loop alive and `codesift index` hangs ~10s
+// until the backstop timer fires. The flag suppresses that respawn.
+let shuttingDown = false;
 
 function getPoolSize(): number {
   const env = process.env.CODESIFT_PARSER_POOL_SIZE;
@@ -81,6 +87,21 @@ function getTaskTimeoutMs(): number {
 function spawnWorker(): PoolWorker {
   const workerPath = resolve(__dirname, "parse-worker.js");
   const worker = new Worker(workerPath);
+
+  // Do not let a pool worker hold the event loop open.
+  //
+  // These threads live for the whole process, so a one-shot `codesift index`
+  // could never exit on its own — process._getActiveHandles() still showed
+  // their MessagePorts after the command was done, and terminate() did not
+  // release them promptly. That forced a hard exit, and forcing an exit with an
+  // onnxruntime session loaded aborts in native teardown (`libc++abi ... mutex
+  // lock failed`, exit 134) — which is why indexing "failed" while having
+  // written every file correctly.
+  //
+  // unref() only removes the thread from the loop's liveness count; it keeps
+  // running and still delivers messages. Each in-flight parse is awaited by its
+  // caller, and those awaits are what keep the process alive while work remains.
+  worker.unref();
   const pw: PoolWorker = {
     worker,
     pendingTasks: new Map(),
@@ -106,6 +127,8 @@ function spawnWorker(): PoolWorker {
   });
 
   worker.on("exit", (code: number) => {
+    // During shutdown, terminate() is what caused this exit — do not respawn.
+    if (shuttingDown) return;
     if (code !== 0) {
       console.error(`[parser-pool] worker exited with code ${code} — respawning`);
       failAllTasksAndRespawn(pw, new Error(`worker exit ${code}`));
@@ -225,16 +248,23 @@ export async function runTreeSitterParse(req: ParseRequest): Promise<CodeSymbol[
  * lifetime (workers persist for the life of the process).
  */
 export async function shutdownPool(): Promise<void> {
-  for (const w of pool) {
-    for (const task of w.pendingTasks.values()) {
-      clearTimeout(task.timeoutHandle);
-      task.reject(new Error("pool shutdown"));
+  shuttingDown = true;
+  try {
+    for (const w of pool) {
+      for (const task of w.pendingTasks.values()) {
+        clearTimeout(task.timeoutHandle);
+        task.reject(new Error("pool shutdown"));
+      }
+      w.pendingTasks.clear();
+      await w.worker.terminate();
     }
-    w.pendingTasks.clear();
-    await w.worker.terminate();
+    pool = [];
+    initialized = false;
+  } finally {
+    // Reset so a later init() in the same process (tests, or a re-index in the
+    // MCP server) can spawn and respawn normally again.
+    shuttingDown = false;
   }
-  pool = [];
-  initialized = false;
 }
 
 /** Diagnostics for tests + debugging — current active task counts per worker. */

@@ -27,7 +27,8 @@ export async function loadConversationEmbeddingsCached(
   const cached = embeddingsCache.get(embeddingPath);
   if (cached?.mtimeMs === mtimeMs) return cached.embeddings;
   const { loadEmbeddings } = await import("../storage/embedding-store.js");
-  const embeddings = await loadEmbeddings(embeddingPath);
+  const { embeddingMemBudgetBytes } = await import("../config.js");
+  const embeddings = await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes());
   embeddingsCache.set(embeddingPath, { mtimeMs, embeddings });
   return embeddings;
 }

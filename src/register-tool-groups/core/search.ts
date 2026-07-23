@@ -185,10 +185,20 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     description: "Get the symbol outline of a single file (functions, classes, exports)",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
-      file_path: z.string().describe("Relative file path within the repository"),
+      // `file_path` is the canonical name, but agents reliably guess `path` or
+      // `file` (both appear in our own docs and hook messages as positional
+      // examples), and a wrong param name is a hard schema rejection — a wasted
+      // call that teaches nothing. Accept the synonyms.
+      file_path: z.string().optional().describe("Relative file path within the repository"),
+      path: z.string().optional().describe("Alias for file_path"),
+      file: z.string().optional().describe("Alias for file_path"),
     })),
     handler: async (args) => {
-      const result = await getFileOutline(args.repo as string, args.file_path as string);
+      const filePath = (args.file_path ?? args.path ?? args.file) as string | undefined;
+      if (!filePath) {
+        return "get_file_outline requires a file path: get_file_outline(file_path=\"src/api.ts\").";
+      }
+      const result = await getFileOutline(args.repo as string, filePath);
       const output = dispatchFormatter("get_file_outline", result);
       const isEmpty = !result || (Array.isArray(result) && result.length === 0);
       const hint = await checkTextStubHint(args.repo as string, "get_file_outline", isEmpty);

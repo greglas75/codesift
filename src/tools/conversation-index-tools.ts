@@ -46,6 +46,7 @@ export interface IndexConversationsResult {
  */
 export async function indexConversations(
   projectPath?: string,
+  options?: { embed?: boolean },
 ): Promise<IndexConversationsResult> {
   const startTime = Date.now();
   const rootPath = resolveConversationProjectPath(projectPath);
@@ -56,7 +57,8 @@ export async function indexConversations(
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
   const scan = await scanConversationFiles(rootPath, repoName);
-  await persistConversationIndex(rootPath, repoName, indexPath, scan);
+  // Explicit call embeds by default; auto-discovery passes embed:false (see below).
+  await persistConversationIndex(rootPath, repoName, indexPath, scan, { embed: options?.embed ?? true });
 
   return {
     sessions_found: scan.sessions,
@@ -114,6 +116,7 @@ async function persistConversationIndex(
   repoName: string,
   indexPath: string,
   scan: ConversationScan,
+  options?: { embed?: boolean },
 ): Promise<void> {
   const config = loadConfig();
   const bm25 = buildBM25Index(scan.symbols);
@@ -129,10 +132,24 @@ async function persistConversationIndex(
     file_count: scan.files.length,
   };
   await saveIndex(indexPath, codeIndex);
-  embedSymbols(scan.symbols, indexPath, repoName, config).catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[codesift] Conversation embedding failed for ${repoName}: ${msg}`);
-  });
+
+  // Embedding conversations is OPT-IN. This used to fire unconditionally and
+  // unawaited on every server start (autoDiscoverConversations → here), so each
+  // of N concurrent MCP servers began embedding the whole ~/.claude/projects
+  // history (6+ GB of JSONL) in the background. The resulting Float32Arrays live
+  // OUTSIDE the V8 heap, so --max-old-space-size cannot bound them: a single
+  // process was measured at 53 GB RSS, and with one server per editor session
+  // that alone exhausted a 128 GB machine.
+  //
+  // The BM25 index built above is what search_conversations actually needs for
+  // lexical hits, and it is cheap. Semantic conversation search now requires an
+  // explicit index_conversations call rather than happening behind your back.
+  if (options?.embed) {
+    embedSymbols(scan.symbols, indexPath, repoName, config).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] Conversation embedding failed for ${repoName}: ${msg}`);
+    });
+  }
 
   const meta: RepoMeta = {
     name: repoName,
@@ -174,7 +191,9 @@ export async function autoDiscoverConversations(cwd: string): Promise<void> {
   }
 
   // Index conversations from the discovered directory.
-  await indexConversations(conversationsDir);
+  // Startup path: BM25 only. Embedding 6+ GB of chat history in the background
+  // on every server spawn is what blew the machine's RAM.
+  await indexConversations(conversationsDir, { embed: false });
 
   // Install session-end hook
   await installSessionEndHook(cwd);
