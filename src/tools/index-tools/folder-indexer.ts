@@ -420,10 +420,18 @@ export async function indexFolder(
   // Embed symbols and chunks in the background (non-fatal, must not block the
   // MCP response — large repos take minutes). Serialised per repo so repeated
   // watcher events queue instead of piling up concurrently; see embeddingRuns.
-  scheduleEmbedding(repoName, async () => {
-    await embedSymbols(mergedSymbols, indexPath, repoName, config);
-    await embedChunks(mergedEntries, rootPath, repoName, indexPath, config, mergedSymbols);
-  });
+  //
+  // The CLI opts out via CODESIFT_EMBED_OUT_OF_PROCESS and runs the same work in
+  // a child process instead, so that a short-lived command never loads
+  // onnxruntime — see src/cli/embed-child.ts for why that matters. The
+  // long-lived MCP server keeps embedding in-process: it does not exit, so the
+  // teardown conflict cannot arise there.
+  if (process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
+    scheduleEmbedding(repoName, async () => {
+      await embedSymbols(mergedSymbols, indexPath, repoName, config);
+      await embedChunks(mergedEntries, rootPath, repoName, indexPath, config, mergedSymbols);
+    });
+  }
 
   // Register in the global registry. If a stale entry exists with the same
   // root but a different name (e.g. `local/workspace` from before the git
