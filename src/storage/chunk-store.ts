@@ -133,13 +133,37 @@ export async function saveChunkEmbeddings(
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
 ): Promise<void> {
-  const lines: string[] = [];
-  for (const [id, vec] of embeddings) {
-    lines.push(JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine));
-  }
+  // Stream line-by-line. The previous version built one big `lines.join("\n")`
+  // string, which threw `RangeError: Invalid string length` once the combined
+  // ndjson exceeded V8's max string length (~512 MB) — a repo with enough chunks
+  // (e.g. TGMQuotas, ~27K) silently failed its entire chunk-embedding save with
+  // exit 0 and no chunk file, so semantic search stayed symbol-only there. This
+  // mirrors saveEmbeddings, which already streams for the same reason.
+  const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
+  const { createWriteStream } = await import("node:fs");
+  const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
 
-  const data = lines.join("\n") + "\n";
-  await atomicWriteFile(embeddingPath, data);
+  let streamError: Error | null = null;
+  stream.on("error", (err) => { streamError = err; });
+
+  try {
+    for (const [id, vec] of embeddings) {
+      if (streamError) throw streamError;
+      const line = JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
+      if (!stream.write(line)) {
+        await new Promise<void>((resolve) => stream.once("drain", resolve));
+      }
+    }
+    if (streamError) throw streamError;
+    await new Promise<void>((resolve, reject) => {
+      stream.end(() => streamError ? reject(streamError) : resolve());
+    });
+    const { rename } = await import("node:fs/promises");
+    await rename(tmpPath, embeddingPath);
+  } catch (err) {
+    try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 function isChunkEmbeddingLine(parsed: unknown): boolean {
