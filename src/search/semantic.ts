@@ -3,7 +3,16 @@ import { StaticEmbeddingProvider } from "./static-embedding-provider.js";
 
 const MAX_SYMBOL_SOURCE_CHARS = 200;
 const MAX_ERROR_DETAIL_CHARS = 200;
-const EMBEDDING_TIMEOUT_MS = 30_000;
+// Per-request embed timeout. 30s suits remote APIs (Voyage/OpenAI) with small
+// batches, but a local Ollama GPU embedding a large batch of long chunks can
+// legitimately take longer — a 1024-batch measured ~28s, and bigger/longer
+// batches abort mid-flight, so embedSymbols/embedChunks then silently write
+// nothing. Configurable via CODESIFT_EMBEDDING_TIMEOUT_MS.
+const EMBEDDING_TIMEOUT_MS = (() => {
+  const raw = process.env["CODESIFT_EMBEDDING_TIMEOUT_MS"];
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+})();
 
 // ---------------------------------------------------------------------------
 // Provider abstraction
