@@ -83,6 +83,8 @@ export interface Config {
   voyageApiKey: string | null;
   openaiApiKey: string | null;
   ollamaUrl: string | null;
+  ollamaModel: string | null;
+  ollamaDimensions: number | null;
   localModel: string | null;
   embeddingBatchSize: number; // 128
 
@@ -106,6 +108,9 @@ export function loadConfig(): Config {
   const voyageApiKey = process.env["CODESIFT_VOYAGE_API_KEY"] ?? null;
   const openaiApiKey = process.env["CODESIFT_OPENAI_API_KEY"] ?? null;
   const ollamaUrl = process.env["CODESIFT_OLLAMA_URL"] ?? null;
+  const ollamaModel = process.env["CODESIFT_OLLAMA_MODEL"] ?? null;
+  const ollamaDimsRaw = process.env["CODESIFT_OLLAMA_DIMENSIONS"];
+  const ollamaDimensions = ollamaDimsRaw ? Number.parseInt(ollamaDimsRaw, 10) : null;
   const localModel = process.env["CODESIFT_LOCAL_MODEL"] ?? null;
   const localDisabled = localEmbeddingsDisabled();
   const explicitProvider = process.env["CODESIFT_EMBEDDING_PROVIDER"] ?? null;
@@ -136,6 +141,8 @@ export function loadConfig(): Config {
     voyageApiKey,
     openaiApiKey,
     ollamaUrl,
+    ollamaModel,
+    ollamaDimensions: ollamaDimensions && Number.isFinite(ollamaDimensions) ? ollamaDimensions : null,
     localModel,
     embeddingBatchSize: parseIntEnv("CODESIFT_EMBEDDING_BATCH_SIZE", 128),
 

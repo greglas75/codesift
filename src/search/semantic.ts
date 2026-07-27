@@ -235,44 +235,49 @@ export class OpenAIProvider implements EmbeddingProvider {
 // ---------------------------------------------------------------------------
 
 export class OllamaProvider implements EmbeddingProvider {
-  readonly model = "nomic-embed-text";
-  readonly dimensions = 768;
+  readonly model: string;
+  readonly dimensions: number;
   private baseUrl: string;
 
-  constructor(baseUrl: string) {
+  // Model and dimensions are configurable (CODESIFT_OLLAMA_MODEL /
+  // CODESIFT_OLLAMA_DIMENSIONS): the provider used to be pinned to
+  // nomic-embed-text/768, so no other Ollama model (embeddinggemma,
+  // mxbai-embed-large, bge-m3, …) could be selected.
+  constructor(baseUrl: string, model = "nomic-embed-text", dimensions = 768) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.model = model;
+    this.dimensions = dimensions;
   }
 
   async embed(texts: string[], _mode: EmbeddingMode = "document"): Promise<number[][]> {
-    // Ollama doesn't support batch — call sequentially
-    const results: number[][] = [];
+    if (texts.length === 0) return [];
 
-    for (const text of texts) {
-      const response = await fetch(`${this.baseUrl}/api/embeddings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: this.model,
-          prompt: text,
-        }),
-        signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
-      });
+    // Use the BATCH endpoint /api/embed (input: string[]). The old code hit
+    // /api/embeddings once per text — 90K sequential HTTP round-trips for a big
+    // repo, which throws away most of the GPU speedup Ollama gives on Apple
+    // Silicon. /api/embed embeds the whole array in one request.
+    const response = await fetch(`${this.baseUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: this.model, input: texts }),
+      signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
+    });
 
-      if (!response.ok) {
-        // SEC-004: Log raw body to stderr only — don't forward to MCP client
-        const body = await response.text();
-        console.error(`Ollama API error ${response.status}:`, body);
-        throw new Error(`Ollama API error: ${response.status}`);
-      }
-
-      const data: unknown = await response.json();
-      if (!data || typeof data !== "object" || !("embedding" in data) || !Array.isArray((data as Record<string, unknown>)["embedding"])) {
-        throw new Error(`Unexpected Ollama API response shape: ${JSON.stringify(data).slice(0, MAX_ERROR_DETAIL_CHARS)}`);
-      }
-      results.push((data as { embedding: number[] }).embedding);
+    if (!response.ok) {
+      // SEC-004: log raw body to stderr only — do not forward to the MCP client.
+      const body = await response.text();
+      console.error(`Ollama API error ${response.status}:`, body);
+      throw new Error(`Ollama API error: ${response.status}`);
     }
 
-    return results;
+    const data: unknown = await response.json();
+    const embeddings = (data as { embeddings?: unknown })?.embeddings;
+    if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
+      throw new Error(
+        `Unexpected Ollama /api/embed response shape: ${JSON.stringify(data).slice(0, MAX_ERROR_DETAIL_CHARS)}`,
+      );
+    }
+    return embeddings as number[][];
   }
 }
 
@@ -342,11 +347,12 @@ export function groupByTokenBudget(
 export function expectedEmbeddingModel(
   provider: "voyage" | "openai" | "ollama" | "local",
   localModel?: string | null,
+  ollamaModel?: string | null,
 ): string {
   switch (provider) {
     case "voyage": return "voyage-code-3";
     case "openai": return "text-embedding-3-small";
-    case "ollama": return "nomic-embed-text";
+    case "ollama": return ollamaModel ?? "nomic-embed-text";
     case "local": return localModel ?? DEFAULT_LOCAL_MODEL;
   }
 }
@@ -539,6 +545,8 @@ export function createEmbeddingProvider(
     voyageApiKey?: string | null;
     openaiApiKey?: string | null;
     ollamaUrl?: string | null;
+    ollamaModel?: string | null;
+    ollamaDimensions?: number | null;
     localModel?: string | null;
   },
 ): EmbeddingProvider {
@@ -553,7 +561,11 @@ export function createEmbeddingProvider(
     }
     case "ollama": {
       if (!config.ollamaUrl) throw new Error("CODESIFT_OLLAMA_URL not set");
-      return new OllamaProvider(config.ollamaUrl);
+      return new OllamaProvider(
+        config.ollamaUrl,
+        config.ollamaModel ?? "nomic-embed-text",
+        config.ollamaDimensions ?? 768,
+      );
     }
     case "local": {
       const model = config.localModel ?? DEFAULT_LOCAL_MODEL;
