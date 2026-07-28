@@ -32,7 +32,27 @@ export async function resolveSymbolPosition(
   }
   const sym = index.symbols.find((s) => s.name === symbolName);
   if (!sym) return null;
-  return { filePath: sym.file, line: sym.start_line - 1, character: 0 };
+
+  // LSP hover/definition/type only respond when the position lands ON the
+  // identifier token. character:0 points at the start of the line (e.g. the
+  // `export` keyword of `export function foo(...)`), where every server returns
+  // "no hover info". Locate the symbol name within its declaration line and aim
+  // there; fall back to column 0 if the line can't be read.
+  let col = 0;
+  try {
+    const abs = index.root ? join(index.root, sym.file) : sym.file;
+    const src = await readFile(abs, "utf-8");
+    const declLine = src.split("\n")[sym.start_line - 1];
+    if (declLine) {
+      // Prefer a whole-word match so `foo` doesn't land inside `fooBar`.
+      const wordRe = new RegExp(`\\b${sym.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      const m = wordRe.exec(declLine);
+      const idx = m ? m.index : declLine.indexOf(sym.name);
+      if (idx >= 0) col = idx;
+    }
+  } catch { /* unreadable file — column 0 is the safe fallback */ }
+
+  return { filePath: sym.file, line: sym.start_line - 1, character: col };
 }
 
 /**
