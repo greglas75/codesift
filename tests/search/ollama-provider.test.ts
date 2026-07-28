@@ -51,6 +51,26 @@ describe("OllamaProvider — configurable model + batch endpoint", () => {
     expect(out.length).toBe(4);
   });
 
+  it("truncates a pathologically large input before sending (dump.sql tokenize-EOF crash)", async () => {
+    let sentInput: string[] = [];
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      sentInput = JSON.parse(init.body).input;
+      return { ok: true, json: async () => ({ embeddings: sentInput.map(() => [0.1]) }) };
+    }) as unknown as typeof fetch;
+
+    const p = createEmbeddingProvider("ollama", {
+      ollamaUrl: "http://localhost:11434", ollamaModel: "embeddinggemma",
+    });
+    const huge = "SELECT * FROM x; ".repeat(200_000); // ~3.4 MB, like tests/_data/dump.sql
+    await p.embed([huge, "short"], "document");
+
+    // Ollama tokenizes the full text before truncating to context, so an
+    // oversized input crashes its runner ("/tokenize: EOF") and fails the whole
+    // batch. Cap it before it ever reaches Ollama.
+    expect(sentInput[0]!.length).toBeLessThanOrEqual(8192);
+    expect(sentInput[1]).toBe("short"); // normal text untouched
+  });
+
   it("expectedEmbeddingModel reflects the configured Ollama model (for cache invalidation)", () => {
     expect(expectedEmbeddingModel("ollama", null, "embeddinggemma")).toBe("embeddinggemma");
     expect(expectedEmbeddingModel("ollama")).toBe("nomic-embed-text");

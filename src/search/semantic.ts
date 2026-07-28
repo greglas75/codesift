@@ -261,6 +261,16 @@ export class OllamaProvider implements EmbeddingProvider {
   async embed(texts: string[], _mode: EmbeddingMode = "document"): Promise<number[][]> {
     if (texts.length === 0) return [];
 
+    // Hard-truncate every input. Ollama tokenizes the FULL text before applying
+    // the model's context window, so a pathologically large input (e.g. a 2.4 MB
+    // tests/_data/dump.sql chunk) crashes the model runner mid-tokenize
+    // ("/tokenize: EOF", HTTP 400) and takes the whole batch — and thus the
+    // whole embedSymbols/embedChunks pass — down with it. The model only keeps
+    // ~2048 tokens anyway, so sending more is pure waste. LocalProvider already
+    // truncates via groupByTokenBudget; Ollama did not, so it inherited no cap.
+    const OLLAMA_MAX_CHARS = 8192; // ~2048 tokens
+    const capped = texts.map((t) => (t.length > OLLAMA_MAX_CHARS ? t.slice(0, OLLAMA_MAX_CHARS) : t));
+
     // Use the BATCH endpoint /api/embed (input: string[]). The old code hit
     // /api/embeddings once per text — 90K sequential HTTP round-trips for a big
     // repo, which throws away most of the GPU speedup Ollama gives on Apple
@@ -268,7 +278,7 @@ export class OllamaProvider implements EmbeddingProvider {
     const response = await fetch(`${this.baseUrl}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.model, input: texts }),
+      body: JSON.stringify({ model: this.model, input: capped }),
       signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
     });
 
