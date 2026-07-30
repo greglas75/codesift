@@ -225,10 +225,24 @@ async function handleIndexRepo(args: string[], flags: Flags): Promise<void> {
   const url = requireArg(args, 0, "url");
   const { indexRepo } = await import("../tools/index-tools.js");
 
+  // Same three protections as handleIndex. Without them this entry point still
+  // exits while the fire-and-forget embedding chain is in flight, so the repo
+  // ends up with partial or zero embeddings and the command reports success —
+  // the exact bug handleIndex was fixed for, left behind on this path.
+  process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] = "1";
+
   const result = await indexRepo(url, {
     branch: getFlag(flags, "branch"),
     include_paths: parseCommaSeparated(flags, "include-paths"),
   });
+
+  const { awaitPendingEmbeddings } = await import("../tools/index-tools/folder-indexer.js");
+  await awaitPendingEmbeddings();
+
+  const repo = (result as { repo?: string } | null)?.repo;
+  const root = (result as { root?: string } | null)?.root;
+  if (repo && root) await runEmbeddingChild(repo, root);
+
   output(result, flags);
 }
 

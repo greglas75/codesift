@@ -27,6 +27,24 @@ vi.mock("../../src/tools/index-tools.js", () => ({
   indexFile: (...args: unknown[]) => mockIndexFile(...args),
 }));
 
+// ---------------------------------------------------------------------------
+// Server-liveness is environment state, not behaviour under test.
+//
+// The hooks bail out early unless a codesift MCP server process is actually
+// running (`ps -Ao command`). On a developer machine one usually is, so every
+// deny-assertion passed locally — and on CI, where none runs, the same 28 tests
+// failed with `expected '' to contain '"permissionDecision":"deny"'`
+// (GH Actions run 30302333468 @455cf87). Pin the gate so these tests assert the
+// redirect LOGIC on any machine; `serverRunning` is flipped by the dedicated
+// tests below that cover the not-running branch.
+// ---------------------------------------------------------------------------
+const hookEnv = { serverRunning: true };
+
+vi.mock("../../src/cli/hooks/shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/cli/hooks/shared.js")>();
+  return { ...actual, isCodesiftServerRunning: () => hookEnv.serverRunning };
+});
+
 describe("handlePrecheckRead", () => {
   let exitCode: number | undefined;
   let stdoutOutput: string;
@@ -1002,6 +1020,79 @@ describe("handlePrecheckBash", () => {
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Bash",
       tool_input: { command: 'for f in *.jsonl; do grep -ic "x" "$f"; done | sort -rn' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("allows the native fallback when no codesift server is running", async () => {
+    // The whole point of the liveness gate: redirecting an agent to CodeSift
+    // tools it cannot reach is strictly worse than letting grep through.
+    hookEnv.serverRunning = false;
+    try {
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: 'rg "TODO" src/' },
+      });
+
+      await handlePrecheckBash();
+
+      expect(exitCode).toBe(0);
+      expect(stdoutOutput).toBe("");
+    } finally {
+      hookEnv.serverRunning = true;
+    }
+  });
+
+  it("exits 2 for a search inside backtick substitution", async () => {
+    // Regression (adversarial review, 2026-07-31): the backtick glued onto the
+    // command word (`` `grep `` != `grep`), so the invocation slipped past.
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "`grep -r foo .`" },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+  });
+
+  it("exits 2 for rg in a backtick assignment", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "X=`rg TODO src`" },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+  });
+
+  it("still exits 2 for a real rg that follows a herestring", async () => {
+    // Regression (adversarial review, 2026-07-31): `<<<WORD` is a herestring,
+    // not a heredoc. The scanner skipped the first `<`, read the remaining
+    // `<<WORD` as a heredoc open, found no closing line, and consumed the rest
+    // of the command as its body — so the real `rg` after it was never seen.
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'cat <<<EOF; rg "TODO" src/' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+  });
+
+  it("still exits 0 for a heredoc body that mentions rg (herestring fix must not break heredocs)", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "python3 - <<'EOF'\nprint('rg -r x')\nEOF" },
     });
 
     await handlePrecheckBash();

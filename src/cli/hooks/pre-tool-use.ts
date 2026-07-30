@@ -181,9 +181,16 @@ interface ShellToken {
  *    read as a recursive grep because of `sort`'s `-rn`.
  *
  * Quoted regions therefore stay inert for separator splitting but keep their
- * text (so `"rg" "TODO"` is still recognised as ripgrep). Command substitutions
- * (`$(...)`) split into their own segment so the inner command is still checked.
- * Heredoc bodies are skipped entirely — they are data, not commands.
+ * text (so `"rg" "TODO"` is still recognised as ripgrep). UNQUOTED command
+ * substitutions (`$(...)`, backticks) split into their own segment so the inner
+ * command is still checked. Heredoc bodies are skipped entirely — they are
+ * data, not commands.
+ *
+ * Known limit: a substitution nested INSIDE double quotes (`echo "$(rg x)"`) is
+ * consumed as one quoted token, so the inner command is not inspected. That is
+ * an accepted under-block: this hook is a nudge toward CodeSift, not a security
+ * boundary, and the costly direction is over-blocking — a false deny stops
+ * legitimate work, a missed nudge only means the agent used grep.
  */
 function lexShellSegments(cmd: string): ShellToken[][] {
   const segments: ShellToken[][] = [];
@@ -208,6 +215,16 @@ function lexShellSegments(cmd: string): ShellToken[][] {
   let i = 0;
   while (i < cmd.length) {
     const ch = cmd[i]!;
+
+    // Herestring (`<<<WORD`) is NOT a heredoc and has no body. Without this the
+    // scanner skips the first `<`, then reads the remaining `<<WORD` as a
+    // heredoc open, finds no closing `WORD` line, and swallows the REST OF THE
+    // COMMAND as body — so `cat <<<EOF; rg "TODO" src/` silently under-blocks.
+    if (ch === "<" && cmd[i + 1] === "<" && cmd[i + 2] === "<") {
+      endToken();
+      i += 3;
+      continue;
+    }
 
     // Heredoc (`<<EOF`, `<<-EOF`, `<<'EOF'`) — skip the redirect and its body.
     if (ch === "<" && cmd[i + 1] === "<") {
@@ -253,7 +270,10 @@ function lexShellSegments(cmd: string): ShellToken[][] {
 
     if (ch === "\n") { endSegment(); i++; continue; }
     if (/\s/.test(ch)) { endToken(); i++; continue; }
-    if (ch === ";" || ch === "|" || ch === "&" || ch === "(" || ch === ")" || ch === "{" || ch === "}") {
+    // Backtick substitution splits like `$(...)` does. Without this the tick
+    // glues onto the command word (`` `grep `` != `grep`) and the whole
+    // invocation slips past unrecognised.
+    if (ch === ";" || ch === "|" || ch === "&" || ch === "(" || ch === ")" || ch === "{" || ch === "}" || ch === "`") {
       endSegment();
       i++;
       continue;

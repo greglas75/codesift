@@ -76,7 +76,12 @@ export function isCodesiftServerRunning(): boolean {
       return /(^|\/)codesift-mcp(\s|$)/.test(cmd);               // the codesift-mcp bin, no subcommand
     });
   } catch {
-    return true; // cannot tell → behave as before, do not silently disable the hooks
+    // Fail OPEN, as the contract above promises. This used to `return true`
+    // ("assume running"), which inverted it: callers treat true as "server is
+    // up" and go on to deny the tool, so an unreadable process table produced
+    // exactly the outage this function exists to prevent — the agent loses the
+    // native fallback AND has no CodeSift tools to redirect to.
+    return false;
   }
 }
 
