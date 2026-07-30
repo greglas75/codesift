@@ -1,4 +1,5 @@
 import { appendFile, mkdir } from "node:fs/promises";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -9,10 +10,47 @@ import { randomUUID } from "node:crypto";
 
 const SESSION_ID = randomUUID();
 
-/** Machine identity stamped on every entry so logs merged across machines
- *  (laptop + VPS, see usage-remote/) stay attributable. Overridable for
- *  ephemeral hosts whose hostnames are random (CI, containers). */
-const HOST = process.env["CODESIFT_HOST_TAG"] ?? hostname();
+/**
+ * Machine identity stamped on every entry so logs merged across machines
+ * (laptop + VPS, see usage-remote/) stay attributable.
+ *
+ * `os.hostname()` alone is NOT stable: on macOS it follows DHCP/network state
+ * and returns a different string over the life of one machine — a single Mac
+ * produced four identities in `usage.jsonl` ("greg-m5", the .local name, "Mac",
+ * and a bare IP), splitting its own stats four ways. An explicit
+ * CODESIFT_HOST_TAG still wins, but when it is absent (a GUI app launched
+ * before `launchctl setenv` never sees it) we fall back to a machine-local id
+ * persisted once under the data dir, so the identity survives renames.
+ */
+export function resolveHostTag(): string {
+  const explicit = process.env["CODESIFT_HOST_TAG"];
+  if (explicit && explicit.trim()) return explicit.trim();
+  return loadOrCreateStableHostId(hostname());
+}
+
+/**
+ * Read (or seed once) `<dataDir>/host-id`. Best-effort: any filesystem problem
+ * falls back to the live hostname, which is what the old code always used.
+ */
+function loadOrCreateStableHostId(fallback: string): string {
+  try {
+    const dir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+    const idPath = join(dir, "host-id");
+    const existing = readFileSync(idPath, "utf-8").trim();
+    if (existing) return existing;
+  } catch { /* not seeded yet — fall through and create it */ }
+
+  try {
+    const dir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+    mkdirSync(dir, { recursive: true });
+    // Seed from the current hostname so existing history keeps matching, and
+    // freeze it so a later rename cannot split the machine again.
+    writeFileSync(join(dir, "host-id"), fallback, "utf-8");
+  } catch { /* read-only data dir — use the volatile name for this process */ }
+  return fallback;
+}
+
+const HOST = resolveHostTag();
 
 // ---------------------------------------------------------------------------
 // Types

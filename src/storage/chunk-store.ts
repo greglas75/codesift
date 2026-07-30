@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { CodeChunk } from "../types.js";
-import { atomicWriteFile } from "./_shared.js";
+import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -139,6 +139,9 @@ export async function saveChunkEmbeddings(
   // (e.g. TGMQuotas, ~27K) silently failed its entire chunk-embedding save with
   // exit 0 and no chunk file, so semantic search stayed symbol-only there. This
   // mirrors saveEmbeddings, which already streams for the same reason.
+  // Same orphan sweep as saveEmbeddings — a killed process leaves these behind.
+  await cleanupOrphanTempFiles(embeddingPath);
+
   const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });

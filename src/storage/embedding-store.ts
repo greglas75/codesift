@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { EmbeddingMeta } from "../types.js";
-import { atomicWriteFile } from "./_shared.js";
+import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
 
 /**
  * Get the embedding file path from an index path.
@@ -130,6 +130,11 @@ export async function saveEmbeddings(
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
 ): Promise<void> {
+  // Sweep orphans from earlier runs that were killed mid-write. These files are
+  // never overwritten (the name carries a timestamp), so without this they
+  // accumulate indefinitely — see cleanupOrphanTempFiles.
+  await cleanupOrphanTempFiles(embeddingPath);
+
   const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });

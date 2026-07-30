@@ -218,6 +218,59 @@ test and only breaks under plain Node. The guard is the source-level invariant i
 `tests/utils/language-detect.test.ts` ("no src module calls require() without createRequire"),
 which strips comments/strings first and exempts `createRequire`-derived calls (`server.ts`).
 
+## Index write cost (measured 2026-07-30)
+
+The index is **one JSON blob per repo**, and `saveIncremental` does a full
+`loadIndex` + `saveIndex` per changed file. Measured on the live indexes:
+
+| repo | index | read+parse+stringify | observed `index_file` median |
+|---|---:|---:|---:|
+| tgm-survey-platform | 262 MB | 1854 ms | 3711 ms |
+| translation-qa | 130 MB | 849 ms | 1218 ms |
+| codesift | 26 MB | 169 ms | 131 ms |
+
+Telemetry over 10,613 `index_file` calls: 235 ms median overall, p90 6.2 s,
+p99 29 s, **7.5 h of wall clock**. The documented "9ms" is the *unchanged-file*
+short-circuit, not the write path.
+
+Mitigation shipped: `enqueueIndexMutation` folds every queued mutation for one
+index into a single load+save, so a burst of N concurrent edits costs one
+rewrite instead of N (`getIndexWriteCountForTesting` exists because ESM forbids
+spying on `node:fs/promises`). **This only helps concurrent bursts** — an agent
+that awaits each `index_file` before the next still pays the full cycle per file,
+and the CLI hook (`codesift postindex-file`) is a fresh process each time, so it
+cannot batch at all.
+
+Two known costs remain, both needing a format change (sharded index / SQLite),
+not a patch:
+- `file-indexer.ts:108` parses the whole blob just to read one file's `mtime_ms`,
+  then `saveIncremental` parses it again — two full parses per first-touch edit.
+- An in-memory index cache would remove the parse, but is **unsafe here**: the
+  PostToolUse hook writes the same index from a separate process, so a cached
+  copy would clobber its writes.
+
+## Storage hygiene
+
+`saveEmbeddings` / `saveChunkEmbeddings` write `<target>.tmp.<timestamp>` then
+rename. A process killed mid-write (SIGKILL, the stdio-disconnect exit path, OOM,
+machine sleep) never runs the writer's own cleanup, and the timestamped name is
+never reused — so orphans accumulate forever: **100 files / 5.0 GB** in
+`~/.codesift` by 2026-07-30, against 21.9 GB of live embeddings.
+`cleanupOrphanTempFiles` (in `storage/_shared.ts`) sweeps siblings older than 1 h
+at the start of each save; the age guard is what keeps it from touching a
+concurrent writer's in-flight file.
+
+## Host identity
+
+`os.hostname()` is **not stable on macOS** — it follows DHCP/network state. One
+Mac produced four identities in `usage.jsonl` (`greg-m5`, the `.local` name,
+`Mac`, and a bare IP), splitting its own stats four ways. `resolveHostTag`
+(`storage/usage-tracker.ts`) now freezes the identity in `<dataDir>/host-id` on
+first use. `CODESIFT_HOST_TAG` still wins when set, but it is not sufficient on
+its own: a GUI app launched before `launchctl setenv` never sees it, which is
+why 1,109 of 1,370 calls on 2026-07-30 were still tagged `Mac` despite the
+LaunchAgent being in place since 16 July.
+
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.
 - **Stdio server exits on client disconnect (`server.ts`)**: the MCP stdio server exits on transport-close / stdin-EOF / SIGTERM. Before this, a dead Claude/Codex left the server orphaned under launchd forever, holding 1–4 GB each — the root cause of "codesift is killing my machine" (one box had 51 procs / 30 GB / 202% CPU). The HTTP daemon (`codesift serve`) is unaffected (stdin handlers are stdio-only).

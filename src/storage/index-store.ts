@@ -190,6 +190,118 @@ export function isExtractorVersionCurrent(
 }
 
 /**
+ * A single pending edit to an on-disk index, waiting to be folded into the next
+ * write. `apply` mutates the loaded index in place; `missing` decides what to do
+ * when there is no index on disk at all.
+ */
+interface IndexMutation {
+  /** Mutates in place; returns false when it was a no-op. */
+  apply: (index: CodeIndex) => boolean;
+  /** "throw" for updates that require an existing index, "skip" for removals. */
+  missing: "throw" | "skip";
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}
+
+const pendingMutations = new Map<string, IndexMutation[]>();
+const scheduledFlushes = new Map<string, Promise<void>>();
+
+/**
+ * Count of full index rewrites. Exposed for tests: the whole point of batching
+ * is that N queued edits cost fewer than N rewrites, and ESM will not let a
+ * test spy on `node:fs/promises` to measure that from the outside.
+ */
+let indexWriteCount = 0;
+export function getIndexWriteCountForTesting(): number {
+  return indexWriteCount;
+}
+export function resetIndexWriteCountForTesting(): void {
+  indexWriteCount = 0;
+}
+
+/**
+ * Fold every queued mutation for one index into a SINGLE load + save.
+ *
+ * The index is one JSON blob per repo, so each write costs a full parse plus a
+ * full stringify of the whole thing — 263 MB on tgm-survey-platform, 391 MB on
+ * Mobi3. Agents edit in bursts and the PostToolUse hook calls index_file once
+ * per edit, so the old one-write-per-edit path re-serialised the entire repo N
+ * times for N files. Telemetry over 10,613 index_file calls: 235 ms median
+ * overall, but 3.7 s median / 15.2 s p90 on tgm-survey-platform, 7.5 h of wall
+ * clock in total. Batching collapses a burst of N edits to one parse+write.
+ *
+ * Ordering and durability are unchanged: mutations still apply in submission
+ * order, and a caller's promise still resolves only once its own edit is on
+ * disk. This does not fix the underlying whole-blob format — it removes the
+ * repeated cost of it.
+ */
+async function flushIndexMutations(indexPath: string): Promise<void> {
+  const batch = pendingMutations.get(indexPath);
+  if (!batch || batch.length === 0) return;
+  // Take ownership before the first await: anything queued from here on belongs
+  // to the next flush, which the scheduler chains after this one.
+  pendingMutations.delete(indexPath);
+
+  try {
+    const existing = await loadIndex(indexPath);
+    if (!existing) {
+      // Updates need an index to update; removals against a missing index are
+      // already in the desired state.
+      for (const mutation of batch) {
+        if (mutation.missing === "throw") {
+          mutation.reject(new Error(`Cannot incrementally update: index not found at ${indexPath}`));
+        } else {
+          mutation.resolve();
+        }
+      }
+      return;
+    }
+
+    let changed = false;
+    for (const mutation of batch) {
+      if (mutation.apply(existing)) changed = true;
+    }
+    // A batch of pure no-ops (e.g. removing files the index never had) must not
+    // rewrite the whole blob — that was the point of the old early return.
+    if (changed) {
+      existing.updated_at = Date.now();
+      indexWriteCount++;
+      await saveIndex(indexPath, existing);
+    }
+    for (const mutation of batch) mutation.resolve();
+  } catch (err) {
+    for (const mutation of batch) mutation.reject(err);
+  }
+}
+
+/** Queue a mutation and make sure exactly one flush is pending per index. */
+function enqueueIndexMutation(
+  indexPath: string,
+  missing: IndexMutation["missing"],
+  apply: (index: CodeIndex) => boolean,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const queue = pendingMutations.get(indexPath);
+    if (queue) queue.push({ apply, missing, resolve, reject });
+    else pendingMutations.set(indexPath, [{ apply, missing, resolve, reject }]);
+
+    // A flush already waiting has not drained yet, so it will pick this up.
+    if (scheduledFlushes.has(indexPath)) return;
+
+    const prev = writeLocks.get(indexPath) ?? Promise.resolve();
+    const next = prev.then(() => {
+      // Release the slot before draining so mutations that arrive during the
+      // load/save schedule their own follow-up flush instead of being lost.
+      scheduledFlushes.delete(indexPath);
+      return flushIndexMutations(indexPath);
+    });
+    scheduledFlushes.set(indexPath, next);
+    // Swallow errors on the lock chain so one failure cannot block later writers.
+    writeLocks.set(indexPath, next.catch(() => {}));
+  });
+}
+
+/**
  * Incrementally update an index for a single changed file.
  * Removes old symbols for the file, adds new ones, and saves atomically.
  * Serialized per indexPath to prevent read-modify-write races.
@@ -200,23 +312,12 @@ export async function saveIncremental(
   newSymbols: CodeSymbol[],
   fileEntry?: FileEntry,
 ): Promise<void> {
-  const prev = writeLocks.get(indexPath) ?? Promise.resolve();
-
-  const next = prev.then(async () => {
-    const existing = await loadIndex(indexPath);
-    if (!existing) {
-      throw new Error(`Cannot incrementally update: index not found at ${indexPath}`);
-    }
-
-    // Update symbols
-    const filtered = existing.symbols.filter(
-      (symbol) => symbol.file !== updatedFile,
-    );
+  return enqueueIndexMutation(indexPath, "throw", (existing) => {
+    const filtered = existing.symbols.filter((symbol) => symbol.file !== updatedFile);
     const merged = [...filtered, ...newSymbols];
 
     existing.symbols = merged;
     existing.symbol_count = merged.length;
-    existing.updated_at = Date.now();
 
     // Update files[] to keep it in sync
     if (fileEntry) {
@@ -224,13 +325,9 @@ export async function saveIncremental(
       existing.files.push(fileEntry);
       existing.file_count = existing.files.length;
     }
-
-    await saveIndex(indexPath, existing);
+    // A re-index of a file always rewrites its symbols, so this is never a no-op.
+    return true;
   });
-
-  // Store the chain (swallow errors so next caller isn't blocked)
-  writeLocks.set(indexPath, next.catch(() => {}));
-  return next;
 }
 
 /**
@@ -241,27 +338,17 @@ export async function removeFileFromIndex(
   indexPath: string,
   deletedFile: string,
 ): Promise<void> {
-  const prev = writeLocks.get(indexPath) ?? Promise.resolve();
-
-  const next = prev.then(async () => {
-    const existing = await loadIndex(indexPath);
-    if (!existing) return;
-
+  return enqueueIndexMutation(indexPath, "skip", (existing) => {
     const hadSymbols = existing.symbols.some((s) => s.file === deletedFile);
     const hadFile = existing.files.some((f) => f.path === deletedFile);
-    if (!hadSymbols && !hadFile) return;
+    if (!hadSymbols && !hadFile) return false;
 
     existing.symbols = existing.symbols.filter((s) => s.file !== deletedFile);
     existing.symbol_count = existing.symbols.length;
     existing.files = existing.files.filter((f) => f.path !== deletedFile);
     existing.file_count = existing.files.length;
-    existing.updated_at = Date.now();
-
-    await saveIndex(indexPath, existing);
+    return true;
   });
-
-  writeLocks.set(indexPath, next.catch(() => {}));
-  return next;
 }
 
 /**

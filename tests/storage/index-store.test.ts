@@ -5,10 +5,12 @@ import {
   saveIncremental,
   removeFileFromIndex,
   getIndexPath,
+  getIndexWriteCountForTesting,
   isExtractorVersionCurrent,
+  resetIndexWriteCountForTesting,
 } from "../../src/storage/index-store.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../../src/types.js";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -128,6 +130,45 @@ describe("index-store", () => {
 
       const names = updated!.symbols.map((s) => s.name).sort();
       expect(names).toEqual(["funcA_new", "funcB1"]);
+    });
+
+    it("folds a burst of concurrent updates into ONE read-modify-write", async () => {
+      // The index is a single JSON blob per repo (263 MB on tgm-survey-platform),
+      // so every write re-parses and re-serialises the whole thing. Agents edit
+      // in bursts and the PostToolUse hook fires index_file per edit — batching
+      // is what keeps a 10-file burst from costing 10 full rewrites.
+      const indexPath = join(tmpDir, "batched.index.json");
+      await saveIndex(indexPath, makeIndex({ symbols: [makeSymbol("src/keep.ts", "keep", 1)], symbol_count: 1 }));
+
+      resetIndexWriteCountForTesting();
+      await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          saveIncremental(indexPath, `src/f${i}.ts`, [makeSymbol(`src/f${i}.ts`, `fn${i}`, 1)]),
+        ),
+      );
+
+      // Every edit must be durable...
+      const updated = await loadIndex(indexPath);
+      expect(updated).not.toBeNull();
+      const names = updated!.symbols.map((s) => s.name).sort();
+      expect(names).toEqual(["fn0", "fn1", "fn2", "fn3", "fn4", "fn5", "fn6", "fn7", "keep"]);
+      expect(updated!.symbol_count).toBe(9);
+
+      // ...but they must not have cost 8 separate rewrites of the whole blob.
+      expect(getIndexWriteCountForTesting()).toBeLessThan(8);
+    });
+
+    it("removing files the index never had does not rewrite the blob", async () => {
+      const indexPath = join(tmpDir, "noop.index.json");
+      await saveIndex(indexPath, makeIndex({ symbols: [makeSymbol("src/a.ts", "a", 1)], symbol_count: 1 }));
+      const before = await readFile(indexPath, "utf-8");
+
+      await Promise.all([
+        removeFileFromIndex(indexPath, "src/never-existed.ts"),
+        removeFileFromIndex(indexPath, "src/also-not-here.ts"),
+      ]);
+
+      expect(await readFile(indexPath, "utf-8")).toBe(before);
     });
 
     it("throws when index file does not exist", async () => {

@@ -1,5 +1,42 @@
-import { writeFile, rename, mkdir, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { writeFile, rename, mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+
+/**
+ * Delete abandoned `<target>.tmp.*` siblings left by an interrupted atomic write.
+ *
+ * Every writer here removes its own temp file when the write *throws*, but a
+ * process that is killed mid-write (SIGKILL, the stdio-disconnect exit path, an
+ * OOM, the machine sleeping) never runs that cleanup. Because the temp name
+ * embeds a timestamp, nothing ever overwrites the orphan either, so they
+ * accumulate forever: 100 files / 5.0 GB in `~/.codesift` as of 2026-07-30,
+ * against 21.9 GB of live embeddings.
+ *
+ * Only files older than `minAgeMs` are removed, so a concurrent writer's
+ * in-flight temp file is never touched. Best-effort throughout: cleanup must
+ * never fail the write it is protecting.
+ */
+export async function cleanupOrphanTempFiles(
+  targetPath: string,
+  minAgeMs = 60 * 60 * 1000,
+): Promise<number> {
+  const dir = dirname(targetPath);
+  const prefix = `${basename(targetPath)}.tmp.`;
+  let removed = 0;
+  try {
+    const cutoff = Date.now() - minAgeMs;
+    for (const entry of await readdir(dir)) {
+      if (!entry.startsWith(prefix)) continue;
+      const full = join(dir, entry);
+      try {
+        const info = await stat(full);
+        if (info.mtimeMs > cutoff) continue;
+        await unlink(full);
+        removed++;
+      } catch { /* raced with another cleaner — fine */ }
+    }
+  } catch { /* unreadable dir — nothing to clean */ }
+  return removed;
+}
 
 /**
  * Write content to a file atomically using a write-rename strategy.
