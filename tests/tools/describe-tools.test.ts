@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { describeTools, getToolDefinitions, registerTools, getToolHandle, resetDescribeToolsCacheForTesting } from "../../src/register-tools.js";
+import { describeTools, getToolDefinitions, registerTools, getToolHandle, resetDescribeToolsCacheForTesting, setFrozenToolListHostForTesting } from "../../src/register-tools.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,6 +34,15 @@ function createMockServer() {
       return handle;
     }),
   };
+}
+
+/**
+ * Read a tool result's JSON payload. wrapTool may append response-hint lines
+ * (e.g. H2 for repeated identical calls) after the JSON body.
+ */
+function parseToolJson(result: unknown): any {
+  const text = (result as any).content[0].text as string;
+  return JSON.parse(text.split("\n")[0]!);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,5 +205,42 @@ describe("registerTools with deferNonCore", () => {
     expect(deadCodeHandle).toBeDefined();
     expect(deadCodeHandle!.enable).toHaveBeenCalled();
     expect(deadCodeHandle!.enabled).toBe(true);
+  });
+
+  it("reports reveal as ineffective on a host with a frozen tool list", async () => {
+    // Codex accepts the reveal and never re-reads tools/list, so the tool stays
+    // uncallable. Reporting plain success made skills mark runs INCOMPLETE
+    // after the follow-up call failed (13 sessions, 2026-07-30).
+    const mock = createMockServer();
+    registerTools(mock as any, { deferNonCore: true });
+    setFrozenToolListHostForTesting(true);
+
+    try {
+      const handler = mock.registeredTools.get("describe_tools")!.handler as (
+        args: Record<string, unknown>,
+      ) => Promise<unknown>;
+      const result = await handler({ names: ["find_clones"], reveal: true });
+      const parsed = parseToolJson(result);
+
+      expect(parsed.reveal_ineffective).toBe(true);
+      expect(parsed.reveal_note).toContain("caches its tool list");
+    } finally {
+      setFrozenToolListHostForTesting(false);
+    }
+  });
+
+  it("stays silent about reveal on hosts that honour tools/list_changed", async () => {
+    const mock = createMockServer();
+    registerTools(mock as any, { deferNonCore: true });
+    setFrozenToolListHostForTesting(false);
+
+    const handler = mock.registeredTools.get("describe_tools")!.handler as (
+      args: Record<string, unknown>,
+    ) => Promise<unknown>;
+    const result = await handler({ names: ["find_circular_deps"], reveal: true });
+    const parsed = parseToolJson(result);
+
+    expect(parsed.reveal_ineffective).toBeUndefined();
+    expect(parsed.reveal_note).toBeUndefined();
   });
 });

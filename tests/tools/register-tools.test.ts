@@ -5,12 +5,16 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   ALWAYS_VISIBLE_TOOL_NAMES,
+  FROZEN_LIST_FALLBACK_TOOL_NAMES,
   getToolDefinitions,
   CORE_TOOL_NAMES,
   enableToolByName,
   extractToolParams,
+  frontLoadHiddenToolsForFrozenHost,
   getToolDefinition,
   registerTools,
+  setFrozenToolListHostForTesting,
+  shouldFrontLoadHiddenTools,
 } from "../../src/register-tools.js";
 import { ANALYSIS_TOOL_ENTRIES } from "../../src/register-tool-groups/analysis.js";
 import { ASTRO_TOOL_ENTRIES } from "../../src/register-tool-groups/astro.js";
@@ -246,6 +250,66 @@ describe("register-tools — astro tools registration", () => {
   });
 
   // review_diff/scan_secrets removed from CORE - more visible tools degraded agent adoption
+});
+
+describe("register-tools — frozen-tool-list host fallback", () => {
+  const originalOverride = process.env["CODESIFT_STATIC_TOOL_LIST"];
+
+  afterEach(() => {
+    if (originalOverride === undefined) delete process.env["CODESIFT_STATIC_TOOL_LIST"];
+    else process.env["CODESIFT_STATIC_TOOL_LIST"] = originalOverride;
+    // frontLoadHiddenToolsForFrozenHost() latches a module-level flag.
+    setFrozenToolListHostForTesting(false);
+  });
+
+  it("keeps the fallback tools OUT of CORE_TOOL_NAMES", () => {
+    // Commit 3e1ec6c: growing the default ListTools depressed adoption on
+    // Claude Code. The fallback must stay a per-host override, never a core bump.
+    for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
+      expect(CORE_TOOL_NAMES.has(name), `${name} must not be core`).toBe(false);
+    }
+  });
+
+  it("every fallback tool is a real, language-agnostic tool definition", () => {
+    for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
+      const def = getToolDefinition(name);
+      expect(def, `${name} should exist in TOOL_DEFINITIONS`).toBeDefined();
+      // Language-gated tools are handled by auto-load bundles, not this fallback.
+      expect(def!.requiresLanguage, `${name} should not be language-gated`).toBeUndefined();
+    }
+  });
+
+  it("front-loads only on hosts with a frozen tool list", () => {
+    delete process.env["CODESIFT_STATIC_TOOL_LIST"];
+    expect(shouldFrontLoadHiddenTools("codex")).toBe(true);
+    expect(shouldFrontLoadHiddenTools("claude")).toBe(false);
+    expect(shouldFrontLoadHiddenTools("gemini")).toBe(false);
+    expect(shouldFrontLoadHiddenTools("unknown")).toBe(false);
+  });
+
+  it("honours the CODESIFT_STATIC_TOOL_LIST override in both directions", () => {
+    process.env["CODESIFT_STATIC_TOOL_LIST"] = "1";
+    expect(shouldFrontLoadHiddenTools("claude")).toBe(true);
+    process.env["CODESIFT_STATIC_TOOL_LIST"] = "0";
+    expect(shouldFrontLoadHiddenTools("codex")).toBe(false);
+  });
+
+  it("enables every fallback tool and is idempotent", async () => {
+    const server = createMockServer();
+    registerTools(server as never, { deferNonCore: true });
+
+    for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
+      expect(server.registeredTools.get(name)?.enabled ?? false).toBe(false);
+    }
+
+    const first = frontLoadHiddenToolsForFrozenHost();
+    expect(first).toEqual([...FROZEN_LIST_FALLBACK_TOOL_NAMES]);
+    for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
+      expect(server.registeredTools.get(name)?.enabled, `${name} should be enabled`).toBe(true);
+    }
+
+    expect(frontLoadHiddenToolsForFrozenHost()).toEqual([...FROZEN_LIST_FALLBACK_TOOL_NAMES]);
+  });
 });
 
 describe("register-tools — React tools registration & auto-load", () => {

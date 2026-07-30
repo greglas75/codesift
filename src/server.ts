@@ -2,7 +2,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
-import { registerTools, enableFrameworkToolBundle } from "./register-tools.js";
+import {
+  registerTools,
+  enableFrameworkToolBundle,
+  frontLoadHiddenToolsForFrozenHost,
+  shouldFrontLoadHiddenTools,
+} from "./register-tools.js";
 import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { maybePrintFirstRunNotice } from "./storage/telemetry/config.js";
@@ -327,9 +332,25 @@ async function main(): Promise<void> {
   };
 
   server.server.oninitialized = () => {
-    if (hooksInstalledFor !== null || envPlatform !== "unknown") return;
     const clientName = server.server.getClientVersion()?.name ?? "";
     const clientPlatform = detectPlatformFromClientInfo(clientName);
+    const platform = envPlatform !== "unknown" ? envPlatform : clientPlatform;
+
+    // Front-load reveal-dependent tools for hosts that freeze their tool list
+    // at session start. This runs in the `initialized` notification, i.e. before
+    // the client's first tools/list, which is the only window where enabling a
+    // tool still reaches that host. See FROZEN_LIST_FALLBACK_TOOL_NAMES.
+    if (shouldFrontLoadHiddenTools(platform)) {
+      const enabled = frontLoadHiddenToolsForFrozenHost();
+      if (enabled.length > 0) {
+        console.error(
+          `[codesift] ${platform || "host"} does not refresh its tool list mid-session — ` +
+            `made ${enabled.length} reveal-dependent tools visible up front: ${enabled.join(", ")}`,
+        );
+      }
+    }
+
+    if (hooksInstalledFor !== null || envPlatform !== "unknown") return;
     installHooks(clientPlatform === "unknown" ? "claude" : clientPlatform, clientName || "fallback");
   };
 

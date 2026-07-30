@@ -959,6 +959,81 @@ describe("handlePrecheckBash", () => {
     expect(stdoutOutput).toContain('"permissionDecision":"deny"');
   });
 
+  // Regression: the hook used to match search-tool names anywhere in the raw
+  // command string, so a script that merely MENTIONED grep/rg was redirected —
+  // and a later command's flags were attributed to an earlier grep.
+  it("exits 0 when a search tool name only appears inside a quoted argument", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'echo "use rg instead of grep -r"' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("exits 0 for an interpreter script whose source mentions rg/grep", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: `python3 -c "pats = {'rg': r'\\\\brg\\\\b', 'grep': r'-r'}"` },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("exits 0 for a heredoc script body that mentions rg/grep", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "python3 - <<'EOF'\nprint('rg')\nprint('grep -r x')\nEOF" },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("exits 0 for non-recursive grep piped into an unrelated -r flag", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'for f in *.jsonl; do grep -ic "x" "$f"; done | sort -rn' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toBe("");
+  });
+
+  it("still exits 2 for a recursive grep inside a command substitution", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'n=$(grep -rc "TODO" src/)' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+  });
+
+  it("still exits 2 for rg behind a wrapper command", async () => {
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: 'find . -type f | xargs -0 rg "TODO"' },
+    });
+
+    await handlePrecheckBash();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+  });
+
   it("exits 0 for non-recursive grep (single file)", async () => {
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Bash",

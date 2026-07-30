@@ -6,29 +6,60 @@ const ANALYZABLE_KINDS = new Set<SymbolKind>([
   "function", "method", "class", "component", "hook",
 ]);
 
-// Patterns that increase cyclomatic complexity (decision points)
-const BRANCH_PATTERNS = [
+// Decision-point patterns shared by every language.
+//
+// The ternary regex deliberately excludes `?` when followed by `?`, `.`, `:` or
+// `-`, and when preceded by `?`. Without those guards it fires on constructs that
+// are not branches at all: `name?: string` (optional TS property/param),
+// `a?.b` (optional chaining), `a ?? b` (nullish, counted separately below) and
+// `$a?->b` (PHP nullsafe).
+const COMMON_BRANCH_PATTERNS = [
   /\bif\s*\(/g,
   /\belse\s+if\s*\(/g,
   /\bcase\s+/g,
   /\bcatch\s*\(/g,
-  /\?\s*[^:]/g,       // ternary operator
+  /(?<!\?)\?(?![?.:\-])/g, // ternary operator
   /\&\&/g,
   /\|\|/g,
   /\?\?/g,            // nullish coalescing
-  // Kotlin branch patterns
+];
+
+// Language-specific decision points. These MUST stay gated by file language:
+// applied globally they produce large false positives in other languages —
+// Kotlin's Elvis `?:` matches every optional TypeScript property (`field?: T`),
+// and PHP's `match(` matches every JavaScript `str.match(...)` call. A 126-field
+// NestJS DTO scored cyclomatic_complexity=82 with max_nesting_depth=0 before
+// this gating, and got queued for a refactor it did not need.
+const KOTLIN_BRANCH_PATTERNS = [
   /\bwhen\s*[\({]/g,  // when expression/statement
   /\?\.let\s*\{/g,    // safe call + lambda
   /\?\.run\s*\{/g,    // safe call + run
   /\?:/g,             // Elvis operator
-  // PHP branch patterns
+];
+
+const PHP_BRANCH_PATTERNS = [
   /\bforeach\s*\(/g,  // foreach loop
   /\belseif\s*\(/g,   // PHP elseif (one word)
   /\bmatch\s*\(/g,    // PHP 8 match expression
+  /\?:/g,             // short ternary
 ];
 
-// Patterns that increase nesting
-const NESTING_OPENERS = /\b(if|for|foreach|while|switch|try|when|match)\s*[\({]/g;
+function branchPatternsFor(language: string | undefined): RegExp[] {
+  if (language === "kotlin") return [...COMMON_BRANCH_PATTERNS, ...KOTLIN_BRANCH_PATTERNS];
+  if (language === "php") return [...COMMON_BRANCH_PATTERNS, ...PHP_BRANCH_PATTERNS];
+  return COMMON_BRANCH_PATTERNS;
+}
+
+// Patterns that increase nesting — gated for the same reason as branches.
+const COMMON_NESTING_OPENERS = /\b(if|for|while|switch|try)\s*[\({]/g;
+const KOTLIN_NESTING_OPENERS = /\b(if|for|while|switch|try|when)\s*[\({]/g;
+const PHP_NESTING_OPENERS = /\b(if|for|foreach|while|switch|try|match)\s*[\({]/g;
+
+function nestingOpenersFor(language: string | undefined): RegExp {
+  if (language === "kotlin") return KOTLIN_NESTING_OPENERS;
+  if (language === "php") return PHP_NESTING_OPENERS;
+  return COMMON_NESTING_OPENERS;
+}
 
 /**
  * Cooperative wall-clock budget for the synchronous per-symbol scan. This loop
@@ -85,9 +116,9 @@ export interface ComplexityResult {
  * Counts decision points: if, else if, case, catch, &&, ||, ??, ternary.
  * McCabe complexity = branches + 1.
  */
-function countBranches(source: string): number {
+function countBranches(source: string, language?: string): number {
   let branches = 0;
-  for (const pattern of BRANCH_PATTERNS) {
+  for (const pattern of branchPatternsFor(language)) {
     pattern.lastIndex = 0;
     while (pattern.exec(source) !== null) {
       branches++;
@@ -144,7 +175,8 @@ function estimateJsxDepth(source: string): number {
  * Estimate max nesting depth by tracking brace depth around control flow.
  * Simple heuristic: count opening braces after control flow keywords.
  */
-function estimateMaxNesting(source: string): number {
+function estimateMaxNesting(source: string, language?: string): number {
+  const nestingOpeners = nestingOpenersFor(language);
   let maxDepth = 0;
   let currentDepth = 0;
 
@@ -156,8 +188,8 @@ function estimateMaxNesting(source: string): number {
     if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
 
     // Check for nesting openers
-    NESTING_OPENERS.lastIndex = 0;
-    if (NESTING_OPENERS.test(trimmed)) {
+    nestingOpeners.lastIndex = 0;
+    if (nestingOpeners.test(trimmed)) {
       currentDepth++;
       if (currentDepth > maxDepth) maxDepth = currentDepth;
     }
@@ -194,7 +226,10 @@ export async function analyzeComplexity(
   const includeTests = options?.include_tests ?? false;
   const filePattern = options?.file_pattern;
 
-  // Build a language lookup for SQL file exclusion
+  // Per-file language drives both SQL exclusion and which branch/nesting
+  // patterns apply — Kotlin- and PHP-only decision points must not be counted
+  // in other languages (see branchPatternsFor).
+  const fileLanguage = new Map(index.files.map((f) => [f.path, f.language]));
   const sqlFiles = new Set(
     index.files
       .filter((f) => f.language === "sql" || f.language === "sql-jinja")
@@ -225,10 +260,11 @@ export async function analyzeComplexity(
       break;
     }
     const source = sym.source!;
+    const language = fileLanguage.get(sym.file);
     const lines = source.split("\n").length;
-    const branches = countBranches(source);
+    const branches = countBranches(source, language);
     const complexity = branches + 1;
-    const nesting = estimateMaxNesting(source);
+    const nesting = estimateMaxNesting(source, language);
 
     if (complexity >= minComplexity) {
       const info: ComplexityInfo = {

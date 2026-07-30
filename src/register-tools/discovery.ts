@@ -87,6 +87,42 @@ export const CORE_TOOL_NAMES = new Set([
   "framework_audit",
 ]);
 
+/**
+ * Hidden tools that must be visible from the first ListTools on hosts whose
+ * callable tool surface is frozen at session start.
+ *
+ * `describe_tools(reveal=true)` enables a tool server-side and emits
+ * `notifications/tools/list_changed`. Claude Code honours that and the tool
+ * becomes callable mid-session. The Codex MCP bridge does not: the tool shows up
+ * in discovery, the reveal call succeeds, and the tool still cannot be called —
+ * so every skill that depends on one of these degrades. Measured on 2026-07-30
+ * across 13 Codex sessions: `describe_tools(reveal=true)` was called 35 times
+ * and not one of the revealed tools was ever invoked; the runs fell back to
+ * 318 `rg` + 75 `find` shell calls and reported BLOCKED_INFRA / INCOMPLETE.
+ *
+ * These names are NOT added to CORE_TOOL_NAMES. Commit 3e1ec6c ("revert
+ * agent-visible changes that broke CodeSift adoption (>90% drop)") found that
+ * growing the default ListTools depressed adoption on Claude Code, so the core
+ * list stays byte-identical there; this set is applied only to frozen-list hosts.
+ *
+ * Scope rule: language-agnostic tools that skills call directly. Framework- or
+ * language-gated tools stay out — they are handled by the auto-load bundles.
+ */
+export const FROZEN_LIST_FALLBACK_TOOL_NAMES = [
+  "find_dead_code",
+  "find_clones",
+  "find_circular_deps",
+  "find_unused_imports",
+  "rename_symbol",
+  "review_diff",
+  "changed_symbols",
+  "diff_outline",
+  "scan_secrets",
+  "classify_roles",
+  "check_boundaries",
+  "resolve_constant_value",
+] as const;
+
 /** Get all tool definitions (exported for testing) */
 export function getToolDefinitions(): readonly ToolDefinition[] {
   return TOOL_DEFINITIONS;

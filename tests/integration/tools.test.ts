@@ -1253,6 +1253,67 @@ export function simpleFunc(): number {
     expect(complex!.branches).toBeGreaterThan(3);
   });
 
+  it("does not count optional TS members/params or optional chaining as branches", async () => {
+    // Regression: Kotlin's Elvis pattern (/\?:/) and the old ternary pattern
+    // (/\?\s*[^:]/) were applied to every language, so a field-only DTO scored
+    // one branch per optional property. A real 126-field NestJS DTO reported
+    // cyclomatic_complexity=82 with max_nesting_depth=0 and was queued for a
+    // refactor it did not need.
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    const fields = Array.from({ length: 40 }, (_, i) => `  field${i}?: string;`).join("\n");
+    await writeFile(
+      join(fixtureDir, "src", "device.dto.ts"),
+      `export class DeviceAtlasDto {\n${fields}\n}\n\n` +
+        `export function readsOptionally(dto?: DeviceAtlasDto): string {\n` +
+        `  const direct = dto?.field0;\n` +
+        `  const fallback = dto?.field1 ?? "none";\n` +
+        `  return (direct ?? fallback).match(/x/) ? "hit" : "miss";\n` +
+        `}\n`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await analyzeComplexity(REPO, { min_complexity: 1 });
+
+    const dto = result.functions.find((f) => f.name === "DeviceAtlasDto");
+    expect(dto).toBeDefined();
+    // 40 optional fields, zero decision points.
+    expect(dto!.branches).toBe(0);
+    expect(dto!.cyclomatic_complexity).toBe(1);
+
+    // The function has exactly one real branch: the ternary. `dto?.field0`,
+    // `dto?: T` and `.match(` must not count; `??` counts twice (two operators).
+    const fn = result.functions.find((f) => f.name === "readsOptionally");
+    expect(fn).toBeDefined();
+    expect(fn!.branches).toBe(3);
+  });
+
+  it("counts Kotlin Elvis and PHP match only in their own languages", async () => {
+    await mkdir(join(fixtureDir, "src"), { recursive: true });
+
+    await writeFile(
+      join(fixtureDir, "src", "Sample.kt"),
+      `fun pick(a: String?, b: String): String {\n  return a ?: b\n}\n`,
+    );
+    await writeFile(
+      join(fixtureDir, "src", "sample.php"),
+      `<?php\nfunction pick($rows) {\n  foreach ($rows as $r) { $x = $r; }\n  return match(true) { default => 1 };\n}\n`,
+    );
+
+    await indexFolder(fixtureDir, { watch: false });
+
+    const result = await analyzeComplexity(REPO, { min_complexity: 1 });
+
+    // Kotlin `?:` is a real branch in Kotlin (it is not in TypeScript).
+    const kotlin = result.functions.find((f) => f.file.endsWith("Sample.kt"));
+    if (kotlin) expect(kotlin.branches).toBeGreaterThanOrEqual(1);
+
+    // PHP `foreach` + `match` are real branches in PHP.
+    const php = result.functions.find((f) => f.file.endsWith("sample.php"));
+    if (php) expect(php.branches).toBeGreaterThanOrEqual(2);
+  });
+
   it("sorts by complexity descending", async () => {
     const repo = await indexFixture();
 

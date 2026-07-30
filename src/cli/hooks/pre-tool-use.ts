@@ -155,18 +155,167 @@ export async function handlePrecheckRead(): Promise<void> {
   }
 }
 
+/** Wrapper commands that precede the real command word (`sudo rg`, `xargs -0 rg`). */
+const COMMAND_PREFIXES = new Set([
+  "sudo", "env", "time", "command", "nohup", "nice", "stdbuf", "exec", "builtin", "xargs",
+  "if", "elif", "then", "else", "while", "until", "do", "!",
+]);
+
+interface ShellToken {
+  /** Token text with quoting removed. */
+  text: string;
+  /** True when any part of the token came from inside quotes. */
+  quoted: boolean;
+}
+
+/**
+ * Lex a command line into segments, each starting at a command position.
+ *
+ * A regex over the raw string cannot do this correctly, and the two failure
+ * modes both showed up in practice:
+ *
+ *  - Quoted text was treated as shell code, so any command that merely MENTIONS
+ *    a search tool got intercepted — `echo "use rg instead"`, or a python/node
+ *    analysis script passed via `-c`/heredoc whose source contains `'rg'`.
+ *  - Flags were matched across the whole line, so `grep -ic x "$f" | sort -rn`
+ *    read as a recursive grep because of `sort`'s `-rn`.
+ *
+ * Quoted regions therefore stay inert for separator splitting but keep their
+ * text (so `"rg" "TODO"` is still recognised as ripgrep). Command substitutions
+ * (`$(...)`) split into their own segment so the inner command is still checked.
+ * Heredoc bodies are skipped entirely — they are data, not commands.
+ */
+function lexShellSegments(cmd: string): ShellToken[][] {
+  const segments: ShellToken[][] = [];
+  let segment: ShellToken[] = [];
+  let text = "";
+  let quoted = false;
+  let started = false;
+
+  const endToken = (): void => {
+    if (!started) return;
+    segment.push({ text, quoted });
+    text = "";
+    quoted = false;
+    started = false;
+  };
+  const endSegment = (): void => {
+    endToken();
+    if (segment.length > 0) segments.push(segment);
+    segment = [];
+  };
+
+  let i = 0;
+  while (i < cmd.length) {
+    const ch = cmd[i]!;
+
+    // Heredoc (`<<EOF`, `<<-EOF`, `<<'EOF'`) — skip the redirect and its body.
+    if (ch === "<" && cmd[i + 1] === "<") {
+      const marker = /^<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(cmd.slice(i));
+      if (marker) {
+        endToken();
+        i += marker[0].length;
+        const rest = cmd.slice(i);
+        const end = new RegExp(`\\n[ \\t]*${marker[2]!}[ \\t]*(?:\\n|$)`).exec(rest);
+        i += end ? end.index + end[0].length : rest.length;
+        continue;
+      }
+    }
+
+    if (ch === "'") {
+      started = true;
+      quoted = true;
+      i++;
+      while (i < cmd.length && cmd[i] !== "'") { text += cmd[i]; i++; }
+      i++;
+      continue;
+    }
+
+    if (ch === '"') {
+      started = true;
+      quoted = true;
+      i++;
+      while (i < cmd.length && cmd[i] !== '"') {
+        if (cmd[i] === "\\" && i + 1 < cmd.length) { text += cmd[i + 1]; i += 2; continue; }
+        text += cmd[i];
+        i++;
+      }
+      i++;
+      continue;
+    }
+
+    if (ch === "\\" && i + 1 < cmd.length) {
+      started = true;
+      text += cmd[i + 1];
+      i += 2;
+      continue;
+    }
+
+    if (ch === "\n") { endSegment(); i++; continue; }
+    if (/\s/.test(ch)) { endToken(); i++; continue; }
+    if (ch === ";" || ch === "|" || ch === "&" || ch === "(" || ch === ")" || ch === "{" || ch === "}") {
+      endSegment();
+      i++;
+      continue;
+    }
+
+    started = true;
+    text += ch;
+    i++;
+  }
+
+  endSegment();
+  return segments;
+}
+
+/** The command a segment actually invokes, plus its unquoted argument tokens. */
+function segmentInvocation(tokens: ShellToken[]): { name: string; args: ShellToken[] } | null {
+  let i = 0;
+  while (i < tokens.length) {
+    const token = tokens[i]!;
+    // Skip `FOO=bar` env assignments and shell/wrapper words like `sudo`, `do`.
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.text)) { i++; continue; }
+    const base = token.text.split("/").pop() ?? token.text;
+    if (COMMAND_PREFIXES.has(base)) {
+      i++;
+      // A wrapper's own flags (`xargs -0 rg`) precede the real command.
+      while (i < tokens.length && tokens[i]!.text.startsWith("-")) i++;
+      continue;
+    }
+    return { name: base, args: tokens.slice(i + 1) };
+  }
+  return null;
+}
+
+/** Flags only count when they were written unquoted — `grep "x -r y" f` is a pattern. */
+function hasFlag(args: ShellToken[], pattern: RegExp): boolean {
+  return args.some((token) => !token.quoted && pattern.test(token.text));
+}
+
 function isFileFindCommand(cmd: string): boolean {
-  const hasFind = /\bfind\s/.test(cmd);
-  const hasNameFilter = /\s-i?name\s/.test(cmd);
-  const hasDestructive = /\s-(?:exec|delete|ok)\b|\brm\s|\bmv\s/.test(cmd);
-  return hasFind && hasNameFilter && !hasDestructive;
+  for (const segment of lexShellSegments(cmd)) {
+    const invocation = segmentInvocation(segment);
+    if (invocation?.name !== "find") continue;
+    const hasNameFilter = hasFlag(invocation.args, /^-i?name$/);
+    const hasDestructive =
+      hasFlag(invocation.args, /^-(?:exec|delete|ok)$/) ||
+      invocation.args.some((token) => !token.quoted && (token.text === "rm" || token.text === "mv"));
+    if (hasNameFilter && !hasDestructive) return true;
+  }
+  return false;
 }
 
 function isContentGrepCommand(cmd: string): boolean {
-  const hasRecursiveGrep =
-    /\bgrep\b.*(?:\s-\w*[rR]\w*(?:\s|$)|--recursive(?:\s|$))/.test(cmd) && !/\bgit\s+grep\b/.test(cmd);
-  const hasRg = /(?:^|[\s;&|"'`])(?:[./\w-]+\/)?rg(?=$|[\s;&|"'`])/.test(cmd);
-  return hasRecursiveGrep || hasRg;
+  for (const segment of lexShellSegments(cmd)) {
+    const invocation = segmentInvocation(segment);
+    if (!invocation) continue;
+    if (invocation.name === "rg") return true;
+    // `git grep` lexes as command `git` with args `grep …`, so it never matches
+    // here — which is intended: it is repo-aware already and is left alone.
+    if (invocation.name !== "grep" && invocation.name !== "egrep") continue;
+    if (hasFlag(invocation.args, /^--recursive$/) || hasFlag(invocation.args, /^-[A-Za-z]*[rR]/)) return true;
+  }
+  return false;
 }
 
 export async function handlePrecheckBash(): Promise<void> {

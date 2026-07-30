@@ -2,9 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerShortener, wrapTool } from "./server-helpers.js";
 import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/language-detect.js";
+import type { HookPlatform } from "./cli/platform.js";
 import { setRegisterToolRuntime, zBool } from "./register-tool-groups/shared.js";
 import { detectAutoLoadToolsCached } from "./register-tools/autoload.js";
-import { CORE_TOOL_NAMES, describeTools, discoverTools, getToolDefinitions } from "./register-tools/discovery.js";
+import { CORE_TOOL_NAMES, FROZEN_LIST_FALLBACK_TOOL_NAMES, describeTools, discoverTools, getToolDefinitions } from "./register-tools/discovery.js";
 import { enableToolByName, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
@@ -15,6 +16,7 @@ export { detectAutoLoadTools, detectAutoLoadToolsCached } from "./register-tools
 export {
   ALWAYS_VISIBLE_TOOL_NAMES,
   CORE_TOOL_NAMES,
+  FROZEN_LIST_FALLBACK_TOOL_NAMES,
   describeTools,
   discoverTools,
   extractToolParams,
@@ -25,6 +27,56 @@ export {
 export { enableFrameworkToolBundle, enableToolByName, getToolHandle } from "./register-tools/runtime.js";
 
 setRegisterToolRuntime({ detectAutoLoadToolsCached, enableToolByName });
+
+/**
+ * Hosts whose callable tool list is fixed once the session starts, so a later
+ * `tools/list_changed` never makes a revealed tool callable.
+ *
+ * Kept as an explicit allowlist rather than a default: an unknown host is
+ * assumed to behave like Claude Code (honours the notification), which keeps
+ * the default ListTools small.
+ */
+const FROZEN_TOOL_LIST_PLATFORMS = new Set<HookPlatform>(["codex"]);
+
+/**
+ * Decide whether this session must front-load the reveal-dependent tools.
+ * `CODESIFT_STATIC_TOOL_LIST=1|0` forces it on/off for hosts we cannot detect.
+ */
+export function shouldFrontLoadHiddenTools(platform: HookPlatform): boolean {
+  const override = process.env["CODESIFT_STATIC_TOOL_LIST"];
+  if (override === "1" || override === "true") return true;
+  if (override === "0" || override === "false") return false;
+  return FROZEN_TOOL_LIST_PLATFORMS.has(platform);
+}
+
+/**
+ * True once we know this session runs against a host that will not re-read
+ * `tools/list`. Drives the honesty note on `describe_tools(reveal=true)`.
+ */
+let frozenToolListHost = false;
+
+/** Exported for tests — resets the frozen-host flag between cases. */
+export function setFrozenToolListHostForTesting(value: boolean): void {
+  frozenToolListHost = value;
+}
+
+/**
+ * Make the reveal-dependent tools callable before the host's first `tools/list`.
+ *
+ * Must run inside the `initialized` notification handler: the client sends
+ * `notifications/initialized` and only then requests `tools/list`, so enabling
+ * here lands in the very first list the host caches. Doing the same work later
+ * (what `describe_tools(reveal=true)` does) is exactly the path that fails on
+ * these hosts. Idempotent.
+ */
+export function frontLoadHiddenToolsForFrozenHost(): string[] {
+  frozenToolListHost = true;
+  const enabled: string[] = [];
+  for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
+    if (enableToolByName(name)) enabled.push(name);
+  }
+  return enabled;
+}
 
 const zStringArrayJson = () => z.string().transform((value, ctx) => {
   let parsed: unknown;
@@ -102,10 +154,25 @@ export function registerTools(
     },
     async (args) => wrapTool("describe_tools", args as Record<string, unknown>, async () => {
       const result = describeTools(args.names as string[]);
-      if (args.reveal === true) {
-        for (const t of result.tools) {
-          enableToolByName(t.name);
-        }
+      if (args.reveal !== true) return result;
+
+      const revealed: string[] = [];
+      for (const t of result.tools) {
+        if (enableToolByName(t.name)) revealed.push(t.name);
+      }
+      // On hosts that freeze their tool list at session start, enabling a tool
+      // now does NOT make it callable — the client never re-reads tools/list.
+      // Say so instead of reporting a silent success the agent will act on and
+      // then mark its run BLOCKED when the call fails.
+      if (frozenToolListHost && revealed.length > 0) {
+        return {
+          ...result,
+          reveal_ineffective: true,
+          reveal_note:
+            "This host caches its tool list at session start, so reveal does not make these callable now. " +
+            "Language-agnostic analysis tools are already visible without reveal; for anything else, use the " +
+            "equivalent visible tool (audit_scan, plan_turn) or restart the session.",
+        };
       }
       return result;
     })(),
