@@ -46,13 +46,23 @@ describe("resolveHostTag", () => {
     expect(resolveHostTag()).toBe(resolveHostTag());
   });
 
-  it("an explicit CODESIFT_HOST_TAG overrides the persisted id", () => {
-    writeFileSync(join(dir, "host-id"), "persisted-name", "utf-8");
-    process.env["CODESIFT_HOST_TAG"] = "explicit-tag";
+  it("an explicit CODESIFT_HOST_TAG overrides AND corrects the persisted id", () => {
+    // The tag reaches some processes and not others (a GUI app launched before
+    // `launchctl setenv` never sees it), so an env-less process can seed the
+    // file from a volatile hostname. The first process that DOES see the tag
+    // must repair it — otherwise the pin never becomes durable.
+    writeFileSync(join(dir, "host-id"), "Mac", "utf-8");
+    process.env["CODESIFT_HOST_TAG"] = "greg-m5";
 
-    expect(resolveHostTag()).toBe("explicit-tag");
-    // and it must not rewrite what is on disk
-    expect(readFileSync(join(dir, "host-id"), "utf-8").trim()).toBe("persisted-name");
+    expect(resolveHostTag()).toBe("greg-m5");
+    expect(readFileSync(join(dir, "host-id"), "utf-8").trim()).toBe("greg-m5");
+  });
+
+  it("seeds host-id from the tag when no file exists yet", () => {
+    process.env["CODESIFT_HOST_TAG"] = "greg-m5";
+
+    expect(resolveHostTag()).toBe("greg-m5");
+    expect(readFileSync(join(dir, "host-id"), "utf-8").trim()).toBe("greg-m5");
   });
 
   it("ignores a blank CODESIFT_HOST_TAG instead of stamping an empty host", () => {

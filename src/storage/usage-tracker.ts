@@ -23,8 +23,12 @@ const SESSION_ID = randomUUID();
  * persisted once under the data dir, so the identity survives renames.
  */
 export function resolveHostTag(): string {
-  const explicit = process.env["CODESIFT_HOST_TAG"];
-  if (explicit && explicit.trim()) return explicit.trim();
+  const explicit = process.env["CODESIFT_HOST_TAG"]?.trim();
+  // Seed the persisted id FROM the explicit tag when there is one. The whole
+  // failure mode here is that the tag reaches some processes and not others (a
+  // GUI app launched before `launchctl setenv` never sees it), so persisting it
+  // the first time we DO see it is what makes the pin durable for the rest.
+  if (explicit) return loadOrCreateStableHostId(explicit, { preferSeed: true });
   return loadOrCreateStableHostId(hostname());
 }
 
@@ -32,22 +36,38 @@ export function resolveHostTag(): string {
  * Read (or seed once) `<dataDir>/host-id`. Best-effort: any filesystem problem
  * falls back to the live hostname, which is what the old code always used.
  */
-function loadOrCreateStableHostId(fallback: string): string {
+function loadOrCreateStableHostId(
+  seed: string,
+  opts?: { preferSeed?: boolean },
+): string {
+  const dir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  const idPath = join(dir, "host-id");
+
+  let existing = "";
   try {
-    const dir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
-    const idPath = join(dir, "host-id");
-    const existing = readFileSync(idPath, "utf-8").trim();
-    if (existing) return existing;
-  } catch { /* not seeded yet — fall through and create it */ }
+    existing = readFileSync(idPath, "utf-8").trim();
+  } catch { /* not seeded yet */ }
+
+  // An explicit CODESIFT_HOST_TAG is authoritative: adopt it and correct a file
+  // that was seeded from a volatile hostname by some earlier env-less process.
+  if (opts?.preferSeed) {
+    if (existing !== seed) {
+      try {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(idPath, seed, "utf-8");
+      } catch { /* read-only data dir — tag still applies to this process */ }
+    }
+    return seed;
+  }
+
+  if (existing) return existing;
 
   try {
-    const dir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
     mkdirSync(dir, { recursive: true });
-    // Seed from the current hostname so existing history keeps matching, and
-    // freeze it so a later rename cannot split the machine again.
-    writeFileSync(join(dir, "host-id"), fallback, "utf-8");
+    // Freeze the current hostname so a later rename cannot split the machine.
+    writeFileSync(idPath, seed, "utf-8");
   } catch { /* read-only data dir — use the volatile name for this process */ }
-  return fallback;
+  return seed;
 }
 
 const HOST = resolveHostTag();
