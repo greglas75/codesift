@@ -8,6 +8,7 @@
  * Performance: fast file-tree walk with early-exit per language. Caps at
  * ~2000 files to avoid slow startup on huge monorepos.
  */
+import { readdirSync, statSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -144,10 +145,11 @@ export function detectProjectLanguagesSync(root: string): ProjectLanguages {
     ruby: false,
   };
 
-  // Dynamic require to avoid import-order issues in ESM
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
-
+  // NOTE: this used to `require("node:fs")` here. The package is ESM, so that
+  // threw ReferenceError on every call; registerTools caught it and fell into
+  // its "on failure, enable everything" branch, which silently disabled ALL
+  // requiresLanguage gating — every project looked like it contained every
+  // language. Keep these as static imports.
   let filesScanned = 0;
 
   function walk(dir: string): void {

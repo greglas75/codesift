@@ -3,6 +3,7 @@ import {
   CORE_TOOL_NAMES,
   detectAutoLoadToolsCached,
   getToolDefinitions,
+  isToolHiddenForHost,
 } from "../../register-tools.js";
 import {
   getToolEmbeddings,
@@ -216,7 +217,15 @@ function rankParsedIntents(
       coreToolNames: CORE_TOOL_NAMES,
     };
     try {
-      batches.push(rankTools(rankerContext));
+      // The ranker derives is_hidden from CORE_TOOL_NAMES alone; re-resolve it
+      // against the host so a frozen-list session does not print "[hidden]"
+      // next to tools it can already call.
+      batches.push(
+        rankTools(rankerContext).map((tool) => ({
+          ...tool,
+          is_hidden: tool.is_hidden && isToolHiddenForHost(tool.name),
+        })),
+      );
     } catch {
       batches.push([]);
     }
@@ -254,7 +263,7 @@ function selectTools(primary: ToolRecommendation[], maxTools: number): ToolRecom
     name: "discover_tools",
     confidence: 0.3,
     reasoning: "No direct matches, fall back to explicit search",
-    is_hidden: !CORE_TOOL_NAMES.has("discover_tools"),
+    is_hidden: isToolHiddenForHost("discover_tools"),
   }];
 }
 
@@ -267,8 +276,12 @@ function resolveMaxTools(requested: number | undefined): number {
 }
 
 function collectRevealRequired(tools: ToolRecommendation[]): string[] {
+  // On a frozen-list host every applicable tool was enabled during the
+  // handshake, so isToolHiddenForHost is false throughout and this list is
+  // empty — telling the agent to reveal there would send it into the dead end
+  // the front-load exists to remove.
   return tools
-    .filter((tool) => tool.is_hidden && !CORE_TOOL_NAMES.has(tool.name))
+    .filter((tool) => tool.is_hidden && isToolHiddenForHost(tool.name))
     .map((tool) => tool.name);
 }
 

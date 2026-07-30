@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -12,8 +13,11 @@ export interface JsonPlatformConfig {
 const DEFAULT_DAEMON_PORT = 7077;
 
 export function resolveMcpServerEntry(): { command: string; args: string[] } {
+  // NOTE: these two lookups used to `require("node:child_process")`. The package
+  // is ESM, so the bare require threw ReferenceError, both try blocks fell
+  // through, and setup ALWAYS wrote the `npx -y codesift-mcp` fallback — even
+  // with codesift-mcp installed globally. Keep execSync a static import.
   try {
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
     const serverPath = execSync("which codesift-mcp", { encoding: "utf-8" }).trim();
     if (serverPath) {
       return { command: serverPath, args: [] };
@@ -21,7 +25,6 @@ export function resolveMcpServerEntry(): { command: string; args: string[] } {
   } catch { /* not globally installed — fall back to npx */ }
 
   try {
-    const { execSync } = require("node:child_process") as typeof import("node:child_process");
     const npxPath = execSync("which npx", { encoding: "utf-8" }).trim();
     if (npxPath) {
       return { command: npxPath, args: ["-y", "codesift-mcp"] };

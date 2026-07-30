@@ -177,12 +177,18 @@ in discovery, and it is still not callable. Measured 2026-07-30 across 13 Codex 
 calls, zero revealed tools ever invoked, runs falling back to 318 `rg` + 75 `find` shell calls and
 reporting `BLOCKED_INFRA` / `INCOMPLETE`.
 
-Fix (`server.ts` `oninitialized` → `frontLoadHiddenToolsForFrozenHost`): on such hosts the 12
-language-agnostic tools in `FROZEN_LIST_FALLBACK_TOOL_NAMES` (`find_dead_code`, `find_clones`,
-`find_circular_deps`, `find_unused_imports`, `rename_symbol`, `review_diff`, `changed_symbols`,
-`diff_outline`, `scan_secrets`, `classify_roles`, `check_boundaries`, `resolve_constant_value`) are
-enabled inside the `initialized` notification — the last window before the client's first
-`tools/list`. `describe_tools(reveal=true)` also returns `reveal_ineffective` + `reveal_note` there.
+Fix (`server.ts` `oninitialized` → `frontLoadHiddenToolsForFrozenHost`): on such hosts the **entire
+language-appropriate surface** is enabled inside the `initialized` notification — the last window
+before the client's first `tools/list`. Not just a shortlist: on a host that cannot reveal, any tool
+left disabled is unreachable for the whole session. It is affordable precisely there because Codex
+defers MCP tool schemas *and names*, surfacing them only through ToolSearch, so they never enter the
+prompt (verified in the 2026-07-30 logs: codesift tool names appear only in `tool_search_output`).
+`FROZEN_LIST_FALLBACK_TOOL_NAMES` remains as the must-be-reachable set a narrowing regression fails
+against. `describe_tools(reveal=true)` returns `reveal_ineffective` + `reveal_note` there, and
+`plan_turn` returns an empty `reveal_required` with no `[hidden]` marks (`isToolHiddenForHost`).
+
+Handshake probe (spawn `dist/server.js`, initialize as a given client, read the first `tools/list`):
+claude-code 60 · unknown-client 60 · codex-mcp-client 181 · TypeScript-only project on codex 148.
 
 **These names are deliberately NOT in `CORE_TOOL_NAMES`.** Commit 3e1ec6c ("revert agent-visible
 changes that broke CodeSift adoption (>90% drop)") found that growing the default ListTools
@@ -194,6 +200,23 @@ Note: Codex's `ToolSearch(query="select:<names>")` answers with a semantic sampl
 rather than the requested names (a 20-name query returned 20–25 tools, none of them requested,
 including always-visible core tools the same session called successfully). That is client-side and
 not fixable here — it is why front-loading, not a preload protocol, is the fix.
+
+### ESM: never call bare `require()`
+
+The package is `"type": "module"`, so a bare `require()` throws at runtime. Two places did, and both
+failed silently because the call sites swallowed the error:
+
+- `detectProjectLanguagesSync` — `registerTools` caught the throw and fell into its "on failure,
+  enable everything" branch, so **`requiresLanguage` gating was dead**: every project looked like it
+  contained every language. Invisible while non-core tools were hidden anyway; front-loading on
+  Codex exposed it (a TypeScript-only repo was getting the full Python/PHP/Kotlin surface).
+- `resolveMcpServerEntry` (`src/cli/setup/mcp.ts`) — both `which` lookups threw, so `codesift setup`
+  **always** wrote the `npx -y codesift-mcp` fallback even with a global install present.
+
+Unit tests did not catch either: vitest provides a CJS interop shim, so `require` resolves under
+test and only breaks under plain Node. The guard is the source-level invariant in
+`tests/utils/language-detect.test.ts` ("no src module calls require() without createRequire"),
+which strips comments/strings first and exempts `createRequire`-derived calls (`server.ts`).
 
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.

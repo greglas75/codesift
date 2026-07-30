@@ -27,13 +27,20 @@ vi.mock("../../src/storage/registry.js", () => ({
   resolveRegisteredRepoMeta: vi.fn(),
 }));
 
+// vi.mock factories are hoisted above module-scope consts, so the shared state
+// they close over has to be hoisted too.
+const hostState = vi.hoisted(() => ({
+  coreToolNames: new Set(["search_text", "discover_tools", "index_folder", "get_file_outline"]),
+  /** Mirrors the real helper: on a frozen-list host nothing is hidden. */
+  frozen: false,
+}));
+
 vi.mock("../../src/register-tools.js", () => ({
-  CORE_TOOL_NAMES: new Set([
-    "search_text",
-    "discover_tools",
-    "index_folder",
-    "get_file_outline",
-  ]),
+  CORE_TOOL_NAMES: hostState.coreToolNames,
+  isFrozenToolListHost: vi.fn(() => hostState.frozen),
+  isToolHiddenForHost: vi.fn((name: string) =>
+    hostState.frozen ? false : !hostState.coreToolNames.has(name),
+  ),
   detectAutoLoadTools: vi.fn(),
   detectAutoLoadToolsCached: vi.fn(),
   getToolDefinitions: vi.fn(() => [
@@ -417,6 +424,25 @@ describe("planTurn", () => {
     const result = await planTurn("test", "query");
 
     expect(result.reveal_required).toContain("find_dead_code");
+  });
+
+  it("5b. frozen-list host → no reveal_required and no [hidden] marks", async () => {
+    // Everything applicable is enabled during the handshake there, so a reveal
+    // instruction would send the agent into a dead end: the reveal succeeds and
+    // the tool still cannot be called.
+    getCodeIndexMock.mockResolvedValue(makeIndex());
+    rankToolsMock.mockReturnValue([rec("find_dead_code", 0.9, true)]);
+    hostState.frozen = true;
+
+    try {
+      const result = await planTurn("test", "query");
+
+      expect(result.reveal_required).toEqual([]);
+      expect(result.tools[0]?.name).toBe("find_dead_code");
+      expect(result.tools[0]?.is_hidden).toBe(false);
+    } finally {
+      hostState.frozen = false;
+    }
   });
 
   it("6. metadata flags: vague_query, duration, embedding_available", async () => {

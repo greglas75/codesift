@@ -1,4 +1,4 @@
-import { CORE_TOOL_NAMES } from "../../register-tools.js";
+import { isToolHiddenForHost } from "../../register-tools.js";
 import type { ToolRecommendation } from "../../search/tool-ranker.js";
 import type { CodeIndex } from "../../types.js";
 import type { FileRecommendation, ParsedQuery, PlanTurnResult, SymbolRecommendation } from "./types.js";
@@ -16,7 +16,7 @@ export function buildUnindexedResult(
     name: "index_folder",
     confidence: 1.0,
     reasoning: "Repo is not indexed — run index_folder before any query tools",
-    is_hidden: !CORE_TOOL_NAMES.has("index_folder"),
+    is_hidden: isToolHiddenForHost("index_folder"),
   };
   return {
     query,

@@ -89,3 +89,46 @@ describe("detectProjectLanguages", () => {
     expect(syncResult).toEqual(asyncResult);
   });
 });
+
+describe("ESM invariant", () => {
+  // detectProjectLanguagesSync used to `require("node:fs")`. This package is
+  // ESM ("type": "module"), so that threw ReferenceError on every real call;
+  // registerTools caught it and fell into its "on failure, enable everything"
+  // branch, so requiresLanguage gating was silently dead — every project looked
+  // like it contained every language.
+  //
+  // The unit tests above did NOT catch this: vitest transforms modules and
+  // provides a CJS interop shim, so `require` resolves there and only breaks
+  // under plain Node. A source-level invariant is the guard that actually holds.
+  it("no src module calls require() without createRequire", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join: joinPath } = await import("node:path");
+    const { stripCommentsAndStrings } = await import("../../src/utils/source-stripper.js");
+
+    // `require` as a call, not `.require` and not a bare identifier.
+    const requireCall = /(?<![\w.$])require\s*\(/;
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const full = joinPath(dir, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.endsWith(".ts")) continue;
+        const source = readFileSync(full, "utf8");
+        // Comments and string literals are not calls; strip them first.
+        const code = stripCommentsAndStrings(source);
+        if (!requireCall.test(code)) continue;
+        // `const require = createRequire(import.meta.url)` is the supported way
+        // to reach CJS from ESM — those calls are fine.
+        if (/createRequire\s*\(/.test(code)) continue;
+        offenders.push(full);
+      }
+    };
+    walk("src");
+
+    expect(offenders).toEqual([]);
+  });
+});

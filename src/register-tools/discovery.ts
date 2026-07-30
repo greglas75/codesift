@@ -104,9 +104,40 @@ export const CORE_TOOL_NAMES = new Set([
  * agent-visible changes that broke CodeSift adoption (>90% drop)") found that
  * growing the default ListTools depressed adoption on Claude Code, so the core
  * list stays byte-identical there; this set is applied only to frozen-list hosts.
+ */
+/**
+ * True once this session is known to run against a host that will not re-read
+ * `tools/list`. On such hosts the whole language-appropriate tool surface is
+ * enabled up front, so nothing is "hidden pending reveal" any more.
+ */
+let frozenToolListHost = false;
+
+export function setFrozenToolListHost(value: boolean): void {
+  frozenToolListHost = value;
+}
+
+export function isFrozenToolListHost(): boolean {
+  return frozenToolListHost;
+}
+
+/**
+ * Whether a tool still needs a reveal before the agent can call it.
  *
- * Scope rule: language-agnostic tools that skills call directly. Framework- or
- * language-gated tools stay out — they are handled by the auto-load bundles.
+ * On a frozen-list host the answer is always no: everything callable was
+ * enabled during the handshake. Telling an agent to reveal there sends it into
+ * the exact dead end this fallback exists to remove — the reveal succeeds and
+ * the tool stays uncallable.
+ */
+export function isToolHiddenForHost(name: string): boolean {
+  if (frozenToolListHost) return false;
+  return !CORE_TOOL_NAMES.has(name);
+}
+
+/**
+ * The language-agnostic analysis tools that skills call directly and that MUST
+ * be reachable on a frozen-list host. Kept as an explicit list (rather than
+ * relying on "everything is enabled") so a regression that narrows the
+ * front-load has something concrete to fail against.
  */
 export const FROZEN_LIST_FALLBACK_TOOL_NAMES = [
   "find_dead_code",

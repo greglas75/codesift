@@ -12,6 +12,7 @@ import {
   extractToolParams,
   frontLoadHiddenToolsForFrozenHost,
   getToolDefinition,
+  isToolHiddenForHost,
   registerTools,
   setFrozenToolListHostForTesting,
   shouldFrontLoadHiddenTools,
@@ -294,7 +295,7 @@ describe("register-tools — frozen-tool-list host fallback", () => {
     expect(shouldFrontLoadHiddenTools("codex")).toBe(false);
   });
 
-  it("enables every fallback tool and is idempotent", async () => {
+  it("enables the whole applicable surface, covers the fallback set, and is idempotent", async () => {
     const server = createMockServer();
     registerTools(server as never, { deferNonCore: true });
 
@@ -303,12 +304,26 @@ describe("register-tools — frozen-tool-list host fallback", () => {
     }
 
     const first = frontLoadHiddenToolsForFrozenHost();
-    expect(first).toEqual([...FROZEN_LIST_FALLBACK_TOOL_NAMES]);
+
+    // Anything left disabled on a host that cannot reveal is unreachable for
+    // the whole session, so the front-load is not limited to the fallback set.
     for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
+      expect(first, `${name} should be front-loaded`).toContain(name);
       expect(server.registeredTools.get(name)?.enabled, `${name} should be enabled`).toBe(true);
     }
+    expect(first.length).toBeGreaterThan(FROZEN_LIST_FALLBACK_TOOL_NAMES.length);
 
-    expect(frontLoadHiddenToolsForFrozenHost()).toEqual([...FROZEN_LIST_FALLBACK_TOOL_NAMES]);
+    expect(frontLoadHiddenToolsForFrozenHost()).toEqual(first);
+  });
+
+  it("nothing reports as hidden once the frozen-host front-load has run", () => {
+    setFrozenToolListHostForTesting(true);
+    expect(isToolHiddenForHost("find_dead_code")).toBe(false);
+    expect(isToolHiddenForHost("search_text")).toBe(false);
+
+    setFrozenToolListHostForTesting(false);
+    expect(isToolHiddenForHost("find_dead_code")).toBe(true);
+    expect(isToolHiddenForHost("search_text")).toBe(false);
   });
 });
 

@@ -5,7 +5,7 @@ import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/langu
 import type { HookPlatform } from "./cli/platform.js";
 import { setRegisterToolRuntime, zBool } from "./register-tool-groups/shared.js";
 import { detectAutoLoadToolsCached } from "./register-tools/autoload.js";
-import { CORE_TOOL_NAMES, FROZEN_LIST_FALLBACK_TOOL_NAMES, describeTools, discoverTools, getToolDefinitions } from "./register-tools/discovery.js";
+import { CORE_TOOL_NAMES, describeTools, discoverTools, getToolDefinitions, isFrozenToolListHost, setFrozenToolListHost } from "./register-tools/discovery.js";
 import { enableToolByName, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
@@ -17,6 +17,8 @@ export {
   ALWAYS_VISIBLE_TOOL_NAMES,
   CORE_TOOL_NAMES,
   FROZEN_LIST_FALLBACK_TOOL_NAMES,
+  isFrozenToolListHost,
+  isToolHiddenForHost,
   describeTools,
   discoverTools,
   extractToolParams,
@@ -49,31 +51,37 @@ export function shouldFrontLoadHiddenTools(platform: HookPlatform): boolean {
   return FROZEN_TOOL_LIST_PLATFORMS.has(platform);
 }
 
-/**
- * True once we know this session runs against a host that will not re-read
- * `tools/list`. Drives the honesty note on `describe_tools(reveal=true)`.
- */
-let frozenToolListHost = false;
-
 /** Exported for tests — resets the frozen-host flag between cases. */
 export function setFrozenToolListHostForTesting(value: boolean): void {
-  frozenToolListHost = value;
+  setFrozenToolListHost(value);
 }
 
 /**
- * Make the reveal-dependent tools callable before the host's first `tools/list`.
+ * Make the whole applicable tool surface callable before the host's first
+ * `tools/list`.
  *
  * Must run inside the `initialized` notification handler: the client sends
  * `notifications/initialized` and only then requests `tools/list`, so enabling
  * here lands in the very first list the host caches. Doing the same work later
  * (what `describe_tools(reveal=true)` does) is exactly the path that fails on
- * these hosts. Idempotent.
+ * these hosts.
+ *
+ * Everything is enabled, not just FROZEN_LIST_FALLBACK_TOOL_NAMES: on a host
+ * that cannot reveal, any tool left disabled is unreachable for the whole
+ * session, and the agent has no way to get at it. This is affordable precisely
+ * on these hosts — Codex defers MCP tool schemas AND names, surfacing them only
+ * through ToolSearch, so the tool names never enter the prompt (verified in the
+ * 2026-07-30 session logs: codesift tool names appear only in tool_search_output
+ * payloads). `enableToolByName` still refuses tools whose language is absent
+ * from the project, so a TypeScript repo does not gain the Python/PHP surface.
+ *
+ * Idempotent.
  */
 export function frontLoadHiddenToolsForFrozenHost(): string[] {
-  frozenToolListHost = true;
+  setFrozenToolListHost(true);
   const enabled: string[] = [];
-  for (const name of FROZEN_LIST_FALLBACK_TOOL_NAMES) {
-    if (enableToolByName(name)) enabled.push(name);
+  for (const definition of getToolDefinitions()) {
+    if (enableToolByName(definition.name)) enabled.push(definition.name);
   }
   return enabled;
 }
@@ -164,7 +172,7 @@ export function registerTools(
       // now does NOT make it callable — the client never re-reads tools/list.
       // Say so instead of reporting a silent success the agent will act on and
       // then mark its run BLOCKED when the call fails.
-      if (frozenToolListHost && revealed.length > 0) {
+      if (isFrozenToolListHost() && revealed.length > 0) {
         return {
           ...result,
           reveal_ineffective: true,
