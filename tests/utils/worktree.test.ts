@@ -177,6 +177,18 @@ describe("isAnswerFromWrongTree — what actually earns a warning", () => {
     expect(isAnswerFromWrongTree(linked, main)).toBe(true);
   });
 
+  it("warns for a SIBLING worktree, not just one nested under the checkout", async () => {
+    if (!gitAvailable) return;
+    // `git worktree add ../feature` is at least as common as the nested layout,
+    // and puts the tree BESIDE the main checkout. A containment test misses it
+    // entirely while the failure is identical — being served another checkout's
+    // files. Found by adversarial review of the first cut.
+    const sibling = join(base, "sibling-tree");
+    git(main, "worktree", "add", "-q", "-b", "sibling", sibling);
+    expect(isAnswerFromWrongTree(sibling, main)).toBe(true);
+    expect(findWorkingTree(sibling)?.mainRoot).toBe(main);
+  });
+
   it("stays silent on deliberate cross-repo queries", async () => {
     if (!gitAvailable) return;
     // Asking about another project from this one is a different checkout by
@@ -210,5 +222,16 @@ describe("canonicalPath", () => {
   it("falls back to the resolved path for something that does not exist", () => {
     const missing = join(base, "no", "such", "dir");
     expect(canonicalPath(missing)).toBe(missing);
+  });
+});
+
+describe("path separators", () => {
+  it("parses a gitdir written with forward slashes regardless of platform", () => {
+    // git writes the gitdir path with forward slashes even on Windows, where
+    // the OS separator is a backslash. Splitting on the OS separator alone made
+    // every Windows worktree look unlinked, silently preserving the old
+    // wrong-checkout behaviour there. Found by adversarial review.
+    expect(mainCheckoutFromGitDir("C:/dev/repo/.git/worktrees/task-1")).toBe("C:/dev/repo".replace(/\//g, "/"));
+    expect(mainCheckoutFromGitDir("/a/b/repo/.git/worktrees/t")).toBe("/a/b/repo");
   });
 });

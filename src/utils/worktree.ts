@@ -70,7 +70,11 @@ function readGitLink(dir: string): { linked: boolean; gitDir: string | null } | 
     // sits under `<main>/.git/worktrees/<name>`. Keeping these apart matters —
     // a submodule is a different repository and must not be reported as another
     // checkout of this one.
-    const linked = gitDir.split(sep).includes("worktrees");
+    // Split on BOTH separators. git writes the gitdir path with forward slashes
+    // even on Windows, where `sep` is a backslash — splitting on `sep` alone
+    // yields one segment there, so `linked` came out false for every worktree
+    // and Windows users silently kept the old wrong-checkout behaviour.
+    const linked = gitDir.split(/[\\/]/).includes("worktrees");
     return { linked, gitDir };
   } catch {
     return null;
@@ -83,7 +87,9 @@ function readGitLink(dir: string): { linked: boolean; gitDir: string | null } | 
  * match (unusual layouts, `--separate-git-dir`).
  */
 export function mainCheckoutFromGitDir(gitDir: string): string | null {
-  const parts = gitDir.split(sep);
+  // Separator-agnostic for the same reason as `readGitLink`: the gitdir path is
+  // written with forward slashes even on Windows.
+  const parts = gitDir.split(/[\\/]/);
   const i = parts.lastIndexOf("worktrees");
   if (i < 1 || parts[i - 1] !== ".git") return null;
   const mainRoot = parts.slice(0, i - 1).join(sep);
@@ -133,23 +139,35 @@ export function isDifferentWorkingTree(cwd: string, repoRoot: string): boolean {
 }
 
 /**
- * True only for the case worth warning about: the repo *looks* like the
- * caller's because its root contains the CWD, yet the CWD belongs to a
- * different working tree.
+ * The repository a working tree belongs to: a linked worktree reports its main
+ * checkout, a normal checkout reports itself. Two trees of the same repository
+ * share this value.
+ */
+function repositoryIdentity(dir: string): string | null {
+  const tree = findWorkingTree(dir);
+  if (!tree) return null;
+  return canonicalPath(tree.mainRoot ?? tree.root);
+}
+
+/**
+ * True only for the case worth warning about: the answer describes a DIFFERENT
+ * checkout of the SAME repository as the caller's CWD.
  *
- * The ancestor requirement is what keeps this from firing on deliberate
- * cross-repo work. Querying another project from this one is a different
- * checkout by definition, and warning there would be noise on every
- * cross_repo_search and every "what does that other service do" question —
- * which is precisely how a hint gets trained out of an agent's attention.
- * The silent-failure case is narrower: `<repo>` is an ancestor of
- * `<repo>/.worktrees/<task>`, so it matched by containment while describing
- * files the caller does not have.
+ * Keying on repository identity rather than path containment is what separates
+ * the two situations that look alike from the outside. Querying another project
+ * is also "a different working tree", but it is deliberate — warning there fires
+ * on every cross_repo_search and trains the hint out of an agent's attention,
+ * taking the real case with it. Two checkouts of the SAME repo are the dangerous
+ * pair: the caller believes it is looking at its own files.
+ *
+ * Containment alone was not enough. `git worktree add ../feature` puts the
+ * worktree BESIDE the main checkout, so an ancestor test missed it entirely
+ * while the failure — being served another checkout's files — is identical.
  */
 export function isAnswerFromWrongTree(cwd: string, repoRoot: string): boolean {
-  const root = canonicalPath(repoRoot);
-  const here = canonicalPath(cwd);
-  const contains = here === root || here.startsWith(root + sep);
-  if (!contains) return false;
-  return isDifferentWorkingTree(cwd, repoRoot);
+  if (!isDifferentWorkingTree(cwd, repoRoot)) return false;
+  const here = repositoryIdentity(cwd);
+  const there = repositoryIdentity(repoRoot);
+  if (here === null || there === null) return false;
+  return here === there;
 }
