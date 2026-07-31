@@ -25,6 +25,7 @@ HINT CODES (act on immediately when they appear in responses)
   H5     → use cached tree result    H6(n) → add detail_level=compact
   H7     → use get_context_bundle    H8(n) → use assemble_context(level=L1)
   H9     → codebase_retrieval(type:semantic)  H10 → call get_session_snapshot
+  H19    → answer is from a DIFFERENT git working tree than your CWD — index it
   H11    → use search_text instead   H12 → batch search_text into codebase_retrieval
   H13    → route query → use trace_route  H14 → secret pattern → use scan_secrets
   H15    → journal fetch: search_text(glob='.codesift/wiki/journal/**')

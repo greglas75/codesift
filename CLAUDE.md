@@ -15,6 +15,7 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 | `H8(n)` | n× `get_symbol` calls | Use `assemble_context(level='L1')` |
 | `H9` | Question-word text query | Use semantic search |
 | `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context |
+| `H19` | Answer comes from a DIFFERENT git working tree than your CWD | Results describe other files — `index_folder(path=<your worktree>)` |
 
 ## Tool Discovery (NEW — agents read this)
 

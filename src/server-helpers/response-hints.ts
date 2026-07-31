@@ -1,3 +1,5 @@
+import { repoRootFor } from "./repo-resolution.js";
+import { findWorkingTree, isDifferentWorkingTree } from "../utils/worktree.js";
 import { getCallCount, getSessionState } from "../storage/session-state.js";
 const HIGH_CARDINALITY_THRESHOLD = 50;
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
@@ -80,7 +82,33 @@ function isTestAntipatternQuery(query: string): boolean {
 // H7     = get_symbol after search_symbols, use get_context_bundle instead
 // H8(n)  = 3+ get_symbol calls, use assemble_context(level='L1')
 // H9     = question-word text query, use semantic search
+// H19    = answering from a DIFFERENT git working tree than your CWD
 // ---------------------------------------------------------------------------
+
+
+/**
+ * Build the H19 note when the resolved repo is a different working tree than
+ * the process CWD. Returns null in the ordinary case (same checkout), so this
+ * costs nothing on the hot path beyond one stat walk.
+ *
+ * Best-effort by design: any failure resolving git or registry state yields no
+ * hint rather than a wrong one.
+ */
+function worktreeMismatchNote(args: Record<string, unknown>): string | null {
+  const repo = args["repo"];
+  if (typeof repo !== "string" || repo.length === 0) return null;
+  try {
+    const cwd = process.cwd();
+    const root = repoRootFor(repo);
+    if (!root || !isDifferentWorkingTree(cwd, root)) return null;
+    const tree = findWorkingTree(cwd);
+    const what = tree?.linked ? "a linked worktree" : "a different checkout";
+    return `⚡H19 answering from "${repo}" (${root}) but your CWD is ${what} (${tree?.root ?? cwd}) `
+      + `— results describe DIFFERENT files. Index this tree with index_folder(path="${tree?.root ?? cwd}").`;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Build optimization hints based on response data + call patterns.
@@ -88,6 +116,18 @@ function isTestAntipatternQuery(query: string): boolean {
  */
 export function buildResponseHint(toolName: string, args: Record<string, unknown>, data: unknown): string | null {
   const hints: string[] = [];
+
+  // H19 — the answer describes a different checkout than the caller's files.
+  //
+  // A linked worktree at `<repo>/.worktrees/<task>` has `<repo>` as an
+  // ancestor, so before this existed an agent working in a worktree silently
+  // got the main checkout's index. Nothing in the response said so, and the
+  // data looked plausible: on ResearchShield the main tree's
+  // `result.service.ts` came back as 4042 lines while the file in the agent's
+  // own tree was 1415, with the very methods it had already extracted. An
+  // agent cannot detect that from the outside — it has to be told.
+  const worktreeNote = worktreeMismatchNote(args);
+  if (worktreeNote) hints.push(worktreeNote);
 
   if (toolName === "search_text" && Array.isArray(data) && data.length > HIGH_CARDINALITY_THRESHOLD) {
     if (!args["group_by_file"] && !args["auto_group"]) {

@@ -215,6 +215,7 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 | `H8(n)` | n× `get_symbol` calls | Use `assemble_context(level='L1')` |
 | `H9` | Question-word text query | Use semantic search |
 | `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context before compaction |
+| `H19` | Answer comes from a DIFFERENT git working tree than your CWD | Results describe other files — `index_folder(path=<your worktree>)` |
 
 ## ALWAYS
 
@@ -234,7 +235,10 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 - Call `list_repos` in single-repo sessions — repo auto-resolves from CWD
 - Use manual Edit on multiple files for rename — use `rename_symbol`
 - Read entire file just to get a return type — use `get_type_info`
-- Index a worktree only when it is the reviewed/edited target and `index_status(path=<worktree>)` shows the branch tip is missing; otherwise use `index_file(path=...)` for edited files
+- Skip indexing a worktree you are actually working in. A linked worktree has the main
+  checkout as a path ancestor, so an unindexed one resolves to the PARENT repo and you get
+  that checkout's files. `index_folder(path=<worktree>)` makes it resolve to itself; hint
+  `H19` fires whenever an answer describes a different working tree than your CWD
 - Call `get_knowledge_map` without `focus=` parameter
 
 ## Response Cascade
