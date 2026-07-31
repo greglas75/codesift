@@ -1,7 +1,7 @@
 {
   "name": "codesift-mcp",
   "version": "0.10.3",
-  "description": "MCP server for code intelligence — 146 tools for symbol search, call graph, semantic search, route tracing, community detection, LSP bridge, secret detection, conversation search, and Hono framework intelligence",
+  "description": "MCP server for code intelligence \u2014 146 tools for symbol search, call graph, semantic search, route tracing, community detection, LSP bridge, secret detection, conversation search, and Hono framework intelligence",
   "license": "BSL-1.1",
   "author": "Greg Laskowski",
   "type": "module",
@@ -28,7 +28,7 @@
     "lint": "tsc --noEmit",
     "download-wasm": "tsx scripts/download-wasm.ts",
     "prepublishOnly": "npm run build && npm test",
-    "postinstall": "node ./dist/cli.js setup all 2>/dev/null && echo '\n  ✨ CodeSift MCP installed and configured for all platforms.\n  ⚠️  Restart your AI client (Cmd+Q for Claude Code) to load new MCP server.\n' || echo '\n  ✨ CodeSift MCP installed. Run: codesift setup all\n'"
+    "postinstall": "node ./dist/cli.js setup all 2>/dev/null && echo '\n  \u2728 CodeSift MCP installed and configured for all platforms.\n  \u26a0\ufe0f  Restart your AI client (Cmd+Q for Claude Code) to load new MCP server.\n' || echo '\n  \u2728 CodeSift MCP installed. Run: codesift setup all\n'"
   },
   "dependencies": {
     "@manypkg/get-packages": "^3.1.0",
@@ -64,7 +64,10 @@
   },
   "overrides": {
     "lodash-es": ">=4.18.1",
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "brace-expansion@2": "^2.1.2",
+    "sharp": "^0.35.0",
+    "@hono/node-server": "^2.0.5"
   },
   "engines": {
     "node": ">=20.0.0"
