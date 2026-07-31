@@ -76,9 +76,12 @@ export default defineConfig({
           ],
           environment: "node",
           pool: "vmForks",
-          poolOptions: {
-            vmForks: { singleFork: true },
-          },
+          // Vitest 4 removed `test.poolOptions` — the former per-pool settings
+          // are top-level now. Left as-is, `singleFork` would be silently
+          // ignored, and it is not decoration: these suites share process-level
+          // caches and mutate env, so running them across forks reintroduces
+          // exactly the cross-test interference singleFork was added to stop.
+          singleFork: true,
           server: {
             deps: {
               // chevrotain ships ESM in a CJS wrapper; inline so Vite transforms

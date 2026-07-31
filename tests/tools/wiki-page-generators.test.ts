@@ -180,7 +180,10 @@ describe("generateCommunitySummary", () => {
   });
 });
 
-import { generateCommunityPage, generateOverviewPage, generateArchitecturePage, generateIndexPage } from "../../src/tools/wiki-page-generators.js";
+// `generateCommunityPage` and `generateIndexPage` are already imported at the
+// top of this file; re-importing them here is a duplicate declaration. esbuild
+// (vitest 3) accepted it silently, oxc (vitest 4) rejects the whole file.
+import { generateOverviewPage, generateArchitecturePage } from "../../src/tools/wiki-page-generators.js";
 import type { ModuleMetadata, ProjectOverview } from "../../src/tools/wiki-manifest.js";
 
 describe("v2 generators (Tasks 17-19)", () => {

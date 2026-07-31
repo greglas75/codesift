@@ -4,16 +4,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const anthropicCreate = vi.fn();
 const openaiCreate = vi.fn();
 
+// The implementation must be a NON-arrow function: production code calls this
+// with `new`, and an arrow function has no [[Construct]]. vitest 3 papered over
+// it; vitest 4 throws "… is not a constructor".
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: { create: anthropicCreate },
-  })),
+  default: vi.fn(function (this: Record<string, unknown>) {
+    this["messages"] = { create: anthropicCreate };
+  }),
 }));
 
 vi.mock("openai", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    chat: { completions: { create: openaiCreate } },
-  })),
+  default: vi.fn(function (this: Record<string, unknown>) {
+    this["chat"] = { completions: { create: openaiCreate } };
+  }),
 }));
 
 // Import after mocks so dynamic import inside providers sees them.
