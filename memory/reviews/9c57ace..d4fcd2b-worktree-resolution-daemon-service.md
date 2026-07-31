@@ -1,13 +1,14 @@
 <!-- zuvo-review -->
-range: 9c57ace..8231041
+range: 9c57ace..d4fcd2b
+adversarial: zuvo/proofs/adv-9c57ace-d4fcd2b.txt
 files: rules/codesift.mdc,src/cli/commands.ts,src/cli/help.ts,src/cli/service.ts,src/instructions.ts,src/search/tool-embedding-storage.ts,src/server-helpers/repo-resolution.ts,src/server-helpers/response-hints.ts,src/storage/registry.ts,src/utils/worktree.ts,vitest.config.ts
 
-# Code review — worktree resolution, daemon service, test isolation (9c57ace..8231041)
+# Code review — worktree resolution, daemon service, test isolation (9c57ace..d4fcd2b)
 
 ```
 CODE REVIEW | TIER 3 (DEEP)
 SCOPE:  11 production files, 20 files total, +1252/-45 | INTENT: FIX + FEAT
-AUDIT:  self-review, adversarial against the running system (not fixtures) | RISK: MEDIUM
+AUDIT:  self-review + 2-chunk cross-model adversarial (agy, codex, claude) | RISK: MEDIUM
 SELF-REVIEW: yes -> every claim re-verified by execution, 4 defects found and fixed in 8231041
 ```
 
@@ -84,6 +85,37 @@ reaches one), so each run now sweeps dirs older than an hour. The age guard is
 load-bearing — a younger dir may belong to a concurrent run, and deleting it
 would cause the exact `Repository ... not found` this setup prevents. Sweeping
 is once per worker, not once per test file.
+
+
+## Adversarial pass (2 chunks, cross-model)
+
+Three CRITICAL findings. Two accepted and fixed in `d4fcd2b`, one refuted.
+
+**A1 — sibling worktrees were never flagged. [accepted, fixed]** F1's fix keyed
+on path containment, which only covers a worktree nested under its own checkout.
+`git worktree add ../feature` puts the tree BESIDE the main checkout, so
+containment missed it while the failure is identical. Replaced with repository
+IDENTITY: warn when the answer describes a different working tree of the SAME
+repository. Better rule, not merely wider — still silent across projects, now
+correct for every worktree layout.
+
+**A2 — Windows worktree detection was dead. [accepted, fixed]**
+`gitDir.split(sep)` splits on the OS separator, but git writes the gitdir path
+with forward slashes even on Windows. One segment, `linked` always false, and
+Windows users silently kept the old wrong-checkout behaviour — the very bug this
+work fixes. Both parsers now split on either separator.
+
+**A3 — `tool-embedding-storage.ts` ignoring a config-file dataDir. [refuted]**
+The finding assumes `loadConfig()` can source `dataDir` from a config file.
+`config.ts:106` derives it from `CODESIFT_DATA_DIR` and nothing else, so the
+expression is byte-identical to what the loader returns; using the loader would
+add a dependency for no behavioural change.
+
+Also raised and consciously kept: cross-process registry interleaving (in-process
+lock cannot address it — the test fix isolates data dirs for exactly this
+reason), and PID recycling making a stale `daemon.pid` read as running. The
+latter is a real limit of pid-file liveness checks; consequence is a wrong
+`service status` line, not data loss.
 
 ## Considered and accepted
 
