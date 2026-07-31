@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../types.js";
 import { extractTypeScriptSymbols } from "./extractors/typescript.js";
 import { extractPythonSymbols } from "./extractors/python.js";
@@ -18,7 +18,7 @@ export { makeSymbolId, tokenizeIdentifier } from "./symbol-utils.js";
  * For markdown files, use `extractMarkdownSymbols` directly (no tree-sitter needed).
  */
 export function extractSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
@@ -82,14 +82,14 @@ const GENERIC_NODE_KIND_MAP: Record<string, SymbolKind> = {
 };
 
 function extractGenericSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
-  function walk(node: Parser.SyntaxNode, parentId?: string): void {
+  function walk(node: TSNode, parentId?: string): void {
     const kind = GENERIC_NODE_KIND_MAP[node.type];
 
     if (kind) {

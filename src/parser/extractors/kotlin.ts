@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { makeSymbol } from "./_shared.js";
 import {
@@ -19,14 +19,14 @@ import {
 // --- Main extractor ---
 
 export function extractKotlinSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
-  function walk(node: Parser.SyntaxNode, parentId?: string): void {
+  function walk(node: TSNode, parentId?: string): void {
     switch (node.type) {
       case "function_declaration": {
         const name = getName(node);

@@ -89,7 +89,10 @@ async function parseConfigSource(source: string): Promise<ConfigParseResult> {
   const parser = await getParser("javascript");
   if (!parser) return { status: "parser-unavailable" };
   try {
-    return { status: "ok", collections: discoverCollections(parser.parse(source).rootNode) };
+    const tree = parser.parse(source);
+    // parse() is nullable since web-tree-sitter 0.25.
+    if (!tree) return { status: "parse-error" };
+    return { status: "ok", collections: discoverCollections(tree.rootNode) };
   } catch {
     return { status: "parse-error" };
   }

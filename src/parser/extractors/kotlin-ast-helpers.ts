@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { getNodeName } from "./_shared.js";
 // --- Helpers ---
 
@@ -7,7 +7,7 @@ import { getNodeName } from "./_shared.js";
  * Falls back to first `identifier` child when `childForFieldName("name")` returns null
  * (needed for enum_entry, class_parameter, type_alias, etc.).
  */
-export function getName(node: Parser.SyntaxNode): string | null {
+export function getName(node: TSNode): string | null {
   return getNodeName(node)
     ?? node.namedChildren.find((c) => c.type === "identifier")?.text
     ?? null;
@@ -19,7 +19,7 @@ export function getName(node: Parser.SyntaxNode): string | null {
  * Always checks the declaration node's previousNamedSibling (not modifiers).
  */
 export function getDocstring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const prev = node.previousNamedSibling;
@@ -33,7 +33,7 @@ export function getDocstring(
 /**
  * Checks if a class_declaration has the `interface` keyword (unnamed child).
  */
-export function isInterface(node: Parser.SyntaxNode): boolean {
+export function isInterface(node: TSNode): boolean {
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (child && child.type === "interface") return true;
@@ -47,12 +47,12 @@ export function isInterface(node: Parser.SyntaxNode): boolean {
  * Checks if modifiers contain a specific modifier keyword.
  * Works with class_modifier, function_modifier, property_modifier, inheritance_modifier.
  */
-export function hasModifier(node: Parser.SyntaxNode, modifier: string): boolean {
+export function hasModifier(node: TSNode, modifier: string): boolean {
   const mods = node.namedChildren.find((c) => c.type === "modifiers");
   if (!mods) return false;
 
   // Walk recursively through modifier tree to find the keyword
-  function findMod(n: Parser.SyntaxNode): boolean {
+  function findMod(n: TSNode): boolean {
     if (n.text === modifier && !n.isNamed) return true;
     if (n.isNamed && n.text === modifier) return true;
     for (let i = 0; i < n.childCount; i++) {
@@ -70,7 +70,7 @@ export function hasModifier(node: Parser.SyntaxNode, modifier: string): boolean 
  * surfaces these as `platform_modifier` nodes inside `modifiers`. Returns
  * "expect", "actual", or null.
  */
-export function getKmpModifier(node: Parser.SyntaxNode): "expect" | "actual" | null {
+export function getKmpModifier(node: TSNode): "expect" | "actual" | null {
   const mods = node.namedChildren.find((c) => c.type === "modifiers");
   if (!mods) return null;
   for (const m of mods.namedChildren) {
@@ -82,9 +82,9 @@ export function getKmpModifier(node: Parser.SyntaxNode): "expect" | "actual" | n
   return null;
 }
 
-function getSimpleUserTypeName(node: Parser.SyntaxNode): string {
+function getSimpleUserTypeName(node: TSNode): string {
   const identifiers: string[] = [];
-  function collect(current: Parser.SyntaxNode): void {
+  function collect(current: TSNode): void {
     if (current.type === "identifier") identifiers.push(current.text);
     for (const child of current.namedChildren) collect(child);
   }
@@ -98,7 +98,7 @@ function getSimpleUserTypeName(node: Parser.SyntaxNode): string {
  * Gets annotation names from a node's modifiers.
  * Annotation structure: modifiers → annotation → @ + user_type → identifier
  */
-export function getAnnotations(node: Parser.SyntaxNode): string[] {
+export function getAnnotations(node: TSNode): string[] {
   const mods = node.namedChildren.find((c) => c.type === "modifiers");
   if (!mods) return [];
 
@@ -121,7 +121,7 @@ export function getAnnotations(node: Parser.SyntaxNode): string[] {
 /**
  * Gets the name of a property_declaration (stored in variable_declaration/identifier).
  */
-export function getPropertyName(node: Parser.SyntaxNode): string | null {
+export function getPropertyName(node: TSNode): string | null {
   const varDecl = node.namedChildren.find((c) => c.type === "variable_declaration");
   if (varDecl) {
     const ident = varDecl.namedChildren.find((c) => c.type === "identifier");
@@ -136,7 +136,7 @@ export function getPropertyName(node: Parser.SyntaxNode): string | null {
  * Returns the receiver type name or null.
  */
 function getReceiverType(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | null {
   const nameNode = node.childForFieldName("name")
@@ -157,7 +157,7 @@ function getReceiverType(
  * For Kotlin: `(name: String, age: Int): User?`
  */
 export function getSignature(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const params = node.namedChildren.find(

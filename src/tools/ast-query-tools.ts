@@ -2,8 +2,8 @@ import { getParser, initParser } from "../parser/parser-manager.js";
 import { getCodeIndex } from "./index-tools.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type Parser from "web-tree-sitter";
-
+import { Query as TSQueryCtor } from "web-tree-sitter";
+import type { Query as TSQuery } from "web-tree-sitter";
 const MAX_MATCHES = 50;
 const MAX_FILE_SIZE = 500_000;
 
@@ -50,10 +50,14 @@ export async function astQuery(
   const parser = await getParser(lang);
   if (!parser) throw new Error(`No tree-sitter grammar for language: ${lang}`);
 
-  const tsLang = parser.getLanguage();
-  let query: Parser.Query;
+  // web-tree-sitter >= 0.25: the language is a property (not a getter), and
+  // queries are constructed via `new Query(language, source)` rather than
+  // `language.query(source)`.
+  const tsLang = parser.language;
+  if (!tsLang) throw new Error(`Parser has no language loaded for: ${lang}`);
+  let query: TSQuery;
   try {
-    query = tsLang.query(queryString);
+    query = new TSQueryCtor(tsLang, queryString);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Invalid tree-sitter query: ${msg}`);
@@ -82,7 +86,10 @@ export async function astQuery(
     if (source.length > MAX_FILE_SIZE) continue;
     filesScanned++;
 
+    // parse() is nullable since web-tree-sitter 0.25 — a file the grammar
+    // cannot parse yields no matches rather than crashing the whole query.
     const tree = parser.parse(source);
+    if (!tree) continue;
     const queryMatches = query.matches(tree.rootNode);
 
     for (const match of queryMatches) {

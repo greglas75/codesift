@@ -1,10 +1,10 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { HonoApp } from "./hono-model.js";
 import { stringLiteralValue, walk } from "./hono-ast-utils.js";
 import { joinPaths } from "./hono-route-utils.js";
 
 export function walkHonoAppVariables(
-  root: Parser.SyntaxNode,
+  root: TSNode,
   file: string,
   localVars: Record<string, HonoApp>,
 ): void {
@@ -56,7 +56,7 @@ export function walkHonoAppVariables(
   });
 }
 
-function collectFactoryVars(root: Parser.SyntaxNode): Set<string> {
+function collectFactoryVars(root: TSNode): Set<string> {
   const factoryVars = new Set<string>();
   const cursor = root.walk();
   walk(cursor, (node) => {
@@ -72,7 +72,7 @@ function collectFactoryVars(root: Parser.SyntaxNode): Set<string> {
 }
 
 function extractBasePathCall(
-  valueNode: Parser.SyntaxNode,
+  valueNode: TSNode,
   knownVars: Record<string, HonoApp>,
   factoryVars: Set<string>,
 ): { parentVar?: string; prefix: string } | null {
@@ -119,7 +119,7 @@ function extractBasePathCall(
   return null;
 }
 
-function isCreateFactoryCall(valueNode: Parser.SyntaxNode): boolean {
+function isCreateFactoryCall(valueNode: TSNode): boolean {
   if (valueNode.type !== "call_expression") return false;
   const fn = valueNode.childForFieldName("function");
   if (!fn) return false;
@@ -132,7 +132,7 @@ function isCreateFactoryCall(valueNode: Parser.SyntaxNode): boolean {
 }
 
 function isFactoryCreateApp(
-  valueNode: Parser.SyntaxNode,
+  valueNode: TSNode,
   factoryVars: Set<string>,
 ): boolean {
   if (valueNode.type !== "call_expression") return false;
@@ -145,7 +145,7 @@ function isFactoryCreateApp(
 }
 
 function classifyAppCreation(
-  valueNode: Parser.SyntaxNode,
+  valueNode: TSNode,
 ): HonoApp["created_via"] | null {
   if (valueNode.type === "call_expression") {
     const fn = valueNode.childForFieldName("function");

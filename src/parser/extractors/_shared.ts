@@ -1,16 +1,16 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { tokenizeIdentifier, makeSymbolId } from "../symbol-utils.js";
 
 export const MAX_SOURCE_LENGTH = 5000;
 
-export function getNodeName(node: Parser.SyntaxNode): string | null {
+export function getNodeName(node: TSNode): string | null {
   const nameNode = node.childForFieldName("name");
   return nameNode?.text ?? null;
 }
 
 export function extractNodeSource(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string {
   const text = source.slice(node.startIndex, node.endIndex);
@@ -21,7 +21,7 @@ export function extractNodeSource(
 }
 
 export function makeSymbol(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   name: string,
   kind: SymbolKind,
   filePath: string,

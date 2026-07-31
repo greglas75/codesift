@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { getNodeName, makeSymbol } from "./_shared.js";
 
@@ -9,7 +9,7 @@ import { getNodeName, makeSymbol } from "./_shared.js";
  * Go convention uses // line comments for documentation (no block comment docs).
  */
 function getDocstring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const comments: string[] = [];
@@ -43,7 +43,7 @@ function getDocstring(
  * For Go methods: includes receiver in signature.
  */
 function getSignature(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const params = node.childForFieldName("parameters");
@@ -70,14 +70,14 @@ function getSignature(
 // --- Main extractor ---
 
 export function extractGoSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
-  function walk(node: Parser.SyntaxNode, parentId?: string): void {
+  function walk(node: TSNode, parentId?: string): void {
     switch (node.type) {
       case "function_declaration": {
         const name = getNodeName(node);

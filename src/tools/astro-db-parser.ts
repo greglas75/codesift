@@ -3,7 +3,7 @@
  * into a structured TableDef[] with column metadata + FK references.
  * Pure function (no I/O) — accepts source content and returns parsed schema.
  */
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { getParser, initParser } from "../parser/parser-manager.js";
 import { getProperty, stripQuotes } from "./astro-helpers.js";
 
@@ -33,7 +33,7 @@ export interface DbParserResult {
   issues: DbParserIssue[];
 }
 
-function parseColumnCall(callNode: Parser.SyntaxNode): { type: string; props: Map<string, Parser.SyntaxNode> } | null {
+function parseColumnCall(callNode: TSNode): { type: string; props: Map<string, TSNode> } | null {
   if (callNode.type !== "call_expression") return null;
   const fn = callNode.childForFieldName("function");
   if (!fn || fn.type !== "member_expression") return null;
@@ -42,7 +42,7 @@ function parseColumnCall(callNode: Parser.SyntaxNode): { type: string; props: Ma
   if (!obj || obj.text !== "column" || !prop) return null;
   const type = prop.text;
   const args = callNode.childForFieldName("arguments");
-  const props = new Map<string, Parser.SyntaxNode>();
+  const props = new Map<string, TSNode>();
   if (args) {
     const objArg = args.namedChildren.find((n) => n.type === "object");
     if (objArg) {
@@ -59,7 +59,7 @@ function parseColumnCall(callNode: Parser.SyntaxNode): { type: string; props: Ma
   return { type, props };
 }
 
-function parseReferences(node: Parser.SyntaxNode): string | null {
+function parseReferences(node: TSNode): string | null {
   // Pattern: () => Author.columns.id  →  arrow_function with body member_expression
   if (node.type === "arrow_function") {
     const body = node.childForFieldName("body");
@@ -69,10 +69,10 @@ function parseReferences(node: Parser.SyntaxNode): string | null {
   return null;
 }
 
-function memberToFkPath(node: Parser.SyntaxNode): string | null {
+function memberToFkPath(node: TSNode): string | null {
   // Author.columns.id → "Author.id". Skip the middle `columns` segment.
   const parts: string[] = [];
-  let cur: Parser.SyntaxNode | null = node;
+  let cur: TSNode | null = node;
   while (cur && cur.type === "member_expression") {
     const p = cur.childForFieldName("property");
     if (p) parts.unshift(p.text);
@@ -87,7 +87,7 @@ function memberToFkPath(node: Parser.SyntaxNode): string | null {
   return filtered.length >= 2 ? filtered.join(".") : null;
 }
 
-function parseTableCall(callNode: Parser.SyntaxNode): ColumnDef[] | null {
+function parseTableCall(callNode: TSNode): ColumnDef[] | null {
   const fn = callNode.childForFieldName("function");
   if (!fn || fn.text !== "defineTable") return null;
   const args = callNode.childForFieldName("arguments");
@@ -129,9 +129,11 @@ export async function parseAstroDbSchema(content: string): Promise<DbParserResul
   const parser = await getParser(lang);
   if (!parser) return { tables: [], issues: [{ code: "DB00", severity: "error", message: "TypeScript parser unavailable", line: 1 }] };
   let tree;
+  // parse() is nullable since web-tree-sitter 0.25 — handled with the throw below.
   try { tree = parser.parse(content); } catch {
     return { tables: [], issues: [{ code: "DB00", severity: "error", message: "Parse error in schema source", line: 1 }] };
   }
+  if (!tree) return { tables: [], issues: [{ code: "DB00", severity: "error", message: "Parse error in schema source", line: 1 }] };
   try {
     const root = tree.rootNode;
     // Tolerate hasError — tree-sitter recovers and exposes valid sub-trees.

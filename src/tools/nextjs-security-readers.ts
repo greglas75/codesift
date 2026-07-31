@@ -6,7 +6,7 @@
  * composes them into a per-action audit.
  */
 
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import { extractZodSchema } from "../utils/nextjs.js";
 import type {
   AuthGuardInfo,
@@ -15,7 +15,7 @@ import type {
 } from "./nextjs-security-tools.js";
 
 /** Determine if a tree-sitter program has a file-scope `"use server"` directive. */
-function hasFileScopeUseServer(tree: Parser.Tree): boolean {
+function hasFileScopeUseServer(tree: TSTree): boolean {
   const root = tree.rootNode;
   const first = root.namedChildren[0];
   if (!first) return false;
@@ -28,7 +28,7 @@ function hasFileScopeUseServer(tree: Parser.Tree): boolean {
 }
 
 /** Returns true if the function body's first statement is `"use server"` directive. */
-function hasInlineUseServer(body: Parser.SyntaxNode): boolean {
+function hasInlineUseServer(body: TSNode): boolean {
   if (body.type !== "statement_block") return false;
   const first = body.namedChildren[0];
   if (!first) return false;
@@ -48,12 +48,12 @@ export interface ServerActionFn {
   file: string;
   line: number;
   isAsync: boolean;
-  bodyNode: Parser.SyntaxNode | null;
-  fnNode: Parser.SyntaxNode;
+  bodyNode: TSNode | null;
+  fnNode: TSNode;
 }
 
 export function extractServerActionFunctions(
-  tree: Parser.Tree,
+  tree: TSTree,
   _source: string,
   file: string,
 ): ServerActionFn[] {
@@ -124,7 +124,7 @@ export function extractServerActionFunctions(
   }
 
   // No file-scope directive: walk all functions and find inline `"use server"`.
-  const allFns: Parser.SyntaxNode[] = [
+  const allFns: TSNode[] = [
     ...root.descendantsOfType("function_declaration"),
     ...root.descendantsOfType("arrow_function"),
     ...root.descendantsOfType("function_expression"),
@@ -139,7 +139,7 @@ export function extractServerActionFunctions(
       name = fn.childForFieldName("name")?.text ?? "<anon>";
     } else {
       // Try to find enclosing variable_declarator for name
-      let p: Parser.SyntaxNode | null = fn.parent;
+      let p: TSNode | null = fn.parent;
       while (p) {
         if (p.type === "variable_declarator") {
           name = p.childForFieldName("name")?.text ?? "<anon>";
@@ -183,7 +183,7 @@ export function detectAuthGuard(fn: ServerActionFn): AuthGuardInfo {
   const body = fn.bodyNode;
 
   // 0) HOC wrapper detection — if the function node is the argument of a known HOC wrapper.
-  let p: Parser.SyntaxNode | null = fn.fnNode.parent;
+  let p: TSNode | null = fn.fnNode.parent;
   while (p) {
     if (p.type === "call_expression") {
       const callee = p.childForFieldName("function") ?? p.namedChild(0);
@@ -199,7 +199,7 @@ export function detectAuthGuard(fn: ServerActionFn): AuthGuardInfo {
   }
 
   // 1) Look for direct auth call expressions inside body.
-  let firstAuthCall: { name: string; line: number; node: Parser.SyntaxNode } | null = null;
+  let firstAuthCall: { name: string; line: number; node: TSNode } | null = null;
   for (const call of body.descendantsOfType("call_expression")) {
     const callee = call.childForFieldName("function") ?? call.namedChild(0);
     if (callee?.type === "identifier" && AUTH_CALL_NAMES.has(callee.text)) {
@@ -284,7 +284,7 @@ export function detectAuthGuard(fn: ServerActionFn): AuthGuardInfo {
 
 export function detectInputValidation(
   fn: ServerActionFn,
-  tree: Parser.Tree,
+  tree: TSTree,
   source: string,
 ): InputValidationInfo {
   const body = fn.bodyNode;
@@ -335,7 +335,7 @@ const RATE_LIMIT_PATTERNS: Array<{ regex: RegExp; lib: RateLimitingInfo["lib"] }
 
 export function detectRateLimiting(
   fn: ServerActionFn,
-  _tree: Parser.Tree,
+  _tree: TSTree,
   _source: string,
 ): RateLimitingInfo {
   const body = fn.bodyNode;

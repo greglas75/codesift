@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { SymbolKind } from "../../types.js";
 
 /** React wrapper functions that indicate a component */
@@ -28,7 +28,7 @@ export function isComponentName(name: string): boolean {
   return COMPONENT_NAME_RE.test(name);
 }
 
-export function returnsJSX(node: Parser.SyntaxNode): boolean {
+export function returnsJSX(node: TSNode): boolean {
   const body = node.childForFieldName("body");
   if (!body) return false;
 
@@ -54,7 +54,7 @@ export function returnsJSX(node: Parser.SyntaxNode): boolean {
   return false;
 }
 
-export function isReactWrapper(callExpr: Parser.SyntaxNode): boolean {
+export function isReactWrapper(callExpr: TSNode): boolean {
   const fn = callExpr.childForFieldName("function");
   if (!fn) return false;
 
@@ -68,7 +68,7 @@ export function isReactWrapper(callExpr: Parser.SyntaxNode): boolean {
   return false;
 }
 
-export function getWrapperName(callExpr: Parser.SyntaxNode): string | null {
+export function getWrapperName(callExpr: TSNode): string | null {
   const fn = callExpr.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return fn.text;
@@ -78,7 +78,7 @@ export function getWrapperName(callExpr: Parser.SyntaxNode): string | null {
   return null;
 }
 
-export function getWrappedFunction(callExpr: Parser.SyntaxNode): Parser.SyntaxNode | null {
+export function getWrappedFunction(callExpr: TSNode): TSNode | null {
   const args = callExpr.childForFieldName("arguments");
   if (!args) return null;
   const firstArg = args.namedChildren[0];
@@ -100,7 +100,7 @@ export function extendsListIndicatesReactComponent(extendsList: string[]): boole
 
 export function classifyReactKind(
   name: string,
-  fnNode: Parser.SyntaxNode | null,
+  fnNode: TSNode | null,
 ): SymbolKind {
   if (isHookName(name)) return "hook";
   if (isComponentName(name) && fnNode && returnsJSX(fnNode)) return "component";

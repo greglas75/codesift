@@ -1,5 +1,4 @@
-import type Parser from "web-tree-sitter";
-
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 // ---------------------------------------------------------------------------
 // Metadata export extraction (T1 helper)
 // ---------------------------------------------------------------------------
@@ -27,7 +26,7 @@ export interface MetadataFields {
 }
 
 /** Unwrap a tree-sitter string node (e.g. `"foo"`, `'foo'`, `` `foo` ``) to its literal content, or null. */
-export function readStringLiteral(node: Parser.SyntaxNode | null | undefined): string | null {
+export function readStringLiteral(node: TSNode | null | undefined): string | null {
   if (!node) return null;
   if (node.type === "string") {
     // Look for string_fragment child first (quoted string)
@@ -49,7 +48,7 @@ export function readStringLiteral(node: Parser.SyntaxNode | null | undefined): s
 }
 
 /** Extract a string-literal array (e.g. `["a","b"]`) into a string[]. Returns null if any element is non-literal. */
-function readStringArray(node: Parser.SyntaxNode | null | undefined): string[] | null {
+function readStringArray(node: TSNode | null | undefined): string[] | null {
   if (!node || node.type !== "array") return null;
   const out: string[] = [];
   for (const el of node.namedChildren) {
@@ -62,9 +61,9 @@ function readStringArray(node: Parser.SyntaxNode | null | undefined): string[] |
 
 /** Walk an object literal node and return a map of literal key -> child value node. */
 function readObjectPairs(
-  node: Parser.SyntaxNode,
-): Map<string, Parser.SyntaxNode> {
-  const map = new Map<string, Parser.SyntaxNode>();
+  node: TSNode,
+): Map<string, TSNode> {
+  const map = new Map<string, TSNode>();
   if (node.type !== "object") return map;
   for (const pair of node.namedChildren) {
     if (pair.type !== "pair") continue;
@@ -84,7 +83,7 @@ function readObjectPairs(
 }
 
 /** Read known metadata fields off an object-literal node into the MetadataFields shape. */
-function readMetadataObject(obj: Parser.SyntaxNode): MetadataFields {
+function readMetadataObject(obj: TSNode): MetadataFields {
   const out: MetadataFields = {};
   if (obj.type !== "object") return out;
   const pairs = readObjectPairs(obj);
@@ -183,7 +182,7 @@ function readMetadataObject(obj: Parser.SyntaxNode): MetadataFields {
  * `_non_literal: true` when the export exists but is not a parseable object
  * literal (e.g. `export const metadata = someExternal`).
  */
-export function parseMetadataExport(tree: Parser.Tree, _source: string): MetadataFields {
+export function parseMetadataExport(tree: TSTree, _source: string): MetadataFields {
   const root = tree.rootNode;
   const exportStatements = root.descendantsOfType("export_statement");
 
@@ -212,7 +211,7 @@ export function parseMetadataExport(tree: Parser.Tree, _source: string): Metadat
     for (const ret of returns) {
       // Skip nested return statements belonging to inner functions.
       // Compare by node.id because tree-sitter wrappers are not reference-stable.
-      let parent: Parser.SyntaxNode | null = ret.parent;
+      let parent: TSNode | null = ret.parent;
       let inInnerFn = false;
       while (parent && parent.id !== fnDecl.id) {
         if (
@@ -269,13 +268,13 @@ export interface FetchCall {
 }
 
 /** Extract the string-literal or number-literal value of a single pair inside an object node. */
-function readPairValue(obj: Parser.SyntaxNode, key: string): Parser.SyntaxNode | null {
+function readPairValue(obj: TSNode, key: string): TSNode | null {
   if (obj.type !== "object") return null;
   const pairs = readObjectPairs(obj);
   return pairs.get(key) ?? null;
 }
 
-function parseCacheOption(optsNode: Parser.SyntaxNode | null): string | null {
+function parseCacheOption(optsNode: TSNode | null): string | null {
   if (!optsNode || optsNode.type !== "object") return null;
   // cache: 'no-store' | 'force-cache' | 'default' | ...
   const cacheVal = readPairValue(optsNode, "cache");
@@ -300,8 +299,8 @@ function parseCacheOption(optsNode: Parser.SyntaxNode | null): string | null {
 /**
  * Collect the enclosing `statement_block` id of a node (for grouping awaits by scope).
  */
-function enclosingBlockId(node: Parser.SyntaxNode): number | null {
-  let cur: Parser.SyntaxNode | null = node.parent;
+function enclosingBlockId(node: TSNode): number | null {
+  let cur: TSNode | null = node.parent;
   while (cur) {
     if (cur.type === "statement_block") return cur.id;
     cur = cur.parent;
@@ -312,8 +311,8 @@ function enclosingBlockId(node: Parser.SyntaxNode): number | null {
 /**
  * Walk upward from `node` to find the containing `await_expression`, or null.
  */
-function enclosingAwait(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
-  let cur: Parser.SyntaxNode | null = node.parent;
+function enclosingAwait(node: TSNode): TSNode | null {
+  let cur: TSNode | null = node.parent;
   while (cur) {
     if (cur.type === "await_expression") return cur;
     if (
@@ -334,7 +333,7 @@ function enclosingAwait(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
  * Collect the identifiers bound by a single statement (`const x = …`, `const {a,b} = …`).
  * Returns an empty set for non-declarations.
  */
-function identifiersBoundByStatement(stmt: Parser.SyntaxNode): Set<string> {
+function identifiersBoundByStatement(stmt: TSNode): Set<string> {
   const out = new Set<string>();
   if (stmt.type !== "lexical_declaration" && stmt.type !== "variable_declaration") {
     return out;
@@ -358,7 +357,7 @@ function identifiersBoundByStatement(stmt: Parser.SyntaxNode): Set<string> {
 }
 
 /** Collect all identifier references inside a subtree. */
-function collectIdentifierRefs(node: Parser.SyntaxNode): Set<string> {
+function collectIdentifierRefs(node: TSNode): Set<string> {
   const out = new Set<string>();
   for (const id of node.descendantsOfType("identifier")) {
     out.add(id.text);
@@ -377,7 +376,7 @@ function collectIdentifierRefs(node: Parser.SyntaxNode): Set<string> {
  * `// sequential intentional` comments on the line preceding an await suppress
  * the flag for that await.
  */
-export function extractFetchCalls(tree: Parser.Tree, source: string): FetchCall[] {
+export function extractFetchCalls(tree: TSTree, source: string): FetchCall[] {
   const root = tree.rootNode;
   const out: FetchCall[] = [];
 
@@ -394,11 +393,11 @@ export function extractFetchCalls(tree: Parser.Tree, source: string): FetchCall[
   // Pass 1: collect raw calls, grouped by (block, topLevelStatement) for sequential detection
   type RawCall = {
     callee: FetchCallee;
-    call: Parser.SyntaxNode;
+    call: TSNode;
     line: number;
     blockId: number | null;
-    containingStmt: Parser.SyntaxNode | null;
-    awaitNode: Parser.SyntaxNode | null;
+    containingStmt: TSNode | null;
+    awaitNode: TSNode | null;
     cacheOption: string | null;
   };
   const raws: RawCall[] = [];
@@ -426,10 +425,10 @@ export function extractFetchCalls(tree: Parser.Tree, source: string): FetchCall[
     }
 
     // Find the enclosing top-level statement (a direct child of the block)
-    let containingStmt: Parser.SyntaxNode | null = null;
+    let containingStmt: TSNode | null = null;
     const blockId = enclosingBlockId(call);
     if (blockId !== null) {
-      let p: Parser.SyntaxNode | null = call;
+      let p: TSNode | null = call;
       while (p && p.parent && p.parent.type !== "statement_block") {
         p = p.parent;
       }

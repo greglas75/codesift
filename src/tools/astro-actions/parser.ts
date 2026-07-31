@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import { getParser, initParser } from "../../parser/parser-manager.js";
 import {
   getActionProperty,
@@ -46,7 +46,7 @@ function findActionsFile(root: string): { source: string; file: string } | null 
   return null;
 }
 
-function createDescriptor(name: string, file: string, call: Parser.SyntaxNode): ExtractedAction {
+function createDescriptor(name: string, file: string, call: TSNode): ExtractedAction {
   return {
     name,
     file,
@@ -60,7 +60,7 @@ function createDescriptor(name: string, file: string, call: Parser.SyntaxNode): 
   };
 }
 
-function populateInputDetails(descriptor: ExtractedAction, input: Parser.SyntaxNode): void {
+function populateInputDetails(descriptor: ExtractedAction, input: TSNode): void {
   descriptor.has_input_schema = true;
   if (input.type === "call_expression") {
     const outerName = methodName(input);
@@ -89,7 +89,7 @@ function populateInputDetails(descriptor: ExtractedAction, input: Parser.SyntaxN
 function extractAction(
   name: string,
   file: string,
-  call: Parser.SyntaxNode,
+  call: TSNode,
 ): ExtractedAction {
   const descriptor = createDescriptor(name, file, call);
   const args = call.childForFieldName("arguments");
@@ -117,7 +117,7 @@ function extractAction(
 function collectNestedAction(
   name: string,
   file: string,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   actions: ExtractedAction[],
 ): void {
   walkAll(node, (candidate) => {
@@ -128,7 +128,7 @@ function collectNestedAction(
 }
 
 function collectObjectPropertyAction(
-  pair: Parser.SyntaxNode,
+  pair: TSNode,
   file: string,
   actions: ExtractedAction[],
 ): void {
@@ -146,7 +146,7 @@ function collectObjectPropertyAction(
 }
 
 function collectVariableActions(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   file: string,
   actions: ExtractedAction[],
 ): void {
@@ -173,12 +173,14 @@ export async function parseActionsFile(root: string): Promise<ActionsFileExtract
   const parser = await getParser(pickLanguage(actionsFile.file));
   if (!parser) return { file: actionsFile.file, actions: [] };
 
-  let tree: Parser.Tree;
+  let tree: TSTree | null;
   try {
     tree = parser.parse(actionsFile.source);
   } catch {
     return { file: actionsFile.file, actions: [] };
   }
+  // parse() is nullable since web-tree-sitter 0.25.
+  if (!tree) return { file: actionsFile.file, actions: [] };
 
   const actions: ExtractedAction[] = [];
   walkAll(tree.rootNode, (node) => collectVariableActions(node, actionsFile.file, actions));

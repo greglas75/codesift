@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import {
   getDocstring,
   makeSymbol,
@@ -20,7 +20,7 @@ const TEST_SUITE_METHODS = new Set([
 
 interface CalleeInfo { base: string; method: string | null }
 
-function parseTestCallee(callExpr: Parser.SyntaxNode): CalleeInfo | null {
+function parseTestCallee(callExpr: TSNode): CalleeInfo | null {
   const fn = callExpr.childForFieldName("function");
   if (!fn) return null;
 
@@ -50,7 +50,7 @@ function parseTestCallee(callExpr: Parser.SyntaxNode): CalleeInfo | null {
   return null;
 }
 
-function getTestName(node: Parser.SyntaxNode): string | null {
+function getTestName(node: TSNode): string | null {
   const args = node.childForFieldName("arguments");
   if (!args) return null;
 
@@ -65,7 +65,7 @@ function getTestName(node: Parser.SyntaxNode): string | null {
 
 export function handleTestExpressionStatement(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   walk: WalkNode,
 ): boolean {
@@ -81,8 +81,8 @@ export function handleTestExpressionStatement(
 
 function emitTestSuite(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
-  expr: Parser.SyntaxNode,
+  node: TSNode,
+  expr: TSNode,
   callee: CalleeInfo,
   parentId: string | undefined,
   walk: WalkNode,
@@ -101,8 +101,8 @@ function emitTestSuite(
 
 function emitTestCase(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
-  expr: Parser.SyntaxNode,
+  node: TSNode,
+  expr: TSNode,
   callee: CalleeInfo,
   parentId: string | undefined,
 ): boolean {
@@ -118,7 +118,7 @@ function emitTestCase(
 
 function emitTestHook(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   callee: CalleeInfo,
   parentId: string | undefined,
 ): boolean {
@@ -131,7 +131,7 @@ function emitTestHook(
   return true;
 }
 
-function walkTestSuiteBody(expr: Parser.SyntaxNode, parentId: string, walk: WalkNode): void {
+function walkTestSuiteBody(expr: TSNode, parentId: string, walk: WalkNode): void {
   const args = expr.childForFieldName("arguments");
   if (!args) return;
 
@@ -143,7 +143,7 @@ function walkTestSuiteBody(expr: Parser.SyntaxNode, parentId: string, walk: Walk
   }
 }
 
-function isSuiteBodyFunction(node: Parser.SyntaxNode): boolean {
+function isSuiteBodyFunction(node: TSNode): boolean {
   return node.type === "arrow_function" || node.type === "function";
 }
 

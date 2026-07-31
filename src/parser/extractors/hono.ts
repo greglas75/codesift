@@ -12,7 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { getParser } from "../parser-manager.js";
 import type {
   HonoApp,
@@ -259,7 +259,7 @@ export class HonoExtractor {
    * Build a map of { variableName → absoluteFilePath } from import statements.
    */
   private extractImportMap(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     currentFile: string,
   ): Map<string, string> {
     const importMap = new Map<string, string>();
@@ -306,7 +306,7 @@ export class HonoExtractor {
    * or "route_group" if it's a sub-router without child mounts.
    */
   private walkRPCExports(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     file: string,
     appVars: Record<string, HonoApp>,
     model: HonoAppModel,
@@ -353,7 +353,7 @@ export class HonoExtractor {
    * Resolves subApp import, recursively parses the file.
    */
   private async walkRouteMounts(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     _file: string,
     parentPrefix: string,
     appVars: Record<string, HonoApp>,

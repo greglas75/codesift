@@ -69,6 +69,8 @@ export async function findPythonCircularImports(
     }
 
     const tree = parser.parse(source);
+    // Unparseable file contributes no import edges.
+    if (!tree) continue;
     const imports = extractPythonImports(tree);
     const outgoing = new Set<string>();
 

@@ -12,10 +12,9 @@
  * The cache is a singleton used across the indexing pipeline. Tests
  * can reset via `resetParseCache()`.
  */
-import type Parser from "web-tree-sitter";
-
+import type { Tree as TSTree } from "web-tree-sitter";
 interface CacheEntry {
-  tree: Parser.Tree;
+  tree: TSTree;
   language: string;
   contentHash: string;
   lastAccessed: number;
@@ -49,7 +48,7 @@ function hashContent(language: string, source: string): string {
 export function getCachedParse(
   language: string,
   source: string,
-): Parser.Tree | null {
+): TSTree | null {
   const key = hashContent(language, source);
   const entry = cache.get(key);
   if (!entry) {
@@ -68,7 +67,7 @@ export function getCachedParse(
 export function setCachedParse(
   language: string,
   source: string,
-  tree: Parser.Tree,
+  tree: TSTree,
 ): void {
   const key = hashContent(language, source);
   if (cache.has(key)) {

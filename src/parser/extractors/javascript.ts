@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol } from "../../types.js";
 import { extractTypeScriptSymbols } from "./typescript.js";
 
@@ -8,7 +8,7 @@ import { extractTypeScriptSymbols } from "./typescript.js";
  * for functions, classes, arrow functions, etc.
  */
 export function extractJavaScriptSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,

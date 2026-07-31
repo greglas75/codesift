@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { getParser } from "../parser-manager.js";
 import type { ContextVariable, HonoAppModel } from "./hono-model.js";
 import { pickLanguage, stringLiteralValue, walk } from "./hono-ast-utils.js";
@@ -37,7 +37,7 @@ export class HonoContextExtractor {
    * Detects conditional sets when the access appears inside if/switch/catch.
    */
   walkContextFlow(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     file: string,
     model: HonoAppModel,
   ): void {
@@ -72,12 +72,12 @@ export class HonoContextExtractor {
 
 type ContextVarFactory = (name: string, isEnv: boolean) => ContextVariable;
 
-function isContextParam(node: Parser.SyntaxNode | null): boolean {
+function isContextParam(node: TSNode | null): boolean {
   return !!node && CONTEXT_PARAM_NAMES.has(node.text);
 }
 
 function collectContextCall(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   file: string,
   getOrCreate: ContextVarFactory,
 ): void {
@@ -118,7 +118,7 @@ function collectContextCall(
 }
 
 function collectContextMember(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   file: string,
   getOrCreate: ContextVarFactory,
 ): void {
@@ -142,7 +142,7 @@ function collectContextMember(
 }
 
 function collectContextVarDestructuring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   file: string,
   getOrCreate: ContextVarFactory,
 ): void {
@@ -182,7 +182,7 @@ function collectContextVarDestructuring(
   }
 }
 
-function isInsideBranch(node: Parser.SyntaxNode): boolean {
+function isInsideBranch(node: TSNode): boolean {
   let current = node.parent;
   while (current) {
     if (
@@ -208,7 +208,7 @@ function isInsideBranch(node: Parser.SyntaxNode): boolean {
   return false;
 }
 
-function isShortCircuitBinaryExpression(node: Parser.SyntaxNode): boolean {
+function isShortCircuitBinaryExpression(node: TSNode): boolean {
   if (node.type !== "binary_expression") return false;
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);

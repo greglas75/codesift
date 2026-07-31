@@ -11,7 +11,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import { getParser, initParser } from "../parser/parser-manager.js";
 
 // ---------------------------------------------------------------------------
@@ -67,12 +67,12 @@ function stripQuotes(s: string): string {
   return (s[0] === '"' || s[0] === "'") && s[s.length - 1] === s[0] ? s.slice(1, -1) : s;
 }
 
-function isLiteral(n: Parser.SyntaxNode): boolean {
+function isLiteral(n: TSNode): boolean {
   return n.type === "string" || n.type === "number" || n.type === "true"
     || n.type === "false" || n.type === "null" || n.type === "undefined";
 }
 
-function getProperty(obj: Parser.SyntaxNode, name: string): Parser.SyntaxNode | null {
+function getProperty(obj: TSNode, name: string): TSNode | null {
   for (const p of obj.namedChildren) {
     if (p.type !== "pair") continue;
     const k = p.childForFieldName("key");
@@ -86,7 +86,7 @@ function getProperty(obj: Parser.SyntaxNode, name: string): Parser.SyntaxNode | 
 // ---------------------------------------------------------------------------
 
 /** Build import specifier -> module source map from top-level imports. */
-function buildImportMap(root: Parser.SyntaxNode): Map<string, string> {
+function buildImportMap(root: TSNode): Map<string, string> {
   const map = new Map<string, string>();
   for (const child of root.namedChildren) {
     if (child.type !== "import_statement") continue;
@@ -116,7 +116,7 @@ function buildImportMap(root: Parser.SyntaxNode): Map<string, string> {
 }
 
 /** Find the object literal passed to `defineConfig(...)`. */
-function findConfigObject(root: Parser.SyntaxNode): Parser.SyntaxNode | null {
+function findConfigObject(root: TSNode): TSNode | null {
   for (const child of root.namedChildren) {
     if (child.type !== "export_statement") continue;
     const call = child.namedChildren.find((n) => n.type === "call_expression");
@@ -131,7 +131,7 @@ function findConfigObject(root: Parser.SyntaxNode): Parser.SyntaxNode | null {
 
 /** Extract config properties from the defineConfig object. */
 function extractFromAST(
-  root: Parser.SyntaxNode,
+  root: TSNode,
   importMap: Map<string, string>,
 ): { conv: Partial<AstroConventions>; nonLiteralCount: number } {
   const obj = findConfigObject(root);
@@ -229,10 +229,12 @@ export async function extractAstroConventions(
   const parser = await getParser("javascript");
   if (!parser) return dynamicResult(configPath, "JavaScript parser unavailable");
 
-  let tree: Parser.Tree;
+  let tree: TSTree | null;
   try { tree = parser.parse(source); } catch {
     return dynamicResult(configPath, "AST parse error");
   }
+  // parse() is nullable since web-tree-sitter 0.25.
+  if (!tree) return dynamicResult(configPath, "AST parse error");
 
   const importMap = buildImportMap(tree.rootNode);
   const { conv, nonLiteralCount } = extractFromAST(tree.rootNode, importMap);

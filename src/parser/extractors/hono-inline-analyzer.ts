@@ -19,7 +19,7 @@
  * intentional so closures over request context are captured.
  */
 
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, TreeCursor as TSTreeCursor } from "web-tree-sitter";
 import type {
   InlineHandlerAnalysis,
   ResponseEmission,
@@ -83,7 +83,7 @@ export class HonoInlineAnalyzer {
    * parameter, so handlers written as `(ctx) => ...` or `(context) => ...`
    * are recognized as well as the canonical `(c) => ...`.
    */
-  analyze(handlerNode: Parser.SyntaxNode): InlineHandlerAnalysis {
+  analyze(handlerNode: TSNode): InlineHandlerAnalysis {
     const result: InlineHandlerAnalysis = {
       responses: [],
       errors: [],
@@ -157,7 +157,7 @@ export class HonoInlineAnalyzer {
  * preserve encapsulation and avoid coupling from tool files.
  * ====================================================================== */
 
-function isFunctionLike(node: Parser.SyntaxNode): boolean {
+function isFunctionLike(node: TSNode): boolean {
   return (
     node.type === "arrow_function" ||
     node.type === "function_expression" ||
@@ -172,7 +172,7 @@ function isFunctionLike(node: Parser.SyntaxNode): boolean {
  * null for parameterless functions or destructured/complex parameters.
  * Used to resolve the Hono context binding (`c` / `ctx` / `context`).
  */
-function firstParamName(fnNode: Parser.SyntaxNode): string | null {
+function firstParamName(fnNode: TSNode): string | null {
   const params = fnNode.childForFieldName("parameters");
   if (!params) {
     // Arrow with single bare param: (c) => ... — tree-sitter uses "parameter" field
@@ -191,7 +191,7 @@ function firstParamName(fnNode: Parser.SyntaxNode): string | null {
   return null;
 }
 
-function hasCatchClause(tryNode: Parser.SyntaxNode): boolean {
+function hasCatchClause(tryNode: TSNode): boolean {
   for (let i = 0; i < tryNode.childCount; i++) {
     const c = tryNode.child(i);
     if (c?.type === "catch_clause") return true;
@@ -200,7 +200,7 @@ function hasCatchClause(tryNode: Parser.SyntaxNode): boolean {
 }
 
 function extractResponseEmission(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   ctxBinding: string,
 ): ResponseEmission | null {
   const fn = node.childForFieldName("function");
@@ -232,7 +232,7 @@ function isResponseMethod(
 }
 
 function parseStatusArg(
-  node: Parser.SyntaxNode | null,
+  node: TSNode | null,
   method: string,
 ): number {
   if (!node) {
@@ -250,7 +250,7 @@ function parseStatusArg(
     : RESPONSE_DEFAULT_STATUS;
 }
 
-function shapeHintOf(node: Parser.SyntaxNode | null): string | null {
+function shapeHintOf(node: TSNode | null): string | null {
   if (!node) return null;
   const text = node.text;
   if (!text) return null;
@@ -260,14 +260,14 @@ function shapeHintOf(node: Parser.SyntaxNode | null): string | null {
 }
 
 function extractThrownError(
-  node: Parser.SyntaxNode,
+  node: TSNode,
 ): ErrorEmission | null {
   // throw_statement → contains new_expression as first child, OR an arbitrary
   // expression (throw err / throw getError() / throw await f()). The former
   // yields a structured emission; the latter produces an "UnknownThrow" entry
   // so error-path analysis isn't blind to rethrows.
-  let newExpr: Parser.SyntaxNode | null = null;
-  let firstNamedChild: Parser.SyntaxNode | null = null;
+  let newExpr: TSNode | null = null;
+  let firstNamedChild: TSNode | null = null;
   for (let i = 0; i < node.childCount; i++) {
     const c = node.child(i);
     if (!c || !c.isNamed) continue;
@@ -323,7 +323,7 @@ function extractThrownError(
 }
 
 function extractExternalCall(
-  node: Parser.SyntaxNode,
+  node: TSNode,
 ): ExternalCall | null {
   const fn = node.childForFieldName("function");
   if (!fn) return null;
@@ -368,9 +368,9 @@ function extractExternalCall(
  * returns `["prisma", "user", "findMany"]`. Returns empty array when the
  * chain contains non-identifier nodes (e.g. computed access `obj[key]`).
  */
-function memberChain(node: Parser.SyntaxNode): string[] {
+function memberChain(node: TSNode): string[] {
   const parts: string[] = [];
-  let current: Parser.SyntaxNode | null = node;
+  let current: TSNode | null = node;
   while (current) {
     if (current.type === "member_expression") {
       const prop = current.childForFieldName("property");
@@ -391,7 +391,7 @@ function memberChain(node: Parser.SyntaxNode): string[] {
 }
 
 function extractContextCall(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   ctxBinding: string,
 ): ContextAccess | null {
   const fn = node.childForFieldName("function");
@@ -416,7 +416,7 @@ function extractContextCall(
 }
 
 function extractContextMember(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   ctxBinding: string,
 ): ContextAccess | null {
   // ctx.var.X  →  (ctx.var).X
@@ -445,7 +445,7 @@ function extractContextMember(
 }
 
 function extractValidatorRef(
-  node: Parser.SyntaxNode,
+  node: TSNode,
 ): string | null {
   const fn = node.childForFieldName("function");
   if (fn?.type === "identifier" && VALIDATOR_NAMES.has(fn.text)) {
@@ -460,7 +460,7 @@ function extractValidatorRef(
  * Returns `"<dynamic>"` for interpolated templates so analyzers still record
  * that a context access happened at an unknown key.
  */
-function stringOrTemplateValue(node: Parser.SyntaxNode): string | null {
+function stringOrTemplateValue(node: TSNode): string | null {
   if (node.type === "string") {
     const raw = node.text;
     return raw.length < 2 ? null : raw.slice(1, -1);
@@ -481,10 +481,10 @@ function stringOrTemplateValue(node: Parser.SyntaxNode): string | null {
 }
 
 type WalkState = { truncated: boolean };
-type CursorVisitor = (node: Parser.SyntaxNode) => void;
+type CursorVisitor = (node: TSNode) => void;
 
 function walk(
-  cursor: Parser.TreeCursor,
+  cursor: TSTreeCursor,
   state: WalkState,
   visit: CursorVisitor,
   depth = 0,

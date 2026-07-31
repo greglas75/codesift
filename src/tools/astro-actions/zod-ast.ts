@@ -1,7 +1,7 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { stripActionQuotes, walkAll } from "./ast.js";
 
-export function isZObjectCall(call: Parser.SyntaxNode): boolean {
+export function isZObjectCall(call: TSNode): boolean {
   if (call.type !== "call_expression") return false;
   const callable = call.childForFieldName("function");
   if (!callable || callable.type !== "member_expression") return false;
@@ -9,7 +9,7 @@ export function isZObjectCall(call: Parser.SyntaxNode): boolean {
     && callable.childForFieldName("property")?.text === "object";
 }
 
-function isFileInstanceCall(node: Parser.SyntaxNode): boolean {
+function isFileInstanceCall(node: TSNode): boolean {
   if (node.type !== "call_expression") return false;
   const callable = node.childForFieldName("function");
   if (!callable || callable.type !== "member_expression") return false;
@@ -18,7 +18,7 @@ function isFileInstanceCall(node: Parser.SyntaxNode): boolean {
   return node.childForFieldName("arguments")?.namedChildren[0]?.text === "File";
 }
 
-function containsFileField(value: Parser.SyntaxNode): boolean {
+function containsFileField(value: TSNode): boolean {
   let found = false;
   walkAll(value, (node) => {
     if (!found && isFileInstanceCall(node)) found = true;
@@ -26,7 +26,7 @@ function containsFileField(value: Parser.SyntaxNode): boolean {
   return found;
 }
 
-export function extractZodObjectFields(zodCall: Parser.SyntaxNode): {
+export function extractZodObjectFields(zodCall: TSNode): {
   fields: string[];
   hasFileField: boolean;
 } {

@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import {
   getDocstring,
   getNodeName,
@@ -9,7 +9,7 @@ import {
 
 export function handleInterfaceDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
 ): void {
@@ -18,7 +18,7 @@ export function handleInterfaceDeclaration(
 
 export function handleTypeAliasDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
 ): void {
@@ -27,7 +27,7 @@ export function handleTypeAliasDeclaration(
 
 function emitNamedTypeSymbol(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
   kind: "interface" | "type",
@@ -45,7 +45,7 @@ function emitNamedTypeSymbol(
 
 export function handleEnumDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
 ): void {

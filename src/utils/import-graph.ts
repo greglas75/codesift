@@ -547,6 +547,10 @@ export async function collectImportEdges(
           let tree = getCachedParse(lang, source);
           if (!tree) {
             tree = parser.parse(source);
+            // parse() is nullable since web-tree-sitter 0.25 — a file that will
+            // not parse simply contributes no import edges, and must not be
+            // written into the parse cache as if it had.
+            if (!tree) continue;
             setCachedParse(lang, source, tree);
           }
           const tsImports = extractTypeScriptImports(tree);
@@ -669,6 +673,10 @@ export async function collectImportEdges(
           let tree = getCachedParse("python", source);
           if (!tree) {
             tree = parser.parse(source);
+            // parse() is nullable since web-tree-sitter 0.25 — a file that will
+            // not parse simply contributes no import edges, and must not be
+            // written into the parse cache as if it had.
+            if (!tree) continue;
             setCachedParse("python", source, tree);
           }
           const pyImports = extractPythonImports(tree);

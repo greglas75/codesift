@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import { readStringLiteral } from "./nextjs-metadata-readers.js";
 
 // ---------------------------------------------------------------------------
@@ -97,11 +97,11 @@ export interface ZodShape {
  * captured field method, and any collected chain modifiers.
  */
 function unwrapZodChain(
-  call: Parser.SyntaxNode,
-): { rootCall: Parser.SyntaxNode; rootMethod: string; chain: string[]; partial: boolean } | null {
+  call: TSNode,
+): { rootCall: TSNode; rootMethod: string; chain: string[]; partial: boolean } | null {
   const chain: string[] = [];
   let partial = false;
-  let cur: Parser.SyntaxNode = call;
+  let cur: TSNode = call;
 
   while (cur.type === "call_expression") {
     const fn = cur.childForFieldName("function") ?? cur.namedChild(0);
@@ -155,7 +155,7 @@ function unwrapZodChain(
 }
 
 /** Recursively parse a single field call like `z.string()` into a ZodFieldType. */
-function parseZodField(call: Parser.SyntaxNode): ZodFieldType | null {
+function parseZodField(call: TSNode): ZodFieldType | null {
   const unwrapped = unwrapZodChain(call);
   if (!unwrapped) return null;
   const { rootCall, rootMethod, chain } = unwrapped;
@@ -181,7 +181,7 @@ function parseZodField(call: Parser.SyntaxNode): ZodFieldType | null {
 }
 
 /** Walk an `{ key: z.<method>(), ... }` object literal into a fields map. */
-function parseZodObjectArg(objNode: Parser.SyntaxNode): Record<string, ZodFieldType> | null {
+function parseZodObjectArg(objNode: TSNode): Record<string, ZodFieldType> | null {
   if (objNode.type !== "object") return null;
   const out: Record<string, ZodFieldType> = {};
   for (const pair of objNode.namedChildren) {
@@ -212,7 +212,7 @@ function parseZodObjectArg(objNode: Parser.SyntaxNode): Record<string, ZodFieldT
  * — downstream tools wrap this and add `schema_lib: "unknown"` at their own
  * aggregation level.
  */
-export function extractZodSchema(tree: Parser.Tree, _source: string): ZodShape | null {
+export function extractZodSchema(tree: TSTree, _source: string): ZodShape | null {
   const root = tree.rootNode;
 
   for (const decl of root.descendantsOfType("variable_declarator")) {
@@ -261,7 +261,7 @@ export interface LinkRef {
  * `isDynamic: false`. Template literals with substitutions and identifier
  * references populate `href` with the raw expression text and `isDynamic: true`.
  */
-export function extractLinkHrefs(tree: Parser.Tree, _source: string): LinkRef[] {
+export function extractLinkHrefs(tree: TSTree, _source: string): LinkRef[] {
   const refs: LinkRef[] = [];
   const root = tree.rootNode;
 

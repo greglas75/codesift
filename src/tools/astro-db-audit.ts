@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { walkDirectory } from "../utils/walk.js";
 import { getCodeIndex } from "./index-tools.js";
 import { getParser, initParser } from "../parser/parser-manager.js";
@@ -51,6 +51,9 @@ async function readIndexedColumns(content: string): Promise<Set<string>> {
   if (!parser) return new Set();
   let tree;
   try { tree = parser.parse(content); } catch { return new Set(); }
+  // parse() is nullable since web-tree-sitter 0.25 — an unparseable
+  // source takes the same path as a parse error.
+  if (!tree) return new Set();
   try {
     const indexed = new Set<string>();
     for (const lex of tree.rootNode.descendantsOfType("lexical_declaration")) {
@@ -118,6 +121,9 @@ async function findNPlusOneSites(source: string, file: string): Promise<DbAuditI
   if (!parser) return [];
   let tree;
   try { tree = parser.parse(source); } catch { return []; }
+  // parse() is nullable since web-tree-sitter 0.25 — an unparseable
+  // source takes the same path as a parse error.
+  if (!tree) return [];
   try {
     const issues: DbAuditIssue[] = [];
     for (const call of tree.rootNode.descendantsOfType("call_expression")) {
@@ -128,7 +134,7 @@ async function findNPlusOneSites(source: string, file: string): Promise<DbAuditI
       if (!obj || obj.text !== "db" || !prop || !DB_OP.test(prop.text)) continue;
 
       // Walk up to see if any ancestor is a for/while/forEach loop body.
-      let cur: Parser.SyntaxNode | null = call;
+      let cur: TSNode | null = call;
       while (cur) {
         if (cur.type === "for_statement" || cur.type === "for_in_statement" || cur.type === "while_statement") {
           issues.push({ code: "DB02", severity: "warning", message: `db.${prop.text}() inside ${cur.type.replace("_", " ")} — likely N+1`, file, line: call.startPosition.row + 1 });

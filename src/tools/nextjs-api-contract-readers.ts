@@ -6,7 +6,7 @@
  * `nextjs-api-contract-tools.ts` composes them into a `HandlerShape`.
  */
 
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import { extractZodSchema } from "../utils/nextjs.js";
 import type {
   HttpMethod,
@@ -26,7 +26,7 @@ const HTTP_METHODS = new Set<HttpMethod>([
   "OPTIONS",
 ]);
 
-export function extractHttpMethods(tree: Parser.Tree): HttpMethodInfo {
+export function extractHttpMethods(tree: TSTree): HttpMethodInfo {
   const methods = new Set<HttpMethod>();
   let wrapped = false;
 
@@ -57,7 +57,7 @@ export function extractHttpMethods(tree: Parser.Tree): HttpMethodInfo {
 }
 
 export function extractQueryParams(
-  tree: Parser.Tree,
+  tree: TSTree,
   source: string,
 ): QueryParam[] | "*" {
   // Heuristic: if the source contains `searchParams` or `URL(req.url)`, return wildcard.
@@ -74,7 +74,7 @@ export function extractQueryParams(
 }
 
 export function extractRequestBodySchema(
-  tree: Parser.Tree,
+  tree: TSTree,
   source: string,
 ): RequestBodySchema | null {
   const root = tree.rootNode;
@@ -122,7 +122,7 @@ export function extractRequestBodySchema(
 }
 
 /** Extract `{ status: NUMBER }` from an options object literal node, or null. */
-function readStatusOption(opts: Parser.SyntaxNode): number | null {
+function readStatusOption(opts: TSNode): number | null {
   if (opts.type !== "object") return null;
   for (const pair of opts.namedChildren) {
     if (pair.type !== "pair") continue;
@@ -145,7 +145,7 @@ function readStatusOption(opts: Parser.SyntaxNode): number | null {
 }
 
 export function extractResponseShapes(
-  tree: Parser.Tree,
+  tree: TSTree,
   _source: string,
 ): ResponseShape[] {
   const out: ResponseShape[] = [];

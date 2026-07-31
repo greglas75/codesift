@@ -1,6 +1,5 @@
 // Shared AST helpers for Astro tools (extracted from astro-content-collections).
-import type Parser from "web-tree-sitter";
-
+import type { Node as TSNode } from "web-tree-sitter";
 export function stripQuotes(s: string): string {
   if (s.length < 2) return s;
   const f = s[0], l = s[s.length - 1];
@@ -8,7 +7,7 @@ export function stripQuotes(s: string): string {
   return s;
 }
 
-export function getProperty(obj: Parser.SyntaxNode, name: string): Parser.SyntaxNode | null {
+export function getProperty(obj: TSNode, name: string): TSNode | null {
   for (const p of obj.namedChildren) {
     if (p.type !== "pair") continue;
     const k = p.childForFieldName("key");
@@ -19,12 +18,12 @@ export function getProperty(obj: Parser.SyntaxNode, name: string): Parser.Syntax
   return null;
 }
 
-export function isLiteral(n: Parser.SyntaxNode): boolean {
+export function isLiteral(n: TSNode): boolean {
   return n.type === "string" || n.type === "number" || n.type === "bigint"
     || n.type === "true" || n.type === "false" || n.type === "null" || n.type === "undefined";
 }
 
-export function innermostCall(node: Parser.SyntaxNode): Parser.SyntaxNode {
+export function innermostCall(node: TSNode): TSNode {
   let current = node;
   while (current.type === "call_expression") {
     const fn = current.childForFieldName("function");
@@ -36,9 +35,9 @@ export function innermostCall(node: Parser.SyntaxNode): Parser.SyntaxNode {
   return current;
 }
 
-export function methodChain(node: Parser.SyntaxNode): string[] {
+export function methodChain(node: TSNode): string[] {
   const chain: string[] = [];
-  let current: Parser.SyntaxNode | null = node;
+  let current: TSNode | null = node;
   while (current && current.type === "call_expression") {
     const fn = current.childForFieldName("function");
     if (!fn) break;
@@ -57,9 +56,9 @@ export function methodChain(node: Parser.SyntaxNode): string[] {
 
 export interface ZodFieldInfo { type: string; required: boolean; references?: string; }
 
-export function classifyZodField(valueNode: Parser.SyntaxNode): ZodFieldInfo {
+export function classifyZodField(valueNode: TSNode): ZodFieldInfo {
   let required = true;
-  let cursor: Parser.SyntaxNode | null = valueNode;
+  let cursor: TSNode | null = valueNode;
   while (cursor && cursor.type === "call_expression") {
     const fn = cursor.childForFieldName("function");
     if (!fn) break;

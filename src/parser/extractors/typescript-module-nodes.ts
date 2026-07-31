@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { returnsJSX } from "./typescript-react.js";
 import {
   getDocstring,
@@ -23,7 +23,7 @@ const ANONYMOUS_DEFAULT_NODE_TYPES = new Set([
 
 export function handleModuleDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
   walk: WalkNode,
@@ -41,7 +41,7 @@ export function handleModuleDeclaration(
   walkModuleBody(node, sym.id, exported, walk);
 }
 
-function readModuleName(node: Parser.SyntaxNode): string | null {
+function readModuleName(node: TSNode): string | null {
   const nameNode = node.childForFieldName("name");
   if (nameNode) return stripQuotedName(nameNode);
 
@@ -53,12 +53,12 @@ function readModuleName(node: Parser.SyntaxNode): string | null {
   return null;
 }
 
-function stripQuotedName(node: Parser.SyntaxNode): string {
+function stripQuotedName(node: TSNode): string {
   return node.type === "string" ? node.text.replace(/^['"`]|['"`]$/g, "") : node.text;
 }
 
 function walkModuleBody(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string,
   exported: boolean,
   walk: WalkNode,
@@ -73,7 +73,7 @@ function walkModuleBody(
 }
 
 export function handleAmbientDeclaration(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
   walk: WalkNode,
@@ -89,7 +89,7 @@ export function handleAmbientDeclaration(
 
 export function handleExportStatement(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   walk: WalkNode,
 ): void {
@@ -105,7 +105,7 @@ export function handleExportStatement(
 
 function emitExternalReExportSymbols(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
 ): void {
   for (const child of node.namedChildren) {
@@ -119,7 +119,7 @@ function emitExternalReExportSymbols(
 
 function emitExportSpecifiers(
   ctx: TypeScriptExtractorContext,
-  exportClause: Parser.SyntaxNode,
+  exportClause: TSNode,
   parentId: string | undefined,
 ): void {
   for (const spec of exportClause.namedChildren) {
@@ -138,7 +138,7 @@ function emitExportSpecifiers(
 
 function emitNamespaceExport(
   ctx: TypeScriptExtractorContext,
-  namespaceExport: Parser.SyntaxNode,
+  namespaceExport: TSNode,
   parentId: string | undefined,
 ): void {
   for (const child of namespaceExport.namedChildren) {
@@ -150,7 +150,7 @@ function emitNamespaceExport(
   }
 }
 
-function collectLocalReExports(ctx: TypeScriptExtractorContext, node: Parser.SyntaxNode): void {
+function collectLocalReExports(ctx: TypeScriptExtractorContext, node: TSNode): void {
   for (const child of node.namedChildren) {
     if (child.type !== "export_clause") continue;
     for (const spec of child.namedChildren) {
@@ -163,7 +163,7 @@ function collectLocalReExports(ctx: TypeScriptExtractorContext, node: Parser.Syn
 
 function tryEmitAnonymousDefaultExport(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   walk: WalkNode,
 ): boolean {
@@ -180,13 +180,13 @@ function tryEmitAnonymousDefaultExport(
   return false;
 }
 
-function isAnonymousDefaultCandidate(node: Parser.SyntaxNode): boolean {
+function isAnonymousDefaultCandidate(node: TSNode): boolean {
   return ANONYMOUS_DEFAULT_NODE_TYPES.has(node.type) && !getNodeName(node);
 }
 
 function makeAnonymousDefaultSymbol(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
 ) {
   const meta: Record<string, unknown> = {};
@@ -199,12 +199,12 @@ function makeAnonymousDefaultSymbol(
   });
 }
 
-function isClassNode(node: Parser.SyntaxNode): boolean {
+function isClassNode(node: TSNode): boolean {
   return node.type === "class" || node.type === "class_declaration" || node.type === "class_expression";
 }
 
 function walkExportChildren(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   walk: WalkNode,
 ): void {

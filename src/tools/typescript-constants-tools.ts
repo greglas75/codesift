@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Parser, Node as TSNode, Tree as TSTree  } from "web-tree-sitter";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { buildNormalizedPathMap, resolveImportPath } from "../utils/import-graph.js";
@@ -16,7 +16,7 @@ import type {
 } from "./python-constants-tools.js";
 
 interface AssignmentBinding {
-  rhs: Parser.SyntaxNode;
+  rhs: TSNode;
   line: number;
 }
 
@@ -29,13 +29,13 @@ interface ImportBinding {
 
 interface DefaultExportBinding {
   name?: string;
-  node?: Parser.SyntaxNode;
+  node?: TSNode;
   line: number;
 }
 
 interface TypeScriptFileContext {
   source: string;
-  tree: Parser.Tree;
+  tree: TSTree;
   assignments: Map<string, AssignmentBinding>;
   imports: Map<string, ImportBinding>;
   default_export?: DefaultExportBinding;
@@ -94,7 +94,7 @@ function computeConfidence(resolved: boolean, aliasChain: ResolutionHop[], usedI
   return "high";
 }
 
-function unsupportedNode(node: Parser.SyntaxNode, aliasChain: ResolutionHop[], usedImport: boolean): EvaluationResult {
+function unsupportedNode(node: TSNode, aliasChain: ResolutionHop[], usedImport: boolean): EvaluationResult {
   return {
     resolved: false,
     value_text: node.text,
@@ -108,14 +108,14 @@ function getBindingLine(binding: AssignmentBinding | ImportBinding | DefaultExpo
   return binding.line;
 }
 
-function getStringLiteralText(node: Parser.SyntaxNode): string {
+function getStringLiteralText(node: TSNode): string {
   const fragment = node.namedChildren.find((child) => child.type === "string_fragment");
   if (fragment) return fragment.text;
   return stripTypeScriptString(node.text);
 }
 
 function collectVariableDeclarators(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   assignments: Map<string, AssignmentBinding>,
 ): void {
   for (const child of node.namedChildren) {
@@ -131,7 +131,7 @@ function collectVariableDeclarators(
 }
 
 function collectImportBindings(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   importerFile: string,
   normalizedPaths: Map<string, string>,
   imports: Map<string, ImportBinding>,
@@ -187,7 +187,7 @@ function collectImportBindings(
   }
 }
 
-function extractDefaultExport(node: Parser.SyntaxNode): DefaultExportBinding | undefined {
+function extractDefaultExport(node: TSNode): DefaultExportBinding | undefined {
   if (!node.text.startsWith("export default")) return undefined;
 
   const inner = node.namedChildren[0];
@@ -250,6 +250,7 @@ async function loadTypeScriptFileContext(
   }
 
   const tree = state.parser.parse(source);
+  if (!tree) return null;
   const assignments = new Map<string, AssignmentBinding>();
   const imports = new Map<string, ImportBinding>();
   const normalizedPaths = state.normalizedPathMap;
@@ -291,7 +292,7 @@ async function loadTypeScriptFileContext(
 
 async function evaluateValueNode(
   filePath: string,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   state: ResolutionState,
 ): Promise<EvaluationResult> {
   switch (node.type) {
@@ -495,7 +496,7 @@ async function evaluateValueNode(
 
 async function evaluateMemberExpression(
   filePath: string,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   state: ResolutionState,
 ): Promise<EvaluationResult> {
   const objectNode = node.childForFieldName("object") ?? node.namedChildren[0];
@@ -669,7 +670,7 @@ async function resolveNamedValue(
   }
 }
 
-function findCallableNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+function findCallableNode(node: TSNode): TSNode | null {
   if (node.type === "function_declaration" || node.type === "arrow_function" || node.type === "method_definition") {
     return node;
   }
@@ -680,7 +681,7 @@ function findCallableNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
   return null;
 }
 
-function getDefaultParameterParts(node: Parser.SyntaxNode): { name: string; valueNode: Parser.SyntaxNode } | null {
+function getDefaultParameterParts(node: TSNode): { name: string; valueNode: TSNode } | null {
   if (node.type !== "required_parameter" && node.type !== "optional_parameter") {
     return null;
   }
@@ -740,6 +741,18 @@ async function resolveFunctionDefaults(
   }
 
   const tree = state.parser.parse(symbol.source);
+  if (!tree) {
+    return {
+      symbol_name: symbol.name,
+      symbol_kind: symbol.kind,
+      file: symbol.file,
+      line: symbol.start_line,
+      resolved: false,
+      confidence: "low",
+      alias_chain: [],
+      reason: `Could not parse source for ${symbol.name}`,
+    };
+  }
   const fnNode = findCallableNode(tree.rootNode);
   if (!fnNode) {
     return {

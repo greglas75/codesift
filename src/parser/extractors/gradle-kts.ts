@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol } from "../../types.js";
 import { makeSymbol } from "./_shared.js";
 
@@ -31,7 +31,7 @@ const CONFIG_BLOCKS = new Set([
 const PLUGIN_DECLARATORS = new Set(["id", "kotlin", "alias"]);
 
 export function extractGradleKtsSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
@@ -67,7 +67,7 @@ export function extractGradleKtsSymbols(
  * Returns the identifier name of a top-level DSL call like `plugins {` or
  * `android {`. Null if the call_expression doesn't match the block shape.
  */
-function getBlockName(call: Parser.SyntaxNode): string | null {
+function getBlockName(call: TSNode): string | null {
   const ident = call.namedChildren.find((c) => c.type === "identifier");
   return ident?.text ?? null;
 }
@@ -76,7 +76,7 @@ function getBlockName(call: Parser.SyntaxNode): string | null {
  * Returns the inner `lambda_literal` of a DSL block call. Null if the call
  * doesn't end with a trailing lambda (e.g. `android()` without a body).
  */
-function getLambdaBody(call: Parser.SyntaxNode): Parser.SyntaxNode | null {
+function getLambdaBody(call: TSNode): TSNode | null {
   const annotatedLambda = call.namedChildren.find(
     (c) => c.type === "annotated_lambda",
   );
@@ -96,7 +96,7 @@ function getLambdaBody(call: Parser.SyntaxNode): Parser.SyntaxNode | null {
  * The second appears as a bare `call_expression > identifier + value_arguments`.
  */
 function emitPluginSymbols(
-  lambda: Parser.SyntaxNode,
+  lambda: TSNode,
   filePath: string,
   source: string,
   repo: string,
@@ -134,7 +134,7 @@ interface ParsedPlugin {
   version?: string;
 }
 
-function parsePluginCall(call: Parser.SyntaxNode): ParsedPlugin | null {
+function parsePluginCall(call: TSNode): ParsedPlugin | null {
   const callee = call.namedChildren.find((c) => c.type === "identifier");
   if (!callee || !PLUGIN_DECLARATORS.has(callee.text)) return null;
 
@@ -174,7 +174,7 @@ function parsePluginCall(call: Parser.SyntaxNode): ParsedPlugin | null {
 }
 
 function makePluginSymbol(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   plugin: ParsedPlugin,
   filePath: string,
   source: string,
@@ -200,7 +200,7 @@ function makePluginSymbol(
  *   runtimeOnly(libs.okhttp)   // skipped — version catalog, no string literal
  */
 function emitDependencySymbols(
-  lambda: Parser.SyntaxNode,
+  lambda: TSNode,
   filePath: string,
   source: string,
   repo: string,
@@ -260,7 +260,7 @@ function emitDependencySymbols(
  * right-hand-side text stored in meta.value.
  */
 function emitConfigSymbols(
-  lambda: Parser.SyntaxNode,
+  lambda: TSNode,
   blockName: string,
   filePath: string,
   source: string,
@@ -303,7 +303,7 @@ function emitConfigSymbols(
   }
 }
 
-function unquoteStringLiteral(node: Parser.SyntaxNode): string {
+function unquoteStringLiteral(node: TSNode): string {
   const content = node.namedChildren.find((c) => c.type === "string_content");
   if (content) return content.text;
   return node.text.replace(/^"|"$/g, "");

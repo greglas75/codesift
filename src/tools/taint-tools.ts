@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Parser, Node as TSNode  } from "web-tree-sitter";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { detectSrcLayout, resolvePythonImport } from "../utils/python-import-resolver.js";
@@ -52,7 +52,7 @@ interface TaintPath {
 }
 
 interface CallArgumentInfo {
-  node: Parser.SyntaxNode;
+  node: TSNode;
   keyword?: string;
   index: number;
 }
@@ -68,7 +68,7 @@ interface PythonFileContext {
 }
 
 interface CallableContext {
-  node: Parser.SyntaxNode;
+  node: TSNode;
   parameter_names: string[];
 }
 
@@ -199,15 +199,15 @@ function computeConfidence(path: TaintPath): "high" | "medium" | "low" {
   return "high";
 }
 
-function lineForNode(symbol: CodeSymbol, node: Parser.SyntaxNode): number {
+function lineForNode(symbol: CodeSymbol, node: TSNode): number {
   return symbol.start_line + node.startPosition.row;
 }
 
-function codeForNode(node: Parser.SyntaxNode): string {
+function codeForNode(node: TSNode): string {
   return node.text.split("\n")[0]?.trim() ?? node.text.trim();
 }
 
-function getAttributePath(node: Parser.SyntaxNode | null | undefined): string | null {
+function getAttributePath(node: TSNode | null | undefined): string | null {
   if (!node) return null;
   if (node.type === "identifier") return node.text;
   if (node.type === "attribute") {
@@ -221,7 +221,7 @@ function getAttributePath(node: Parser.SyntaxNode | null | undefined): string | 
   return null;
 }
 
-function getCallArguments(argsNode: Parser.SyntaxNode | null | undefined): CallArgumentInfo[] {
+function getCallArguments(argsNode: TSNode | null | undefined): CallArgumentInfo[] {
   if (!argsNode) return [];
   const args: CallArgumentInfo[] = [];
   let index = 0;
@@ -249,7 +249,7 @@ function getCallArguments(argsNode: Parser.SyntaxNode | null | undefined): CallA
   return args;
 }
 
-function getParameterName(node: Parser.SyntaxNode): string | null {
+function getParameterName(node: TSNode): string | null {
   switch (node.type) {
     case "identifier":
       return node.text;
@@ -264,7 +264,7 @@ function getParameterName(node: Parser.SyntaxNode): string | null {
   }
 }
 
-function findFunctionNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+function findFunctionNode(node: TSNode): TSNode | null {
   if (node.type === "function_definition" || node.type === "async_function_definition") {
     return node;
   }
@@ -278,7 +278,7 @@ function findFunctionNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
 function createSourcePath(
   sourceKind: string,
   symbol: CodeSymbol,
-  node: Parser.SyntaxNode,
+  node: TSNode,
 ): TaintPath {
   return {
     source: {
@@ -374,7 +374,7 @@ function buildSinkDescriptors(): SinkDescriptor[] {
   ];
 }
 
-function getImportModule(node: Parser.SyntaxNode): { module: string; level: number } {
+function getImportModule(node: TSNode): { module: string; level: number } {
   const moduleNode = node.childForFieldName("module_name");
   if (!moduleNode) return { module: "", level: 0 };
 
@@ -412,6 +412,7 @@ async function loadFileContext(
   }
 
   const tree = state.pythonParser.parse(source);
+  if (!tree) return null;
   const files = state.index.files.map((entry) => entry.path);
   const srcLayout = detectSrcLayout(files);
   const imports = new Map<string, FileImportBinding>();
@@ -481,6 +482,7 @@ async function loadCallableContext(
   }
 
   const tree = state.pythonParser.parse(symbol.source);
+  if (!tree) return null;
   const functionNode = findFunctionNode(tree.rootNode);
   if (!functionNode) {
     state.callableCache.set(symbol.id, null);
@@ -514,7 +516,7 @@ function resolveSelfMethod(
 
 async function resolveHelperTarget(
   currentSymbol: CodeSymbol,
-  calleeNode: Parser.SyntaxNode,
+  calleeNode: TSNode,
   state: AnalysisState,
 ): Promise<CodeSymbol | null> {
   const calleeText = getAttributePath(calleeNode) ?? calleeNode.text;
@@ -575,7 +577,7 @@ function matchesRequestSource(attributePath: string | null): string | null {
   return null;
 }
 
-function isSessionTarget(node: Parser.SyntaxNode): boolean {
+function isSessionTarget(node: TSNode): boolean {
   if (node.type === "attribute") {
     const path = getAttributePath(node);
     return path === "request.session";
@@ -603,7 +605,7 @@ function addTrace(
   entrySymbol: CodeSymbol,
   currentSymbol: CodeSymbol,
   sinkKind: string,
-  sinkNode: Parser.SyntaxNode,
+  sinkNode: TSNode,
   paths: TaintPath[],
 ): void {
   if (state.truncated) return;
@@ -639,7 +641,7 @@ function addTrace(
 }
 
 async function evaluateExpression(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   symbol: CodeSymbol,
   env: TaintEnv,
   state: AnalysisState,
@@ -834,7 +836,7 @@ async function evaluateExpression(
 }
 
 async function analyzeAssignment(
-  assignmentNode: Parser.SyntaxNode,
+  assignmentNode: TSNode,
   symbol: CodeSymbol,
   env: TaintEnv,
   state: AnalysisState,
@@ -867,7 +869,7 @@ async function analyzeAssignment(
 }
 
 async function analyzeConditionalLike(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   symbol: CodeSymbol,
   env: TaintEnv,
   state: AnalysisState,
@@ -905,7 +907,7 @@ async function analyzeConditionalLike(
 }
 
 async function analyzeLoopLike(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   symbol: CodeSymbol,
   env: TaintEnv,
   state: AnalysisState,
@@ -929,7 +931,7 @@ async function analyzeLoopLike(
 }
 
 async function analyzeStatement(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   symbol: CodeSymbol,
   env: TaintEnv,
   state: AnalysisState,
@@ -995,7 +997,7 @@ async function analyzeStatement(
 }
 
 async function analyzeBlock(
-  blockNode: Parser.SyntaxNode,
+  blockNode: TSNode,
   symbol: CodeSymbol,
   env: TaintEnv,
   state: AnalysisState,

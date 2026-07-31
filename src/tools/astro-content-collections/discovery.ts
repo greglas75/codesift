@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { getProperty, isLiteral, stripQuotes } from "../astro-helpers.js";
 import { extractSchemaFields } from "./schema.js";
 import type { DiscoveredConfig, LoaderInfo, RawCollection } from "./types.js";
@@ -36,7 +36,7 @@ export async function findConfig(root: string): Promise<DiscoveredConfig | null>
 }
 
 function extractLoader(
-  loaderNode: Parser.SyntaxNode | null,
+  loaderNode: TSNode | null,
   configType: string | null,
 ): LoaderInfo {
   if (!loaderNode) return configType ? { kind: "glob" } : { kind: "unknown" };
@@ -48,7 +48,7 @@ function extractLoader(
   return { kind: "custom" };
 }
 
-function extractGlobLoader(loaderNode: Parser.SyntaxNode): LoaderInfo {
+function extractGlobLoader(loaderNode: TSNode): LoaderInfo {
   const args = loaderNode.childForFieldName("arguments");
   const obj = args?.namedChildren.find((node) => node.type === "object");
   if (!obj) return { kind: "glob" };
@@ -60,7 +60,7 @@ function extractGlobLoader(loaderNode: Parser.SyntaxNode): LoaderInfo {
   return info;
 }
 
-function extractFileLoader(loaderNode: Parser.SyntaxNode): LoaderInfo {
+function extractFileLoader(loaderNode: TSNode): LoaderInfo {
   const args = loaderNode.childForFieldName("arguments");
   const first = args?.namedChildren.find((node) => isLiteral(node));
   const info: LoaderInfo = { kind: "file" };
@@ -68,14 +68,14 @@ function extractFileLoader(loaderNode: Parser.SyntaxNode): LoaderInfo {
   return info;
 }
 
-function defineCollectionObject(call: Parser.SyntaxNode): Parser.SyntaxNode | null {
+function defineCollectionObject(call: TSNode): TSNode | null {
   const fn = call.childForFieldName("function");
   if (fn?.text !== "defineCollection") return null;
   const args = call.childForFieldName("arguments");
   return args?.namedChildren.find((node) => node.type === "object") ?? null;
 }
 
-function extractRawCollection(name: string, defineObj: Parser.SyntaxNode): RawCollection {
+function extractRawCollection(name: string, defineObj: TSNode): RawCollection {
   const loaderNode = getProperty(defineObj, "loader");
   const typeNode = getProperty(defineObj, "type");
   const schemaNode = getProperty(defineObj, "schema");
@@ -87,9 +87,9 @@ function extractRawCollection(name: string, defineObj: Parser.SyntaxNode): RawCo
   };
 }
 
-function collectLocalDefinitions(root: Parser.SyntaxNode): Map<string, Parser.SyntaxNode> {
-  const definitions = new Map<string, Parser.SyntaxNode>();
-  const walk = (node: Parser.SyntaxNode): void => {
+function collectLocalDefinitions(root: TSNode): Map<string, TSNode> {
+  const definitions = new Map<string, TSNode>();
+  const walk = (node: TSNode): void => {
     if (node.type === "lexical_declaration" || node.type === "variable_declaration") {
       for (const declaration of node.namedChildren) {
         if (declaration.type !== "variable_declarator") continue;
@@ -107,8 +107,8 @@ function collectLocalDefinitions(root: Parser.SyntaxNode): Map<string, Parser.Sy
 }
 
 function resolveCollectionPair(
-  pair: Parser.SyntaxNode,
-  localDefinitions: Map<string, Parser.SyntaxNode>,
+  pair: TSNode,
+  localDefinitions: Map<string, TSNode>,
 ): RawCollection | null {
   if (pair.type === "shorthand_property_identifier") {
     const object = localDefinitions.get(pair.text);
@@ -128,8 +128,8 @@ function resolveCollectionPair(
 }
 
 function collectExportedCollections(
-  root: Parser.SyntaxNode,
-  localDefinitions: Map<string, Parser.SyntaxNode>,
+  root: TSNode,
+  localDefinitions: Map<string, TSNode>,
 ): RawCollection[] {
   const collections: RawCollection[] = [];
   for (const child of root.namedChildren) {
@@ -152,7 +152,7 @@ function collectExportedCollections(
   return collections;
 }
 
-export function discoverCollections(root: Parser.SyntaxNode): RawCollection[] {
+export function discoverCollections(root: TSNode): RawCollection[] {
   const localDefinitions = collectLocalDefinitions(root);
   const exported = collectExportedCollections(root, localDefinitions);
   if (exported.length > 0) return exported;

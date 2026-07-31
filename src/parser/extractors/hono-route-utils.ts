@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { HonoHandler } from "./hono-model.js";
 
 /**
@@ -22,7 +22,7 @@ export function parseRegexConstraints(
 }
 
 export function buildHandler(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   file: string,
 ): HonoHandler {
   const line = node.startPosition.row + 1;

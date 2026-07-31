@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { SymbolKind } from "../../types.js";
 import { extractObjectLiteralMethods } from "./typescript-cjs-nodes.js";
 import {
@@ -24,7 +24,7 @@ import {
 
 export function handleFunctionDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
 ): void {
@@ -57,7 +57,7 @@ export function handleFunctionDeclaration(
 
 export function handleLexicalDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
 ): void {
@@ -66,7 +66,7 @@ export function handleLexicalDeclaration(
     node,
     parentId,
     exported: isExported || hasExportModifier(node),
-    isConst: node.children.some((c: Parser.SyntaxNode) => c.type === "const"),
+    isConst: node.children.some((c: TSNode) => c.type === "const"),
   };
 
   for (const declarator of node.namedChildren) {
@@ -76,13 +76,13 @@ export function handleLexicalDeclaration(
 
 interface LexicalState {
   ctx: TypeScriptExtractorContext;
-  node: Parser.SyntaxNode;
+  node: TSNode;
   parentId: string | undefined;
   exported: boolean;
   isConst: boolean;
 }
 
-function emitVariableDeclarator(state: LexicalState, declarator: Parser.SyntaxNode): void {
+function emitVariableDeclarator(state: LexicalState, declarator: TSNode): void {
   if (declarator.type !== "variable_declarator") return;
 
   const name = getNodeName(declarator);
@@ -103,7 +103,7 @@ function emitVariableDeclarator(state: LexicalState, declarator: Parser.SyntaxNo
 function emitArrowFunctionVariable(
   state: LexicalState,
   name: string,
-  value: Parser.SyntaxNode,
+  value: TSNode,
 ): void {
   const isAsync = hasAsyncModifier(value);
   state.ctx.symbols.push(makeSymbol(state.node, name, classifyReactKind(name, value), state.ctx.filePath, state.ctx.source, state.ctx.repo, {
@@ -118,7 +118,7 @@ function emitArrowFunctionVariable(
 function emitReactWrappedVariable(
   state: LexicalState,
   name: string,
-  value: Parser.SyntaxNode,
+  value: TSNode,
 ): void {
   const innerFn = getWrappedFunction(value);
   state.ctx.symbols.push(makeSymbol(state.node, name, reactWrapperKind(name, value, innerFn), state.ctx.filePath, state.ctx.source, state.ctx.repo, {
@@ -131,8 +131,8 @@ function emitReactWrappedVariable(
 
 function reactWrapperKind(
   name: string,
-  value: Parser.SyntaxNode,
-  innerFn: Parser.SyntaxNode | null,
+  value: TSNode,
+  innerFn: TSNode | null,
 ): SymbolKind {
   if (isHookName(name)) return "hook";
   if (!isComponentName(name)) return "function";
@@ -146,7 +146,7 @@ function reactWrapperKind(
 function emitPlainVariable(
   state: LexicalState,
   name: string,
-  value: Parser.SyntaxNode | null,
+  value: TSNode | null,
 ): void {
   const sym = makeSymbol(state.node, name, variableKind(state, name), state.ctx.filePath, state.ctx.source, state.ctx.repo, {
     parentId: state.parentId,

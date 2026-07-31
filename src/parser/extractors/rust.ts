@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { getNodeName, makeSymbol } from "./_shared.js";
 
@@ -6,7 +6,7 @@ import { getNodeName, makeSymbol } from "./_shared.js";
  * Extract doc comments (/// or //!) preceding a node.
  */
 function getDocstring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const lines: string[] = [];
@@ -25,7 +25,7 @@ function getDocstring(
   return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
-function getSignature(node: Parser.SyntaxNode, source: string): string | undefined {
+function getSignature(node: TSNode, source: string): string | undefined {
   const params = node.childForFieldName("parameters");
   const returnType = node.childForFieldName("return_type");
 
@@ -39,7 +39,7 @@ function getSignature(node: Parser.SyntaxNode, source: string): string | undefin
 }
 
 export function extractRustSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
@@ -47,7 +47,7 @@ export function extractRustSymbols(
   const symbols: CodeSymbol[] = [];
 
   function addSymbol(
-    node: Parser.SyntaxNode,
+    node: TSNode,
     name: string,
     kind: SymbolKind,
     parentId?: string,
@@ -62,7 +62,7 @@ export function extractRustSymbols(
     return sym.id;
   }
 
-  function walk(node: Parser.SyntaxNode, parentId?: string): void {
+  function walk(node: TSNode, parentId?: string): void {
     switch (node.type) {
       case "function_item": {
         const name = getNodeName(node);

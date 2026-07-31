@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { HonoAppModel } from "./hono-model.js";
 import { stringLiteralValue, walk } from "./hono-ast-utils.js";
 
@@ -56,7 +56,7 @@ export class HonoRuntimeExtractor {
    * Bindings type literals in Hono/createFactory generic arguments.
    */
   extractEnvBindings(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     source: string,
     model: HonoAppModel,
   ): void {
@@ -97,7 +97,7 @@ function detectRuntimeAdvanced(
 }
 
 function collectEnvMemberAccess(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   bindings: Set<string>,
 ): void {
   if (node.type !== "member_expression") return;
@@ -113,7 +113,7 @@ function collectEnvMemberAccess(
 }
 
 function collectEnvDestructuring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   bindings: Set<string>,
 ): void {
   if (node.type !== "variable_declarator") return;

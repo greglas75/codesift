@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { SymbolKind } from "../../types.js";
 import { extendsListIndicatesReactComponent } from "./typescript-react.js";
 import {
@@ -14,7 +14,7 @@ import {
   type WalkNode,
 } from "./typescript-shared.js";
 
-function extractHeritageNames(node: Parser.SyntaxNode): string[] {
+function extractHeritageNames(node: TSNode): string[] {
   if (node.type === "identifier") return [node.text];
   if (node.type === "type_identifier") return [node.text];
   if (node.type === "member_expression" || node.type === "nested_type_identifier") {
@@ -30,7 +30,7 @@ function extractHeritageNames(node: Parser.SyntaxNode): string[] {
   return [];
 }
 
-function getClassHeritage(node: Parser.SyntaxNode): { extends: string[]; implements: string[] } {
+function getClassHeritage(node: TSNode): { extends: string[]; implements: string[] } {
   const extendsList: string[] = [];
   const implementsList: string[] = [];
   for (const child of node.namedChildren) {
@@ -48,7 +48,7 @@ function getClassHeritage(node: Parser.SyntaxNode): { extends: string[]; impleme
   return { extends: extendsList, implements: implementsList };
 }
 
-function trimClassBody(node: Parser.SyntaxNode, source: string): string {
+function trimClassBody(node: TSNode, source: string): string {
   const body = node.childForFieldName("body");
   if (!body) return source.slice(node.startIndex, node.endIndex);
 
@@ -78,7 +78,7 @@ const MODIFIER_KEYWORD_TOKENS = new Set([
   "static", "abstract", "readonly", "declare", "accessor",
 ]);
 
-function getModifiers(node: Parser.SyntaxNode): string[] {
+function getModifiers(node: TSNode): string[] {
   const mods: string[] = [];
   for (const child of node.children) {
     if (MODIFIER_KEYWORD_TOKENS.has(child.type)) {
@@ -92,7 +92,7 @@ function getModifiers(node: Parser.SyntaxNode): string[] {
   return mods;
 }
 
-function getAccessorKind(node: Parser.SyntaxNode): "get" | "set" | "accessor" | undefined {
+function getAccessorKind(node: TSNode): "get" | "set" | "accessor" | undefined {
   for (const child of node.children) {
     if (child.type === "get") return "get";
     if (child.type === "set") return "set";
@@ -113,7 +113,7 @@ interface ClassMemberInfo {
   isAsync: boolean;
 }
 
-function getClassMemberInfo(node: Parser.SyntaxNode, forceAbstract = false): ClassMemberInfo {
+function getClassMemberInfo(node: TSNode, forceAbstract = false): ClassMemberInfo {
   const decorators = getDecorators(node);
   const modifiers = getModifiers(node);
   if (forceAbstract) ensureAbstractRecorded(modifiers);
@@ -132,7 +132,7 @@ function getClassMemberInfo(node: Parser.SyntaxNode, forceAbstract = false): Cla
 
 function pushMethodSymbol(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   name: string,
   forceAbstract = false,
@@ -150,7 +150,7 @@ function pushMethodSymbol(
 
 function pushFieldSymbol(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   name: string,
 ): void {
@@ -165,7 +165,7 @@ function pushFieldSymbol(
 
 export function handleClassLikeDeclaration(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
   walk: WalkNode,
@@ -197,7 +197,7 @@ export function handleClassLikeDeclaration(
 
 export function handleAbstractMethodSignature(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
 ): void {
   const name = getNodeName(node);
@@ -207,7 +207,7 @@ export function handleAbstractMethodSignature(
 
 export function handleMethodDefinition(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
 ): void {
   const name = getNodeName(node);
@@ -217,7 +217,7 @@ export function handleMethodDefinition(
 
 export function handleFieldDefinition(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
 ): void {
   const nameNode = node.childForFieldName("name") ?? node.childForFieldName("property");
@@ -228,7 +228,7 @@ export function handleFieldDefinition(
 
 export function handleClassStaticBlock(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
 ): void {
   ctx.symbols.push(makeSymbol(node, "<static>", "method", ctx.filePath, ctx.source, ctx.repo, {

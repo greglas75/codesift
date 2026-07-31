@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type {
   HonoApp,
   HonoAppModel,
@@ -15,7 +15,7 @@ export class HonoOpenAPIExtractor {
    * name, then app.openapi(routeVar, handler) emits both OpenAPI and Hono routes.
    */
   walkOpenAPI(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     file: string,
     appVars: Record<string, HonoApp>,
     prefix: string,
@@ -69,11 +69,11 @@ interface OpenAPIRegistration {
   appVar: string;
   routeRef: string;
   routeDef: RouteDefinition;
-  handlerArg: Parser.SyntaxNode;
+  handlerArg: TSNode;
 }
 
 function collectCreateRouteDefinitions(
-  root: Parser.SyntaxNode,
+  root: TSNode,
 ): Map<string, RouteDefinition> {
   const routeDefs = new Map<string, RouteDefinition>();
   const cursor = root.walk();
@@ -96,7 +96,7 @@ function collectCreateRouteDefinitions(
 }
 
 function readRouteDefinitionObject(
-  objArg: Parser.SyntaxNode,
+  objArg: TSNode,
   line: number,
 ): RouteDefinition | null {
   let method = "";
@@ -113,7 +113,7 @@ function readRouteDefinitionObject(
 }
 
 function readOpenAPIRegistration(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   appVars: Record<string, HonoApp>,
   routeDefs: Map<string, RouteDefinition>,
 ): OpenAPIRegistration | null {

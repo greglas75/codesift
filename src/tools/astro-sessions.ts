@@ -58,6 +58,9 @@ async function detectExperimentalSession(configPath: string | null): Promise<boo
   if (!parser) return false;
   let tree;
   try { tree = parser.parse(src); } catch { return false; }
+  // parse() is nullable since web-tree-sitter 0.25 — an unparseable
+  // source takes the same path as a parse error.
+  if (!tree) return false;
   try {
     for (const obj of tree.rootNode.descendantsOfType("object")) {
       const expProp = getProperty(obj, "experimental");

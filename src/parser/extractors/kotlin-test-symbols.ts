@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { makeSymbol } from "./_shared.js";
 import { getAnnotations } from "./kotlin-ast-helpers.js";
@@ -37,8 +37,8 @@ const KOTEST_DSL_KEYWORDS = new Set([
  * doesn't extend a Kotest spec.
  */
 export function findKotestSpecLambda(
-  node: Parser.SyntaxNode,
-): Parser.SyntaxNode | null {
+  node: TSNode,
+): TSNode | null {
   const delegation = node.namedChildren.find(
     (c) => c.type === "delegation_specifiers",
   );
@@ -82,7 +82,7 @@ export function findKotestSpecLambda(
  *   AST: call_expression > [string_literal, annotated_lambda]
  */
 function extractKotestTestName(
-  call: Parser.SyntaxNode,
+  call: TSNode,
 ): string | null {
   // Must have an annotated_lambda child to be a DSL test declaration with body.
   const hasLambda = call.namedChildren.some(
@@ -122,7 +122,7 @@ function extractKotestTestName(
   return null;
 }
 
-function unquoteStringLiteral(node: Parser.SyntaxNode): string {
+function unquoteStringLiteral(node: TSNode): string {
   // Prefer the inner string_content child when present (avoids the outer quotes).
   const content = node.namedChildren.find((c) => c.type === "string_content");
   if (content) return content.text;
@@ -137,7 +137,7 @@ function unquoteStringLiteral(node: Parser.SyntaxNode): string {
  * level.
  */
 export function walkKotestLambda(
-  lambda: Parser.SyntaxNode,
+  lambda: TSNode,
   parentId: string,
   filePath: string,
   source: string,
@@ -159,7 +159,7 @@ export function walkKotestLambda(
 }
 
 function walkKotestCall(
-  call: Parser.SyntaxNode,
+  call: TSNode,
   parentId: string,
   filePath: string,
   source: string,
@@ -190,7 +190,7 @@ function walkKotestCall(
 /**
  * Determines if a function is a test or test hook based on annotations.
  */
-export function getTestKind(node: Parser.SyntaxNode): SymbolKind | null {
+export function getTestKind(node: TSNode): SymbolKind | null {
   const annotations = getAnnotations(node);
   for (const ann of annotations) {
     if (TEST_ANNOTATIONS.has(ann)) return "test_case";

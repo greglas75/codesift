@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { SymbolKind } from "../../types.js";
 import { classifyReactKind } from "./typescript-react.js";
 import {
@@ -17,8 +17,8 @@ interface CjsTarget {
 
 type ModuleExportsHandler = (
   ctx: TypeScriptExtractorContext,
-  rhs: Parser.SyntaxNode,
-  stmt: Parser.SyntaxNode,
+  rhs: TSNode,
+  stmt: TSNode,
   parentId: string | undefined,
 ) => boolean;
 
@@ -37,7 +37,7 @@ const MODULE_EXPORT_HANDLERS: Record<string, ModuleExportsHandler> = {
 };
 
 function parseCjsLhs(
-  lhs: Parser.SyntaxNode,
+  lhs: TSNode,
 ): CjsTarget | null {
   if (lhs.type !== "member_expression") return null;
   const obj = lhs.childForFieldName("object");
@@ -46,7 +46,7 @@ function parseCjsLhs(
   return parseDirectCjsTarget(obj, prop) ?? parseNestedModuleExportsTarget(obj, prop);
 }
 
-function parseDirectCjsTarget(obj: Parser.SyntaxNode, prop: Parser.SyntaxNode): CjsTarget | null {
+function parseDirectCjsTarget(obj: TSNode, prop: TSNode): CjsTarget | null {
   if (obj.type === "identifier" && obj.text === "exports") {
     return { kind: "exports", property: prop.text };
   }
@@ -56,7 +56,7 @@ function parseDirectCjsTarget(obj: Parser.SyntaxNode, prop: Parser.SyntaxNode): 
   return null;
 }
 
-function parseNestedModuleExportsTarget(obj: Parser.SyntaxNode, prop: Parser.SyntaxNode): CjsTarget | null {
+function parseNestedModuleExportsTarget(obj: TSNode, prop: TSNode): CjsTarget | null {
   if (obj.type !== "member_expression") return null;
   const innerObj = obj.childForFieldName("object");
   const innerProp = obj.childForFieldName("property");
@@ -69,7 +69,7 @@ function parseNestedModuleExportsTarget(obj: Parser.SyntaxNode, prop: Parser.Syn
   return null;
 }
 
-function cjsValueKind(value: Parser.SyntaxNode, name: string): SymbolKind {
+function cjsValueKind(value: TSNode, name: string): SymbolKind {
   if (value.type === "arrow_function" || value.type === "function_expression") {
     return classifyReactKind(name, value);
   }
@@ -80,8 +80,8 @@ function cjsValueKind(value: Parser.SyntaxNode, name: string): SymbolKind {
 
 export function handleCjsExport(
   ctx: TypeScriptExtractorContext,
-  assign: Parser.SyntaxNode,
-  stmt: Parser.SyntaxNode,
+  assign: TSNode,
+  stmt: TSNode,
   parentId: string | undefined,
 ): boolean {
   const lhs = assign.childForFieldName("left");
@@ -101,8 +101,8 @@ export function handleCjsExport(
 function emitNamedCjsProperty(
   ctx: TypeScriptExtractorContext,
   name: string,
-  rhs: Parser.SyntaxNode,
-  stmt: Parser.SyntaxNode,
+  rhs: TSNode,
+  stmt: TSNode,
   parentId: string | undefined,
 ): boolean {
   ctx.symbols.push(makeSymbol(stmt, name, cjsValueKind(rhs, name), ctx.filePath, ctx.source, ctx.repo, {
@@ -117,7 +117,7 @@ function emitNamedCjsProperty(
 
 function recordObjectModuleExports(
   ctx: TypeScriptExtractorContext,
-  objectNode: Parser.SyntaxNode,
+  objectNode: TSNode,
   parentId: string | undefined,
 ): void {
   for (const member of objectNode.namedChildren) {
@@ -131,7 +131,7 @@ function recordObjectModuleExports(
 
 function recordObjectPairExport(
   ctx: TypeScriptExtractorContext,
-  member: Parser.SyntaxNode,
+  member: TSNode,
   parentId: string | undefined,
 ): void {
   const keyNode = member.childForFieldName("key");
@@ -149,9 +149,9 @@ function recordObjectPairExport(
 
 function emitObjectPairFunctionExport(
   ctx: TypeScriptExtractorContext,
-  member: Parser.SyntaxNode,
+  member: TSNode,
   keyName: string,
-  valNode: Parser.SyntaxNode,
+  valNode: TSNode,
   parentId: string | undefined,
 ): void {
   ctx.symbols.push(makeSymbol(member, keyName, classifyReactKind(keyName, valNode), ctx.filePath, ctx.source, ctx.repo, {
@@ -163,8 +163,8 @@ function emitObjectPairFunctionExport(
 
 function emitDefaultCjsExport(
   ctx: TypeScriptExtractorContext,
-  rhs: Parser.SyntaxNode,
-  stmt: Parser.SyntaxNode,
+  rhs: TSNode,
+  stmt: TSNode,
   parentId: string | undefined,
 ): boolean {
   ctx.symbols.push(makeSymbol(stmt, "default", "default_export", ctx.filePath, ctx.source, ctx.repo, {
@@ -175,12 +175,12 @@ function emitDefaultCjsExport(
   return true;
 }
 
-function isFunctionLikeValue(value: Parser.SyntaxNode): boolean {
+function isFunctionLikeValue(value: TSNode): boolean {
   return value.type === "arrow_function" || value.type === "function_expression";
 }
 
 export function extractObjectLiteralMethods(
-  objectNode: Parser.SyntaxNode,
+  objectNode: TSNode,
   parentId: string,
   ctx: TypeScriptExtractorContext,
 ): void {

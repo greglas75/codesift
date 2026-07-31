@@ -11,7 +11,7 @@
  * in cache until the TTL expires.
  */
 
-import type Parser from "web-tree-sitter";
+import type { Tree as TSTree } from "web-tree-sitter";
 import { parseFile } from "../parser/parser-manager.js";
 import { walkDirectory, type WalkOptions } from "./walk.js";
 
@@ -57,13 +57,13 @@ export async function cachedWalkDirectory(root: string, options?: WalkOptions): 
  * Proxy for parseFile that uses global cache when active.
  * Drop-in replacement — same signature as parseFile.
  */
-export async function cachedParseFile(path: string, source: string): Promise<Parser.Tree | null> {
+export async function cachedParseFile(path: string, source: string): Promise<TSTree | null> {
   if (_globalCache) return _globalCache.getParsedFile(path, source);
   return parseFile(path, source);
 }
 
 export class NextjsAuditCache {
-  private parseFileCache: Map<string, CacheEntry<Parser.Tree | null>> = new Map();
+  private parseFileCache: Map<string, CacheEntry<TSTree | null>> = new Map();
   private walkCache: Map<string, CacheEntry<string[]>> = new Map();
   private readonly ttl: number;
 
@@ -82,7 +82,7 @@ export class NextjsAuditCache {
    * Synchronous (returns the cached/in-flight Promise directly) so that
    * `cache.getParsedFile(p) === cache.getParsedFile(p)` for concurrent calls.
    */
-  getParsedFile(path: string, source: string): Promise<Parser.Tree | null> {
+  getParsedFile(path: string, source: string): Promise<TSTree | null> {
     const now = Date.now();
     this.evictExpired(now);
 

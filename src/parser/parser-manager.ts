@@ -1,4 +1,8 @@
-import Parser from "web-tree-sitter";
+// web-tree-sitter >= 0.25 has no default export: Parser is a named class
+// (with the same static `init()`), and the old `Parser.SyntaxNode` namespace
+// members are now top-level types (`Node`, `Tree`, …).
+import { Language as TSLanguage, Parser } from "web-tree-sitter";
+import type { Tree as TSTree } from "web-tree-sitter";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { STUB_LANGUAGES } from "./stub-languages.js";
@@ -80,7 +84,7 @@ export async function getParser(language: string): Promise<Parser | null> {
   );
 
   try {
-    const lang = await Parser.Language.load(wasmPath);
+    const lang = await TSLanguage.load(wasmPath);
     const parser = new Parser();
     parser.setLanguage(lang);
     parserCache.set(language, parser);
@@ -162,7 +166,7 @@ export async function parseFile(
   filePath: string,
   source: string,
   options?: { timeoutMs?: number },
-): Promise<Parser.Tree | null> {
+): Promise<TSTree | null> {
   // Gradle KTS files share the Kotlin tree-sitter grammar but route through
   // a dedicated symbol extractor. parseFile() only needs a parser, so fall
   // back to the Kotlin parser here — the extractor split happens in
@@ -203,9 +207,9 @@ export async function parseFile(
     });
     const parsePromise = (async () => parser.parse(source))();
 
-    let tree: Parser.Tree;
+    let tree: TSTree;
     try {
-      tree = (await Promise.race([parsePromise, timeoutPromise])) as Parser.Tree;
+      tree = (await Promise.race([parsePromise, timeoutPromise])) as TSTree;
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }

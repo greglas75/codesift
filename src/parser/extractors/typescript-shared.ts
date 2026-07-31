@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type { CodeSymbol } from "../../types.js";
 import { MAX_SOURCE_LENGTH } from "./_shared.js";
 
@@ -18,13 +18,13 @@ export interface TypeScriptExtractorContext {
 }
 
 export type WalkNode = (
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId?: string,
   isExported?: boolean,
 ) => void;
 
 export function getDocstring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const prev = node.previousNamedSibling;
@@ -39,16 +39,16 @@ export function getDocstring(
   return undefined;
 }
 
-function getDecoratorText(node: Parser.SyntaxNode): string {
+function getDecoratorText(node: TSNode): string {
   return node.text.trim();
 }
 
-function collectOwnDecorators(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+function collectOwnDecorators(node: TSNode): TSNode[] {
   return node.namedChildren.filter((child) => child.type === "decorator");
 }
 
-function collectLeadingSiblingDecorators(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
-  const decorators: Parser.SyntaxNode[] = [];
+function collectLeadingSiblingDecorators(node: TSNode): TSNode[] {
+  const decorators: TSNode[] = [];
   let sibling = node.previousNamedSibling;
   while (sibling && sibling.type === "decorator") {
     decorators.unshift(sibling);
@@ -57,7 +57,7 @@ function collectLeadingSiblingDecorators(node: Parser.SyntaxNode): Parser.Syntax
   return decorators;
 }
 
-export function getDecorators(node: Parser.SyntaxNode): string[] {
+export function getDecorators(node: TSNode): string[] {
   const decoratorNodes = [
     ...collectOwnDecorators(node),
     ...collectLeadingSiblingDecorators(node),
@@ -76,7 +76,7 @@ export function getDecorators(node: Parser.SyntaxNode): string[] {
 }
 
 export function getSignature(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const params = node.childForFieldName("parameters");
@@ -98,7 +98,7 @@ export function getSignature(
 }
 
 /** True if the declaration has an `export` keyword child (modifier-based export). */
-export function hasExportModifier(node: Parser.SyntaxNode): boolean {
+export function hasExportModifier(node: TSNode): boolean {
   for (const child of node.children) {
     if (child.type === "export") return true;
   }
@@ -106,7 +106,7 @@ export function hasExportModifier(node: Parser.SyntaxNode): boolean {
 }
 
 /** True if the function/method/arrow has an `async` keyword child. */
-export function hasAsyncModifier(node: Parser.SyntaxNode): boolean {
+export function hasAsyncModifier(node: TSNode): boolean {
   for (const child of node.children) {
     if (child.type === "async") return true;
     if (child.type === "ERROR" && /^\s*async\b/.test(child.text)) return true;
@@ -115,7 +115,7 @@ export function hasAsyncModifier(node: Parser.SyntaxNode): boolean {
 }
 
 /** Strip `export default ((...))` wrappers. */
-export function unwrapParentheses(node: Parser.SyntaxNode): Parser.SyntaxNode {
+export function unwrapParentheses(node: TSNode): TSNode {
   let cur = node;
   while (cur.type === "parenthesized_expression" && cur.namedChildren.length > 0) {
     const inner = cur.namedChildren[0];

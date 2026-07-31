@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol } from "../../types.js";
 import {
   handleAbstractMethodSignature,
@@ -30,7 +30,7 @@ import {
 
 type NodeAction = (
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
   walk: WalkNode,
@@ -39,7 +39,7 @@ type NodeAction = (
 function continueAfter(
   handler: (
     ctx: TypeScriptExtractorContext,
-    node: Parser.SyntaxNode,
+    node: TSNode,
     parentId: string | undefined,
     isExported: boolean,
     walk: WalkNode,
@@ -51,7 +51,7 @@ function continueAfter(
 function stopAfter(
   handler: (
     ctx: TypeScriptExtractorContext,
-    node: Parser.SyntaxNode,
+    node: TSNode,
     parentId: string | undefined,
     isExported: boolean,
     walk: WalkNode,
@@ -63,7 +63,7 @@ function stopAfter(
 function actionAfter(
   handler: (
     ctx: TypeScriptExtractorContext,
-    node: Parser.SyntaxNode,
+    node: TSNode,
     parentId: string | undefined,
     isExported: boolean,
     walk: WalkNode,
@@ -116,7 +116,7 @@ const NODE_ACTIONS: Record<string, NodeAction> = {
 
 function handleExpressionStatement(
   ctx: TypeScriptExtractorContext,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   _isExported: boolean,
   walk: WalkNode,
@@ -129,7 +129,7 @@ function handleExpressionStatement(
 }
 
 function walkChildren(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   parentId: string | undefined,
   isExported: boolean,
   walk: WalkNode,
@@ -151,7 +151,7 @@ function applyExportPostPass(context: TypeScriptExtractorContext): void {
 }
 
 export function extractTypeScriptSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
@@ -167,13 +167,13 @@ export function extractTypeScriptSymbols(
     ambientFnSigOverloadCount: new Map<string, number>(),
   };
 
-  function walk(node: Parser.SyntaxNode, parentId?: string, isExported = false): void {
+  function walk(node: TSNode, parentId?: string, isExported = false): void {
     const action = NODE_ACTIONS[node.type];
     if (action?.(context, node, parentId, isExported, walk)) return;
     walkChildren(node, parentId, isExported, walk);
   }
 
-  if ((tree.rootNode as Parser.SyntaxNode & { hasError: boolean }).hasError) {
+  if ((tree.rootNode as TSNode & { hasError: boolean }).hasError) {
     console.warn(`[ts-extractor] grammar errors detected in ${filePath}; some symbols may be incomplete`);
   }
 

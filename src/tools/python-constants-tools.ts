@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { resolvePythonImport, detectSrcLayout } from "../utils/python-import-resolver.js";
@@ -73,7 +73,7 @@ export interface ConstantResolutionResult {
 }
 
 interface AssignmentBinding {
-  rhs: Parser.SyntaxNode;
+  rhs: TSNode;
   line: number;
 }
 
@@ -85,7 +85,7 @@ interface ImportBinding {
 
 interface PythonFileContext {
   source: string;
-  tree: Parser.Tree;
+  tree: TSTree;
   assignments: Map<string, AssignmentBinding>;
   imports: Map<string, ImportBinding>;
 }
@@ -128,7 +128,7 @@ function computeConfidence(resolved: boolean, aliasChain: ResolutionHop[], usedI
   return "high";
 }
 
-function unsupportedNode(node: Parser.SyntaxNode, aliasChain: ResolutionHop[], usedImport: boolean): EvaluationResult {
+function unsupportedNode(node: TSNode, aliasChain: ResolutionHop[], usedImport: boolean): EvaluationResult {
   return {
     resolved: false,
     value_text: node.text,
@@ -142,7 +142,7 @@ function getBindingLine(binding: AssignmentBinding | ImportBinding): number {
   return binding.line;
 }
 
-function findFunctionNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+function findFunctionNode(node: TSNode): TSNode | null {
   if (node.type === "function_definition" || node.type === "async_function_definition") {
     return node;
   }
@@ -153,7 +153,7 @@ function findFunctionNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
   return null;
 }
 
-function getDefaultParameterParts(node: Parser.SyntaxNode): { name: string; valueNode: Parser.SyntaxNode } | null {
+function getDefaultParameterParts(node: TSNode): { name: string; valueNode: TSNode } | null {
   if (node.type !== "default_parameter" && node.type !== "typed_default_parameter") {
     return null;
   }
@@ -171,7 +171,7 @@ function getDefaultParameterParts(node: Parser.SyntaxNode): { name: string; valu
   };
 }
 
-function getImportModule(node: Parser.SyntaxNode): { module: string; level: number } {
+function getImportModule(node: TSNode): { module: string; level: number } {
   const moduleNode = node.childForFieldName("module_name");
   if (!moduleNode) return { module: "", level: 0 };
 
@@ -221,6 +221,7 @@ async function loadPythonFileContext(
   }
 
   const tree = parser.parse(source);
+  if (!tree) return null;
   const files = index.files.map((entry) => entry.path);
   const srcLayout = detectSrcLayout(files);
   const assignments = new Map<string, AssignmentBinding>();
@@ -286,7 +287,7 @@ async function loadPythonFileContext(
 
 async function evaluateValueNode(
   filePath: string,
-  node: Parser.SyntaxNode,
+  node: TSNode,
   state: ResolutionState,
 ): Promise<EvaluationResult> {
   switch (node.type) {
@@ -577,6 +578,18 @@ async function resolveFunctionDefaults(
   }
 
   const tree = parser.parse(symbol.source);
+  if (!tree) {
+    return {
+      symbol_name: symbol.name,
+      symbol_kind: symbol.kind,
+      file: symbol.file,
+      line: symbol.start_line,
+      resolved: false,
+      confidence: "low",
+      alias_chain: [],
+      reason: `Could not parse source for ${symbol.name}`,
+    };
+  }
   const fnNode = findFunctionNode(tree.rootNode);
   if (!fnNode) {
     return {

@@ -10,7 +10,7 @@
 
 import { readFile } from "node:fs/promises";
 import { relative } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Tree as TSTree } from "web-tree-sitter";
 import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
 import { scanDirective } from "../utils/nextjs.js";
 
@@ -153,7 +153,7 @@ export function applyClassificationTable(
  *   - next/dynamic({ ssr: false }) — import from "next/dynamic" + call with ssr:false
  */
 export function detectSignals(
-  tree: Parser.Tree,
+  tree: TSTree,
   _source: string,
 ): ComponentSignals {
   const hooks = new Set<string>();
@@ -283,7 +283,7 @@ export function detectSignals(
  * nested block, inline comment, or non-first statement — must return `null`.
  */
 export function confirmDirectiveFromTree(
-  tree: Parser.Tree,
+  tree: TSTree,
 ): "use client" | "use server" | null {
   const root = tree.rootNode;
   const first = root.namedChildren[0];

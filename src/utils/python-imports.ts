@@ -8,8 +8,7 @@
  * Because this uses the AST (not regex), string literals and comments
  * cannot produce false positives.
  */
-import type Parser from "web-tree-sitter";
-
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 export interface PythonImportRef {
   /** Dotted module path (empty string for `from . import X`) */
   module: string;
@@ -27,11 +26,11 @@ export interface PythonImportRef {
  * Extract all Python imports from a parsed tree-sitter tree.
  */
 export function extractPythonImports(
-  tree: Parser.Tree,
+  tree: TSTree,
 ): PythonImportRef[] {
   const imports: PythonImportRef[] = [];
 
-  function walk(node: Parser.SyntaxNode, inTypeChecking: boolean): void {
+  function walk(node: TSNode, inTypeChecking: boolean): void {
     switch (node.type) {
       case "if_statement": {
         // Detect `if TYPE_CHECKING:` or `if typing.TYPE_CHECKING:`
@@ -135,7 +134,7 @@ export function extractPythonImports(
  * The dots appear as unnamed `import_prefix` child node or as separate
  * "." tokens depending on grammar version.
  */
-function countRelativeDots(relImport: Parser.SyntaxNode): number {
+function countRelativeDots(relImport: TSNode): number {
   // Walk all children (named + unnamed); each "." token represents one level
   let dots = 0;
   for (let i = 0; i < relImport.childCount; i++) {

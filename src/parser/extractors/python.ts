@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { getNodeName, makeSymbol } from "./_shared.js";
 
@@ -8,7 +8,7 @@ import { getNodeName, makeSymbol } from "./_shared.js";
  * Python docstrings are the first expression_statement in the body
  * whose child is a string node (triple-quoted or single-quoted).
  */
-function getDocstring(node: Parser.SyntaxNode): string | undefined {
+function getDocstring(node: TSNode): string | undefined {
   const body = node.childForFieldName("body");
   if (!body) return undefined;
 
@@ -28,7 +28,7 @@ function getDocstring(node: Parser.SyntaxNode): string | undefined {
  * e.g. "(self, name: str, age: int = 0) -> bool"
  */
 function getSignature(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const params = node.childForFieldName("parameters");
@@ -47,7 +47,7 @@ function getSignature(
 /**
  * Check if a class inherits from unittest.TestCase.
  */
-function isTestCaseClass(node: Parser.SyntaxNode): boolean {
+function isTestCaseClass(node: TSNode): boolean {
   const superclasses = node.childForFieldName("superclasses");
   if (!superclasses) return false;
 
@@ -65,7 +65,7 @@ function isTestCaseClass(node: Parser.SyntaxNode): boolean {
  * Returns the text of each positional argument in the superclass list,
  * skipping keyword arguments (e.g. `metaclass=ABCMeta`).
  */
-function getSuperclasses(classNode: Parser.SyntaxNode): string[] {
+function getSuperclasses(classNode: TSNode): string[] {
   const superclasses = classNode.childForFieldName("superclasses");
   if (!superclasses) return [];
 
@@ -81,7 +81,7 @@ function getSuperclasses(classNode: Parser.SyntaxNode): string[] {
 /**
  * Check if a function is a pytest fixture (has @pytest.fixture decorator).
  */
-function isPytestFixture(decorators: Parser.SyntaxNode[]): boolean {
+function isPytestFixture(decorators: TSNode[]): boolean {
   for (const dec of decorators) {
     const text = dec.text;
     if (
@@ -102,7 +102,7 @@ function isPytestFixture(decorators: Parser.SyntaxNode[]): boolean {
 function classifyFunction(
   name: string,
   parentId: string | undefined,
-  decorators: Parser.SyntaxNode[],
+  decorators: TSNode[],
 ): SymbolKind {
   if (decorators.length > 0 && isPytestFixture(decorators)) return "test_hook";
   if (name.startsWith("test_")) return "test_case";
@@ -123,7 +123,7 @@ const DUNDER_RE = /^__\w+__$/;
  * if the RHS is anything other than a plain list/tuple of string literals
  * (e.g. `BASE + ["X"]`, `list(...)`, conditional assignment).
  */
-function parseAllAssignment(rhs: Parser.SyntaxNode): {
+function parseAllAssignment(rhs: TSNode): {
   members: string[];
   computed: boolean;
 } {
@@ -147,7 +147,7 @@ function parseAllAssignment(rhs: Parser.SyntaxNode): {
   // Anything else (binary_operator, call, etc.) — dynamic expression.
   // Walk descendants for any string literals to preserve partial data.
   const members: string[] = [];
-  const stack: Parser.SyntaxNode[] = [rhs];
+  const stack: TSNode[] = [rhs];
   while (stack.length > 0) {
     const n = stack.pop()!;
     if (n.type === "string") {
@@ -165,7 +165,7 @@ function parseAllAssignment(rhs: Parser.SyntaxNode): {
  * "@app.route('/users')", "@dataclass(frozen=True)"). Returns the leading
  * "@" plus the expression text, trimmed.
  */
-function getDecoratorText(decoratorNode: Parser.SyntaxNode): string {
+function getDecoratorText(decoratorNode: TSNode): string {
   return decoratorNode.text.trim();
 }
 
@@ -196,7 +196,7 @@ function classifyDecorators(decorators: string[]): Record<string, unknown> {
  * Belt-and-suspenders: handle both `async_function_definition` node type
  * (older grammars) and `async` keyword child on `function_definition`.
  */
-function isAsyncFunction(node: Parser.SyntaxNode): boolean {
+function isAsyncFunction(node: TSNode): boolean {
   if (node.type === "async_function_definition") return true;
   // tree-sitter-python 0.23+ represents async via an unnamed `async` child
   // before `def`. Walk all children (including unnamed) to find it.
@@ -212,14 +212,14 @@ function isAsyncFunction(node: Parser.SyntaxNode): boolean {
 const MAX_WALK_DEPTH = 200;
 
 export function extractPythonSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
 ): CodeSymbol[] {
   const symbols: CodeSymbol[] = [];
 
-  function walk(node: Parser.SyntaxNode, parentId?: string, depth = 0): void {
+  function walk(node: TSNode, parentId?: string, depth = 0): void {
     // Safety: bound recursion depth on pathologically deep files
     if (depth > MAX_WALK_DEPTH) {
       console.warn(
@@ -329,8 +329,8 @@ export function extractPythonSymbols(
 
       case "decorated_definition": {
         // Collect decorator nodes
-        const decoratorNodes: Parser.SyntaxNode[] = [];
-        let innerNode: Parser.SyntaxNode | null = null;
+        const decoratorNodes: TSNode[] = [];
+        let innerNode: TSNode | null = null;
 
         for (const child of node.namedChildren) {
           if (child.type === "decorator") {

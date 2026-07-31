@@ -10,7 +10,7 @@
 
 import { readFile } from "node:fs/promises";
 import { relative, basename } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
 import {
   computeLayoutChain,
@@ -117,7 +117,7 @@ const RUNTIME_VALUES = new Set(["nodejs", "edge"]);
  * @internal exported for unit testing
  */
 export function readRouteSegmentConfig(
-  tree: Parser.Tree,
+  tree: TSTree,
   _source: string,
 ): RouteSegmentConfig {
   const config: RouteSegmentConfig = { has_generate_static_params: false };
@@ -152,7 +152,7 @@ export function readRouteSegmentConfig(
 function readConfigValue(
   config: RouteSegmentConfig,
   name: string,
-  value: Parser.SyntaxNode,
+  value: TSNode,
 ): void {
   // String literal
   if (value.type === "string") {
@@ -272,7 +272,7 @@ function deriveRouteType(filePath: string, router: "app" | "pages"): RouteEntryT
 }
 
 /** Detect Pages Router data-fetching signals via exported function/const names. */
-function detectPagesRouterSignals(tree: Parser.Tree): PagesRouterSignals {
+function detectPagesRouterSignals(tree: TSTree): PagesRouterSignals {
   const signals: PagesRouterSignals = {};
   for (const exportNode of tree.rootNode.descendantsOfType("export_statement")) {
     for (const fn of exportNode.descendantsOfType("function_declaration")) {
@@ -290,7 +290,7 @@ function detectPagesRouterSignals(tree: Parser.Tree): PagesRouterSignals {
 }
 
 /** Detect `export const metadata = {...}` or `export function generateMetadata`. */
-function detectMetadataExport(tree: Parser.Tree): boolean {
+function detectMetadataExport(tree: TSTree): boolean {
   for (const exportNode of tree.rootNode.descendantsOfType("export_statement")) {
     for (const decl of exportNode.descendantsOfType("variable_declarator")) {
       const name = (decl.childForFieldName("name") ?? decl.namedChild(0))?.text;
@@ -305,7 +305,7 @@ function detectMetadataExport(tree: Parser.Tree): boolean {
 }
 
 /** Collect HTTP method names from top-level exports of a route.ts file. */
-function extractHttpMethods(tree: Parser.Tree): string[] {
+function extractHttpMethods(tree: TSTree): string[] {
   const methods = new Set<string>();
   for (const exportNode of tree.rootNode.descendantsOfType("export_statement")) {
     for (const fn of exportNode.descendantsOfType("function_declaration")) {

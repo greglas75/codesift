@@ -11,7 +11,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Parser, Tree as TSTree  } from "web-tree-sitter";
 import { getParser } from "../parser/parser-manager.js";
 import { getCodeIndex } from "./index-tools.js";
 import type { CodeIndex } from "../types.js";
@@ -47,8 +47,11 @@ function parseMiddleware(
   parser: Parser,
   source: string,
 ): { handlers: string[]; sequence: string[]; sequenceTied: boolean; guardFallthroughLines: number[]; parseOk: boolean } {
-  let tree: Parser.Tree;
+  let tree: TSTree | null;
   try { tree = parser.parse(source); } catch { return { handlers: [], sequence: [], sequenceTied: false, guardFallthroughLines: [], parseOk: false }; }
+  // parse() is nullable since web-tree-sitter 0.25 — an unparseable
+  // source takes the same path as a parse error.
+  if (!tree) return { handlers: [], sequence: [], sequenceTied: false, guardFallthroughLines: [], parseOk: false };
   try {
     const root = tree.rootNode;
     if (root.hasError) {

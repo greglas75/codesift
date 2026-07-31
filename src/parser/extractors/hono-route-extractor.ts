@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type {
   HonoApp,
   HonoHandler,
@@ -22,7 +22,7 @@ export class HonoRouteExtractor {
   constructor(private readonly inlineAnalyzer = new HonoInlineAnalyzer()) {}
 
   walkHttpRoutes(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     file: string,
     appVars: Record<string, HonoApp>,
     routes: HonoRoute[],
@@ -66,16 +66,16 @@ export class HonoRouteExtractor {
 
   private analyzeHandlerIfInline(
     handler: HonoHandler,
-    handlerNode: Parser.SyntaxNode,
+    handlerNode: TSNode,
   ): InlineHandlerAnalysis | undefined {
     if (!handler.inline) return undefined;
     return this.inlineAnalyzer.analyze(handlerNode);
   }
 
   private handleOnMethod(
-    argList: Parser.SyntaxNode[],
+    argList: TSNode[],
     file: string,
-    node: Parser.SyntaxNode,
+    node: TSNode,
     ownerVar: string,
     basePrefix: string,
     routes: HonoRoute[],
@@ -116,13 +116,13 @@ export class HonoRouteExtractor {
 
 interface RouteCall {
   method: string;
-  argList: Parser.SyntaxNode[];
+  argList: TSNode[];
   ownerVar: string;
   basePrefix: string;
 }
 
 function readRouteCall(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   appVars: Record<string, HonoApp>,
 ): RouteCall | null {
   if (node.type !== "call_expression") return null;
@@ -153,7 +153,7 @@ function readRouteCall(
   };
 }
 
-function extractOnMethods(methodsArg: Parser.SyntaxNode): string[] {
+function extractOnMethods(methodsArg: TSNode): string[] {
   if (methodsArg.type === "array") {
     const methods: string[] = [];
     for (const element of methodsArg.namedChildren) {

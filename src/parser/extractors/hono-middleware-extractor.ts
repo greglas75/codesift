@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import type {
   ConditionalApplication,
   HonoApp,
@@ -9,7 +9,7 @@ import { stringLiteralValue, walk } from "./hono-ast-utils.js";
 
 interface UseCall {
   ownerVar: string;
-  argList: Parser.SyntaxNode[];
+  argList: TSNode[];
   line: number;
 }
 
@@ -37,7 +37,7 @@ export class HonoMiddlewareExtractor {
    * spread arrays, call expressions like cors().
    */
   walkMiddleware(
-    root: Parser.SyntaxNode,
+    root: TSNode,
     file: string,
     appVars: Record<string, HonoApp>,
     model: HonoAppModel,
@@ -70,7 +70,7 @@ export class HonoMiddlewareExtractor {
   }
 
   private readUseCall(
-    node: Parser.SyntaxNode,
+    node: TSNode,
     appVars: Record<string, HonoApp>,
   ): UseCall | null {
     if (node.type !== "call_expression") return null;
@@ -95,7 +95,7 @@ export class HonoMiddlewareExtractor {
   }
 
   private readScope(
-    argList: Parser.SyntaxNode[],
+    argList: TSNode[],
     stringVars: Map<string, string>,
   ): ScopeParse {
     const firstArg = argList[0];
@@ -125,7 +125,7 @@ export class HonoMiddlewareExtractor {
   }
 
   private buildMiddlewareEntries(
-    argList: Parser.SyntaxNode[],
+    argList: TSNode[],
     startIndex: number,
     file: string,
     useLine: number,
@@ -181,7 +181,7 @@ export class HonoMiddlewareExtractor {
   }
 
   private expandSpreadMiddleware(
-    arg: Parser.SyntaxNode,
+    arg: TSNode,
     file: string,
     useLine: number,
     order: number,
@@ -226,7 +226,7 @@ export class HonoMiddlewareExtractor {
   }
 
   private expandCombineMiddleware(
-    arg: Parser.SyntaxNode,
+    arg: TSNode,
     file: string,
     order: number,
     importSources: Map<string, string>,
@@ -253,7 +253,7 @@ export class HonoMiddlewareExtractor {
   }
 
   private appendConditionalEntries(
-    arg: Parser.SyntaxNode,
+    arg: TSNode,
     file: string,
     order: number,
     importSources: Map<string, string>,
@@ -313,7 +313,7 @@ export class HonoMiddlewareExtractor {
    * form `if (cond) return mw(c, next)` or `if (cond) await mw(c, next)`.
    */
   private detectConditionalMiddlewareCalls(
-    fnNode: Parser.SyntaxNode,
+    fnNode: TSNode,
   ): Array<{ name: string; line: number; applied_when: ConditionalApplication }> {
     const results: Array<{
       name: string;
@@ -351,7 +351,7 @@ export class HonoMiddlewareExtractor {
     return results;
   }
 
-  private extractMiddlewareName(node: Parser.SyntaxNode): string {
+  private extractMiddlewareName(node: TSNode): string {
     if (node.type === "identifier") return node.text;
     if (node.type === "arrow_function" || node.type === "function_expression") {
       return "<inline>";
@@ -392,7 +392,7 @@ export class HonoMiddlewareExtractor {
   }
 
   /** Collect local array variable declarations: const chain = [authMw, tenantMw] */
-  private collectArrayVars(root: Parser.SyntaxNode): Map<string, string[]> {
+  private collectArrayVars(root: TSNode): Map<string, string[]> {
     const result = new Map<string, string[]>();
     const cursor = root.walk();
     walk(cursor, (node) => {
@@ -422,7 +422,7 @@ export class HonoMiddlewareExtractor {
   }
 
   /** Collect const scope values: const API_PREFIX = "/api/*" */
-  private collectStringVars(root: Parser.SyntaxNode): Map<string, string> {
+  private collectStringVars(root: TSNode): Map<string, string> {
     const result = new Map<string, string>();
     const cursor = root.walk();
     walk(cursor, (node) => {
@@ -437,7 +437,7 @@ export class HonoMiddlewareExtractor {
   }
 
   /** Collect import source mapping: variableName -> packageSpecifier */
-  private collectImportSources(root: Parser.SyntaxNode): Map<string, string> {
+  private collectImportSources(root: TSNode): Map<string, string> {
     const result = new Map<string, string>();
     const cursor = root.walk();
     walk(cursor, (node) => {
@@ -477,8 +477,8 @@ function isThirdPartyImport(importedFrom: string): boolean {
   return importedFrom.startsWith("hono/") || !importedFrom.startsWith(".");
 }
 
-function unwrapArrayExpression(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
-  let current: Parser.SyntaxNode | null = node;
+function unwrapArrayExpression(node: TSNode): TSNode | null {
+  let current: TSNode | null = node;
   while (current) {
     if (current.type === "array") return current;
     if (
@@ -494,7 +494,7 @@ function unwrapArrayExpression(node: Parser.SyntaxNode): Parser.SyntaxNode | nul
   return null;
 }
 
-function extractOwnerIdentifier(node: Parser.SyntaxNode): string | null {
+function extractOwnerIdentifier(node: TSNode): string | null {
   if (node.type === "identifier") return node.text;
   if (node.type === "member_expression") {
     const objectNode = node.childForFieldName("object");
@@ -508,7 +508,7 @@ function extractOwnerIdentifier(node: Parser.SyntaxNode): string | null {
 }
 
 function extractCombineType(
-  callFunction: Parser.SyntaxNode | null,
+  callFunction: TSNode | null,
 ): "some" | "every" | null {
   if (callFunction?.type === "identifier" &&
       (callFunction.text === "some" || callFunction.text === "every")) {
@@ -524,14 +524,14 @@ function extractCombineType(
 }
 
 function findMiddlewareCallInBlock(
-  consequence: Parser.SyntaxNode,
-): Parser.SyntaxNode | null {
+  consequence: TSNode,
+): TSNode | null {
   const statements =
     consequence.type === "statement_block"
       ? consequence.namedChildren
       : [consequence];
   for (const stmt of statements) {
-    let call: Parser.SyntaxNode | null = null;
+    let call: TSNode | null = null;
     if (stmt.type === "return_statement") {
       const expr = stmt.namedChildren[0];
       if (expr) call = unwrapCallExpression(expr);
@@ -545,7 +545,7 @@ function findMiddlewareCallInBlock(
 }
 
 function callHasAtLeastNArgs(
-  call: Parser.SyntaxNode,
+  call: TSNode,
   n: number,
 ): boolean {
   const args = call.childForFieldName("arguments");
@@ -553,7 +553,7 @@ function callHasAtLeastNArgs(
 }
 
 function collectLocalAliases(
-  consequence: Parser.SyntaxNode,
+  consequence: TSNode,
 ): Map<string, string> {
   const map = new Map<string, string>();
   const statements =
@@ -576,8 +576,8 @@ function collectLocalAliases(
 }
 
 function unwrapCallExpression(
-  node: Parser.SyntaxNode,
-): Parser.SyntaxNode | null {
+  node: TSNode,
+): TSNode | null {
   let current = node;
   while (current.type === "await_expression") {
     const inner = current.namedChildren[0];
@@ -588,7 +588,7 @@ function unwrapCallExpression(
   return null;
 }
 
-function extractCallCalleeName(callNode: Parser.SyntaxNode): string | null {
+function extractCallCalleeName(callNode: TSNode): string | null {
   const fn = callNode.childForFieldName("function");
   if (!fn) return null;
   if (fn.type === "identifier") return fn.text;
@@ -608,7 +608,7 @@ function extractCallCalleeName(callNode: Parser.SyntaxNode): string | null {
 }
 
 function classifyConditionType(
-  condition: Parser.SyntaxNode,
+  condition: TSNode,
 ): ConditionalApplication["condition_type"] {
   const text = condition.text;
   const contextRef = String.raw`(?:c|ctx|context)\.req`;

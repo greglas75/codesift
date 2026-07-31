@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { walkDirectory } from "../utils/walk.js";
 import { getCodeIndex } from "./index-tools.js";
 import { getParser, initParser } from "../parser/parser-manager.js";
@@ -53,7 +53,7 @@ async function findConfig(root: string): Promise<{ abs: string; rel: string } | 
   return null;
 }
 
-function parseEnvField(callNode: Parser.SyntaxNode): Omit<EnvVarDecl, "name"> {
+function parseEnvField(callNode: TSNode): Omit<EnvVarDecl, "name"> {
   const fn = callNode.childForFieldName("function");
   const type = fn?.type === "member_expression" ? (fn.childForFieldName("property")?.text ?? "unknown") : "unknown";
   const args = callNode.childForFieldName("arguments");
@@ -87,6 +87,9 @@ async function parseEnvSchema(configPath: string): Promise<EnvVarDecl[]> {
   if (!parser) return [];
   let tree;
   try { tree = parser.parse(src); } catch { return []; }
+  // parse() is nullable since web-tree-sitter 0.25 — an unparseable
+  // source takes the same path as a parse error.
+  if (!tree) return [];
   try {
     const decls: EnvVarDecl[] = [];
     for (const obj of tree.rootNode.descendantsOfType("object")) {

@@ -1,11 +1,10 @@
 import path from "node:path";
-import type Parser from "web-tree-sitter";
-
+import type { Node as TSNode, TreeCursor as TSTreeCursor } from "web-tree-sitter";
 const MAX_WALK_DEPTH = 500;
 
-export type CursorVisitor = (node: Parser.SyntaxNode) => void;
+export type CursorVisitor = (node: TSNode) => void;
 
-export function stringLiteralValue(node: Parser.SyntaxNode): string | null {
+export function stringLiteralValue(node: TSNode): string | null {
   if (node.type === "string") {
     const text = node.text;
     if (text.length < 2) return null;
@@ -54,7 +53,7 @@ function decodeJsStringEscapes(raw: string): string {
 }
 
 export function walk(
-  cursor: Parser.TreeCursor,
+  cursor: TSTreeCursor,
   visit: CursorVisitor,
   depth = 0,
 ): void {

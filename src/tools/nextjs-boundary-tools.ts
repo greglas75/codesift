@@ -9,7 +9,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type Parser from "web-tree-sitter";
+import type { Tree as TSTree } from "web-tree-sitter";
 import { discoverWorkspaces, scanDirective } from "../utils/nextjs.js";
 import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
 import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
@@ -60,7 +60,7 @@ function isLocalImport(spec: string): boolean {
 export function extractComponentSignals(
   _filePath: string,
   source: string,
-  tree: Parser.Tree,
+  tree: TSTree,
 ): ComponentSignals {
   const loc = source.split("\n").length;
   let import_count = 0;

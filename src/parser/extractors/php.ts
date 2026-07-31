@@ -1,4 +1,4 @@
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 import type { CodeSymbol, SymbolKind } from "../../types.js";
 import { getNodeName, makeSymbol } from "./_shared.js";
 
@@ -74,7 +74,7 @@ export function parsePhpDocVar(docstring?: string): string | undefined {
  * Walk backwards through siblings collecting contiguous doc comments.
  */
 function getDocstring(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   let prev = node.previousNamedSibling;
@@ -97,7 +97,7 @@ function getDocstring(
  * e.g. "(string $name, int $age = 0): bool"
  */
 function getSignature(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   source: string,
 ): string | undefined {
   const params = node.childForFieldName("parameters");
@@ -132,7 +132,7 @@ const TEST_BASE_NAMES = new Set([
  * source-side names — namespace resolution is the resolver's job, not the
  * extractor's.
  */
-function parseBaseClause(baseClause: Parser.SyntaxNode | null): string[] {
+function parseBaseClause(baseClause: TSNode | null): string[] {
   if (!baseClause) return [];
   const names: string[] = [];
   for (const child of baseClause.namedChildren) {
@@ -158,7 +158,7 @@ function parseBaseClause(baseClause: Parser.SyntaxNode | null): string[] {
  * Extract the list of interface names from a `class_interface_clause` node.
  * Mirrors `parseBaseClause` but strips the `implements` keyword.
  */
-function parseInterfaceClause(clause: Parser.SyntaxNode | null): string[] {
+function parseInterfaceClause(clause: TSNode | null): string[] {
   if (!clause) return [];
   const names: string[] = [];
   for (const child of clause.namedChildren) {
@@ -182,7 +182,7 @@ function parseInterfaceClause(clause: Parser.SyntaxNode | null): string[] {
  * Walk a class/trait body and collect the names of traits used via
  * `use TraitName;` declarations. Returns FQ names as written.
  */
-function collectTraitUses(body: Parser.SyntaxNode | null): string[] {
+function collectTraitUses(body: TSNode | null): string[] {
   if (!body) return [];
   const traits: string[] = [];
   for (const child of body.namedChildren) {
@@ -203,7 +203,7 @@ function collectTraitUses(body: Parser.SyntaxNode | null): string[] {
  * `abstract_modifier`, `final_modifier`, `readonly_modifier`, `static_modifier`,
  * and `visibility_modifier`. Returns a set of plain string flags.
  */
-function collectModifiers(node: Parser.SyntaxNode): {
+function collectModifiers(node: TSNode): {
   visibility?: "public" | "private" | "protected";
   is_static?: boolean;
   is_abstract?: boolean;
@@ -240,7 +240,7 @@ function collectModifiers(node: Parser.SyntaxNode): {
  *   #[Route('/api', methods: ['GET'])] → { name: "Route", args: "'/api', methods: ['GET']" }
  */
 function parseAttributes(
-  node: Parser.SyntaxNode,
+  node: TSNode,
 ): Array<{ name: string; args?: string }> {
   const attrs: Array<{ name: string; args?: string }> = [];
   // Attributes precede the decl as a sibling; we walk the immediate previous
@@ -261,7 +261,7 @@ function parseAttributes(
 }
 
 function walkAttributeList(
-  list: Parser.SyntaxNode,
+  list: TSNode,
   out: Array<{ name: string; args?: string }>,
 ): void {
   for (const group of list.namedChildren) {
@@ -294,7 +294,7 @@ function walkAttributeList(
  * substring-based on the last name segment so namespace prefixes don't
  * matter (e.g. `Codeception\\Test\\Unit` ends with `Unit`).
  */
-function isTestCaseClass(node: Parser.SyntaxNode): boolean {
+function isTestCaseClass(node: TSNode): boolean {
   const bases = collectClassExtends(node);
   for (const b of bases) {
     const last = b.split(/[\\\\]+/).pop() ?? "";
@@ -308,7 +308,7 @@ function isTestCaseClass(node: Parser.SyntaxNode): boolean {
  * of whether the parser exposes it via `childForFieldName("base_clause")`
  * or as a named child of type `base_clause`.
  */
-function collectClassExtends(node: Parser.SyntaxNode): string[] {
+function collectClassExtends(node: TSNode): string[] {
   let baseClause = node.childForFieldName("base_clause");
   if (!baseClause) {
     baseClause = node.namedChildren.find((c) => c.type === "base_clause") ?? null;
@@ -319,7 +319,7 @@ function collectClassExtends(node: Parser.SyntaxNode): string[] {
 /**
  * Helper: read the `implements` list from a class_declaration node.
  */
-function collectClassImplements(node: Parser.SyntaxNode): string[] {
+function collectClassImplements(node: TSNode): string[] {
   let clause = node.childForFieldName("class_interface_clause");
   if (!clause) {
     clause =
@@ -355,7 +355,7 @@ function classifyMethod(
  * Property elements contain variable_name → name nodes.
  * Returns the name without the $ prefix.
  */
-function getPropertyName(node: Parser.SyntaxNode): string | null {
+function getPropertyName(node: TSNode): string | null {
   for (const child of node.namedChildren) {
     if (child.type === "property_element") {
       // variable_name → name
@@ -382,7 +382,7 @@ function getPropertyName(node: Parser.SyntaxNode): string | null {
  *   intersection_type     (PHP 8.1+: A&B)
  *   disjunctive_normal_form_type (PHP 8.2+: (A&B)|C)
  */
-function getInlineType(node: Parser.SyntaxNode): string | undefined {
+function getInlineType(node: TSNode): string | undefined {
   const TYPE_NODES = new Set([
     "primitive_type",
     "named_type",
@@ -406,7 +406,7 @@ function getInlineType(node: Parser.SyntaxNode): string | undefined {
  * inline type is absent (legacy 7.2/7.3 code).
  */
 function buildPropertyMeta(
-  node: Parser.SyntaxNode,
+  node: TSNode,
   docstring: string | undefined,
 ): Record<string, unknown> {
   const meta: Record<string, unknown> = {};
@@ -433,7 +433,7 @@ function buildPropertyMeta(
 // --- Main extractor ---
 
 export function extractPhpSymbols(
-  tree: Parser.Tree,
+  tree: TSTree,
   filePath: string,
   source: string,
   repo: string,
@@ -447,7 +447,7 @@ export function extractPhpSymbols(
   // already exists under the same parent, skip synthesis. Body walk must run
   // BEFORE this function so the real members are in the symbols array.
   function synthesizeDocstringTags(
-    node: Parser.SyntaxNode,
+    node: TSNode,
     parent: CodeSymbol,
     docstring: string | undefined,
   ): void {
@@ -499,7 +499,7 @@ export function extractPhpSymbols(
    * fields from declared ones if they need to.
    */
   function emitPromotedCtorFields(
-    methodNode: Parser.SyntaxNode,
+    methodNode: TSNode,
     classId: string,
   ): void {
     const params = methodNode.childForFieldName("parameters")
@@ -535,7 +535,7 @@ export function extractPhpSymbols(
     }
   }
 
-  function walk(node: Parser.SyntaxNode, parentId?: string, parentIsTest = false): void {
+  function walk(node: TSNode, parentId?: string, parentIsTest = false): void {
     switch (node.type) {
       case "namespace_definition": {
         const nameNode = node.childForFieldName("name");

@@ -24,8 +24,7 @@
  * we do not read compilerOptions here, so graphs may under-report runtime edges in that mode.
  */
 
-import type Parser from "web-tree-sitter";
-
+import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 export interface TsImportEdge {
   /** raw specifier text from the import source (relative or bare/aliased) */
   path: string;
@@ -41,7 +40,7 @@ export interface TsImportEdge {
  * Some grammar versions wrap `type` inside an ERROR node for niche syntaxes
  * like `export type * from "y"`. We walk one level into ERROR children to
  * handle that case. */
-function statementIsTypeOnly(node: Parser.SyntaxNode): boolean {
+function statementIsTypeOnly(node: TSNode): boolean {
   for (const child of node.children) {
     if (child.type === "type" && child.text === "type") return true;
     if (child.type === "ERROR") {
@@ -55,7 +54,7 @@ function statementIsTypeOnly(node: Parser.SyntaxNode): boolean {
 
 /** Extract source string from `import_statement` or `export_statement` source field.
  * Returns undefined when the statement has no `from` clause (e.g. local export). */
-function getSourcePath(node: Parser.SyntaxNode): string | undefined {
+function getSourcePath(node: TSNode): string | undefined {
   // import_statement: source field directly
   // export_statement: also exposes source field when `from` is present
   const sourceField = node.childForFieldName("source");
@@ -77,7 +76,7 @@ function getSourcePath(node: Parser.SyntaxNode): string | undefined {
  * at least one specifier is NOT prefixed with `type` (per-specifier modifier).
  * For default + namespace imports (no named clause) anyRuntimeSpecifier=true. */
 function walkImportClause(
-  clause: Parser.SyntaxNode,
+  clause: TSNode,
 ): { specifiers: string[]; anyRuntimeSpecifier: boolean } {
   const specifiers: string[] = [];
   let anyRuntimeSpecifier = false;
@@ -120,7 +119,7 @@ function walkImportClause(
 
 /** Walk an `export_clause` (named re-exports) to collect names and whether any
  * specifier is not `type`-only (mirrors `import_specifier` rules). */
-function walkExportClause(clause: Parser.SyntaxNode): {
+function walkExportClause(clause: TSNode): {
   specifiers: string[];
   anyRuntimeSpecifier: boolean;
 } {
@@ -144,10 +143,10 @@ function walkExportClause(clause: Parser.SyntaxNode): {
 }
 
 /** Walk the tree and return all import + re-export edges. */
-export function extractTypeScriptImports(tree: Parser.Tree): TsImportEdge[] {
+export function extractTypeScriptImports(tree: TSTree): TsImportEdge[] {
   const edges: TsImportEdge[] = [];
 
-  function visit(node: Parser.SyntaxNode): void {
+  function visit(node: TSNode): void {
     if (node.type === "import_statement") {
       const requireClause = node.namedChildren.find(
         (c) => c.type === "import_require_clause",

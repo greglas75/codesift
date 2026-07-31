@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
-import type Parser from "web-tree-sitter";
+import type { Node as TSNode } from "web-tree-sitter";
 import { classifyZodField, stripQuotes } from "../astro-helpers.js";
 import type { ParsedField } from "./types.js";
 
-export function extractSchemaFields(schemaNode: Parser.SyntaxNode): ParsedField[] {
-  let target: Parser.SyntaxNode | null = null;
-  const stack: Parser.SyntaxNode[] = [schemaNode];
+export function extractSchemaFields(schemaNode: TSNode): ParsedField[] {
+  let target: TSNode | null = null;
+  const stack: TSNode[] = [schemaNode];
   while (stack.length > 0) {
     const node = stack.shift()!;
     if (node.type === "call_expression") {
