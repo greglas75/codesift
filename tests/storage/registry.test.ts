@@ -139,6 +139,35 @@ describe("registry", () => {
     });
   });
 
+  describe("concurrent writes", () => {
+    // Each mutating call is a read-modify-write over the WHOLE registry file.
+    // Fired without awaiting in between — which is what the watcher, background
+    // embedding and auto-index actually do — unserialised calls interleave as
+    // A-reads, B-reads, A-writes, B-writes, and A's repo is silently dropped.
+    it("keeps every repo when registerRepo calls overlap", async () => {
+      const names = Array.from({ length: 25 }, (_, i) => `local/app-${i}`);
+
+      await Promise.all(names.map((n) => registerRepo(registryPath, makeMeta(n))));
+
+      const repos = await listRepos(registryPath);
+      expect(repos.map((r) => r.name).sort()).toEqual([...names].sort());
+    });
+
+    it("does not lose concurrent removals", async () => {
+      const names = Array.from({ length: 20 }, (_, i) => `local/tmp-${i}`);
+      for (const n of names) await registerRepo(registryPath, makeMeta(n));
+
+      const doomed = names.slice(0, 10);
+      const results = await Promise.all(
+        doomed.map((n) => removeRepo(registryPath, n)),
+      );
+      expect(results.every(Boolean)).toBe(true);
+
+      const left = (await listRepos(registryPath)).map((r) => r.name).sort();
+      expect(left).toEqual(names.slice(10).sort());
+    });
+  });
+
   describe("getRepoName", () => {
     it("derives local/<folder> from an absolute path", () => {
       const result = getRepoName("/Users/foo/projects/myapp");

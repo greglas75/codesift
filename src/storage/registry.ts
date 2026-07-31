@@ -36,16 +36,43 @@ export async function saveRegistry(
 }
 
 /**
+ * Serialises read-modify-write cycles per registry file.
+ *
+ * `registerRepo` / `updateRepoMeta` / `removeRepo` each load the whole registry,
+ * mutate one entry and write it back. Nothing kept two of those from
+ * interleaving, so the classic lost update applied: A reads, B reads, A writes,
+ * B writes — and A's repo is silently gone from the registry. The caller sees a
+ * successful index followed by "Repository ... not found", or `prune` reporting
+ * zero repos.
+ *
+ * Concurrency here is not hypothetical even in a single process: watcher-driven
+ * re-indexing, background embedding and auto-index all call these unawaited
+ * while a foreground tool call is doing the same. `index-store.ts` already
+ * serialises its own writes this way (`writeLocks`); the registry never did.
+ */
+const registryWriteLocks = new Map<string, Promise<unknown>>();
+
+function withRegistryLock<T>(registryPath: string, work: () => Promise<T>): Promise<T> {
+  const prev = registryWriteLocks.get(registryPath) ?? Promise.resolve();
+  const next = prev.then(work, work);
+  // Swallow on the chain only — the caller still sees its own rejection.
+  registryWriteLocks.set(registryPath, next.then(() => undefined, () => undefined));
+  return next;
+}
+
+/**
  * Register or update a repo in the registry.
  */
 export async function registerRepo(
   registryPath: string,
   meta: RepoMeta,
 ): Promise<void> {
-  const registry = await loadRegistry(registryPath);
-  registry.repos[meta.name] = meta;
-  registry.updated_at = Date.now();
-  await saveRegistry(registryPath, registry);
+  return withRegistryLock(registryPath, async () => {
+    const registry = await loadRegistry(registryPath);
+    registry.repos[meta.name] = meta;
+    registry.updated_at = Date.now();
+    await saveRegistry(registryPath, registry);
+  });
 }
 
 /**
@@ -78,12 +105,14 @@ export async function updateRepoMeta(
   repoName: string,
   updates: Partial<Pick<RepoMeta, "last_git_commit" | "symbol_count" | "file_count" | "updated_at">>,
 ): Promise<void> {
-  const registry = await loadRegistry(registryPath);
-  const existing = registry.repos[repoName];
-  if (!existing) return;
-  Object.assign(existing, updates);
-  registry.updated_at = Date.now();
-  await saveRegistry(registryPath, registry);
+  return withRegistryLock(registryPath, async () => {
+    const registry = await loadRegistry(registryPath);
+    const existing = registry.repos[repoName];
+    if (!existing) return;
+    Object.assign(existing, updates);
+    registry.updated_at = Date.now();
+    await saveRegistry(registryPath, registry);
+  });
 }
 
 /**
@@ -94,16 +123,18 @@ export async function removeRepo(
   registryPath: string,
   name: string,
 ): Promise<boolean> {
-  const registry = await loadRegistry(registryPath);
+  return withRegistryLock(registryPath, async () => {
+    const registry = await loadRegistry(registryPath);
 
-  if (!(name in registry.repos)) {
-    return false;
-  }
+    if (!(name in registry.repos)) {
+      return false;
+    }
 
-  delete registry.repos[name];
-  registry.updated_at = Date.now();
-  await saveRegistry(registryPath, registry);
-  return true;
+    delete registry.repos[name];
+    registry.updated_at = Date.now();
+    await saveRegistry(registryPath, registry);
+    return true;
+  });
 }
 
 /**

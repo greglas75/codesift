@@ -75,7 +75,20 @@ export default defineConfig({
             "tests/utils/**/*.test.ts",
           ],
           environment: "node",
-          pool: "vmForks",
+          // `forks`, NOT `vmForks`. Measured on this suite: vmForks produced a
+          // green run only 2 times in 5, failing 1-3 files per run, and never
+          // the same files — ast-query, astro-pipeline, report-react,
+          // taint-tools, constant-resolution, workspace-tools and others took
+          // turns, each passing 10/10 in isolation. Every failure was an EMPTY
+          // result ("expected [] to have a length of 1", "Repository ... not
+          // found"), i.e. state that should have been there was not.
+          // Switching the pool made it 8 of 8 green and roughly halved the wall
+          // clock (~80s -> ~45s). The precise mechanism inside the VM context
+          // is not identified; what is established is that it is the pool, not
+          // the tests — the same files pass consistently under `forks`.
+          // vmForks originally came in with the prisma-ast/chevrotain alias
+          // work; those tests (15) pass under `forks` too.
+          pool: "forks",
           // Vitest 4 removed `test.poolOptions` — the former per-pool settings
           // are top-level now. Left as-is, `singleFork` would be silently
           // ignored, and it is not decoration: these suites share process-level
