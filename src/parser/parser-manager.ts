@@ -207,9 +207,12 @@ export async function parseFile(
     });
     const parsePromise = (async () => parser.parse(source))();
 
-    let tree: TSTree;
+    // `parse()` is nullable since web-tree-sitter 0.25. The guard below already
+    // handled that at runtime, but the old `as TSTree` cast hid it from the type
+    // system — so the type now says what the code actually does.
+    let tree: TSTree | null;
     try {
-      tree = (await Promise.race([parsePromise, timeoutPromise])) as TSTree;
+      tree = await Promise.race([parsePromise, timeoutPromise]);
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
