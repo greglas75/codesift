@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { join, basename, isAbsolute, resolve, sep } from "node:path";
 import { homedir } from "node:os";
-import { findWorkingTree } from "../utils/worktree.js";
+import { findWorkingTree, canonicalPath } from "../utils/worktree.js";
 // ---------------------------------------------------------------------------
 // Auto-resolve repo from CWD — eliminates mandatory list_repos on session start
 // ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ export function resolveRepoFromCwd(cwd: string, registryPath: string = defaultRe
 
   const tree = findWorkingTree(cwd);
   if (tree) {
-    const own = usable.find((r) => resolve(r.root) === tree.root);
+    const own = usable.find((r) => canonicalPath(r.root) === tree.root);
     if (own) return own.name;
   }
 

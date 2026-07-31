@@ -8,6 +8,8 @@ import { realpathSync } from "node:fs";
 import {
   findWorkingTree,
   isDifferentWorkingTree,
+  isAnswerFromWrongTree,
+  canonicalPath,
   mainCheckoutFromGitDir,
 } from "../../src/utils/worktree.js";
 import { resolveRepoFromCwd } from "../../src/server-helpers/repo-resolution.js";
@@ -166,5 +168,47 @@ describe("resolveRepoFromCwd — worktree awareness", () => {
     // answer describes another tree.
     expect(resolveRepoFromCwd(linked, registryPath)).toBe("local/repo");
     expect(isDifferentWorkingTree(linked, main)).toBe(true);
+  });
+});
+
+describe("isAnswerFromWrongTree — what actually earns a warning", () => {
+  it("warns for a worktree answered from its parent checkout", () => {
+    if (!gitAvailable) return;
+    expect(isAnswerFromWrongTree(linked, main)).toBe(true);
+  });
+
+  it("stays silent on deliberate cross-repo queries", async () => {
+    if (!gitAvailable) return;
+    // Asking about another project from this one is a different checkout by
+    // definition. Warning there fires on every cross_repo_search and trains the
+    // hint out of an agent's attention — the exact failure this narrowing
+    // prevents. Caught reviewing the first cut, which warned here.
+    const other = join(base, "other-repo");
+    await mkdir(join(other, "src"), { recursive: true });
+    git(other, "init", "-q", "-b", "main");
+    expect(isDifferentWorkingTree(main, other)).toBe(true); // genuinely different
+    expect(isAnswerFromWrongTree(main, other)).toBe(false); // but not a wrong-tree answer
+  });
+
+  it("stays silent for a subdirectory of the same checkout", () => {
+    if (!gitAvailable) return;
+    expect(isAnswerFromWrongTree(join(main, "src"), main)).toBe(false);
+    expect(isAnswerFromWrongTree(main, main)).toBe(false);
+  });
+});
+
+describe("canonicalPath", () => {
+  it("resolves symlinked paths so both sides of a compare agree", () => {
+    if (!gitAvailable) return;
+    // On macOS /tmp is a symlink to /private/tmp, so a repo under a symlinked
+    // path yields one spelling from the registry and another from a resolved
+    // CWD — an indexed worktree would then fail to match itself.
+    expect(canonicalPath("/tmp")).toBe(realpathSync("/tmp"));
+    expect(canonicalPath(main)).toBe(main);
+  });
+
+  it("falls back to the resolved path for something that does not exist", () => {
+    const missing = join(base, "no", "such", "dir");
+    expect(canonicalPath(missing)).toBe(missing);
   });
 });

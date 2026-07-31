@@ -219,6 +219,20 @@ const defaultRunner: CommandRunner = (cmd, args) => {
   }
 };
 
+/**
+ * GUI domain target for launchctl, e.g. `gui/501`.
+ *
+ * Never guesses. A hardcoded fallback here would aim `bootstrap`/`bootout` at
+ * whichever user happens to own that uid — 501 is simply the first account
+ * macOS creates, not necessarily this one — so a wrong guess would touch
+ * another user's launchd domain. Absent uid means we cannot address a domain
+ * at all, and saying so beats acting on a guess.
+ */
+function guiDomain(): string | null {
+  const uid = process.getuid?.();
+  return typeof uid === "number" ? `gui/${uid}` : null;
+}
+
 export function installService(opts: {
   port?: number;
   host?: string;
@@ -266,12 +280,18 @@ export function installService(opts: {
   let activated = false;
   let note: string | undefined;
   if (os === "darwin") {
-    // Replace any previous registration; `bootout` on a not-loaded label is a
-    // normal no-op, so its failure is not an error.
-    run("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${plan.label}`]);
-    const r = run("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 501}`, plan.unitPath]);
-    activated = r.ok;
-    if (!r.ok) note = `unit written, but launchctl bootstrap failed: ${r.message}`;
+    const domain = guiDomain();
+    if (!domain) {
+      note = "unit written, but this process has no uid — activate with "
+        + `launchctl bootstrap gui/$(id -u) ${plan.unitPath}`;
+    } else {
+      // `bootout` on a label that is not loaded is a normal no-op, so its
+      // failure is not an error — it exists to replace a previous registration.
+      run("launchctl", ["bootout", `${domain}/${plan.label}`]);
+      const r = run("launchctl", ["bootstrap", domain, plan.unitPath]);
+      activated = r.ok;
+      if (!r.ok) note = `unit written, but launchctl bootstrap failed: ${r.message}`;
+    }
   } else {
     run("systemctl", ["--user", "daemon-reload"]);
     const r = run("systemctl", ["--user", "enable", "--now", "codesift-daemon.service"]);
@@ -299,7 +319,8 @@ export function uninstallService(opts: {
   const plan = buildServicePlan({ ...opts, ...(opts.os ? { os: opts.os } : {}) });
   const existed = existsSync(plan.unitPath);
   if (os === "darwin") {
-    run("launchctl", ["bootout", `gui/${process.getuid?.() ?? 501}/${plan.label}`]);
+    const domain = guiDomain();
+    if (domain) run("launchctl", ["bootout", `${domain}/${plan.label}`]);
   } else {
     run("systemctl", ["--user", "disable", "--now", "codesift-daemon.service"]);
   }

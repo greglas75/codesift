@@ -1,5 +1,5 @@
 import { repoRootFor } from "./repo-resolution.js";
-import { findWorkingTree, isDifferentWorkingTree } from "../utils/worktree.js";
+import { findWorkingTree, isAnswerFromWrongTree } from "../utils/worktree.js";
 import { getCallCount, getSessionState } from "../storage/session-state.js";
 const HIGH_CARDINALITY_THRESHOLD = 50;
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
@@ -100,7 +100,7 @@ function worktreeMismatchNote(args: Record<string, unknown>): string | null {
   try {
     const cwd = process.cwd();
     const root = repoRootFor(repo);
-    if (!root || !isDifferentWorkingTree(cwd, root)) return null;
+    if (!root || !isAnswerFromWrongTree(cwd, root)) return null;
     const tree = findWorkingTree(cwd);
     const what = tree?.linked ? "a linked worktree" : "a different checkout";
     return `⚡H19 answering from "${repo}" (${root}) but your CWD is ${what} (${tree?.root ?? cwd}) `

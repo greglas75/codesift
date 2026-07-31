@@ -1,4 +1,4 @@
-import { statSync, readFileSync } from "node:fs";
+import { statSync, readFileSync, realpathSync } from "node:fs";
 import { join, dirname, isAbsolute, resolve, sep } from "node:path";
 
 /**
@@ -20,6 +20,27 @@ import { join, dirname, isAbsolute, resolve, sep } from "node:path";
 
 /** Depth guard — a working tree root is never 64 levels above the CWD. */
 const MAX_WALK_UP = 64;
+
+/**
+ * Canonical form of a path, symlinks resolved.
+ *
+ * Both sides of every comparison here go through this. On macOS `/tmp` is a
+ * symlink to `/private/tmp`, so a repo checked out under a symlinked path
+ * yields `/tmp/x` from the registry and `/private/tmp/x` from a resolved CWD —
+ * and a plain string compare then reports two names for one directory, which
+ * would make an indexed worktree fail to match itself.
+ *
+ * Falls back to the lexically resolved path when the target does not exist, so
+ * this never throws on a stale registry entry.
+ */
+export function canonicalPath(p: string): string {
+  const resolved = resolve(p);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 export interface WorkingTree {
   /** Root of the working tree the path belongs to. */
@@ -76,7 +97,7 @@ export function mainCheckoutFromGitDir(gitDir: string): string | null {
  * in that case, since plenty of indexed folders are not repositories.
  */
 export function findWorkingTree(startDir: string): WorkingTree | null {
-  let dir = resolve(startDir);
+  let dir = canonicalPath(startDir);
   for (let i = 0; i < MAX_WALK_UP; i++) {
     const link = readGitLink(dir);
     if (link) {
@@ -99,14 +120,36 @@ export function findWorkingTree(startDir: string): WorkingTree | null {
  *
  * Deliberately narrow: only a genuinely different working tree counts. A
  * subdirectory of the same checkout (monorepo package, `src/`) is the same
- * files and must not warn, or the hint becomes noise and gets ignored.
+ * files and must not warn.
  */
 export function isDifferentWorkingTree(cwd: string, repoRoot: string): boolean {
   const tree = findWorkingTree(cwd);
   if (!tree) return false;
-  const root = resolve(repoRoot);
+  const root = canonicalPath(repoRoot);
   if (tree.root === root) return false;
   // The repo root sits inside this working tree — same checkout, deeper root.
   if (root.startsWith(tree.root + sep)) return false;
   return true;
+}
+
+/**
+ * True only for the case worth warning about: the repo *looks* like the
+ * caller's because its root contains the CWD, yet the CWD belongs to a
+ * different working tree.
+ *
+ * The ancestor requirement is what keeps this from firing on deliberate
+ * cross-repo work. Querying another project from this one is a different
+ * checkout by definition, and warning there would be noise on every
+ * cross_repo_search and every "what does that other service do" question —
+ * which is precisely how a hint gets trained out of an agent's attention.
+ * The silent-failure case is narrower: `<repo>` is an ancestor of
+ * `<repo>/.worktrees/<task>`, so it matched by containment while describing
+ * files the caller does not have.
+ */
+export function isAnswerFromWrongTree(cwd: string, repoRoot: string): boolean {
+  const root = canonicalPath(repoRoot);
+  const here = canonicalPath(cwd);
+  const contains = here === root || here.startsWith(root + sep);
+  if (!contains) return false;
+  return isDifferentWorkingTree(cwd, repoRoot);
 }

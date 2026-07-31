@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,4 +31,55 @@ import { join } from "node:path";
  * private default instead of a shared one, and their `afterAll` delete no
  * longer strands the next file with no value at all, because setup re-runs.
  */
-process.env["CODESIFT_DATA_DIR"] = mkdtempSync(join(tmpdir(), "codesift-test-file-"));
+const PREFIX = "codesift-test-file-";
+
+/**
+ * Sweep dirs this file created on earlier runs.
+ *
+ * One per test file means ~360 per full run, each holding a registry and
+ * whatever indexes the file built — left alone they accumulate at hundreds of
+ * megabytes a day on a machine that runs the suite often. There is no teardown
+ * hook that can do it (a run killed with ctrl-C never reaches one), so each run
+ * cleans up after the previous ones instead.
+ *
+ * The age guard is what makes this safe under concurrent runs: a directory
+ * younger than an hour may belong to a suite running right now in another
+ * process, and deleting it would fail that run with exactly the
+ * `Repository ... not found` this whole setup exists to prevent.
+ */
+const MAX_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Once per worker process, not once per test file. setupFiles runs for every
+ * file, so without this a full readdir of a tmpdir holding thousands of entries
+ * happens ~360 times per run — a lot of syscalls for a job that one pass
+ * finishes. The flag lives in the environment because module state does not
+ * survive per-file isolation while the process environment does.
+ */
+function sweepStaleDataDirs(): void {
+  const SWEPT_FLAG = "CODESIFT_TEST_TMP_SWEPT";
+  if (process.env[SWEPT_FLAG] === "1") return;
+  process.env[SWEPT_FLAG] = "1";
+  const root = tmpdir();
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return; // Never let cleanup failure stop the suite from running.
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.startsWith(PREFIX)) continue;
+    const full = join(root, entry);
+    try {
+      if (now - statSync(full).mtimeMs < MAX_AGE_MS) continue;
+      rmSync(full, { recursive: true, force: true });
+    } catch {
+      // Racing another sweeper, or not ours to delete — skip it.
+    }
+  }
+}
+
+sweepStaleDataDirs();
+
+process.env["CODESIFT_DATA_DIR"] = mkdtempSync(join(tmpdir(), PREFIX));
