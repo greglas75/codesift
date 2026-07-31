@@ -8,7 +8,19 @@ import { homedir } from "node:os";
 /** Tools that accept a `repo` param and should auto-resolve from CWD */
 const TOOLS_WITHOUT_REPO = new Set(["list_repos", "index_folder", "index_repo", "index_conversations", "discover_tools", "describe_tools", "search_conversations", "search_all_conversations", "get_session_snapshot", "get_session_context", "usage_stats", "usage_hotspots", "usage_trace_session", "retros_list", "retros_analyze", "memory_candidate_extract", "optimization_candidates", "pope_insights_push_candidates", "test_tool"]);
 
-const REGISTRY_PATH = join(homedir(), ".codesift", "registry.json");
+/**
+ * Default registry location, honoring `CODESIFT_DATA_DIR` like every other
+ * consumer (config.ts, the hooks, usage-tracker, telemetry). This used to be a
+ * module-level `join(homedir(), ".codesift", …)` constant, which silently
+ * ignored the override: a process pointed at an alternate data dir still
+ * auto-resolved repos out of the real `~/.codesift/registry.json`. Resolved per
+ * call rather than once at import so setting the env var after module load
+ * still takes effect.
+ */
+function defaultRegistryPath(): string {
+  const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  return join(dataDir, "registry.json");
+}
 const CONVERSATIONS_PREFIX = join(homedir(), ".claude", "projects") + sep;
 
 interface RegistryRepoMeta {
@@ -21,7 +33,7 @@ interface RegistryRepoMeta {
 const registryCache = new Map<string, { mtimeMs: number; entries: RegistryRepoMeta[] }>();
 
 /** Read registry synchronously, cached by mtime to avoid disk hits in the hot path. */
-export function loadRegistrySync(registryPath: string = REGISTRY_PATH): RegistryRepoMeta[] {
+export function loadRegistrySync(registryPath: string = defaultRegistryPath()): RegistryRepoMeta[] {
   try {
     // Key the cache on the resolved path. The default is already absolute, so
     // this changes nothing for production callers — it stops a relative path
@@ -63,7 +75,7 @@ export function isAncestorOrEqual(ancestor: string, descendant: string): boolean
  *  4. If nothing matches, fall back to `local/<basename(cwd)>` so the tool
  *     surfaces a clear NOT INDEXED error instead of silently using a stale value.
  */
-export function resolveRepoFromCwd(cwd: string, registryPath: string = REGISTRY_PATH): string {
+export function resolveRepoFromCwd(cwd: string, registryPath: string = defaultRegistryPath()): string {
   const candidates = loadRegistrySync(registryPath).filter(
     (r) =>
       typeof r.root === "string" &&
@@ -94,7 +106,7 @@ export function resolveRepoFromCwd(cwd: string, registryPath: string = REGISTRY_
  */
 export function canonicalizeRepoName(
   repoName: string,
-  registryPath: string = REGISTRY_PATH,
+  registryPath: string = defaultRegistryPath(),
 ): string {
   if (isAbsolute(repoName)) return repoName; // resolved by path downstream
   const lower = repoName.toLowerCase();

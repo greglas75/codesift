@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { z } from "zod";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir, homedir } from "node:os";
+import { join, isAbsolute } from "node:path";
 
 import {
   rankTools,
@@ -512,10 +512,37 @@ describe("getToolEmbeddings", () => {
     }
   });
 
-  it("exposes an absolute cache path under ~/.codesift", () => {
+  it("exposes an absolute cache path inside the CodeSift data dir", () => {
     const p = getToolEmbeddingCachePath();
-    expect(p).toContain(".codesift");
+    expect(isAbsolute(p)).toBe(true);
     expect(p.endsWith("tool-embeddings.ndjson")).toBe(true);
+  });
+
+  // The path used to be a hardcoded join(homedir(), ".codesift", …), so a
+  // process pointed at another data dir still read and wrote the real cache.
+  it("honors CODESIFT_DATA_DIR", () => {
+    const prev = process.env["CODESIFT_DATA_DIR"];
+    try {
+      process.env["CODESIFT_DATA_DIR"] = "/tmp/codesift-alt-datadir";
+      expect(getToolEmbeddingCachePath()).toBe(
+        "/tmp/codesift-alt-datadir/tool-embeddings.ndjson",
+      );
+    } finally {
+      if (prev === undefined) delete process.env["CODESIFT_DATA_DIR"];
+      else process.env["CODESIFT_DATA_DIR"] = prev;
+    }
+  });
+
+  it("falls back to ~/.codesift when no data dir is set", () => {
+    const prev = process.env["CODESIFT_DATA_DIR"];
+    try {
+      delete process.env["CODESIFT_DATA_DIR"];
+      expect(getToolEmbeddingCachePath()).toBe(
+        join(homedir(), ".codesift", "tool-embeddings.ndjson"),
+      );
+    } finally {
+      if (prev !== undefined) process.env["CODESIFT_DATA_DIR"] = prev;
+    }
   });
 });
 

@@ -10,7 +10,11 @@ export interface CachedToolEmbeddings {
 }
 
 export function getToolEmbeddingCachePath(): string {
-  return join(homedir(), ".codesift", "tool-embeddings.ndjson");
+  // Honors CODESIFT_DATA_DIR like the rest of the data-dir consumers; hardcoding
+  // homedir() here meant a process pointed elsewhere still read and wrote the
+  // real `~/.codesift` cache.
+  const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  return join(dataDir, "tool-embeddings.ndjson");
 }
 
 export async function readToolEmbeddingCache(path: string): Promise<CachedToolEmbeddings | null> {
