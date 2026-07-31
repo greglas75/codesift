@@ -14,6 +14,7 @@ Commands:
   prune [--dry-run]               Delete orphaned cache (embeddings/index of dead repos)
   cleanup-processes [--dry-run]   Kill stale MCP helper processes that leak memory
   serve [--port N] [--host H]     Run one shared local daemon (embeddings load once for all windows)
+  service install|uninstall|status  Supervise that daemon (autostart + restart on crash)
   index-conversations [path]      Index Claude Code conversations for the current project
 
   search <repo> <query>           Full-text search across all files
@@ -76,6 +77,27 @@ Examples:
 `;
 
 export const COMMAND_HELP: Record<string, string> = {
+  service: `codesift service <install|uninstall|status> [--port N] [--host H] [--force]
+
+Run the shared daemon as a supervised background service so clients can rely on
+it being there: it starts at login, restarts if it crashes, and survives closing
+the terminal. Without supervision 'codesift serve' dies with its shell, and every
+client configured with 'setup --http' is left pointing at nothing.
+
+  install     Write and activate the unit (macOS LaunchAgent / Linux systemd user
+              unit), then start the daemon. --force overwrites an existing unit.
+  uninstall   Deactivate and remove it. Use this to stop the daemon for good —
+              killing the process only makes the supervisor start it again.
+  status      Whether the unit is installed and the daemon currently running.
+
+Per-user and unprivileged: nothing here needs root, and a process holding every
+index on the machine should not have it.
+
+The host must stay on loopback. The daemon answers tool calls that read any
+indexed repository and has no authentication by default, so binding it to a
+routable address publishes your source tree; install refuses to do that.
+
+Logs land in <data-dir>/logs/daemon.{out,err}.log.`,
   index: `codesift index <path> [options]
 
 Index a local folder, extracting symbols and building the search index.

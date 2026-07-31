@@ -862,6 +862,46 @@ async function handleFindClones(args: string[], flags: Flags): Promise<void> {
   output(result, flags);
 }
 
+
+/**
+ * `codesift service install|uninstall|status` — supervise the shared daemon.
+ *
+ * `serve` alone dies with the terminal that started it and never comes back
+ * after a crash or reboot, which is precisely the failure the shared-daemon
+ * model cannot tolerate: every client is configured to talk to one process.
+ */
+async function handleService(args: string[], flags: Flags): Promise<void> {
+  const { installService, uninstallService, serviceStatus, DEFAULT_SERVICE_PORT } =
+    await import("./service.js");
+  const { loadConfig } = await import("../config.js");
+  const dataDir = loadConfig().dataDir;
+  const sub = args[0] ?? "status";
+
+  try {
+    if (sub === "install") {
+      const port = getNumFlag(flags, "port") ?? DEFAULT_SERVICE_PORT;
+      const host = getFlag(flags, "host") ?? "127.0.0.1";
+      output(
+        installService({ dataDir, port, host, force: getBoolFlag(flags, "force") === true }),
+        flags,
+      );
+      return;
+    }
+    if (sub === "uninstall") {
+      output(uninstallService({ dataDir }), flags);
+      return;
+    }
+    if (sub === "status") {
+      output(serviceStatus({ dataDir }), flags);
+      return;
+    }
+  } catch (e) {
+    die(`service: ${(e as Error).message}`);
+    return;
+  }
+  die(`service: unknown subcommand "${sub}" (expected install, uninstall or status)`);
+}
+
 // ---------------------------------------------------------------------------
 // Command dispatch map
 // ---------------------------------------------------------------------------
@@ -874,6 +914,7 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "prune": handlePrune,
   "cleanup-processes": handleCleanupProcesses,
   "serve": handleServe,
+  "service": handleService,
   "index-conversations": handleIndexConversations,
   "search": handleSearch,
   "symbols": handleSymbols,
