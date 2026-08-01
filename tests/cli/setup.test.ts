@@ -326,20 +326,40 @@ describe("setup", () => {
 
   describe("--http (shared daemon client)", () => {
     it("writes an HTTP client entry (type/url, no stdio command) for claude", async () => {
-      const result = await setup("claude", { http: true });
+      const result = await setup("claude", { http: true, cwd: "/proj/alpha" });
       expect(result.status).toBe("created");
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
         type: "http",
-        url: "http://127.0.0.1:7077/mcp",
+        url: "http://127.0.0.1:7077/mcp?cwd=%2Fproj%2Falpha",
       });
       expect(content.mcpServers.codesift.command).toBeUndefined();
     });
 
-    it("honors a custom --port in the URL", async () => {
-      const result = await setup("claude", { http: true, port: 9001 });
+    it("pins the project directory into the URL", async () => {
+      // The daemon is one process for every client, started in `/`, and Claude
+      // Code answers `roots/list` with -32601 Method not found — so the config
+      // is the only thing that can say where this client works. Without it,
+      // every auto-resolved call returns `Repository "local/" not found`.
+      const result = await setup("claude", { http: true, cwd: "/proj/beta" });
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.url).toBe("http://127.0.0.1:9001/mcp");
+      const url = new URL(content.mcpServers.codesift.url);
+      expect(url.searchParams.get("cwd")).toBe("/proj/beta");
+    });
+
+    it("defaults the pinned directory to the CWD", async () => {
+      const result = await setup("claude", { http: true });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      const url = new URL(content.mcpServers.codesift.url);
+      expect(url.searchParams.get("cwd")).toBe(process.cwd());
+    });
+
+    it("honors a custom --port in the URL", async () => {
+      const result = await setup("claude", { http: true, port: 9001, cwd: "/proj/gamma" });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      const url = new URL(content.mcpServers.codesift.url);
+      expect(url.port).toBe("9001");
+      expect(url.searchParams.get("cwd")).toBe("/proj/gamma");
     });
 
     it("stdio remains the default without the flag", async () => {
@@ -367,7 +387,7 @@ describe("setup", () => {
       const result = await setup("codex", { http: true });
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain("[mcp_servers.codesift]");
-      expect(content).toContain('url = "http://127.0.0.1:7077/mcp"');
+      expect(content).toMatch(/url = "http:\/\/127\.0\.0\.1:7077\/mcp\?cwd=/);
       expect(content).not.toContain("command =");
     });
   });

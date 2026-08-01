@@ -20,6 +20,11 @@ export interface SetupOptions {
   gitHooks?: boolean;
   /** Write shared-daemon HTTP client config instead of stdio config. */
   http?: boolean;
+  /**
+   * Project directory to pin into the daemon URL. Defaults to the CWD.
+   * An HTTP entry is per-project by construction — see `daemonHttpUrl`.
+   */
+  cwd?: string;
   /** Shared-daemon port; defaults to 7077. */
   port?: number;
 }

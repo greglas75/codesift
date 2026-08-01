@@ -92,7 +92,7 @@ function jsonString(value: string): string {
 
 function getCodexServerEntryLines(options?: SetupOptions): string {
   if (options?.http) {
-    return "url = " + jsonString(daemonHttpUrl(options.port));
+    return "url = " + jsonString(daemonHttpUrl(options.port, options.cwd));
   }
   const entry = resolveMcpServerEntry();
   return (

@@ -17,6 +17,8 @@ import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { resolve as pathResolve } from "node:path";
+import { statSync } from "node:fs";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
 
 // Re-export for test compatibility
@@ -173,13 +175,50 @@ export async function startHttpServer(
   type Session = {
     transport: InstanceType<typeof StreamableHTTPServerTransport>;
     server: McpServer;
-    /** Client's working directory, learned from its MCP roots. */
+    /** Client's working directory — from the URL, else its MCP roots. */
     cwd?: string;
     /** Roots asked for already — success or not, we only ask once. */
     rootsResolved?: boolean;
     /** In-flight one-shot roots lookup; later requests await it. */
     rootsPromise?: Promise<void>;
   };
+
+
+  /**
+   * Working directory declared in the connection URL: `/mcp?cwd=/abs/path`.
+   *
+   * This exists because the protocol's own answer — `roots/list` — is not
+   * universally implemented. Claude Code answers it with
+   * `-32601 Method not found`, so a daemon serving it has no way to learn where
+   * the caller works, and every auto-resolved call fails. The client cannot
+   * tell us, but its CONFIG can: a project-scoped MCP entry pins the directory
+   * into the URL, and the daemon reads it off every request.
+   *
+   * Takes precedence over roots when both are present — the URL is what the
+   * user configured for this project, roots are a guess about the window.
+   *
+   * Validated rather than trusted: an absolute path to a real directory or
+   * nothing. Not a security boundary (the daemon is loopback-only and already
+   * serves every indexed repo to any local caller) but it keeps a typo from
+   * silently resolving every repo to garbage.
+   */
+  function cwdFromUrl(rawUrl: string): string | undefined {
+    const q = rawUrl.indexOf("?");
+    if (q < 0) return undefined;
+    let value: string | null;
+    try {
+      value = new URLSearchParams(rawUrl.slice(q + 1)).get("cwd");
+    } catch {
+      return undefined;
+    }
+    if (!value) return undefined;
+    try {
+      const resolved = pathResolve(value);
+      return statSync(resolved).isDirectory() ? resolved : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   /**
    * Learn a session's working directory from the client's MCP roots.
@@ -310,7 +349,14 @@ export async function startHttpServer(
           method?: unknown; id?: unknown;
         };
         const isRequest = typeof msg.method === "string" && msg.id !== undefined;
-        if (req.method === "POST" && isRequest && !session.rootsResolved) {
+        // A URL-pinned directory makes the roots round-trip unnecessary — and
+        // for clients that answer `roots/list` with "method not found", it is
+        // the only thing that works at all.
+        const urlCwd = cwdFromUrl(url);
+        if (urlCwd) {
+          session.cwd = urlCwd;
+          session.rootsResolved = true;
+        } else if (req.method === "POST" && isRequest && !session.rootsResolved) {
           const s = session;
           s.rootsPromise = ensureSessionCwd(s);
         }

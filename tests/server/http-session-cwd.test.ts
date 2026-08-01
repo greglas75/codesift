@@ -110,3 +110,51 @@ describe("HTTP daemon — learning the client's directory", () => {
     await client.close();
   }, 90_000);
 });
+
+describe("HTTP daemon — directory pinned in the connection URL", () => {
+  let close: (() => Promise<void>) | null = null;
+  afterEach(async () => {
+    if (close) await close();
+    close = null;
+  });
+
+  it("takes precedence over roots, so the round-trip never happens", async () => {
+    // The protocol's own mechanism is not enough in practice: Claude Code
+    // answers `roots/list` with -32601 Method not found, so a daemon serving it
+    // has no way to learn where the caller works and every auto-resolved call
+    // fails. The client cannot tell us, but its CONFIG can.
+    //
+    // This client CAN answer roots — and must still never be asked, because the
+    // URL is what the user configured for this project while roots are a guess
+    // about the window.
+    const handle = await startHttpServer({ port: 0 });
+    close = handle.close;
+
+    let asked = false;
+    const client = new Client({ name: "url-cwd", version: "1" }, { capabilities: { roots: {} } });
+    client.setRequestHandler(ListRootsRequestSchema, () => {
+      asked = true;
+      return { roots: [] };
+    });
+
+    const url = new URL(`${handle.url}?cwd=${encodeURIComponent(process.cwd())}`);
+    await client.connect(new StreamableHTTPClientTransport(url));
+    await client.listTools();
+
+    // A pinned directory makes the roots round-trip unnecessary.
+    expect(asked).toBe(false);
+    await client.close();
+  }, 60_000);
+
+  it("ignores a cwd that is not a real directory rather than resolving to garbage", async () => {
+    const handle = await startHttpServer({ port: 0 });
+    close = handle.close;
+    const client = new Client({ name: "bad-cwd", version: "1" }, { capabilities: {} });
+    // Nonexistent path: the daemon must fall through, not adopt it.
+    const url = new URL(`${handle.url}?cwd=${encodeURIComponent("/no/such/dir/anywhere")}`);
+    await client.connect(new StreamableHTTPClientTransport(url));
+    const tools = await client.listTools();
+    expect(tools.tools.length).toBeGreaterThan(0);
+    await client.close();
+  }, 90_000);
+});

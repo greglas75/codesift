@@ -36,13 +36,30 @@ export function resolveMcpServerEntry(): { command: string; args: string[] } {
 
 const MCP_SERVER_ENTRY = resolveMcpServerEntry();
 
-export function daemonHttpUrl(port?: number): string {
-  return "http://127.0.0.1:" + (port ?? DEFAULT_DAEMON_PORT) + "/mcp";
+/**
+ * Daemon URL, with the caller's project directory pinned into it.
+ *
+ * The daemon is one process for every client and launchd starts it in `/`, so
+ * it cannot know where any given client works. The protocol's answer to that is
+ * `roots/list` — but Claude Code replies `-32601 Method not found`, so for the
+ * main client it does not exist. Measured, not assumed: switching it to a plain
+ * daemon URL made every auto-resolved call fail with
+ * `Repository "local/" not found`.
+ *
+ * The client cannot tell the daemon where it is; its CONFIG can. Pinning the
+ * directory here is what makes an HTTP entry usable at all, which is also why
+ * an HTTP entry is inherently PER-PROJECT — one shared URL cannot describe two
+ * projects.
+ */
+export function daemonHttpUrl(port?: number, cwd?: string): string {
+  const base = "http://127.0.0.1:" + (port ?? DEFAULT_DAEMON_PORT) + "/mcp";
+  const dir = cwd ?? process.cwd();
+  return base + "?cwd=" + encodeURIComponent(dir);
 }
 
 export function buildJsonServerEntry(options?: SetupOptions): Record<string, unknown> {
   if (options?.http) {
-    return { type: "http", url: daemonHttpUrl(options.port) };
+    return { type: "http", url: daemonHttpUrl(options.port, options.cwd) };
   }
   return { ...MCP_SERVER_ENTRY };
 }
