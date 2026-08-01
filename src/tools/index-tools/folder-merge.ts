@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { isExistingIndexStale } from "./snapshots.js";
+import { IGNORE_DIRS } from "../../utils/walk.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../../types.js";
 import type { FileHashSnapshot } from "../../storage/hash-snapshot.js";
 import type { IndexFolderResult } from "./types.js";
@@ -23,6 +24,35 @@ export interface FolderMergeResult {
   mergedSymbols: CodeSymbol[];
   mergedEntries: FileEntry[];
   mergedSnapshotFiles: Record<string, string>;
+}
+
+
+/**
+ * Fraction of an existing index's paths that today's walk would refuse to visit.
+ *
+ * The sanity guard exists to catch a TRUNCATED walk — a WASM crash or FS error
+ * that silently returns a slice of the repo. A file the walker now deliberately
+ * skips is not evidence of that, but it looks identical by file count, and the
+ * on-disk auto-heal cannot tell them apart either: an excluded file is still on
+ * disk, so sampling finds it present and the guard rejects.
+ *
+ * That is not hypothetical. Adding `vendor/` to the ignore set drops
+ * `tgm-collect` from 11,622 files to 1,557 (87% of its index was Composer
+ * dependencies) — a legitimate, desired shrink that the guard would reject
+ * forever, so the fix could never actually take effect on the repos that needed
+ * it most.
+ */
+function existingFractionNowExcluded(existing: CodeIndex): number {
+  if (existing.files.length === 0) return 0;
+  let excluded = 0;
+  for (const fe of existing.files) {
+    const segments = fe.path.split("/");
+    // Directory segments only — the filename is not a directory, and a dotfile
+    // at the leaf (.eslintrc.js) is indexed while a dot-DIRECTORY is not.
+    segments.pop();
+    if (segments.some((s) => IGNORE_DIRS.has(s) || s.startsWith("."))) excluded++;
+  }
+  return excluded / existing.files.length;
 }
 
 export async function validateAndMergeFolderWalk(
@@ -162,7 +192,16 @@ export async function validateAndMergeFolderWalk(
     // truncated and gets rejected forever. Disambiguate by sampling the old
     // index's paths: if most of them no longer exist on disk, the old index
     // is stale dead weight — accept the new result instead of keeping it.
-    if (await isExistingIndexStale(existing, rootPath)) {
+    const excludedFraction = existingFractionNowExcluded(existing);
+    if (excludedFraction >= STALE_MISSING_FRACTION) {
+      // The shrink is explained by the walker's own rules, not by a failure.
+      console.error(
+        `[codesift] Sanity check auto-heal for ${repoName}: ` +
+        `${Math.round(excludedFraction * 100)}% of the old index sits under directories ` +
+        `the walker now excludes (e.g. vendor/, node_modules/). Accepting new index ` +
+        `(${fileEntries.length} files vs ${existing.file_count}).`,
+      );
+    } else if (await isExistingIndexStale(existing, rootPath)) {
       console.error(
         `[codesift] Sanity check auto-heal for ${repoName}: old index has ` +
         `${existing.file_count} files but most sampled paths no longer exist ` +
