@@ -105,4 +105,21 @@ describe("sanity guard vs a newly-excluded directory", () => {
     const result = await validateAndMergeFolderWalk(contextFor(old, ["src/Real0.php"]));
     expect(wasRejected(result)).toBe(false);
   });
+
+  it("still rejects a truncated walk on a vendor-heavy repo", async () => {
+    // The hole an adversarial pass found in the first cut: the excluded
+    // fraction describes the OLD index's composition and says nothing about
+    // whether the NEW walk succeeded. With 90 of 100 files excluded the bypass
+    // fired unconditionally, so a walk that aborted after 2 of the 10 real
+    // files was accepted and the other 8 were wiped.
+    const old = existingIndex([
+      ...Array.from({ length: 90 }, (_, i) => `vendor/dep/File${i}.php`),
+      ...Array.from({ length: 100 }, (_, i) => `src/Real${i}.php`),
+    ]);
+    // 100 real files expected, walk returned 5.
+    const result = await validateAndMergeFolderWalk(
+      contextFor(old, Array.from({ length: 5 }, (_, i) => `src/Real${i}.php`)),
+    );
+    expect(wasRejected(result)).toBe(true);
+  });
 });

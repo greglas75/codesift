@@ -42,8 +42,7 @@ export interface FolderMergeResult {
  * forever, so the fix could never actually take effect on the repos that needed
  * it most.
  */
-function existingFractionNowExcluded(existing: CodeIndex): number {
-  if (existing.files.length === 0) return 0;
+function countExistingNowExcluded(existing: CodeIndex): number {
   let excluded = 0;
   for (const fe of existing.files) {
     const segments = fe.path.split("/");
@@ -52,7 +51,7 @@ function existingFractionNowExcluded(existing: CodeIndex): number {
     segments.pop();
     if (segments.some((s) => IGNORE_DIRS.has(s) || s.startsWith("."))) excluded++;
   }
-  return excluded / existing.files.length;
+  return excluded;
 }
 
 export async function validateAndMergeFolderWalk(
@@ -192,14 +191,24 @@ export async function validateAndMergeFolderWalk(
     // truncated and gets rejected forever. Disambiguate by sampling the old
     // index's paths: if most of them no longer exist on disk, the old index
     // is stale dead weight — accept the new result instead of keeping it.
-    const excludedFraction = existingFractionNowExcluded(existing);
-    if (excludedFraction >= STALE_MISSING_FRACTION) {
+    const excludedCount = existing.files.length === 0 ? 0 : countExistingNowExcluded(existing);
+    const excludedFraction = existing.files.length === 0 ? 0 : excludedCount / existing.files.length;
+    // What the walk SHOULD still find once the excluded tree is discounted.
+    // Re-arming the same 50% drop test against this number is what keeps the
+    // exclusion bypass from swallowing a genuine truncation: the excluded
+    // fraction describes the OLD index's composition and says nothing about
+    // whether the NEW walk succeeded. Without it, a vendor-heavy repo whose
+    // walk aborted early — 800 files where ~5,000 were expected — would sail
+    // through, because 87% of the old index is still "explained".
+    const expectedRemaining = existing.files.length - excludedCount;
+    const walkPlausible = fileEntries.length >= expectedRemaining * DROP_THRESHOLD;
+    if (excludedFraction >= STALE_MISSING_FRACTION && walkPlausible) {
       // The shrink is explained by the walker's own rules, not by a failure.
       console.error(
         `[codesift] Sanity check auto-heal for ${repoName}: ` +
         `${Math.round(excludedFraction * 100)}% of the old index sits under directories ` +
         `the walker now excludes (e.g. vendor/, node_modules/). Accepting new index ` +
-        `(${fileEntries.length} files vs ${existing.file_count}).`,
+        `(${fileEntries.length} files vs ${existing.file_count}, ~${expectedRemaining} expected).`,
       );
     } else if (await isExistingIndexStale(existing, rootPath)) {
       console.error(
