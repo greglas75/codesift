@@ -22,8 +22,11 @@ import { loadConfig } from "../config.js";
 import { embedSymbols, embedChunks } from "../tools/index-tools/parse.js";
 
 import { EMBED_CHILD_OK_MARKER } from "./embed-child-marker.js";
+import { exitWhenOrphaned } from "./orphan-guard.js";
 
 async function main(): Promise<void> {
+  // A detached worker that outlives its parent has no consumer for its work.
+  exitWhenOrphaned();
   const [indexPath, repoName, rootPath] = process.argv.slice(2);
   if (!indexPath || !repoName || !rootPath) {
     process.stderr.write("embed-child: expected <indexPath> <repoName> <rootPath>\n");
