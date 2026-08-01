@@ -2,6 +2,7 @@ import { statSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { currentCwd } from "../server-helpers/request-context.js";
 import {
   wrapTool,
   resolveRepoFromCwd,
@@ -286,10 +287,24 @@ function isTimeoutResult(value: unknown): value is TimeoutResult {
   return typeof value === "object" && value !== null && (value as { status?: unknown }).status === "timed_out";
 }
 
-/** The repo a call targets: explicit `repo` arg, else resolved from CWD (as wrapTool does). */
+/**
+ * The repo a call targets: explicit `repo` arg, else resolved from the REQUEST's
+ * cwd (as wrapTool does).
+ *
+ * `currentCwd()`, not `process.cwd()`. This runs from `cacheKeyFor`, which
+ * `withCache` evaluates BEFORE `base` — and `base` is what invokes wrapTool →
+ * `resolveToolRepoArgs`. So on exactly the calls that omit `repo`, the argument
+ * is still absent here and this fallback is what decides the key.
+ *
+ * Under the shared daemon the process cwd is `/`, which resolves to `local/`,
+ * whose index version is empty — so `cacheKeyFor` returned null and the
+ * index-version-aware cache was silently dead for every auto-resolved call.
+ * Worse when the daemon is started by hand from inside some repo: the key then
+ * embeds THAT repo's freshness token while memoizing another repo's result.
+ */
 function repoForArgs(args: Record<string, unknown>): string {
   const explicit = args["repo"];
-  return typeof explicit === "string" && explicit ? explicit : resolveRepoFromCwd(process.cwd());
+  return typeof explicit === "string" && explicit ? explicit : resolveRepoFromCwd(currentCwd());
 }
 
 /**

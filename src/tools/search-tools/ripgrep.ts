@@ -51,13 +51,32 @@ function buildRipgrepArgs(root: string, query: string, options: RipgrepOptions):
   return args;
 }
 
-function executeRipgrep(args: string[], signal: AbortSignal | undefined): Promise<string> {
+/**
+ * Run rg with its CWD set to the repo root.
+ *
+ * A `--glob` containing a `/` is anchored to ripgrep's WORKING DIRECTORY, not to
+ * the search path passed as an argument. Under stdio that was invisible: the
+ * server inherited the client's project directory, so `src/**` happened to
+ * anchor correctly. The shared daemon runs from `/` (launchd), where the same
+ * glob anchors at the filesystem root and matches nothing — every scoped search
+ * silently returned zero results while an unscoped one worked, so it read as
+ * "no matches" rather than "bad scope".
+ *
+ * Basename globs like `*.ts` were unaffected, which is what made this look like
+ * a glob-syntax problem instead of a working-directory one.
+ */
+function executeRipgrep(
+  args: string[],
+  signal: AbortSignal | undefined,
+  cwd: string,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("rg", args, {
       encoding: "utf-8",
       maxBuffer: 20 * 1024 * 1024,
       timeout: RIPGREP_TIMEOUT_MS,
       signal,
+      cwd,
     }, (error, stdout) => {
       if (!error) return resolve(stdout);
       const exitCode = (error as Error & { code?: number | string }).code;
@@ -166,7 +185,7 @@ export async function searchWithRipgrep(
   query: string,
   options: RipgrepOptions,
 ): Promise<TextMatch[]> {
-  const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), options.signal);
+  const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), options.signal, root);
   const rootPrefix = root.endsWith("/") ? root : `${root}/`;
   return parseRipgrepOutput(stdout, rootPrefix, options.maxResults, options.contextLines);
 }
