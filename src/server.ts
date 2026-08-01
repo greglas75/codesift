@@ -296,11 +296,23 @@ export async function startHttpServer(
         let session: Session | undefined = sessionId ? sessions.get(sessionId) : undefined;
         if (!session) {
           if (!isInit) {
-            res.writeHead(400, { "content-type": "application/json" });
+            // 404, not 400 — the spec makes this the signal that a session is
+            // gone and the client MUST start a new one with a fresh
+            // InitializeRequest. It matters here because a daemon restart (any
+            // `service install --force`, i.e. every upgrade) invalidates every
+            // live session at once; with a 400 the client has no defined way to
+            // tell "your session expired" from "you sent nonsense", and stays
+            // broken until someone reconnects it by hand.
+            //
+            // Not a complete fix on its own: the SDK client in use today throws
+            // on any non-2xx rather than re-initializing on 404. Sending the
+            // correct status is what lets a client recover once it implements
+            // the rule, and costs nothing meanwhile.
+            res.writeHead(404, { "content-type": "application/json" });
             res.end(
               JSON.stringify({
                 jsonrpc: "2.0",
-                error: { code: -32000, message: "Bad Request: no valid session (initialize first)" },
+                error: { code: -32001, message: "Session not found — reinitialize" },
               }),
             );
             return;
