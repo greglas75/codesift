@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join, basename, isAbsolute, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { findWorkingTree, canonicalPath } from "../utils/worktree.js";
+import { currentCwd } from "./request-context.js";
 // ---------------------------------------------------------------------------
 // Auto-resolve repo from CWD — eliminates mandatory list_repos on session start
 // ---------------------------------------------------------------------------
@@ -160,7 +161,10 @@ export function resolveToolRepoArgs(toolName: string, args: Record<string, unkno
     return;
   }
   if (!provided) {
-    args["repo"] = resolveRepoFromCwd(process.cwd());
+    // The REQUEST's cwd, not the process's. Under the shared HTTP daemon these
+    // differ for every client but one — the daemon runs from `/`, so using
+    // process.cwd() resolved every auto-resolved call to `local/` and failed.
+    args["repo"] = resolveRepoFromCwd(currentCwd());
   }
 }
 

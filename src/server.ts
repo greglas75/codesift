@@ -16,6 +16,8 @@ import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { runWithRequestContext } from "./server-helpers/request-context.js";
 
 // Re-export for test compatibility
 export { buildResponseHint, resetSessionState } from "./server-helpers.js";
@@ -171,8 +173,61 @@ export async function startHttpServer(
   type Session = {
     transport: InstanceType<typeof StreamableHTTPServerTransport>;
     server: McpServer;
+    /** Client's working directory, learned from its MCP roots. */
+    cwd?: string;
+    /** Roots asked for already — success or not, we only ask once. */
+    rootsResolved?: boolean;
+    /** In-flight one-shot roots lookup; later requests await it. */
+    rootsPromise?: Promise<void>;
   };
+
+  /**
+   * Learn a session's working directory from the client's MCP roots.
+   *
+   * The daemon is one process for every client on the machine and launchd
+   * starts it in `/`, so `process.cwd()` names no client's project. Without
+   * this, every auto-resolved tool call answered `Repository "local/" not
+   * found` — auto-resolution is the documented default, so that is most calls.
+   * `roots/list` is the protocol's own answer to "where is the caller working";
+   * we ask once per session and cache.
+   *
+   * Best-effort on purpose: a client that declares no roots capability, errors,
+   * or reports none leaves `cwd` unset and the request falls back to
+   * `process.cwd()` — no worse than before, and never a thrown request.
+   */
+  async function ensureSessionCwd(session: Session): Promise<void> {
+    if (session.rootsResolved) return;
+    session.rootsResolved = true;
+    try {
+      // Bounded, and much shorter than the SDK's 60s default. A client that
+      // declares no roots support never answers, and the daemon must not stall
+      // that client's FIRST tool call for a minute waiting to find out — the
+      // answer is cached for the session, so the cost is paid once either way.
+      const result = await session.server.server.listRoots(undefined, {
+        timeout: ROOTS_LOOKUP_TIMEOUT_MS,
+      });
+      for (const root of result.roots ?? []) {
+        const uri = typeof root.uri === "string" ? root.uri : "";
+        if (!uri.startsWith("file://")) continue;
+        session.cwd = fileURLToPath(uri);
+        break;
+      }
+      if (session.cwd) {
+        console.error(`[codesift] session cwd from client roots: ${session.cwd}`);
+      } else {
+        console.error("[codesift] client reported no usable file:// root — repo auto-resolution will not work for it");
+      }
+    } catch (err) {
+      console.error(
+        `[codesift] client does not support roots/list (${(err as Error).message}) — `
+        + "repo auto-resolution will not work for it; pass repo= explicitly",
+      );
+    }
+  }
   const sessions = new Map<string, Session>();
+
+  /** How long to wait for a client to answer `roots/list` before giving up. */
+  const ROOTS_LOOKUP_TIMEOUT_MS = 2000;
 
   const httpServer = http.createServer((req, res) => {
     void (async () => {
@@ -212,12 +267,18 @@ export async function startHttpServer(
             return;
           }
           const mcp = createCodesiftServer();
+          // ONE object, referenced by both the map and the local variable.
+          // Building a second literal inside onsessioninitialized meant every
+          // mutation made while serving a request (the learned cwd) landed on an
+          // object the next request would never see.
+          const created: Session = { transport: undefined as never, server: mcp };
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sid) => {
-              sessions.set(sid, { transport, server: mcp });
+              sessions.set(sid, created);
             },
           });
+          created.transport = transport;
           transport.onclose = () => {
             if (transport.sessionId) sessions.delete(transport.sessionId);
           };
@@ -225,9 +286,55 @@ export async function startHttpServer(
           // StreamableHTTPServerTransport types it optional — incompatible only
           // under exactOptionalPropertyTypes, harmless at runtime.
           await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
-          session = { transport, server: mcp };
+          session = created;
         }
-        await session.transport.handleRequest(req, res, body);
+        if (isInit) {
+          // Just serve the handshake. Asking for roots here is too early: the
+          // client is still inside connect() and has no stream to receive a
+          // server->client request on, so `roots/list` times out and looks like
+          // a client that does not support roots at all.
+          await session.transport.handleRequest(req, res, body);
+          return;
+        }
+        // Fire the roots lookup on the first post-handshake REQUEST (something
+        // with an `id`), never on a notification.
+        //
+        // `notifications/initialized` is also a POST, but it arrives while the
+        // client is still inside connect() with no stream to receive a
+        // server->client request on — asking there times out and reads as "this
+        // client has no roots support". By the first real request the client is
+        // listening, so the lookup can actually be delivered.
+        // A JSON-RPC REQUEST has both `method` and `id`. A RESPONSE has `id`
+        // and no `method` — that distinction is load-bearing below.
+        const msg = (typeof body === "object" && body !== null ? body : {}) as {
+          method?: unknown; id?: unknown;
+        };
+        const isRequest = typeof msg.method === "string" && msg.id !== undefined;
+        if (req.method === "POST" && isRequest && !session.rootsResolved) {
+          const s = session;
+          s.rootsPromise = ensureSessionCwd(s);
+        }
+        // Wait for the one-shot roots lookup on POSTs only.
+        //
+        // The client receives server->client requests on the SSE stream it
+        // opens with GET. Blocking that GET until roots resolve deadlocks the
+        // pair — the stream waits for roots, roots wait for the stream — and
+        // presents as `roots/list` timing out, which reads like a client that
+        // does not support roots at all. DELETE (session teardown) must not
+        // block either.
+        // Wait for roots only on REQUESTS. The client's answer to `roots/list`
+        // arrives as its own POST carrying a JSON-RPC response, and making that
+        // POST wait for the lookup would make the lookup wait for itself — a
+        // deadlock that surfaces as `roots/list` timing out, indistinguishable
+        // from a client that has no roots support. GET (the SSE stream the
+        // answer travels on) and DELETE must not block for the same reason.
+        if (req.method === "POST" && isRequest && session.rootsPromise) {
+          await session.rootsPromise.catch(() => undefined);
+        }
+        const cwd = session.cwd;
+        await (cwd
+          ? runWithRequestContext({ cwd }, () => session.transport.handleRequest(req, res, body))
+          : session.transport.handleRequest(req, res, body));
       } catch (err) {
         if (!res.headersSent) {
           res.writeHead(500, { "content-type": "application/json" });

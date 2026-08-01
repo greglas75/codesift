@@ -1,4 +1,5 @@
 import { repoRootFor } from "./repo-resolution.js";
+import { currentCwd } from "./request-context.js";
 import { findWorkingTree, isAnswerFromWrongTree } from "../utils/worktree.js";
 import { getCallCount, getSessionState } from "../storage/session-state.js";
 const HIGH_CARDINALITY_THRESHOLD = 50;
@@ -98,7 +99,7 @@ function worktreeMismatchNote(args: Record<string, unknown>): string | null {
   const repo = args["repo"];
   if (typeof repo !== "string" || repo.length === 0) return null;
   try {
-    const cwd = process.cwd();
+    const cwd = currentCwd();
     const root = repoRootFor(repo);
     if (!root || !isAnswerFromWrongTree(cwd, root)) return null;
     const tree = findWorkingTree(cwd);
