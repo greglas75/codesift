@@ -27,7 +27,24 @@ import type { IndexFolderResult } from "./types.js";
 export type { IndexFolderResult } from "./types.js";
 
 const INDEX_FOLDER_REDUNDANT_WINDOW_MS = 60_000;
-const DEFAULT_MAX_FILES = 50_000;
+/**
+ * Backstop against a pathological walk — NOT a budget, and not a number any
+ * real repository should approach.
+ *
+ * It was 50,000 with no stated rationale, and two repos sat exactly on it:
+ * tgm-mobi and Mobi3, both ~89% Composer `vendor/`. Dependency code was
+ * consuming the cap and pushing first-party source OUT of the index, so those
+ * repos were silently incomplete rather than merely slow. With `vendor/`
+ * excluded the largest genuine repo here is tgm-survey-platform at 14,439
+ * files, so 200,000 puts the ceiling an order of magnitude above anything real
+ * while still stopping a runaway walk.
+ *
+ * It stays finite because the index is ONE JSON blob per repo and the write
+ * path re-serialises all of it: tgm-survey-platform's 14k files already cost
+ * 269 MB and ~1.8s per parse. An unbounded cap would trade silent truncation
+ * for an index too expensive to write, which is not a better failure.
+ */
+const DEFAULT_MAX_FILES = 200_000;
 
 /**
  * In-flight background embedding runs, keyed by repo.
@@ -172,6 +189,9 @@ export async function indexFolder(
   });
   const hitFileLimit = files.length >= maxFiles;
   if (hitFileLimit) {
+    // stderr only is how this stayed invisible: the caller got an ordinary
+    // success result and no way to know the index was partial. It is reported
+    // on the result too now — see `file_limit_hit`.
     console.error(
       `[codesift] index_folder: ${rootPath} hit max_files=${maxFiles}; ` +
       `partial index. Pass include_paths to scope the walk or raise max_files.`,
@@ -496,5 +516,14 @@ export async function indexFolder(
     file_count: mergedEntries.length,
     symbol_count: mergedSymbols.length,
     duration_ms: Date.now() - startTime,
+    ...(hitFileLimit
+      ? {
+          file_limit_hit: true,
+          hint:
+            `Walk stopped at max_files=${maxFiles}, so this index covers only part of the repo. `
+            + "Check for a large vendored or generated tree, add it to .codesiftignore, "
+            + "or raise the cap with CODESIFT_MAX_FILES.",
+        }
+      : {}),
   };
 }
