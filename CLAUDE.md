@@ -242,13 +242,26 @@ that awaits each `index_file` before the next still pays the full cycle per file
 and the CLI hook (`codesift postindex-file`) is a fresh process each time, so it
 cannot batch at all.
 
-Two known costs remain, both needing a format change (sharded index / SQLite),
-not a patch:
-- `file-indexer.ts:108` parses the whole blob just to read one file's `mtime_ms`,
-  then `saveIncremental` parses it again — two full parses per first-touch edit.
-- An in-memory index cache would remove the parse, but is **unsafe here**: the
-  PostToolUse hook writes the same index from a separate process, so a cached
-  copy would clobber its writes.
+**Both remaining costs are now fixed by the format change (ADR-003, 2026-08-02).**
+The index is a per-repo SQLite database (`<hash>.index.db`) with normalized
+`files` / `symbols` tables, via the built-in `node:sqlite` in WAL mode:
+- `file-indexer` reads one file's `mtime_ms` through `getFileEntry` — one indexed
+  row, not a whole-blob parse (was two full parses per first-touch edit).
+- The in-memory index cache is now **safe**: `PRAGMA data_version` moves when
+  another connection commits, which is the cross-process signal a plain JSON file
+  never had. Our own writes invalidate explicitly (data_version does not move for
+  the connection that wrote).
+
+Measured on a 4k-file / 32k-symbol index: `saveIncremental` 10.8× faster, per-file
+mtime read ~2500× faster, warm `loadIndex` ~17800× faster. Cold `loadIndex` (once
+per process) and full `saveIndex` (once per reindex) are 2–3× *slower* — rebuilding
+objects from rows costs more than one big `JSON.parse`. Deliberate trade: the
+frequent paths win, the rare ones pay.
+
+JSON remains the backend on Node < 22.5 (no `node:sqlite`; engines floor stays
+`>=20`) and as the rollback target. `CODESIFT_INDEX_BACKEND=json|sqlite` pins the
+choice; unset auto-detects. Existing JSON indexes migrate on first touch and the
+`.json` file is **never deleted**, so rollback always has something to roll back to.
 
 ## Storage hygiene
 

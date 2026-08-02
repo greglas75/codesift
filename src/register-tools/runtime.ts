@@ -151,23 +151,41 @@ function repoRoots(): Map<string, string> {
 }
 
 /**
- * Per-repo index-version token for cache keying. index_file rewrites the repo's
- * {hash}.index.json via saveIncremental (bumps updated_at + re-saves), so the
- * file's mtime and size move — a cheap, synchronous, per-repo signal that
- * changes exactly when the index changes (in- or out-of-process). Returns "" for
- * an unknown/unindexed repo (coarser key — acceptable, there is nothing indexed
- * to go stale). Exported for the wiring spike test.
+ * Per-repo index-version token for cache keying. An index write moves the mtime and size of
+ * whichever file backs the index — a cheap, synchronous, per-repo signal that changes
+ * exactly when the index changes, in- or out-of-process. Returns "" for an unknown or
+ * unindexed repo (coarser key — acceptable, there is nothing indexed to go stale).
+ * Exported for the wiring spike test.
+ *
+ * All three candidate paths are statted rather than just the active backend's, because:
+ *   - after ADR-003 the index may live in `{hash}.index.db` instead of `{hash}.index.json`,
+ *     and a migrated repo's `.json` is deliberately frozen — keying on it alone would pin
+ *     the token forever and serve cached tool responses over a changing index;
+ *   - SQLite runs in WAL mode, so a commit lands in `{hash}.index.db-wal` and need not
+ *     touch the main db file until a checkpoint. Ignoring the `-wal` would miss exactly the
+ *     recent writes this token exists to catch.
+ * Missing files contribute nothing, so this stays correct under either backend and during
+ * the migration window when both exist.
  */
 export function getRepoIndexVersion(repo: string): string {
   if (!repo) return "";
   const indexPath = repoIndexPaths().get(repo);
   if (!indexPath) return "";
-  try {
-    const st = statSync(indexPath);
-    return `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return "";
+
+  const dbPath = indexPath.endsWith(".json")
+    ? `${indexPath.slice(0, -".json".length)}.db`
+    : `${indexPath}.db`;
+
+  const parts: string[] = [];
+  for (const candidate of [indexPath, dbPath, `${dbPath}-wal`]) {
+    try {
+      const st = statSync(candidate);
+      parts.push(`${st.mtimeMs}:${st.size}`);
+    } catch {
+      /* absent — contributes nothing to the token */
+    }
   }
+  return parts.join("|");
 }
 
 /**
