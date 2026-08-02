@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -59,15 +60,41 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
  * an HTTP entry is inherently PER-PROJECT — one shared URL cannot describe two
  * projects.
  */
-/** Loopback needs no transport encryption — nothing leaves the machine. */
+/**
+ * Loopback needs no transport encryption — nothing leaves the machine.
+ *
+ * Literal IPs only, via `isIP`. A prefix test like `/^127\./` reads as loopback for
+ * `127.attacker.example` and for `127.0.0.1@attacker.example` (that `@` is URL userinfo, so the
+ * request goes to `attacker.example`) — either one turns this exemption into a way to post the
+ * bearer token to an attacker-controlled host, which is the exact thing the guard exists to stop.
+ * `isIP` returns 0 for anything that is not a bare address literal, so those cases fall through.
+ */
 export function isLoopbackHost(host: string): boolean {
   const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
-  return (
-    bare === "localhost" ||
-    bare === "::1" ||
-    bare === "0:0:0:0:0:0:0:1" ||
-    /^127\./.test(bare)
-  );
+  if (bare === "localhost") return true;
+  const kind = isIP(bare);
+  if (kind === 4) return bare.startsWith("127."); // 127.0.0.0/8, and isIP proved it is a literal
+  if (kind === 6) {
+    return bare === "::1" || bare === "0:0:0:0:0:0:0:1" || /^::ffff:127\./.test(bare);
+  }
+  return false;
+}
+
+/**
+ * Reject a host string that can smuggle authority into the URL.
+ *
+ * `@` is the dangerous one: `127.0.0.1@evil.example` parses as userinfo + host, so the client
+ * connects to `evil.example` while the string looks local. `/`, `?`, `#` can move the path or
+ * query. None of these belong in a hostname.
+ */
+function assertPlainHost(host: string): void {
+  if (/[@/?#\s]/.test(host)) {
+    throw new Error(
+      `Invalid daemon host ${JSON.stringify(host)}: a host cannot contain '@', '/', '?', '#' or ` +
+        `whitespace. A host like "127.0.0.1@example.com" looks local but sends the request — and ` +
+        `the token — to example.com.`,
+    );
+  }
 }
 
 export function daemonHttpUrl(
@@ -82,6 +109,7 @@ export function daemonHttpUrl(
   // hand-editing every client's JSON. Adding a machine to a shared instance has
   // to be one command, or nobody will do it twice.
   const rawHost = host ?? "127.0.0.1";
+  assertPlainHost(rawHost);
   // Bracket IPv6 literals. Plain concatenation produced `http://::1:7077/mcp`,
   // which is not a parseable authority — a tailnet IPv6 daemon could not be
   // configured at all.
@@ -108,6 +136,7 @@ export function daemonHttpUrl(
  */
 export function assertTokenTransportIsSafe(options: SetupOptions): void {
   const host = options.host ?? "127.0.0.1";
+  assertPlainHost(host);
   if (!options.token) return;
   if (isLoopbackHost(host)) return;
   if (options.scheme === "https") return;

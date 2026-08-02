@@ -41,6 +41,10 @@
   — which exposes every indexed repository on that daemon. Use `--scheme https`, or
   `--insecure-transport` to state that the link is already encrypted below HTTP
   (tailnet/VPN/SSH tunnel). Loopback is unaffected.
+- The loopback exemption above accepts literal addresses only. A prefix test would have
+  read `127.attacker.example` as loopback — and `127.0.0.1@attacker.example` parses as
+  URL userinfo, so the request and the token go to `attacker.example` while the string
+  looks local. Hosts containing `@`, `/`, `?`, `#` or whitespace are rejected outright.
 
 ### Fixed
 

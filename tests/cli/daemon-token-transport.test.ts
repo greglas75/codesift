@@ -18,6 +18,53 @@ describe("isLoopbackHost", () => {
       expect(isLoopbackHost(h)).toBe(false);
     }
   });
+
+  it("does not treat a hostname that merely STARTS with 127. as loopback", () => {
+    // A prefix test made these read as loopback, which posted the bearer token to whatever
+    // the name resolves to — a bypass of the guard, inside the guard.
+    for (const h of [
+      "127.attacker.example",
+      "127.0.0.1.attacker.example",
+      "127.0.0.1.nip.io",
+    ]) {
+      expect(isLoopbackHost(h)).toBe(false);
+    }
+  });
+
+  it("does not treat a userinfo payload as loopback", () => {
+    // `127.0.0.1@evil.example` looks local and connects to evil.example.
+    expect(isLoopbackHost("127.0.0.1@attacker.example")).toBe(false);
+  });
+
+  it("recognises the IPv4-mapped IPv6 loopback", () => {
+    expect(isLoopbackHost("::ffff:127.0.0.1")).toBe(true);
+  });
+});
+
+describe("host validation", () => {
+  it("rejects a host carrying URL userinfo", () => {
+    expect(() => daemonHttpUrl(7077, "/repo", "127.0.0.1@attacker.example")).toThrow(/cannot contain/i);
+    expect(() =>
+      assertTokenTransportIsSafe({
+        http: true,
+        host: "127.0.0.1@attacker.example",
+        token: "secret",
+      }),
+    ).toThrow(/cannot contain/i);
+  });
+
+  it("rejects a host carrying path or query separators", () => {
+    for (const h of ["evil.example/x", "evil.example?x=1", "evil.example#f", "evil example"]) {
+      expect(() => daemonHttpUrl(7077, "/repo", h)).toThrow(/cannot contain/i);
+    }
+  });
+
+  it("still refuses a plaintext token for a 127-prefixed HOSTNAME", () => {
+    // The end-to-end version of the bypass: guard must fire, not exempt.
+    expect(() =>
+      assertTokenTransportIsSafe({ http: true, host: "127.attacker.example", token: "secret" }),
+    ).toThrow(/plaintext/i);
+  });
 });
 
 describe("daemonHttpUrl", () => {
