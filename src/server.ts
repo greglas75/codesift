@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { loadConfig } from "./config.js";
 import {
   registerTools,
@@ -16,7 +16,6 @@ import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import { resolve as pathResolve } from "node:path";
 import { statSync } from "node:fs";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
@@ -122,27 +121,6 @@ export interface HttpServerHandle {
   close: () => Promise<void>;
 }
 
-/** Read and JSON-parse a request body (POST). Resolves undefined on malformed input. */
-function readJsonBody(req: import("node:http").IncomingMessage): Promise<unknown> {
-  return new Promise((resolve) => {
-    let data = "";
-    req.on("data", (chunk) => {
-      data += chunk;
-    });
-    req.on("end", () => {
-      if (!data) {
-        resolve(undefined);
-        return;
-      }
-      try {
-        resolve(JSON.parse(data));
-      } catch {
-        resolve(undefined);
-      }
-    });
-    req.on("error", () => resolve(undefined));
-  });
-}
 
 /**
  * Start the shared HTTP MCP daemon on loopback. Each MCP session gets its own
@@ -154,14 +132,43 @@ function readJsonBody(req: import("node:http").IncomingMessage): Promise<unknown
  * returned in `mcp-session-id`; subsequent requests carry that header. Binds
  * 127.0.0.1 only; optional bearer token gates MCP requests (Task 10 hardens).
  */
+
+/**
+ * Working directory declared in the connection URL: `/mcp?cwd=/abs/path`.
+ *
+ * Module scope now that serving is stateless: there is no session object to
+ * hang it on, and every request carries it independently.
+ *
+ * Validated rather than trusted: an absolute path to a real directory or
+ * nothing. Not a security boundary (the daemon is loopback-only and already
+ * serves every indexed repo to any local caller) but it keeps a typo from
+ * silently resolving every repo to garbage.
+ */
+function cwdFromUrl(rawUrl: string): string | undefined {
+  const q = rawUrl.indexOf("?");
+  if (q < 0) return undefined;
+  let value: string | null;
+  try {
+    value = new URLSearchParams(rawUrl.slice(q + 1)).get("cwd");
+  } catch {
+    return undefined;
+  }
+  if (!value) return undefined;
+  try {
+    const resolved = pathResolve(value);
+    return statSync(resolved).isDirectory() ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function startHttpServer(
   opts: { port?: number; host?: string; token?: string } = {},
 ): Promise<HttpServerHandle> {
   const http = await import("node:http");
-  const { randomUUID } = await import("node:crypto");
-  const { StreamableHTTPServerTransport } = await import(
-    "@modelcontextprotocol/sdk/server/streamableHttp.js"
-  );
+  const { createMcpHandler } = await import("@modelcontextprotocol/server");
+  const { toNodeHandler } = await import("@modelcontextprotocol/node");
+
   const host = opts.host ?? "127.0.0.1"; // loopback only — never expose to the network
   // Hard refuse a non-loopback bind: the daemon serves trusted local editor
   // windows only and has no network auth model beyond the optional token.
@@ -172,108 +179,29 @@ export async function startHttpServer(
   }
   const token = opts.token ?? process.env["CODESIFT_HTTP_TOKEN"];
 
-  type Session = {
-    transport: InstanceType<typeof StreamableHTTPServerTransport>;
-    server: McpServer;
-    /** Client's working directory — from the URL, else its MCP roots. */
-    cwd?: string;
-    /** Roots asked for already — success or not, we only ask once. */
-    rootsResolved?: boolean;
-    /** In-flight one-shot roots lookup; later requests await it. */
-    rootsPromise?: Promise<void>;
-  };
-
-
   /**
-   * Working directory declared in the connection URL: `/mcp?cwd=/abs/path`.
+   * Stateless serving (MCP 2026-07-28, and the default for `legacy` clients).
    *
-   * A deterministic alternative to `roots/list`, and the fallback when a client
-   * does not implement it.
+   * The previous implementation kept an `Mcp-Session-Id` → session map, which
+   * made a daemon restart fatal to every connected client: each one held an id
+   * the new process had never issued, so its next call came back
+   * `no valid session` and stayed broken until someone reconnected it by hand.
+   * That happened on every `service install --force`, i.e. every upgrade, and
+   * it bit repeatedly while this was being built.
    *
-   * CORRECTION: an earlier version of this comment claimed Claude Code answers
-   * `roots/list` with `-32601 Method not found`. That was wrong. Probed
-   * directly, Claude Code 2.1.220 declares `roots: {listChanged: true}` AND
-   * answers the request with its workspace directory. The -32601 seen in the
-   * daemon log came from some other client — the log does not attribute lines
-   * to a client, and the attribution was an assumption, not an observation.
+   * With no protocol-level session there is nothing to invalidate. Verified
+   * against a 2025-era client — the era Claude Code 2.1.220 still negotiates:
+   * the server process was replaced mid-conversation and the same client kept
+   * calling tools without re-initializing.
    *
-   * The URL parameter is kept anyway, for reasons that survive the correction:
-   * it is pinned by config rather than reported by the client, it costs no
-   * round-trip, and clients that genuinely lack roots still work.
-   *
-   * Takes precedence over roots when both are present — the URL is what the
-   * user configured for this project, roots are a guess about the window.
-   *
-   * Validated rather than trusted: an absolute path to a real directory or
-   * nothing. Not a security boundary (the daemon is loopback-only and already
-   * serves every indexed repo to any local caller) but it keeps a typo from
-   * silently resolving every repo to garbage.
+   * The other half is that any request may land on any instance, which is what
+   * makes more than one process — or a remote host — possible at all without a
+   * shared session store.
    */
-  function cwdFromUrl(rawUrl: string): string | undefined {
-    const q = rawUrl.indexOf("?");
-    if (q < 0) return undefined;
-    let value: string | null;
-    try {
-      value = new URLSearchParams(rawUrl.slice(q + 1)).get("cwd");
-    } catch {
-      return undefined;
-    }
-    if (!value) return undefined;
-    try {
-      const resolved = pathResolve(value);
-      return statSync(resolved).isDirectory() ? resolved : undefined;
-    } catch {
-      return undefined;
-    }
-  }
+  const handler = createMcpHandler(() => createCodesiftServer(), { legacy: "stateless" });
+  const nodeHandler = toNodeHandler(handler);
 
-  /**
-   * Learn a session's working directory from the client's MCP roots.
-   *
-   * The daemon is one process for every client on the machine and launchd
-   * starts it in `/`, so `process.cwd()` names no client's project. Without
-   * this, every auto-resolved tool call answered `Repository "local/" not
-   * found` — auto-resolution is the documented default, so that is most calls.
-   * `roots/list` is the protocol's own answer to "where is the caller working";
-   * we ask once per session and cache.
-   *
-   * Best-effort on purpose: a client that declares no roots capability, errors,
-   * or reports none leaves `cwd` unset and the request falls back to
-   * `process.cwd()` — no worse than before, and never a thrown request.
-   */
-  async function ensureSessionCwd(session: Session): Promise<void> {
-    if (session.rootsResolved) return;
-    session.rootsResolved = true;
-    try {
-      // Bounded, and much shorter than the SDK's 60s default. A client that
-      // declares no roots support never answers, and the daemon must not stall
-      // that client's FIRST tool call for a minute waiting to find out — the
-      // answer is cached for the session, so the cost is paid once either way.
-      const result = await session.server.server.listRoots(undefined, {
-        timeout: ROOTS_LOOKUP_TIMEOUT_MS,
-      });
-      for (const root of result.roots ?? []) {
-        const uri = typeof root.uri === "string" ? root.uri : "";
-        if (!uri.startsWith("file://")) continue;
-        session.cwd = fileURLToPath(uri);
-        break;
-      }
-      if (session.cwd) {
-        console.error(`[codesift] session cwd from client roots: ${session.cwd}`);
-      } else {
-        console.error("[codesift] client reported no usable file:// root — repo auto-resolution will not work for it");
-      }
-    } catch (err) {
-      console.error(
-        `[codesift] client does not support roots/list (${(err as Error).message}) — `
-        + "repo auto-resolution will not work for it; pass repo= explicitly",
-      );
-    }
-  }
-  const sessions = new Map<string, Session>();
-
-  /** How long to wait for a client to answer `roots/list` before giving up. */
-  const ROOTS_LOOKUP_TIMEOUT_MS = 2000;
+  let inFlight = 0;
 
   const httpServer = http.createServer((req, res) => {
     void (async () => {
@@ -281,7 +209,7 @@ export async function startHttpServer(
         const url = req.url ?? "/";
         if (url === "/health" || url.startsWith("/health?")) {
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", sessions: sessions.size, version: PKG_VERSION }));
+          res.end(JSON.stringify({ status: "ok", sessions: inFlight, version: PKG_VERSION }));
           return;
         }
         if (token) {
@@ -293,113 +221,19 @@ export async function startHttpServer(
           }
         }
 
-        const sessionId = req.headers["mcp-session-id"] as string | undefined;
-        const body = req.method === "POST" ? await readJsonBody(req) : undefined;
-        const isInit =
-          typeof body === "object" &&
-          body !== null &&
-          (body as { method?: string }).method === "initialize";
-
-        let session: Session | undefined = sessionId ? sessions.get(sessionId) : undefined;
-        if (!session) {
-          if (!isInit) {
-            // 404, not 400 — the spec makes this the signal that a session is
-            // gone and the client MUST start a new one with a fresh
-            // InitializeRequest. It matters here because a daemon restart (any
-            // `service install --force`, i.e. every upgrade) invalidates every
-            // live session at once; with a 400 the client has no defined way to
-            // tell "your session expired" from "you sent nonsense", and stays
-            // broken until someone reconnects it by hand.
-            //
-            // Not a complete fix on its own: the SDK client in use today throws
-            // on any non-2xx rather than re-initializing on 404. Sending the
-            // correct status is what lets a client recover once it implements
-            // the rule, and costs nothing meanwhile.
-            res.writeHead(404, { "content-type": "application/json" });
-            res.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                error: { code: -32001, message: "Session not found — reinitialize" },
-              }),
-            );
-            return;
-          }
-          const mcp = createCodesiftServer();
-          // ONE object, referenced by both the map and the local variable.
-          // Building a second literal inside onsessioninitialized meant every
-          // mutation made while serving a request (the learned cwd) landed on an
-          // object the next request would never see.
-          const created: Session = { transport: undefined as never, server: mcp };
-          const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => randomUUID(),
-            onsessioninitialized: (sid) => {
-              sessions.set(sid, created);
-            },
-          });
-          created.transport = transport;
-          transport.onclose = () => {
-            if (transport.sessionId) sessions.delete(transport.sessionId);
-          };
-          // Cast: the SDK declares Transport.onclose non-optional but
-          // StreamableHTTPServerTransport types it optional — incompatible only
-          // under exactOptionalPropertyTypes, harmless at runtime.
-          await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
-          session = created;
+        // The caller's directory, pinned per request. Statelessness makes this
+        // the natural carrier: there is no session to have learned it once.
+        const cwd = cwdFromUrl(url);
+        inFlight++;
+        try {
+          await (cwd
+            // Cast: Node types `method`/`url` as optional, the handler wants
+            // them required. Both are always present on a served request.
+            ? runWithRequestContext({ cwd }, () => nodeHandler(req as never, res))
+            : nodeHandler(req as never, res));
+        } finally {
+          inFlight--;
         }
-        if (isInit) {
-          // Just serve the handshake. Asking for roots here is too early: the
-          // client is still inside connect() and has no stream to receive a
-          // server->client request on, so `roots/list` times out and looks like
-          // a client that does not support roots at all.
-          await session.transport.handleRequest(req, res, body);
-          return;
-        }
-        // Fire the roots lookup on the first post-handshake REQUEST (something
-        // with an `id`), never on a notification.
-        //
-        // `notifications/initialized` is also a POST, but it arrives while the
-        // client is still inside connect() with no stream to receive a
-        // server->client request on — asking there times out and reads as "this
-        // client has no roots support". By the first real request the client is
-        // listening, so the lookup can actually be delivered.
-        // A JSON-RPC REQUEST has both `method` and `id`. A RESPONSE has `id`
-        // and no `method` — that distinction is load-bearing below.
-        const msg = (typeof body === "object" && body !== null ? body : {}) as {
-          method?: unknown; id?: unknown;
-        };
-        const isRequest = typeof msg.method === "string" && msg.id !== undefined;
-        // A URL-pinned directory makes the roots round-trip unnecessary — and
-        // for clients that answer `roots/list` with "method not found", it is
-        // the only thing that works at all.
-        const urlCwd = cwdFromUrl(url);
-        if (urlCwd) {
-          session.cwd = urlCwd;
-          session.rootsResolved = true;
-        } else if (req.method === "POST" && isRequest && !session.rootsResolved) {
-          const s = session;
-          s.rootsPromise = ensureSessionCwd(s);
-        }
-        // Wait for the one-shot roots lookup on POSTs only.
-        //
-        // The client receives server->client requests on the SSE stream it
-        // opens with GET. Blocking that GET until roots resolve deadlocks the
-        // pair — the stream waits for roots, roots wait for the stream — and
-        // presents as `roots/list` timing out, which reads like a client that
-        // does not support roots at all. DELETE (session teardown) must not
-        // block either.
-        // Wait for roots only on REQUESTS. The client's answer to `roots/list`
-        // arrives as its own POST carrying a JSON-RPC response, and making that
-        // POST wait for the lookup would make the lookup wait for itself — a
-        // deadlock that surfaces as `roots/list` timing out, indistinguishable
-        // from a client that has no roots support. GET (the SSE stream the
-        // answer travels on) and DELETE must not block for the same reason.
-        if (req.method === "POST" && isRequest && session.rootsPromise) {
-          await session.rootsPromise.catch(() => undefined);
-        }
-        const cwd = session.cwd;
-        await (cwd
-          ? runWithRequestContext({ cwd }, () => session.transport.handleRequest(req, res, body))
-          : session.transport.handleRequest(req, res, body));
       } catch (err) {
         if (!res.headersSent) {
           res.writeHead(500, { "content-type": "application/json" });
@@ -421,13 +255,13 @@ export async function startHttpServer(
   return {
     port,
     url: `http://${host}:${port}/mcp`,
-    sessionCount: () => sessions.size,
-    close: () =>
-      new Promise<void>((resolve) => {
-        for (const s of sessions.values()) void s.transport.close();
-        sessions.clear();
-        httpServer.close(() => resolve());
-      }),
+    // No sessions to count any more; report work in flight so /health still
+    // says something true about load.
+    sessionCount: () => inFlight,
+    close: async () => {
+      await handler.close();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    },
   };
 }
 

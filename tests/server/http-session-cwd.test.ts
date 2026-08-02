@@ -55,7 +55,7 @@ describe("request context", () => {
   });
 });
 
-describe("HTTP daemon — learning the client's directory", () => {
+describe("HTTP daemon — stateless serving", () => {
   let close: (() => Promise<void>) | null = null;
 
   afterEach(async () => {
@@ -63,21 +63,21 @@ describe("HTTP daemon — learning the client's directory", () => {
     close = null;
   });
 
-  it("asks the client for its roots, and only after the client can receive it", async () => {
-    // Every earlier attempt failed here, each for a different reason, and all
-    // of them surfaced identically as `roots/list` timing out — which reads as
-    // "this client has no roots support" rather than "we asked at the wrong
-    // moment". Asking during initialize is too early (the client is still
-    // inside connect() with no stream); asking on `notifications/initialized`
-    // is too early for the same reason; and blocking the GET stream — or the
-    // POST carrying the client's own answer — on the lookup deadlocks it
-    // against itself.
+  it("does not ask the client for roots — every request carries its own directory", async () => {
+    // Stateless serving has no session to cache a roots answer in, so a
+    // round-trip per request would be pure cost. The directory travels in the
+    // URL instead, which is deterministic and free.
+    //
+    // The earlier session-based implementation DID ask, and getting that
+    // handshake delivered took four attempts, each failing as an
+    // indistinguishable timeout. Statelessness removes the whole problem
+    // rather than solving it.
     const handle = await startHttpServer({ port: 0 });
     close = handle.close;
 
     let asked = false;
     const client = new Client(
-      { name: "roots-test", version: "1" },
+      { name: "roots-capable", version: "1" },
       { capabilities: { roots: {} } },
     );
     client.setRequestHandler(ListRootsRequestSchema, () => {
@@ -86,18 +86,13 @@ describe("HTTP daemon — learning the client's directory", () => {
     });
 
     await client.connect(new StreamableHTTPClientTransport(new URL(handle.url)));
-    // The lookup fires on the first post-handshake REQUEST, not during connect.
-    expect(asked).toBe(false);
-
     await client.listTools();
-    expect(asked).toBe(true);
 
+    expect(asked).toBe(false);
     await client.close();
   }, 60_000);
 
-  it("serves a client that declares no roots instead of hanging on it", async () => {
-    // A client without roots support must still work — it just cannot rely on
-    // auto-resolution. The lookup fails, the request proceeds.
+  it("serves a client that declares no roots at all", async () => {
     const handle = await startHttpServer({ port: 0 });
     close = handle.close;
 
@@ -106,6 +101,30 @@ describe("HTTP daemon — learning the client's directory", () => {
 
     const tools = await client.listTools();
     expect(tools.tools.length).toBeGreaterThan(0);
+
+    await client.close();
+  }, 90_000);
+
+  it("keeps serving the same client after the server instance is replaced", async () => {
+    // The reason the migration was worth doing. With a protocol-level session,
+    // every `service install --force` — i.e. every upgrade — left each connected
+    // client holding an id the new process had never issued, and its next call
+    // came back `no valid session` until someone reconnected it by hand.
+    const first = await startHttpServer({ port: 0 });
+    const { port } = first;
+
+    const client = new Client({ name: "survivor", version: "1" }, { capabilities: {} });
+    await client.connect(new StreamableHTTPClientTransport(new URL(first.url)));
+    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+
+    // Replace the server entirely, reusing the port the client still points at.
+    await first.close();
+    const second = await startHttpServer({ port });
+    close = second.close;
+
+    // Same client object, no re-initialize.
+    const after = await client.listTools();
+    expect(after.tools.length).toBeGreaterThan(0);
 
     await client.close();
   }, 90_000);
@@ -157,4 +176,34 @@ describe("HTTP daemon — directory pinned in the connection URL", () => {
     expect(tools.tools.length).toBeGreaterThan(0);
     await client.close();
   }, 90_000);
+});
+
+describe("a daemon that was never told where the client works", () => {
+  it("says so, instead of sending the caller off to re-index", async () => {
+    // Removing the session removed the `roots/list` fallback with it, so a
+    // client connecting without `?cwd=` has no directory at all. Left alone
+    // that resolved to `local/` and surfaced as
+    // `Repository "local/" not found. Run index_folder first.` — which points
+    // an agent at re-indexing when the actual fault is a missing URL parameter.
+    //
+    // Asking for roots on every request instead would be a server->client
+    // round-trip per tool call; stateless serving has no session to have
+    // learned it once. The URL is the carrier, so a missing one is a
+    // configuration fault and reads like one.
+    const { resolveToolRepoArgs } = await import("../../src/server-helpers/repo-resolution.js");
+
+    const args: Record<string, unknown> = {};
+    expect(() =>
+      runWithRequestContext({ cwd: "/" }, () => resolveToolRepoArgs("search_text", args)),
+    ).toThrow(/does not know your working directory/);
+  });
+
+  it("stays silent outside a request — the CLI and tests are unaffected", async () => {
+    const { resolveToolRepoArgs } = await import("../../src/server-helpers/repo-resolution.js");
+    const args: Record<string, unknown> = {};
+    // No request context: the process cwd is a real directory, so this resolves
+    // normally rather than throwing.
+    expect(() => resolveToolRepoArgs("search_text", args)).not.toThrow();
+    expect(typeof args["repo"]).toBe("string");
+  });
 });

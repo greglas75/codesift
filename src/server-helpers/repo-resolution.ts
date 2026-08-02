@@ -2,7 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join, basename, isAbsolute, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { findWorkingTree, canonicalPath } from "../utils/worktree.js";
-import { currentCwd } from "./request-context.js";
+import { currentCwd, hasRequestContext } from "./request-context.js";
 // ---------------------------------------------------------------------------
 // Auto-resolve repo from CWD — eliminates mandatory list_repos on session start
 // ---------------------------------------------------------------------------
@@ -164,7 +164,26 @@ export function resolveToolRepoArgs(toolName: string, args: Record<string, unkno
     // The REQUEST's cwd, not the process's. Under the shared HTTP daemon these
     // differ for every client but one — the daemon runs from `/`, so using
     // process.cwd() resolved every auto-resolved call to `local/` and failed.
-    args["repo"] = resolveRepoFromCwd(currentCwd());
+    const cwd = currentCwd();
+    const resolved = resolveRepoFromCwd(cwd);
+    // `local/` with an empty basename means the caller's directory is unknown —
+    // under the daemon, `/`. Left alone this produced
+    // `Repository "local/" not found. Run index_folder first.`, which sends an
+    // agent off to re-index instead of telling it the real problem: the daemon
+    // was never told where the client works.
+    //
+    // Stateless serving has no session to have learned it once, and asking the
+    // client for its MCP roots on EVERY request is a server->client round-trip
+    // per tool call. The URL is the carrier — `setup --http` always writes it —
+    // so a missing one is a configuration fault, and it says so.
+    if (resolved === "local/" && hasRequestContext()) {
+      throw new Error(
+        "CodeSift daemon does not know your working directory. "
+        + "Add `?cwd=<absolute project path>` to the MCP server URL "
+        + "(`codesift setup <client> --http` writes it), or pass `repo=` explicitly.",
+      );
+    }
+    args["repo"] = resolved;
   }
 }
 

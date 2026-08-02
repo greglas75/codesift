@@ -1,7 +1,7 @@
 import { statSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { currentCwd } from "../server-helpers/request-context.js";
 import {
   wrapTool,
@@ -29,14 +29,14 @@ export function getToolHandle(name: string) {
 }
 
 interface RegistrationContext {
-  server: Pick<McpServer, "tool">;
+  server: Pick<McpServer, "registerTool">;
   languages: ProjectLanguages;
 }
 
 let registrationContext: RegistrationContext | null = null;
 
 export function resetToolRegistrationContext(
-  server: Pick<McpServer, "tool">,
+  server: Pick<McpServer, "registerTool">,
   languages: ProjectLanguages,
 ): void {
   toolHandles.clear();
@@ -400,7 +400,7 @@ function logToolTimeout(toolName: string, args: Record<string, unknown>, timeout
 }
 
 export function registerToolDefinition(
-  server: Pick<McpServer, "tool">,
+  server: Pick<McpServer, "registerTool">,
   tool: ToolDefinition,
   languages: ProjectLanguages,
 ) {
@@ -457,10 +457,11 @@ export function registerToolDefinition(
       ? cacheableBase
       : withTimeout(cacheableBase, timeoutMs, tool.name);
 
-  const handle = server.tool(
+  // v2: registerTool(name, config, handler). The schema is already a Zod shape,
+  // so it moves into the config object unchanged.
+  const handle = server.registerTool(
     tool.name,
-    tool.description,
-    tool.schema,
+    { description: tool.description, inputSchema: tool.schema },
     async (args): Promise<ToolResponse> => {
       const callArgs = args as Record<string, unknown>;
       // Snapshot the args BEFORE the call: wrapTool's resolveRepo MUTATES this
@@ -500,8 +501,9 @@ export function registerToolDefinition(
     },
   );
 
-  if (!isToolLanguageEnabled(tool, languages) && typeof handle.disable === "function") {
-    handle.disable();
+  // v2 exposes visibility as a property rather than enable()/disable() methods.
+  if (!isToolLanguageEnabled(tool, languages)) {
+    handle.enabled = false;
   }
 
   toolHandles.set(tool.name, handle);
@@ -529,9 +531,7 @@ export function enableToolByName(name: string): boolean {
   if (context && tool && !isToolLanguageEnabled(tool, context.languages)) {
     return false;
   }
-  if (typeof handle.enable === "function") {
-    handle.enable();
-  }
+  handle.enabled = true;
   return true;
 }
 

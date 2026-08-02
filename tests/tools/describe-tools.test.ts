@@ -19,7 +19,10 @@ function createMockServer() {
   }>();
   return {
     registeredTools,
-    tool: vi.fn((name: string, _desc: string, schema: unknown, handler: unknown) => {
+    registerTool: vi.fn((name: string, _cfg: { description?: string; inputSchema?: unknown }, handler: unknown) => {
+      const schema = _cfg?.inputSchema;
+      const _desc = _cfg?.description;
+      void _desc;
       const handle = {
         name,
         enabled: true,
@@ -189,7 +192,7 @@ describe("registerTools with deferNonCore", () => {
     expect(parsed.not_found).toHaveLength(0);
   });
 
-  it("describe_tools with reveal=true calls enable() on the tool handle", async () => {
+  it("describe_tools with reveal=true makes the tool visible", async () => {
     const mock = createMockServer();
     registerTools(mock as any, { deferNonCore: true });
 
@@ -203,7 +206,7 @@ describe("registerTools with deferNonCore", () => {
 
     const deadCodeHandle = mock.registeredTools.get("find_dead_code");
     expect(deadCodeHandle).toBeDefined();
-    expect(deadCodeHandle!.enable).toHaveBeenCalled();
+    // v2 exposes visibility as a property; there is no enable() method to spy on.
     expect(deadCodeHandle!.enabled).toBe(true);
   });
 

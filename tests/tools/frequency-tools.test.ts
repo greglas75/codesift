@@ -359,7 +359,7 @@ describe("registration", () => {
     const { registerTools } = await import("../../src/register-tools.js");
     const toolNames: string[] = [];
     const mockServer = {
-      tool: (name: string, ..._args: any[]) => { toolNames.push(name); },
+      registerTool: (name: string, ..._args: any[]) => { toolNames.push(name); },
     };
     registerTools(mockServer as any);
     expect(toolNames).toContain("frequency_analysis");

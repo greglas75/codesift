@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { registerShortener, wrapTool } from "./server-helpers.js";
 import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/language-detect.js";
@@ -139,12 +139,14 @@ export function registerTools(
   }
 
   // Always register discover_tools meta-tool
-  const discoverHandle = server.tool(
+  const discoverHandle = server.registerTool(
     "discover_tools",
-    "Search tool catalog by keyword or category. Returns matching tools with descriptions.",
     {
-      query: z.string().describe("Keywords to search for (e.g. 'dead code', 'complexity', 'rename', 'secrets')"),
-      category: z.string().optional().describe("Filter by category (e.g. 'analysis', 'lsp', 'architecture')"),
+      description: "Search tool catalog by keyword or category. Returns matching tools with descriptions.",
+      inputSchema: {
+        query: z.string().describe("Keywords to search for (e.g. 'dead code', 'complexity', 'rename', 'secrets')"),
+        category: z.string().optional().describe("Filter by category (e.g. 'analysis', 'lsp', 'architecture')"),
+      },
     },
     async (args) => wrapTool("discover_tools", args as Record<string, unknown>, async () => {
       return discoverTools(args.query as string, args.category as string | undefined);
@@ -153,12 +155,14 @@ export function registerTools(
   setToolHandle("discover_tools", discoverHandle);
 
   // Register describe_tools meta-tool — returns full schema for specific tools by name
-  const describeHandle = server.tool(
+  const describeHandle = server.registerTool(
     "describe_tools",
-    "Get full schema for specific tools by name. Use after discover_tools to see params before calling.",
     {
-      names: z.union([z.array(z.string()), zStringArrayJson()]).describe("Tool names to describe"),
-      reveal: zBool().describe("If true, enable tools in ListTools so the LLM can call them"),
+      description: "Get full schema for specific tools by name. Use after discover_tools to see params before calling.",
+      inputSchema: {
+        names: z.union([z.array(z.string()), zStringArrayJson()]).describe("Tool names to describe"),
+        reveal: zBool().describe("If true, enable tools in ListTools so the LLM can call them"),
+      },
     },
     async (args) => wrapTool("describe_tools", args as Record<string, unknown>, async () => {
       const result = describeTools(args.names as string[]);

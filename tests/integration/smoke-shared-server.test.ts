@@ -45,9 +45,9 @@ async function mcpToolsList(url: string): Promise<number> {
     jsonrpc: "2.0", id: 1, method: "initialize",
     params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0" } },
   });
-  const sid = initRes.headers.get("mcp-session-id")!;
-  await post({ jsonrpc: "2.0", method: "notifications/initialized" }, { "mcp-session-id": sid });
-  const listRes = await post({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, { "mcp-session-id": sid });
+  void initRes;
+  await post({ jsonrpc: "2.0", method: "notifications/initialized" });
+  const listRes = await post({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
   const json = await readMcp(listRes);
   return ((json.result?.tools as unknown[]) ?? []).length;
 }
@@ -89,7 +89,10 @@ describe("SMOKE — shared daemon loads once, bounded memory, lite mode", () => 
     const [n1, n2] = await Promise.all([mcpToolsList(handle.url), mcpToolsList(handle.url)]);
     expect(n1).toBeGreaterThanOrEqual(50);
     expect(n2).toBeGreaterThanOrEqual(50);
-    expect(handle.sessionCount()).toBe(2); // two sessions, one process
+    // Sessions no longer exist at the protocol layer, so there is nothing to
+    // count — what matters is that two independent clients were both served by
+    // the one process, which the assertions above already established.
+    expect(handle.sessionCount()).toBe(0);
 
     // Both clients querying the same repo trigger exactly one embedding load.
     const [a, b] = await Promise.all([getEmbeddingCache("local/main"), getEmbeddingCache("local/main")]);
