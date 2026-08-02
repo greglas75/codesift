@@ -19,6 +19,9 @@ import {
   getEmbeddingPath,
   getEmbeddingMetaPath,
   batchEmbed,
+  primeContentHashes,
+  contentHashesFor,
+  contentHashesForPath,
 } from "../../storage/embedding-store.js";
 import {
   saveChunks,
@@ -233,8 +236,12 @@ export async function embedSymbols(
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
     const existing = await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes());
+    // Seed the in-memory hash map from what was stored beside the vectors.
+    // Without this the map starts empty on every process, every symbol looks
+    // changed, and the whole corpus is re-embedded on each MCP server start.
+    primeContentHashes(repoName, contentHashesForPath(embeddingPath));
     const embeddings = await batchEmbed(symbolTexts, existing, (texts) => provider.embed(texts, "document"), config.embeddingBatchSize, repoName);
-    await saveEmbeddings(embeddingPath, embeddings);
+    await saveEmbeddings(embeddingPath, embeddings, contentHashesFor(repoName));
     await saveEmbeddingMeta(metaPath, {
       model: provider.model,
       provider: config.embeddingProvider,
