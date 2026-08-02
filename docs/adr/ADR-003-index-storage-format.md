@@ -179,6 +179,33 @@ faster write path for a slower read path.
 
 ---
 
+## Error contract (added 2026-08-02, from the adversarial review)
+
+The migration initially inherited a flaw the JSON format had made invisible: **every failure
+became `null`**, and `null` means "this repo has no index". A locked, corrupt, or
+permission-denied store therefore arrived at tools as an unindexed repo, which they render as
+an authoritative empty answer. Empty-because-broken is the worst result an index can produce,
+because nothing about it looks wrong — and the suggested remedy ("run `index_folder`") is
+actively harmful against a database that is merely busy.
+
+Storage faults are now a distinct outcome:
+
+- `IndexStorageError` (`code`, `path`) is thrown for operational failures. `classifyStorageError`
+  is a **tight allowlist** — `SQLITE_BUSY/LOCKED/CORRUPT/NOTADB/CANTOPEN/IOERR/READONLY/PERM/FULL`
+  (including extended result codes such as `SQLITE_IOERR_READ`) plus `EACCES/EPERM/EIO/EBUSY/
+  ENOSPC/EMFILE`, with a message-based fallback for builds that omit the code. Anything
+  unrecognised keeps the old null-ish behaviour, because misclassifying ordinary absence as an
+  error on a path used by every tool would be a worse regression than the one being fixed.
+- `loadIndexOrStale` gains `{status: "unreadable", reason: "storage_error", code, message}`,
+  alongside the existing `ok` / `stale`.
+- `getCodeIndex` **throws** on `unreadable` instead of returning `null`. This is deliberate: the
+  null return is what tools convert into "no results", so a fault has to leave that channel.
+- `index_status` is the one exception — reporting index health is its job, so it catches and
+  returns `unreadable: {reason, code, message}` rather than propagating.
+
+What stays `null`: a missing file, an unwritten database, a valid-but-empty database, and a
+malformed JSON document (rebuildable, and the historical contract).
+
 ## Rollback
 
 `CODESIFT_INDEX_BACKEND=json` forces the legacy path; `=sqlite` forces the new one and fails

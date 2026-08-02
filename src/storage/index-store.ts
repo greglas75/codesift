@@ -13,6 +13,8 @@ import {
   getFileEntrySqlite,
   getDataVersion,
   importLegacyIndexIfEmpty,
+  classifyStorageError,
+  IndexStorageError,
 } from "./sqlite-index-store.js";
 
 /** Serialize concurrent writes to the same index path. */
@@ -105,7 +107,10 @@ async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<
 async function isMigrated(dbPath: string): Promise<boolean> {
   try {
     return (await loadIndexSqlite(dbPath)) !== null;
-  } catch {
+  } catch (err) {
+    // A locked/corrupt db is not "not migrated yet": answering false would re-run the full
+    // JSON import on every touch, hammering a database that is already in trouble.
+    if (classifyStorageError(err) !== null) throw err;
     return false;
   }
 }
@@ -318,15 +323,39 @@ export function resetStaleRollbackWarningForTesting(): void {
   staleRollbackWarned.clear();
 }
 
-/** The legacy path, kept intact: it is both the Node 20 backend and the rollback target. */
+/**
+ * The legacy path, kept intact: it is both the Node 20 backend and the rollback target.
+ *
+ * ENOENT is absence and stays `null`; a malformed document is also `null` (an invalid index is
+ * rebuildable, which is the historical contract). But EACCES/EIO/EBUSY mean the file exists and
+ * we simply could not read it — reporting that as "no index" is how a permissions problem gets
+ * misdiagnosed as an unindexed repo.
+ */
 async function loadJsonIndex(indexPath: string): Promise<CodeIndex | null> {
+  let raw: string;
   try {
-    const raw = await readFile(indexPath, "utf-8");
+    raw = await readFile(indexPath, "utf-8");
+  } catch (err) {
+    const code = classifyStorageError(err);
+    if (code !== null) {
+      throw new IndexStorageError(
+        `index storage at ${indexPath} is unreadable (${code}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        code,
+        indexPath,
+        { cause: err },
+      );
+    }
+    return null; // ENOENT and friends: nothing indexed here
+  }
+
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (!isValidIndex(parsed)) return null;
     return parsed;
   } catch {
-    return null;
+    return null; // malformed JSON is a rebuildable index, not a storage fault
   }
 }
 
@@ -337,6 +366,16 @@ async function loadJsonIndex(indexPath: string): Promise<CodeIndex | null> {
  *  silent empty results. */
 export type IndexOrStaleResult =
   | { status: "ok"; index: CodeIndex }
+  | {
+      /** The store exists but could not be read — locked, corrupt, unreadable. Distinct from a
+       *  null return, which means "nothing is indexed here". A caller that treats this as an
+       *  empty index reports a confident, wrong "no results". */
+      status: "unreadable";
+      reason: "storage_error";
+      /** SQLITE_* / errno code, for operators and for deciding whether a retry is sane. */
+      code: string;
+      message: string;
+    }
   | {
       status: "stale";
       reason: "extractor_version_mismatch";
@@ -419,8 +458,21 @@ export async function loadIndexOrStale(
   indexPath: string,
   currentVersions: Record<string, string>,
 ): Promise<IndexOrStaleResult | null> {
+  let parsed: CodeIndex | null;
   try {
-    const parsed = await readIndex(indexPath);
+    parsed = await readIndex(indexPath);
+  } catch (err) {
+    const code = classifyStorageError(err);
+    if (code === null) throw err;
+    return {
+      status: "unreadable",
+      reason: "storage_error",
+      code,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  try {
     if (!parsed) return null;
     const mismatches = collectExtractorVersionMismatches(parsed, currentVersions);
     if (mismatches.length > 0) {

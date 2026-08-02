@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, access, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -363,6 +363,13 @@ describe("adversarial-review fixes", () => {
     useBackend("sqlite");
     await loadIndex(indexPath);
     await saveIncremental(indexPath, "a.ts", [makeSymbol("a.ts", "new", 1)]);
+
+    // Age the JSON explicitly instead of trusting write ordering: on a fast host both files
+    // land in the same millisecond, the `db <= json` guard correctly declines to warn, and the
+    // test fails for a reason that has nothing to do with the behaviour under test. (Observed:
+    // green on macOS/APFS, red on the Linux test farm.)
+    const dayAgo = new Date(Date.now() - 24 * 3600 * 1000);
+    await utimes(indexPath, dayAgo, dayAgo);
 
     const errors: string[] = [];
     const original = console.error;

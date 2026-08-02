@@ -711,6 +711,13 @@ one and fails loudly if unavailable; unset auto-detects. `node:sqlite` requires 
 22.5** — on older runtimes CodeSift transparently keeps using JSON, so the supported Node
 floor stays at 20.
 
+**Storage faults are not "no index".** A locked, corrupt, or permission-denied store raises a
+distinct error instead of reading as an unindexed repo — otherwise tools answer "no results"
+with full confidence over a database that is merely busy, and the obvious next step (rebuild)
+is the wrong one. `index_status` reports it as `unreadable: {code, message}`; `SQLITE_BUSY` is
+worth a retry, `SQLITE_CORRUPT` needs `index_folder`. A missing, empty, or malformed index is
+still ordinary absence.
+
 Design rationale and rejected alternatives: [`docs/adr/ADR-003-index-storage-format.md`](docs/adr/ADR-003-index-storage-format.md).
 
 ## Anonymous usage telemetry

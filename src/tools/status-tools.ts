@@ -26,6 +26,16 @@ export interface IndexStatusResult {
     actual_version: string;
     mismatch_detail?: string;
   };
+  /** When the index store exists but could not be read at all — locked, corrupt, permissions.
+   *  Same principle as `stale`, one step further: an agent told "not indexed" will rebuild,
+   *  which is wrong (and destructive) for a database that is merely busy. `indexed` stays
+   *  false because nothing could be read, but this field is what says why. */
+  unreadable?: {
+    reason: "storage_error";
+    /** SQLITE_* or errno code. SQLITE_BUSY is worth retrying; SQLITE_CORRUPT is not. */
+    code: string;
+    message: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +51,17 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
   // Status check should NOT block on freshness — telemetry showed p99=43s
   // because ensureIndexFresh triggers git-diff + reindex of changed files.
   // Stale-but-fast metadata is the right tradeoff for a status call.
-  const index = await getCodeIndex(repo, { skipFreshness: true });
+  let index: Awaited<ReturnType<typeof getCodeIndex>>;
+  try {
+    index = await getCodeIndex(repo, { skipFreshness: true });
+  } catch (err) {
+    // getCodeIndex now throws on an unreadable store so that ordinary tools cannot render a
+    // storage fault as an empty result. This tool is the exception: reporting index health IS
+    // its job, so it catches and describes rather than propagating.
+    const problem = await detectUnreadable(repo);
+    if (problem) return { indexed: false, unreadable: problem };
+    throw err;
+  }
   if (!index) {
     // getCodeIndex returns null both for "no index file" and for stale-version
     // mismatches. Disambiguate by reading the index path directly: if the file
@@ -74,6 +94,26 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
   };
   if (stubLangs.size > 0) result.text_stub_languages = [...stubLangs].sort();
   return result;
+}
+
+/** Probe the on-disk index and describe a storage fault, if that is what went wrong.
+ *  Returns null when the failure was something else, so the caller rethrows rather than
+ *  mislabelling an unrelated error as a storage problem. */
+async function detectUnreadable(
+  repo: string,
+): Promise<IndexStatusResult["unreadable"] | null> {
+  const config = loadConfig();
+  try {
+    const resolved = await resolveRegisteredRepoMeta(config.registryPath, repo);
+    if (!resolved) return null;
+    const result = await loadIndexOrStale(resolved.meta.index_path, { ...EXTRACTOR_VERSIONS });
+    if (result?.status === "unreadable") {
+      return { reason: "storage_error", code: result.code, message: result.message };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** Probe the on-disk index for a repo and return stale info if the file exists

@@ -131,6 +131,17 @@ export async function getCodeIndex(
 
   const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (!result) return null;
+  if (result.status === "unreadable") {
+    // Deliberately NOT `return null`. Null here means "this repo has no index", and every tool
+    // downstream renders that as an authoritative empty answer. A locked or corrupt store is a
+    // fault the caller must see, not a repo with nothing in it.
+    throw new Error(
+      `[codesift] index for ${resolvedName} is unreadable (${result.code}): ${result.message}. ` +
+        `This is a storage fault, not an empty index — the previous behaviour would have ` +
+        `reported "no results". Retry if the code is SQLITE_BUSY; otherwise run index_folder ` +
+        `to rebuild ${meta.index_path}.`,
+    );
+  }
   if (result.status === "stale") {
     const extra = result.mismatch_detail ? ` — ${result.mismatch_detail}` : "";
     console.warn(
