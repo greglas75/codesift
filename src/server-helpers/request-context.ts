@@ -25,6 +25,21 @@ import { AsyncLocalStorage } from "node:async_hooks";
 export interface RequestContext {
   /** Directory the calling client is working in. */
   cwd: string;
+  /**
+   * Aborted when the client-facing timeout fires.
+   *
+   * `withTimeout` used to answer `timed_out` and leave the handler running:
+   * measured over one day, `scan_secrets` reached 5.1 hours, `find_references`
+   * 5.0 and `search_patterns` 4.9, against a 90-second budget. Nobody was
+   * waiting for any of it — and an agent that gets `timed_out` usually retries
+   * with a narrower scope, so the abandoned work runs ALONGSIDE its own
+   * replacement. That is what put this machine's load average above 600.
+   *
+   * Carried here rather than threaded through every handler signature: the code
+   * that can actually stop (ripgrep, directory walks) sits far below the tool
+   * boundary, and ~150 handlers have no business growing a parameter for it.
+   */
+  signal?: AbortSignal;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -40,6 +55,21 @@ export function runWithRequestContext<T>(ctx: RequestContext, fn: () => T): T {
  */
 export function currentCwd(): string {
   return storage.getStore()?.cwd ?? process.cwd();
+}
+
+/**
+ * The ambient cancellation signal, if a request is in scope.
+ *
+ * Returns undefined outside a request (CLI, tests) so callers keep their
+ * existing behaviour rather than inventing a signal that never fires.
+ */
+export function currentAbortSignal(): AbortSignal | undefined {
+  return storage.getStore()?.signal;
+}
+
+/** The active request context, if any — lets a wrapper extend it without losing fields. */
+export function currentRequestContext(): RequestContext | undefined {
+  return storage.getStore();
 }
 
 /** True when a request context is active — used to tell daemon from stdio. */

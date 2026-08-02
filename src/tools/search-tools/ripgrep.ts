@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import type { TextMatch } from "../../types.js";
 import { MAX_LINE_CHARS, RG_EXCLUDE_DIRS, RIPGREP_TIMEOUT_MS } from "./constants.js";
+import { currentAbortSignal } from "../../server-helpers/request-context.js";
 
 interface RipgrepOptions {
   regex?: boolean;
@@ -185,7 +186,11 @@ export async function searchWithRipgrep(
   query: string,
   options: RipgrepOptions,
 ): Promise<TextMatch[]> {
-  const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), options.signal, root);
+  // Fall back to the request's ambient signal so a tool that never threaded one
+  // through still dies when the client-facing timeout fires. Without this the
+  // scan kept running for hours after `timed_out` was returned.
+  const signal = options.signal ?? currentAbortSignal();
+  const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), signal, root);
   const rootPrefix = root.endsWith("/") ? root : `${root}/`;
   return parseRipgrepOutput(stdout, rootPrefix, options.maxResults, options.contextLines);
 }

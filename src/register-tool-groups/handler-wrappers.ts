@@ -1,3 +1,4 @@
+import { runWithRequestContext, currentRequestContext } from "../server-helpers/request-context.js";
 /**
  * Reusable, server-agnostic wrappers for MCP tool handlers. Pure module (no
  * server/registration imports) so it composes around any async handler and is
@@ -25,15 +26,32 @@ export function withTimeout<A extends AnyArgs, R>(
   return (...args: A): Promise<R | TimeoutResult> =>
     new Promise<R | TimeoutResult>((resolve, reject) => {
       let settled = false;
+      // Answering the client is not the same as stopping the work. Before this
+      // controller existed the handler ran on after `timed_out` was returned:
+      // measured over one day against a 90-second budget, `scan_secrets`
+      // reached 5.1 hours, `find_references` 5.0 and `search_patterns` 4.9 —
+      // all of it for a caller that had already given up, and typically
+      // alongside the narrower retry the agent issued next.
+      const controller = new AbortController();
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        controller.abort();
         resolve(
           toolName !== undefined ? { status: "timed_out", tool: toolName } : { status: "timed_out" },
         );
       }, ms);
+      // The signal reaches the code that can act on it (ripgrep, walks) through
+      // the ambient request context, so no handler signature has to change.
+      // Preserves an existing cwd when one is already in scope.
+      const existing = currentRequestContext();
+      const run = (): Promise<R> =>
+        runWithRequestContext(
+          { ...(existing ?? { cwd: process.cwd() }), signal: controller.signal },
+          () => handler(...args),
+        );
       // Attach an onRejected handler so a late rejection after timeout is swallowed (never unhandled).
-      handler(...args).then(
+      run().then(
         (value) => {
           if (settled) return;
           settled = true;
