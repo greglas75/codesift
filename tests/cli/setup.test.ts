@@ -368,8 +368,12 @@ describe("setup", () => {
       // local-only feature: a shared daemon — the whole reason stateless
       // serving exists — could not be configured without hand-editing every
       // client's JSON. Adding a machine has to be one command.
+      // `insecureTransport` is now required to put a bearer token on a plaintext link to
+      // another machine — the tailnet case this feature was built for, stated rather than
+      // assumed, because the code cannot tell a tailnet address from a public one.
       const result = await setup("claude", {
         http: true, host: "100.69.215.9", port: 7077, token: "secret", cwd: "/proj",
+        insecureTransport: true,
       });
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       const url = new URL(content.mcpServers.codesift.url);
@@ -379,6 +383,13 @@ describe("setup", () => {
       // The server refuses a routable bind without a token, so the client must
       // send one or every call comes back 401.
       expect(content.mcpServers.codesift.headers).toEqual({ Authorization: "Bearer secret" });
+    });
+
+    it("refuses to write a bearer token onto a plaintext remote URL", async () => {
+      // Without the acknowledgement above, this is a replayable credential on the wire.
+      await expect(
+        setup("claude", { http: true, host: "100.69.215.9", token: "secret", cwd: "/proj" }),
+      ).rejects.toThrow(/plaintext/i);
     });
 
     it("stays on loopback and sends no auth header when no host is given", async () => {

@@ -187,7 +187,8 @@ indexed repository — an unauthenticated routable bind publishes your source tr
 With --token (or CODESIFT_HTTP_TOKEN) one host can serve several machines:
 
   codesift serve --host 100.x.y.z --port 7077 --token <t>       # on the host
-  codesift setup claude --http --host 100.x.y.z --token <t>     # on each client
+  codesift setup claude --http --host 100.x.y.z --token <t> \        # on each client
+      --insecure-transport                                    # tailnet: already encrypted
 
 Adding a repository to a shared daemon needs no special command — call
 index_folder(path=...) against it with a path that exists ON THAT HOST. The
@@ -551,6 +552,14 @@ Options:
                 process per machine — embeddings load once for all windows)
                 instead of a stdio server per window. Run 'codesift serve' too.
   --port N      Daemon port for --http URL (default 7077)
+  --host H      Daemon host for --http URL (default 127.0.0.1)
+  --scheme S    http (default) or https for the --http URL
+  --insecure-transport
+                Acknowledge that a plaintext link to a NON-loopback daemon is
+                already encrypted below HTTP (tailnet/VPN/SSH tunnel). Without
+                it, writing a bearer token onto such a URL is REFUSED: the token
+                is static and replayable, and whoever captures it can read every
+                indexed repo on that daemon.
 
 What it does:
   - Creates the config file if it doesn't exist

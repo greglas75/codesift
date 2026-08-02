@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
 import { ensureDir, writeJsonFile } from "./fs.js";
-import { daemonHttpUrl, resolveMcpServerEntry } from "./mcp.js";
+import { daemonHttpUrl, resolveMcpServerEntry, assertTokenTransportIsSafe } from "./mcp.js";
 import { hasCodesiftHook, loadHooksSection } from "./hooks.js";
 
 export function stripCodesiftToolApprovalOverrides(
@@ -93,7 +93,9 @@ function jsonString(value: string): string {
 function getCodexServerEntryLines(options?: SetupOptions): string {
   if (options?.http) {
     {
-    const lines = ["url = " + jsonString(daemonHttpUrl(options.port, options.cwd, options.host))];
+    // Same guard as the JSON path: a token on a plaintext non-loopback URL is refused.
+    assertTokenTransportIsSafe(options);
+    const lines = ["url = " + jsonString(daemonHttpUrl(options.port, options.cwd, options.host, options.scheme))];
     if (options.token) {
       lines.push("[mcp_servers.codesift.http_headers]");
       lines.push("Authorization = " + jsonString(`Bearer ${options.token}`));

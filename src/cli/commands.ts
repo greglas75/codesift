@@ -855,11 +855,19 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
   // one process serve several.
   const daemonHost = getFlag(flags, "host");
   const daemonToken = getFlag(flags, "token") ?? process.env["CODESIFT_HTTP_TOKEN"];
+  // A bearer token on a plaintext link to another machine is refused unless the operator either
+  // asks for https or states that the transport is already encrypted (tailnet/VPN/SSH tunnel).
+  const rawScheme = getFlag(flags, "scheme");
+  const daemonScheme: "http" | "https" | undefined =
+    rawScheme === "https" ? "https" : rawScheme === "http" ? "http" : undefined;
+  const insecureTransport = getBoolFlag(flags, "insecure-transport") ?? false;
   const options = {
     hooks, rules, force, gitHooks, http,
     ...(port !== undefined ? { port } : {}),
     ...(daemonHost ? { host: daemonHost } : {}),
     ...(daemonToken ? { token: daemonToken } : {}),
+    ...(daemonScheme ? { scheme: daemonScheme } : {}),
+    ...(insecureTransport ? { insecureTransport } : {}),
   };
 
   /** Global post-commit backlog hook — wired here because `formatSetupLines` stays editor-setup only (see setup/setupAll for programmatic installs). */
@@ -929,10 +937,20 @@ async function handleService(args: string[], flags: Flags): Promise<void> {
       const host = getFlag(flags, "host") ?? "127.0.0.1";
       // A routable bind needs a token; the server enforces the same rule.
       const token = getFlag(flags, "token") ?? process.env["CODESIFT_HTTP_TOKEN"];
+      // Carry the caller's CODESIFT_* environment into the unit. A service gets
+      // almost nothing from the shell, so an embedding provider set only in the
+      // shell is silently lost and the daemon falls back to on-CPU ONNX.
+      const inheritedEnv: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) {
+        if (k.startsWith("CODESIFT_") && k !== "CODESIFT_HTTP_TOKEN" && typeof v === "string") {
+          inheritedEnv[k] = v;
+        }
+      }
       output(
         installService({
           dataDir, port, host,
           ...(token ? { token } : {}),
+          ...(Object.keys(inheritedEnv).length > 0 ? { env: inheritedEnv } : {}),
           force: getBoolFlag(flags, "force") === true,
         }),
         flags,

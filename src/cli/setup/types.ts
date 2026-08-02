@@ -38,4 +38,12 @@ export interface SetupOptions {
   token?: string;
   /** Shared-daemon port; defaults to 7077. */
   port?: number;
+  /** URL scheme for the daemon endpoint. Defaults to http (correct for loopback). */
+  scheme?: "http" | "https";
+  /**
+   * Acknowledge that a plaintext link to a NON-loopback daemon is already encrypted below HTTP
+   * (tailnet, VPN, SSH tunnel). Without it, writing a bearer token onto such a URL is refused —
+   * the code cannot tell a tailnet address from a public one, so the operator has to say so.
+   */
+  insecureTransport?: boolean;
 }

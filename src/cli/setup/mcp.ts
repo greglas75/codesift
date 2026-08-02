@@ -59,24 +59,74 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
  * an HTTP entry is inherently PER-PROJECT — one shared URL cannot describe two
  * projects.
  */
-export function daemonHttpUrl(port?: number, cwd?: string, host?: string): string {
+/** Loopback needs no transport encryption — nothing leaves the machine. */
+export function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    bare === "localhost" ||
+    bare === "::1" ||
+    bare === "0:0:0:0:0:0:0:1" ||
+    /^127\./.test(bare)
+  );
+}
+
+export function daemonHttpUrl(
+  port?: number,
+  cwd?: string,
+  host?: string,
+  scheme?: "http" | "https",
+): string {
   // Host is a parameter, not a constant. It was hardcoded to 127.0.0.1, which
   // silently made `setup --http` a local-only feature: a SHARED daemon — the
   // entire reason stateless serving exists — could not be configured without
   // hand-editing every client's JSON. Adding a machine to a shared instance has
   // to be one command, or nobody will do it twice.
-  const base = "http://" + (host ?? "127.0.0.1") + ":" + (port ?? DEFAULT_DAEMON_PORT) + "/mcp";
-  const dir = cwd ?? process.cwd();
-  return base + "?cwd=" + encodeURIComponent(dir);
+  const rawHost = host ?? "127.0.0.1";
+  // Bracket IPv6 literals. Plain concatenation produced `http://::1:7077/mcp`,
+  // which is not a parseable authority — a tailnet IPv6 daemon could not be
+  // configured at all.
+  const authorityHost = rawHost.includes(":") && !rawHost.startsWith("[")
+    ? `[${rawHost}]`
+    : rawHost;
+  const url = new URL(
+    `${scheme ?? "http"}://${authorityHost}:${port ?? DEFAULT_DAEMON_PORT}/mcp`,
+  );
+  url.searchParams.set("cwd", cwd ?? process.cwd());
+  return url.toString();
+}
+
+/**
+ * Refuse to write a reusable bearer token onto a plaintext URL that leaves the machine.
+ *
+ * Requiring a token does not make a routable plaintext endpoint safe: the token is static and
+ * replayable, and anything that captures it can call every tool — which exposes every indexed
+ * repository and conversation on the daemon. Loopback is exempt (nothing leaves the host).
+ *
+ * `insecureTransport` is the deliberate escape for the deployment this feature was built for: a
+ * tailnet or VPN where the transport is already encrypted below HTTP. It has to be stated, not
+ * assumed, because the code cannot tell a tailnet address from a public one.
+ */
+export function assertTokenTransportIsSafe(options: SetupOptions): void {
+  const host = options.host ?? "127.0.0.1";
+  if (!options.token) return;
+  if (isLoopbackHost(host)) return;
+  if (options.scheme === "https") return;
+  if (options.insecureTransport) return;
+  throw new Error(
+    `Refusing to write a bearer token for http://${host} — the token would travel in plaintext ` +
+      `and anyone who captures it can read every indexed repo on that daemon. Use --scheme https, ` +
+      `or pass --insecure-transport if the link is already encrypted (tailnet/VPN/SSH tunnel).`,
+  );
 }
 
 export function buildJsonServerEntry(options?: SetupOptions): Record<string, unknown> {
   if (options?.http) {
     // A remote daemon requires a token (the server refuses a routable bind
     // without one), so it travels with the URL in the client entry.
+    assertTokenTransportIsSafe(options);
     const entry: Record<string, unknown> = {
       type: "http",
-      url: daemonHttpUrl(options.port, options.cwd, options.host),
+      url: daemonHttpUrl(options.port, options.cwd, options.host, options.scheme),
     };
     if (options.token) entry["headers"] = { Authorization: `Bearer ${options.token}` };
     return entry;
