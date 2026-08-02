@@ -97,6 +97,24 @@ const OPERATIONAL_CODES = new Set([
   "EMFILE",
 ]);
 
+/**
+ * Structural check, not `instanceof`.
+ *
+ * A duplicated module instance (bundler, worker/thread boundary, a test importing through a
+ * different specifier) makes `instanceof` false for an object that is in every observable way
+ * the right error — and the failure mode is silent: the fault falls into the "unexpected error"
+ * branch and gets reported as an unindexed repo, which is the exact bug this file exists to
+ * prevent.
+ */
+export function isIndexStorageError(err: unknown): err is IndexStorageError {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "IndexStorageError" &&
+    typeof (err as { code?: unknown }).code === "string"
+  );
+}
+
 /** The operational code for `err`, or null when it is not an operational failure. */
 export function classifyStorageError(err: unknown): string | null {
   if (err instanceof IndexStorageError) return err.code;

@@ -332,7 +332,10 @@ const ABSENCE_CODES = new Set(["ENOENT", "ENOTDIR_PARENT"]);
 function nonAbsenceReadCode(err: unknown): string | null {
   const code =
     typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
-  if (typeof code !== "string") return null;
+  // No recognisable code at all: this is NOT evidence of absence. Only an explicit ENOENT is.
+  // Defaulting the unknown case to "nothing indexed here" is how a real fault becomes a
+  // confident empty answer — the whole failure mode being removed.
+  if (typeof code !== "string") return "UNKNOWN_READ_ERROR";
   return ABSENCE_CODES.has(code) ? null : code;
 }
 

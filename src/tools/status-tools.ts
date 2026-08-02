@@ -2,7 +2,7 @@ import { getCodeIndex } from "./index-tools.js";
 import { loadConfig } from "../config.js";
 import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { loadIndexOrStale } from "../storage/index-store.js";
-import { IndexStorageError } from "../storage/sqlite-index-store.js";
+import { isIndexStorageError } from "../storage/sqlite-index-store.js";
 import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
     // so it describes the fault instead of propagating it — straight from the caught error, with
     // no second read. Re-probing would hit an already-struggling store again and could observe a
     // different outcome than the one being reported.
-    if (err instanceof IndexStorageError) {
+    if (isIndexStorageError(err)) {
       return {
         indexed: false,
         unreadable: { reason: "storage_error", code: err.code, message: err.message },
@@ -122,10 +122,13 @@ async function probeIndexProblem(
     if (!resolved) return null;
     result = await loadIndexOrStale(resolved.meta.index_path, { ...EXTRACTOR_VERSIONS });
   } catch (err) {
-    if (err instanceof IndexStorageError) {
+    if (isIndexStorageError(err)) {
       return { unreadable: { reason: "storage_error", code: err.code, message: err.message } };
     }
-    return null;
+    // Anything else here (registry I/O, an unexpected TypeError) is a live fault. Returning
+    // null would render it as {indexed:false} — an authoritative "nothing indexed" over a
+    // problem nobody can see. Let it propagate.
+    throw err;
   }
   if (result?.status === "unreadable") {
     return { unreadable: { reason: "storage_error", code: result.code, message: result.message } };
