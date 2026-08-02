@@ -1,6 +1,6 @@
 <!-- zuvo-review -->
 range: 27fffbc..54026b2
-adversarial: zuvo/proofs/adv-27fffbc-54026b2.txt,zuvo/proofs/adv-27fffbc-54026b2-fixdelta.txt
+adversarial: zuvo/proofs/adv-27fffbc-54026b2.txt
 files: src/storage/sqlite-index-store.ts,src/storage/index-store.ts,src/tools/index-tools/file-indexer.ts,src/register-tools/runtime.ts
 
 # Code review — SQLite index migration (`refactor/sqlite-index-migration`)
