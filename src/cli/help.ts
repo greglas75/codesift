@@ -184,9 +184,11 @@ a crashed daemon). SIGTERM/SIGINT shut down cleanly.
 Binds 127.0.0.1 by default. A routable --host (e.g. a tailnet IP) is REFUSED
 unless a token is set, because the daemon answers tool calls that read every
 indexed repository — an unauthenticated routable bind publishes your source tree.
-With --token (or CODESIFT_HTTP_TOKEN) one host can serve several machines:
+With a token one host can serve several machines. Prefer the ENV form: a --token
+passed as an argument is visible to every local user via ps/proc and lands in shell
+history. --token still works as an override.
 
-  codesift serve --host 100.x.y.z --port 7077 --token <t>       # on the host
+  CODESIFT_HTTP_TOKEN=<t> codesift serve --host 100.x.y.z --port 7077   # on the host
   codesift setup claude --http --host 100.x.y.z --token <t> \        # on each client
       --insecure-transport                                    # tailnet: already encrypted
 

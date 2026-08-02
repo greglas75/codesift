@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
-import { ensureDir, writeJsonFile } from "./fs.js";
+import { ensureDir, writeJsonFile, writeSecretFile } from "./fs.js";
 import { daemonHttpUrl, resolveMcpServerEntry, assertTokenTransportIsSafe } from "./mcp.js";
 import { hasCodesiftHook, loadHooksSection } from "./hooks.js";
 
@@ -92,7 +92,6 @@ function jsonString(value: string): string {
 
 function getCodexServerEntryLines(options?: SetupOptions): string {
   if (options?.http) {
-    {
     // Same guard as the JSON path: a token on a plaintext non-loopback URL is refused.
     assertTokenTransportIsSafe(options);
     const lines = ["url = " + jsonString(daemonHttpUrl(options.port, options.cwd, options.host, options.scheme))];
@@ -101,7 +100,6 @@ function getCodexServerEntryLines(options?: SetupOptions): string {
       lines.push("Authorization = " + jsonString(`Bearer ${options.token}`));
     }
     return lines.join("\n");
-  }
   }
   const entry = resolveMcpServerEntry();
   return (
@@ -185,7 +183,7 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   await ensureDir(configDir);
 
   if (!existsSync(configPath)) {
-    await writeFile(configPath, getCodexTomlBlock(options).trimStart(), "utf-8");
+    await writeSecretFile(configPath, getCodexTomlBlock(options).trimStart());
     return { platform: "codex", config_path: configPath, status: "created" };
   }
 
@@ -202,13 +200,13 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
 
   if (content.includes("[mcp_servers.codesift]")) {
     if (removed > 0 || normalized.changed || normalizedEntry.changed || required.changed) {
-      await writeFile(configPath, content, "utf-8");
+      await writeSecretFile(configPath, content);
       return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
     }
     return { platform: "codex", config_path: configPath, status: "already_configured" };
   }
 
-  await writeFile(configPath, content.trimEnd() + "\n" + getCodexTomlBlock(options), "utf-8");
+  await writeSecretFile(configPath, content.trimEnd() + "\n" + getCodexTomlBlock(options));
   return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
 }
 

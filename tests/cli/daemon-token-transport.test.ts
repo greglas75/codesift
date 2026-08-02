@@ -1,4 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { writeJsonFile, writeSecretFile } from "../../src/cli/setup/fs.js";
 import {
   daemonHttpUrl,
   isLoopbackHost,
@@ -102,6 +107,44 @@ describe("daemonHttpUrl", () => {
   it("keeps the cwd query parameter encoded", () => {
     const url = new URL(daemonHttpUrl(7077, "/repo with space/x", "127.0.0.1"));
     expect(url.searchParams.get("cwd")).toBe("/repo with space/x");
+  });
+});
+
+describe("token at rest", () => {
+  // The transport guard covers the token on the wire. These cover it on disk — the same
+  // credential, and the shared-host scenario this feature enables is exactly where a
+  // world-readable config hands it to every other local account.
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "codesift-secret-mode-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("writeJsonFile creates the file owner-readable only", async () => {
+    const p = join(dir, "claude.json");
+    await writeJsonFile(p, { mcpServers: { codesift: { headers: { Authorization: "Bearer s" } } } });
+    expect((statSync(p).mode & 0o777).toString(8)).toBe("600");
+  });
+
+  it("writeSecretFile creates the file owner-readable only", async () => {
+    const p = join(dir, "config.toml");
+    await writeSecretFile(p, 'Authorization = "Bearer secret"\n');
+    expect((statSync(p).mode & 0o777).toString(8)).toBe("600");
+  });
+
+  it("tightens an existing world-readable config on rewrite", async () => {
+    // `mode` only applies at creation, so a config written by an older version keeps 0644
+    // until something chmods it. Rewriting must not leave it open.
+    const p = join(dir, "pre-existing.json");
+    writeFileSync(p, "{}", { mode: 0o644 });
+    expect((statSync(p).mode & 0o777).toString(8)).toBe("644");
+
+    await writeJsonFile(p, { mcpServers: {} });
+    expect((statSync(p).mode & 0o777).toString(8)).toBe("600");
   });
 });
 

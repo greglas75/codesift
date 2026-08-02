@@ -16,6 +16,7 @@ import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 import { createRequire } from "node:module";
+import { timingSafeEqual } from "node:crypto";
 import { resolve as pathResolve } from "node:path";
 import { statSync } from "node:fs";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
@@ -162,6 +163,23 @@ function cwdFromUrl(rawUrl: string): string | undefined {
   }
 }
 
+/**
+ * Constant-time bearer comparison.
+ *
+ * `!==` on strings short-circuits at the first differing byte, so response time leaks a
+ * prefix-match length. That is a weak channel over a real network, but this token is static,
+ * reusable, and grants every tool on the daemon — the same reasoning that made us refuse to put
+ * it on a plaintext link applies to how it is checked. Length is compared first because
+ * timingSafeEqual throws on a length mismatch (and a length leak is not the interesting one).
+ */
+function bearerMatches(header: string | string[] | undefined, token: string): boolean {
+  if (typeof header !== "string") return false;
+  const expected = Buffer.from(`Bearer ${token}`);
+  const actual = Buffer.from(header);
+  if (actual.length !== expected.length) return false;
+  return timingSafeEqual(actual, expected);
+}
+
 export async function startHttpServer(
   opts: { port?: number; host?: string; token?: string } = {},
 ): Promise<HttpServerHandle> {
@@ -230,7 +248,7 @@ export async function startHttpServer(
         }
         if (token) {
           const auth = req.headers["authorization"];
-          if (auth !== `Bearer ${token}`) {
+          if (!bearerMatches(auth, token)) {
             res.writeHead(401, { "content-type": "application/json" });
             res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" } }));
             return;

@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync, chmodSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -303,7 +303,11 @@ export function installService(opts: {
 
   mkdirSync(dirname(plan.unitPath), { recursive: true });
   mkdirSync(join(plan.dataDir, "logs"), { recursive: true });
-  writeFileSync(plan.unitPath, renderUnit(plan, os), "utf-8");
+  // 0600: the rendered unit embeds CODESIFT_HTTP_TOKEN, and a service file is
+  // world-readable by default — on the shared host this feature exists for, that
+  // hands the daemon credential to every other local account.
+  writeFileSync(plan.unitPath, renderUnit(plan, os), { encoding: "utf-8", mode: 0o600 });
+  try { chmodSync(plan.unitPath, 0o600); } catch { /* non-POSIX fs — do not fail the install */ }
 
   let activated = false;
   let note: string | undefined;
