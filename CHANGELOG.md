@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.13.0] — 2026-08-03
+
+### Added
+
+- `codesift serve` can bind a shared daemon for other machines, configured by
+  command rather than by hand-edited config.
+- SQLite index backend (ADR-003): a per-repo `<hash>.index.db` with normalized
+  `files` / `symbols` tables via the built-in `node:sqlite` in WAL mode. No
+  native dependency, so `npx codesift-mcp` cannot fail on a build step.
+  Existing JSON indexes migrate on first touch and the `.json` is never
+  deleted, so `CODESIFT_INDEX_BACKEND=json` always has a rollback target.
+  Node < 22.5 keeps the JSON backend, so the engines floor stays >=20.
+- `CODESIFT_INDEX_BACKEND` (`sqlite` | `json`, auto-detect when unset) and
+  `CODESIFT_MAX_CACHED_INDEXES` (default 3).
+- `index_status` reports `unreadable: {code, message}` when the store exists
+  but cannot be read.
+
+### Changed
+
+- Re-indexing one edited file no longer rewrites the whole repo index.
+  Measured on 4k files / 32k symbols: `saveIncremental` 10.8x faster, per-file
+  mtime read ~2500x faster, warm index load ~17800x faster. Cold load (once per
+  process) and full re-save (once per reindex) are 2-3x SLOWER — rebuilding
+  objects from rows costs more than one large `JSON.parse`. Deliberate: the
+  frequent paths win, the rare ones pay.
+- `getCodeIndex` now throws on an unreadable index instead of returning null.
+  Null is the channel tools convert into "no results", so a storage fault had
+  to leave it. `index_status` is the one exception and reports instead.
+- `zuvo/contracts` is no longer tracked in git: a worktree checkout rewrote
+  every contract's mtime, which is the signal the refactor gate uses to age
+  abandoned runs out, so a 20-day-old contract looked 35 minutes old and blocked
+  every commit in the new worktree.
+
+### Security
+
+- `setup --http` refuses to write a bearer token onto a plaintext URL pointing at a
+  non-loopback daemon. Requiring a token does not make a routable plaintext endpoint
+  safe: the token is static and replayable, and whoever captures it can call every tool
+  — which exposes every indexed repository on that daemon. Use `--scheme https`, or
+  `--insecure-transport` to state that the link is already encrypted below HTTP
+  (tailnet/VPN/SSH tunnel). Loopback is unaffected.
+
+### Fixed
+
+- IPv6 daemon hosts produced an unparseable URL (`http://::1:7077/mcp`), so an IPv6
+  or tailnet-IPv6 daemon could not be configured at all. The endpoint is now built with
+  `URL` and IPv6 literals are bracketed.
+- A locked, corrupt, or permission-denied index no longer reads as "this repo
+  has no index". Tools rendered that as an authoritative empty answer, and the
+  remedy it implied (rebuild) is wrong against a database that is merely busy.
+- The tool-response cache keyed on a file that a migrated repo freezes, so it
+  would have served cached answers over a changing index. It now also stats the
+  `.db` and its `-wal` — a WAL commit need not touch the main db file until
+  checkpoint.
+- Bounded the materialised-index cache (LRU) — it was the only cache in the
+  codebase without a ceiling, beside an explicitly RAM-budgeted embedding cache.
+- Index reads hand out a copy: the "callers only read" invariant was already
+  false, and a mutation of a shared cached index is invisible to
+  `PRAGMA data_version`.
+- JSON->SQLite migration is decided and written inside one `BEGIN IMMEDIATE`
+  transaction, so two hook processes racing on first touch cannot overwrite each
+  other's rows.
+
+
 ## Unreleased
 
 ### Changed
