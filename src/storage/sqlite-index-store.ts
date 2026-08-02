@@ -207,7 +207,7 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
 
   if (dbPath !== ":memory:") await mkdir(dirname(dbPath), { recursive: true });
 
-  let db: DatabaseSyncType;
+  let db: DatabaseSyncType | undefined;
   try {
     db = new Ctor(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
@@ -215,6 +215,15 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     db.exec("PRAGMA foreign_keys = ON");
     db.exec(SCHEMA_SQL);
   } catch (err) {
+    // Close before rethrowing: the constructor can succeed and a PRAGMA still fail, and this
+    // handle never reaches the `connections` cache, so nothing else would ever close it. On a
+    // retry loop against a sick database that leaks a descriptor and a lock per attempt —
+    // which makes the very BUSY/EMFILE conditions being reported worse.
+    try {
+      db?.close();
+    } catch {
+      /* already dead — the original fault is the one worth reporting */
+    }
     // A corrupt or unopenable file fails here, before any row is read — the one place where
     // "cannot open" would otherwise look exactly like "nothing indexed yet".
     rethrowOperational(err, dbPath);

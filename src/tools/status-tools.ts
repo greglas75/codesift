@@ -2,6 +2,7 @@ import { getCodeIndex } from "./index-tools.js";
 import { loadConfig } from "../config.js";
 import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { loadIndexOrStale } from "../storage/index-store.js";
+import { IndexStorageError } from "../storage/sqlite-index-store.js";
 import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 
 // ---------------------------------------------------------------------------
@@ -55,11 +56,17 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
   try {
     index = await getCodeIndex(repo, { skipFreshness: true });
   } catch (err) {
-    // getCodeIndex now throws on an unreadable store so that ordinary tools cannot render a
-    // storage fault as an empty result. This tool is the exception: reporting index health IS
-    // its job, so it catches and describes rather than propagating.
-    const problem = await detectUnreadable(repo);
-    if (problem) return { indexed: false, unreadable: problem };
+    // getCodeIndex throws on an unreadable store so that ordinary tools cannot render a storage
+    // fault as an empty result. This tool is the exception: reporting index health IS its job,
+    // so it describes the fault instead of propagating it — straight from the caught error, with
+    // no second read. Re-probing would hit an already-struggling store again and could observe a
+    // different outcome than the one being reported.
+    if (err instanceof IndexStorageError) {
+      return {
+        indexed: false,
+        unreadable: { reason: "storage_error", code: err.code, message: err.message },
+      };
+    }
     throw err;
   }
   if (!index) {
@@ -70,8 +77,8 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
     // run index_folder, but agents acting on "stale" can be told the same fix
     // applies AND that some data is still on disk — useful for reasoning about
     // partial coverage during the rebuild.
-    const stale = await detectStale(repo);
-    if (stale) return { indexed: false, stale };
+    const problem = await probeIndexProblem(repo);
+    if (problem) return { indexed: false, ...problem };
     return { indexed: false };
   }
 
@@ -96,49 +103,42 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
   return result;
 }
 
-/** Probe the on-disk index and describe a storage fault, if that is what went wrong.
- *  Returns null when the failure was something else, so the caller rethrows rather than
- *  mislabelling an unrelated error as a storage problem. */
-async function detectUnreadable(
+/** Probe the on-disk index and describe why it did not load: drifted extractor versions, or a
+ *  storage fault. Returns null for the genuine "never indexed" case.
+ *
+ *  It reports `unreadable` as well as `stale` because this path is reachable with a fault: a
+ *  store that read fine a moment ago (so `getCodeIndex` returned null rather than throwing) can
+ *  be locked by the time this probe runs. Falling through to a bare `{indexed:false}` there
+ *  would reintroduce exactly the misdiagnosis this change removes.
+ *
+ *  Uses `resolveRegisteredRepoMeta` so registry resolution stays aligned with `getCodeIndex`. */
+async function probeIndexProblem(
   repo: string,
-): Promise<IndexStatusResult["unreadable"] | null> {
-  const config = loadConfig();
-  try {
-    const resolved = await resolveRegisteredRepoMeta(config.registryPath, repo);
-    if (!resolved) return null;
-    const result = await loadIndexOrStale(resolved.meta.index_path, { ...EXTRACTOR_VERSIONS });
-    if (result?.status === "unreadable") {
-      return { reason: "storage_error", code: result.code, message: result.message };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Probe the on-disk index for a repo and return stale info if the file exists
- *  but its `extractor_version` snapshot drifted. Returns null when no index file
- *  is registered for the repo (the genuine "never indexed" case). Uses
- *  `resolveRegisteredRepoMeta` so registry resolution stays aligned with `getCodeIndex`. */
-async function detectStale(
-  repo: string,
-): Promise<IndexStatusResult["stale"] | null> {
+): Promise<Pick<IndexStatusResult, "stale"> | Pick<IndexStatusResult, "unreadable"> | null> {
   const config = loadConfig();
   let result: Awaited<ReturnType<typeof loadIndexOrStale>>;
   try {
     const resolved = await resolveRegisteredRepoMeta(config.registryPath, repo);
     if (!resolved) return null;
     result = await loadIndexOrStale(resolved.meta.index_path, { ...EXTRACTOR_VERSIONS });
-  } catch {
+  } catch (err) {
+    if (err instanceof IndexStorageError) {
+      return { unreadable: { reason: "storage_error", code: err.code, message: err.message } };
+    }
     return null;
+  }
+  if (result?.status === "unreadable") {
+    return { unreadable: { reason: "storage_error", code: result.code, message: result.message } };
   }
   if (result?.status === "stale") {
     return {
-      reason: "extractor_version_mismatch",
-      language: result.language,
-      expected_version: result.expected_version,
-      actual_version: result.actual_version,
-      ...(result.mismatch_detail ? { mismatch_detail: result.mismatch_detail } : {}),
+      stale: {
+        reason: "extractor_version_mismatch",
+        language: result.language,
+        expected_version: result.expected_version,
+        actual_version: result.actual_version,
+        ...(result.mismatch_detail ? { mismatch_detail: result.mismatch_detail } : {}),
+      },
     };
   }
   return null;

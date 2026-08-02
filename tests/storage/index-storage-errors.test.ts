@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -162,6 +162,23 @@ describe("absence is still absence", () => {
     useBackend("json");
     await writeFile(indexPath, "not valid json {{{", "utf-8");
     expect(await loadIndex(indexPath)).toBeNull();
+  });
+});
+
+describe("non-absence read failures are not absence", () => {
+  it("a directory where the index should be is a fault, not an unindexed repo", async () => {
+    // EISDIR is not in the operational allowlist and never will be — it is a wrong-path
+    // condition. It must still not read as "this repo has no index", which is what a blanket
+    // `catch { return null }` produced.
+    useBackend("json");
+    const asDir = join(dir, "actually-a-dir.index.json");
+    await mkdir(asDir);
+    await expect(loadIndex(asDir)).rejects.toThrow(IndexStorageError);
+  });
+
+  it("still reports plain ENOENT as absence", async () => {
+    useBackend("json");
+    expect(await loadIndex(join(dir, "missing.index.json"))).toBeNull();
   });
 });
 

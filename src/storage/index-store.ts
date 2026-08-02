@@ -104,14 +104,12 @@ async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<
   }
 }
 
+/** Migration state comes from the nullable return ONLY. An exception never means "not migrated":
+ *  answering false there would re-run the whole legacy import against a database that is already
+ *  failing, and genuine absence is already expressed by null. */
 async function isMigrated(dbPath: string): Promise<boolean> {
-  try {
+  {
     return (await loadIndexSqlite(dbPath)) !== null;
-  } catch (err) {
-    // A locked/corrupt db is not "not migrated yet": answering false would re-run the full
-    // JSON import on every touch, hammering a database that is already in trouble.
-    if (classifyStorageError(err) !== null) throw err;
-    return false;
   }
 }
 
@@ -324,6 +322,21 @@ export function resetStaleRollbackWarningForTesting(): void {
 }
 
 /**
+ * Codes that genuinely mean "there is no index file here". Everything else that `readFile` can
+ * fail with — EISDIR, ENOTDIR, ENAMETOOLONG, ELOOP, platform-specific I/O errors — describes a
+ * path that is wrong or unreadable, not a repo that was never indexed. Reporting those as
+ * absence is the same misdiagnosis this change exists to remove, one layer down.
+ */
+const ABSENCE_CODES = new Set(["ENOENT", "ENOTDIR_PARENT"]);
+
+function nonAbsenceReadCode(err: unknown): string | null {
+  const code =
+    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
+  if (typeof code !== "string") return null;
+  return ABSENCE_CODES.has(code) ? null : code;
+}
+
+/**
  * The legacy path, kept intact: it is both the Node 20 backend and the rollback target.
  *
  * ENOENT is absence and stays `null`; a malformed document is also `null` (an invalid index is
@@ -336,7 +349,7 @@ async function loadJsonIndex(indexPath: string): Promise<CodeIndex | null> {
   try {
     raw = await readFile(indexPath, "utf-8");
   } catch (err) {
-    const code = classifyStorageError(err);
+    const code = classifyStorageError(err) ?? nonAbsenceReadCode(err);
     if (code !== null) {
       throw new IndexStorageError(
         `index storage at ${indexPath} is unreadable (${code}): ${
