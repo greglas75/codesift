@@ -6,6 +6,7 @@ import {
   removeFileFromIndex,
   getIndexPath,
   getIndexWriteCountForTesting,
+  resetIndexBackendForTesting,
   isExtractorVersionCurrent,
   resetIndexWriteCountForTesting,
 } from "../../src/storage/index-store.js";
@@ -132,7 +133,24 @@ describe("index-store", () => {
       expect(names).toEqual(["funcA_new", "funcB1"]);
     });
 
-    it("folds a burst of concurrent updates into ONE read-modify-write", async () => {
+    // Both tests below assert on JSON-backend internals — the rewrite counter and the
+    // on-disk blob itself. SQLite has neither (writes are per-row inside a transaction),
+    // so left unpinned they would pass vacuously: the counter simply never moves off 0.
+    describe("JSON backend write batching", () => {
+      const previous = process.env["CODESIFT_INDEX_BACKEND"];
+
+      beforeEach(() => {
+        process.env["CODESIFT_INDEX_BACKEND"] = "json";
+        resetIndexBackendForTesting();
+      });
+
+      afterEach(() => {
+        if (previous === undefined) delete process.env["CODESIFT_INDEX_BACKEND"];
+        else process.env["CODESIFT_INDEX_BACKEND"] = previous;
+        resetIndexBackendForTesting();
+      });
+
+      it("folds a burst of concurrent updates into ONE read-modify-write", async () => {
       // The index is a single JSON blob per repo (263 MB on tgm-survey-platform),
       // so every write re-parses and re-serialises the whole thing. Agents edit
       // in bursts and the PostToolUse hook fires index_file per edit — batching
@@ -158,17 +176,18 @@ describe("index-store", () => {
       expect(getIndexWriteCountForTesting()).toBeLessThan(8);
     });
 
-    it("removing files the index never had does not rewrite the blob", async () => {
-      const indexPath = join(tmpDir, "noop.index.json");
-      await saveIndex(indexPath, makeIndex({ symbols: [makeSymbol("src/a.ts", "a", 1)], symbol_count: 1 }));
-      const before = await readFile(indexPath, "utf-8");
+      it("removing files the index never had does not rewrite the blob", async () => {
+        const indexPath = join(tmpDir, "noop.index.json");
+        await saveIndex(indexPath, makeIndex({ symbols: [makeSymbol("src/a.ts", "a", 1)], symbol_count: 1 }));
+        const before = await readFile(indexPath, "utf-8");
 
-      await Promise.all([
-        removeFileFromIndex(indexPath, "src/never-existed.ts"),
-        removeFileFromIndex(indexPath, "src/also-not-here.ts"),
-      ]);
+        await Promise.all([
+          removeFileFromIndex(indexPath, "src/never-existed.ts"),
+          removeFileFromIndex(indexPath, "src/also-not-here.ts"),
+        ]);
 
-      expect(await readFile(indexPath, "utf-8")).toBe(before);
+        expect(await readFile(indexPath, "utf-8")).toBe(before);
+      });
     });
 
     it("throws when index file does not exist", async () => {

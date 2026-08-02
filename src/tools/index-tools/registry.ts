@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { join, resolve, dirname } from "node:path";
 import { EXTRACTOR_VERSIONS } from "../index-shared.js";
 import { loadIndex, loadIndexOrStale } from "../../storage/index-store.js";
+import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import {
   getRepo,
   listRepos as listRegistryRepos,
@@ -132,6 +133,25 @@ export async function getCodeIndex(
 
   const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (!result) return null;
+  if (result.status === "unreadable") {
+    // Deliberately NOT `return null`. Null here means "this repo has no index", and every tool
+    // downstream renders that as an authoritative empty answer. A locked or corrupt store is a
+    // fault the caller must see, not a repo with nothing in it.
+    //
+    // Typed rather than a generic Error, and carrying the code: index_status maps this straight
+    // into its `unreadable` field. A generic Error forced it to re-read the store to rediscover
+    // what happened — a second hit on an already-struggling database, and a race, since a
+    // transient SQLITE_BUSY that cleared between the two reads produced a "fault" nobody could
+    // reproduce.
+    throw new IndexStorageError(
+      `[codesift] index for ${resolvedName} is unreadable (${result.code}): ${result.message}. ` +
+        `This is a storage fault, not an empty index — the previous behaviour would have ` +
+        `reported "no results". Retry if the code is SQLITE_BUSY; otherwise run index_folder ` +
+        `to rebuild ${meta.index_path}.`,
+      result.code,
+      meta.index_path,
+    );
+  }
   if (result.status === "stale") {
     const extra = result.mismatch_detail ? ` — ${result.mismatch_detail}` : "";
     console.warn(

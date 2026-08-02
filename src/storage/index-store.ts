@@ -1,11 +1,121 @@
 import { readFile } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
+import {
+  isSqliteAvailable,
+  loadIndexSqlite,
+  saveIndexSqlite,
+  saveIncrementalSqlite,
+  removeFileFromIndexSqlite,
+  getFileEntrySqlite,
+  getDataVersion,
+  importLegacyIndexIfEmpty,
+  classifyStorageError,
+  IndexStorageError,
+} from "./sqlite-index-store.js";
 
 /** Serialize concurrent writes to the same index path. */
 const writeLocks = new Map<string, Promise<void>>();
+
+// ---------------------------------------------------------------------------
+// Backend selection (ADR-003)
+// ---------------------------------------------------------------------------
+
+export type IndexBackend = "json" | "sqlite";
+
+/**
+ * Which on-disk format to use.
+ *
+ * `CODESIFT_INDEX_BACKEND=json` pins the legacy path (the documented rollback);
+ * `=sqlite` demands the new one and fails loudly if `node:sqlite` is missing, so a CI run
+ * cannot quietly exercise the wrong backend. Unset auto-detects, which is what keeps the
+ * `engines: >=20` floor honest: Node 20 has no `node:sqlite` and simply stays on JSON.
+ *
+ * Read from the environment here rather than `config.ts` because the choice must be
+ * resolvable from the short-lived `codesift postindex-file` hook process too, which never
+ * builds a full config.
+ */
+let backendPromise: Promise<IndexBackend> | undefined;
+
+export async function resolveIndexBackend(): Promise<IndexBackend> {
+  backendPromise ??= computeIndexBackend();
+  return backendPromise;
+}
+
+async function computeIndexBackend(): Promise<IndexBackend> {
+  const explicit = process.env["CODESIFT_INDEX_BACKEND"];
+  if (explicit === "json") return "json";
+  if (explicit === "sqlite") {
+    if (!(await isSqliteAvailable())) {
+      throw new Error(
+        "CODESIFT_INDEX_BACKEND=sqlite but node:sqlite is unavailable (requires Node >= 22.5)",
+      );
+    }
+    return "sqlite";
+  }
+  return (await isSqliteAvailable()) ? "sqlite" : "json";
+}
+
+export function resetIndexBackendForTesting(): void {
+  backendPromise = undefined;
+}
+
+/** `<hash>.index.json` -> `<hash>.index.db`, so both formats sit side by side and the JSON
+ *  stays available as the rollback artifact. */
+export function sqlitePathFor(indexPath: string): string {
+  return indexPath.endsWith(".json")
+    ? `${indexPath.slice(0, -".json".length)}.db`
+    : `${indexPath}.db`;
+}
+
+/** Guards one-time JSON->SQLite migration per index path. */
+const migrations = new Map<string, Promise<void>>();
+
+/**
+ * Bring an existing JSON index across on first touch.
+ *
+ * Deliberately non-destructive: the source `.json` is left in place. Deleting it would make
+ * `CODESIFT_INDEX_BACKEND=json` a one-way door, and the whole point of shipping a rollback
+ * switch is that it still has something to roll back to.
+ */
+async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<void> {
+  const inFlight = migrations.get(dbPath);
+  if (inFlight) return inFlight;
+
+  const run = (async () => {
+    if ((await loadIndexSqlite(dbPath)) !== null) return; // already migrated
+    const legacy = await loadJsonIndex(indexPath);
+    // importLegacyIndexIfEmpty re-checks emptiness under the write lock, so a second
+    // process that raced us here imports nothing instead of overwriting our rows.
+    if (legacy) await importLegacyIndexIfEmpty(dbPath, legacy);
+  })();
+
+  migrations.set(dbPath, run);
+  try {
+    await run;
+  } finally {
+    // Keep the resolved marker only on success; a failed migration should be retried
+    // rather than remembered as done.
+    if (await isMigrated(dbPath)) migrations.set(dbPath, Promise.resolve());
+    else migrations.delete(dbPath);
+  }
+}
+
+/** Migration state comes from the nullable return ONLY. An exception never means "not migrated":
+ *  answering false there would re-run the whole legacy import against a database that is already
+ *  failing, and genuine absence is already expressed by null. */
+async function isMigrated(dbPath: string): Promise<boolean> {
+  {
+    return (await loadIndexSqlite(dbPath)) !== null;
+  }
+}
+
+export function resetMigrationCacheForTesting(): void {
+  migrations.clear();
+}
 
 /**
  * Save a code index atomically.
@@ -15,6 +125,12 @@ export async function saveIndex(
   indexPath: string,
   index: CodeIndex,
 ): Promise<void> {
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await saveIndexSqlite(dbPath, index);
+    invalidateIndexCache(dbPath);
+    return;
+  }
   const data = JSON.stringify(index);
   await atomicWriteFile(indexPath, data);
 }
@@ -33,21 +149,229 @@ export async function loadIndex(
   indexPath: string,
   currentVersions?: Record<string, string>,
 ): Promise<CodeIndex | null> {
+  const index = await readIndex(indexPath);
+  if (!index) return null;
+  if (currentVersions && !isExtractorVersionCurrent(index, currentVersions)) return null;
+  return index;
+}
+
+/**
+ * One file's `files[]` entry.
+ *
+ * This is the accessor ADR-003 exists for. `file-indexer` needs a single file's `mtime_ms`
+ * and `symbol_count` to decide whether an edit changed anything, and used to obtain them by
+ * loading the entire index — a 262 MB parse on tgm-survey-platform, paid on the first touch
+ * of every file, in a hook process that exits immediately afterwards and so can never reuse
+ * the result. Under SQLite it is one indexed row.
+ *
+ * The JSON backend keeps the old cost; there is no way to read one record out of a blob.
+ */
+export async function getFileEntry(
+  indexPath: string,
+  filePath: string,
+): Promise<FileEntry | undefined> {
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return getFileEntrySqlite(dbPath, filePath);
+  }
+  const index = await loadJsonIndex(indexPath);
+  return index?.files.find((f) => f.path === filePath);
+}
+
+/**
+ * Materialised-index cache, keyed by db path and validated against SQLite's `data_version`.
+ *
+ * Rebuilding 32k symbol objects out of rows is measurably *slower* than one big
+ * `JSON.parse` (267 ms vs 91 ms on a 4k-file index), so without this the migration would
+ * trade a faster write path for a slower read path — and reads happen on every tool call.
+ *
+ * A cache was impossible under JSON: the `codesift postindex-file` hook writes the same
+ * index from its own process, and a plain file offers no way to notice. `PRAGMA
+ * data_version` changes whenever *another* connection commits, which is exactly that
+ * missing signal. It does NOT move for our own writes, so those invalidate explicitly
+ * below — that asymmetry is a property of SQLite, not an oversight.
+ *
+ * Cache hits return a shallow COPY, never the stored object. The "callers only read" invariant
+ * does not hold — `loadIndex` is public and at least one caller reassigns `files` on the
+ * result — and a mutation of a shared cached index is invisible to `data_version`, so it
+ * would silently poison every later reader in the process.
+ */
+interface CachedIndex {
+  index: CodeIndex;
+  dataVersion: number;
+}
+
+/**
+ * Bounded, LRU by insertion order. A materialised index is the largest object this process
+ * holds — the JSON equivalent is 262 MB on tgm-survey-platform — and `codesift serve` is a
+ * long-lived daemon that touches many repos. An unbounded map here would have been the one
+ * cache in this codebase without a ceiling, next to an embedding cache that is explicitly
+ * RAM-budgeted (`CODESIFT_MAX_EMBEDDING_MEM_MB`); that asymmetry is how the OOM reports
+ * documented in CLAUDE.md started.
+ */
+// `|| 3` would be wrong here: an operator setting 0 to minimise memory would get 3, because
+// 0 is falsy. Only a non-numeric value should fall back.
+const MAX_CACHED_INDEXES = (() => {
+  const raw = process.env["CODESIFT_MAX_CACHED_INDEXES"];
+  const parsed = raw === undefined ? 3 : Number(raw);
+  return Math.max(1, Number.isNaN(parsed) ? 3 : parsed);
+})();
+const indexCache = new Map<string, CachedIndex>();
+
+function cacheIndex(dbPath: string, entry: CachedIndex): void {
+  // Re-insert to move to the most-recent end of Map iteration order.
+  indexCache.delete(dbPath);
+  indexCache.set(dbPath, entry);
+  while (indexCache.size > MAX_CACHED_INDEXES) {
+    const oldest = indexCache.keys().next();
+    if (oldest.done) break;
+    indexCache.delete(oldest.value);
+  }
+}
+
+/**
+ * Detach the two arrays callers actually touch.
+ *
+ * A bare `{...index}` only stops a caller REASSIGNING `files`/`symbols`; an in-place
+ * `push`/`sort`/`splice` would still hit the array the cache holds — and `data_version`
+ * cannot see an in-memory mutation, so the corruption would survive every later hit. The
+ * elements stay shared (symbols are treated as immutable records); this copies the two
+ * array containers, which is the boundary that was actually being crossed.
+ */
+function copyIndex(index: CodeIndex): CodeIndex {
+  return { ...index, files: [...index.files], symbols: [...index.symbols] };
+}
+
+function invalidateIndexCache(dbPath: string): void {
+  indexCache.delete(dbPath);
+}
+
+export function resetIndexCacheForTesting(): void {
+  indexCache.clear();
+}
+
+export function getIndexCacheSizeForTesting(): number {
+  return indexCache.size;
+}
+
+/** Backend-agnostic read, without version enforcement. */
+async function readIndex(indexPath: string): Promise<CodeIndex | null> {
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+
+    const dataVersion = await getDataVersion(dbPath);
+    const cached = indexCache.get(dbPath);
+    if (cached && cached.dataVersion === dataVersion) {
+      // Re-insert on HIT too, or the eviction order is FIFO-by-first-load rather than LRU:
+      // the hottest repo would be evicted the moment an (N+1)th repo is touched, while a
+      // repo read once and never again outlives it. That thrashes exactly the working set
+      // the cache exists to keep warm.
+      cacheIndex(dbPath, cached);
+      return copyIndex(cached.index);
+    }
+
+    const index = await loadIndexSqlite(dbPath);
+    if (!index) return null;
+    cacheIndex(dbPath, { index, dataVersion });
+    // Copy on the miss path too: returning the freshly-cached object itself would let the
+    // very first caller mutate the entry every later reader is about to be handed.
+    return copyIndex(index);
+  }
+  warnIfRollbackIsStale(indexPath);
+  return loadJsonIndex(indexPath);
+}
+
+/**
+ * Warn when the JSON backend is serving a snapshot that SQLite has since moved past.
+ *
+ * The rollback switch keeps the `.json` untouched, which is what makes rolling back possible
+ * — and also means that after a repo has run on SQLite for a while, the JSON is a frozen
+ * snapshot from migration day. Falling back to it then answers every query from a stale index
+ * with no error and no empty result: the shape is valid, the extractor versions still match,
+ * it is simply old. That is the worst failure mode we have (confidently wrong), so it gets a
+ * loud one-time line rather than silence.
+ */
+const staleRollbackWarned = new Set<string>();
+
+function warnIfRollbackIsStale(indexPath: string): void {
+  if (staleRollbackWarned.has(indexPath)) return;
   try {
-    const raw = await readFile(indexPath, "utf-8");
+    // Mark only once a real comparison happened. Marking up front would permanently silence
+    // the warning for a long-lived JSON-pinned process that read this repo before any `.db`
+    // existed — precisely the process that most needs telling when one appears later.
+    const dbStat = statSync(sqlitePathFor(indexPath));
+    const jsonStat = statSync(indexPath);
+    staleRollbackWarned.add(indexPath);
+    if (dbStat.mtimeMs <= jsonStat.mtimeMs) return;
+    const ageHours = Math.round((dbStat.mtimeMs - jsonStat.mtimeMs) / 3_600_000);
+    console.error(
+      `[codesift] WARNING: reading the legacy JSON index at ${indexPath}, but a SQLite index ` +
+        `updated ~${ageHours}h more recently exists alongside it. Every answer from this repo ` +
+        `is from the pre-rollback snapshot. Run index_folder to rebuild the JSON index, or ` +
+        `unset CODESIFT_INDEX_BACKEND to go back to SQLite.`,
+    );
+  } catch {
+    /* no .db, or unreadable — nothing to compare against, so nothing to warn about */
+  }
+}
+
+export function resetStaleRollbackWarningForTesting(): void {
+  staleRollbackWarned.clear();
+}
+
+/**
+ * Codes that genuinely mean "there is no index file here". Everything else that `readFile` can
+ * fail with — EISDIR, ENOTDIR, ENAMETOOLONG, ELOOP, platform-specific I/O errors — describes a
+ * path that is wrong or unreadable, not a repo that was never indexed. Reporting those as
+ * absence is the same misdiagnosis this change exists to remove, one layer down.
+ */
+const ABSENCE_CODES = new Set(["ENOENT", "ENOTDIR_PARENT"]);
+
+function nonAbsenceReadCode(err: unknown): string | null {
+  const code =
+    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
+  // No recognisable code at all: this is NOT evidence of absence. Only an explicit ENOENT is.
+  // Defaulting the unknown case to "nothing indexed here" is how a real fault becomes a
+  // confident empty answer — the whole failure mode being removed.
+  if (typeof code !== "string") return "UNKNOWN_READ_ERROR";
+  return ABSENCE_CODES.has(code) ? null : code;
+}
+
+/**
+ * The legacy path, kept intact: it is both the Node 20 backend and the rollback target.
+ *
+ * ENOENT is absence and stays `null`; a malformed document is also `null` (an invalid index is
+ * rebuildable, which is the historical contract). But EACCES/EIO/EBUSY mean the file exists and
+ * we simply could not read it — reporting that as "no index" is how a permissions problem gets
+ * misdiagnosed as an unindexed repo.
+ */
+async function loadJsonIndex(indexPath: string): Promise<CodeIndex | null> {
+  let raw: string;
+  try {
+    raw = await readFile(indexPath, "utf-8");
+  } catch (err) {
+    const code = classifyStorageError(err) ?? nonAbsenceReadCode(err);
+    if (code !== null) {
+      throw new IndexStorageError(
+        `index storage at ${indexPath} is unreadable (${code}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        code,
+        indexPath,
+        { cause: err },
+      );
+    }
+    return null; // ENOENT and friends: nothing indexed here
+  }
+
+  try {
     const parsed: unknown = JSON.parse(raw);
-
-    if (!isValidIndex(parsed)) {
-      return null;
-    }
-
-    if (currentVersions && !isExtractorVersionCurrent(parsed, currentVersions)) {
-      return null;
-    }
-
+    if (!isValidIndex(parsed)) return null;
     return parsed;
   } catch {
-    return null;
+    return null; // malformed JSON is a rebuildable index, not a storage fault
   }
 }
 
@@ -58,6 +382,16 @@ export async function loadIndex(
  *  silent empty results. */
 export type IndexOrStaleResult =
   | { status: "ok"; index: CodeIndex }
+  | {
+      /** The store exists but could not be read — locked, corrupt, unreadable. Distinct from a
+       *  null return, which means "nothing is indexed here". A caller that treats this as an
+       *  empty index reports a confident, wrong "no results". */
+      status: "unreadable";
+      reason: "storage_error";
+      /** SQLITE_* / errno code, for operators and for deciding whether a retry is sane. */
+      code: string;
+      message: string;
+    }
   | {
       status: "stale";
       reason: "extractor_version_mismatch";
@@ -140,10 +474,22 @@ export async function loadIndexOrStale(
   indexPath: string,
   currentVersions: Record<string, string>,
 ): Promise<IndexOrStaleResult | null> {
+  let parsed: CodeIndex | null;
   try {
-    const raw = await readFile(indexPath, "utf-8");
-    const parsed: unknown = JSON.parse(raw);
-    if (!isValidIndex(parsed)) return null;
+    parsed = await readIndex(indexPath);
+  } catch (err) {
+    const code = classifyStorageError(err);
+    if (code === null) throw err;
+    return {
+      status: "unreadable",
+      reason: "storage_error",
+      code,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  try {
+    if (!parsed) return null;
     const mismatches = collectExtractorVersionMismatches(parsed, currentVersions);
     if (mismatches.length > 0) {
       const first = mismatches[0]!;
@@ -312,6 +658,15 @@ export async function saveIncremental(
   newSymbols: CodeSymbol[],
   fileEntry?: FileEntry,
 ): Promise<void> {
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    // No mutation batching here on purpose: batching exists to amortise a whole-blob
+    // rewrite, and this backend writes one file's rows inside a transaction instead.
+    await saveIncrementalSqlite(dbPath, updatedFile, newSymbols, fileEntry);
+    invalidateIndexCache(dbPath);
+    return;
+  }
   return enqueueIndexMutation(indexPath, "throw", (existing) => {
     const filtered = existing.symbols.filter((symbol) => symbol.file !== updatedFile);
     const merged = [...filtered, ...newSymbols];
@@ -338,6 +693,13 @@ export async function removeFileFromIndex(
   indexPath: string,
   deletedFile: string,
 ): Promise<void> {
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    await removeFileFromIndexSqlite(dbPath, deletedFile);
+    invalidateIndexCache(dbPath);
+    return;
+  }
   return enqueueIndexMutation(indexPath, "skip", (existing) => {
     const hadSymbols = existing.symbols.some((s) => s.file === deletedFile);
     const hadFile = existing.files.some((f) => f.path === deletedFile);

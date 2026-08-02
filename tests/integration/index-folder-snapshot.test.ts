@@ -11,7 +11,7 @@ import {
 } from "../../src/tools/index-tools.js";
 import { resetConfigCache } from "../../src/config.js";
 import { resetSecretCache } from "../../src/tools/secret-tools.js";
-import { getIndexPath } from "../../src/storage/index-store.js";
+import { getIndexPath, loadIndex, saveIndex } from "../../src/storage/index-store.js";
 import { getSnapshotPath, type FileHashSnapshot } from "../../src/storage/hash-snapshot.js";
 
 let tmpDir: string;
@@ -104,9 +104,7 @@ describe("indexFolder persistent snapshot diff", () => {
     // index's serialized updated_at exactly (not a later Date.now()).
     const dataDir = join(tmpDir, ".codesift");
     const indexPath = getIndexPath(dataDir, fixtureDir);
-    const rawIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      updated_at: number;
-    };
+    const rawIndex = (await loadIndex(indexPath))!;
     expect(snap.created_at).toBe(rawIndex.updated_at);
 
     // Both files present, keyed by relative path, with their actual sha1.
@@ -230,9 +228,7 @@ describe("indexFolder persistent snapshot diff", () => {
     // FileEntry, which may differ) and assert the touched mtime landed.
     const dataDir = join(tmpDir, ".codesift");
     const indexPath = getIndexPath(dataDir, fixtureDir);
-    const savedIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      files: Array<{ path: string; mtime_ms?: number }>;
-    };
+    const savedIndex = (await loadIndex(indexPath))!;
     const aEntrySaved = savedIndex.files.find((f) => f.path === "src/a.ts")!;
     expect(aEntrySaved.mtime_ms).toBe(futureMtime);
     expect(aEntrySaved.mtime_ms).not.toBe(aMtime1);
@@ -249,9 +245,7 @@ describe("indexFolder persistent snapshot diff", () => {
     expect(aLm3).toBe(aLm1);
     expect(bLm3).toBe(bLm1);
 
-    const savedIndex3 = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      files: Array<{ path: string; mtime_ms?: number }>;
-    };
+    const savedIndex3 = (await loadIndex(indexPath))!;
     const aEntrySaved3 = savedIndex3.files.find((f) => f.path === "src/a.ts")!;
     expect(aEntrySaved3.mtime_ms).toBe(futureMtime);
 
@@ -347,13 +341,10 @@ describe("indexFolder persistent snapshot diff", () => {
     // branch where the file falls through to filesToParse.
     const dataDir = join(tmpDir, ".codesift");
     const indexPath = getIndexPath(dataDir, fixtureDir);
-    const rawIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      files: Array<{ path: string }>;
-      symbols: Array<{ file: string }>;
-    };
+    const rawIndex = (await loadIndex(indexPath))!;
     rawIndex.files = rawIndex.files.filter((f) => f.path !== "src/b.ts");
     // Leave b.ts symbols untouched (the point is the missing mtimeMap entry)
-    await writeFile(indexPath, JSON.stringify(rawIndex));
+    await saveIndex(indexPath, rawIndex);
 
     resetIndexFolderRedundancyForTesting();
     // Must not throw even though mtimeMap has no entry for src/b.ts.
@@ -480,9 +471,7 @@ describe("indexFolder persistent snapshot diff", () => {
 
     // Read the index updated_at, then backdate the snapshot's created_at to
     // 10s BEFORE it → snapshot.created_at < index.updated_at → guard fires.
-    const rawIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      updated_at: number;
-    };
+    const rawIndex = (await loadIndex(indexPath))!;
     const snap = await readSnapshot();
     const staleSnap = { ...snap, created_at: rawIndex.updated_at - 10_000 };
     await writeFile(snapshotPathFor(), JSON.stringify(staleSnap));
@@ -521,9 +510,7 @@ describe("indexFolder persistent snapshot diff", () => {
     // Date.now() that could land before a concurrent saveIncremental). On a
     // fresh full write the two are identical, so any later incremental strictly
     // advances updated_at past created_at and re-arms the staleness guard.
-    const rawIndex2 = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      updated_at: number;
-    };
+    const rawIndex2 = (await loadIndex(indexPath))!;
     const snap2 = await readSnapshot();
     expect(snap2.created_at).toBe(rawIndex2.updated_at);
     expect(snap2.files["src/a.ts"]).toBe(sha1(A_TS));
@@ -544,9 +531,7 @@ describe("indexFolder persistent snapshot diff", () => {
 
     // Forward-date the snapshot's created_at to 10s AFTER the index's
     // updated_at → created_at !== updated_at → guard fires.
-    const rawIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      updated_at: number;
-    };
+    const rawIndex = (await loadIndex(indexPath))!;
     const snap = await readSnapshot();
     const futureSnap = { ...snap, created_at: rawIndex.updated_at + 10_000 };
     await writeFile(snapshotPathFor(), JSON.stringify(futureSnap));
@@ -579,9 +564,7 @@ describe("indexFolder persistent snapshot diff", () => {
     expect(names).toContain("alpha");
     expect(names).toContain("beta");
 
-    const rawIndex2 = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      updated_at: number;
-    };
+    const rawIndex2 = (await loadIndex(indexPath))!;
     const snap2 = await readSnapshot();
     expect(snap2.created_at).toBe(rawIndex2.updated_at);
     expect(snap2.files["src/a.ts"]).toBe(sha1(A_TS));
@@ -824,11 +807,7 @@ describe("indexFolder persistent snapshot diff", () => {
 
     // Saved index: full file count, out-of-scope symbols STILL queryable, the
     // in-scope file refreshed to its new symbol.
-    const savedIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      file_count: number;
-      files: Array<{ path: string }>;
-      symbols: Array<{ name: string; file: string }>;
-    };
+    const savedIndex = (await loadIndex(indexPath))!;
     expect(savedIndex.file_count).toBe(4);
     const savedPaths = savedIndex.files.map((f) => f.path).sort();
     expect(savedPaths).toEqual(["src/a.ts", "src/b.ts", "src/d.ts", "sub/c.ts"]);
@@ -863,9 +842,7 @@ describe("indexFolder persistent snapshot diff", () => {
     ]);
 
     // created_at === updated_at contract holds on the merged write.
-    const rawIndex2 = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      updated_at: number;
-    };
+    const rawIndex2 = (await loadIndex(indexPath))!;
     expect(snapAfter.created_at).toBe(rawIndex2.updated_at);
   });
 
@@ -902,10 +879,7 @@ describe("indexFolder persistent snapshot diff", () => {
     // 4 → 3: deleted in-scope file dropped, out-of-scope preserved.
     expect(r2.file_count).toBe(3);
 
-    const savedIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      files: Array<{ path: string }>;
-      symbols: Array<{ name: string }>;
-    };
+    const savedIndex = (await loadIndex(indexPath))!;
     const savedPaths = savedIndex.files.map((f) => f.path).sort();
     expect(savedPaths).toEqual(["src/a.ts", "src/b.ts", "sub/c.ts"]);
     const savedNames = savedIndex.symbols.map((s) => s.name);
@@ -943,11 +917,7 @@ describe("indexFolder persistent snapshot diff", () => {
     expect(r2.status).toBeUndefined();
     expect(r2.file_count).toBe(4);
 
-    const savedIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      file_count: number;
-      files: Array<{ path: string }>;
-      symbols: Array<{ name: string }>;
-    };
+    const savedIndex = (await loadIndex(indexPath))!;
     expect(savedIndex.file_count).toBe(4);
     expect(savedIndex.files.map((f) => f.path).sort()).toEqual([
       "src/a.ts",
@@ -991,10 +961,7 @@ describe("indexFolder persistent snapshot diff", () => {
     expect(r2.status).toBeUndefined();
     expect(r2.file_count).toBe(3);
 
-    const savedIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      files: Array<{ path: string }>;
-      symbols: Array<{ name: string }>;
-    };
+    const savedIndex = (await loadIndex(indexPath))!;
     expect(savedIndex.files.map((f) => f.path).sort()).toEqual([
       "src/a.ts",
       "src/b.ts",
@@ -1050,7 +1017,7 @@ describe("indexFolder persistent snapshot diff", () => {
     const dataDir = join(tmpDir, ".codesift");
     const indexPath = getIndexPath(dataDir, fixtureDir);
     const snapBefore = await readFile(snapshotPathFor(), "utf-8");
-    const indexBefore = await readFile(indexPath, "utf-8");
+    const indexBefore = JSON.stringify(await loadIndex(indexPath));
 
     // Exclude 59 of the 60 in-scope (src/) files — all still ON DISK. The
     // include_paths=["src"] walk visits only src/f0.ts → walked 1 of 60
@@ -1075,7 +1042,7 @@ describe("indexFolder persistent snapshot diff", () => {
 
     // Old snapshot AND index left byte-for-byte intact — no merge/save happened.
     expect(await readFile(snapshotPathFor(), "utf-8")).toBe(snapBefore);
-    expect(await readFile(indexPath, "utf-8")).toBe(indexBefore);
+    expect(JSON.stringify(await loadIndex(indexPath))).toBe(indexBefore);
   });
 
   it("(m2) legit in-scope MASS deletion is accepted (auto-heal); file_count drops", async () => {
@@ -1114,11 +1081,7 @@ describe("indexFolder persistent snapshot diff", () => {
       errSpy.mockRestore();
     }
 
-    const savedIndex = JSON.parse(await readFile(indexPath, "utf-8")) as {
-      file_count: number;
-      files: Array<{ path: string }>;
-      symbols: Array<{ name: string }>;
-    };
+    const savedIndex = (await loadIndex(indexPath))!;
     expect(savedIndex.file_count).toBe(1);
     expect(savedIndex.files.map((f) => f.path)).toEqual(["src/f0.ts"]);
     // Only the surviving file's symbol remains.

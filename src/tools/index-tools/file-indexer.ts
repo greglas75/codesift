@@ -8,7 +8,7 @@ import {
   listRepos as listRegistryRepos,
   updateRepoMeta,
 } from "../../storage/registry.js";
-import { loadIndex, saveIncremental } from "../../storage/index-store.js";
+import { getFileEntry, saveIncremental } from "../../storage/index-store.js";
 import { loadConfig } from "../../config.js";
 import { scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
@@ -105,25 +105,25 @@ export async function indexFile(filePath: string): Promise<{
   // hook invocations, fresh server). Skips files unchanged since the last
   // full index, and seeds the in-process state for subsequent calls.
   if (!mem) {
-    const existing = await loadIndex(matchingRepo.index_path);
-    if (existing) {
-      const prevEntry = existing.files.find((f) => f.path === relPath);
-      if (prevEntry?.mtime_ms && Math.round(st.mtimeMs) === prevEntry.mtime_ms) {
-        if (contentHash !== null) {
-          lastIndexedState.set(absPath, {
-            mtimeMs: Math.round(st.mtimeMs),
-            contentHash,
-            symbolCount: prevEntry.symbol_count,
-          });
-        }
-        return {
-          repo: matchingRepo.name,
-          file: relPath,
-          symbol_count: prevEntry.symbol_count,
-          duration_ms: Date.now() - startTime,
-          skipped: true,
-        };
+    // One row, not the whole index: this check runs on the first touch of every file, and
+    // the CLI hook is a fresh process per edit, so loading the full index here was the
+    // single most-repeated whole-blob parse in the system (ADR-003).
+    const prevEntry = await getFileEntry(matchingRepo.index_path, relPath);
+    if (prevEntry?.mtime_ms && Math.round(st.mtimeMs) === prevEntry.mtime_ms) {
+      if (contentHash !== null) {
+        lastIndexedState.set(absPath, {
+          mtimeMs: Math.round(st.mtimeMs),
+          contentHash,
+          symbolCount: prevEntry.symbol_count,
+        });
       }
+      return {
+        repo: matchingRepo.name,
+        file: relPath,
+        symbol_count: prevEntry.symbol_count,
+        duration_ms: Date.now() - startTime,
+        skipped: true,
+      };
     }
   }
 

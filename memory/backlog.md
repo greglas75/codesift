@@ -2,6 +2,9 @@
 
 <!-- fingerprint: file|rule|signature -->
 
+<!-- zuvo:review 2026-08-02 27fffbc..HEAD — SQLite index migration -->
+- [x] [MED] `src/storage/index-store.ts|error-contract|sqlite-operational-errors` — DONE 2026-08-02 (IndexStorageError + loadIndexOrStale "unreadable" + getCodeIndex throws + index_status reports). — `readIndex`/`loadIndexOrStale` collapse SQLite operational failures (locked, corrupt, permission) into `null`, i.e. "no index", so callers cannot tell transient storage failure from an absent index and may trigger needless rebuilds. Recipe: (1) introduce an `IndexReadError` distinguishing not-found/invalid from operational; (2) propagate operational errors out of `readIndex`; (3) update the 9 production importers of index-store to surface rather than rebuild. Defer reason: [structural-refactor (multi-file)].
+
 <!-- zuvo:review 2026-07-11 — 25 commits across 11 refactor branches -->
 - [ ] [MED] `src/parser/extractors/sql-symbols.ts|integration|symbol-utils-dependency` — when integrating SQL extractor + cycle branches, import shared helpers from `../symbol-utils.js` in both SQL leaf modules and run SQL/cycle tests. Defer reason: [structural-refactor (multi-file/cross-branch)].
 - [ ] [MED] `src/tools/pg-introspection.ts|CQ11|driver-lifecycle-split` — extract driver discovery/loading from connection and catalog-query lifecycle; characterize loader failure and cleanup. Defer reason: [structural-refactor (multi-file)].

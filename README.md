@@ -107,7 +107,8 @@ codesift wiki-generate
 | Feature | Description | Impact |
 |---------|-------------|--------|
 | **mtime-based incremental indexing** | Skip files with unchanged mtime on reindex | 5.6x faster reindex (57s → 10s on 778-file repo) |
-| **index_file** | Re-index a single file without full repo walk | 9ms (unchanged) / 153ms (changed) vs 3-8s full folder |
+| **index_file** | Re-index a single file without full repo walk | 9ms when the file is unchanged (short-circuit); a changed file costs one row write, not a whole-index rewrite |
+| **SQLite index** | Normalized per-repo DB in WAL mode; incremental writes touch one file's rows ([details](#index-storage)) | 10.8x faster single-file re-index, ~17800x faster warm index load |
 | **detail_level** on search_symbols | `compact` (~15 tok/result), `standard`, `full` | compact is 63% fewer tokens than standard |
 | **token_budget** on search_symbols | Pack results to token limit instead of guessing top_k | Precise budget control |
 | **Centrality bonus** in BM25 | Symbols in frequently-imported files rank higher | Core utilities surface first in search |
@@ -669,6 +670,7 @@ All configuration is via environment variables.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CODESIFT_DATA_DIR` | Storage directory for indexes | `~/.codesift` |
+| `CODESIFT_INDEX_BACKEND` | Index storage format: `sqlite` \| `json` (see [Index storage](#index-storage)) | auto-detect (`sqlite` on Node >= 22.5) |
 | `CODESIFT_WATCH_DEBOUNCE_MS` | File watcher debounce interval | `500` |
 | `CODESIFT_DEFAULT_TOKEN_BUDGET` | Default token budget for retrieval | `8000` |
 | `CODESIFT_DEFAULT_TOP_K` | Default max results for search | `50` |
@@ -676,6 +678,47 @@ All configuration is via environment variables.
 | `CODESIFT_SECRET_SCAN` | Enable/disable secret scanning | `true` (set `false` to disable) |
 | `CODESIFT_TELEMETRY` | Telemetry level: `off` \| `anon` \| `full` | `anon` (opt-out) |
 | `CODESIFT_TELEMETRY_URL` | Collector endpoint (push happens only when set) | unset (no push) |
+
+## Index storage
+
+Each repo's index is a **SQLite database** (`~/.codesift/<hash>.index.db`) with normalized
+`files` and `symbols` tables, using Node's built-in `node:sqlite` in WAL mode. There is no
+native dependency to compile — `npx codesift-mcp` cannot fail on a build step.
+
+Why it matters: the index used to be one JSON document per repo, so re-indexing a single
+edited file re-parsed and re-serialised the whole thing (262 MB on our largest repo). The
+`codesift postindex-file` hook runs as a fresh process per edit, so it could never amortise
+that cost.
+
+Measured on a 4,000-file / 32,000-symbol index:
+
+| operation | how often | JSON | SQLite |
+|---|---|---:|---:|
+| re-index one edited file | every Write/Edit | 534 ms | **49.6 ms** (10.8× faster) |
+| read one file's mtime | first touch of every file | 205.8 ms | **0.08 ms** (~2500× faster) |
+| load index, warm | every tool call after the first | 149.7 ms | **0.008 ms** (~17800× faster) |
+| load index, cold | once per process | 167.8 ms | 517.8 ms (3.1× slower) |
+| full re-save | once per repo, on reindex | 639 ms | 1329 ms (2.1× slower) |
+
+The two regressions are deliberate: rebuilding symbol objects from rows costs more than one
+large `JSON.parse`, and both affected operations are rare. Everything frequent gets cheaper.
+
+**Migration is automatic.** An existing `<hash>.index.json` is imported on first access. The
+JSON file is **never deleted**, so it stays available as a rollback target.
+
+**Backends.** `CODESIFT_INDEX_BACKEND=json` pins the legacy format; `=sqlite` demands the new
+one and fails loudly if unavailable; unset auto-detects. `node:sqlite` requires **Node >=
+22.5** — on older runtimes CodeSift transparently keeps using JSON, so the supported Node
+floor stays at 20.
+
+**Storage faults are not "no index".** A locked, corrupt, or permission-denied store raises a
+distinct error instead of reading as an unindexed repo — otherwise tools answer "no results"
+with full confidence over a database that is merely busy, and the obvious next step (rebuild)
+is the wrong one. `index_status` reports it as `unreadable: {code, message}`; `SQLITE_BUSY` is
+worth a retry, `SQLITE_CORRUPT` needs `index_folder`. A missing, empty, or malformed index is
+still ordinary absence.
+
+Design rationale and rejected alternatives: [`docs/adr/ADR-003-index-storage-format.md`](docs/adr/ADR-003-index-storage-format.md).
 
 ## Anonymous usage telemetry
 
