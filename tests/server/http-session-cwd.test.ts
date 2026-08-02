@@ -177,3 +177,33 @@ describe("HTTP daemon — directory pinned in the connection URL", () => {
     await client.close();
   }, 90_000);
 });
+
+describe("a daemon that was never told where the client works", () => {
+  it("says so, instead of sending the caller off to re-index", async () => {
+    // Removing the session removed the `roots/list` fallback with it, so a
+    // client connecting without `?cwd=` has no directory at all. Left alone
+    // that resolved to `local/` and surfaced as
+    // `Repository "local/" not found. Run index_folder first.` — which points
+    // an agent at re-indexing when the actual fault is a missing URL parameter.
+    //
+    // Asking for roots on every request instead would be a server->client
+    // round-trip per tool call; stateless serving has no session to have
+    // learned it once. The URL is the carrier, so a missing one is a
+    // configuration fault and reads like one.
+    const { resolveToolRepoArgs } = await import("../../src/server-helpers/repo-resolution.js");
+
+    const args: Record<string, unknown> = {};
+    expect(() =>
+      runWithRequestContext({ cwd: "/" }, () => resolveToolRepoArgs("search_text", args)),
+    ).toThrow(/does not know your working directory/);
+  });
+
+  it("stays silent outside a request — the CLI and tests are unaffected", async () => {
+    const { resolveToolRepoArgs } = await import("../../src/server-helpers/repo-resolution.js");
+    const args: Record<string, unknown> = {};
+    // No request context: the process cwd is a real directory, so this resolves
+    // normally rather than throwing.
+    expect(() => resolveToolRepoArgs("search_text", args)).not.toThrow();
+    expect(typeof args["repo"]).toBe("string");
+  });
+});
