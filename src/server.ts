@@ -187,12 +187,19 @@ export async function startHttpServer(
   /**
    * Working directory declared in the connection URL: `/mcp?cwd=/abs/path`.
    *
-   * This exists because the protocol's own answer — `roots/list` — is not
-   * universally implemented. Claude Code answers it with
-   * `-32601 Method not found`, so a daemon serving it has no way to learn where
-   * the caller works, and every auto-resolved call fails. The client cannot
-   * tell us, but its CONFIG can: a project-scoped MCP entry pins the directory
-   * into the URL, and the daemon reads it off every request.
+   * A deterministic alternative to `roots/list`, and the fallback when a client
+   * does not implement it.
+   *
+   * CORRECTION: an earlier version of this comment claimed Claude Code answers
+   * `roots/list` with `-32601 Method not found`. That was wrong. Probed
+   * directly, Claude Code 2.1.220 declares `roots: {listChanged: true}` AND
+   * answers the request with its workspace directory. The -32601 seen in the
+   * daemon log came from some other client — the log does not attribute lines
+   * to a client, and the attribution was an assumption, not an observation.
+   *
+   * The URL parameter is kept anyway, for reasons that survive the correction:
+   * it is pinned by config rather than reported by the client, it costs no
+   * round-trip, and clients that genuinely lack roots still work.
    *
    * Takes precedence over roots when both are present — the URL is what the
    * user configured for this project, roots are a guess about the window.

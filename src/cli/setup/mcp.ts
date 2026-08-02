@@ -40,11 +40,19 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
  * Daemon URL, with the caller's project directory pinned into it.
  *
  * The daemon is one process for every client and launchd starts it in `/`, so
- * it cannot know where any given client works. The protocol's answer to that is
- * `roots/list` — but Claude Code replies `-32601 Method not found`, so for the
- * main client it does not exist. Measured, not assumed: switching it to a plain
- * daemon URL made every auto-resolved call fail with
+ * it cannot know where any given client works. Measured, not assumed: switching
+ * a client to a plain daemon URL made every auto-resolved call fail with
  * `Repository "local/" not found`.
+ *
+ * CORRECTION: this comment used to say Claude Code answers `roots/list` with
+ * `-32601 Method not found`. Probed directly, it does not — Claude Code 2.1.220
+ * declares the capability and returns its workspace directory. The -32601 in the
+ * daemon log belonged to another client; the log does not say which, and
+ * attributing it was a guess.
+ *
+ * Pinning the directory here is still worth doing: config is deterministic where
+ * a reported root is not, it saves the round-trip, and it covers clients that do
+ * lack roots.
  *
  * The client cannot tell the daemon where it is; its CONFIG can. Pinning the
  * directory here is what makes an HTTP entry usable at all, which is also why
