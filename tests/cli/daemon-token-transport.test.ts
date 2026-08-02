@@ -36,8 +36,23 @@ describe("isLoopbackHost", () => {
     expect(isLoopbackHost("127.0.0.1@attacker.example")).toBe(false);
   });
 
-  it("recognises the IPv4-mapped IPv6 loopback", () => {
+  it("recognises both spellings of the IPv4-mapped loopback", () => {
+    // Same address, two notations. Recognising only the dotted one rejected a valid local
+    // config in a way nobody would think to diagnose.
     expect(isLoopbackHost("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("::ffff:7f00:1")).toBe(true);
+    expect(isLoopbackHost("0:0:0:0:0:ffff:7f00:1")).toBe(true);
+  });
+
+  it("does not treat a mapped NON-loopback address as loopback", () => {
+    expect(isLoopbackHost("::ffff:8.8.8.8")).toBe(false);
+    expect(isLoopbackHost("::ffff:0808:0808")).toBe(false);
+  });
+
+  it("only strips brackets as a matched pair", () => {
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("[::1")).toBe(false);
+    expect(isLoopbackHost("127.0.0.1]")).toBe(false);
   });
 });
 

@@ -70,12 +70,31 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
  * `isIP` returns 0 for anything that is not a bare address literal, so those cases fall through.
  */
 export function isLoopbackHost(host: string): boolean {
-  const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
+  // Strip brackets only as a matched pair. Accepting a lone `[` or `]` let a malformed
+  // authority like `[::1` classify as loopback here while failing later in URL construction —
+  // the guard and the URL builder must agree on what the host even is.
+  const unwrapped = /^\[.*\]$/.test(host) ? host.slice(1, -1) : host;
+  const bare = unwrapped.toLowerCase();
+
+  // `localhost` stays exempt. It is resolver-dependent in principle, but anyone who can rewrite
+  // your hosts file already owns the machine, and dropping it would break the overwhelmingly
+  // common local case for a threat that is not meaningfully mitigated here.
   if (bare === "localhost") return true;
+
   const kind = isIP(bare);
   if (kind === 4) return bare.startsWith("127."); // 127.0.0.0/8, and isIP proved it is a literal
   if (kind === 6) {
-    return bare === "::1" || bare === "0:0:0:0:0:0:0:1" || /^::ffff:127\./.test(bare);
+    if (bare === "::1" || bare === "0:0:0:0:0:0:0:1") return true;
+    // IPv4-mapped loopback has two spellings for the same address: dotted (`::ffff:127.0.0.1`)
+    // and hex (`::ffff:7f00:1`). Recognising only the dotted form rejected a valid loopback
+    // config — a false negative, not a hole, but it fails in a way nobody would diagnose.
+    const mapped = bare.match(/^(?:0*:)*:?ffff:(.+)$/);
+    if (mapped?.[1]) {
+      const tail = mapped[1];
+      if (isIP(tail) === 4) return tail.startsWith("127.");
+      const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+      if (hex) return parseInt(hex[1]!, 16) >>> 8 === 0x7f;
+    }
   }
   return false;
 }
