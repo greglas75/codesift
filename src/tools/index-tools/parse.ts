@@ -240,7 +240,14 @@ export async function embedSymbols(
     // Without this the map starts empty on every process, every symbol looks
     // changed, and the whole corpus is re-embedded on each MCP server start.
     primeContentHashes(repoName, contentHashesForPath(embeddingPath));
-    const embeddings = await batchEmbed(symbolTexts, existing, (texts) => provider.embed(texts, "document"), config.embeddingBatchSize, repoName);
+    const embeddings = await batchEmbed(
+      symbolTexts, existing,
+      (texts) => provider.embed(texts, "document"),
+      config.embeddingBatchSize, repoName,
+      // Model identity keys the cross-repo cache; a worktree of an already
+      // embedded checkout then costs lookups instead of model calls.
+      { model: provider.model, dimensions: provider.dimensions },
+    );
     await saveEmbeddings(embeddingPath, embeddings, contentHashesFor(repoName));
     await saveEmbeddingMeta(metaPath, {
       model: provider.model,

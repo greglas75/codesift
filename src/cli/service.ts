@@ -48,6 +48,16 @@ export interface ServicePlan {
   host: string;
   /** Bearer token required for a routable bind; absent for loopback. */
   token?: string;
+  /**
+   * Extra CODESIFT_* variables baked into the unit.
+   *
+   * launchd and systemd give a service almost no environment, so anything the
+   * daemon needs has to be written into the unit. The embedding provider is the
+   * case that forced this: without it the daemon silently falls back to the
+   * bundled ONNX runtime and burns the host's CPU, which is exactly what a
+   * shared daemon is supposed to stop.
+   */
+  env?: Record<string, string>;
   /** Absolute path to the node binary that will run the daemon. */
   execPath: string;
   /** Absolute path to the codesift CLI entry point. */
@@ -92,6 +102,7 @@ export function buildServicePlan(opts: {
   port?: number;
   host?: string;
   token?: string;
+  env?: Record<string, string>;
   dataDir: string;
   execPath?: string;
   cliPath?: string;
@@ -112,6 +123,7 @@ export function buildServicePlan(opts: {
     port,
     host,
     ...(opts.token ? { token: opts.token } : {}),
+    ...(opts.env ? { env: opts.env } : {}),
     execPath: opts.execPath ?? process.execPath,
     cliPath: opts.cliPath ?? resolveCliPath(),
     unitPath,
@@ -162,7 +174,9 @@ ${argLines}
     <key>PATH</key>
     <string>${escapeXml(SERVICE_PATH_ENTRIES.join(":"))}</string>
     <key>CODESIFT_DATA_DIR</key>
-    <string>${escapeXml(plan.dataDir)}</string>${plan.token ? `
+    <string>${escapeXml(plan.dataDir)}</string>${Object.entries(plan.env ?? {})
+      .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
+      .join("")}${plan.token ? `
     <key>CODESIFT_HTTP_TOKEN</key>
     <string>${escapeXml(plan.token)}</string>` : ""}
   </dict>
@@ -191,7 +205,9 @@ ExecStart=${exec}
 Restart=always
 RestartSec=10
 Environment=PATH=${SERVICE_PATH_ENTRIES.join(":")}
-Environment=CODESIFT_DATA_DIR=${plan.dataDir}${plan.token ? `\nEnvironment=CODESIFT_HTTP_TOKEN=${plan.token}` : ""}
+Environment=CODESIFT_DATA_DIR=${plan.dataDir}${Object.entries(plan.env ?? {})
+    .map(([k, v]) => `\nEnvironment=${k}=${v}`)
+    .join("")}${plan.token ? `\nEnvironment=CODESIFT_HTTP_TOKEN=${plan.token}` : ""}
 StandardOutput=append:${plan.stdoutLog}
 StandardError=append:${plan.stderrLog}
 
@@ -244,6 +260,7 @@ export function installService(opts: {
   host?: string;
   dataDir: string;
   token?: string;
+  env?: Record<string, string>;
   force?: boolean;
   os?: NodeJS.Platform;
   home?: string;

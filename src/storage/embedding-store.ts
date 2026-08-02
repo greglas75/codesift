@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { EmbeddingMeta } from "../types.js";
+import { loadSharedCache, appendSharedCache, contentKey } from "./shared-embedding-cache.js";
 import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
 
 /**
@@ -290,6 +291,14 @@ export async function batchEmbed(
   embedFn: (texts: string[]) => Promise<number[][]>,
   batchSize: number,
   cacheKey?: string,
+  /**
+   * Model identity for the cross-repo cache. A vector is a pure function of
+   * (model, dimensions, text), so the same text embedded for a second repo can
+   * be looked up instead of recomputed — which is what makes indexing a
+   * worktree cheap rather than a full duplicate pass. Omitted (CLI paths,
+   * tests) disables the shared lookup and behaves exactly as before.
+   */
+  sharedModel?: { model: string; dimensions: number },
 ): Promise<Map<string, Float32Array>> {
   const result = new Map(existing);
   const hashes = cacheKey ? (embeddingContentHashes.get(cacheKey) ?? new Map<string, number>()) : new Map<string, number>();
@@ -305,6 +314,29 @@ export async function batchEmbed(
     hashes.set(id, hash);
   }
 
+  // Cross-repo lookup before calling the model. Half of the symbols still
+  // queued for embedding on this machine live in worktrees or temp copies whose
+  // text is byte-identical to a repo already embedded; those become a hash
+  // lookup here instead of a model call.
+  const shared = sharedModel ? await loadSharedCache() : null;
+  const freshlyEmbedded: Array<{ key: string; vec: Float32Array }> = [];
+  const stillToEmbed: Array<{ id: string; text: string; key?: string }> = [];
+  for (const item of toEmbed) {
+    if (!shared || !sharedModel) {
+      stillToEmbed.push(item);
+      continue;
+    }
+    const key = contentKey(sharedModel.model, sharedModel.dimensions, item.text);
+    const hit = shared.get(key);
+    if (hit) {
+      result.set(item.id, hit);
+    } else {
+      stillToEmbed.push({ ...item, key });
+    }
+  }
+  toEmbed.length = 0;
+  toEmbed.push(...stillToEmbed);
+
   // Process in batches (only symbols that need embedding)
   for (let i = 0; i < toEmbed.length; i += batchSize) {
     const batch = toEmbed.slice(i, i + batchSize);
@@ -316,7 +348,10 @@ export async function batchEmbed(
       const entry = batch[j];
       const vec = vectors[j];
       if (entry && vec) {
-        result.set(entry.id, new Float32Array(vec));
+        const f32 = new Float32Array(vec);
+        result.set(entry.id, f32);
+        const key = (entry as { key?: string }).key;
+        if (key) freshlyEmbedded.push({ key, vec: f32 });
       }
     }
   }
@@ -331,6 +366,9 @@ export async function batchEmbed(
   if (cacheKey) {
     embeddingContentHashes.set(cacheKey, hashes);
   }
+  // Publish what was computed so the NEXT repo containing this text — a sibling
+  // worktree, a temp copy — gets it for free.
+  if (sharedModel) appendSharedCache(freshlyEmbedded);
 
   return result;
 }
