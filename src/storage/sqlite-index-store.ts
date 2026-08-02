@@ -338,24 +338,68 @@ export async function saveIndexSqlite(dbPath: string, index: CodeIndex): Promise
 
   db.exec("BEGIN");
   try {
-    db.exec("DELETE FROM symbols");
-    db.exec("DELETE FROM files");
-
-    const insSym = db.prepare(INSERT_SYMBOL_SQL);
-    for (const sym of index.symbols) insSym.run(...(symbolToRow(sym) as never[]));
-
-    const insFile = db.prepare(INSERT_FILE_SQL);
-    for (const file of index.files) insFile.run(...(fileEntryToRow(file) as never[]));
-
-    writeMetaValue(db, "repo", index.repo);
-    writeMetaValue(db, "root", index.root);
-    writeMetaValue(db, "created_at", String(index.created_at));
-    writeMetaValue(db, "updated_at", String(index.updated_at));
-    writeMetaValue(db, "extractor_version", JSON.stringify(index.extractor_version ?? null));
-    writeMetaValue(db, "workspaces", JSON.stringify(index.workspaces ?? null));
-    writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
-
+    writeIndexRows(db, index);
     db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/**
+ * Replace all rows + meta. Caller owns the transaction.
+ *
+ * `repo` is written here, inside that transaction, and `loadIndexSqlite` treats its absence
+ * as "no index" — so a write killed midway rolls back and the db reads as empty rather than
+ * as a partially-populated index that later looks complete.
+ */
+function writeIndexRows(db: DatabaseSyncType, index: CodeIndex): void {
+  db.exec("DELETE FROM symbols");
+  db.exec("DELETE FROM files");
+
+  const insSym = db.prepare(INSERT_SYMBOL_SQL);
+  for (const sym of index.symbols) insSym.run(...(symbolToRow(sym) as never[]));
+
+  const insFile = db.prepare(INSERT_FILE_SQL);
+  for (const file of index.files) insFile.run(...(fileEntryToRow(file) as never[]));
+
+  writeMetaValue(db, "repo", index.repo);
+  writeMetaValue(db, "root", index.root);
+  writeMetaValue(db, "created_at", String(index.created_at));
+  writeMetaValue(db, "updated_at", String(index.updated_at));
+  writeMetaValue(db, "extractor_version", JSON.stringify(index.extractor_version ?? null));
+  writeMetaValue(db, "workspaces", JSON.stringify(index.workspaces ?? null));
+  writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
+}
+
+/**
+ * Import a legacy JSON index, but only if this db is still empty — decided and written
+ * inside ONE `BEGIN IMMEDIATE` transaction.
+ *
+ * The check-then-act cannot be done in JS: `codesift postindex-file` is a fresh process per
+ * edit, so two of them (or one plus the server) can both observe an empty db, both read the
+ * same legacy JSON, and the slower writer then overwrites an incremental update the faster
+ * one already committed. An in-process guard cannot see the other process at all.
+ *
+ * `BEGIN IMMEDIATE` takes the write lock before the emptiness check, so the second writer
+ * either waits and then sees the committed import (returns false), or fails on busy_timeout —
+ * never silently clobbers. Returns true when this call performed the import.
+ */
+export async function importLegacyIndexIfEmpty(
+  dbPath: string,
+  index: CodeIndex,
+): Promise<boolean> {
+  const db = await openIndexDb(dbPath);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (readMetaValue(db, "repo") !== undefined) {
+      db.exec("ROLLBACK");
+      return false; // another process got there first
+    }
+    writeIndexRows(db, index);
+    db.exec("COMMIT");
+    return true;
   } catch (err) {
     db.exec("ROLLBACK");
     throw err;

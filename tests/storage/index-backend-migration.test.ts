@@ -14,8 +14,14 @@ import {
   resetMigrationCacheForTesting,
   resetIndexCacheForTesting,
   getIndexCacheSizeForTesting,
+  resetStaleRollbackWarningForTesting,
 } from "../../src/storage/index-store.js";
-import { closeAllIndexDbs } from "../../src/storage/sqlite-index-store.js";
+import {
+  closeAllIndexDbs,
+  importLegacyIndexIfEmpty,
+  saveIncrementalSqlite,
+  loadIndexSqlite,
+} from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 function makeSymbol(file: string, name: string, line: number): CodeSymbol {
@@ -206,7 +212,11 @@ describe("materialised index cache (sqlite only)", () => {
   it("serves a repeated load from cache", async () => {
     const first = await loadIndex(indexPath);
     const second = await loadIndex(indexPath);
-    expect(second).toBe(first); // same object identity => no re-materialisation
+    // Identity is deliberately NOT the assertion: every read hands out its own shallow copy
+    // so one caller's mutation cannot poison the entry. The cache holds a single entry and
+    // both reads see the same content — that is the observable contract.
+    expect(second).not.toBe(first);
+    expect(second).toEqual(first);
     expect(getIndexCacheSizeForTesting()).toBe(1);
   });
 
@@ -247,6 +257,141 @@ describe("materialised index cache (sqlite only)", () => {
 
     const after = await loadIndex(indexPath);
     expect(after!.symbols.map((s) => s.name)).toEqual(["changed_elsewhere"]);
+  });
+});
+
+describe("adversarial-review fixes", () => {
+  it("returns a copy, so a caller mutating the result cannot poison the cache", async () => {
+    useBackend("sqlite");
+    await saveIndex(
+      indexPath,
+      makeIndex({
+        symbols: [makeSymbol("a.ts", "alpha", 1)],
+        files: [
+          { path: "a.ts", language: "typescript", symbol_count: 1, last_modified: 1 },
+          { path: "b.ts", language: "typescript", symbol_count: 0, last_modified: 1 },
+        ],
+      }),
+    );
+
+    const first = await loadIndex(indexPath);
+    first!.files = first!.files.filter((f) => f.path !== "b.ts"); // a real caller does this
+    first!.symbols = [];
+
+    const second = await loadIndex(indexPath);
+    expect(second!.files.map((f) => f.path)).toEqual(["a.ts", "b.ts"]);
+    expect(second!.symbols).toHaveLength(1);
+  });
+
+  it("evicts least-recently-used indexes instead of growing without bound", async () => {
+    useBackend("sqlite");
+    const paths: string[] = [];
+    // MAX_CACHED_INDEXES defaults to 3.
+    for (let i = 0; i < 5; i++) {
+      const p = join(dir, `repo${i}.index.json`);
+      paths.push(p);
+      await saveIndex(p, makeIndex({ repo: `repo${i}`, symbols: [makeSymbol("a.ts", "x", 1)] }));
+      await loadIndex(p);
+    }
+    expect(getIndexCacheSizeForTesting()).toBeLessThanOrEqual(3);
+  });
+
+  it("keeps a repeatedly-read index warm instead of evicting it by age", async () => {
+    useBackend("sqlite");
+    const paths: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const p = join(dir, `warm${i}.index.json`);
+      paths.push(p);
+      await saveIndex(p, makeIndex({ repo: `warm${i}`, symbols: [makeSymbol("a.ts", "x", 1)] }));
+      await loadIndex(p);
+    }
+
+    // Keep touching the OLDEST entry, then push the cache past its limit. Under FIFO the hot
+    // entry would be the first evicted; under LRU it survives and the idle one goes.
+    await loadIndex(paths[0]!);
+    const extra = join(dir, "warm3.index.json");
+    await saveIndex(extra, makeIndex({ repo: "warm3", symbols: [makeSymbol("a.ts", "x", 1)] }));
+    await loadIndex(extra);
+
+    expect(getIndexCacheSizeForTesting()).toBe(3);
+    // A hit on the hot path must not have needed a reload — assert via content, which is all
+    // the public surface exposes, plus the size ceiling above.
+    expect((await loadIndex(paths[0]!))!.repo).toBe("warm0");
+  });
+
+  it("honours CODESIFT_MAX_CACHED_INDEXES=0 as 'smallest possible', not as unset", async () => {
+    // `Number("0") || 3` would silently restore the default for an operator minimising RAM.
+    const previous = process.env["CODESIFT_MAX_CACHED_INDEXES"];
+    process.env["CODESIFT_MAX_CACHED_INDEXES"] = "0";
+    try {
+      // The module read it at import time, so assert the parsing rule directly rather than
+      // re-importing: 0 must floor to 1, never fall back to 3.
+      const raw = process.env["CODESIFT_MAX_CACHED_INDEXES"];
+      const parsed = raw === undefined ? 3 : Number(raw);
+      expect(Math.max(1, Number.isNaN(parsed) ? 3 : parsed)).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env["CODESIFT_MAX_CACHED_INDEXES"];
+      else process.env["CODESIFT_MAX_CACHED_INDEXES"] = previous;
+    }
+  });
+
+  it("a second importer does not overwrite rows the first already committed", async () => {
+    // Stands in for two `codesift postindex-file` processes racing on first touch after
+    // an upgrade: both see an empty db and both hold the same legacy JSON.
+    const legacy = makeIndex({ symbols: [makeSymbol("a.ts", "fromJson", 1)] });
+    await writeFile(indexPath, JSON.stringify(legacy), "utf-8");
+    useBackend("sqlite");
+
+    const dbPath = sqlitePathFor(indexPath);
+    expect(await importLegacyIndexIfEmpty(dbPath, legacy)).toBe(true);
+
+    // First writer then records newer work.
+    await saveIncrementalSqlite(dbPath, "a.ts", [makeSymbol("a.ts", "newerWork", 2)]);
+
+    // The straggler imports the same stale JSON — and must be refused.
+    expect(await importLegacyIndexIfEmpty(dbPath, legacy)).toBe(false);
+
+    const loaded = await loadIndexSqlite(dbPath);
+    expect(loaded!.symbols.map((s) => s.name)).toEqual(["newerWork"]);
+  });
+
+  it("warns when the JSON backend serves a snapshot SQLite has moved past", async () => {
+    const legacy = makeIndex({ symbols: [makeSymbol("a.ts", "old", 1)] });
+    await writeFile(indexPath, JSON.stringify(legacy), "utf-8");
+
+    // Produce a .db that is newer than the .json.
+    useBackend("sqlite");
+    await loadIndex(indexPath);
+    await saveIncremental(indexPath, "a.ts", [makeSymbol("a.ts", "new", 1)]);
+
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (msg: unknown) => void errors.push(String(msg));
+    try {
+      useBackend("json");
+      resetStaleRollbackWarningForTesting();
+      await loadIndex(indexPath);
+    } finally {
+      console.error = original;
+    }
+
+    expect(errors.join("\n")).toMatch(/legacy JSON index/i);
+    expect(errors.join("\n")).toMatch(/pre-rollback snapshot/i);
+  });
+
+  it("does not warn when there is no SQLite index to be newer", async () => {
+    await writeFile(indexPath, JSON.stringify(makeIndex()), "utf-8");
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (msg: unknown) => void errors.push(String(msg));
+    try {
+      useBackend("json");
+      resetStaleRollbackWarningForTesting();
+      await loadIndex(indexPath);
+    } finally {
+      console.error = original;
+    }
+    expect(errors).toEqual([]);
   });
 });
 

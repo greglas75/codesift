@@ -16,6 +16,7 @@ import { recordCacheHit, scheduleSidecarFlush } from "../storage/session-state.j
 import type { ProjectLanguages } from "../utils/language-detect.js";
 import type { ToolDefinition } from "../register-tool-groups/shared.js";
 import { TOOL_DEFINITION_MAP } from "./discovery.js";
+import { sqlitePathFor } from "../storage/index-store.js";
 
 // ---------------------------------------------------------------------------
 // Registered tool handles — populated by registerTools(), used by describe_tools reveal
@@ -172,9 +173,10 @@ export function getRepoIndexVersion(repo: string): string {
   const indexPath = repoIndexPaths().get(repo);
   if (!indexPath) return "";
 
-  const dbPath = indexPath.endsWith(".json")
-    ? `${indexPath.slice(0, -".json".length)}.db`
-    : `${indexPath}.db`;
+  // Shared helper, not a second copy of the rule: this token exists to track whichever file
+  // backs the index, so a derivation that drifts from the storage layer silently pins the
+  // cache key while the real index keeps changing.
+  const dbPath = sqlitePathFor(indexPath);
 
   const parts: string[] = [];
   for (const candidate of [indexPath, dbPath, `${dbPath}-wal`]) {

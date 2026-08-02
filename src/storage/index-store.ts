@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
@@ -11,6 +12,7 @@ import {
   removeFileFromIndexSqlite,
   getFileEntrySqlite,
   getDataVersion,
+  importLegacyIndexIfEmpty,
 } from "./sqlite-index-store.js";
 
 /** Serialize concurrent writes to the same index path. */
@@ -84,7 +86,9 @@ async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<
   const run = (async () => {
     if ((await loadIndexSqlite(dbPath)) !== null) return; // already migrated
     const legacy = await loadJsonIndex(indexPath);
-    if (legacy) await saveIndexSqlite(dbPath, legacy);
+    // importLegacyIndexIfEmpty re-checks emptiness under the write lock, so a second
+    // process that raced us here imports nothing instead of overwriting our rows.
+    if (legacy) await importLegacyIndexIfEmpty(dbPath, legacy);
   })();
 
   migrations.set(dbPath, run);
@@ -185,15 +189,56 @@ export async function getFileEntry(
  * missing signal. It does NOT move for our own writes, so those invalidate explicitly
  * below — that asymmetry is a property of SQLite, not an oversight.
  *
- * The cached object is returned by reference. Callers treat `loadIndex` as a read API; the
- * one code path that mutates a loaded index (`flushIndexMutations`) belongs to the JSON
- * backend and never reaches here.
+ * Cache hits return a shallow COPY, never the stored object. The "callers only read" invariant
+ * does not hold — `loadIndex` is public and at least one caller reassigns `files` on the
+ * result — and a mutation of a shared cached index is invisible to `data_version`, so it
+ * would silently poison every later reader in the process.
  */
 interface CachedIndex {
   index: CodeIndex;
   dataVersion: number;
 }
+
+/**
+ * Bounded, LRU by insertion order. A materialised index is the largest object this process
+ * holds — the JSON equivalent is 262 MB on tgm-survey-platform — and `codesift serve` is a
+ * long-lived daemon that touches many repos. An unbounded map here would have been the one
+ * cache in this codebase without a ceiling, next to an embedding cache that is explicitly
+ * RAM-budgeted (`CODESIFT_MAX_EMBEDDING_MEM_MB`); that asymmetry is how the OOM reports
+ * documented in CLAUDE.md started.
+ */
+// `|| 3` would be wrong here: an operator setting 0 to minimise memory would get 3, because
+// 0 is falsy. Only a non-numeric value should fall back.
+const MAX_CACHED_INDEXES = (() => {
+  const raw = process.env["CODESIFT_MAX_CACHED_INDEXES"];
+  const parsed = raw === undefined ? 3 : Number(raw);
+  return Math.max(1, Number.isNaN(parsed) ? 3 : parsed);
+})();
 const indexCache = new Map<string, CachedIndex>();
+
+function cacheIndex(dbPath: string, entry: CachedIndex): void {
+  // Re-insert to move to the most-recent end of Map iteration order.
+  indexCache.delete(dbPath);
+  indexCache.set(dbPath, entry);
+  while (indexCache.size > MAX_CACHED_INDEXES) {
+    const oldest = indexCache.keys().next();
+    if (oldest.done) break;
+    indexCache.delete(oldest.value);
+  }
+}
+
+/**
+ * Detach the two arrays callers actually touch.
+ *
+ * A bare `{...index}` only stops a caller REASSIGNING `files`/`symbols`; an in-place
+ * `push`/`sort`/`splice` would still hit the array the cache holds — and `data_version`
+ * cannot see an in-memory mutation, so the corruption would survive every later hit. The
+ * elements stay shared (symbols are treated as immutable records); this copies the two
+ * array containers, which is the boundary that was actually being crossed.
+ */
+function copyIndex(index: CodeIndex): CodeIndex {
+  return { ...index, files: [...index.files], symbols: [...index.symbols] };
+}
 
 function invalidateIndexCache(dbPath: string): void {
   indexCache.delete(dbPath);
@@ -215,13 +260,62 @@ async function readIndex(indexPath: string): Promise<CodeIndex | null> {
 
     const dataVersion = await getDataVersion(dbPath);
     const cached = indexCache.get(dbPath);
-    if (cached && cached.dataVersion === dataVersion) return cached.index;
+    if (cached && cached.dataVersion === dataVersion) {
+      // Re-insert on HIT too, or the eviction order is FIFO-by-first-load rather than LRU:
+      // the hottest repo would be evicted the moment an (N+1)th repo is touched, while a
+      // repo read once and never again outlives it. That thrashes exactly the working set
+      // the cache exists to keep warm.
+      cacheIndex(dbPath, cached);
+      return copyIndex(cached.index);
+    }
 
     const index = await loadIndexSqlite(dbPath);
-    if (index) indexCache.set(dbPath, { index, dataVersion });
-    return index;
+    if (!index) return null;
+    cacheIndex(dbPath, { index, dataVersion });
+    // Copy on the miss path too: returning the freshly-cached object itself would let the
+    // very first caller mutate the entry every later reader is about to be handed.
+    return copyIndex(index);
   }
+  warnIfRollbackIsStale(indexPath);
   return loadJsonIndex(indexPath);
+}
+
+/**
+ * Warn when the JSON backend is serving a snapshot that SQLite has since moved past.
+ *
+ * The rollback switch keeps the `.json` untouched, which is what makes rolling back possible
+ * — and also means that after a repo has run on SQLite for a while, the JSON is a frozen
+ * snapshot from migration day. Falling back to it then answers every query from a stale index
+ * with no error and no empty result: the shape is valid, the extractor versions still match,
+ * it is simply old. That is the worst failure mode we have (confidently wrong), so it gets a
+ * loud one-time line rather than silence.
+ */
+const staleRollbackWarned = new Set<string>();
+
+function warnIfRollbackIsStale(indexPath: string): void {
+  if (staleRollbackWarned.has(indexPath)) return;
+  try {
+    // Mark only once a real comparison happened. Marking up front would permanently silence
+    // the warning for a long-lived JSON-pinned process that read this repo before any `.db`
+    // existed — precisely the process that most needs telling when one appears later.
+    const dbStat = statSync(sqlitePathFor(indexPath));
+    const jsonStat = statSync(indexPath);
+    staleRollbackWarned.add(indexPath);
+    if (dbStat.mtimeMs <= jsonStat.mtimeMs) return;
+    const ageHours = Math.round((dbStat.mtimeMs - jsonStat.mtimeMs) / 3_600_000);
+    console.error(
+      `[codesift] WARNING: reading the legacy JSON index at ${indexPath}, but a SQLite index ` +
+        `updated ~${ageHours}h more recently exists alongside it. Every answer from this repo ` +
+        `is from the pre-rollback snapshot. Run index_folder to rebuild the JSON index, or ` +
+        `unset CODESIFT_INDEX_BACKEND to go back to SQLite.`,
+    );
+  } catch {
+    /* no .db, or unreadable — nothing to compare against, so nothing to warn about */
+  }
+}
+
+export function resetStaleRollbackWarningForTesting(): void {
+  staleRollbackWarned.clear();
 }
 
 /** The legacy path, kept intact: it is both the Node 20 backend and the rollback target. */
