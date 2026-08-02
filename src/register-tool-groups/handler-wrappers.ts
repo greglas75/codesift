@@ -45,9 +45,14 @@ export function withTimeout<A extends AnyArgs, R>(
       // the ambient request context, so no handler signature has to change.
       // Preserves an existing cwd when one is already in scope.
       const existing = currentRequestContext();
+      // Compose with any signal already in scope rather than replacing it: a
+      // nested withTimeout, or a future shutdown signal on the context, must
+      // not be silently disarmed by the inner one. Either firing cancels.
+      const outer = existing?.signal;
+      const signal = outer ? AbortSignal.any([outer, controller.signal]) : controller.signal;
       const run = (): Promise<R> =>
         runWithRequestContext(
-          { ...(existing ?? { cwd: process.cwd() }), signal: controller.signal },
+          { ...(existing ?? { cwd: process.cwd() }), signal },
           () => handler(...args),
         );
       // Attach an onRejected handler so a late rejection after timeout is swallowed (never unhandled).

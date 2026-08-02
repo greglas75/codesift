@@ -72,4 +72,32 @@ describe("withTimeout cancels the work it abandons", () => {
     };
     await expect(withTimeout(handler, 5_000)()).rejects.toThrow("boom");
   });
+
+  it("composes with an outer signal instead of disarming it", async () => {
+    // Adversarial review of the first cut: the wrapper replaced whatever signal
+    // was already in scope. A nested withTimeout — or a future shutdown signal
+    // on the context — would then be silently dropped, and the outer timeout
+    // could no longer cancel anything.
+    const outer = new AbortController();
+    let seen: AbortSignal | undefined;
+
+    const handler = async (): Promise<string> => {
+      seen = currentAbortSignal();
+      await sleep(300);
+      return "late";
+    };
+
+    const pending = runWithRequestContext(
+      { cwd: "/p", signal: outer.signal },
+      () => withTimeout(handler, 5_000)(),
+    );
+
+    await sleep(20);
+    expect(seen?.aborted).toBe(false);
+    // The OUTER signal fires; the inner budget has not expired.
+    outer.abort();
+    await sleep(10);
+    expect(seen?.aborted).toBe(true);
+    await pending;
+  });
 });

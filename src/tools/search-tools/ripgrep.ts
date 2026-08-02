@@ -66,6 +66,14 @@ function buildRipgrepArgs(root: string, query: string, options: RipgrepOptions):
  * Basename globs like `*.ts` were unaffected, which is what made this look like
  * a glob-syntax problem instead of a working-directory one.
  */
+/** First signal to fire wins; undefined only when neither side has one. */
+function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((s): s is AbortSignal => s !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length === 1) return present[0];
+  return AbortSignal.any(present);
+}
+
 function executeRipgrep(
   args: string[],
   signal: AbortSignal | undefined,
@@ -186,10 +194,11 @@ export async function searchWithRipgrep(
   query: string,
   options: RipgrepOptions,
 ): Promise<TextMatch[]> {
-  // Fall back to the request's ambient signal so a tool that never threaded one
-  // through still dies when the client-facing timeout fires. Without this the
-  // scan kept running for hours after `timed_out` was returned.
-  const signal = options.signal ?? currentAbortSignal();
+  // COMPOSE, do not choose. `??` looked equivalent but is not: a caller that
+  // passes its own signal would shadow the client-facing timeout entirely, so
+  // the scan it started could still outlive the answer — the exact failure this
+  // wiring exists to prevent. Either signal firing must stop ripgrep.
+  const signal = combineSignals(options.signal, currentAbortSignal());
   const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), signal, root);
   const rootPrefix = root.endsWith("/") ? root : `${root}/`;
   return parseRipgrepOutput(stdout, rootPrefix, options.maxResults, options.contextLines);
