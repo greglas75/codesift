@@ -1,0 +1,7 @@
+{
+  "build": "npm run download-wasm && npm run build",
+  "test": "npx vitest run",
+  "env": {
+    "NODE_ENV": "test"
+  }
+}
