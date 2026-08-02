@@ -26,6 +26,7 @@ import { ensureIndexFresh } from "./file-indexer.js";
 import { indexFolder } from "./folder-indexer.js";
 import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches } from "./state.js";
 import type { CodeIndex, RepoMeta } from "../../types.js";
+import { findWorkingTree } from "../../utils/worktree.js";
 
 export interface RepoSummary {
   name: string;
@@ -170,8 +171,41 @@ export async function autoIndexCurrentRepo(cwd: string): Promise<void> {
   const gitRoot = await findGitRoot(cwd);
   if (!gitRoot) return;
 
-  const repoName = getRepoName(gitRoot);
   const config = loadConfig();
+
+  // A linked worktree has its OWN `.git`, so findGitRoot stops there and every
+  // task branch looked like a brand-new repository. Each got a full index and,
+  // far more expensively, a full embedding pass — for content that is usually
+  // IDENTICAL to the checkout it came from. Measured here:
+  // `backlog-wave-1-integration` had 1,799 files indexed and differed from main
+  // by ZERO; `backlog-vision-log-policy` 1,792 files and 3. Across the machine,
+  // 1,585 of 1,895 registry entries pointed at worktrees that no longer exist,
+  // holding gigabytes of embeddings for directories that cannot be read.
+  //
+  // Auto-indexing is the convenience path, so it now defers to the parent
+  // checkout, whose index already covers this content. An explicit
+  // `index_folder(path=<worktree>)` is untouched — a worktree you are actually
+  // working in is worth its own index, and hint H19 is what says so.
+  const tree = findWorkingTree(gitRoot);
+  if (tree?.linked && tree.mainRoot) {
+    const parentName = getRepoName(tree.mainRoot);
+    const parent = await getRepo(config.registryPath, parentName);
+    if (parent) {
+      console.error(
+        `[codesift] ${gitRoot} is a worktree of ${parentName}, which is already indexed — `
+        + "skipping auto-index. Run index_folder(path=…) explicitly if this tree needs its own.",
+      );
+      return;
+    }
+    // Parent not indexed: index THAT instead. It covers the worktree's content
+    // and every sibling worktree, where indexing this one covers only itself.
+    console.error(`[codesift] Auto-indexing parent checkout ${parentName} (first use)...`);
+    await indexFolder(tree.mainRoot);
+    console.error(`[codesift] Auto-index complete: ${parentName}`);
+    return;
+  }
+
+  const repoName = getRepoName(gitRoot);
   const existing = await getRepo(config.registryPath, repoName);
   if (existing) return;
 

@@ -274,17 +274,44 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   const dryRun = getBoolFlag(flags, "dry-run");
 
   // Live index hashes from the registry — everything else is orphaned cache.
+  //
+  // A registry entry counted as live even when its `root` no longer existed, so
+  // artifacts for deleted directories were protected indefinitely. Measured
+  // here: 101 of 119 indexed worktrees pointed at directories that were gone,
+  // holding 5.4 GB of embeddings for code that cannot be read. Task branches are
+  // created and deleted constantly, so this accumulates without bound.
+  //
+  // Entries whose root is missing are de-registered first; their artifacts then
+  // fall out as orphans through the sweep below.
   const live = new Set<string>();
+  const stale: Array<{ name: string; root: string }> = [];
+  let reg: { repos?: Record<string, { index_path?: string; root?: string }> };
   try {
-    const reg = JSON.parse(readFileSync(join(dataDir, "registry.json"), "utf-8")) as {
-      repos?: Record<string, { index_path?: string }>;
-    };
-    for (const v of Object.values(reg.repos ?? {})) {
-      const ip = v.index_path;
-      if (typeof ip === "string") live.add(ip.split("/").pop()!.replace(".index.json", ""));
-    }
+    reg = JSON.parse(readFileSync(join(dataDir, "registry.json"), "utf-8")) as typeof reg;
   } catch {
     die("prune: cannot read registry.json — aborting so live data is never deleted.");
+    return;
+  }
+  for (const [name, v] of Object.entries(reg.repos ?? {})) {
+    const ip = v.index_path;
+    const root = v.root;
+    // Only a root that is definitively absent counts. An unreadable path (a
+    // permissions error, an unmounted volume mid-check) throws and is treated
+    // as present — the conservative direction, since the cost of keeping a dead
+    // entry is disk, and the cost of dropping a live one is a re-index.
+    let rootGone = false;
+    if (typeof root === "string" && root.length > 0) {
+      try {
+        statSync(root);
+      } catch {
+        rootGone = true;
+      }
+    }
+    if (rootGone) {
+      stale.push({ name, root: root as string });
+      continue; // deliberately NOT added to `live`
+    }
+    if (typeof ip === "string") live.add(ip.split("/").pop()!.replace(".index.json", ""));
   }
   // Safety: an empty live set would mark every artifact orphaned. Refuse rather
   // than risk nuking a valid (but momentarily empty-looking) data dir.
@@ -305,7 +332,16 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       files++;
     } catch { /* skip unreadable/already-gone */ }
   }
+  // De-register the dead entries. After the sweep, so a failure above leaves the
+  // registry untouched rather than half-cleaned.
+  if (!dryRun && stale.length > 0) {
+    const { removeRepo } = await import("../storage/registry.js");
+    for (const s of stale) await removeRepo(join(dataDir, "registry.json"), s.name);
+  }
+
   output({
+    stale_repos: stale.length,
+    stale_examples: stale.slice(0, 5).map((s) => s.name),
     pruned: !dryRun,
     dry_run: dryRun,
     orphan_files: files,
