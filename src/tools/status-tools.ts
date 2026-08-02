@@ -43,6 +43,14 @@ export interface IndexStatusResult {
 // Tool implementation
 // ---------------------------------------------------------------------------
 
+/**
+ * One translation from a storage fault to the reported field.
+ * Three copies of this literal drifted apart is exactly how the code and the type stop agreeing.
+ */
+function toUnreadable(fault: { code: string; message: string }): Pick<IndexStatusResult, "unreadable"> {
+  return { unreadable: { reason: "storage_error", code: fault.code, message: fault.message } };
+}
+
 const TEXT_STUB_LANGUAGES = new Set([
   "kotlin", "swift", "dart", "scala", "groovy",
   "elixir", "lua", "zig", "nim", "gradle", "sbt",
@@ -64,7 +72,7 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
     if (isIndexStorageError(err)) {
       return {
         indexed: false,
-        unreadable: { reason: "storage_error", code: err.code, message: err.message },
+        ...toUnreadable(err),
       };
     }
     throw err;
@@ -123,7 +131,7 @@ async function probeIndexProblem(
     result = await loadIndexOrStale(resolved.meta.index_path, { ...EXTRACTOR_VERSIONS });
   } catch (err) {
     if (isIndexStorageError(err)) {
-      return { unreadable: { reason: "storage_error", code: err.code, message: err.message } };
+      return toUnreadable(err);
     }
     // Anything else here (registry I/O, an unexpected TypeError) is a live fault. Returning
     // null would render it as {indexed:false} — an authoritative "nothing indexed" over a
@@ -131,7 +139,7 @@ async function probeIndexProblem(
     throw err;
   }
   if (result?.status === "unreadable") {
-    return { unreadable: { reason: "storage_error", code: result.code, message: result.message } };
+    return toUnreadable(result);
   }
   if (result?.status === "stale") {
     return {
