@@ -1,9 +1,11 @@
-import { isIP } from "node:net";
+
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
+import { isLoopbackHost, assertPlainHost } from "../../utils/loopback.js";
+export { isLoopbackHost } from "../../utils/loopback.js";
 import { ensureDir, readJsonFile, writeJsonFile } from "./fs.js";
 
 export interface JsonPlatformConfig {
@@ -60,61 +62,6 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
  * an HTTP entry is inherently PER-PROJECT — one shared URL cannot describe two
  * projects.
  */
-/**
- * Loopback needs no transport encryption — nothing leaves the machine.
- *
- * Literal IPs only, via `isIP`. A prefix test like `/^127\./` reads as loopback for
- * `127.attacker.example` and for `127.0.0.1@attacker.example` (that `@` is URL userinfo, so the
- * request goes to `attacker.example`) — either one turns this exemption into a way to post the
- * bearer token to an attacker-controlled host, which is the exact thing the guard exists to stop.
- * `isIP` returns 0 for anything that is not a bare address literal, so those cases fall through.
- */
-export function isLoopbackHost(host: string): boolean {
-  // Strip brackets only as a matched pair. Accepting a lone `[` or `]` let a malformed
-  // authority like `[::1` classify as loopback here while failing later in URL construction —
-  // the guard and the URL builder must agree on what the host even is.
-  const unwrapped = /^\[.*\]$/.test(host) ? host.slice(1, -1) : host;
-  const bare = unwrapped.toLowerCase();
-
-  // `localhost` stays exempt. It is resolver-dependent in principle, but anyone who can rewrite
-  // your hosts file already owns the machine, and dropping it would break the overwhelmingly
-  // common local case for a threat that is not meaningfully mitigated here.
-  if (bare === "localhost") return true;
-
-  const kind = isIP(bare);
-  if (kind === 4) return bare.startsWith("127."); // 127.0.0.0/8, and isIP proved it is a literal
-  if (kind === 6) {
-    if (bare === "::1" || bare === "0:0:0:0:0:0:0:1") return true;
-    // IPv4-mapped loopback has two spellings for the same address: dotted (`::ffff:127.0.0.1`)
-    // and hex (`::ffff:7f00:1`). Recognising only the dotted form rejected a valid loopback
-    // config — a false negative, not a hole, but it fails in a way nobody would diagnose.
-    const mapped = bare.match(/^(?:0*:)*:?ffff:(.+)$/);
-    if (mapped?.[1]) {
-      const tail = mapped[1];
-      if (isIP(tail) === 4) return tail.startsWith("127.");
-      const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-      if (hex) return parseInt(hex[1]!, 16) >>> 8 === 0x7f;
-    }
-  }
-  return false;
-}
-
-/**
- * Reject a host string that can smuggle authority into the URL.
- *
- * `@` is the dangerous one: `127.0.0.1@evil.example` parses as userinfo + host, so the client
- * connects to `evil.example` while the string looks local. `/`, `?`, `#` can move the path or
- * query. None of these belong in a hostname.
- */
-function assertPlainHost(host: string): void {
-  if (/[@/?#\s]/.test(host)) {
-    throw new Error(
-      `Invalid daemon host ${JSON.stringify(host)}: a host cannot contain '@', '/', '?', '#' or ` +
-        `whitespace. A host like "127.0.0.1@example.com" looks local but sends the request — and ` +
-        `the token — to example.com.`,
-    );
-  }
-}
 
 export function daemonHttpUrl(
   port?: number,

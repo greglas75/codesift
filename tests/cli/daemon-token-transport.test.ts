@@ -61,6 +61,35 @@ describe("isLoopbackHost", () => {
   });
 });
 
+describe("one loopback definition across bind, install and setup", () => {
+  // There were three copies with different semantics: server.ts and cli/service.ts each had a
+  // 3-string set, cli/setup/mcp.ts had the full one. Binding to 127.0.0.2 — an ordinary loopback
+  // alias, the usual way to run two daemons on one port — was accepted by setup and refused by
+  // the server as "non-loopback without a token": a deployment valid at one layer, unstartable
+  // at another.
+  it("treats the whole 127.0.0.0/8 range as loopback, not just 127.0.0.1", () => {
+    expect(isLoopbackHost("127.0.0.2")).toBe(true);
+    expect(isLoopbackHost("127.53.1.9")).toBe(true);
+  });
+
+  it("still refuses everything genuinely routable", () => {
+    // Unifying widened the no-token bind set, so this is the direction that must not leak:
+    // these are exactly the addresses a token is protecting.
+    for (const h of ["0.0.0.0", "100.69.215.9", "192.168.1.10", "10.0.0.1", "::", "fd7a::1"]) {
+      expect(isLoopbackHost(h)).toBe(false);
+    }
+  });
+
+  it("service, setup and the shared module agree", async () => {
+    const shared = await import("../../src/utils/loopback.js");
+    const service = await import("../../src/cli/service.js");
+    for (const h of ["127.0.0.1", "127.0.0.2", "localhost", "::1", "0.0.0.0", "100.69.215.9"]) {
+      expect(service.isLoopbackHost(h)).toBe(shared.isLoopbackHost(h));
+      expect(isLoopbackHost(h)).toBe(shared.isLoopbackHost(h));
+    }
+  });
+});
+
 describe("host validation", () => {
   it("rejects a host carrying URL userinfo", () => {
     expect(() => daemonHttpUrl(7077, "/repo", "127.0.0.1@attacker.example")).toThrow(/cannot contain/i);

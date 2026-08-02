@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync, chmodSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
+import { isLoopbackHost } from "../utils/loopback.js";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
@@ -87,10 +88,7 @@ export function escapeXml(value: string): string {
  * user's entire source tree — and their indexed conversation history — to
  * anything that can reach the port. There is no authentication by default.
  */
-export function isLoopbackHost(host: string): boolean {
-  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
-  return h === "127.0.0.1" || h === "localhost" || h === "::1";
-}
+export { isLoopbackHost } from "../utils/loopback.js";
 
 /** Resolve the CLI entry point for the currently running codesift install. */
 export function resolveCliPath(): string {

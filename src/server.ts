@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { timingSafeEqual } from "node:crypto";
 import { resolve as pathResolve } from "node:path";
 import { statSync } from "node:fs";
+import { isLoopbackHost } from "./utils/loopback.js";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
 
 // Re-export for test compatibility
@@ -109,8 +110,7 @@ export function createCodesiftServer(): McpServer {
 
 const server = createCodesiftServer();
 
-/** Bind addresses considered loopback-safe for the local daemon. */
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
 
 export interface HttpServerHandle {
   /** Actual listening port (resolved when port 0 was requested). */
@@ -205,7 +205,7 @@ export async function startHttpServer(
   // Still not a licence to bind 0.0.0.0 casually: the caller chooses the
   // interface, and a private one (tailnet, VPN) plus a token is a very
   // different exposure from a public IP plus a token.
-  if (!LOOPBACK_HOSTS.has(host) && !token) {
+  if (!isLoopbackHost(host) && !token) {
     throw new Error(
       `codesift HTTP daemon refuses non-loopback bind "${host}" without a token — `
       + "it would serve every indexed repository unauthenticated. "
