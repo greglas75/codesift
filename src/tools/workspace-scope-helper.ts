@@ -1,5 +1,6 @@
 import { getCodeIndex } from "./index-tools.js";
 import type { Workspace } from "../types.js";
+import { isIndexStorageError } from "../storage/sqlite-index-store.js";
 
 export interface WorkspaceScopeResolved {
   /** Repo-relative root paths to use as scoping prefix (one entry per resolved workspace). */
@@ -29,7 +30,12 @@ export async function resolveWorkspaceScope(
   let index;
   try {
     index = await getCodeIndex(repo, { skipFreshness: true });
-  } catch {
+  } catch (err) {
+    // Same reason as workspace-tools' getIndexOrEmpty: this feeds the `workspace=` parameter on
+    // framework_audit, nextjs_route_map, nextjs_metadata_audit, analyze_hono_app, nest_audit and
+    // astro_audit. Collapsing a storage fault to null here makes all of them report an empty
+    // workspace set over an index that could not be read.
+    if (isIndexStorageError(err)) throw err;
     index = null;
   }
   const workspaces = index?.workspaces;

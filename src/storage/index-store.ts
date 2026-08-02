@@ -96,21 +96,15 @@ async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<
   migrations.set(dbPath, run);
   try {
     await run;
-  } finally {
-    // Keep the resolved marker only on success; a failed migration should be retried
-    // rather than remembered as done.
-    if (await isMigrated(dbPath)) migrations.set(dbPath, Promise.resolve());
-    else migrations.delete(dbPath);
+  } catch (err) {
+    // A failed migration is retried, not remembered as done — and we do NOT re-read the same
+    // failing database to decide that. Probing it again inside a `finally` would hit an
+    // already-struggling store a second time AND, if that probe throws too, JS try/finally
+    // semantics would replace the original error with the second one.
+    migrations.delete(dbPath);
+    throw err;
   }
-}
-
-/** Migration state comes from the nullable return ONLY. An exception never means "not migrated":
- *  answering false there would re-run the whole legacy import against a database that is already
- *  failing, and genuine absence is already expressed by null. */
-async function isMigrated(dbPath: string): Promise<boolean> {
-  {
-    return (await loadIndexSqlite(dbPath)) !== null;
-  }
+  migrations.set(dbPath, Promise.resolve());
 }
 
 export function resetMigrationCacheForTesting(): void {

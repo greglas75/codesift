@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { CodeIndex, Workspace, WorkspaceBoundaryRule, AffectedResult } from "../types.js";
 import { getCodeIndex } from "./index-tools.js";
 import { collectImportEdges, buildWorkspaceAliasResolver } from "../utils/import-graph.js";
+import { isIndexStorageError } from "../storage/sqlite-index-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -442,7 +443,13 @@ export async function workspaceBoundariesHandler(args: {
 async function getIndexOrEmpty(repo?: string): Promise<CodeIndex | null> {
   try {
     return await getCodeIndex(repo ?? "", { skipFreshness: true });
-  } catch {
+  } catch (err) {
+    // A storage fault must NOT become "this repo has no workspaces". `getCodeIndex` throws
+    // IndexStorageError for a locked or corrupt index precisely so callers stop rendering it
+    // as an empty result; swallowing it here would put every workspace tool
+    // (list_workspaces, workspace_graph, affected_workspaces, workspace_boundaries) right back
+    // to answering "no workspaces" with full confidence over a database that is merely busy.
+    if (isIndexStorageError(err)) throw err;
     return null;
   }
 }
