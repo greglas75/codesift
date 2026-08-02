@@ -169,15 +169,31 @@ export async function startHttpServer(
   const { createMcpHandler } = await import("@modelcontextprotocol/server");
   const { toNodeHandler } = await import("@modelcontextprotocol/node");
 
-  const host = opts.host ?? "127.0.0.1"; // loopback only — never expose to the network
-  // Hard refuse a non-loopback bind: the daemon serves trusted local editor
-  // windows only and has no network auth model beyond the optional token.
-  if (!LOOPBACK_HOSTS.has(host)) {
+  const host = opts.host ?? "127.0.0.1"; // loopback unless a token is configured
+  const token = opts.token ?? process.env["CODESIFT_HTTP_TOKEN"];
+
+  // A non-loopback bind is refused UNLESS a bearer token is configured.
+  //
+  // The refusal exists because the daemon answers tool calls that read every
+  // indexed repository — source, and indexed conversation history — with no
+  // authentication at all. Exposing that on an interface is publishing it.
+  //
+  // A token is an authentication model, so the reason to refuse goes away with
+  // it. This is what lets one host serve several machines (a shared box, a CI
+  // runner) instead of every workstation running its own copy — which is the
+  // whole point of stateless serving. Without it the daemon could never be
+  // anything but per-machine.
+  //
+  // Still not a licence to bind 0.0.0.0 casually: the caller chooses the
+  // interface, and a private one (tailnet, VPN) plus a token is a very
+  // different exposure from a public IP plus a token.
+  if (!LOOPBACK_HOSTS.has(host) && !token) {
     throw new Error(
-      `codesift HTTP daemon refuses non-loopback bind "${host}" — it is local-only by design.`,
+      `codesift HTTP daemon refuses non-loopback bind "${host}" without a token — `
+      + "it would serve every indexed repository unauthenticated. "
+      + "Set CODESIFT_HTTP_TOKEN (or --token) to bind a routable interface.",
     );
   }
-  const token = opts.token ?? process.env["CODESIFT_HTTP_TOKEN"];
 
   /**
    * Stateless serving (MCP 2026-07-28, and the default for `legacy` clients).

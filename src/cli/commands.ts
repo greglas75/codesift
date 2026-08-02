@@ -850,7 +850,17 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
   // per machine) instead of spawning a stdio server per editor window.
   const http = getBoolFlag(flags, "http") ?? false;
   const port = getNumFlag(flags, "port");
-  const options = { hooks, rules, force, gitHooks, http, ...(port !== undefined ? { port } : {}) };
+  // A SHARED daemon needs a host and a token; without these `--http` could only
+  // ever mean "the daemon on this machine", which defeats the point of having
+  // one process serve several.
+  const daemonHost = getFlag(flags, "host");
+  const daemonToken = getFlag(flags, "token") ?? process.env["CODESIFT_HTTP_TOKEN"];
+  const options = {
+    hooks, rules, force, gitHooks, http,
+    ...(port !== undefined ? { port } : {}),
+    ...(daemonHost ? { host: daemonHost } : {}),
+    ...(daemonToken ? { token: daemonToken } : {}),
+  };
 
   /** Global post-commit backlog hook — wired here because `formatSetupLines` stays editor-setup only (see setup/setupAll for programmatic installs). */
   async function emitGlobalGitHooksIfRequested(): Promise<void> {
@@ -917,8 +927,14 @@ async function handleService(args: string[], flags: Flags): Promise<void> {
     if (sub === "install") {
       const port = getNumFlag(flags, "port") ?? DEFAULT_SERVICE_PORT;
       const host = getFlag(flags, "host") ?? "127.0.0.1";
+      // A routable bind needs a token; the server enforces the same rule.
+      const token = getFlag(flags, "token") ?? process.env["CODESIFT_HTTP_TOKEN"];
       output(
-        installService({ dataDir, port, host, force: getBoolFlag(flags, "force") === true }),
+        installService({
+          dataDir, port, host,
+          ...(token ? { token } : {}),
+          force: getBoolFlag(flags, "force") === true,
+        }),
         flags,
       );
       return;

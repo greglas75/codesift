@@ -46,6 +46,8 @@ export interface ServicePlan {
   label: string;
   port: number;
   host: string;
+  /** Bearer token required for a routable bind; absent for loopback. */
+  token?: string;
   /** Absolute path to the node binary that will run the daemon. */
   execPath: string;
   /** Absolute path to the codesift CLI entry point. */
@@ -89,6 +91,7 @@ export function resolveCliPath(): string {
 export function buildServicePlan(opts: {
   port?: number;
   host?: string;
+  token?: string;
   dataDir: string;
   execPath?: string;
   cliPath?: string;
@@ -108,6 +111,7 @@ export function buildServicePlan(opts: {
     label: SERVICE_LABEL,
     port,
     host,
+    ...(opts.token ? { token: opts.token } : {}),
     execPath: opts.execPath ?? process.execPath,
     cliPath: opts.cliPath ?? resolveCliPath(),
     unitPath,
@@ -158,7 +162,9 @@ ${argLines}
     <key>PATH</key>
     <string>${escapeXml(SERVICE_PATH_ENTRIES.join(":"))}</string>
     <key>CODESIFT_DATA_DIR</key>
-    <string>${escapeXml(plan.dataDir)}</string>
+    <string>${escapeXml(plan.dataDir)}</string>${plan.token ? `
+    <key>CODESIFT_HTTP_TOKEN</key>
+    <string>${escapeXml(plan.token)}</string>` : ""}
   </dict>
   <key>StandardOutPath</key>
   <string>${escapeXml(plan.stdoutLog)}</string>
@@ -185,7 +191,7 @@ ExecStart=${exec}
 Restart=always
 RestartSec=10
 Environment=PATH=${SERVICE_PATH_ENTRIES.join(":")}
-Environment=CODESIFT_DATA_DIR=${plan.dataDir}
+Environment=CODESIFT_DATA_DIR=${plan.dataDir}${plan.token ? `\nEnvironment=CODESIFT_HTTP_TOKEN=${plan.token}` : ""}
 StandardOutput=append:${plan.stdoutLog}
 StandardError=append:${plan.stderrLog}
 
@@ -237,6 +243,7 @@ export function installService(opts: {
   port?: number;
   host?: string;
   dataDir: string;
+  token?: string;
   force?: boolean;
   os?: NodeJS.Platform;
   home?: string;
@@ -255,11 +262,15 @@ export function installService(opts: {
   }
   const plan = buildServicePlan({ ...opts, ...(opts.os ? { os: opts.os } : {}) });
 
-  if (!isLoopbackHost(plan.host)) {
+  // Same rule as the server itself: a routable bind is allowed only with a
+  // token, because the token is what turns "publishes every indexed repository"
+  // into "serves authenticated callers". Serving several machines from one host
+  // is the point of stateless serving; doing it unauthenticated is not.
+  if (!isLoopbackHost(plan.host) && !opts.token) {
     throw new Error(
-      `refusing to install a service bound to ${plan.host}: the daemon serves every indexed `
-        + `repository and has no authentication, so a non-loopback bind publishes your source `
-        + `tree to the network. Use 127.0.0.1.`,
+      `refusing to install a service bound to ${plan.host} without a token: the daemon serves `
+        + `every indexed repository, so an unauthenticated non-loopback bind publishes your `
+        + `source tree. Pass --token (stored in the unit's environment) or use 127.0.0.1.`,
     );
   }
 

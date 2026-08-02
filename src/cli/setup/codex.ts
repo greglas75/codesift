@@ -92,7 +92,14 @@ function jsonString(value: string): string {
 
 function getCodexServerEntryLines(options?: SetupOptions): string {
   if (options?.http) {
-    return "url = " + jsonString(daemonHttpUrl(options.port, options.cwd));
+    {
+    const lines = ["url = " + jsonString(daemonHttpUrl(options.port, options.cwd, options.host))];
+    if (options.token) {
+      lines.push("[mcp_servers.codesift.http_headers]");
+      lines.push("Authorization = " + jsonString(`Bearer ${options.token}`));
+    }
+    return lines.join("\n");
+  }
   }
   const entry = resolveMcpServerEntry();
   return (

@@ -362,6 +362,31 @@ describe("setup", () => {
       expect(url.searchParams.get("cwd")).toBe("/proj/gamma");
     });
 
+
+    it("points at a REMOTE daemon when a host is given", async () => {
+      // The host was hardcoded to 127.0.0.1, which quietly made `--http` a
+      // local-only feature: a shared daemon — the whole reason stateless
+      // serving exists — could not be configured without hand-editing every
+      // client's JSON. Adding a machine has to be one command.
+      const result = await setup("claude", {
+        http: true, host: "100.69.215.9", port: 7077, token: "secret", cwd: "/proj",
+      });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      const url = new URL(content.mcpServers.codesift.url);
+      expect(url.hostname).toBe("100.69.215.9");
+      expect(url.port).toBe("7077");
+      expect(url.searchParams.get("cwd")).toBe("/proj");
+      // The server refuses a routable bind without a token, so the client must
+      // send one or every call comes back 401.
+      expect(content.mcpServers.codesift.headers).toEqual({ Authorization: "Bearer secret" });
+    });
+
+    it("stays on loopback and sends no auth header when no host is given", async () => {
+      const result = await setup("claude", { http: true, cwd: "/proj" });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(new URL(content.mcpServers.codesift.url).hostname).toBe("127.0.0.1");
+      expect(content.mcpServers.codesift.headers).toBeUndefined();
+    });
     it("stdio remains the default without the flag", async () => {
       const result = await setup("claude");
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));

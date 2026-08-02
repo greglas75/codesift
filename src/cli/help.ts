@@ -179,8 +179,20 @@ the fix for multi-session memory exhaustion on smaller machines. Point clients a
 it with 'codesift setup <platform> --http'.
 
 Single-instance (refuses a 2nd serve while one is live; reclaims a stale lock from
-a crashed daemon). Binds 127.0.0.1 only. Set CODESIFT_HTTP_TOKEN to require a
-bearer token. SIGTERM/SIGINT shut down cleanly.
+a crashed daemon). SIGTERM/SIGINT shut down cleanly.
+
+Binds 127.0.0.1 by default. A routable --host (e.g. a tailnet IP) is REFUSED
+unless a token is set, because the daemon answers tool calls that read every
+indexed repository — an unauthenticated routable bind publishes your source tree.
+With --token (or CODESIFT_HTTP_TOKEN) one host can serve several machines:
+
+  codesift serve --host 100.x.y.z --port 7077 --token <t>       # on the host
+  codesift setup claude --http --host 100.x.y.z --token <t>     # on each client
+
+Adding a repository to a shared daemon needs no special command — call
+index_folder(path=...) against it with a path that exists ON THAT HOST. The
+daemon reads files from its own disk, so getting the code there is deployment
+(a checkout, a mirror), not something CodeSift does for you.
 
 Flags:
   --port N     Port to listen on (default 7077)

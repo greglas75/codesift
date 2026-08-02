@@ -59,15 +59,27 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
  * an HTTP entry is inherently PER-PROJECT — one shared URL cannot describe two
  * projects.
  */
-export function daemonHttpUrl(port?: number, cwd?: string): string {
-  const base = "http://127.0.0.1:" + (port ?? DEFAULT_DAEMON_PORT) + "/mcp";
+export function daemonHttpUrl(port?: number, cwd?: string, host?: string): string {
+  // Host is a parameter, not a constant. It was hardcoded to 127.0.0.1, which
+  // silently made `setup --http` a local-only feature: a SHARED daemon — the
+  // entire reason stateless serving exists — could not be configured without
+  // hand-editing every client's JSON. Adding a machine to a shared instance has
+  // to be one command, or nobody will do it twice.
+  const base = "http://" + (host ?? "127.0.0.1") + ":" + (port ?? DEFAULT_DAEMON_PORT) + "/mcp";
   const dir = cwd ?? process.cwd();
   return base + "?cwd=" + encodeURIComponent(dir);
 }
 
 export function buildJsonServerEntry(options?: SetupOptions): Record<string, unknown> {
   if (options?.http) {
-    return { type: "http", url: daemonHttpUrl(options.port, options.cwd) };
+    // A remote daemon requires a token (the server refuses a routable bind
+    // without one), so it travels with the URL in the client entry.
+    const entry: Record<string, unknown> = {
+      type: "http",
+      url: daemonHttpUrl(options.port, options.cwd, options.host),
+    };
+    if (options.token) entry["headers"] = { Authorization: `Bearer ${options.token}` };
+    return entry;
   }
   return { ...MCP_SERVER_ENTRY };
 }

@@ -25,6 +25,17 @@ export interface SetupOptions {
    * An HTTP entry is per-project by construction — see `daemonHttpUrl`.
    */
   cwd?: string;
+  /**
+   * Daemon host. Defaults to 127.0.0.1 (a local daemon). Point it at a shared
+   * instance to have several machines served by one process — the reason
+   * stateless serving exists.
+   */
+  host?: string;
+  /**
+   * Bearer token for a remote daemon. The server refuses a routable bind
+   * without one, so a remote setup needs it.
+   */
+  token?: string;
   /** Shared-daemon port; defaults to 7077. */
   port?: number;
 }
