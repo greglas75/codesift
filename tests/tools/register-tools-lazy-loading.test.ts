@@ -12,7 +12,10 @@ function createMockServer() {
   }>();
   return {
     registeredTools,
-    tool: vi.fn((name: string, _desc: string, _schema: unknown, handler: unknown) => {
+    registerTool: vi.fn((name: string, _cfg: { description?: string; inputSchema?: unknown }, handler: unknown) => {
+      const _schema = _cfg?.inputSchema;
+      const _desc = _cfg?.description;
+      void _desc;
       const handle = {
         name,
         enabled: true,
@@ -102,7 +105,7 @@ describe("registerTools lazy loading", () => {
     const hiddenHandle = server.registeredTools.get("find_dead_code")!;
     expect(planTurn).toHaveBeenCalledWith("local/test", "find dead code", {});
     expect(hiddenHandle).toBeDefined();
-    expect(hiddenHandle.enable).toHaveBeenCalledTimes(1);
+    // v2 exposes visibility as a property; there is no enable() method to spy on.
     expect(hiddenHandle.enabled).toBe(true);
     expect(result.content[0]?.text).toContain("plan_turn: find dead code");
   });

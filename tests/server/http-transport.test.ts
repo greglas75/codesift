@@ -37,15 +37,18 @@ describe("HTTP transport (Task 6 spike)", () => {
       params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0" } },
     });
     expect(initRes.status).toBe(200);
+    // Stateless serving (MCP 2026-07-28): there is no Mcp-Session-Id any more.
+    // Requests carry everything they need, which is what lets a restarted — or a
+    // second — server instance answer a client that never re-initialized.
     const sid = initRes.headers.get("mcp-session-id");
-    expect(sid).toBeTruthy();
+    expect(sid).toBeNull();
     const initJson = await readMcp(initRes);
     expect((initJson.result?.["serverInfo"] as { name?: string })?.name).toBe("codesift-mcp");
 
     // Complete the MCP handshake before issuing further requests.
-    await post(h.url, { jsonrpc: "2.0", method: "notifications/initialized" }, { "mcp-session-id": sid! });
+    await post(h.url, { jsonrpc: "2.0", method: "notifications/initialized" }, {});
 
-    const listRes = await post(h.url, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, { "mcp-session-id": sid! });
+    const listRes = await post(h.url, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, {});
     const listJson = await readMcp(listRes);
     const tools = (listJson.result?.["tools"] as unknown[]) ?? [];
     expect(tools.length).toBeGreaterThanOrEqual(50);

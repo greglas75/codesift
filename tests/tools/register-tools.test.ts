@@ -95,7 +95,10 @@ function createMockServer() {
   }>();
   return {
     registeredTools,
-    tool: vi.fn((name: string, _desc: string, _schema: unknown, handler: unknown) => {
+    registerTool: vi.fn((name: string, _cfg: { description?: string; inputSchema?: unknown }, handler: unknown) => {
+      const _schema = _cfg?.inputSchema;
+      const _desc = _cfg?.description;
+      void _desc;
       const handle = {
         name,
         enabled: true,

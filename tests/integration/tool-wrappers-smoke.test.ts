@@ -54,11 +54,11 @@ type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 function bind(def: ToolDefinition): Handler {
   let captured: Handler | undefined;
   const server = {
-    tool: (_name: string, _desc: string, _schema: unknown, cb: Handler) => {
+    registerTool: (_name: string, _cfg: { description?: string; inputSchema?: unknown }, cb: Handler) => {
       captured = cb;
       return { enabled: true, enable() {}, disable() {} };
     },
-  } as unknown as Pick<McpServer, "tool">;
+  } as unknown as Pick<McpServer, "registerTool">;
   resetToolRegistrationContext(server, NO_LANGS);
   registerToolDefinition(server, def, NO_LANGS);
   if (!captured) throw new Error("server.tool callback was not captured");
