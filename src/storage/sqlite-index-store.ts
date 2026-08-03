@@ -619,17 +619,32 @@ export async function importLegacyIndexIfEmpty(
  * measurement by 2x:
  *
  *     .all() + map    median 5609 ms   0 timer ticks — the loop never ran at all
- *     paged 20k       median 4635 ms   12 ticks/run, worst stall 795 ms
+ *     paged           median 4635 ms   12 ticks/run
  *
  * So this is not the usual responsiveness-for-throughput trade: paging is BOTH faster and
  * interruptible, because a page is one bulk `.all()` over a rowid range and SQLite never
  * has to hold the whole result set. `iterate()` also fixes the stall but gives up the bulk
  * fetch per row.
  *
+ * The page is sized by TIME, not rows, because yielding is not sufficient on its own — an
+ * HTTP server only answers between pages, so the page length is the latency floor. Measured
+ * against a live server polled every 50 ms while pages of a given length ran:
+ *
+ *     page 400 ms   6 answered, 8 timed out, worst latency 2182 ms
+ *     page 200 ms  19 answered, 0 timed out, worst latency  489 ms
+ *     page  50 ms  78 answered, 0 timed out, worst latency  226 ms
+ *
+ * and the row count that lands on 50 ms is not a constant: profiling the daemon mid-freeze
+ * put 8,016 of 10,113 samples in `StatementSync::All` with GC on the rest, because the same
+ * page that costs milliseconds on a fresh heap costs seconds on a daemon already holding
+ * several indexes. Hence the feedback loop rather than a tuned constant.
+ *
  * Keyset pagination on rowid, never OFFSET: OFFSET re-scans the skipped rows on every page,
  * turning a linear read into a quadratic one exactly on the biggest indexes this exists for.
  */
-const PAGE_ROWS = 20_000;
+const PAGE_TARGET_MS = 50;
+const PAGE_MIN_ROWS = 500;
+const PAGE_MAX_ROWS = 20_000;
 
 async function readTablePaged<T, R>(
   db: DatabaseSyncType,
@@ -637,16 +652,26 @@ async function readTablePaged<T, R>(
   fn: (row: T) => R,
 ): Promise<R[]> {
   const stmt = db.prepare(
-    `SELECT rowid AS _rid, * FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ${PAGE_ROWS}`,
+    `SELECT rowid AS _rid, * FROM ${table} WHERE rowid > ? ORDER BY rowid LIMIT ?`,
   );
   const out: R[] = [];
   let cursor = 0;
+  let rows = 4_000;
   for (;;) {
-    const page = stmt.all(cursor) as unknown as Array<T & { _rid: number }>;
+    const started = Date.now();
+    const page = stmt.all(cursor, rows) as unknown as Array<T & { _rid: number }>;
     if (page.length === 0) return out;
     for (const row of page) out.push(fn(row));
+    const elapsed = Date.now() - started;
     cursor = page[page.length - 1]!._rid;
-    if (page.length < PAGE_ROWS) return out;
+    if (page.length < rows) return out;
+    // Aim the NEXT page at the time budget rather than a row count. Per-row cost is not a
+    // property of the data: the same page costs milliseconds on a fresh heap and seconds
+    // under a daemon already holding several indexes, because allocating a few thousand
+    // objects there lands in incremental marking. A fixed row count is therefore tuned for
+    // one heap and wrong for the other; a fixed time budget holds in both.
+    rows = Math.max(PAGE_MIN_ROWS, Math.min(PAGE_MAX_ROWS,
+      Math.round(rows * (PAGE_TARGET_MS / Math.max(elapsed, 1)))));
     await new Promise<void>((r) => setImmediate(r));
   }
 }
