@@ -91,3 +91,41 @@ export async function atomicWriteBuffer(
     throw err;
   }
 }
+
+/**
+ * Every per-repo artifact kind, keyed off the index path.
+ *
+ * `prune` decides what is garbage by matching `<hash>.<suffix>` against this list, so a
+ * suffix missing here is a file nothing will ever reclaim. That drifted: the list predated
+ * the chunk store and the SQLite backend, so it knew `embeddings.ndjson` but not
+ * `chunks.ndjson`, `chunk-embeddings.ndjson`, `index.db` or `snapshot.json`. On this
+ * machine that hid 2,206 files and 8.72 GB — prune reported 0.93 GB and called it done,
+ * which reads as "nothing left to clean" rather than "I do not recognise most of this".
+ *
+ * Derived from the helpers that BUILD these names (getChunkPath, getChunkEmbeddingPath,
+ * sqlitePathFor, …) rather than written out independently, and asserted against them in
+ * tests, so adding an artifact kind without teaching prune about it fails the build.
+ */
+export const ARTIFACT_SUFFIXES = [
+  "index.json",
+  "index.db",
+  "index.db-wal",
+  "index.db-shm",
+  "embeddings.ndjson",
+  "embeddings.meta.json",
+  "chunks.ndjson",
+  "chunk-embeddings.ndjson",
+  "bm25.json",
+  "graph.json",
+  "snapshot.json",
+] as const;
+
+/**
+ * Matches `<hash>.<known artifact suffix>`, with an optional `.tmp.<ts>` tail so the
+ * abandoned halves of an interrupted atomic write are reclaimed too. Capture group 1 is the
+ * hash, which is what identifies the owning repo.
+ */
+export function artifactPattern(): RegExp {
+  const suffixes = ARTIFACT_SUFFIXES.map((s) => s.replace(/[.\\+*?[^\]$(){}=!<>|:#-]/g, "\\$&"));
+  return new RegExp(`^([0-9a-f]{8,})\\.(?:${suffixes.join("|")})(?:\\.tmp\\..*)?$`);
+}

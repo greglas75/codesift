@@ -332,7 +332,10 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
     die("prune: registry lists 0 repos — aborting (refusing to treat all artifacts as orphans).");
   }
 
-  const re = /^([0-9a-f]{8,})\.(embeddings\.ndjson(\.tmp.*)?|index\.json|embeddings\.meta.*|bm25\.json|graph\.json)$/;
+  // Suffix list lives with the helpers that build these names, so a new artifact kind
+  // cannot quietly become unreclaimable garbage — see ARTIFACT_SUFFIXES.
+  const { artifactPattern } = await import("../storage/_shared.js");
+  const re = artifactPattern();
   let files = 0, bytes = 0, kept = 0;
   for (const name of readdirSync(dataDir)) {
     const m = re.exec(name);
