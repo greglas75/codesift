@@ -219,6 +219,19 @@ async function handleIndex(args: string[], flags: Flags): Promise<void> {
   if (repo && root) await runEmbeddingChild(repo, root);
 
   output(result, flags);
+
+  // Without `--no-watch` this command does not return: the watcher keeps the
+  // event loop alive so the index stays current. That is the intended default,
+  // but a process that prints a finished-looking result and then sits there is
+  // indistinguishable from a hang — long enough that I read it as one and spent
+  // a `timeout 240` proving otherwise, on a run whose indexing took 125 ms. Say
+  // which of the two it is. On stderr, so `codesift index … | jq` still works.
+  if (getBoolFlag(flags, "no-watch") !== true) {
+    console.error(
+      `[codesift] watching ${root ?? path} for changes — Ctrl-C to stop, `
+      + "or re-run with --no-watch to exit when indexing finishes.",
+    );
+  }
 }
 
 async function handleIndexRepo(args: string[], flags: Flags): Promise<void> {
