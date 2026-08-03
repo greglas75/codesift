@@ -16,6 +16,8 @@ import {
   classifyStorageError,
   IndexStorageError,
 } from "./sqlite-index-store.js";
+import { indexFootprintBytes } from "./index-footprint.js";
+import { indexCacheMemBudgetBytes } from "../config.js";
 
 /** Serialize concurrent writes to the same index path. */
 const writeLocks = new Map<string, Promise<void>>();
@@ -213,15 +215,32 @@ const MAX_CACHED_INDEXES = (() => {
 })();
 const indexCache = new Map<string, CachedIndex>();
 
+function cachedBytes(): number {
+  let total = 0;
+  for (const entry of indexCache.values()) total += indexFootprintBytes(entry.index);
+  return total;
+}
+
 function cacheIndex(dbPath: string, entry: CachedIndex): void {
   // Re-insert to move to the most-recent end of Map iteration order.
   indexCache.delete(dbPath);
   indexCache.set(dbPath, entry);
-  while (indexCache.size > MAX_CACHED_INDEXES) {
+
+  const budget = indexCacheMemBudgetBytes();
+  // Evict oldest-first on EITHER bound. The count cap alone let three repos of any size sit
+  // resident, and index sizes span two orders of magnitude — the measured tgm-survey-platform
+  // index is 411 MB against a few MB for a small repo, so "three indexes" was a ceiling only in
+  // name. The byte bound is the real one; the count cap stays as a cheap upper limit on entries.
+  while (indexCache.size > 1 && (indexCache.size > MAX_CACHED_INDEXES || cachedBytes() > budget)) {
     const oldest = indexCache.keys().next();
     if (oldest.done) break;
     indexCache.delete(oldest.value);
   }
+  // `size > 1` above deliberately keeps the entry just inserted even when it alone exceeds the
+  // budget. Evicting it would mean re-reading the same index on the very next call and evicting
+  // it again — an unbounded reload loop that costs far more than the memory it reclaims. A repo
+  // bigger than the whole budget is a reason to raise CODESIFT_MAX_INDEX_CACHE_MB, not to stop
+  // caching it.
 }
 
 /**
@@ -247,6 +266,10 @@ export function resetIndexCacheForTesting(): void {
 
 export function getIndexCacheSizeForTesting(): number {
   return indexCache.size;
+}
+
+export function getIndexCacheBytesForTesting(): number {
+  return cachedBytes();
 }
 
 /** Backend-agnostic read, without version enforcement. */

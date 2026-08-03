@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import type { CodeIndex, CodeSymbol, FileEntry, Workspace } from "../types.js";
+import { recordIndexFootprint } from "./index-footprint.js";
 
 /**
  * SQLite backend for the per-repo index. See docs/adr/ADR-003-index-storage-format.md.
@@ -720,6 +721,37 @@ async function readTablePaged<T, R>(
   }
 }
 
+/**
+ * Fixed heap cost of one materialised symbol, on top of its text.
+ *
+ * Calibrated against the real tgm-survey-platform index (240,137 symbols): loading it moves
+ * `heapUsed` by 349 MB, of which the summed string lengths account for ~221 MB, leaving ~560 B
+ * per symbol for the object header, property slots and array pointers. Counting only the text
+ * would therefore under-report the cache by more than a third.
+ *
+ * Rounded UP from the fitted 560, deliberately. The constant is fitted to one index and other
+ * repos will differ, so the residual error should fall on the safe side: over-reporting evicts a
+ * little sooner than strictly necessary, whereas under-reporting lets the cache quietly exceed
+ * the budget it exists to enforce. Measured overshoot on the calibration index is ~11%.
+ */
+const SYMBOL_OBJECT_OVERHEAD_BYTES = 700;
+const FILE_OBJECT_OVERHEAD_BYTES = 200;
+
+function symbolRowBytes(row: SymbolRow): number {
+  return (
+    SYMBOL_OBJECT_OVERHEAD_BYTES +
+    row.id.length +
+    row.file.length +
+    row.name.length +
+    row.kind.length +
+    (row.signature?.length ?? 0) +
+    (row.docstring?.length ?? 0) +
+    (row.source?.length ?? 0) +
+    (row.parent?.length ?? 0) +
+    (row.extras?.length ?? 0)
+  );
+}
+
 export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null> {
   const db = await openIndexDb(dbPath);
 
@@ -728,6 +760,7 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
   let symbols: CodeSymbol[];
   let files: FileEntry[];
   let reader: DatabaseSyncType | undefined;
+  let footprint = 0;
   try {
     repo = readMetaValue(db, "repo");
     root = readMetaValue(db, "root");
@@ -741,8 +774,14 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
     reader = await openReadConnection(dbPath);
     reader.exec("BEGIN");
     try {
-      symbols = await readTablePaged<SymbolRow, CodeSymbol>(reader, "symbols", (row) => rowToSymbol(row, owner));
-      files = await readTablePaged<FileRow, FileEntry>(reader, "files", rowToFileEntry);
+      symbols = await readTablePaged<SymbolRow, CodeSymbol>(reader, "symbols", (row) => {
+        footprint += symbolRowBytes(row);
+        return rowToSymbol(row, owner);
+      });
+      files = await readTablePaged<FileRow, FileEntry>(reader, "files", (row) => {
+        footprint += FILE_OBJECT_OVERHEAD_BYTES + row.path.length;
+        return rowToFileEntry(row);
+      });
       reader.exec("COMMIT");
     } catch (err) {
       try { reader.exec("ROLLBACK"); } catch { /* snapshot already gone */ }
@@ -778,6 +817,7 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
     if (parsed !== null) index.workspaces = parsed;
   }
 
+  recordIndexFootprint(index, footprint);
   return index;
 }
 

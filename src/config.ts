@@ -61,6 +61,27 @@ export function embeddingMemBudgetBytes(): number {
   return mb * 1024 * 1024;
 }
 
+/**
+ * Resident index-CACHE RAM budget in bytes.
+ *
+ * The cache used to be bounded by index COUNT, which treats a 411 MB index and a 2 MB one as
+ * equal — so the ceiling was really "three times the largest repo you happen to touch", and on
+ * the measured tgm-survey-platform index that is 1.2 GB of long-lived heap. Profiling attributed
+ * the remaining stalls to GC (`Heap::Scavenge`) rather than to SQLite, and this is the resident
+ * object graph doing the pressuring.
+ *
+ * Budgeting bytes rather than entries is what the neighbouring embedding cache already does; the
+ * two now agree. A repo evicted here is re-read, not lost.
+ */
+export function indexCacheMemBudgetBytes(): number {
+  const raw = process.env["CODESIFT_MAX_INDEX_CACHE_MB"];
+  const n = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isNaN(n) && n > 0) return n * 1024 * 1024;
+  const total = totalmem();
+  const mb = total <= 16 * GIB ? 256 : total <= 32 * GIB ? 512 : 1024;
+  return mb * 1024 * 1024;
+}
+
 export interface Config {
   // Storage
   dataDir: string;          // ~/.codesift by default
