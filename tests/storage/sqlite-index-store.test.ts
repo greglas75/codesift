@@ -346,3 +346,63 @@ describe("cross-process change signal", () => {
     expect(await getDataVersion(dbPath)).toBeGreaterThan(before);
   });
 });
+
+describe("symbol ids are not unique, and the store must not pretend they are", () => {
+  // `id` is `repo:file:name:line`. A minified bundle puts hundreds of distinct symbols on
+  // line 1 of one file; PHPDoc `@method` synthesis emits a `field` and a `method` at the
+  // same line. Under a PRIMARY KEY with ON CONFLICT DO UPDATE each collision silently
+  // overwrote the previous row: 73,165 rows vanished across 16 real indexes here, 7,514 of
+  // them in real source, and re-indexing reproduced the loss rather than repairing it.
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "cs-dupid-")); });
+  afterEach(async () => { closeAllIndexDbs(); await rm(dir, { recursive: true, force: true }); });
+
+  function collidingIndex(): CodeIndex {
+    const at = (name: string, kind: string, sig: string): CodeSymbol => ({
+      id: "r:min.js:i:1", repo: "r", name, kind: kind as CodeSymbol["kind"],
+      file: "min.js", start_line: 1, end_line: 1, signature: sig, is_exported: false,
+    } as CodeSymbol);
+    return {
+      repo: "r", root: "/r", version: "1", created_at: 1, updated_at: 1,
+      files: [makeFile("min.js", "javascript")],
+      symbols: [at("i", "function", "(a)"), at("i", "variable", "(b)"), at("i", "function", "(c)")],
+    } as CodeIndex;
+  }
+
+  it("keeps every colliding symbol instead of the last one written", async () => {
+    const p = join(dir, "x.index.db");
+    await saveIndexSqlite(p, collidingIndex());
+    const loaded = await loadIndexSqlite(p);
+    expect(loaded?.symbols.length).toBe(3);
+    expect(loaded?.symbols.map((s) => s.signature).sort()).toEqual(["(a)", "(b)", "(c)"]);
+  });
+
+  it("keeps them on the incremental path too", async () => {
+    const p = join(dir, "y.index.db");
+    await saveIndexSqlite(p, { ...collidingIndex(), symbols: [], files: [] } as CodeIndex);
+    const idx = collidingIndex();
+    await saveIncrementalSqlite(p, "min.js", idx.symbols, idx.files[0]!);
+    expect((await getSymbolsForFileSqlite(p, "min.js")).length).toBe(3);
+  });
+
+  it("upgrades a v1 database in place without losing what it already holds", async () => {
+    // Most repos no longer have the JSON they were migrated from, so the db IS the index:
+    // the upgrade has to preserve it rather than drop it and force a reindex.
+    const p = join(dir, "z.index.db");
+    await saveIndexSqlite(p, collidingIndex());
+    closeAllIndexDbs();
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const raw = new DatabaseSync(p);
+    raw.exec("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
+    const before = (raw.prepare("select count(*) c from symbols").get() as { c: number }).c;
+    raw.close();
+
+    const db = await openIndexDb(p);
+    expect((db.prepare("select value from meta where key='schema_version'").get() as { value: string }).value)
+      .toBe(String(SCHEMA_VERSION));
+    expect((db.prepare("select count(*) c from symbols").get() as { c: number }).c).toBe(before);
+    // The scratch table must not survive holding the only copy of anything.
+    expect(db.prepare("select name from sqlite_master where name='symbols_v1'").get()).toBeUndefined();
+  });
+});

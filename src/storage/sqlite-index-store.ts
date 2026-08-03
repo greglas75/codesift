@@ -160,7 +160,23 @@ function rethrowOperational(err: unknown, path: string): never {
 // Schema
 // ---------------------------------------------------------------------------
 
-export const SCHEMA_VERSION = 1;
+/**
+ * v2 dropped the PRIMARY KEY on `symbols.id`.
+ *
+ * `id` is `repo:file:name:line`, which is NOT unique: a minified bundle puts hundreds of
+ * distinct symbols on line 1 of one file, and PHPDoc `@method` synthesis emits a `field`
+ * and a `method` at the same line. As a PRIMARY KEY with `ON CONFLICT DO UPDATE`, every
+ * such collision silently overwrote the previous row — so the store quietly held fewer
+ * symbols than it was given, and re-indexing reproduced the loss instead of repairing it.
+ *
+ * Measured over the 16 indexes that failed the migration's count check: 73,165 dropped
+ * rows, every one carrying content different from the row that survived, and 7,514 of them
+ * in real source rather than minified or vendored output.
+ *
+ * JSON never enforced uniqueness here, so this is parity, not a new tolerance. Lookups by
+ * id return the first match exactly as the array scan did.
+ */
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -178,7 +194,7 @@ CREATE TABLE IF NOT EXISTS files (
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
-  id          TEXT PRIMARY KEY,
+  id          TEXT NOT NULL,
   file        TEXT NOT NULL,
   name        TEXT NOT NULL,
   kind        TEXT NOT NULL,
@@ -199,6 +215,43 @@ CREATE TABLE IF NOT EXISTS symbols (
 
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_id ON symbols(id);
+`;
+
+/**
+ * v1 -> v2: rebuild `symbols` without the PRIMARY KEY, keeping every row already stored.
+ *
+ * Rebuilt in place rather than by re-importing: for most repos the JSON source is gone, so
+ * the db IS the index — dropping it to force a reindex would trade a store that is merely
+ * incomplete for no store at all. This recovers nothing on its own; rows lost under v1 come
+ * back when the repo is next indexed from source, which now keeps them.
+ */
+const MIGRATE_V1_TO_V2_SQL = `
+ALTER TABLE symbols RENAME TO symbols_v1;
+CREATE TABLE symbols (
+  id          TEXT NOT NULL,
+  file        TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  start_line  INTEGER NOT NULL,
+  end_line    INTEGER NOT NULL,
+  start_col   INTEGER,
+  end_col     INTEGER,
+  start_byte  INTEGER,
+  end_byte    INTEGER,
+  signature   TEXT,
+  docstring   TEXT,
+  source      TEXT,
+  parent      TEXT,
+  is_async    INTEGER,
+  is_exported INTEGER,
+  extras      TEXT
+);
+INSERT INTO symbols SELECT * FROM symbols_v1;
+DROP TABLE symbols_v1;
+CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
+CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_id ON symbols(id);
 `;
 
 // ---------------------------------------------------------------------------
@@ -255,6 +308,19 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     throw new Error(
       `Index at ${dbPath} was written by a newer CodeSift (schema v${stored} > v${SCHEMA_VERSION}). Upgrade codesift-mcp.`,
     );
+  } else if (Number(stored) < SCHEMA_VERSION) {
+    // One transaction: a half-applied table swap would leave `symbols_v1` as the only copy
+    // of the rows, under a name nothing reads.
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      if (Number(stored) < 2) db.exec(MIGRATE_V1_TO_V2_SQL);
+      writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch { /* nothing left to roll back */ }
+      try { db.close(); } catch { /* already dead */ }
+      rethrowOperational(err, dbPath);
+    }
   }
 
   connections.set(dbPath, db);
@@ -433,16 +499,11 @@ INSERT INTO symbols (
   start_byte, end_byte, signature, docstring, source, parent,
   is_async, is_exported, extras
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET
-  file=excluded.file, name=excluded.name, kind=excluded.kind,
-  start_line=excluded.start_line, end_line=excluded.end_line,
-  start_col=excluded.start_col, end_col=excluded.end_col,
-  start_byte=excluded.start_byte, end_byte=excluded.end_byte,
-  signature=excluded.signature, docstring=excluded.docstring,
-  source=excluded.source, parent=excluded.parent,
-  is_async=excluded.is_async, is_exported=excluded.is_exported,
-  extras=excluded.extras
 `;
+// No upsert: both writers (`writeIndexRows`, `saveIncrementalSqlite`) DELETE the rows they
+// are about to replace, so the only thing an ON CONFLICT clause ever resolved was a
+// collision WITHIN one payload — two distinct symbols sharing a non-unique id — by throwing
+// one of them away. See SCHEMA_VERSION.
 
 const INSERT_FILE_SQL = `
 INSERT INTO files (path, language, symbol_count, last_modified, mtime_ms, stale)
