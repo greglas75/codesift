@@ -821,7 +821,34 @@ export interface DeadCodeResult {
   candidates: DeadCodeCandidate[];
   scanned_symbols: number;
   scanned_files: number;
+  /**
+   * The RESULT LIST was cut short — there are more dead-looking symbols than are shown.
+   * The listed candidates are still as trustworthy as `coverage` says; there are just more.
+   */
   truncated?: boolean;
+  /**
+   * Whether the reference scan actually saw the whole repository.
+   *
+   * This is the field that decides whether a candidate may be deleted. "Dead" here means
+   * "no reference found in the files I read" — if some files were never read, a symbol used
+   * only from those files looks exactly like a genuinely unused one. `truncated` used to carry
+   * this meaning as well as the list-length one; an agent reading a single boolean naturally
+   * takes the harmless reading ("the list is cut off") and acts on the candidates, which is
+   * the wrong call precisely when the scan was short.
+   *
+   * `complete` is the only status under which an empty or short candidate list is evidence
+   * about the code rather than about the scan.
+   */
+  coverage: {
+    status: "complete" | "partial";
+    files_indexed: number;
+    files_read: number;
+    /** Files the scan stopped before reaching (MAX_SCAN_FILES cap). */
+    files_skipped_by_cap?: number;
+    /** Files that were indexed but could not be read now (deleted, permissions, races). */
+    files_unreadable?: number;
+    detail?: string;
+  };
 }
 
 // Kinds that are typically exported and should have external references
@@ -966,15 +993,21 @@ export async function findDeadCode(
   // `includeTests` (above) so test-only helpers don't appear in the result list.
   const fileContents = new Map<string, string>();
   let scanTruncated = false;
+  let filesSkippedByCap = 0;
+  let filesUnreadable = 0;
   for (const file of index.files) {
     if (fileContents.size >= MAX_SCAN_FILES) {
       scanTruncated = true;
+      filesSkippedByCap = index.files.length - fileContents.size - filesUnreadable;
       break;
     }
     try {
       fileContents.set(file.path, await readFile(join(index.root, file.path), "utf-8"));
     } catch {
-      // File may have been deleted
+      // Deleted, unreadable, or raced with a write. Counted rather than merely skipped: a
+      // reference living only in a file we could not read is invisible to the scan below, and
+      // the symbol it points at then looks dead.
+      filesUnreadable++;
     }
   }
 
@@ -1027,11 +1060,34 @@ export async function findDeadCode(
     }
   }
 
+  const scanComplete = !scanTruncated && filesUnreadable === 0;
+  const coverage: DeadCodeResult["coverage"] = {
+    status: scanComplete ? "complete" : "partial",
+    files_indexed: index.files.length,
+    files_read: fileContents.size,
+    ...(filesSkippedByCap > 0 ? { files_skipped_by_cap: filesSkippedByCap } : {}),
+    ...(filesUnreadable > 0 ? { files_unreadable: filesUnreadable } : {}),
+    ...(scanComplete
+      ? {}
+      : {
+          detail:
+            `reference scan read ${fileContents.size} of ${index.files.length} indexed files` +
+            (filesSkippedByCap > 0 ? ` (${filesSkippedByCap} beyond the ${MAX_SCAN_FILES}-file cap)` : "") +
+            (filesUnreadable > 0 ? ` (${filesUnreadable} unreadable)` : "") +
+            " — a symbol referenced only from an unread file is indistinguishable from a dead one," +
+            " so do NOT delete on this result alone; narrow with file_pattern to get a complete scan",
+        }),
+  };
+
   return {
     candidates,
     scanned_symbols: exportedSymbols.length,
     scanned_files: fileContents.size,
-    ...(candidates.length >= MAX_DEAD_CODE_RESULTS || scanTruncated ? { truncated: true } : {}),
+    // Deliberately ONLY about list length now. Scan completeness lives in `coverage`, because
+    // the two have opposite implications: a cut-off list means "there are more", a short scan
+    // means "these may be wrong".
+    ...(candidates.length >= MAX_DEAD_CODE_RESULTS ? { truncated: true } : {}),
+    coverage,
   };
 }
 

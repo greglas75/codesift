@@ -129,13 +129,38 @@ export function formatSearchPatterns(data: PatternResult): string {
 
 interface DeadCodeCandidate { name: string; kind: SymbolKind; file: string; start_line: number; end_line: number }
 
-export function formatDeadCode(data: { candidates: DeadCodeCandidate[]; scanned_symbols: number; scanned_files: number }): string {
+interface DeadCodeCoverage {
+  status: "complete" | "partial";
+  files_indexed: number;
+  files_read: number;
+  detail?: string;
+}
+
+export function formatDeadCode(data: {
+  candidates: DeadCodeCandidate[];
+  scanned_symbols: number;
+  scanned_files: number;
+  coverage?: DeadCodeCoverage;
+}): string {
   const header = `scanned ${data.scanned_symbols} symbols in ${data.scanned_files} files`;
-  if (data.candidates.length === 0) return `${header}\n(no dead code found)`;
+  const partial = data.coverage?.status === "partial";
+  // A partial scan changes what BOTH outcomes mean, so it goes first — an agent that stops
+  // reading after the verdict line still sees it.
+  const warning = partial
+    ? `INCOMPLETE SCAN (${data.coverage!.files_read}/${data.coverage!.files_indexed} files): ` +
+      `${data.coverage!.detail ?? "results may include false positives"}\n`
+    : "";
+
+  if (data.candidates.length === 0) {
+    // "(no dead code found)" over a partial scan asserts something the scan never established.
+    return partial
+      ? `${warning}${header}\n(no dead code found IN THE FILES READ — not evidence that none exists)`
+      : `${header}\n(no dead code found)`;
+  }
   const lines = data.candidates.map((c) =>
     `${c.file}:${c.start_line}-${c.end_line} ${c.kind} ${c.name}`
   );
-  return `${header}\n${lines.join("\n")}`;
+  return `${warning}${header}\n${lines.join("\n")}`;
 }
 
 // ── Analyze complexity ────────────────────────────
