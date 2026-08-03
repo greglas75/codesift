@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.1] — 2026-08-03
+
+### Fixed
+
+- A config or service file that could not be restricted to its owner is no
+  longer reported as written successfully. These files can embed
+  `CODESIFT_HTTP_TOKEN`, which grants read access to every repository the
+  daemon has indexed, and `mode` on `writeFile` only applies when the file is
+  CREATED — so a config from an older version kept its 0644 and the chmod that
+  was supposed to fix it had its failure swallowed by `.catch(() => {})`.
+  Observed on a shared CI host: the installed systemd unit sat at `-rw-r--r--`,
+  readable by the CI user, and the install said OK. Writes now go through
+  `owner-only-file.ts`, which tightens an existing file *before* the new token
+  is written, tolerates only the errnos meaning "this filesystem has no
+  permission bits", and otherwise raises with the path and the actual mode.
+- The daemon token is protected at rest and compared in constant time
+  (`b35a94f`); `index_status` and its callers no longer swallow the
+  storage-fault contract (`2b7f957`, `f7aa5a7`).
+
+### Changed
+
+- One definition of "loopback" instead of three (`8a24e87`).
+
 ## [0.13.0] — 2026-08-03
 
 ### Added
