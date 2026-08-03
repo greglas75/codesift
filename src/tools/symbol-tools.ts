@@ -204,8 +204,27 @@ export async function getSymbol(
   const index = await requireCodeIndex(repo);
   const includeRelated = options?.include_related ?? true;
 
-  const symbol = index.symbols.find((s) => s.id === symbolId);
-  if (!symbol) return null;
+  // `repo:file:name:line` is NOT unique — a minified bundle puts many symbols on line 1, and
+  // PHPDoc synthesis emits a field and a method at the same line (73,165 collisions measured
+  // across 16 indexes). `.find` would hand back whichever happened to load first, with no
+  // signal: the caller then reads source for a symbol it did not ask for. This file already
+  // states the rule for names ("two symbols named `handler` must stay ambiguous — silently
+  // picking one is worse than the miss it replaces"); it was never applied to ids because they
+  // were assumed unique.
+  const matches = index.symbols.filter((s) => s.id === symbolId);
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    const where = matches
+      .map((s) => `${s.kind} ${s.name} @ ${s.file}:${s.start_line}`)
+      .slice(0, 5)
+      .join("; ");
+    throw new Error(
+      `Symbol id "${symbolId}" is ambiguous — ${matches.length} distinct symbols share it: ${where}. ` +
+        `Ids embed only file, name and line, which collide in generated or synthesised code. ` +
+        `Use search_symbols to pick the one you mean.`,
+    );
+  }
+  const symbol = matches[0]!;
 
   const source = await extractSource(
     index.root,

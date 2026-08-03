@@ -313,7 +313,15 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     // of the rows, under a name nothing reads.
     try {
       db.exec("BEGIN IMMEDIATE");
-      if (Number(stored) < 2) db.exec(MIGRATE_V1_TO_V2_SQL);
+      if (Number(stored) < 2) {
+        db.exec(MIGRATE_V1_TO_V2_SQL);
+        // The rebuild keeps every row the v1 table still HELD — it cannot bring back the ones
+        // v1 already discarded on id collision (73,165 across 16 indexes when this was found).
+        // Without this marker the upgraded database looks like any other complete v2 index, so
+        // a caller would read a short symbol list as a fact about the code. Only a full reindex
+        // from source can restore them, and `saveIndexSqlite` clears the flag when it does.
+        writeMetaValue(db, "lossy_v1_migration", "1");
+      }
       writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
       db.exec("COMMIT");
     } catch (err) {
@@ -525,11 +533,26 @@ export async function saveIndexSqlite(dbPath: string, index: CodeIndex): Promise
   db.exec("BEGIN");
   try {
     writeIndexRows(db, index);
+    // A full replace comes from a fresh parse of the source, so anything v1 dropped on id
+    // collision is back. This is the only operation that can honestly clear the marker —
+    // an incremental write only refreshes the file it was given.
+    db.prepare("DELETE FROM meta WHERE key = ?").run("lossy_v1_migration");
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
     throw err;
   }
+}
+
+/**
+ * True when this database was upgraded from the v1 schema, whose PRIMARY KEY on a non-unique
+ * `symbols.id` silently discarded colliding rows. The rebuild preserved everything still stored,
+ * but cannot recover what was already gone — so a short symbol list here is a fact about the
+ * migration, not about the code. Cleared by a full reindex.
+ */
+export async function wasLossilyMigrated(dbPath: string): Promise<boolean> {
+  const db = await openIndexDb(dbPath);
+  return readMetaValue(db, "lossy_v1_migration") !== undefined;
 }
 
 /**
@@ -646,6 +669,27 @@ const PAGE_TARGET_MS = 50;
 const PAGE_MIN_ROWS = 500;
 const PAGE_MAX_ROWS = 20_000;
 
+/**
+ * Open a second connection for reading only.
+ *
+ * The paged read below yields to the event loop between pages, and the cached connection is
+ * shared by every request in this process — so a write landing mid-traversal would let one
+ * `CodeIndex` be assembled out of two different database states. Holding a read transaction on
+ * the SHARED connection cannot fix that: any write arriving during the yield would hit
+ * "cannot start a transaction within a transaction".
+ *
+ * A private connection in WAL mode sees a stable snapshot from `BEGIN` to `COMMIT` regardless of
+ * what other connections commit meanwhile. It costs one open per cold load, which happens once
+ * per process per repo.
+ */
+async function openReadConnection(dbPath: string): Promise<DatabaseSyncType> {
+  const Ctor = await loadSqliteCtor();
+  if (!Ctor) throw new Error("node:sqlite is unavailable (requires Node >= 22.5)");
+  const db = new Ctor(dbPath);
+  db.exec("PRAGMA busy_timeout = 5000");
+  return db;
+}
+
 async function readTablePaged<T, R>(
   db: DatabaseSyncType,
   table: string,
@@ -683,16 +727,32 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
   let root: string | undefined;
   let symbols: CodeSymbol[];
   let files: FileEntry[];
+  let reader: DatabaseSyncType | undefined;
   try {
     repo = readMetaValue(db, "repo");
     root = readMetaValue(db, "root");
     if (repo === undefined || root === undefined) return null; // genuinely empty — not a fault
     const owner = repo;
-    symbols = await readTablePaged<SymbolRow, CodeSymbol>(db, "symbols", (row) => rowToSymbol(row, owner));
-    files = await readTablePaged<FileRow, FileEntry>(db, "files", rowToFileEntry);
+
+    // Both tables are read inside ONE transaction on a private connection, so symbols and files
+    // describe the same instant. The paged reader yields between pages; without the snapshot a
+    // write arriving during a yield would be half-included, and `symbols` could disagree with
+    // `files` in the very object callers treat as one consistent index.
+    reader = await openReadConnection(dbPath);
+    reader.exec("BEGIN");
+    try {
+      symbols = await readTablePaged<SymbolRow, CodeSymbol>(reader, "symbols", (row) => rowToSymbol(row, owner));
+      files = await readTablePaged<FileRow, FileEntry>(reader, "files", rowToFileEntry);
+      reader.exec("COMMIT");
+    } catch (err) {
+      try { reader.exec("ROLLBACK"); } catch { /* snapshot already gone */ }
+      throw err;
+    }
   } catch (err) {
     // Corruption often only surfaces on the first page read, not at open time.
     rethrowOperational(err, dbPath);
+  } finally {
+    try { reader?.close(); } catch { /* best-effort; the snapshot is done with either way */ }
   }
 
   const index: CodeIndex = {
