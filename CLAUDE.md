@@ -289,3 +289,27 @@ LaunchAgent being in place since 16 July.
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.
 - **Stdio server exits on client disconnect (`server.ts`)**: the MCP stdio server exits on transport-close / stdin-EOF / SIGTERM. Before this, a dead Claude/Codex left the server orphaned under launchd forever, holding 1–4 GB each — the root cause of "codesift is killing my machine" (one box had 51 procs / 30 GB / 202% CPU). The HTTP daemon (`codesift serve`) is unaffected (stdin handlers are stdio-only).
 - `CODESIFT_MAX_EMBEDDING_MEM_MB` — resident embedding-**cache** budget; explicit value wins, otherwise **RAM-scaled default** (≤16 GB → 256 MB, ≤32 GB → 512 MB, else 1024 MB). LRU-evicts per-repo embeddings over budget; `getEmbeddingCache` pins the in-use repo. `loadEmbeddings` streams the ndjson (no whole-file slurp). Shared HTTP daemon (`codesift serve`, load-once) live — see docs/specs/2026-06-22-shared-server-memory-plan.md.
+
+## Tests run on the i9 farm — use `rt`, not a local runner
+
+This repo is wired to the shared test farm (burst-i9, 24 cores). The Mac runs
+20-30 agent worktrees at once, so a local suite fights every other agent for the
+same cores. `rt` wraps whatever you were going to run and executes it there,
+streaming the log back.
+
+```sh
+rt                     # this repo's test command (from .tf.json), on i9
+rt <any command>       # lint / build / typecheck / a single spec, on i9
+rt -q                  # same, but only farm lines, failures and totals
+rt --flaky             # per-test history: is this red a flake or a regression?
+rt --repeat 20 <cmd>   # run it 20x in ONE job and report the failure RATE
+```
+
+**This applies to every test/lint/build command in this repo**, including ones
+these docs name directly — `rt` composes with them, it does not replace them.
+Off the tailnet `rt` transparently runs the same command locally, so it is
+always safe to reach for.
+
+Farm config for this repo lives in `.tf.json`. Tool source of truth:
+`~/DEV/i9-farma` (edit there, then `./install.sh` — never edit `~/bin/rt`
+or the deployed copies on i9).
