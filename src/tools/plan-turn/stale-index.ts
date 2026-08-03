@@ -1,5 +1,5 @@
 import type { CodeIndex } from "../../types.js";
-import { getCurrentGitCommit } from "../../utils/git-head.js";
+import { getCurrentGitCommit, isWorktreeDirty } from "../../utils/git-head.js";
 
 const STALE_INDEX_TIME_FALLBACK_MS = 24 * 60 * 60 * 1000;
 const GIT_HEAD_TIMEOUT_MS = 1500;
@@ -24,9 +24,14 @@ export function safeReadGitHead(repoRoot: string): string | null {
  * whether to state a conclusion or to hedge it.
  */
 export type IndexFreshness =
-  | { status: "current"; basis: "git_head_match" }
+  | { status: "current"; basis: "git_head_match_clean_worktree" }
   | { status: "stale"; basis: "git_head_moved"; indexedCommit: string; headCommit: string }
-  | { status: "unknown"; basis: "no_git_head" | "no_indexed_commit"; ageMs: number; likelyStale: boolean };
+  | {
+      status: "unknown";
+      basis: "no_git_head" | "no_indexed_commit" | "worktree_dirty" | "worktree_state_unknown";
+      ageMs: number;
+      likelyStale: boolean;
+    };
 
 export function assessIndexFreshness(
   index: CodeIndex,
@@ -34,14 +39,25 @@ export function assessIndexFreshness(
 ): IndexFreshness {
   const headSha = safeReadGitHead(index.root);
   if (headSha !== null && lastGitCommit !== undefined) {
-    return headSha === lastGitCommit
-      ? { status: "current", basis: "git_head_match" }
-      : {
-          status: "stale",
-          basis: "git_head_moved",
-          indexedCommit: lastGitCommit,
-          headCommit: headSha,
-        };
+    if (headSha === lastGitCommit) {
+      // HEAD agreeing is necessary, not sufficient: uncommitted, staged and untracked changes
+      // never move it, so an index predating them still compares equal.
+      const dirty = isWorktreeDirty(index.root);
+      const ageMs = Date.now() - (index.updated_at ?? index.created_at ?? 0);
+      if (dirty === true) {
+        return { status: "unknown", basis: "worktree_dirty", ageMs, likelyStale: true };
+      }
+      if (dirty === null) {
+        return { status: "unknown", basis: "worktree_state_unknown", ageMs, likelyStale: false };
+      }
+      return { status: "current", basis: "git_head_match_clean_worktree" };
+    }
+    return {
+      status: "stale",
+      basis: "git_head_moved",
+      indexedCommit: lastGitCommit,
+      headCommit: headSha,
+    };
   }
   // No commit to compare against. Age is a heuristic, not evidence — say so rather than
   // reporting a guess in the same shape as a measurement.

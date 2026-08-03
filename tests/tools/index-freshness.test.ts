@@ -4,9 +4,10 @@ import type { CodeIndex } from "../../src/types.js";
 // safeReadGitHead shells out to git; stub the module it reads from so each state is reachable.
 vi.mock("../../src/utils/git-head.js", () => ({
   getCurrentGitCommit: vi.fn(),
+  isWorktreeDirty: vi.fn(),
 }));
 
-import { getCurrentGitCommit } from "../../src/utils/git-head.js";
+import { getCurrentGitCommit, isWorktreeDirty } from "../../src/utils/git-head.js";
 import { assessIndexFreshness, isStaleIndex } from "../../src/tools/plan-turn/stale-index.js";
 
 const SHA_A = "a".repeat(40);
@@ -26,15 +27,42 @@ function makeIndex(updatedAt: number): CodeIndex {
 }
 
 const mockedHead = vi.mocked(getCurrentGitCommit);
+const mockedDirty = vi.mocked(isWorktreeDirty);
 
-beforeEach(() => mockedHead.mockReset());
+beforeEach(() => {
+  mockedHead.mockReset();
+  mockedDirty.mockReset();
+  mockedDirty.mockReturnValue(false); // clean worktree unless a test says otherwise
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("assessIndexFreshness", () => {
-  it("reports current, and says the verdict rests on a HEAD match", () => {
+  it("reports current, and says the verdict rests on HEAD plus a clean worktree", () => {
     mockedHead.mockReturnValue(SHA_A);
     const result = assessIndexFreshness(makeIndex(Date.now()), SHA_A);
-    expect(result).toEqual({ status: "current", basis: "git_head_match" });
+    expect(result).toEqual({ status: "current", basis: "git_head_match_clean_worktree" });
+  });
+
+  it("reports UNKNOWN when HEAD matches but the worktree has uncommitted changes", () => {
+    // Uncommitted, staged and untracked edits never move HEAD, so an index built before them
+    // compares equal. Calling that "current" is the over-claim this type exists to prevent —
+    // and it was in the first version of this function.
+    mockedHead.mockReturnValue(SHA_A);
+    mockedDirty.mockReturnValue(true);
+    const result = assessIndexFreshness(makeIndex(Date.now()), SHA_A);
+    expect(result.status).toBe("unknown");
+    if (result.status === "unknown") {
+      expect(result.basis).toBe("worktree_dirty");
+      expect(result.likelyStale).toBe(true);
+    }
+  });
+
+  it("reports UNKNOWN — not current — when the worktree state cannot be read", () => {
+    mockedHead.mockReturnValue(SHA_A);
+    mockedDirty.mockReturnValue(null);
+    const result = assessIndexFreshness(makeIndex(Date.now()), SHA_A);
+    expect(result.status).toBe("unknown");
+    if (result.status === "unknown") expect(result.basis).toBe("worktree_state_unknown");
   });
 
   it("reports stale with both commits when HEAD moved", () => {

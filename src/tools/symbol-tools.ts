@@ -327,7 +327,8 @@ export async function getSymbols(
  * several call sites slice and re-key — stays untouched.
  */
 export interface ReferenceScanCoverage {
-  status: "complete" | "partial";
+  /** `unknown` is the honest default when the scan did not report — never assume `complete`. */
+  status: "complete" | "partial" | "unknown";
   files_indexed: number;
   files_scanned: number;
   /** Generated/vendored paths skipped because no file_pattern was given. */

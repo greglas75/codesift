@@ -215,7 +215,14 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         // safe to rename or delete", so the scan's reach travels beside it, always.
         return {
           references: batch,
-          scan_coverage: sink.coverage ?? { status: "complete" },
+          // `unknown`, never `complete`. The sink is only filled when the scan ran to the end,
+          // so an unset sink means an early exit or a throw — exactly the case where claiming a
+          // full scan turns "no references" into a false licence to delete. Defaulting to the
+          // reassuring value is the bug this field exists to prevent.
+          scan_coverage: sink.coverage ?? {
+            status: "unknown" as const,
+            detail: "the reference scan did not report its reach; treat an empty result as inconclusive",
+          },
           ...(Object.keys(trimmedForOutput).length > 0
             ? { shown_of_total: trimmedForOutput }
             : {}),
