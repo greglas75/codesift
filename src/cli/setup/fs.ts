@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile , chmod } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OWNER_ONLY_MODE, writeOwnerOnlyFile } from "../owner-only-file.js";
 
 export async function ensureDir(dir: string): Promise<void> {
   if (!existsSync(dir)) {
@@ -34,24 +35,18 @@ export async function readJsonFile(path: string): Promise<Record<string, unknown
  * group- and world-readable) hands every other local account a credential that grants
  * read access to every indexed repository on that daemon.
  *
- * `mode` only applies when the file is CREATED, so an existing config keeps its old
- * permissions; the explicit chmod below covers the rewrite case.
+ * The mode is enforced by `owner-only-file.ts`, which also decides what to do when it
+ * cannot be enforced — see the header there for why that is not best-effort.
  */
-export const SECRET_FILE_MODE = 0o600;
+export const SECRET_FILE_MODE = OWNER_ONLY_MODE;
 
 /** Write a text config that may embed a bearer token, owner-readable only. */
 export async function writeSecretFile(path: string, content: string): Promise<void> {
-  await writeFile(path, content, { encoding: "utf-8", mode: SECRET_FILE_MODE });
-  await chmod(path, SECRET_FILE_MODE).catch(() => {
-    /* best-effort: a filesystem without POSIX modes must not fail the setup */
-  });
+  await writeOwnerOnlyFile(path, content);
 }
 
 export async function writeJsonFile(path: string, data: Record<string, unknown>): Promise<void> {
-  await writeFile(path, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: SECRET_FILE_MODE });
-  await chmod(path, SECRET_FILE_MODE).catch(() => {
-    /* best-effort: a filesystem without POSIX modes must not fail the setup */
-  });
+  await writeOwnerOnlyFile(path, JSON.stringify(data, null, 2) + "\n");
 }
 
 export function resolvePackageFile(relativePath: string): string {

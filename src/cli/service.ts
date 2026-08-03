@@ -1,7 +1,8 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync, chmodSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync, unlinkSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { isLoopbackHost } from "../utils/loopback.js";
+import { writeOwnerOnlyFileSync } from "./owner-only-file.js";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
@@ -303,9 +304,10 @@ export function installService(opts: {
   mkdirSync(join(plan.dataDir, "logs"), { recursive: true });
   // 0600: the rendered unit embeds CODESIFT_HTTP_TOKEN, and a service file is
   // world-readable by default — on the shared host this feature exists for, that
-  // hands the daemon credential to every other local account.
-  writeFileSync(plan.unitPath, renderUnit(plan, os), { encoding: "utf-8", mode: 0o600 });
-  try { chmodSync(plan.unitPath, 0o600); } catch { /* non-POSIX fs — do not fail the install */ }
+  // hands the daemon credential to every other local account. Raises instead of
+  // installing a unit whose permissions it could not set; this is the exact file
+  // that was found at -rw-r--r-- on burst-i9.
+  writeOwnerOnlyFileSync(plan.unitPath, renderUnit(plan, os));
 
   let activated = false;
   let note: string | undefined;

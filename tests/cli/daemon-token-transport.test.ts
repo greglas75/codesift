@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
-import { statSync, writeFileSync } from "node:fs";
+import { statSync, writeFileSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, platform } from "node:os";
 import { writeJsonFile, writeSecretFile } from "../../src/cli/setup/fs.js";
+import { chmodFailureIsTolerable } from "../../src/cli/owner-only-file.js";
 import {
   daemonHttpUrl,
   isLoopbackHost,
@@ -174,6 +176,43 @@ describe("token at rest", () => {
 
     await writeJsonFile(p, { mcpServers: {} });
     expect((statSync(p).mode & 0o777).toString(8)).toBe("600");
+  });
+
+  it("refuses to report success when the mode could not be set", () => {
+    // The bug this replaces: `.catch(() => {})` on the chmod, so "could not restrict
+    // this file" and "restricted this file" were the same outcome to the caller.
+    // Observed on burst-i9 — a systemd unit holding CODESIFT_HTTP_TOKEN sat at
+    // -rw-r--r--, readable by the CI user, and the install reported OK.
+    expect(chmodFailureIsTolerable("EPERM", 0o644)).toBe(false);
+    expect(chmodFailureIsTolerable("EACCES", 0o640)).toBe(false);
+    expect(chmodFailureIsTolerable("EPERM", null)).toBe(false); // unreadable mode is not "safe"
+  });
+
+  it("stays quiet when the failure cannot expose anything", () => {
+    // A filesystem with no permission bits enforces nothing, so there is nothing to
+    // warn about; and a chmod that failed on an already-owner-only file was redundant.
+    expect(chmodFailureIsTolerable("ENOSYS", 0o644)).toBe(true);
+    expect(chmodFailureIsTolerable("ENOTSUP", 0o777)).toBe(true);
+    expect(chmodFailureIsTolerable("EPERM", 0o600)).toBe(true);
+    expect(chmodFailureIsTolerable("EPERM", 0o400)).toBe(true);
+  });
+
+  it.runIf(platform() === "darwin")("throws on a file it genuinely cannot chmod", async () => {
+    // A real un-chmod-able file rather than a mocked errno: user-immutable makes
+    // chmod(2) fail with EPERM while the file stays 0644.
+    const p = join(dir, "immutable.json");
+    writeFileSync(p, "{}", { mode: 0o644 });
+    try {
+      execFileSync("chflags", ["uchg", p]);
+    } catch {
+      return; // chflags unavailable — nothing to assert
+    }
+    try {
+      await expect(writeJsonFile(p, { mcpServers: {} })).rejects.toThrow(/could not restrict/i);
+      expect(readFileSync(p, "utf-8")).toBe("{}"); // and the old content survives
+    } finally {
+      execFileSync("chflags", ["nouchg", p]);
+    }
   });
 });
 
