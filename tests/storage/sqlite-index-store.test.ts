@@ -406,3 +406,53 @@ describe("symbol ids are not unique, and the store must not pretend they are", (
     expect(db.prepare("select name from sqlite_master where name='symbols_v1'").get()).toBeUndefined();
   });
 });
+
+describe("loading an index does not freeze the process", () => {
+  // Under the shared daemon a cold load is not the caller's own time — every other
+  // client waits behind it. Measured on the largest index here (240,133 symbols), a
+  // plain .map() blocked the event loop for 4.8s with ZERO timer ticks, so /health
+  // stopped answering and the daemon looked dead to everyone else.
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "cs-yield-")); });
+  afterEach(async () => { closeAllIndexDbs(); await rm(dir, { recursive: true, force: true }); });
+
+  it("lets timers run while it materializes a large index", async () => {
+    const p = join(dir, "big.index.db");
+    const symbols: CodeSymbol[] = [];
+    for (let i = 0; i < 40_000; i++) {
+      symbols.push({
+        id: `r:f${i % 50}.ts:s${i}:${i}`, repo: "r", name: `s${i}`, kind: "function",
+        file: `f${i % 50}.ts`, start_line: i, end_line: i, signature: "()", is_exported: false,
+        source: "x".repeat(80),
+      } as CodeSymbol);
+    }
+    const files = Array.from({ length: 50 }, (_, i) => makeFile(`f${i}.ts`, "typescript"));
+    await saveIndexSqlite(p, {
+      repo: "r", root: "/r", version: "1", created_at: 1, updated_at: 1, files, symbols,
+    } as CodeIndex);
+    closeAllIndexDbs();
+
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 5);
+    try {
+      const loaded = await loadIndexSqlite(p);
+      expect(loaded?.symbols.length).toBe(40_000);
+    } finally {
+      clearInterval(timer);
+    }
+    // The load yields 8 times at 5k rows; a blocking .map() lets the timer run zero times.
+    expect(ticks).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("does not pay for yielding on an index small enough not to matter", async () => {
+    const p = join(dir, "small.index.db");
+    await saveIndexSqlite(p, {
+      repo: "r", root: "/r", version: "1", created_at: 1, updated_at: 1,
+      files: [makeFile("a.ts", "typescript")],
+      symbols: [{ id: "r:a.ts:x:1", repo: "r", name: "x", kind: "function", file: "a.ts",
+                  start_line: 1, end_line: 1, is_exported: true } as CodeSymbol],
+    } as CodeIndex);
+    const loaded = await loadIndexSqlite(p);
+    expect(loaded?.symbols.length).toBe(1);
+  });
+});
