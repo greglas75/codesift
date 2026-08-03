@@ -315,10 +315,38 @@ export async function getSymbols(
  * Batch find references for multiple symbols in one pass.
  * Reads each file once instead of N times — critical for large repos.
  */
+/**
+ * What a reference scan actually looked at.
+ *
+ * `find_references` returning `[]` is the input to "nobody uses this, safe to rename or delete".
+ * That inference is only valid if the scan saw everywhere a reference could be. It routinely does
+ * not: generated and vendored paths are skipped by default, files can be unreadable, and per
+ * symbol the collection stops at MAX_REFERENCES. None of that was visible in the result.
+ *
+ * Filled through a caller-supplied sink so the `Record<string, Reference[]>` return shape — which
+ * several call sites slice and re-key — stays untouched.
+ */
+export interface ReferenceScanCoverage {
+  status: "complete" | "partial";
+  files_indexed: number;
+  files_scanned: number;
+  /** Generated/vendored paths skipped because no file_pattern was given. */
+  files_skipped_noise?: number;
+  files_unreadable?: number;
+  /** Symbols whose reference list hit MAX_REFERENCES — their counts are floors, not totals. */
+  capped_symbols?: string[];
+  detail?: string;
+}
+
+export interface ReferenceScanSink {
+  coverage?: ReferenceScanCoverage;
+}
+
 export async function findReferencesBatch(
   repo: string,
   symbolNames: string[],
   filePattern?: string,
+  sink?: ReferenceScanSink,
 ): Promise<Record<string, Reference[]>> {
   const index = await requireCodeIndex(repo);
   const patterns = symbolNames.map((name) => ({
@@ -333,14 +361,29 @@ export async function findReferencesBatch(
   const result: Record<string, Reference[]> = {};
   for (const name of symbolNames) result[name] = [];
 
+  let filesScanned = 0;
+  let filesSkippedNoise = 0;
+  let filesUnreadable = 0;
+
   for (const fileEntry of index.files) {
     if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
-    if (!filePattern && isNoisePath(fileEntry.path)) continue;
+    if (!filePattern && isNoisePath(fileEntry.path)) {
+      // Sensible default — but it means "no references" really means "none outside generated
+      // and vendored code", and the caller could not tell that scoping had happened.
+      filesSkippedNoise++;
+      continue;
+    }
 
     let content: string;
     try {
       content = await readFile(join(index.root, fileEntry.path), "utf-8");
-    } catch { continue; }
+      filesScanned++;
+    } catch {
+      // A reference living only in a file we could not read is invisible here, and the symbol
+      // then looks unused.
+      filesUnreadable++;
+      continue;
+    }
 
     const lines = content.split("\n");
     for (let i = 0; i < lines.length; i++) {
@@ -364,6 +407,32 @@ export async function findReferencesBatch(
         }
       }
     }
+  }
+
+  if (sink) {
+    const capped = symbolNames.filter((n) => (result[n]?.length ?? 0) >= MAX_REFERENCES);
+    const complete = filesSkippedNoise === 0 && filesUnreadable === 0 && capped.length === 0;
+    const reasons: string[] = [];
+    if (filesSkippedNoise > 0) {
+      reasons.push(`${filesSkippedNoise} generated/vendored files skipped (pass file_pattern to include them)`);
+    }
+    if (filesUnreadable > 0) reasons.push(`${filesUnreadable} files could not be read`);
+    if (capped.length > 0) reasons.push(`${capped.length} symbol(s) hit the ${MAX_REFERENCES}-reference cap`);
+    sink.coverage = {
+      status: complete ? "complete" : "partial",
+      files_indexed: index.files.length,
+      files_scanned: filesScanned,
+      ...(filesSkippedNoise > 0 ? { files_skipped_noise: filesSkippedNoise } : {}),
+      ...(filesUnreadable > 0 ? { files_unreadable: filesUnreadable } : {}),
+      ...(capped.length > 0 ? { capped_symbols: capped } : {}),
+      ...(complete
+        ? {}
+        : {
+            detail:
+              `${reasons.join("; ")} — an empty or short result is about what was scanned, ` +
+              `not proof the symbol is unused`,
+          }),
+    };
   }
 
   return result;

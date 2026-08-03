@@ -125,12 +125,35 @@ describe("find_references — capped by default", () => {
   it("applies max_refs on the symbol_names BATCH path too (per symbol)", async () => {
     const handler = handlerFor("find_references");
 
-    const batch = (await handler({ repo, symbol_names: ["widget"], max_refs: 3 })) as Record<string, unknown[]>;
-    expect(Array.isArray(batch["widget"])).toBe(true);
-    expect(batch["widget"]!.length).toBe(3); // fixture has >50 — capped per symbol
+    // Shape change: the batch path now always returns { references, scan_coverage } so that an
+    // empty or short list travels with the reach of the scan that produced it — `[]` here is
+    // what an agent turns into "nobody uses this, safe to delete".
+    type Batch = { references: Record<string, unknown[]>; scan_coverage: { status: string } };
+    const batch = (await handler({ repo, symbol_names: ["widget"], max_refs: 3 })) as Batch;
+    expect(Array.isArray(batch.references["widget"])).toBe(true);
+    expect(batch.references["widget"]!.length).toBe(3); // fixture has >50 — capped per symbol
+    expect(batch.scan_coverage.status).toMatch(/^(complete|partial)$/);
 
     // Default cap still applies with no explicit max_refs (fixture has >50 refs).
-    const defaulted = (await handler({ repo, symbol_names: ["widget"] })) as Record<string, unknown[]>;
-    expect(defaulted["widget"]!.length).toBe(50);
+    const defaulted = (await handler({ repo, symbol_names: ["widget"] })) as Batch;
+    expect(defaulted.references["widget"]!.length).toBe(50);
+  });
+
+  it("distinguishes output trimming from an incomplete scan", async () => {
+    // The fixture has >50 references but fewer than MAX_REFERENCES, so the SCAN saw all of them
+    // and only the OUTPUT was trimmed to max_refs. Those must not report the same way: "showing
+    // 50 of 73" is a display choice, "the scan stopped early" would mean the list is unreliable.
+    const handler = handlerFor("find_references");
+    const batch = (await handler({ repo, symbol_names: ["widget"] })) as {
+      references: Record<string, unknown[]>;
+      scan_coverage: { status: string; capped_symbols?: string[] };
+      shown_of_total?: Record<string, number>;
+    };
+
+    expect(batch.references["widget"]!.length).toBe(50); // trimmed for output
+    expect(batch.shown_of_total?.["widget"]).toBeGreaterThan(50); // and says the real total
+    // The scan itself was complete — nothing was skipped and the reference cap was not hit.
+    expect(batch.scan_coverage.status).toBe("complete");
+    expect(batch.scan_coverage.capped_symbols).toBeUndefined();
   });
 });

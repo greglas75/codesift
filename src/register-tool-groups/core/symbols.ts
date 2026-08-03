@@ -196,12 +196,30 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (names && names.length > 0) {
         // The batch path fans out over MANY symbols — it is the one that most
         // needs the cap, so apply it per symbol (return shape unchanged).
-        const batch = await findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined);
+        const sink: { coverage?: import("../../tools/symbol-tools.js").ReferenceScanCoverage } = {};
+        const batch = await findReferencesBatch(args.repo as string, names, args.file_pattern as string | undefined, sink);
+        // Display trimming is NOT scan incompleteness — the scan found these, we are just not
+        // printing them all. Reported separately so "shown 50 of 73" never reads as "the scan
+        // only reached 50", which is the confusion the dead-code path had.
+        const trimmedForOutput: Record<string, number> = {};
         for (const name of Object.keys(batch)) {
           const refs = batch[name];
-          if (refs && refs.length > maxRefs) batch[name] = refs.slice(0, maxRefs);
+          if (refs && refs.length > maxRefs) {
+            trimmedForOutput[name] = refs.length;
+            batch[name] = refs.slice(0, maxRefs);
+          }
         }
-        return batch;
+        // Always the same shape. A response that changes structure depending on the data is
+        // worse than the problem being fixed — a consumer that reads `result[name]` would work
+        // until the first partial scan. An empty list here is the input to "nobody uses this,
+        // safe to rename or delete", so the scan's reach travels beside it, always.
+        return {
+          references: batch,
+          scan_coverage: sink.coverage ?? { status: "complete" },
+          ...(Object.keys(trimmedForOutput).length > 0
+            ? { shown_of_total: trimmedForOutput }
+            : {}),
+        };
       }
       if (typeof args.symbol_name !== "string" || args.symbol_name.trim().length === 0) {
         throw new Error("symbol_name or symbol_names is required");
