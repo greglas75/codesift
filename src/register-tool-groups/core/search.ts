@@ -135,7 +135,21 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         if (fallback.semantic_results) {
           hints.push("Exact text not found — semantic_fallback below shows closest matches by meaning.");
         }
+
+        // What this empty result is and is not evidence of. Tuning hints above tell the agent how
+        // to search better; these tell it whether "no matches" can be believed at all.
+        const cov = fallback.semantic_coverage;
+        if (cov && cov.status !== "searched") {
+          hints.push(`NOT a complete search: ${cov.detail ?? cov.status}.`);
+        }
+        const fresh = fallback.index_freshness;
+        if (fresh && fresh.status !== "current") {
+          hints.push(`Index ${fresh.status}: ${fresh.detail ?? "freshness unverified"}.`);
+        }
+
         const response: Record<string, unknown> = { matches: [], hint: hints.join(" ") };
+        if (cov) response["semantic_coverage"] = cov;
+        if (fresh) response["index_freshness"] = fresh;
         if (fallback.suggestions) {
           response["did_you_mean"] = fallback.suggestions;
         }

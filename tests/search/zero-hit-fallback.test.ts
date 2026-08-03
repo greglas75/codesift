@@ -87,13 +87,22 @@ export function validatePayload(input: unknown): boolean { return input != null;
     expect(fallback.suggestions).toBeUndefined();
   });
 
-  it("skips semantic rescue when no embeddings index exists", async () => {
+  it("skips semantic rescue when no embeddings index exists — and SAYS SO", async () => {
     const fallback = await zeroHitFallback(repoName, "authorizeUsr");
     expect(fallback.semantic_results).toBeUndefined();
+    // The skip used to be silent, which made "searched by meaning and found nothing"
+    // indistinguishable from "never searched by meaning". Only the second one is not
+    // evidence of absence, and the caller could not tell which it had.
+    expect(fallback.semantic_coverage?.status).toBe("repo_not_embedded");
+    expect(fallback.semantic_coverage?.detail).toMatch(/did not run/i);
   });
 
-  it("never throws on an unknown repo", async () => {
+  it("never throws on an unknown repo, and reports that it could not check", async () => {
     const fallback = await zeroHitFallback("local/does-not-exist", "whatever");
-    expect(fallback).toEqual({});
+    // Contract change: this used to assert an empty object. Staying silent here is the same
+    // failure one level down — the caller learns nothing about whether anything was searched.
+    expect(fallback.suggestions).toBeUndefined();
+    expect(fallback.semantic_results).toBeUndefined();
+    expect(fallback.semantic_coverage?.status).toBe("unknown");
   });
 });
