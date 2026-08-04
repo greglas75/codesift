@@ -227,7 +227,16 @@ export async function getIndexSummary(
     // `loadIndexOrStale`, which also says "ok", so it matched neither the stale nor the
     // unreadable branch and fell through to a bare `{indexed:false}` with no diagnostic at all.
     // A correctly-indexed repo reported as never-indexed, confidently and silently.
-    if (collectExtractorVersionMismatches(summary, { ...EXTRACTOR_VERSIONS }).length > 0) {
+    const mismatches = collectExtractorVersionMismatches(summary, { ...EXTRACTOR_VERSIONS });
+    if (mismatches.length > 0) {
+      // Log parity too: getCodeIndex warns here, and without this the server log simply goes
+      // dark for a stale repo whose only traffic is index_status.
+      const first = mismatches[0]!;
+      console.warn(
+        `[codesift] stale index for ${resolvedName}: extractor_version_mismatch ` +
+        `(${first.language} expected ${first.expected}, got ${first.actual}). ` +
+        `Run index_folder to refresh.`,
+      );
       return null;
     }
     return summary;
@@ -235,10 +244,17 @@ export async function getIndexSummary(
     const code = classifyStorageError(err);
     if (code === null) throw err;
     // Mirrors getCodeIndex: null means "no index", and a locked or corrupt store is not that.
+    //
+    // The underlying detail belongs in `message`, not only in `cause`: `index_status` copies
+    // `err.message` verbatim into `unreadable.message`, the one field whose entire job is telling
+    // an agent WHAT went wrong. Reporting only the classified code there would say "something is
+    // broken" where the old path said which thing — a strictly worse diagnostic from a change
+    // whose point was to lose nothing.
+    const detail = err instanceof Error ? err.message : String(err);
     throw new IndexStorageError(
-      `[codesift] index for ${resolvedName} is unreadable (${code}). This is a storage fault, ` +
-        `not an empty index. Retry if the code is SQLITE_BUSY; otherwise run index_folder to ` +
-        `rebuild ${meta.index_path}.`,
+      `[codesift] index for ${resolvedName} is unreadable (${code}): ${detail}. This is a storage ` +
+        `fault, not an empty index. Retry if the code is SQLITE_BUSY; otherwise run index_folder ` +
+        `to rebuild ${meta.index_path}.`,
       code,
       meta.index_path,
       { cause: err },

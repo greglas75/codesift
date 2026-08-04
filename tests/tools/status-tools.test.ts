@@ -194,3 +194,32 @@ describe("indexStatus", () => {
     expect(result.text_stub_languages).toBeUndefined();
   });
 });
+
+describe("indexStatus — storage faults (Q7/Q11: the branch nothing exercised)", () => {
+  it("reports the fault instead of an empty index, and keeps the underlying detail", async () => {
+    // `unreadable.message` is the one field whose job is telling an agent WHAT went wrong. A
+    // message carrying only the classified code says "something is broken" where the old path
+    // said which thing — the diagnostic regression CQ-4 caught in the narrowed read.
+    const fault = Object.assign(new Error("database disk image is malformed"), {
+      name: "IndexStorageError",
+      code: "SQLITE_CORRUPT",
+      path: "/tmp/x.index.db",
+    });
+    mockGetIndexSummary.mockRejectedValue(fault);
+
+    const result = await indexStatus("broken-repo");
+    expect(result.indexed).toBe(false);
+    expect(result.unreadable).toEqual({
+      reason: "storage_error",
+      code: "SQLITE_CORRUPT",
+      message: "database disk image is malformed",
+    });
+    // And emphatically NOT a bare not-indexed answer.
+    expect(result.symbol_count).toBeUndefined();
+  });
+
+  it("lets a non-storage error propagate rather than rendering it as an empty index", async () => {
+    mockGetIndexSummary.mockRejectedValue(new TypeError("programmer error"));
+    await expect(indexStatus("some-repo")).rejects.toThrow(/programmer error/);
+  });
+});

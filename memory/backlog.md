@@ -198,3 +198,19 @@
 - [ ] **B-9 [NIT]** `summariseIndex`'s `[...index.files]` throws on a malformed index with no
   `files`, and the cache-hit call site is outside `getIndexSummary`'s try/catch. Unreachable via the
   typed path, undefended nonetheless.
+
+## From the CQ audit of f8979e5..d9e424f (returned late; 2026-08-04)
+
+- [ ] **B-10 [structural-refactor, CQ14]** `loadIndexSqlite` and `loadIndexSummarySqlite` repeat the
+  same ~10-line meta-extras block (extractor_version / workspaces / lossy_migration: JSON-parse,
+  null-check, assign). Recipe: extract
+  `parseIndexMetaExtras(meta: (k: string) => string | undefined): Pick<IndexSummary,
+  "extractor_version" | "workspaces" | "lossy_migration">` in `sqlite-index-store.ts` and call it
+  from both readers. Deferred rather than done inline: it edits the hot full-load path for a
+  maintainability win, which is not a trade to make in the same commit as a correctness fix.
+- [ ] **B-11 [NIT, CQ25]** `loadIndexSummary` has no equivalent of `readIndex`'s `data_version`-aware
+  cache, so a repo whose only traffic is `index_status` re-opens a connection every call while its
+  `getCodeIndex` sibling is cached. Either add a lightweight summary cache keyed the same way, or
+  state the asymmetry in the doc comment — currently it is neither.
+- [ ] **B-12 [NIT]** The line counts quoted in B-2 ("931 raw lines") and in the god-module entry
+  ("731L") are stale after this diff: `sqlite-index-store.ts` is ~1100L and `index-store.ts` ~806L.
