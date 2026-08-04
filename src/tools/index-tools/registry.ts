@@ -2,7 +2,17 @@ import { unlink } from "node:fs/promises";
 import { stat } from "node:fs/promises";
 import { join, resolve, dirname } from "node:path";
 import { EXTRACTOR_VERSIONS } from "../index-shared.js";
-import { loadIndex, loadIndexOrStale } from "../../storage/index-store.js";
+import {
+  loadIndex,
+  loadIndexOrStale,
+  loadIndexSummary,
+  summariseIndex,
+  isExtractorVersionCurrent,
+} from "../../storage/index-store.js";
+import {
+  classifyStorageError,
+  type IndexSummary,
+} from "../../storage/sqlite-index-store.js";
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import {
   getRepo,
@@ -164,6 +174,60 @@ export async function getCodeIndex(
 
   codeIndexes.set(resolvedName, result.index);
   return result.index;
+}
+
+/**
+ * Files + metadata for a repo, without constructing its symbols (ADR-004 stage 2).
+ *
+ * Same resolution, staleness and unreadable semantics as `getCodeIndex` — a storage fault must
+ * still surface as a fault here, not as a repo with nothing in it. The difference is only what is
+ * built: a full load of the tgm-survey-platform index costs ~1.0 s and 349 MB of heap, effectively
+ * all of it symbol objects, and `index_status` — which reports counts it reads from metadata and
+ * never touches `index.symbols` — was paying that in full.
+ *
+ * Returns `IndexSummary`, which has no `symbols` field at all rather than an empty one: a caller
+ * that needs symbols must fail to compile, not read an empty array as "this repo has none".
+ */
+export async function getIndexSummary(
+  repoName: string,
+  options?: { skipFreshness?: boolean },
+): Promise<IndexSummary | null> {
+  const config = loadConfig();
+  const resolved = await resolveRegisteredRepoMeta(config.registryPath, repoName);
+  if (!resolved) return null;
+  const { resolvedName, meta } = resolved;
+
+  if (!options?.skipFreshness) {
+    await ensureIndexFresh(resolvedName);
+  }
+
+  // A full index already in memory answers this for free; going back to the database would be
+  // slower than projecting what we are holding.
+  const cached = codeIndexes.get(resolvedName);
+  if (cached) return summariseIndex(cached);
+
+  try {
+    const summary = await loadIndexSummary(meta.index_path);
+    if (summary === null) return null;
+    // Staleness parity with getCodeIndex. Without this a drifted extractor_version would come
+    // back looking healthy here while the full-load path reports it stale — and `index_status`,
+    // the one tool whose job is to say whether the index can be trusted, would be the caller that
+    // lost the signal.
+    if (!isExtractorVersionCurrent(summary, { ...EXTRACTOR_VERSIONS })) return null;
+    return summary;
+  } catch (err) {
+    const code = classifyStorageError(err);
+    if (code === null) throw err;
+    // Mirrors getCodeIndex: null means "no index", and a locked or corrupt store is not that.
+    throw new IndexStorageError(
+      `[codesift] index for ${resolvedName} is unreadable (${code}). This is a storage fault, ` +
+        `not an empty index. Retry if the code is SQLITE_BUSY; otherwise run index_folder to ` +
+        `rebuild ${meta.index_path}.`,
+      code,
+      meta.index_path,
+      { cause: err },
+    );
+  }
 }
 
 /**

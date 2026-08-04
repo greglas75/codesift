@@ -6,7 +6,7 @@ import { loadConfig } from "../config.js";
 import { stopWatcher } from "../storage/watcher.js";
 import { indexFolder, resetIndexFolderRedundancyForTesting, type IndexFolderResult } from "./index-tools/folder-indexer.js";
 import { indexFile, clearLastIndexedStateForTesting, ensureIndexFresh, resetFreshnessCache } from "./index-tools/file-indexer.js";
-import { listAllRepos, invalidateCache, getBM25Index, getCodeIndex, getEmbeddingCache, autoIndexCurrentRepo, _cachedEmbeddingReposForTesting, _embeddingLoadCountForTesting, _resetEmbeddingLoadCountForTesting, type RepoSummary } from "./index-tools/registry.js";
+import { listAllRepos, invalidateCache, getBM25Index, getCodeIndex, getIndexSummary, getEmbeddingCache, autoIndexCurrentRepo, _cachedEmbeddingReposForTesting, _embeddingLoadCountForTesting, _resetEmbeddingLoadCountForTesting, type RepoSummary } from "./index-tools/registry.js";
 import { embedSymbols } from "./index-tools/parse.js";
 import { drainLegacyHashQueue, ASTRO_LOCK_FILENAME, EXTRACTOR_VERSIONS_FILENAME, checkAstroExtractorVersion, type AstroReindexResult } from "./index-tools/snapshots.js";
 import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches } from "./index-tools/state.js";
@@ -26,6 +26,7 @@ export {
   invalidateCache,
   getBM25Index,
   getCodeIndex,
+  getIndexSummary,
   getEmbeddingCache,
   autoIndexCurrentRepo,
   _cachedEmbeddingReposForTesting,

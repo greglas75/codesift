@@ -920,6 +920,98 @@ export async function getFileMtimeSqlite(
   return row?.mtime_ms ?? undefined;
 }
 
+/**
+ * Everything about an index EXCEPT its symbols (ADR-004 stage 2).
+ *
+ * Deliberately not a `CodeIndex` with an empty `symbols` array. That shape would be a lie a caller
+ * cannot detect: iterating it yields nothing and reads as "this repo has no symbols", which is the
+ * empty-because-not-loaded answer this codebase treats as the worst one available. With no such
+ * field at all, a consumer that needs symbols fails to compile instead of failing silently.
+ *
+ * `symbol_count` is counted in SQL rather than derived from an array, so it stays a real count.
+ */
+export interface IndexSummary {
+  repo: string;
+  root: string;
+  files: FileEntry[];
+  created_at: number;
+  updated_at: number;
+  symbol_count: number;
+  file_count: number;
+  extractor_version?: Record<string, string>;
+  workspaces?: Workspace[];
+  lossy_migration?: boolean;
+}
+
+/**
+ * Read an index without constructing its symbols.
+ *
+ * Measured on the real tgm-survey-platform index (240,137 symbols): a full load costs ~1.0 s and
+ * 349 MB of resident heap, essentially all of it building symbol objects. Tools that never touch
+ * `index.symbols` — `index_status` is the clearest, it reports counts it reads from metadata — paid
+ * that in full for nothing.
+ */
+export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSummary | null> {
+  await openIndexDb(dbPath);
+  let reader: DatabaseSyncType | undefined;
+  let out: IndexSummary | null = null;
+  try {
+    // Same one-transaction rule as `loadIndexSqlite`: files and meta must describe one instant,
+    // or the summary reports a file list from one revision with counts from another.
+    reader = await openReadConnection(dbPath);
+    reader.exec("BEGIN");
+    try {
+      const meta = (key: string): string | undefined => readMetaValue(reader as DatabaseSyncType, key);
+      const repo = meta("repo");
+      const root = meta("root");
+      if (repo === undefined || root === undefined) {
+        reader.exec("COMMIT");
+        return null; // genuinely empty — not a fault
+      }
+
+      const files = (reader.prepare("SELECT * FROM files").all() as unknown as FileRow[]).map(
+        rowToFileEntry,
+      );
+      const counted = reader.prepare("SELECT COUNT(*) AS n FROM symbols").get() as
+        | { n: number }
+        | undefined;
+
+      const summary: IndexSummary = {
+        repo,
+        root,
+        files,
+        created_at: Number(meta("created_at") ?? 0),
+        updated_at: Number(meta("updated_at") ?? 0),
+        symbol_count: Number(counted?.n ?? 0),
+        file_count: files.length,
+      };
+
+      const extractorRaw = meta("extractor_version");
+      if (extractorRaw !== undefined) {
+        const parsed = JSON.parse(extractorRaw) as Record<string, string> | null;
+        if (parsed !== null) summary.extractor_version = parsed;
+      }
+      const workspacesRaw = meta("workspaces");
+      if (workspacesRaw !== undefined) {
+        const parsed = JSON.parse(workspacesRaw) as Workspace[] | null;
+        if (parsed !== null) summary.workspaces = parsed;
+      }
+      if (meta("lossy_v1_migration") !== undefined) summary.lossy_migration = true;
+
+      reader.exec("COMMIT");
+      out = summary;
+    } catch (err) {
+      try { reader.exec("ROLLBACK"); } catch { /* snapshot already gone */ }
+      throw err;
+    }
+  } catch (err) {
+    rethrowOperational(err, dbPath);
+  } finally {
+    try { reader?.close(); } catch { /* best-effort */ }
+  }
+  return out;
+}
+
 /** One file's `files[]` entry, without materialising the index. */
 export async function getFileEntrySqlite(
   dbPath: string,

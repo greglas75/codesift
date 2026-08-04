@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { loadConfig } from "../config.js";
 import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { loadIndexOrStale } from "../storage/index-store.js";
@@ -70,11 +70,14 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
   // Status check should NOT block on freshness — telemetry showed p99=43s
   // because ensureIndexFresh triggers git-diff + reindex of changed files.
   // Stale-but-fast metadata is the right tradeoff for a status call.
-  let index: Awaited<ReturnType<typeof getCodeIndex>>;
+  // ADR-004 stage 2: this tool reports counts and file metadata and never touches
+  // `index.symbols`, so it reads the narrow summary. On the measured 240k-symbol index that is
+  // ~1.0 s and 349 MB of heap it no longer builds to answer a status question.
+  let index: Awaited<ReturnType<typeof getIndexSummary>>;
   try {
-    index = await getCodeIndex(repo, { skipFreshness: true });
+    index = await getIndexSummary(repo, { skipFreshness: true });
   } catch (err) {
-    // getCodeIndex throws on an unreadable store so that ordinary tools cannot render a storage
+    // getIndexSummary throws on an unreadable store so that ordinary tools cannot render a storage
     // fault as an empty result. This tool is the exception: reporting index health IS its job,
     // so it describes the fault instead of propagating it — straight from the caught error, with
     // no second read. Re-probing would hit an already-struggling store again and could observe a
@@ -88,7 +91,7 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
     throw err;
   }
   if (!index) {
-    // getCodeIndex returns null both for "no index file" and for stale-version
+    // getIndexSummary returns null both for "no index file" and for stale-version
     // mismatches. Disambiguate by reading the index path directly: if the file
     // exists but extractor_version drifted, surface a structured stale signal
     // instead of a generic "not indexed". Agents acting on "not indexed" will

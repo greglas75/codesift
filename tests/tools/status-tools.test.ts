@@ -1,17 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { indexStatus } from "../../src/tools/status-tools.js";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
+import type { IndexSummary } from "../../src/storage/sqlite-index-store.js";
 
 // ---------------------------------------------------------------------------
 // Mocks — I/O boundaries
 // ---------------------------------------------------------------------------
 
-const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
+// ADR-004 stage 2: indexStatus reads the narrow summary — it never touches `index.symbols`, so
+// it no longer builds them. The mock returns the same shape MINUS `symbols`, which is the point:
+// a summary type with no symbols field cannot be silently mistaken for an index that has none.
+const mockGetIndexSummary = vi.fn<(repo: string) => Promise<IndexSummary | null>>();
 const mockResolveRegisteredRepoMeta = vi.fn();
 const mockLoadIndexOrStale = vi.fn();
 
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
+  getIndexSummary: (...args: unknown[]) => mockGetIndexSummary(args[0] as string),
 }));
 
 vi.mock("../../src/storage/registry.js", () => ({
@@ -42,12 +46,11 @@ function makeFile(overrides: Partial<FileEntry> & Pick<FileEntry, "path" | "lang
   };
 }
 
-function makeIndex(files: FileEntry[]): CodeIndex {
+function makeIndex(files: FileEntry[]): IndexSummary {
   const now = Date.now();
   return {
     repo: "test",
     root: "/test",
-    symbols: [],
     files,
     created_at: now,
     updated_at: now,
@@ -62,25 +65,25 @@ function makeIndex(files: FileEntry[]): CodeIndex {
 
 describe("indexStatus", () => {
   beforeEach(() => {
-    mockGetCodeIndex.mockReset();
+    mockGetIndexSummary.mockReset();
     mockResolveRegisteredRepoMeta.mockReset();
     mockLoadIndexOrStale.mockReset();
     mockResolveRegisteredRepoMeta.mockResolvedValue(null);
     mockLoadIndexOrStale.mockResolvedValue(null);
   });
 
-  it("returns {indexed: false} when getCodeIndex returns null and no registry entry exists", async () => {
-    mockGetCodeIndex.mockResolvedValue(null);
+  it("returns {indexed: false} when getIndexSummary returns null and no registry entry exists", async () => {
+    mockGetIndexSummary.mockResolvedValue(null);
 
     const result = await indexStatus("missing-repo");
 
     expect(result).toEqual({ indexed: false });
-    expect(mockGetCodeIndex).toHaveBeenCalledWith("missing-repo");
+    expect(mockGetIndexSummary).toHaveBeenCalledWith("missing-repo");
     expect(mockResolveRegisteredRepoMeta).toHaveBeenCalled();
   });
 
   it("surfaces structured stale info when extractor_version drifted", async () => {
-    mockGetCodeIndex.mockResolvedValue(null);
+    mockGetIndexSummary.mockResolvedValue(null);
     mockResolveRegisteredRepoMeta.mockResolvedValue({
       resolvedName: "local/translation-qa",
       meta: {
@@ -117,7 +120,7 @@ describe("indexStatus", () => {
       makeFile({ path: "src/util.ts", language: "typescript", symbol_count: 5 }),
       makeFile({ path: "src/app.py", language: "python", symbol_count: 3 }),
     ];
-    mockGetCodeIndex.mockResolvedValue(makeIndex(files));
+    mockGetIndexSummary.mockResolvedValue(makeIndex(files));
 
     const result = await indexStatus("test");
 
@@ -141,7 +144,7 @@ describe("indexStatus", () => {
       makeFile({ path: "lib/main.dart", language: "dart", symbol_count: 0 }),
       makeFile({ path: "src/main.ts", language: "typescript", symbol_count: 5 }),
     ];
-    mockGetCodeIndex.mockResolvedValue(makeIndex(files));
+    mockGetIndexSummary.mockResolvedValue(makeIndex(files));
 
     const result = await indexStatus("test");
 
@@ -156,7 +159,7 @@ describe("indexStatus", () => {
       makeFile({ path: "src/app.py", language: "python", symbol_count: 3 }),
       makeFile({ path: "cmd/main.go", language: "go", symbol_count: 2 }),
     ];
-    mockGetCodeIndex.mockResolvedValue(makeIndex(files));
+    mockGetIndexSummary.mockResolvedValue(makeIndex(files));
 
     const result = await indexStatus("test");
 
@@ -171,7 +174,7 @@ describe("indexStatus", () => {
       makeFile({ path: "src/B.kt", language: "kotlin", symbol_count: 0 }),
       makeFile({ path: "src/C.kt", language: "kotlin", symbol_count: 0 }),
     ];
-    mockGetCodeIndex.mockResolvedValue(makeIndex(files));
+    mockGetIndexSummary.mockResolvedValue(makeIndex(files));
 
     const result = await indexStatus("test");
 
@@ -180,7 +183,7 @@ describe("indexStatus", () => {
   });
 
   it("handles empty file list", async () => {
-    mockGetCodeIndex.mockResolvedValue(makeIndex([]));
+    mockGetIndexSummary.mockResolvedValue(makeIndex([]));
 
     const result = await indexStatus("test");
 

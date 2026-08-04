@@ -69,8 +69,20 @@ the code comment and then only half-fixed.
   more than the memory it reclaims. A repo larger than the whole budget is a reason to raise
   `CODESIFT_MAX_INDEX_CACHE_MB`.
 
-**Stage 2 (queued, NOT implemented).** Stop materialising whole indexes: have each tool query the
-database for the rows it actually needs.
+**Stage 2 (started).** Stop materialising whole indexes: have each tool query the database for the
+rows it actually needs.
+
+First increment shipped — `loadIndexSummarySqlite` / `getIndexSummary`, returning `IndexSummary`:
+files and metadata with **no `symbols` field at all**. Not a `CodeIndex` with an empty array, which
+would be a lie a caller cannot detect — iterating it reads as "this repo has no symbols". With the
+field absent, a consumer that needs symbols fails to compile instead of failing silently.
+
+`index_status` is the first consumer, and the clearest: it reports counts it reads from metadata and
+never touched `index.symbols`. Measured on the real 240k-symbol index — full load **15.9 s / 349 MB**
+against summary **2.3 s / 3 MB**: **7.0x faster, 345 MB less resident heap**, with `symbol_count` and
+`file_count` identical (the SQL `COUNT(*)` agrees with the materialised array length).
+
+The remaining consumers are the bulk of the work; see the call-site count below.
 
 ## What stage 2 costs, and why it is not being done quietly
 

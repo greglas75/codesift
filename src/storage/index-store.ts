@@ -15,6 +15,8 @@ import {
   importLegacyIndexIfEmpty,
   classifyStorageError,
   IndexStorageError,
+  loadIndexSummarySqlite,
+  type IndexSummary,
 } from "./sqlite-index-store.js";
 import { indexFootprintBytes } from "./index-footprint.js";
 import { indexCacheMemBudgetBytes } from "../config.js";
@@ -281,6 +283,41 @@ export function getIndexCacheBytesForTesting(): number {
   return cachedBytes();
 }
 
+/**
+ * Read an index's files and metadata WITHOUT constructing its symbols (ADR-004 stage 2).
+ *
+ * On the SQLite backend this skips the object graph entirely. On JSON there is nothing to skip —
+ * the format forces a whole-document parse — so this is parity, not a speedup, and it exists so
+ * callers can be written once against the narrow shape rather than branching on the backend.
+ */
+export async function loadIndexSummary(indexPath: string): Promise<IndexSummary | null> {
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return loadIndexSummarySqlite(dbPath);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  return index === null ? null : summariseIndex(index);
+}
+
+/** Project a fully-loaded index onto the narrow shape, dropping the symbols array. */
+export function summariseIndex(index: CodeIndex): IndexSummary {
+  const summary: IndexSummary = {
+    repo: index.repo,
+    root: index.root,
+    files: index.files,
+    created_at: index.created_at,
+    updated_at: index.updated_at,
+    symbol_count: index.symbol_count,
+    file_count: index.file_count,
+  };
+  if (index.extractor_version !== undefined) summary.extractor_version = index.extractor_version;
+  if (index.workspaces !== undefined) summary.workspaces = index.workspaces;
+  if (index.lossy_migration === true) summary.lossy_migration = true;
+  return summary;
+}
+
 /** Backend-agnostic read, without version enforcement. */
 async function readIndex(indexPath: string): Promise<CodeIndex | null> {
   if ((await resolveIndexBackend()) === "sqlite") {
@@ -439,8 +476,14 @@ export type ExtractorVersionMismatchRow = {
 /** All languages whose stored `extractor_version` entry does not match
  *  `currentVersions`, applying the same tolerances as `loadIndexOrStale`
  *  (newly added keys with no files in that language are skipped). */
+/**
+ * Only the two fields the check actually reads, so an `IndexSummary` (ADR-004 stage 2) can be
+ * validated without materialising symbols just to satisfy a parameter type.
+ */
+export type ExtractorVersionCheckable = Pick<CodeIndex, "extractor_version" | "files">;
+
 export function collectExtractorVersionMismatches(
-  index: CodeIndex,
+  index: ExtractorVersionCheckable,
   currentVersions: Record<string, string>,
 ): ExtractorVersionMismatchRow[] {
   const stored = index.extractor_version ?? {};
@@ -554,7 +597,7 @@ export async function loadIndexOrStale(
  * version miss.
  */
 export function isExtractorVersionCurrent(
-  index: CodeIndex,
+  index: ExtractorVersionCheckable,
   currentVersions: Record<string, string>,
 ): boolean {
   if (!index.extractor_version) return false;
