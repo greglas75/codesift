@@ -8,7 +8,7 @@ vi.mock("../../src/tools/index-tools.js", () => ({
 }));
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
-import { findPhpGodModel, analyzeActiveRecord } from "../../src/tools/php-tools.js";
+import { findPhpGodModel, } from "../../src/tools/php-tools.js";
 
 function makeClassSym(name: string, file: string, startLine: number, endLine: number, source?: string) {
   return {

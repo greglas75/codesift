@@ -59,7 +59,7 @@ export async function resolveWorkspaces(root: string): Promise<WorkspaceIndex | 
       })),
       ...(rootPackage ? { rootPackage } : {}),
     };
-  } catch (err) {
+  } catch (_err) {
     // @manypkg throws on non-monorepo or malformed config — caller treats null
     // as flat-repo. Existing regex YAML parser in project-tools.ts is the
     // last-resort fallback and is invoked there, not here.

@@ -290,8 +290,8 @@ function extractThrownError(
     return emission;
   }
 
-  const constructor = newExpr.childForFieldName("constructor");
-  const className = constructor?.text ?? "Error";
+  const ctorNode = newExpr.childForFieldName("constructor");
+  const className = ctorNode?.text ?? "Error";
   const args = newExpr.childForFieldName("arguments");
   const firstArg = args?.namedChildren[0];
   const secondArg = args?.namedChildren[1];

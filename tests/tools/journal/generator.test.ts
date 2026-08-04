@@ -325,7 +325,7 @@ describe("Resume from checkpoint (f)", () => {
 
 describe("Lockfile (g)", () => {
   it("returns locked on EEXIST and does not call provider", async () => {
-    fsWriteFile.mockImplementation(async (path: string, _data: unknown, opts?: unknown) => {
+    fsWriteFile.mockImplementation(async (_path: string, _data: unknown, opts?: unknown) => {
       if (typeof opts === "object" && opts !== null && (opts as { flag?: string }).flag === "wx") {
         const err = Object.assign(new Error("EEXIST"), { code: "EEXIST" });
         throw err;

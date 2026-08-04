@@ -31,7 +31,7 @@ import {
   checkTestGaps,
   checkAstroHydration,
 } from "../../src/tools/review-diff-tools.js";
-import type { ReviewFinding, CheckResult, ReviewDiffOptions, ReviewDiffResult } from "../../src/tools/review-diff-tools.js";
+import type { ReviewFinding, CheckResult, ReviewDiffResult } from "../../src/tools/review-diff-tools.js";
 import { formatReviewDiff } from "../../src/formatters.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";

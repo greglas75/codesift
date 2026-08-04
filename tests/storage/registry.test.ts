@@ -1,6 +1,5 @@
 import {
   loadRegistry,
-  saveRegistry,
   registerRepo,
   getRepo,
   listRepos,

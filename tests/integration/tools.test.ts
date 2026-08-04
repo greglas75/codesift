@@ -953,7 +953,7 @@ export function testHelper(): void { serve(); }
 
     // Without tests: serve() has no non-test external refs
     const withoutTests = await findDeadCode(REPO);
-    const serveCandidate = withoutTests.candidates.find((c) => c.name === "serve");
+    const _serveCandidate = withoutTests.candidates.find((c) => c.name === "serve");
     // serve is referenced in test file, but tests excluded by default
     // however test imports DO count as external refs if we read ALL files
     // Actually: include_tests=false means we skip test files from scanning too

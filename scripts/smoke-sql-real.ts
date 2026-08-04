@@ -9,8 +9,6 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 import { extractSqlSymbols, stripJinjaTokens } from "../src/parser/extractors/sql.js";
-import { analyzeSchema } from "../src/tools/sql-tools.js";
-import { indexFolder } from "../src/tools/index-tools.js";
 
 const ROOT = process.argv[2];
 if (!ROOT) {

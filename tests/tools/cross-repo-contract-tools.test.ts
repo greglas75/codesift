@@ -505,7 +505,7 @@ describe("extractOutboundCalls — comment stripping", () => {
 // matchContracts — Task 14
 // ---------------------------------------------------------------------------
 
-import type { RepoEndpoint, ContractMatch } from "../../src/types.js";
+import type { RepoEndpoint, } from "../../src/types.js";
 import type { OutboundCall } from "../../src/tools/cross-repo-contract-tools.js";
 
 type ConsumerCall = OutboundCall & { repo: string };

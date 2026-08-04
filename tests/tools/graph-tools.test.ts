@@ -7,7 +7,7 @@ import {
 } from "../../src/tools/graph-tools.js";
 
 const names = (sites: CallSite[]) => sites.map((s) => s.name);
-import type { CodeSymbol, Direction } from "../../src/types.js";
+import type { CodeSymbol, } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

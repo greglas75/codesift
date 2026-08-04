@@ -1,14 +1,12 @@
 import {
   loadGroupRegistry,
-  saveGroupRegistry,
   registerGroup,
   getGroup,
   listGroups,
   removeGroup,
   getGroupRegistryPath,
 } from "../../src/storage/group-registry.js";
-import type { RepoGroup } from "../../src/types.js";
-import { mkdtemp, rm, writeFile, chmod, access } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod, } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";

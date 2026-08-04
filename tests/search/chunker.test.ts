@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkBySymbols, chunkFile } from "../../src/search/chunker.js";
+import { chunkBySymbols, } from "../../src/search/chunker.js";
 
 describe("chunkBySymbols", () => {
   it("creates one chunk per symbol", () => {
@@ -46,7 +46,7 @@ describe("chunkBySymbols", () => {
     ];
     const chunks = chunkBySymbols("test.ts", source, "repo", symbols);
     // preamble + b (empty symbol body skipped)
-    const names = chunks.map((c) => `${c.startLine}`);
+    const _names = chunks.map((c) => `${c.startLine}`);
     expect(chunks.some((c) => c.startLine === 5)).toBe(true);
   });
 

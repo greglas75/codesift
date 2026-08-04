@@ -54,7 +54,7 @@ describe("runRuff", () => {
     // First call: ruff version (succeeds)
     // Second call: ruff check (exits with code 1, findings in stdout)
     let callCount = 0;
-    mockedExecFileSync.mockImplementation((...args: unknown[]) => {
+    mockedExecFileSync.mockImplementation((..._args: unknown[]) => {
       callCount++;
       if (callCount === 1) return "0.8.0"; // ruff version
 

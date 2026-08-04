@@ -1,21 +1,4 @@
-/**
- * End-to-end smoke test for Python Phase 2-4 tools on a real project.
- *
- * Usage:
- *   npx tsx scripts/bench-python-phase-2-4.ts [project-path]
- *
- * Default: /tmp/review-projects/flask
- *
- * Exercises:
- *   - search_patterns (17 Python anti-patterns)
- *   - trace_route (Flask/FastAPI/Django)
- *   - get_model_graph
- *   - get_test_fixtures
- *   - find_framework_wiring
- *   - parse_pyproject
- *   - (run_ruff skipped — requires ruff installed)
- */
-import { join } from "node:path";
+
 import { initParser } from "../src/parser/parser-manager.js";
 import { indexFolder, getCodeIndex } from "../src/tools/index-tools.js";
 import { searchPatterns, BUILTIN_PATTERNS } from "../src/tools/pattern-tools.js";

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { indexStatus } from "../../src/tools/status-tools.js";
-import type { CodeIndex, FileEntry } from "../../src/types.js";
+import type { FileEntry } from "../../src/types.js";
 import type { IndexSummary } from "../../src/storage/sqlite-index-store.js";
 
 // ---------------------------------------------------------------------------

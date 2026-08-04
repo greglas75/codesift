@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { parseFile } from "../../src/parser/parser-manager.js";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, } from "node:path";
 import { tmpdir } from "node:os";
 
 vi.mock("../../src/tools/index-tools.js", () => ({

@@ -315,6 +315,29 @@ present**, because an absent field is indistinguishable from "nobody checked". W
 tool output is **prefixed** with an `AMBIGUOUS ID —` banner naming the candidates: the handlers
 return text, so a signal that lives only in the typed result informs nothing.
 
+## Linting — Biome (`npm run lint`)
+
+`npm run lint` is `biome lint . && tsc --noEmit`; `npm run lint:fix` applies the safe fixes. Config
+in `biome.json`. Until 2026-08-04 `lint` was `tsc --noEmit` alone, so every CQ40 gate failed on every
+file for want of a linter to run.
+
+Deliberately narrow, and that is the point. **The formatter is off** — enabling it would rewrite the
+whole repo in one commit and bury every real finding under whitespace. `recommended` is off too;
+only rule groups that catch defects are on (correctness, suspicious, a little complexity/security).
+Style and naming opinions stay out: a linter that fires on things nobody intends to change is a
+linter that gets ignored.
+
+`noAdjacentSpacesInRegex` is **off** rather than suppressed per-site: all 4 hits were regexes
+matching indentation (`/^  - /gm` for markdown lists, `/^    - (.+)$/` for YAML). A rule that is
+wrong every time it fires on this codebase is noise.
+
+First run: 51 findings across 949 files. 44 were unused imports/variables/parameters (auto-fixed,
+verified by `tsc` + the full suite), 3 were deliberate and are suppressed inline **with the reason
+above the suppression** — `biome-ignore` only binds to the line immediately after it, so an
+explanation placed between the directive and the code silently disables the suppression (Biome then
+reports `suppressions/unused`). One was a real test defect: a "detects Yii2 from composer.json" test
+that imported `detectStack`, never called it, and grepped the source for a string literal instead.
+
 ## Tests run on the i9 farm — use `rt`, not a local runner
 
 This repo is wired to the shared test farm (burst-i9, 24 cores). The Mac runs

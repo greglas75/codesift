@@ -50,9 +50,8 @@ import {
   onFileDeleted,
   resetSecretCache,
   getSecretCache,
-  SEVERITY_MAP,
 } from "../../src/tools/secret-tools.js";
-import type { SecretFinding, SecretContext } from "../../src/tools/secret-tools.js";
+import type { SecretFinding, } from "../../src/tools/secret-tools.js";
 import {
   isMissingFileError,
   severityAtLeast,

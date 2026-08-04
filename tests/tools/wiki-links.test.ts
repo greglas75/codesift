@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { resolveWikiLinks } from "../../src/tools/wiki-links.js";
-import type { LinkResolutionResult } from "../../src/tools/wiki-links.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures

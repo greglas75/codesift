@@ -16,7 +16,7 @@ const fsState: FsState = {
 };
 
 // Real fixture is loaded lazily via the unmocked `readFileSync`.
-const FIXTURE_PATH = "/fixture/prototype-history.md";
+const _FIXTURE_PATH = "/fixture/prototype-history.md";
 const FIXTURE_CONTENT = readFileSync(
   join(process.cwd(), "tests/fixtures/journal/prototype-history.md"),
   "utf-8",
@@ -60,7 +60,7 @@ import * as fsPromises from "node:fs/promises";
 
 const mockWriteFile = fsPromises.writeFile as unknown as Mock;
 const mockCopyFile = fsPromises.copyFile as unknown as Mock;
-const mockReadFile = fsPromises.readFile as unknown as Mock;
+const _mockReadFile = fsPromises.readFile as unknown as Mock;
 
 const REPO_ROOT = "/repo";
 const OUTPUT_DIR = "/repo/.codesift/wiki";

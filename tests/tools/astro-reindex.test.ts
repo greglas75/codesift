@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdir, rm, writeFile, readFile, stat, utimes } from "node:fs/promises";
-import { openSync, closeSync, writeFileSync, renameSync, unlinkSync, existsSync } from "node:fs";
+import { mkdir, rm, writeFile, readFile, utimes } from "node:fs/promises";
+import { openSync, closeSync, unlinkSync, existsSync } from "node:fs";
 import { EXTRACTOR_VERSIONS } from "../../src/tools/project-tools.js";
 import {
   checkAstroExtractorVersion,

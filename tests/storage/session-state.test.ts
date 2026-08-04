@@ -552,7 +552,7 @@ describe("session-state", () => {
       scheduleSidecarFlush();
       resetSession();
       vi.advanceTimersByTime(2000);
-      const sessionId = getSessionState().sessionId;
+      const _sessionId = getSessionState().sessionId;
       const files = fs.readdirSync(tmpDir).filter((f: string) => f.startsWith("session-"));
       // No sidecar should have been written after reset
       expect(files.length).toBe(0);

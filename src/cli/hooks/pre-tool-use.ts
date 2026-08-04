@@ -20,6 +20,11 @@ function safeRelPath(filePath: string): string {
     .split(/[/\\]/)
     .slice(-3)
     .join("/")
+    // Matching control characters IS the job here: this strips them out of a path before it is
+    // echoed back to the user, so a crafted filename cannot inject terminal escapes into hook
+    // output. The explanation goes above the suppression because biome-ignore only applies to the
+    // line directly after it.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberate control-character strip
     .replace(/[\u0000-\u001f\u007f]/g, "?");
 }
 

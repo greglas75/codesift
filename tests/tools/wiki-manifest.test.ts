@@ -8,8 +8,6 @@ import {
   type WikiManifestV2,
   type ProjectOverview,
   type ModuleMetadata,
-  type DependencySummary,
-  type KeyExport,
   type ModuleRole,
   type JournalPageEntry,
   type JournalPageKind,

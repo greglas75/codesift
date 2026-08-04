@@ -34,7 +34,7 @@ async function cleanup() {
 
 describe("generate_report React section (Item 13)", () => {
   it("includes React section when component symbols exist", async () => {
-    const { repo, root } = await createIndexedFixture({
+    const { repo } = await createIndexedFixture({
       "src/Button.tsx": `function Button() {
   const [count, setCount] = useState(0);
   return <button onClick={() => setCount(count + 1)}>{count}</button>;

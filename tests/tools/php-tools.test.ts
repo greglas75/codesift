@@ -213,13 +213,11 @@ describe("extractYii2Conventions — Yii2-specific patterns", () => {
 });
 
 describe("Yii2 language detection", () => {
-  it("detects Yii2 from composer.json yiisoft/yii2 dependency", async () => {
-    // This tests the stack detector after its extraction from project-tools.ts
-    // where "yii2" was added to the PHP framework list
-    const { detectStack } = await import("../../src/tools/project-tools.js");
-
-    // We can't easily mock composer.json reading, but we can verify
-    // the code path exists by checking the source
+  it("lists yii2 among the PHP frameworks the stack detector recognises", async () => {
+    // Renamed to what it actually asserts. It was called "detects Yii2 from composer.json" and
+    // imported `detectStack` without ever calling it — the unused import is what gave that away.
+    // Grepping the source for a string literal is not a detection test; the real one needs a
+    // composer.json fixture and is backlogged (B-13).
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/tools/project-profile-stack.ts", "utf-8");
     expect(source).toContain('"laravel", "symfony", "yii2"');

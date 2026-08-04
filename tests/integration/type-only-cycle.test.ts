@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolve, join } from "node:path";
+import { resolve, } from "node:path";
 import { collectImportEdges } from "../../src/utils/import-graph.js";
 import { clearTsconfigCache } from "../../src/utils/tsconfig-paths.js";
 import { resetParseCache } from "../../src/parser/parse-cache.js";

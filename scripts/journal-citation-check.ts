@@ -12,7 +12,7 @@ export interface CitationResult {
 
 export async function runCitationCheck(
   phaseFile: string,
-  threshold: number,
+  _threshold: number,
 ): Promise<CitationResult> {
   const content = await readFile(phaseFile, "utf-8");
   const literals = extractLiterals(content);

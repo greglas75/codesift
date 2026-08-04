@@ -20,7 +20,6 @@ vi.mock("../../src/tools/journal-generator.js", () => ({
 // Import after mocks are declared
 // ---------------------------------------------------------------------------
 import { getToolDefinitions, getToolDefinition } from "../../src/register-tools.js";
-import { generateWiki } from "../../src/tools/wiki-tools.js";
 
 // ---------------------------------------------------------------------------
 // (a) journal_append tool is registered

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,13 +19,12 @@ import {
   extractHonoConventions,
   extractNestConventions,
   getExtractorVersions,
-  EXTRACTOR_VERSIONS,
   analyzeProject,
   buildConventionsSummary,
   resetAnalyzeProjectCacheForTesting,
 } from "../../src/tools/project-tools.js";
-import type { ProfileSummary, ProjectProfile } from "../../src/tools/project-tools.js";
-import type { CodeIndex, FileEntry } from "../../src/types.js";
+import type { ProjectProfile } from "../../src/tools/project-tools.js";
+import type { CodeIndex, } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers

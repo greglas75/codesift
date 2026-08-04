@@ -44,7 +44,7 @@ const KOTLIN = new Set([
 
 function detectStackTags(cwd: string, tools: string[]): string[] {
   const tags = new Set<string>();
-  const set = new Set(tools);
+  const _set = new Set(tools);
 
   // File / dep heuristics for tag derivation (independent of bundle membership
   // so we still tag stacks like "astro" or "nextjs" whose tools live in

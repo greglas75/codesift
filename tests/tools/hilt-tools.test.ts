@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, } from "vitest";
 import { buildHiltGraph, traceHiltGraph } from "../../src/tools/hilt-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 

@@ -17,7 +17,6 @@ import {
   StaticEmbeddingProvider,
   _resetStaticProviderForTesting,
   STATIC_FAILURE_COOLDOWN_MS,
-  _failedStaticModels,
 } from "../../src/search/static-embedding-provider.js";
 import { ensureModelFile } from "../../src/utils/hf-hub-download.js";
 
