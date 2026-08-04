@@ -3,6 +3,7 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "includes": [
+      "*.ts",
       "src/**/*.ts",
       "tests/**/*.ts",
       "scripts/**/*.ts",
@@ -42,7 +43,6 @@
         "noSelfCompare": "error",
         "noSparseArray": "error",
         "noUnsafeNegation": "error",
-        "useAwait": "off",
         "noAsyncPromiseExecutor": "error",
         "noCompareNegZero": "error",
         "noControlCharactersInRegex": "error",

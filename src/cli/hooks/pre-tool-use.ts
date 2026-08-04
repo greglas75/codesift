@@ -15,17 +15,21 @@ function readHookMaxBytes(): number {
   return Math.min(parsed, MAX_READ_HOOK_MAX_BYTES);
 }
 
-function safeRelPath(filePath: string): string {
+export function safeRelPath(filePath: string): string {
   return filePath
     .split(/[/\\]/)
     .slice(-3)
     .join("/")
     // Matching control characters IS the job here: this strips them out of a path before it is
     // echoed back to the user, so a crafted filename cannot inject terminal escapes into hook
-    // output. The explanation goes above the suppression because biome-ignore only applies to the
-    // line directly after it.
+    // output. C0 (\u0000-\u001f) and DEL alone are not enough for that claim — C1
+    // (\u0080-\u009f) contains CSI at \u009b, which terminals decoding Latin-1 act on exactly
+    // like ESC[. The comment used to promise escape-injection safety that the class did not
+    // deliver.
+    // The explanation sits above the directive because biome-ignore binds only to the line
+    // directly after it; putting prose in between silently disables the suppression.
     // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberate control-character strip
-    .replace(/[\u0000-\u001f\u007f]/g, "?");
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
 }
 
 function readRedirectReason(filePath: string, lineCount: number | null, sizeBytes: number | null): string {

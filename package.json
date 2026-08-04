@@ -29,7 +29,7 @@
     "download-wasm": "tsx scripts/download-wasm.ts",
     "prepublishOnly": "npm run build && npm test",
     "postinstall": "node ./dist/cli.js setup all 2>/dev/null && echo '\n  \u2728 CodeSift MCP installed and configured for all platforms.\n  \u26a0\ufe0f  Restart your AI client (Cmd+Q for Claude Code) to load new MCP server.\n' || echo '\n  \u2728 CodeSift MCP installed. Run: codesift setup all\n'",
-    "lint:fix": "biome lint --write ."
+    "lint:fix": "biome lint --write . && tsc --noEmit"
   },
   "dependencies": {
     "@manypkg/get-packages": "^3.1.0",
