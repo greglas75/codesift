@@ -186,3 +186,15 @@
   `BEGIN IMMEDIATE` and never re-checks under the lock, so two processes can both run the v1->v2
   migration. Harmless (v2 has no PRIMARY KEY, so the second pass is a redundant copy) but wasteful.
 - [ ] **B-6 [pre-carried]** `tests/server/http-session-cwd.test.ts` ECONNRESET flake.
+
+## From review f8979e5..d9e424f (2026-08-04) — IndexSummary / ADR-004 stage 2
+
+- [ ] **B-7 [NIT, pre-existing]** `EXTRACTOR_VERSIONS` (`src/tools/index-shared.ts`) has no entries
+  for go, rust, markdown, sql, prisma, swift, dart despite extractors existing for several. This is
+  what made R-1's trigger condition reachable.
+- [ ] **B-8 [NIT]** `loadIndexSummarySqlite` reads the whole `files` table in one `.all()` with no
+  `setImmediate` yield, unlike `readTablePaged`. Harmless while `files` stays orders of magnitude
+  smaller than `symbols`; revisit if that stops holding.
+- [ ] **B-9 [NIT]** `summariseIndex`'s `[...index.files]` throws on a malformed index with no
+  `files`, and the cache-hit call site is outside `getIndexSummary`'s try/catch. Unreachable via the
+  typed path, undefended nonetheless.
