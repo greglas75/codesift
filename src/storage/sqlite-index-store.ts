@@ -969,9 +969,12 @@ export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSumma
         return null; // genuinely empty — not a fault
       }
 
-      const files = (reader.prepare("SELECT * FROM files").all() as unknown as FileRow[]).map(
-        rowToFileEntry,
-      );
+      // ORDER BY rowid, matching `readTablePaged`'s keyset walk. Without it the two SQLite read
+      // paths could hand back the same files in different orders, so a caller comparing a summary
+      // against a full load would see a difference that is not in the data.
+      const files = (
+        reader.prepare("SELECT * FROM files ORDER BY rowid").all() as unknown as FileRow[]
+      ).map(rowToFileEntry);
       const counted = reader.prepare("SELECT COUNT(*) AS n FROM symbols").get() as
         | { n: number }
         | undefined;

@@ -7,7 +7,7 @@ import {
   loadIndexOrStale,
   loadIndexSummary,
   summariseIndex,
-  isExtractorVersionCurrent,
+  collectExtractorVersionMismatches,
 } from "../../storage/index-store.js";
 import {
   classifyStorageError,
@@ -203,17 +203,33 @@ export async function getIndexSummary(
 
   // A full index already in memory answers this for free; going back to the database would be
   // slower than projecting what we are holding.
+  //
+  // The staleness check below is deliberately NOT repeated here, and this mirrors `getCodeIndex`
+  // exactly: `codeIndexes` is written in one place only (the tail of `getCodeIndex`), and only
+  // after `loadIndexOrStale` reported `ok` — so a cached entry is version-validated by
+  // construction. `EXTRACTOR_VERSIONS` is a module constant and cannot drift inside a process,
+  // so there is no window in which a cached index becomes stale. Two independent reviewers read
+  // this shortcut as a missing check, which is why it is spelled out rather than left implicit.
   const cached = codeIndexes.get(resolvedName);
   if (cached) return summariseIndex(cached);
 
   try {
     const summary = await loadIndexSummary(meta.index_path);
     if (summary === null) return null;
-    // Staleness parity with getCodeIndex. Without this a drifted extractor_version would come
-    // back looking healthy here while the full-load path reports it stale — and `index_status`,
-    // the one tool whose job is to say whether the index can be trusted, would be the caller that
-    // lost the signal.
-    if (!isExtractorVersionCurrent(summary, { ...EXTRACTOR_VERSIONS })) return null;
+    // Staleness parity with getCodeIndex — via the SAME function its path uses.
+    //
+    // The first version called `isExtractorVersionCurrent`, which looks equivalent and is not: it
+    // short-circuits `if (!index.extractor_version) return false`, whereas
+    // `collectExtractorVersionMismatches` only flags a language it can actually see among
+    // `files`. An index with no `extractor_version` whose files are entirely in languages absent
+    // from EXTRACTOR_VERSIONS (go, rust, markdown, sql, prisma) therefore loaded fine through
+    // `getCodeIndex` and came back null here — and `index_status`'s fallback probe re-runs
+    // `loadIndexOrStale`, which also says "ok", so it matched neither the stale nor the
+    // unreadable branch and fell through to a bare `{indexed:false}` with no diagnostic at all.
+    // A correctly-indexed repo reported as never-indexed, confidently and silently.
+    if (collectExtractorVersionMismatches(summary, { ...EXTRACTOR_VERSIONS }).length > 0) {
+      return null;
+    }
     return summary;
   } catch (err) {
     const code = classifyStorageError(err);

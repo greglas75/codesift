@@ -301,19 +301,26 @@ export async function loadIndexSummary(indexPath: string): Promise<IndexSummary 
   return index === null ? null : summariseIndex(index);
 }
 
-/** Project a fully-loaded index onto the narrow shape, dropping the symbols array. */
+/**
+ * Project a fully-loaded index onto the narrow shape, dropping the symbols array.
+ *
+ * `files` is COPIED, not aliased. This function's main caller projects an index held in the
+ * `codeIndexes` cache, so handing back the live array would let one caller's `sort`/`splice`
+ * rewrite what every later reader is given — the exact boundary `copyIndex` above exists to
+ * defend, reached by a different route. `workspaces` is copied for the same reason.
+ */
 export function summariseIndex(index: CodeIndex): IndexSummary {
   const summary: IndexSummary = {
     repo: index.repo,
     root: index.root,
-    files: index.files,
+    files: [...index.files],
     created_at: index.created_at,
     updated_at: index.updated_at,
     symbol_count: index.symbol_count,
     file_count: index.file_count,
   };
   if (index.extractor_version !== undefined) summary.extractor_version = index.extractor_version;
-  if (index.workspaces !== undefined) summary.workspaces = index.workspaces;
+  if (index.workspaces !== undefined) summary.workspaces = [...index.workspaces];
   if (index.lossy_migration === true) summary.lossy_migration = true;
   return summary;
 }
