@@ -174,7 +174,7 @@
   candidate summaries through both tool registrations for `find_and_show` and `get_context_bundle`,
   (3) make the field unconditional, never conditional-on-ambiguity (a conditional shape was the
   earlier BEHAV-class bug in this same file).
-- [ ] **B-2 [structural-refactor (multi-file)]** `src/storage/sqlite-index-store.ts` is 931 raw lines
+- [ ] **B-2 [structural-refactor (multi-file)]** `src/storage/sqlite-index-store.ts` is ~1100 raw lines
   (>2x the 450L ceiling; 587 non-comment). Extract the read-connection / paging / footprint block,
   mirroring the `index-footprint.ts` extraction already done.
 - [ ] **B-3 [NIT]** `indexCacheMemBudgetBytes` (`src/config.ts:76`) duplicates
@@ -195,22 +195,22 @@
 - [ ] **B-8 [NIT]** `loadIndexSummarySqlite` reads the whole `files` table in one `.all()` with no
   `setImmediate` yield, unlike `readTablePaged`. Harmless while `files` stays orders of magnitude
   smaller than `symbols`; revisit if that stops holding.
-- [ ] **B-9 [NIT]** `summariseIndex`'s `[...index.files]` throws on a malformed index with no
+- [x] **B-9 [NIT]** DONE 2026-08-04. `summariseIndex`'s `[...index.files]` throws on a malformed index with no
   `files`, and the cache-hit call site is outside `getIndexSummary`'s try/catch. Unreachable via the
   typed path, undefended nonetheless.
 
 ## From the CQ audit of f8979e5..d9e424f (returned late; 2026-08-04)
 
-- [ ] **B-10 [structural-refactor, CQ14]** `loadIndexSqlite` and `loadIndexSummarySqlite` repeat the
+- [x] **B-10 [structural-refactor, CQ14]** DONE 2026-08-04. `loadIndexSqlite` and `loadIndexSummarySqlite` repeat the
   same ~10-line meta-extras block (extractor_version / workspaces / lossy_migration: JSON-parse,
   null-check, assign). Recipe: extract
   `parseIndexMetaExtras(meta: (k: string) => string | undefined): Pick<IndexSummary,
   "extractor_version" | "workspaces" | "lossy_migration">` in `sqlite-index-store.ts` and call it
   from both readers. Deferred rather than done inline: it edits the hot full-load path for a
   maintainability win, which is not a trade to make in the same commit as a correctness fix.
-- [ ] **B-11 [NIT, CQ25]** `loadIndexSummary` has no equivalent of `readIndex`'s `data_version`-aware
+- [x] **B-11 [NIT, CQ25]** DONE 2026-08-04. `loadIndexSummary` has no equivalent of `readIndex`'s `data_version`-aware
   cache, so a repo whose only traffic is `index_status` re-opens a connection every call while its
   `getCodeIndex` sibling is cached. Either add a lightweight summary cache keyed the same way, or
   state the asymmetry in the doc comment — currently it is neither.
-- [ ] **B-12 [NIT]** The line counts quoted in B-2 ("931 raw lines") and in the god-module entry
+- [x] **B-12 [NIT]** DONE 2026-08-04. The line counts quoted in B-2 ("931 raw lines") and in the god-module entry
   ("731L") are stale after this diff: `sqlite-index-store.ts` is ~1100L and `index-store.ts` ~806L.

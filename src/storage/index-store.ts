@@ -21,6 +21,21 @@ import {
 import { indexFootprintBytes } from "./index-footprint.js";
 import { indexCacheMemBudgetBytes } from "../config.js";
 
+/** Bounded by entry count, not bytes: a summary holds no symbols, so it cannot dominate the heap
+ *  the way a materialised index can. */
+const MAX_CACHED_SUMMARIES = 16;
+const summaryCache = new Map<string, { summary: IndexSummary; dataVersion: number }>();
+
+function copySummary(summary: IndexSummary): IndexSummary {
+  const out: IndexSummary = { ...summary, files: [...summary.files] };
+  if (summary.workspaces !== undefined) out.workspaces = [...summary.workspaces];
+  return out;
+}
+
+export function resetSummaryCacheForTesting(): void {
+  summaryCache.clear();
+}
+
 /** Serialize concurrent writes to the same index path. */
 const writeLocks = new Map<string, Promise<void>>();
 
@@ -269,6 +284,9 @@ function copyIndex(index: CodeIndex): CodeIndex {
 
 function invalidateIndexCache(dbPath: string): void {
   indexCache.delete(dbPath);
+  // Our own writes do not move `data_version`, so the summary must be dropped explicitly too —
+  // otherwise a save would leave `index_status` reporting the pre-write counts indefinitely.
+  summaryCache.delete(dbPath);
 }
 
 export function resetIndexCacheForTesting(): void {
@@ -294,7 +312,31 @@ export async function loadIndexSummary(indexPath: string): Promise<IndexSummary 
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);
-    return loadIndexSummarySqlite(dbPath);
+
+    // Cached on the same `data_version` signal as the full index. Without this a repo whose only
+    // traffic is `index_status` re-opened a connection and re-read the whole files table on every
+    // call, while its `getCodeIndex` sibling was served from memory — an asymmetry with no reason
+    // behind it. A summary is small (3 MB against 349 MB on the measured index), so this is not
+    // budgeted against `CODESIFT_MAX_INDEX_CACHE_MB`; it is bounded by entry count instead.
+    const dataVersion = await getDataVersion(dbPath);
+    const cached = summaryCache.get(dbPath);
+    if (cached && cached.dataVersion === dataVersion) {
+      summaryCache.delete(dbPath);
+      summaryCache.set(dbPath, cached); // move to the recent end (LRU, as in cacheIndex)
+      return copySummary(cached.summary);
+    }
+
+    const summary = await loadIndexSummarySqlite(dbPath);
+    if (summary === null) return null;
+    summaryCache.set(dbPath, { summary, dataVersion });
+    while (summaryCache.size > MAX_CACHED_SUMMARIES) {
+      const oldest = summaryCache.keys().next();
+      if (oldest.done) break;
+      summaryCache.delete(oldest.value);
+    }
+    // Copy on the miss path too, for the same reason `readIndex` does: handing back the stored
+    // object lets the first caller mutate the entry every later reader is about to be given.
+    return copySummary(summary);
   }
   warnIfRollbackIsStale(indexPath);
   const index = await loadJsonIndex(indexPath);
@@ -313,7 +355,7 @@ export function summariseIndex(index: CodeIndex): IndexSummary {
   const summary: IndexSummary = {
     repo: index.repo,
     root: index.root,
-    files: [...index.files],
+    files: index.files === undefined ? [] : [...index.files],
     created_at: index.created_at,
     updated_at: index.updated_at,
     symbol_count: index.symbol_count,
@@ -321,6 +363,10 @@ export function summariseIndex(index: CodeIndex): IndexSummary {
   };
   if (index.extractor_version !== undefined) summary.extractor_version = index.extractor_version;
   if (index.workspaces !== undefined) summary.workspaces = [...index.workspaces];
+  // `files` is required on CodeIndex, so the guard above is unreachable through the typed path —
+  // but this projects objects that also arrive from JSON on disk, where nothing enforces the type,
+  // and the cache-hit call site sits outside its caller's try/catch. A throw there would surface as
+  // a crash on a status call, which is a worse answer than an empty file list.
   if (index.lossy_migration === true) summary.lossy_migration = true;
   return summary;
 }

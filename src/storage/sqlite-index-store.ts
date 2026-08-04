@@ -876,23 +876,10 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
     file_count: files.length,
   };
 
-  const extractorRaw = meta["extractor_version"];
-  if (extractorRaw !== undefined) {
-    const parsed = JSON.parse(extractorRaw) as Record<string, string> | null;
-    if (parsed !== null) index.extractor_version = parsed;
-  }
-
-  // Carried on the index itself, not left for callers to go and ask about. A flag that only a
-  // dedicated accessor can reveal is one nothing in production ever reads — which is exactly what
-  // happened to the first version of this marker: written on migration, exported, and consulted
-  // by nobody, so a lossy index still answered like a complete one.
-  if (meta["lossy_v1_migration"] !== undefined) index.lossy_migration = true;
-
-  const workspacesRaw = meta["workspaces"];
-  if (workspacesRaw !== undefined) {
-    const parsed = JSON.parse(workspacesRaw) as Workspace[] | null;
-    if (parsed !== null) index.workspaces = parsed;
-  }
+  // `lossy_migration` rides on the index itself rather than behind an accessor callers must know
+  // to call: the first version of that marker was written on migration, exported, and consulted by
+  // nobody, so a lossy index still answered like a complete one.
+  Object.assign(index, readMetaExtras((k) => meta[k]));
 
   recordIndexFootprint(index, footprint);
   return index;
@@ -951,6 +938,37 @@ export interface IndexSummary {
  * `index.symbols` — `index_status` is the clearest, it reports counts it reads from metadata — paid
  * that in full for nothing.
  */
+/**
+ * The three optional meta fields both readers reconstruct, parsed once.
+ *
+ * `loadIndexSqlite` and `loadIndexSummarySqlite` had the same JSON-parse-and-null-check block
+ * duplicated verbatim. Two copies of a parser is two places for a schema addition to be applied
+ * to only one, and the readers would then disagree about the same database — the class of
+ * divergence this file has already been bitten by twice.
+ */
+function readMetaExtras(
+  meta: (key: string) => string | undefined,
+): Pick<IndexSummary, "extractor_version" | "workspaces" | "lossy_migration"> {
+  const out: Pick<IndexSummary, "extractor_version" | "workspaces" | "lossy_migration"> = {};
+
+  const extractorRaw = meta("extractor_version");
+  if (extractorRaw !== undefined) {
+    const parsed = JSON.parse(extractorRaw) as Record<string, string> | null;
+    if (parsed !== null) out.extractor_version = parsed;
+  }
+
+  const workspacesRaw = meta("workspaces");
+  if (workspacesRaw !== undefined) {
+    const parsed = JSON.parse(workspacesRaw) as Workspace[] | null;
+    if (parsed !== null) out.workspaces = parsed;
+  }
+
+  // Presence IS the marker: the writer only ever stores "1" and clears by deleting the key.
+  if (meta("lossy_v1_migration") !== undefined) out.lossy_migration = true;
+
+  return out;
+}
+
 export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSummary | null> {
   await openIndexDb(dbPath);
   let reader: DatabaseSyncType | undefined;
@@ -989,17 +1007,7 @@ export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSumma
         file_count: files.length,
       };
 
-      const extractorRaw = meta("extractor_version");
-      if (extractorRaw !== undefined) {
-        const parsed = JSON.parse(extractorRaw) as Record<string, string> | null;
-        if (parsed !== null) summary.extractor_version = parsed;
-      }
-      const workspacesRaw = meta("workspaces");
-      if (workspacesRaw !== undefined) {
-        const parsed = JSON.parse(workspacesRaw) as Workspace[] | null;
-        if (parsed !== null) summary.workspaces = parsed;
-      }
-      if (meta("lossy_v1_migration") !== undefined) summary.lossy_migration = true;
+      Object.assign(summary, readMetaExtras(meta));
 
       reader.exec("COMMIT");
       out = summary;

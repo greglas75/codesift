@@ -125,3 +125,29 @@ describe("summary staleness agrees with the full-load path", () => {
     expect(collectExtractorVersionMismatches(untracked, { typescript: "1.0.0" })).toEqual([]);
   });
 });
+
+describe("summary cache", () => {
+  it("serves a repeat read from cache and hands back a copy, not the stored object", async () => {
+    const { loadIndexSummary, resetSummaryCacheForTesting } = await import(
+      "../../src/storage/index-store.js"
+    );
+    process.env["CODESIFT_INDEX_BACKEND"] = "sqlite";
+    resetSummaryCacheForTesting();
+    const jsonPath = join(dir, "cached.index.json");
+    await saveIndexSqlite(join(dir, "cached.index.db"), makeIndex([sym("a.ts", "a", 1)]));
+
+    const first = await loadIndexSummary(jsonPath);
+    const second = await loadIndexSummary(jsonPath);
+    expect(first!.symbol_count).toBe(1);
+    expect(second!.symbol_count).toBe(1);
+
+    // Mutating one caller's copy must not reach the next reader — the boundary `copyIndex`
+    // defends for full indexes, applied to the narrow shape as well.
+    first!.files.length = 0;
+    const third = await loadIndexSummary(jsonPath);
+    expect(third!.files).toHaveLength(1);
+
+    resetSummaryCacheForTesting();
+    delete process.env["CODESIFT_INDEX_BACKEND"];
+  });
+});
