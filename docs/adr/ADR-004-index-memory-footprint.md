@@ -1,6 +1,6 @@
 # ADR-004: Index memory footprint — budget the cache in bytes, keep whole-index loads for now
 
-**Status:** Accepted (staged — stage 2 is queued, not done)
+**Status:** Accepted (staged — stage 1 done; stage 2 started, first increment shipped)
 **Date:** 2026-08-04 | **Deciders:** Greg Laskowski | **Area:** Storage
 
 ---
@@ -114,6 +114,7 @@ blockers — description is not scheduling.
 - Repos evicted under the byte budget are re-read, not lost. On a machine below the tier
   boundaries this trades some cache hits for a bounded heap — the same trade the embedding cache
   already makes.
-- Load *time* is unchanged. Nothing here claims to fix it; stage 2 is what fixes it.
+- Load *time* is unchanged for consumers that still need symbols. It is 7.0x better for the
+  first consumer that does not; stage 2 is what carries that to the rest.
 - The calibration constants are fitted to one index. If a future repo profiles very differently,
   re-fit them from a `heapUsed` delta rather than adjusting them by feel.
