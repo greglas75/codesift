@@ -174,7 +174,7 @@
   candidate summaries through both tool registrations for `find_and_show` and `get_context_bundle`,
   (3) make the field unconditional, never conditional-on-ambiguity (a conditional shape was the
   earlier BEHAV-class bug in this same file).
-- [ ] **B-2 [structural-refactor (multi-file)]** `src/storage/sqlite-index-store.ts` is ~1100 raw lines
+- [ ] **B-2 [structural-refactor (multi-file)]** PLANNED 2026-08-04 — contract `zuvo/contracts/refactor-e47bc9a8.json` holds the frozen scope fence, a 7-module extraction plan (runtime/errors/schema/rows/connection/index-io/accessors + barrel) and the resume notes. Execution NOT started; resume with `zuvo:refactor continue src/storage/sqlite-index-store.ts`. Key precondition recorded there: `sqliteCtor` and `connections` are module-scope mutable state and must each land in exactly one module — duplicating either forks the connection cache, which type-check and lint would both pass. `src/storage/sqlite-index-store.ts` is ~1100 raw lines
   (>2x the 450L ceiling; 587 non-comment). Extract the read-connection / paging / footprint block,
   mirroring the `index-footprint.ts` extraction already done.
 - [ ] **B-3 [NIT]** `indexCacheMemBudgetBytes` (`src/config.ts:76`) duplicates
