@@ -306,10 +306,14 @@ so the two entry points disagreed about the same input. Use `isAmbiguousSymbolId
 not `instanceof` — a duplicated module instance across a worker/bundler boundary breaks
 `instanceof`). `wrapTool` turns the throw into an `{isError: true}` result with the message intact.
 
-**Searches are exempt, deliberately.** `find_and_show` and `get_context_bundle` read the id back off
-a BM25 hit they already hold, so `resolveSearchHit` falls back to that hit instead of failing the
-whole query. Refusing there would make the collision a worse answer than the silent substitution it
-replaced, on the two tools the H7/H8 hints steer agents toward.
+**Searches fall back instead of failing — and say so.** `find_and_show` and `get_context_bundle`
+read the id back off a BM25 hit they already hold, so `resolveSearchHit` returns that hit rather
+than failing the whole query; refusing there would make the collision a worse answer than the
+silent substitution it replaced, on the two tools the H7/H8 hints steer agents toward. Both then
+carry `id_ambiguity: { status: "unique" | "ambiguous", shared_by?, candidates? }` — **always
+present**, because an absent field is indistinguishable from "nobody checked". When ambiguous, the
+tool output is **prefixed** with an `AMBIGUOUS ID —` banner naming the candidates: the handlers
+return text, so a signal that lives only in the typed result informs nothing.
 
 ## Tests run on the i9 farm — use `rt`, not a local runner
 

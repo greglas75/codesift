@@ -1,12 +1,36 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type ToolDefinitionEntry } from "../shared.js";
 import { getSymbol, getSymbols, findAndShow, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, findReferences, findReferencesBatch, traceCallChain, impactAnalysis, traceRoute, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, dispatchFormatter, type Direction } from "../deps.js";
 import { zJsonArray } from "./schema.js";
+import type { SymbolIdAmbiguity } from "../../tools/symbol-tools.js";
 
 // Token diet (2026-07-10 tool-runtime-opt plan, Task 4): find_references' default
 // result cap. Telemetry showed find_references as the #2 token sink (605 calls /
 // 909K tok), most of it unbounded result sets on common symbol names. An explicit
 // higher max_refs opts out.
 const DEFAULT_MAX_REFS = 50;
+
+/**
+ * Warning banner for a symbol that was picked from several sharing one id.
+ *
+ * These two tools resolve a BM25 hit rather than a caller-supplied id, so `getSymbol`'s hard
+ * refusal would fail whole searches over minified bundles — but returning the top hit without
+ * saying it was one of several is the silent substitution this codebase treats as the worst
+ * answer available. Prepended, not appended: an agent that stops reading after the source block
+ * would otherwise miss it entirely.
+ *
+ * Empty string for the unique case, so the common answer carries no noise.
+ */
+function formatIdAmbiguity(ambiguity: SymbolIdAmbiguity): string {
+  if (ambiguity.status !== "ambiguous") return "";
+  const others = (ambiguity.candidates ?? [])
+    .map((c) => `${c.kind} ${c.name} @ ${c.file}:${c.start_line}`)
+    .join("; ");
+  return (
+    `AMBIGUOUS ID — ${ambiguity.shared_by ?? "several"} distinct symbols share this id; ` +
+    `below is the top search hit, not a unique resolution. Candidates: ${others}. ` +
+    `Use search_symbols to pick the one you mean.\n\n`
+  );
+}
 
 /**
  * Sanitize a client-supplied `max_refs` into a usable slice length. zNum() only
@@ -150,7 +174,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     handler: async (args) => {
       const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
       if (!result) return null;
-      let text = await formatSymbolCompact(result.symbol);
+      let text = formatIdAmbiguity(result.id_ambiguity) + (await formatSymbolCompact(result.symbol));
       if (result.references) {
         text += `\n\n--- references ---\n${await formatRefsCompact(result.references)}`;
       }
@@ -169,7 +193,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     handler: async (args) => {
       const bundle = await getContextBundle(args.repo as string, args.symbol_name as string);
       if (!bundle) return null;
-      return formatBundleCompact(bundle);
+      return formatIdAmbiguity(bundle.id_ambiguity) + (await formatBundleCompact(bundle));
     },
   } },
   // --- References & call graph ---

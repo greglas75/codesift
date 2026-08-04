@@ -167,7 +167,7 @@
 
 ## From review 080ae7c..28ba048 (2026-08-04) — index memory + SQLite honesty
 
-- [ ] **B-1 [structural-refactor (multi-file)]** Surface ambiguity on the search path. When
+- [x] **B-1 [structural-refactor (multi-file)]** DONE 2026-08-04. Surface ambiguity on the search path. When
   `resolveSearchHit` (`src/tools/symbol-tools.ts:234`) falls back to the BM25 hit for a colliding id,
   the response says nothing — the same silence `lossy_migration` was added to remove one layer down.
   Recipe: (1) return the collision group from `resolveSearchHit`, (2) thread `ambiguous_id: true` +

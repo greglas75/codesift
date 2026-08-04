@@ -231,13 +231,35 @@ export function isAmbiguousSymbolIdError(err: unknown): err is AmbiguousSymbolId
  * two tools the H7/H8 hints steer agents toward. Falling back to the hit is not a guess: it is the
  * result the search actually returned.
  */
-async function resolveSearchHit(repo: string, hit: CodeSymbol): Promise<CodeSymbol | null> {
+export interface SymbolIdAmbiguity {
+  /** Always present. `ambiguous` means the answer is the search's top hit, not a unique resolution. */
+  status: "unique" | "ambiguous";
+  /** Set only when ambiguous: how many distinct symbols share the id. */
+  shared_by?: number;
+  /** Set only when ambiguous: the other candidates, so the caller can pick deliberately. */
+  candidates?: Array<{ name: string; kind: SymbolKind; file: string; start_line: number }>;
+}
+
+async function resolveSearchHit(
+  repo: string,
+  hit: CodeSymbol,
+): Promise<{ symbol: CodeSymbol; ambiguity: SymbolIdAmbiguity } | null> {
   try {
     const full = await getSymbol(repo, hit.id, { include_related: false });
-    return full ? full.symbol : null;
+    return full ? { symbol: full.symbol, ambiguity: { status: "unique" } } : null;
   } catch (err) {
     if (!isAmbiguousSymbolIdError(err)) throw err;
-    return hit;
+    // Falling back is defensible; falling back SILENTLY is not. The caller is being handed one of
+    // several symbols and has no way to tell from the result — which is the same silence the
+    // `lossy_migration` marker was added to remove one layer down.
+    const index = await requireCodeIndex(repo);
+    const candidates = index.symbols
+      .filter((s) => s.id === hit.id)
+      .map((s) => ({ name: s.name, kind: s.kind, file: s.file, start_line: s.start_line }));
+    return {
+      symbol: hit,
+      ambiguity: { status: "ambiguous", shared_by: candidates.length, candidates: candidates.slice(0, 5) },
+    };
   }
 }
 
@@ -767,7 +789,9 @@ export async function findAndShow(
   repo: string,
   query: string,
   includeRefs?: boolean,
-): Promise<{ symbol: CodeSymbol; references?: Reference[] } | null> {
+): Promise<
+  { symbol: CodeSymbol; references?: Reference[]; id_ambiguity: SymbolIdAmbiguity } | null
+> {
   const bm25Index = await requireBM25Index(repo);
   const config = loadConfig();
   const results = searchBM25(bm25Index, query, 1, config.bm25FieldWeights);
@@ -775,15 +799,16 @@ export async function findAndShow(
   const topResult = results[0];
   if (!topResult) return null;
 
-  const fullSymbol = await resolveSearchHit(repo, topResult.symbol);
-  if (!fullSymbol) return null;
+  const resolved = await resolveSearchHit(repo, topResult.symbol);
+  if (!resolved) return null;
+  const { symbol: fullSymbol, ambiguity } = resolved;
 
   if (includeRefs) {
     const references = await findReferences(repo, fullSymbol.name as string);
-    return { symbol: fullSymbol, references };
+    return { symbol: fullSymbol, references, id_ambiguity: ambiguity };
   }
 
-  return { symbol: fullSymbol };
+  return { symbol: fullSymbol, id_ambiguity: ambiguity };
 }
 
 /**
@@ -819,6 +844,9 @@ export interface ContextBundle {
   types_used: string[];  // type/interface names referenced in the symbol's source
   /** Only populated when symbol.kind === "component" */
   react_context?: ReactContext;
+  /** Always present. Says whether `symbol` is a unique resolution or the search's top hit among
+   *  several sharing one id — a distinction the caller cannot otherwise make from the result. */
+  id_ambiguity: SymbolIdAmbiguity;
 }
 
 /**
@@ -838,15 +866,22 @@ export async function getContextBundle(
   const index = await requireCodeIndex(repo);
 
   // Get full symbol with source
-  const fullSymbol = await resolveSearchHit(repo, topResult.symbol);
-  if (!fullSymbol) return null;
+  const resolved = await resolveSearchHit(repo, topResult.symbol);
+  if (!resolved) return null;
+  const { symbol: fullSymbol, ambiguity } = resolved;
 
   // Read the file to extract imports
   let fileSource: string;
   try {
     fileSource = await readFile(join(index.root, fullSymbol.file), "utf-8");
   } catch {
-    return { symbol: fullSymbol, imports: [], siblings: [], types_used: [] };
+    return {
+      symbol: fullSymbol,
+      imports: [],
+      siblings: [],
+      types_used: [],
+      id_ambiguity: ambiguity,
+    };
   }
 
   const imports = extractImportLines(fileSource);
@@ -865,7 +900,13 @@ export async function getContextBundle(
   const typesUsed = extractTypesUsed(fullSymbol.source ?? "", index.symbols);
 
   // React-specific enrichment for components
-  const bundle: ContextBundle = { symbol: fullSymbol, imports, siblings, types_used: typesUsed };
+  const bundle: ContextBundle = {
+    symbol: fullSymbol,
+    imports,
+    siblings,
+    types_used: typesUsed,
+    id_ambiguity: ambiguity,
+  };
   if (fullSymbol.kind === "component") {
     bundle.react_context = buildReactContext(fullSymbol, index.symbols);
   }

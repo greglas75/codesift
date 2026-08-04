@@ -6,6 +6,7 @@ import { indexFolder } from "../../src/tools/index-tools.js";
 import {
   getSymbol,
   findAndShow,
+  getContextBundle,
   isAmbiguousSymbolIdError,
 } from "../../src/tools/symbol-tools.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";
@@ -36,7 +37,7 @@ beforeEach(async () => {
   // method at one line) and for minified bundles.
   await writeFile(
     join(fixtureDir, "src", "bundle.min.ts"),
-    `export type Collide = number; export const Collide = 1;\n`,
+    `export type Collide = number; export const Collide = 1;\nexport function collideUnique(){ return 3; }\n`,
   );
   await indexFolder(fixtureDir);
 });
@@ -78,5 +79,25 @@ describe("ambiguous symbol ids", () => {
     const result = await findAndShow(REPO, "Collide", false);
     expect(result).not.toBeNull();
     expect(result!.symbol.name).toBe("Collide");
+  });
+
+  it("and SAYS the answer was one of several, rather than passing it off as unique", async () => {
+    // Falling back is defensible; falling back silently is the substitution this codebase calls
+    // the worst answer available. The field is unconditional so a caller can always check it.
+    const result = await findAndShow(REPO, "Collide", false);
+    expect(result!.id_ambiguity.status).toBe("ambiguous");
+    expect(result!.id_ambiguity.shared_by).toBeGreaterThan(1);
+    expect(result!.id_ambiguity.candidates!.length).toBeGreaterThan(1);
+
+    const bundle = await getContextBundle(REPO, "Collide");
+    expect(bundle!.id_ambiguity.status).toBe("ambiguous");
+  });
+
+  it("reports `unique` — not an absent field — when the id resolves to exactly one symbol", async () => {
+    // An absent field would be indistinguishable from "nobody checked", which is the failure mode
+    // this whole change exists to remove.
+    const result = await findAndShow(REPO, "collideUnique", false);
+    expect(result).not.toBeNull();
+    expect(result!.id_ambiguity).toEqual({ status: "unique" });
   });
 });
