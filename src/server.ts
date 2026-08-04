@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { timingSafeEqual } from "node:crypto";
 import { resolve as pathResolve } from "node:path";
 import { statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { isLoopbackHost } from "./utils/loopback.js";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
 
@@ -135,6 +136,48 @@ export interface HttpServerHandle {
  */
 
 /**
+ * Identity of the code this process is RUNNING, captured once at load.
+ *
+ * `npm run build` opens with `rmSync('dist')` and the supervised daemon executes `dist/cli.js`, so
+ * a routine build pulls the code out from under a machine-wide service. Node keeps serving from
+ * the modules it already resolved, so nothing looks wrong — until the first LAZILY imported module
+ * resolves against the new files and fails with a message that reads like a source bug:
+ *
+ *     The requested module './index-tools.js' does not provide an export named 'getIndexSummary'
+ *
+ * The export was present in both src and dist. Nothing was wrong with the code; the module graph
+ * was half-old. Measured 2026-08-04: every tool call through the daemon failed that way while
+ * `/health` answered 200 ok, so the one endpoint whose job is to say "am I usable" was the one
+ * thing that could not see it.
+ *
+ * Probing an already-imported module cannot detect this — a successful import is cached and would
+ * keep returning the old, working copy. The file's identity on disk can: a rebuild replaces it, so
+ * a changed mtime/size/inode means "this process is running code that no longer exists".
+ */
+const SELF_PATH = fileURLToPath(import.meta.url);
+
+function selfStamp(): string | null {
+  try {
+    const s = statSync(SELF_PATH);
+    return `${s.mtimeMs}:${s.size}:${String(s.ino)}`;
+  } catch {
+    return null; // deleted out from under us — itself the condition worth reporting
+  }
+}
+
+const SELF_STAMP_AT_START = selfStamp();
+
+/**
+ * True when the files this process started from have been replaced or removed.
+ *
+ * Deliberately not "has the version changed": a rebuild of the SAME version is exactly the case
+ * that bit us, and a version comparison would have called it healthy.
+ */
+function codeReplacedUnderUs(): boolean {
+  return selfStamp() !== SELF_STAMP_AT_START;
+}
+
+/**
  * Working directory declared in the connection URL: `/mcp?cwd=/abs/path`.
  *
  * Module scope now that serving is stateless: there is no session object to
@@ -242,8 +285,25 @@ export async function startHttpServer(
       try {
         const url = req.url ?? "/";
         if (url === "/health" || url.startsWith("/health?")) {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", sessions: inFlight, version: PKG_VERSION }));
+          // 503, not 200-with-a-field. A supervisor and a shell one-liner both read the status
+          // code, and this state means "every tool call from here will fail" — reporting it inside
+          // a 200 body is how the previous version managed to look healthy while serving nothing.
+          const stale = codeReplacedUnderUs();
+          res.writeHead(stale ? 503 : 200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify(
+              stale
+                ? {
+                    status: "stale",
+                    sessions: inFlight,
+                    version: PKG_VERSION,
+                    reason:
+                      "the files this daemon started from were replaced (rebuild); lazily imported modules will fail until it restarts",
+                    remedy: "launchctl kickstart -k gui/$(id -u)/com.codesift.daemon",
+                  }
+                : { status: "ok", sessions: inFlight, version: PKG_VERSION },
+            ),
+          );
           return;
         }
         if (token) {

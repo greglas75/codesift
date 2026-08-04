@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && cp -r src/parser/languages dist/parser/ && chmod +x dist/cli.js dist/server.js",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && cp -r src/parser/languages dist/parser/ && chmod +x dist/cli.js dist/server.js && node scripts/restart-daemon-after-build.mjs",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
