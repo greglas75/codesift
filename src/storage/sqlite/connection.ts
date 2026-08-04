@@ -38,6 +38,23 @@ export function rollbackQuietly(db: DatabaseSyncType): void {
 }
 
 /**
+ * Opens that have started but not yet reached `connections`.
+ *
+ * Without this, `openIndexDb` is a check-then-act straddling two awaits (`loadSqliteCtor`, then
+ * `mkdir`): two concurrent callers both miss the cache, both construct a handle, and the second
+ * `connections.set` overwrites the first. The orphan is not in the map, so `closeIndexDb` and
+ * `closeAllIndexDbs` can never reach it — a leaked descriptor and a WAL read mark for the life of
+ * the process, arriving on exactly the EMFILE/BUSY conditions the rest of this file works to avoid.
+ * Reproducible with `Promise.all([openIndexDb(p), openIndexDb(p)])`, and reachable in production
+ * because a save and a read can race on a cold cache.
+ *
+ * Known and unchanged: a `closeIndexDb` issued WHILE an open is in flight does not cancel it, so
+ * the completing open still populates the cache. That is a narrower window than the one closed
+ * here, and pretending otherwise in a comment is how the previous defect survived.
+ */
+const opening = new Map<string, Promise<DatabaseSyncType>>();
+
+/**
  * Open (and cache) a connection, creating the schema on first use.
  *
  * WAL is the reason this migration solves a problem a sharded JSON layout would not: the MCP
@@ -50,6 +67,21 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
   const cached = connections.get(dbPath);
   if (cached) return cached;
 
+  const inFlight = opening.get(dbPath);
+  if (inFlight) return inFlight;
+
+  const attempt = openUncachedIndexDb(dbPath);
+  opening.set(dbPath, attempt);
+  try {
+    return await attempt;
+  } finally {
+    // Safe to drop once settled: `openUncachedIndexDb` populates `connections` before it resolves,
+    // so any caller arriving after this point hits the cache instead.
+    opening.delete(dbPath);
+  }
+}
+
+async function openUncachedIndexDb(dbPath: string): Promise<DatabaseSyncType> {
   const Ctor = await loadSqliteCtor();
   if (!Ctor) throw new Error("node:sqlite is unavailable (requires Node >= 22.5)");
 

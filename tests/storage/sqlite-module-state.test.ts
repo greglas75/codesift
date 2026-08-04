@@ -129,3 +129,32 @@ describe("open-connection cache is a single module-scope binding", () => {
     expect((await openIndexDb(two)) === firstTwo).toBe(true);
   });
 });
+
+describe("concurrent opens do not orphan a handle", () => {
+  it("two simultaneous openIndexDb calls share one connection", async () => {
+    const dbPath = join(dir, "race.index.db");
+
+    // `openIndexDb` awaits the ctor lookup and a `mkdir` before it constructs, so both callers
+    // used to clear the cache check, both construct, and the second `connections.set` overwrote
+    // the first. The overwritten handle is in no map, so nothing can ever close it.
+    const [a, b] = await Promise.all([openIndexDb(dbPath), openIndexDb(dbPath)]);
+    expect(a === b).toBe(true);
+
+    // And the shared handle is the one the cache actually closes — the leak was invisible
+    // precisely because the caller's own handle kept working.
+    closeAllIndexDbs();
+    expect(() => a.exec("SELECT 1")).toThrow();
+  });
+
+  it("a failed open does not poison later attempts", async () => {
+    const dbPath = join(dir, "poison.index.db");
+    setSqliteCtorForTesting(null);
+    await expect(openIndexDb(dbPath)).rejects.toThrow(/node:sqlite is unavailable/);
+
+    // The in-flight entry must be dropped on rejection too, or one transient failure would be
+    // replayed to every caller for the rest of the process.
+    setSqliteCtorForTesting(undefined);
+    const db = await openIndexDb(dbPath);
+    expect(() => db.exec("SELECT 1")).not.toThrow();
+  });
+});
