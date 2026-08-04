@@ -195,6 +195,20 @@ function textBytes(value: string | null | undefined): number {
   return Buffer.byteLength(value, "utf8");
 }
 
+/**
+ * Byte cost of one materialised file entry.
+ *
+ * Counted with `textBytes` and including `language`, not `path.length` alone. The caller used to
+ * do the latter inline, which under-reported on exactly the two axes the comment above rules out:
+ * a non-ASCII path counts half its bytes, and `language` counted zero. Small per row — but a
+ * budget that is wrong in the permissive direction is the failure mode the budget exists to stop,
+ * and having one of the two footprint helpers contradict the other's stated rule is worse than
+ * either number.
+ */
+export function fileRowBytes(row: FileRow): number {
+  return FILE_OBJECT_OVERHEAD_BYTES + textBytes(row.path) + textBytes(row.language);
+}
+
 export function symbolRowBytes(row: SymbolRow): number {
   return (
     SYMBOL_OBJECT_OVERHEAD_BYTES +

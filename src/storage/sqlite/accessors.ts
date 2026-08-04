@@ -4,6 +4,7 @@ import {
   openIndexDb,
   openReadConnection,
   readMetaValue,
+  rollbackQuietly,
   writeMetaValue,
 } from "./connection.js";
 import { rethrowOperational } from "./errors.js";
@@ -60,14 +61,18 @@ export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSumma
   try {
     // Same one-transaction rule as `loadIndexSqlite`: files and meta must describe one instant,
     // or the summary reports a file list from one revision with counts from another.
-    reader = await openReadConnection(dbPath);
-    reader.exec("BEGIN");
+    // Bound to a `const` as well as to `reader`: the closure below outlives the narrowing of the
+    // `let`, so reading it through `reader` needed an `as` cast that asserted away an `undefined`
+    // the compiler was right to track. The local carries the non-optional type honestly.
+    const snapshot = await openReadConnection(dbPath);
+    reader = snapshot;
+    snapshot.exec("BEGIN");
     try {
-      const meta = (key: string): string | undefined => readMetaValue(reader as DatabaseSyncType, key);
+      const meta = (key: string): string | undefined => readMetaValue(snapshot, key);
       const repo = meta("repo");
       const root = meta("root");
       if (repo === undefined || root === undefined) {
-        reader.exec("COMMIT");
+        snapshot.exec("COMMIT");
         return null; // genuinely empty — not a fault
       }
 
@@ -75,9 +80,9 @@ export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSumma
       // paths could hand back the same files in different orders, so a caller comparing a summary
       // against a full load would see a difference that is not in the data.
       const files = (
-        reader.prepare("SELECT * FROM files ORDER BY rowid").all() as unknown as FileRow[]
+        snapshot.prepare("SELECT * FROM files ORDER BY rowid").all() as unknown as FileRow[]
       ).map(rowToFileEntry);
-      const counted = reader.prepare("SELECT COUNT(*) AS n FROM symbols").get() as
+      const counted = snapshot.prepare("SELECT COUNT(*) AS n FROM symbols").get() as
         | { n: number }
         | undefined;
 
@@ -93,10 +98,10 @@ export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSumma
 
       Object.assign(summary, readMetaExtras(meta));
 
-      reader.exec("COMMIT");
+      snapshot.exec("COMMIT");
       out = summary;
     } catch (err) {
-      try { reader.exec("ROLLBACK"); } catch { /* snapshot already gone */ }
+      rollbackQuietly(snapshot);
       throw err;
     }
   } catch (err) {
@@ -144,8 +149,8 @@ export async function saveIncrementalSqlite(
     writeMetaValue(db, "updated_at", String(Date.now()));
     db.exec("COMMIT");
   } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    rollbackQuietly(db);
+    rethrowOperational(err, dbPath);
   }
 }
 
@@ -164,8 +169,8 @@ export async function removeFileFromIndexSqlite(
     writeMetaValue(db, "updated_at", String(Date.now()));
     db.exec("COMMIT");
   } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    rollbackQuietly(db);
+    rethrowOperational(err, dbPath);
   }
 }
 

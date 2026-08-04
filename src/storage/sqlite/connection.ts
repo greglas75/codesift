@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
-import { rethrowOperational } from "./errors.js";
+import { IndexStorageError, rethrowOperational } from "./errors.js";
 import { loadSqliteCtor } from "./runtime.js";
 import { MIGRATE_V1_TO_V2_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
 
@@ -16,6 +16,26 @@ import { MIGRATE_V1_TO_V2_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
  */
 
 const connections = new Map<string, DatabaseSyncType>();
+
+/**
+ * ROLLBACK that cannot replace the error that caused it.
+ *
+ * SQLite rolls back automatically on the faults that matter most here — `SQLITE_FULL`,
+ * `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_INTERRUPT` — so an explicit ROLLBACK in the catch block
+ * then throws `cannot rollback - no transaction is active`, and THAT is what propagates. Verified
+ * on node v24.18.0: a write that failed with `database or disk is full` (errcode 13) arrived at
+ * the caller as a rollback complaint instead, which classifies as nothing at all.
+ *
+ * Losing the transaction is not the risk — SQLite already ended it. Losing the diagnosis is.
+ */
+export function rollbackQuietly(db: DatabaseSyncType): void {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    /* already rolled back by SQLite, or the handle is gone — either way the original error is
+       the one worth reporting */
+  }
+}
 
 /**
  * Open (and cache) a connection, creating the schema on first use.
@@ -61,9 +81,16 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
   if (stored === undefined) {
     writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
   } else if (Number(stored) > SCHEMA_VERSION) {
-    db.close();
-    throw new Error(
+    try { db.close(); } catch { /* a throwing close must not mask the message below */ }
+    // An IndexStorageError, not a plain one, and the difference is the whole point: every read
+    // path that routes through `workspace-scope-helper.ts` does
+    // `if (isIndexStorageError(err)) throw err;` and otherwise collapses the failure to
+    // `index = null`. As a plain Error this instruction — the one thing that tells the user how to
+    // fix it — was swallowed, and the tool reported an empty repo.
+    throw new IndexStorageError(
       `Index at ${dbPath} was written by a newer CodeSift (schema v${stored} > v${SCHEMA_VERSION}). Upgrade codesift-mcp.`,
+      "SCHEMA_TOO_NEW",
+      dbPath,
     );
   } else if (Number(stored) < SCHEMA_VERSION) {
     // One transaction: a half-applied table swap would leave `symbols_v1` as the only copy
@@ -93,7 +120,7 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
       }
       db.exec("COMMIT");
     } catch (err) {
-      try { db.exec("ROLLBACK"); } catch { /* nothing left to roll back */ }
+      rollbackQuietly(db);
       try { db.close(); } catch { /* already dead */ }
       rethrowOperational(err, dbPath);
     }

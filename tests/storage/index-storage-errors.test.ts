@@ -78,8 +78,12 @@ describe("classifyStorageError", () => {
     expect(classifyStorageError({ code: "SQLITE_CANTOPEN" })).toBe("SQLITE_CANTOPEN");
   });
 
-  it("recognises extended result codes", () => {
-    // node:sqlite reports the extended form; matching only the base code would miss these.
+  it("recognises extended result codes spelled as strings", () => {
+    // NOT what `node:sqlite` produces — it puts a NUMBER in `errcode` and "ERR_SQLITE_ERROR" in
+    // `code` (see tests/storage/sqlite-fault-classification.test.ts). This case covers bindings
+    // that do name codes as strings, e.g. better-sqlite3. The comment here used to claim
+    // node:sqlite behaved this way, which is how three allowlisted codes stayed unreachable while
+    // this file looked like it had them covered.
     expect(classifyStorageError({ code: "SQLITE_IOERR_READ" })).toBe("SQLITE_IOERR_READ");
     expect(classifyStorageError({ code: "SQLITE_BUSY_SNAPSHOT" })).toBe("SQLITE_BUSY_SNAPSHOT");
   });

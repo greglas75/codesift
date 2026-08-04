@@ -5,15 +5,16 @@ import {
   openIndexDb,
   openReadConnection,
   readMetaValue,
+  rollbackQuietly,
   writeMetaValue,
 } from "./connection.js";
 import { rethrowOperational } from "./errors.js";
 import { readMetaExtras } from "./meta.js";
 import {
-  FILE_OBJECT_OVERHEAD_BYTES,
   INSERT_FILE_SQL,
   INSERT_SYMBOL_SQL,
   fileEntryToRow,
+  fileRowBytes,
   rowToFileEntry,
   rowToSymbol,
   symbolRowBytes,
@@ -60,8 +61,11 @@ export async function saveIndexSqlite(
     }
     db.exec("COMMIT");
   } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    rollbackQuietly(db);
+    // Classified here, not left raw. `saveIndex`/`saveIncremental` have no classifying boundary of
+    // their own, so a SQLITE_BUSY or a full disk during a write used to reach the tool layer as an
+    // anonymous Error — carrying the same information as a bug in our own code.
+    rethrowOperational(err, dbPath);
   }
 }
 
@@ -131,8 +135,8 @@ export async function importLegacyIndexIfEmpty(
     db.exec("COMMIT");
     return true;
   } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    rollbackQuietly(db);
+    rethrowOperational(err, dbPath);
   }
 }
 
@@ -264,12 +268,12 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
         return rowToSymbol(row, owner);
       });
       files = await readTablePaged<FileRow, FileEntry>(reader, "files", (row) => {
-        footprint += FILE_OBJECT_OVERHEAD_BYTES + row.path.length;
+        footprint += fileRowBytes(row);
         return rowToFileEntry(row);
       });
       reader.exec("COMMIT");
     } catch (err) {
-      try { reader.exec("ROLLBACK"); } catch { /* snapshot already gone */ }
+      rollbackQuietly(reader);
       throw err;
     }
   } catch (err) {
