@@ -790,8 +790,10 @@ function symbolRowBytes(row: SymbolRow): number {
     row.file.length +
     row.name.length +
     row.kind.length +
-    (row.parent?.length ?? 0) +
-    // Prose and code text: the fields that actually carry non-Latin1 content.
+    // Prose and code text: the fields that actually carry non-Latin1 content. `parent` is a
+    // symbol name and so is ASCII in practice, but it is measured the same way as the rest —
+    // splitting it off saved one scan per row and cost a reader having to ask why.
+    textBytes(row.parent) +
     textBytes(row.signature) +
     textBytes(row.docstring) +
     textBytes(row.source) +
