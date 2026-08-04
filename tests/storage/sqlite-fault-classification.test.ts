@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import {
   classifyStorageError,
   closeAllIndexDbs,
+  getSymbolsForFileSqlite,
   isIndexStorageError,
   openIndexDb,
   saveIndexSqlite,
@@ -166,5 +167,40 @@ describe("an index from a newer CodeSift is a fault, not an empty repo", () => {
     expect(isIndexStorageError(caught)).toBe(true);
     expect((caught as { code: string }).code).toBe("SCHEMA_TOO_NEW");
     expect(String((caught as Error).message)).toMatch(/newer CodeSift/i);
+  });
+});
+
+describe("a fault surfacing on the first page read is still a fault", () => {
+  it("corrupt data pages reach the caller classified, not as an empty symbol list", async () => {
+    // The dangerous shape: this accessor returns `[]` for legitimate absence, so an unclassified
+    // fault here is indistinguishable from "this file has no symbols" — and nothing downstream
+    // re-checks.
+    //
+    // Corrupting DATA pages rather than the header is the point. `CREATE TABLE IF NOT EXISTS` in
+    // openIndexDb only consults sqlite_schema and succeeds on such a database; the first statement
+    // that touches a real page is the `schema_version` meta read, which sat outside the
+    // classifying guard and threw raw. Measured: every offset tried gives errcode 11
+    // (SQLITE_CORRUPT) deterministically.
+    const dbPath = join(dir, "corrupt.index.db");
+    await saveIndexSqlite(dbPath, makeIndex({ symbols: bulkySymbols(400) }));
+    closeAllIndexDbs();
+
+    const handle = await open(dbPath, "r+");
+    try {
+      await handle.write(Buffer.alloc(32768, 0x7a), 0, 32768, 65536);
+    } finally {
+      await handle.close();
+    }
+
+    let caught: unknown = null;
+    try {
+      await getSymbolsForFileSqlite(dbPath, "big.ts");
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(isIndexStorageError(caught)).toBe(true);
+    expect((caught as { code: string }).code).toBe("SQLITE_CORRUPT");
   });
 });

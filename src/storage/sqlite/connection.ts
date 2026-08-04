@@ -109,7 +109,19 @@ async function openUncachedIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     rethrowOperational(err, dbPath);
   }
 
-  const stored = readMetaValue(db, "schema_version");
+  // Classified like the block above, and for a reason that is not obvious: `CREATE TABLE IF NOT
+  // EXISTS` can succeed on a database whose DATA pages are corrupt, because it only consults
+  // sqlite_schema. The first statement that actually reads a page is this one — so on real
+  // corruption the fault surfaces HERE, outside the guard, and reached callers unwrapped. Found by
+  // a test that was aiming at something else; the audits did not catch it either.
+  let stored: string | undefined;
+  try {
+    stored = readMetaValue(db, "schema_version");
+  } catch (err) {
+    try { db.close(); } catch { /* not cached yet — nothing else would ever close it */ }
+    rethrowOperational(err, dbPath);
+  }
+
   if (stored === undefined) {
     writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
   } else if (Number(stored) > SCHEMA_VERSION) {

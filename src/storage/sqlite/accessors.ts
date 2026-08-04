@@ -29,6 +29,23 @@ import {
  */
 
 /**
+ * Run a read against an already-open index, classifying any storage fault it surfaces.
+ *
+ * `openIndexDb` classifies what fails at open time, but corruption and I/O faults frequently only
+ * surface on the first page actually touched — and these accessors are the fast paths precisely
+ * because they touch one row late rather than the whole table early. Without this, a caller using
+ * `isIndexStorageError` (rather than `classifyStorageError`) does not recognise the fault, and the
+ * read falls into the "unexpected error" branch that reports an unindexed repo.
+ */
+function classifyingRead<T>(dbPath: string, read: () => T): T {
+  try {
+    return read();
+  } catch (err) {
+    rethrowOperational(err, dbPath);
+  }
+}
+
+/**
  * One file's `mtime_ms`, without materialising the index.
  *
  * `file-indexer.ts` used to parse the whole blob for exactly this value and then
@@ -40,10 +57,12 @@ export async function getFileMtimeSqlite(
   filePath: string,
 ): Promise<number | undefined> {
   const db = await openIndexDb(dbPath);
-  const row = db.prepare("SELECT mtime_ms FROM files WHERE path = ?").get(filePath) as
-    | { mtime_ms: number | null }
-    | undefined;
-  return row?.mtime_ms ?? undefined;
+  return classifyingRead(dbPath, () => {
+    const row = db.prepare("SELECT mtime_ms FROM files WHERE path = ?").get(filePath) as
+      | { mtime_ms: number | null }
+      | undefined;
+    return row?.mtime_ms ?? undefined;
+  });
 }
 
 /**
@@ -118,10 +137,12 @@ export async function getFileEntrySqlite(
   filePath: string,
 ): Promise<FileEntry | undefined> {
   const db = await openIndexDb(dbPath);
-  const row = db.prepare("SELECT * FROM files WHERE path = ?").get(filePath) as unknown as
-    | FileRow
-    | undefined;
-  return row ? rowToFileEntry(row) : undefined;
+  return classifyingRead(dbPath, () => {
+    const row = db.prepare("SELECT * FROM files WHERE path = ?").get(filePath) as unknown as
+      | FileRow
+      | undefined;
+    return row ? rowToFileEntry(row) : undefined;
+  });
 }
 
 /** Replace one file's symbols (and optionally its files[] entry) in a single transaction. */
@@ -180,12 +201,14 @@ export async function getSymbolsForFileSqlite(
   filePath: string,
 ): Promise<CodeSymbol[]> {
   const db = await openIndexDb(dbPath);
-  const repo = readMetaValue(db, "repo");
-  if (repo === undefined) return [];
-  const rows = db
-    .prepare("SELECT * FROM symbols WHERE file = ?")
-    .all(filePath) as unknown as SymbolRow[];
-  return rows.map((row) => rowToSymbol(row, repo));
+  return classifyingRead(dbPath, () => {
+    const repo = readMetaValue(db, "repo");
+    if (repo === undefined) return [];
+    const rows = db
+      .prepare("SELECT * FROM symbols WHERE file = ?")
+      .all(filePath) as unknown as SymbolRow[];
+    return rows.map((row) => rowToSymbol(row, repo));
+  });
 }
 
 /**
@@ -195,6 +218,8 @@ export async function getSymbolsForFileSqlite(
  */
 export async function getDataVersion(dbPath: string): Promise<number> {
   const db = await openIndexDb(dbPath);
-  const row = db.prepare("PRAGMA data_version").get() as { data_version: number };
-  return row.data_version;
+  return classifyingRead(dbPath, () => {
+    const row = db.prepare("PRAGMA data_version").get() as { data_version: number };
+    return row.data_version;
+  });
 }
