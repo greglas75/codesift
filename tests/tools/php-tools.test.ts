@@ -212,18 +212,6 @@ describe("extractYii2Conventions — Yii2-specific patterns", () => {
   });
 });
 
-describe("Yii2 language detection", () => {
-  it("lists yii2 among the PHP frameworks the stack detector recognises", async () => {
-    // Renamed to what it actually asserts. It was called "detects Yii2 from composer.json" and
-    // imported `detectStack` without ever calling it — the unused import is what gave that away.
-    // Grepping the source for a string literal is not a detection test; the real one needs a
-    // composer.json fixture and is backlogged (B-13).
-    const { readFileSync } = await import("node:fs");
-    const source = readFileSync("src/tools/project-profile-stack.ts", "utf-8");
-    expect(source).toContain('"laravel", "symfony", "yii2"');
-  });
-});
-
 describe("PHP security patterns", () => {
   it("has all 8 PHP patterns registered", async () => {
     const { BUILTIN_PATTERNS } = await import("../../src/tools/pattern-tools.js");

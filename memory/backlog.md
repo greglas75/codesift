@@ -182,7 +182,7 @@
   `ramTieredBudgetBytes(envVar, tiers)` when a third budget function appears.
 - [x] **B-4 [NIT, systemic/pre-existing]** DONE 2026-08-04 (Biome 2.5.7). No meta-linter repo-wide; `"lint"` is `tsc --noEmit`,
   no eslint/biome/oxlint config. Fails CQ40 on every TS file independent of any diff.
-- [ ] **B-5 [NIT, pre-existing]** `openIndexDb` reads `schema_version` before taking
+- [x] **B-5 [NIT, pre-existing]** DONE 2026-08-04. `openIndexDb` read `schema_version` before taking
   `BEGIN IMMEDIATE` and never re-checks under the lock, so two processes can both run the v1->v2
   migration. Harmless (v2 has no PRIMARY KEY, so the second pass is a redundant copy) but wasteful.
 - [ ] **B-6 [pre-carried]** `tests/server/http-session-cwd.test.ts` ECONNRESET flake.
@@ -215,7 +215,7 @@
 - [x] **B-12 [NIT]** DONE 2026-08-04. The line counts quoted in B-2 ("931 raw lines") and in the god-module entry
   ("731L") are stale after this diff: `sqlite-index-store.ts` is ~1100L and `index-store.ts` ~806L.
 
-- [ ] **B-13 [NIT]** `tests/tools/php-tools.test.ts` asserts that `project-profile-stack.ts` contains
+- [x] **B-13 [NIT]** DONE 2026-08-04 (tests/tools/detect-stack-php.test.ts, 6 tests incl. negatives). `tests/tools/php-tools.test.ts` asserts that `project-profile-stack.ts` contains
   the string `"laravel", "symfony", "yii2"` and calls it Yii2 detection. Biome caught it: the test
   imported `detectStack` and never called it. Renamed to what it actually checks; a real test needs
   a temp dir with a `composer.json` requiring `yiisoft/yii2`, run through `detectStack`.

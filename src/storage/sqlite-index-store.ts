@@ -314,7 +314,16 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     // of the rows, under a name nothing reads.
     try {
       db.exec("BEGIN IMMEDIATE");
-      if (Number(stored) < 2) {
+      // Re-read UNDER the lock. The version above was read before `BEGIN IMMEDIATE`, so two
+      // processes opening the same index at once both saw `stored < 2` and both queued the
+      // migration; the second then re-copied a table that was already v2. Harmless — v2 has no
+      // PRIMARY KEY, so nothing is dropped — but it is a full-table copy of a repo-sized table
+      // done for nothing, and on a large index that is seconds of wall clock plus the disk churn.
+      // The lock is the only point at which the answer is stable, so this is where to ask.
+      // Fall through rather than return early: the connection still has to reach `connections`
+      // below, and an early return here would quietly stop caching it for the racing process.
+      const current = Number(readMetaValue(db, "schema_version") ?? 0);
+      if (current < SCHEMA_VERSION && current < 2) {
         db.exec(MIGRATE_V1_TO_V2_SQL);
         // The rebuild keeps every row the v1 table still HELD — it cannot bring back the ones
         // v1 already discarded on id collision (73,165 across 16 indexes when this was found).
@@ -323,7 +332,9 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
         // from source can restore them, and `saveIndexSqlite` clears the flag when it does.
         writeMetaValue(db, "lossy_v1_migration", "1");
       }
-      writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
+      if (current < SCHEMA_VERSION) {
+        writeMetaValue(db, "schema_version", String(SCHEMA_VERSION));
+      }
       db.exec("COMMIT");
     } catch (err) {
       try { db.exec("ROLLBACK"); } catch { /* nothing left to roll back */ }
