@@ -164,3 +164,25 @@
 - [ ] B-7 [NIT] `withCache` maxEntries LRU eviction has no test (hit/miss/coalesce/reject covered). (handler-wrappers.ts:98)
 - [ ] B-8 [structural-refactor (multi-file)] Abandoned-work backpressure: withTimeout is client-facing and does not cancel the handler (deliberate, plan-accepted), but nothing bounds the pile-up. (handler-wrappers.ts:20)
 - [ ] B-9 [pre-existing] buildResponseHint (server-helpers.ts:323) cyclomatic complexity 55; server-helpers.ts has no dedicated test file and is a churn hotspot (309000).
+
+## From review 080ae7c..28ba048 (2026-08-04) — index memory + SQLite honesty
+
+- [ ] **B-1 [structural-refactor (multi-file)]** Surface ambiguity on the search path. When
+  `resolveSearchHit` (`src/tools/symbol-tools.ts:234`) falls back to the BM25 hit for a colliding id,
+  the response says nothing — the same silence `lossy_migration` was added to remove one layer down.
+  Recipe: (1) return the collision group from `resolveSearchHit`, (2) thread `ambiguous_id: true` +
+  candidate summaries through both tool registrations for `find_and_show` and `get_context_bundle`,
+  (3) make the field unconditional, never conditional-on-ambiguity (a conditional shape was the
+  earlier BEHAV-class bug in this same file).
+- [ ] **B-2 [structural-refactor (multi-file)]** `src/storage/sqlite-index-store.ts` is 931 raw lines
+  (>2x the 450L ceiling; 587 non-comment). Extract the read-connection / paging / footprint block,
+  mirroring the `index-footprint.ts` extraction already done.
+- [ ] **B-3 [NIT]** `indexCacheMemBudgetBytes` (`src/config.ts:76`) duplicates
+  `embeddingMemBudgetBytes` (`:53`) — same env-parse + RAM-tier shape. Extract
+  `ramTieredBudgetBytes(envVar, tiers)` when a third budget function appears.
+- [ ] **B-4 [NIT, systemic/pre-existing]** No meta-linter repo-wide; `"lint"` is `tsc --noEmit`,
+  no eslint/biome/oxlint config. Fails CQ40 on every TS file independent of any diff.
+- [ ] **B-5 [NIT, pre-existing]** `openIndexDb` reads `schema_version` before taking
+  `BEGIN IMMEDIATE` and never re-checks under the lock, so two processes can both run the v1->v2
+  migration. Harmless (v2 has no PRIMARY KEY, so the second pass is a redundant copy) but wasteful.
+- [ ] **B-6 [pre-carried]** `tests/server/http-session-cwd.test.ts` ECONNRESET flake.
