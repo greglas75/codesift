@@ -42,8 +42,3 @@ export function indexFootprintBytes(index: CodeIndex): number {
   const files = index.file_count || index.files.length;
   return symbols * ESTIMATED_BYTES_PER_SYMBOL + files * ESTIMATED_BYTES_PER_FILE;
 }
-
-/** True when the number came from the loader's tally rather than the constants above. */
-export function hasMeasuredFootprint(index: CodeIndex): boolean {
-  return footprints.has(index);
-}

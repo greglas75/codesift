@@ -15,7 +15,6 @@ import { closeAllIndexDbs } from "../../src/storage/sqlite-index-store.js";
 import {
   indexFootprintBytes,
   recordIndexFootprint,
-  hasMeasuredFootprint,
 } from "../../src/storage/index-footprint.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
@@ -87,12 +86,11 @@ afterEach(async () => {
 describe("index footprint", () => {
   it("prefers the loader's measured tally over the estimate", () => {
     const index = sizedIndex(10, 100);
-    expect(hasMeasuredFootprint(index)).toBe(false);
     const estimated = indexFootprintBytes(index);
     expect(estimated).toBeGreaterThan(0);
+    expect(estimated).not.toBe(12_345); // or the assertion below would prove nothing
 
     recordIndexFootprint(index, 12_345);
-    expect(hasMeasuredFootprint(index)).toBe(true);
     expect(indexFootprintBytes(index)).toBe(12_345);
   });
 

@@ -81,6 +81,12 @@ export interface CodeIndex {
   /** Present iff a JS/TS monorepo was detected at index time. Populated by
    *  the workspace resolver in `src/storage/workspace-resolver.ts`. */
   workspaces?: Workspace[];
+  /** Set when this index was upgraded from the v1 SQLite schema, whose PRIMARY KEY on a
+   *  non-unique `symbols.id` silently discarded colliding rows (73,165 measured across 16
+   *  indexes). The upgrade kept everything still stored but cannot recover what was already
+   *  gone, so a short result here is a fact about the migration, not about the code. Cleared
+   *  by a reindex that re-parses every file. Absent means "not known to be lossy". */
+  lossy_migration?: boolean;
 }
 
 // ---------------------------------------------------------------------------

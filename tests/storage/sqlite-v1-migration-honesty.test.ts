@@ -102,17 +102,45 @@ describe("v1 -> v2 migration is honest about what it could not recover", () => {
     expect(await wasLossilyMigrated(dbPath)).toBe(true);
   });
 
-  it("a full reindex clears the marker, because it restores from source", async () => {
+  it("a reindex that re-parsed every file clears the marker", async () => {
     writeV1Database(dbPath, [{ id: "test:bundle.min.js:a:1", name: "a" }]);
     await loadIndexSqlite(dbPath);
     expect(await wasLossilyMigrated(dbPath)).toBe(true);
 
-    await saveIndexSqlite(dbPath, makeIndex([sym("a", 1), sym("b", 1)]));
+    await saveIndexSqlite(dbPath, makeIndex([sym("a", 1), sym("b", 1)]), { sourceComplete: true });
     expect(await wasLossilyMigrated(dbPath)).toBe(false);
 
     // And both colliding symbols survive now that the PRIMARY KEY is gone.
     const reloaded = await loadIndexSqlite(dbPath);
     expect(reloaded!.symbols).toHaveLength(2);
+  });
+
+  it("a whole-index write that did NOT re-parse every file leaves the marker alone", async () => {
+    // Rewriting every row is not the same as re-reading every file. `index_folder` reuses cached
+    // symbols for files whose mtime has not moved, and `enqueueIndexMutation` folds a single-file
+    // edit into a whole-index rewrite — both arrive at saveIndexSqlite looking like a reindex.
+    // Clearing on either erases the warning on the next keystroke after an upgrade.
+    writeV1Database(dbPath, [{ id: "test:bundle.min.js:a:1", name: "a" }]);
+    await loadIndexSqlite(dbPath);
+    expect(await wasLossilyMigrated(dbPath)).toBe(true);
+
+    await saveIndexSqlite(dbPath, makeIndex([sym("a", 1)]));
+    expect(await wasLossilyMigrated(dbPath)).toBe(true);
+
+    await saveIndexSqlite(dbPath, makeIndex([sym("a", 1)]), { sourceComplete: false });
+    expect(await wasLossilyMigrated(dbPath)).toBe(true);
+  });
+
+  it("surfaces the marker on the loaded index, so callers see it without asking", async () => {
+    // The first version wrote the marker, exported an accessor, and was consulted by nothing —
+    // a lossy index still answered like a complete one.
+    writeV1Database(dbPath, [{ id: "test:bundle.min.js:a:1", name: "a" }]);
+    const loaded = await loadIndexSqlite(dbPath);
+    expect(loaded!.lossy_migration).toBe(true);
+
+    await saveIndexSqlite(dbPath, makeIndex([sym("a", 1)]), { sourceComplete: true });
+    const clean = await loadIndexSqlite(dbPath);
+    expect(clean!.lossy_migration).toBeUndefined();
   });
 
   it("a fresh v2 index is never marked lossy", async () => {

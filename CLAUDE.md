@@ -292,6 +292,25 @@ LaunchAgent being in place since 16 July.
 - `CODESIFT_MAX_INDEX_CACHE_MB` (**ADR-004**) — resident index-**cache** budget, same RAM-scaled tiers as the embedding budget. Replaces a bound on entry COUNT (`CODESIFT_MAX_CACHED_INDEXES`, kept as a secondary cap), which priced a 349 MB index and a 2 MB one identically — "at most three indexes" permitted ~1 GB of long-lived heap. Footprint is tallied by the SQLite loader as it walks the rows (one addition per row, no extra query); other backends fall back to constants calibrated from a `heapUsed` delta on the real 240k-symbol index. Both constants are rounded **up** — over-reporting costs a re-read, under-reporting silently breaks the budget (measured overshoot 9.4%). The most recently loaded index is never evicted, even if it alone exceeds the budget, or every call would re-read and re-evict it.
 - **Load *time* is a separate, unfixed problem** (ADR-004 stage 2). Measured on the 240k-symbol index: 349 MB resident, of which `source` is 185 MB (45%) — but omitting `source` makes the load only 2% faster, because the cost is constructing 240k objects, not attaching strings. Fixing it means tools querying the DB for the rows they need instead of materialising the index: **348 call sites in 150 files**. Do NOT "fix" it by omitting `source` by default (hands `undefined` to ~60 files that read it, indistinguishable from a symbol with no source) or by a lazy getter (`JSON.stringify` skips prototype getters — source would vanish from serialised responses; own accessors on 240k objects force dictionary mode).
 
+## Symbol ids are not unique — both lookup paths refuse a collision
+
+A symbol id is `repo:file:name:line`, which does **not** identify one symbol: TypeScript's separate
+type and value namespaces let `export type Collide` and `export const Collide` share a line, PHPDoc
+`@method` synthesis emits a field and a method at one line, and a minified bundle puts hundreds of
+declarations on line 1. Under the v1 SQLite schema this was a `PRIMARY KEY`, which silently dropped
+73,165 rows across 16 indexes (fixed in `b7245f8`).
+
+`getSymbol` and `getSymbols` now both throw `AmbiguousSymbolIdError` listing the candidates instead
+of returning whichever match came first — `getSymbols` previously did last-write-wins into a `Map`,
+so the two entry points disagreed about the same input. Use `isAmbiguousSymbolIdError` (structural,
+not `instanceof` — a duplicated module instance across a worker/bundler boundary breaks
+`instanceof`). `wrapTool` turns the throw into an `{isError: true}` result with the message intact.
+
+**Searches are exempt, deliberately.** `find_and_show` and `get_context_bundle` read the id back off
+a BM25 hit they already hold, so `resolveSearchHit` falls back to that hit instead of failing the
+whole query. Refusing there would make the collision a worse answer than the silent substitution it
+replaced, on the two tools the H7/H8 hints steer agents toward.
+
 ## Tests run on the i9 farm — use `rt`, not a local runner
 
 This repo is wired to the shared test farm (burst-i9, 24 cores). The Mac runs

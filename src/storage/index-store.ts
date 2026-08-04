@@ -120,10 +120,11 @@ export function resetMigrationCacheForTesting(): void {
 export async function saveIndex(
   indexPath: string,
   index: CodeIndex,
+  opts?: { sourceComplete?: boolean },
 ): Promise<void> {
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
-    await saveIndexSqlite(dbPath, index);
+    await saveIndexSqlite(dbPath, index, opts);
     invalidateIndexCache(dbPath);
     return;
   }
@@ -231,10 +232,18 @@ function cacheIndex(dbPath: string, entry: CachedIndex): void {
   // resident, and index sizes span two orders of magnitude — the measured tgm-survey-platform
   // index is 411 MB against a few MB for a small repo, so "three indexes" was a ceiling only in
   // name. The byte bound is the real one; the count cap stays as a cheap upper limit on entries.
-  while (indexCache.size > 1 && (indexCache.size > MAX_CACHED_INDEXES || cachedBytes() > budget)) {
-    const oldest = indexCache.keys().next();
+  //
+  // The running total is decremented per eviction rather than re-summed in the loop condition.
+  // `MAX_CACHED_INDEXES` has a floor but no ceiling (`CODESIFT_MAX_CACHED_INDEXES` is operator
+  // input), and re-summing would make each insert O(n²) in exactly the many-repo daemon this
+  // budget was written for.
+  let total = cachedBytes();
+  while (indexCache.size > 1 && (indexCache.size > MAX_CACHED_INDEXES || total > budget)) {
+    const oldest = indexCache.entries().next();
     if (oldest.done) break;
-    indexCache.delete(oldest.value);
+    const [key, entry] = oldest.value;
+    total -= indexFootprintBytes(entry.index);
+    indexCache.delete(key);
   }
   // `size > 1` above deliberately keeps the entry just inserted even when it alone exceeds the
   // budget. Evicting it would mean re-reading the same index on the very next call and evicting

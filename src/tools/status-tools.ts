@@ -27,6 +27,16 @@ export interface IndexStatusResult {
     actual_version: string;
     mismatch_detail?: string;
   };
+  /** Set when this index was upgraded from the v1 SQLite schema, which silently dropped symbols
+   *  whose non-unique `id` collided. `symbol_count` below is then a floor, not a count: the
+   *  upgrade preserved every row still stored and could not recover the rest. Reported here
+   *  because this is the tool whose job is to say whether the index can be trusted — without it
+   *  the marker would exist in the database and inform nobody. Clears on a reindex that
+   *  re-parses every file. */
+  lossy_migration?: {
+    reason: "v1_schema_dropped_colliding_symbols";
+    hint: string;
+  };
   /** When the index store exists but could not be read at all — locked, corrupt, permissions.
    *  Same principle as `stale`, one step further: an agent told "not indexed" will rebuild,
    *  which is wrong (and destructive) for a database that is merely busy. `indexed` stays
@@ -108,6 +118,14 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
     last_indexed: new Date(index.updated_at).toISOString(),
   };
   if (stubLangs.size > 0) result.text_stub_languages = [...stubLangs].sort();
+  if (index.lossy_migration === true) {
+    result.lossy_migration = {
+      reason: "v1_schema_dropped_colliding_symbols",
+      hint:
+        "symbol_count is a floor, not a count — the v1 schema discarded symbols sharing an id " +
+        "(same file and line). Run index_folder to re-parse every file and restore them.",
+    };
+  }
   return result;
 }
 

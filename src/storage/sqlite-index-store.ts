@@ -527,17 +527,33 @@ ON CONFLICT(path) DO UPDATE SET
 // Whole-index read / write
 // ---------------------------------------------------------------------------
 
-/** Replace the entire index. Used by full (re)indexing and by JSON->SQLite migration. */
-export async function saveIndexSqlite(dbPath: string, index: CodeIndex): Promise<void> {
+/**
+ * Replace the entire index. Used by full (re)indexing and by JSON->SQLite migration.
+ *
+ * `sourceComplete` means every symbol in `index` came from parsing the file it belongs to during
+ * THIS run — the only condition under which the `lossy_v1_migration` marker can honestly be
+ * cleared. It defaults to false, and the default is the point: rewriting every row is NOT the
+ * same as re-reading every file. `index_folder` reuses cached symbols for files whose mtime has
+ * not moved, and `enqueueIndexMutation` folds a single-file edit into a whole-index rewrite that
+ * arrives here indistinguishable from a real reindex. An earlier version cleared the marker on
+ * any call and so erased the warning on the next keystroke after an upgrade.
+ *
+ * Defaulting to "still lossy" errs toward over-warning, which a reindex clears, rather than
+ * toward silence, which nothing does.
+ */
+export async function saveIndexSqlite(
+  dbPath: string,
+  index: CodeIndex,
+  opts?: { sourceComplete?: boolean },
+): Promise<void> {
   const db = await openIndexDb(dbPath);
 
   db.exec("BEGIN");
   try {
     writeIndexRows(db, index);
-    // A full replace comes from a fresh parse of the source, so anything v1 dropped on id
-    // collision is back. This is the only operation that can honestly clear the marker —
-    // an incremental write only refreshes the file it was given.
-    db.prepare("DELETE FROM meta WHERE key = ?").run("lossy_v1_migration");
+    if (opts?.sourceComplete === true) {
+      db.prepare("DELETE FROM meta WHERE key = ?").run("lossy_v1_migration");
+    }
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
@@ -687,7 +703,17 @@ async function openReadConnection(dbPath: string): Promise<DatabaseSyncType> {
   const Ctor = await loadSqliteCtor();
   if (!Ctor) throw new Error("node:sqlite is unavailable (requires Node >= 22.5)");
   const db = new Ctor(dbPath);
-  db.exec("PRAGMA busy_timeout = 5000");
+  // The constructor can succeed and the PRAGMA still fail — corruption and I/O faults often
+  // surface on the first statement, not at open. This handle never reaches the `connections`
+  // cache, and the caller's `finally` only closes what it managed to assign, so an unguarded
+  // throw here leaks a descriptor on every attempt. Same guard as `openIndexDb`, same reason;
+  // it was missing here only because this connection is deliberately not cached.
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+  } catch (err) {
+    try { db.close(); } catch { /* already unusable — the leak is what we came to prevent */ }
+    throw err;
+  }
   return db;
 }
 
@@ -737,43 +763,86 @@ async function readTablePaged<T, R>(
 const SYMBOL_OBJECT_OVERHEAD_BYTES = 700;
 const FILE_OBJECT_OVERHEAD_BYTES = 200;
 
+/**
+ * Byte cost of a string field that may hold prose.
+ *
+ * `String.length` counts UTF-16 code units, not bytes. V8 stores a string one byte per character
+ * only while every character fits Latin1; one non-Latin1 character anywhere makes the whole string
+ * two-byte. So `.length` under-reports CJK, Cyrillic and emoji-bearing text by about half — and
+ * under-reporting is the one direction the calibration comment below rules out, because it lets
+ * the cache exceed the budget it exists to enforce. `source` alone is 45% of the footprint
+ * (ADR-004), so a repo commented in Chinese would quietly blow through the cap.
+ *
+ * `Buffer.byteLength` over-reports instead (3 UTF-8 bytes per CJK character against V8's 2), which
+ * is the acceptable side.
+ */
+function textBytes(value: string | null | undefined): number {
+  if (value === null || value === undefined || value === "") return 0;
+  return Buffer.byteLength(value, "utf8");
+}
+
 function symbolRowBytes(row: SymbolRow): number {
   return (
     SYMBOL_OBJECT_OVERHEAD_BYTES +
+    // Identifiers and paths: overwhelmingly ASCII, and there are 240k of them — `.length` is
+    // exact for ASCII and skips a scan per row on the fields least likely to need one.
     row.id.length +
     row.file.length +
     row.name.length +
     row.kind.length +
-    (row.signature?.length ?? 0) +
-    (row.docstring?.length ?? 0) +
-    (row.source?.length ?? 0) +
     (row.parent?.length ?? 0) +
-    (row.extras?.length ?? 0)
+    // Prose and code text: the fields that actually carry non-Latin1 content.
+    textBytes(row.signature) +
+    textBytes(row.docstring) +
+    textBytes(row.source) +
+    textBytes(row.extras)
   );
 }
 
 export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null> {
-  const db = await openIndexDb(dbPath);
+  // Called for its side effects, not its handle: this is what creates the schema and runs the
+  // v1->v2 migration. The read below deliberately uses its own connection instead (see the
+  // snapshot comment), so there is nothing here to bind.
+  await openIndexDb(dbPath);
 
   let repo: string | undefined;
   let root: string | undefined;
-  let symbols: CodeSymbol[];
-  let files: FileEntry[];
+  let symbols: CodeSymbol[] = [];
+  let files: FileEntry[] = [];
+  let meta: Record<string, string | undefined> = {};
   let reader: DatabaseSyncType | undefined;
   let footprint = 0;
   try {
-    repo = readMetaValue(db, "repo");
-    root = readMetaValue(db, "root");
-    if (repo === undefined || root === undefined) return null; // genuinely empty — not a fault
-    const owner = repo;
-
-    // Both tables are read inside ONE transaction on a private connection, so symbols and files
-    // describe the same instant. The paged reader yields between pages; without the snapshot a
-    // write arriving during a yield would be half-included, and `symbols` could disagree with
-    // `files` in the very object callers treat as one consistent index.
+    // EVERYTHING that goes into the returned index is read inside ONE transaction on a private
+    // connection, so every field describes the same instant. The paged reader yields between
+    // pages; without the snapshot a write arriving during a yield would be half-included, and
+    // `symbols` could disagree with `files` in the very object callers treat as consistent.
+    //
+    // The meta reads belong inside it for the same reason and are easy to leave out — the first
+    // version of this did exactly that, taking `repo`/`root` before the transaction opened and
+    // `created_at`/`updated_at`/`extractor_version`/`workspaces` after it committed. That is a
+    // narrower window, not a closed one: a concurrent `saveIndexSqlite` landing in either gap
+    // yields metadata from one revision paired with rows from another, which is worse than an
+    // obviously stale index because every field is individually valid.
     reader = await openReadConnection(dbPath);
     reader.exec("BEGIN");
     try {
+      repo = readMetaValue(reader, "repo");
+      root = readMetaValue(reader, "root");
+      if (repo === undefined || root === undefined) {
+        reader.exec("COMMIT");
+        return null; // genuinely empty — not a fault
+      }
+      const owner = repo;
+      for (const key of [
+        "created_at",
+        "updated_at",
+        "extractor_version",
+        "workspaces",
+        "lossy_v1_migration",
+      ]) {
+        meta[key] = readMetaValue(reader, key);
+      }
       symbols = await readTablePaged<SymbolRow, CodeSymbol>(reader, "symbols", (row) => {
         footprint += symbolRowBytes(row);
         return rowToSymbol(row, owner);
@@ -799,19 +868,25 @@ export async function loadIndexSqlite(dbPath: string): Promise<CodeIndex | null>
     root,
     symbols,
     files,
-    created_at: Number(readMetaValue(db, "created_at") ?? 0),
-    updated_at: Number(readMetaValue(db, "updated_at") ?? 0),
+    created_at: Number(meta["created_at"] ?? 0),
+    updated_at: Number(meta["updated_at"] ?? 0),
     symbol_count: symbols.length,
     file_count: files.length,
   };
 
-  const extractorRaw = readMetaValue(db, "extractor_version");
+  const extractorRaw = meta["extractor_version"];
   if (extractorRaw !== undefined) {
     const parsed = JSON.parse(extractorRaw) as Record<string, string> | null;
     if (parsed !== null) index.extractor_version = parsed;
   }
 
-  const workspacesRaw = readMetaValue(db, "workspaces");
+  // Carried on the index itself, not left for callers to go and ask about. A flag that only a
+  // dedicated accessor can reveal is one nothing in production ever reads — which is exactly what
+  // happened to the first version of this marker: written on migration, exported, and consulted
+  // by nobody, so a lossy index still answered like a complete one.
+  if (meta["lossy_v1_migration"] !== undefined) index.lossy_migration = true;
+
+  const workspacesRaw = meta["workspaces"];
   if (workspacesRaw !== undefined) {
     const parsed = JSON.parse(workspacesRaw) as Workspace[] | null;
     if (parsed !== null) index.workspaces = parsed;

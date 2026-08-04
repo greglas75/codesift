@@ -56,6 +56,13 @@ the code comment and then only half-fixed.
 - Both constants are rounded **up** from their fitted values. The residual error belongs on the
   evict-sooner side: over-reporting costs a re-read, under-reporting silently breaks the budget.
   Measured overshoot on the calibration index: 9.4%.
+- Text is measured with `Buffer.byteLength`, not `String.length`, on the prose-bearing fields
+  (`source`, `docstring`, `signature`, `extras`). `.length` counts UTF-16 code units, and V8 stores
+  a string at one byte per character only while every character fits Latin1 — so `.length`
+  under-reports CJK, Cyrillic and emoji-bearing text by roughly half, in the one direction this
+  design rules out. `source` alone is 45% of the footprint, so a repo commented in Chinese would
+  have quietly exceeded the cap. Identifiers and paths keep `.length`: they are effectively always
+  ASCII, where it is exact, and there are 240k of them per load.
 - The entry cap stays as a cheap secondary bound.
 - The most recently loaded index is **never** evicted, even if it alone exceeds the budget.
   Evicting it would re-read and re-evict on every call — an unbounded reload loop that costs far

@@ -410,7 +410,10 @@ export async function indexFolder(
     extractor_version: { ...EXTRACTOR_VERSIONS },
     ...(workspaces ? { workspaces } : {}),
   };
-  await saveIndex(indexPath, codeIndex);
+  // Source-complete only when this run parsed every file it is about to store. The mtime reuse
+  // path above keeps symbols from the previous index for unchanged files, and those carry
+  // whatever an older schema left behind — so a partial re-parse must not clear the lossy marker.
+  await saveIndex(indexPath, codeIndex, { sourceComplete: filesToParse.length === files.length });
 
   // Persist the hash snapshot AFTER the index lands (mirrors registerRepo
   // ordering) and only on the success path — the rejected_partial branch

@@ -196,6 +196,51 @@ async function extractSource(
  *  - children (for classes/interfaces) — saves follow-up get_symbols call
  *  - symbols in the same file that reference this symbol — saves find_references call
  */
+/**
+ * Raised when one id maps to several distinct symbols.
+ *
+ * A named type rather than a bare `Error` because two callers must tell this apart from a real
+ * failure, and matching on message text would break the moment the wording changes. Structural
+ * check, not `instanceof`: a duplicated module instance across a worker or bundler boundary makes
+ * `instanceof` false for an object that is in every observable way the right error — the same
+ * trap `isIndexStorageError` documents in the storage layer.
+ */
+export class AmbiguousSymbolIdError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AmbiguousSymbolIdError";
+  }
+}
+
+export function isAmbiguousSymbolIdError(err: unknown): err is AmbiguousSymbolIdError {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "AmbiguousSymbolIdError"
+  );
+}
+
+/**
+ * Resolve a search hit to its full symbol, tolerating an ambiguous id.
+ *
+ * `getSymbol` throwing on a colliding id is right when a caller supplies one: it named a specific
+ * symbol and must not silently receive a different one. Here nobody supplied it — the id was read
+ * back off a BM25 hit whose symbol this function already holds. Failing an entire search because
+ * its top hit happens to sit in a minified bundle would make the collision a worse answer than the
+ * silent substitution it replaced, and it would hit `find_and_show` and `get_context_bundle`, the
+ * two tools the H7/H8 hints steer agents toward. Falling back to the hit is not a guess: it is the
+ * result the search actually returned.
+ */
+async function resolveSearchHit(repo: string, hit: CodeSymbol): Promise<CodeSymbol | null> {
+  try {
+    const full = await getSymbol(repo, hit.id, { include_related: false });
+    return full ? full.symbol : null;
+  } catch (err) {
+    if (!isAmbiguousSymbolIdError(err)) throw err;
+    return hit;
+  }
+}
+
 export async function getSymbol(
   repo: string,
   symbolId: string,
@@ -218,7 +263,7 @@ export async function getSymbol(
       .map((s) => `${s.kind} ${s.name} @ ${s.file}:${s.start_line}`)
       .slice(0, 5)
       .join("; ");
-    throw new Error(
+    throw new AmbiguousSymbolIdError(
       `Symbol id "${symbolId}" is ambiguous — ${matches.length} distinct symbols share it: ${where}. ` +
         `Ids embed only file, name and line, which collide in generated or synthesised code. ` +
         `Use search_symbols to pick the one you mean.`,
@@ -270,13 +315,44 @@ export async function getSymbols(
 ): Promise<CodeSymbol[]> {
   const index = await requireCodeIndex(repo);
 
-  // Build lookup map for requested symbols
+  // Build lookup map for requested symbols.
+  //
+  // A colliding id must be refused here for the same reason `getSymbol` refuses it: ids are
+  // `repo:file:name:line` and that is not unique, so `.set()` on a repeated id was last-write-wins
+  // — the caller asked for one symbol and silently received whichever happened to come later in
+  // the array. Leaving the batch path permissive would have meant two entry points in this file
+  // disagreeing about the same input, one throwing and one substituting, which is worse than
+  // either rule applied consistently.
   const requestedIds = new Set(symbolIds);
   const symbolMap = new Map<string, CodeSymbol>();
+  const collisions = new Map<string, CodeSymbol[]>();
   for (const sym of index.symbols) {
-    if (requestedIds.has(sym.id)) {
+    if (!requestedIds.has(sym.id)) continue;
+    const seen = symbolMap.get(sym.id);
+    if (seen === undefined) {
       symbolMap.set(sym.id, sym);
+      continue;
     }
+    const group = collisions.get(sym.id) ?? [seen];
+    group.push(sym);
+    collisions.set(sym.id, group);
+  }
+  if (collisions.size > 0) {
+    const detail = [...collisions.entries()]
+      .slice(0, 3)
+      .map(([id, group]) => {
+        const where = group
+          .slice(0, 5)
+          .map((s) => `${s.kind} ${s.name} @ ${s.file}:${s.start_line}`)
+          .join("; ");
+        return `"${id}" -> ${group.length} symbols: ${where}`;
+      })
+      .join(" | ");
+    throw new AmbiguousSymbolIdError(
+      `${collisions.size} of the requested ids are ambiguous — ${detail}. ` +
+        `Ids embed only file, name and line, which collide in generated or synthesised code. ` +
+        `Use search_symbols to pick the ones you mean.`,
+    );
   }
 
   // Group symbols by file to read each file only once
@@ -699,9 +775,8 @@ export async function findAndShow(
   const topResult = results[0];
   if (!topResult) return null;
 
-  const fullResult = await getSymbol(repo, topResult.symbol.id, { include_related: false });
-  if (!fullResult) return null;
-  const fullSymbol = fullResult.symbol;
+  const fullSymbol = await resolveSearchHit(repo, topResult.symbol);
+  if (!fullSymbol) return null;
 
   if (includeRefs) {
     const references = await findReferences(repo, fullSymbol.name as string);
@@ -763,9 +838,8 @@ export async function getContextBundle(
   const index = await requireCodeIndex(repo);
 
   // Get full symbol with source
-  const fullResult = await getSymbol(repo, topResult.symbol.id, { include_related: false });
-  if (!fullResult) return null;
-  const fullSymbol = fullResult.symbol;
+  const fullSymbol = await resolveSearchHit(repo, topResult.symbol);
+  if (!fullSymbol) return null;
 
   // Read the file to extract imports
   let fileSource: string;
