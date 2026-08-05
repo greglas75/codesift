@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
@@ -250,6 +250,17 @@ function isAncestorOrEqual(ancestor: string, descendant: string): boolean {
  * through silently to the next step — derivation must never throw.
  */
 export function getRepoName(repoRoot: string): string {
+  const worktree = linkedWorktree(repoRoot);
+  // Base name from the MAIN checkout, not from the worktree: a linked worktree has no
+  // `.git/config` of its own (the config lives in the main repo), so deriving locally would fall
+  // through to the worktree's own basename and every worktree of one repo would get an unrelated
+  // name. Taking the base from the main checkout keeps them grouped under one prefix and differing
+  // only by the suffix — which is what makes the set readable in `list_repos`.
+  if (worktree) return `${baseRepoName(worktree.mainRoot)}@${worktree.name}`;
+  return baseRepoName(repoRoot);
+}
+
+function baseRepoName(repoRoot: string): string {
   const override = readNameOverride(repoRoot);
   if (override) return override;
 
@@ -257,6 +268,54 @@ export function getRepoName(repoRoot: string): string {
   if (fromGit) return `local/${fromGit}`;
 
   return `local/${basename(repoRoot)}`;
+}
+
+/**
+ * The git worktree identifier when `repoRoot` is a LINKED worktree, else null.
+ *
+ * Every one of the three name sources above collapses a repo's worktrees onto a single name, and
+ * the registry is keyed by name — so the last one indexed silently evicts the rest. Measured on
+ * this machine: `tgm-survey-platform` has **36 worktrees**, all carrying the same TRACKED
+ * `.codesift.json` (`{"name":"tgm-survey-platform"}`), so 35 registry entries were being
+ * overwritten. The override file is documented as the escape hatch FOR collisions; committing it
+ * makes it the cause of one, because git checks it out into every worktree.
+ *
+ * `git remote.origin.url` collapses them for the same reason (worktrees share the remote), and
+ * even the basename fallback collides whenever two worktrees are named alike under different
+ * parents.
+ *
+ * This is the H19 hazard as a persistent condition rather than a transient one: an agent working
+ * in one worktree resolves the repo by name and gets whichever tree registered last. Disambiguating
+ * here fixes all three sources at once, because it is applied to the result rather than to any of
+ * them.
+ *
+ * Detection is the presence of a `.git` FILE (linked worktrees get a file containing
+ * `gitdir: …/.git/worktrees/<name>`; a main checkout gets a directory). The trailing segment is
+ * git's own worktree name, which git already guarantees unique within the repository — safer than
+ * the directory basename, which is not.
+ */
+function linkedWorktree(repoRoot: string): { name: string; mainRoot: string } | null {
+  const dotGit = join(repoRoot, ".git");
+  try {
+    if (!statSync(dotGit).isFile()) return null; // main checkout, or no git at all
+    const pointer = readFileSync(dotGit, "utf-8").trim();
+    const match = pointer.match(/^gitdir:\s*(.+)$/m);
+    if (!match?.[1]) return null;
+    const raw = match[1].trim().replace(/[/\\]+$/, "");
+    // `gitdir:` is normally absolute but git permits a relative pointer.
+    const gitdir = isAbsolute(raw) ? raw : resolve(repoRoot, raw);
+    // Only a worktree pointer qualifies. Submodules also use a `.git` file, and their gitdir
+    // points at `…/.git/modules/<name>` — a submodule is a different repository with its own
+    // remote, so it already gets a distinct name and must not be suffixed onto its parent's.
+    const split = gitdir.split(/[/\\]\.git[/\\]worktrees[/\\]/);
+    if (split.length !== 2) return null;
+    const mainRoot = split[0];
+    const name = split[1]?.split(/[/\\]/)[0];
+    if (!mainRoot || !name) return null;
+    return { name, mainRoot };
+  } catch {
+    return null; // derivation must never throw
+  }
 }
 
 function readNameOverride(repoRoot: string): string | null {

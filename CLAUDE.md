@@ -17,6 +17,20 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 | `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context |
 | `H19` | Answer comes from a DIFFERENT git working tree than your CWD | Results describe other files — `index_folder(path=<your worktree>)` |
 
+### Worktrees get their own registry name (2026-08-06)
+
+The registry is keyed by repo NAME, and all three name sources collapse a repo's worktrees onto one:
+the `.codesift.json` override is TRACKED so git checks it into every worktree, `remote.origin.url` is
+shared by definition, and the basename fallback collides across parents. Measured here:
+`tgm-survey-platform` has **36 worktrees**, so 35 registry entries were being silently overwritten and
+resolving by name returned whichever tree indexed last — H19 as a permanent condition rather than a
+transient one. `getRepoName` now suffixes a LINKED worktree with git's own worktree name
+(`local/tgm-survey-platform@ci-docker-cache`), taking the base from the MAIN checkout because a
+worktree has no `.git/config` of its own. Submodules also use a `.git` file but point at
+`.git/modules/<name>` and are deliberately left alone — a submodule is a different repository.
+Bare-name input (`tgm-survey-platform`) still resolves to the main checkout, since a suffixed name
+does not end in `/<input>`.
+
 ## Tool Discovery (NEW — agents read this)
 
 Non-core tools are **hidden** from ListTools (via SDK `disable()`). Only 51 core tools are visible (out of 150 total).
