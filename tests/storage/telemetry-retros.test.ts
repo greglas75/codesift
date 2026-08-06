@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { aggregateRetros } from "../../src/storage/telemetry/retro-aggregator.js";
@@ -170,5 +171,44 @@ describe("the payload builder treats retros as allowlisted, not spread", () => {
     // A reader cannot tell those apart after the fact, so they must not share a representation.
     const payload = buildLevel1Payload({ anonId: "a", env: ENV, tools: [], retros: [], now: 1 });
     expect("retros" in payload).toBe(false);
+  });
+});
+
+/**
+ * The first-run notice is the CONSENT, and it is a closed enumeration. Nothing enforced that it
+ * stayed in sync with what the payload actually carries, so the retro rollup shipped (ad605bd)
+ * while the notice still described only "tool names, latencies, error/empty rates, bucketed env".
+ * Its negative claims stayed true — no repo names, no paths, no code — but a user who read that
+ * list did not agree to skill-level or quality-gate telemetry. Incomplete disclosure, not a false
+ * one, and invisible because it lives in a string no test read.
+ *
+ * This asserts the pairing rather than the wording: if the aggregator can emit a dimension, the
+ * notice has to name that dimension. Reword freely — the test only fails when the notice stops
+ * covering something the payload can send.
+ */
+describe("first-run notice covers what the payload can carry", () => {
+  const noticeSource = () =>
+    readFileSync(
+      join(__dirname, "..", "..", "src", "storage", "telemetry", "config.ts"),
+      "utf-8",
+    );
+
+  it("names the retro dimensions the aggregator emits", () => {
+    const src = noticeSource();
+    const notice = src.slice(src.indexOf("[codesift] Anonymous usage stats"));
+    // One term per DIMENSION the rollup can reveal — not one per field name.
+    for (const term of ["skill", "friction", "gate", "effort"]) {
+      expect(notice.toLowerCase()).toContain(term);
+    }
+  });
+
+  it("still promises exactly what the aggregator omits", () => {
+    const src = noticeSource();
+    const notice = src.slice(src.indexOf("[codesift] Anonymous usage stats"));
+    // These four are omitted from the F map, so the promise is keepable. If someone starts
+    // reading them, this assertion is the thing that should be revisited FIRST.
+    for (const term of ["repo names", "branches", "commit", "free text"]) {
+      expect(notice.toLowerCase()).toContain(term);
+    }
   });
 });

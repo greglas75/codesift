@@ -111,9 +111,19 @@ export function maybePrintFirstRunNotice(): void {
       /* not shown yet */
     }
     process.stderr.write(
+      // The enumeration is the consent. It is a CLOSED list, so anything the
+      // payload gains has to be added here BEFORE it ships — a user who read
+      // "tool names, latencies, error/empty rates, bucketed env" did not agree
+      // to skill-level or quality-gate telemetry, even though the negative
+      // claims below stayed true throughout. The retro rollup (ad605bd) is a
+      // different CATEGORY of data, not more of the same, which is why it gets
+      // its own clause rather than being folded into "usage stats".
       "[codesift] Anonymous usage stats are ON (tool names, latencies, error/empty rates,\n" +
-      "  bucketed env — NO queries, paths, repo names or code). See exactly what is sent:\n" +
-      "  `codesift telemetry show`.  Opt out: CODESIFT_TELEMETRY=off (or DO_NOT_TRACK=1).\n",
+      "  bucketed env). If zuvo is installed, also anonymous per-skill rollups: which skill\n" +
+      "  ran, friction category, whether the audit/adversarial gates produced a verdict or\n" +
+      "  were skipped, and median effort — NO queries, paths, repo names, branches, commit\n" +
+      "  hashes, free text or code. See exactly what is sent: `codesift telemetry show`.\n" +
+      "  Opt out: CODESIFT_TELEMETRY=off (or DO_NOT_TRACK=1).\n",
     );
     mkdirSync(dataDir(), { recursive: true });
     writeFileSync(marker, String(Date.now()) + "\n", "utf-8");
