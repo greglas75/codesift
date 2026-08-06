@@ -212,3 +212,41 @@ describe("first-run notice covers what the payload can carry", () => {
     }
   });
 });
+
+/**
+ * `N/A` must never read as a verdict. zuvo's append-retro had no N/A in the blind-audit enum until
+ * 2026-08-06, so skills with no such step filed verdict-shaped values instead — 108 of 164 recorded
+ * verdicts (66%) came from skills whose SKILL.md never mentions a blind audit. Adding N/A upstream
+ * fixes the source, but gateRan() counted any unrecognised token as "ran", so the corrected value
+ * would have been counted as a real verdict and the fix would have produced a WORSE metric than the
+ * bug it repaired.
+ */
+describe("N/A is neither a verdict nor a skip", () => {
+  it("does not count N/A as a gate that ran, and reports it separately", async () => {
+    const lines = [
+      retroLine({ blind: "N/A", adversarial: "N/A" }),
+      retroLine({ blind: "clean:strict", adversarial: "3findings" }),
+      retroLine({ blind: "not_run", adversarial: "skipped" }),
+    ].join("\n");
+    await writeFile(logPath, lines + "\n", "utf-8");
+
+    const out = await aggregateRetros(0, logPath);
+    expect(out).toHaveLength(1);
+    const b = out[0]!;
+    expect(b.count).toBe(3);
+    // one real verdict, one N/A, one genuine skip — three distinct facts
+    expect(b.blind_audit_ran).toBe(1);
+    expect(b.blind_audit_na).toBe(1);
+    expect(b.adversarial_ran).toBe(1);
+    expect(b.adversarial_na).toBe(1);
+  });
+
+  it("keeps 'not_run' distinguishable from 'N/A'", async () => {
+    await writeFile(logPath, retroLine({ blind: "not_run" }) + "\n", "utf-8");
+    const out = await aggregateRetros(0, logPath);
+    const b = out[0]!;
+    // "has the step, did not run it" must NOT be reported as "has no step"
+    expect(b.blind_audit_ran).toBe(0);
+    expect(b.blind_audit_na).toBe(0);
+  });
+});

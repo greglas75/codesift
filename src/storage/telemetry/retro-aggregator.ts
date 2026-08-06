@@ -61,6 +61,15 @@ export interface RetroAggregate {
   /** How many of these runs ran each safety gate to a real verdict. */
   blind_audit_ran: number;
   adversarial_ran: number;
+  /**
+   * How many declared the gate INAPPLICABLE (`N/A`) — the skill has no such step.
+   * Kept separate from "did not run" on purpose: "this skill has no blind audit"
+   * and "this skill has one and skipped it" are different product facts, and
+   * collapsing them is what made this column unreadable in the first place.
+   * A consumer wanting a compliance rate should use ran / (count - na).
+   */
+  blind_audit_na: number;
+  adversarial_na: number;
 }
 
 /**
@@ -71,6 +80,19 @@ export interface RetroAggregate {
  * where it runs and finds nothing.
  */
 const GATE_NOT_RUN = new Set(["skipped", "not_run", "blocked", "blocked_infra", "-", ""]);
+/**
+ * `N/A` = the skill has no such step, so there is nothing to run. It is NOT a verdict and NOT a
+ * skip. Before 2026-08-06 zuvo's append-retro had no N/A in the blind-audit enum at all, so skills
+ * without the step were forced to file a verdict-shaped value — 108 of 164 recorded verdicts (66%)
+ * came from skills whose SKILL.md never mentions a blind audit. Once zuvo started emitting N/A,
+ * gateRan() would have counted it as a real verdict (it is not in GATE_NOT_RUN), turning the fix
+ * into a worse metric than the bug. Hence its own set and its own counter.
+ */
+const GATE_NOT_APPLICABLE = new Set(["n/a", "na"]);
+
+function gateNotApplicable(value: string): boolean {
+  return GATE_NOT_APPLICABLE.has(value.trim().toLowerCase());
+}
 
 /**
  * Collapse anything that is not a short, enum-shaped token to `"other"`.
@@ -94,7 +116,7 @@ function enumish(value: string | undefined): string {
 
 function gateRan(value: string): boolean {
   const v = value.trim().toLowerCase();
-  return v.length > 0 && !GATE_NOT_RUN.has(v) && !v.startsWith("blocked");
+  return v.length > 0 && !GATE_NOT_RUN.has(v) && !GATE_NOT_APPLICABLE.has(v) && !v.startsWith("blocked");
 }
 
 function median(values: number[]): number {
@@ -172,6 +194,8 @@ export async function aggregateRetros(
         day,
         ...dims,
         blind_audit_ran: 0,
+        blind_audit_na: 0,
+        adversarial_na: 0,
         adversarial_ran: 0,
         turns: [],
         toolCalls: [],
@@ -190,6 +214,8 @@ export async function aggregateRetros(
     b.filesRead.push(num(F.FILES_READ));
     b.filesModified.push(num(F.FILES_MODIFIED));
     if (gateRan(f[F.BLIND_AUDIT] ?? "")) b.blind_audit_ran++;
+    if (gateNotApplicable(f[F.BLIND_AUDIT] ?? "")) b.blind_audit_na++;
+    if (gateNotApplicable(f[F.ADVERSARIAL] ?? "")) b.adversarial_na++;
     if (gateRan(f[F.ADVERSARIAL] ?? "")) b.adversarial_ran++;
   }
 
@@ -209,6 +235,8 @@ export async function aggregateRetros(
       median_files_modified: median(b.filesModified),
       blind_audit_ran: b.blind_audit_ran,
       adversarial_ran: b.adversarial_ran,
+      blind_audit_na: b.blind_audit_na,
+      adversarial_na: b.adversarial_na,
     }))
     .sort((a, b) => (a.day === b.day ? a.skill.localeCompare(b.skill) : a.day.localeCompare(b.day)));
 }
