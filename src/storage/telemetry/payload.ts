@@ -4,6 +4,7 @@ import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintFunnel, aggre
 import { buildEnvProfile } from "./env-profile.js";
 import { getAnonId } from "./anon-id.js";
 import { buildLevel1Payload, assertSanitized, type Level1Payload } from "./sanitizer.js";
+import { aggregateRetros } from "./retro-aggregator.js";
 
 /**
  * Build the exact Level-1 payload that would be sent right now, from the local
@@ -16,7 +17,9 @@ export async function buildCurrentLevel1Payload(now: number, sinceTs = 0): Promi
   const hints = aggregateHintFunnel(entries);
   const planTurn = aggregatePlanTurnFunnel(entries);
   const env = buildEnvProfile();
-  const payload = buildLevel1Payload({ anonId: getAnonId(), env, tools, hints, planTurn, now });
+  // Absent when zuvo is not installed; never an error.
+  const retros = await aggregateRetros(sinceTs);
+  const payload = buildLevel1Payload({ anonId: getAnonId(), env, tools, hints, planTurn, retros, now });
   assertSanitized(payload); // throws if the allowlist was ever violated
   return payload;
 }

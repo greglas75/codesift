@@ -13,6 +13,7 @@ import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintFunnel, aggre
 import { buildEnvProfile } from "./env-profile.js";
 import { getAnonId } from "./anon-id.js";
 import { buildLevel1Payload, assertSanitized } from "./sanitizer.js";
+import { aggregateRetros } from "./retro-aggregator.js";
 
 const FLUSH_TIMEOUT_MS = 2000; // hard cap per spec §3
 const INITIAL_FLUSH_DELAY_MS = 10_000;
@@ -107,6 +108,11 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
       tools: aggregateToolMetrics(entries),
       hints: aggregateHintFunnel(entries),
       planTurn: aggregatePlanTurnFunnel(entries),
+      // Absent when zuvo is not installed. Rides this payload rather than getting its own channel
+      // because this is the channel that reaches anyone: `/ingest/zuvo` is token-gated (it carries
+      // repo names and debt text) and its sender ships over SSH to a tailnet address, so it has
+      // exactly one reporting install. This one has eleven.
+      retros: await aggregateRetros(since),
       now,
     });
     assertSanitized(payload); // never send an unsanitized L1 payload

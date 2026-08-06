@@ -6,6 +6,7 @@
 import { TELEMETRY_SCHEMA_VERSION } from "./config.js";
 import type { EnvProfile } from "./env-profile.js";
 import type { ToolAggregate, HintEmission, PlanTurnFunnel } from "./aggregator.js";
+import type { RetroAggregate } from "./retro-aggregator.js";
 
 export interface Level1Payload {
   schema_version: number;
@@ -15,6 +16,35 @@ export interface Level1Payload {
   tools: Level1ToolMetric[];
   hints: Level1HintEmission[];
   plan_turn: Level1PlanTurn[];
+  /** Absent when zuvo is not installed — the common case for a codesift-only user. */
+  retros?: Level1Retro[];
+}
+
+/**
+ * A day of zuvo retrospectives, reduced to enums and counts.
+ *
+ * The four identifying fields of a retro line (project, branch, commit sha, and the free-text
+ * "missing template" note) are not present here and are never read by the aggregator. That is the
+ * distinction the collector's own gate is built on: `/ingest/zuvo` is token-gated precisely because
+ * raw retros "carry repo names and debt text", while `/ingest/codesift` is open to anonymous L1.
+ * This rides the open channel because it genuinely is L1, not because it was scrubbed into looking
+ * like it.
+ */
+export interface Level1Retro {
+  day: string;
+  skill: string;
+  code_type: string;
+  friction: string;
+  context_gap: string;
+  codesift: string;
+  routing: string;
+  count: number;
+  median_turns: number;
+  median_tool_calls: number;
+  median_files_read: number;
+  median_files_modified: number;
+  blind_audit_ran: number;
+  adversarial_ran: number;
 }
 
 export interface Level1ToolMetric {
@@ -65,6 +95,25 @@ function pickPlanTurn(p: PlanTurnFunnel): Level1PlanTurn {
   return { day: p.day, recommended: p.recommended, used: p.used };
 }
 
+function pickRetro(r: RetroAggregate): Level1Retro {
+  return {
+    day: r.day,
+    skill: r.skill,
+    code_type: r.code_type,
+    friction: r.friction,
+    context_gap: r.context_gap,
+    codesift: r.codesift,
+    routing: r.routing,
+    count: r.count,
+    median_turns: r.median_turns,
+    median_tool_calls: r.median_tool_calls,
+    median_files_read: r.median_files_read,
+    median_files_modified: r.median_files_modified,
+    blind_audit_ran: r.blind_audit_ran,
+    adversarial_ran: r.adversarial_ran,
+  };
+}
+
 /** Explicitly pick ONLY allowlisted env fields (no hostname/paths). */
 function pickEnv(env: EnvProfile): EnvProfile {
   const picked: EnvProfile = {
@@ -86,8 +135,10 @@ export function buildLevel1Payload(input: {
   tools: ToolAggregate[];
   hints?: HintEmission[];
   planTurn?: PlanTurnFunnel[];
+  retros?: RetroAggregate[];
   now: number;
 }): Level1Payload {
+  const retros = (input.retros ?? []).map(pickRetro);
   return {
     schema_version: TELEMETRY_SCHEMA_VERSION,
     ts: input.now,
@@ -96,6 +147,10 @@ export function buildLevel1Payload(input: {
     tools: input.tools.map(pickToolMetric),
     hints: (input.hints ?? []).map(pickHint),
     plan_turn: (input.planTurn ?? []).map(pickPlanTurn),
+    // Omitted rather than sent empty: an absent key says "this install has no zuvo", an empty array
+    // says "zuvo ran and produced nothing". Those are different facts and the reader cannot
+    // distinguish them after the fact.
+    ...(retros.length > 0 ? { retros } : {}),
   };
 }
 
