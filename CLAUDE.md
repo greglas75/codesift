@@ -72,6 +72,19 @@ in `detectAutoLoadTools` at `src/register-tools.ts`.
 ### index_folder sanity check is now visible + self-healing (NEW)
 When a re-walk finds <50% of the previously indexed file count, index_folder keeps the old index — but now returns `status: "rejected_partial"` + `reason` + `hint` instead of silently echoing the old counts as success (pre-fix this skipped saveIndex AND registerRepo, so the repo could vanish from the registry while the tool reported OK). Before rejecting, it samples the old index's paths on disk: if ≥50% no longer exist (e.g. deleted `.worktrees/` swept by an older walker), the old index is treated as stale and the new one is accepted (auto-heal — breaks the poisoned-baseline deadlock where every honest reindex was rejected forever).
 
+### Anonymous retro rollups ride the codesift telemetry channel (0.14.0)
+
+`/ingest/zuvo` is token-gated and its sender ships over SSH to a tailnet address, so it has exactly
+ONE reporting install; `/ingest/codesift` is open and anonymous and has eleven. Retros therefore ride
+the codesift L1 payload (`retros[]`, built in `telemetry/retro-aggregator.ts`, allowlisted in
+`sanitizer.ts`). Five of the 17 retro columns — project, branch, commit sha, and the free-text note —
+are **never read**, not read-then-scrubbed; anonymity by omission survives a format change, scrubbing
+does not. Non-enum-shaped values collapse to `"other"` (retros.log is a plain text file anything can
+append to). Medians, not sums, so total workload does not leak. The key is OMITTED when empty —
+absent means "no zuvo installed", `[]` would mean "zuvo ran and produced nothing". The first-run
+notice is the consent and `tests/storage/telemetry-retros.test.ts` fails if the payload can emit a
+dimension the notice does not name.
+
 ### Multi-host usage telemetry (NEW)
 Every usage.jsonl entry now carries `host` (os.hostname(), override via `CODESIFT_HOST_TAG`). Logs pulled from other machines into `~/.codesift/usage-remote/<host>.jsonl` (see `scripts/sync-usage-remote.sh` + cron) are merged by `usage_stats` (new `host` filter param, `hosts` breakdown in stats/report) and by the dashboard (Usage by Host section on /analytics). Entries predating the field inherit the local hostname or the remote file's name stem.
 
