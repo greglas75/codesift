@@ -51,17 +51,39 @@ function effectiveEntry(dir) {
   return { scope: "none", entry: null };
 }
 
-/** Resolve a stdio entry to the file that would run, following symlinks. */
+/**
+ * Resolve what would actually execute, following symlinks.
+ *
+ * Two shapes appear in these files and both matter. An MCP server entry is an absolute path. A HOOK
+ * entry is a command line resolved through PATH (`codesift precheck-read --stdin`) — and hooks fail
+ * SILENTLY, so a `codesift` that has fallen off PATH disables the read/bash prechecks with no error
+ * anywhere. Checking only absolute paths would miss the quieter half.
+ */
 function resolveStdio(entry) {
-  const target = entry.args?.length ? entry.args[0] : entry.command;
-  if (!target) return { ok: false, why: "no command or args" };
-  try {
-    const real = realpathSync(target);
-    if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
-    return { ok: true, real };
-  } catch {
-    return { ok: false, why: `${target} does not resolve to an existing file` };
+  const raw = entry.args?.length ? entry.args[0] : entry.command;
+  if (!raw) return { ok: false, why: "no command or args" };
+  const argv0 = raw.trim().split(/\s+/)[0].replace(/^~/, homedir());
+
+  if (argv0.includes("/")) {
+    try {
+      const real = realpathSync(argv0);
+      if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
+      return { ok: true, real };
+    } catch {
+      return { ok: false, why: `${argv0} does not resolve to an existing file` };
+    }
   }
+
+  for (const dir of (process.env["PATH"] ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, argv0);
+    try {
+      if (statSync(candidate).isFile()) return { ok: true, real: realpathSync(candidate) };
+    } catch {
+      /* next PATH entry */
+    }
+  }
+  return { ok: false, why: `\`${argv0}\` is not on PATH — hooks using it fail silently` };
 }
 
 let daemonHealth = null;
@@ -154,6 +176,53 @@ if (!globalEntry) {
     : { ok: false, why: r.why };
 }
 results.push({ dir: `(fallback for ${unlisted.length} unlisted repos)`, scope: "global", transport: globalEntry?.type ?? "-", ...fallback });
+
+// EVERY client, not just Claude Code. The first version of this checker read ~/.claude.json alone
+// and reported "0 broken" at a moment when Cursor, Gemini, Antigravity and Claude's settings.json
+// all pointed at a path that had just been deleted — Codex's canary died and a human had to notice.
+// Checking one client while four are down is the same mistake as checking the config instead of
+// the file it resolves to.
+const OTHER_CLIENTS = [
+  join(homedir(), ".claude", "settings.json"),
+  process.env["CODESIFT_CHECK_EXTRA_CLIENT"] ?? join(homedir(), ".codex", "config.toml"),
+  join(homedir(), ".cursor", "mcp.json"),
+  join(homedir(), ".gemini", "settings.json"),
+  join(homedir(), ".gemini", "antigravity", "mcp_config.json"),
+];
+
+for (const file of OTHER_CLIENTS) {
+  if (!existsSync(file)) continue;
+  let text;
+  try {
+    text = readFileSync(file, "utf-8");
+  } catch (err) {
+    results.push({ dir: file, scope: "client", transport: "-", ok: false, why: `unreadable: ${err.message}` });
+    continue;
+  }
+  // Deliberately textual, including for TOML: the question is "does the command this client would
+  // run exist", and every client spells that as a path in the file. A per-format parser would add
+  // three dependencies to answer a question a path extraction already answers.
+  // ONLY the value of a `command` key — TOML `command = "…"` or JSON `"command": "…"`. An earlier
+  // version matched any quoted string containing "codesift", which happily flagged Codex's
+  // `[projects."/Users/greglas/DEV/codesift-mcp"]` section header as a missing executable. A
+  // checker that cries wolf about a directory is a checker people stop reading.
+  const cmds = new Set();
+  for (const m of text.matchAll(/(?:"command"\s*:|(?:^|\n)\s*command\s*=)\s*"([^"\n]+)"/g)) {
+    const v = m[1];
+    if (v && v.includes("codesift")) cmds.add(v);
+  }
+  if (cmds.size === 0) {
+    results.push({ dir: file, scope: "client", transport: "-", ok: true, why: "no codesift path (http or absent)" });
+    continue;
+  }
+  for (const cmd of cmds) {
+    const r = resolveStdio({ command: cmd });
+    const note = r.ok && /\/DEV\/|\/projects\//.test(r.real)
+      ? `resolves into a working tree (${r.real}) — a build there will break this client`
+      : null;
+    results.push({ dir: `${file} -> ${cmd}`, scope: "client", transport: "stdio", ok: r.ok, why: r.ok ? note : r.why });
+  }
+}
 
 const broken = results.filter((r) => !r.ok);
 const warned = results.filter((r) => r.ok && r.why);
