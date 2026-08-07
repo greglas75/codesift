@@ -6,7 +6,7 @@ import type { HookPlatform } from "./cli/platform.js";
 import { setRegisterToolRuntime, zBool } from "./register-tool-groups/shared.js";
 import { detectAutoLoadToolsCached } from "./register-tools/autoload.js";
 import { CORE_TOOL_NAMES, describeTools, discoverTools, getToolDefinitions, isFrozenToolListHost, setFrozenToolListHost } from "./register-tools/discovery.js";
-import { enableToolByName, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
+import { enableToolByName, reapplyRevealedTools, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
 
@@ -232,4 +232,9 @@ export function registerTools(
       } catch { return "parse error"; }
     },
   });
+
+  // Restore anything already revealed in THIS process. Under stdio this is a no-op on the first
+  // call; under the HTTP daemon, which builds a server per request, it is what keeps a revealed
+  // tool callable on the request AFTER the one that revealed it.
+  reapplyRevealedTools();
 }

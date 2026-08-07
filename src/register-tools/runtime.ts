@@ -24,6 +24,24 @@ import { sqlitePathFor } from "../storage/index-store.js";
 
 const toolHandles = new Map<string, any>();
 
+/**
+ * Tools revealed during this PROCESS, remembered across server instances.
+ *
+ * `toolHandles` is cleared on every `resetToolRegistrationContext`, which is correct for a stdio
+ * server (one instance for the whole session) and wrong for the HTTP daemon: it serves statelessly,
+ * building a fresh `McpServer` per request, so a tool enabled by `describe_tools(reveal=true)` was
+ * enabled on the instance that handled THAT request and hidden again on the next one.
+ *
+ * Measured 2026-08-07, same sequence over both transports:
+ *   stdio : 60 tools -> reveal -> 62 tools -> find_dead_code returns 873 symbols
+ *   http  : 60 tools -> reveal -> 60 tools -> "Tool find_dead_code not found"
+ *
+ * The reveal even LOOKED successful, because `describe_tools` returns the schema either way — so
+ * an agent gets a full parameter list for a tool it then cannot call. Reveal is a statement about
+ * the process's tool surface, not about one request, so the set that records it belongs here.
+ */
+const revealedToolNames = new Set<string>();
+
 /** Get a registered tool handle by name (for testing and describe_tools reveal) */
 export function getToolHandle(name: string) {
   return toolHandles.get(name);
@@ -43,6 +61,27 @@ export function resetToolRegistrationContext(
   toolHandles.clear();
   enabledFrameworkBundles.clear();
   registrationContext = { server, languages };
+}
+
+/**
+ * Re-enable everything this process has already revealed, on a freshly registered server.
+ *
+ * Called at the END of `registerTools` rather than from the reset above: at reset time the new
+ * server has no tools yet, and `ensureToolRegistered` would register the revealed ones before the
+ * core catalog — a different ordering for daemon requests than for stdio, which is exactly the kind
+ * of divergence this bug was.
+ */
+export function reapplyRevealedTools(): number {
+  let restored = 0;
+  for (const name of revealedToolNames) {
+    if (enableToolByName(name)) restored++;
+  }
+  return restored;
+}
+
+/** Tests need to prove a fresh process starts with nothing revealed. */
+export function resetRevealedToolsForTesting(): void {
+  revealedToolNames.clear();
 }
 
 export function setToolHandle(name: string, handle: unknown): void {
@@ -552,6 +591,9 @@ export function enableToolByName(name: string): boolean {
     return false;
   }
   handle.enabled = true;
+  // Remember at process scope so the next server instance (the HTTP daemon builds one per request)
+  // starts with this tool already callable.
+  revealedToolNames.add(name);
   return true;
 }
 
