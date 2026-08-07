@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
+  blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
+  recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
+  `gateRan()` treated any unrecognised token as "ran", so the upstream fix alone would have counted
+  honest `N/A`s as real verdicts and made `blind_audit_ran` worse than the bug it repaired. `N/A`
+  now has its own set and its own counters (`blind_audit_na`, `adversarial_na`): "this skill has no
+  blind audit" and "this skill has one and skipped it" are different product facts.
+  **This matters for already-published data** — 0.14.0 ships the retro rollup, so any install
+  pairing it with zuvo ≥ 1.6.60 is currently over-counting `blind_audit_ran`.
+- Registry/prune: an entry pointing at a `.db` was invisible to the live-set, leaving the largest
+  index on the machine one `prune` from deletion.
+- Ops: the availability check covered one client while four were down; the fallback pointed at a
+  working tree.
+
+## [0.14.0] — 2026-08-06
+
+> Entry written retroactively on 2026-08-07: 0.14.0 was published with **no changelog entry at
+> all**, which is how the two items below — one of them a change to what leaves a user's machine —
+> shipped without appearing here.
+
+### Added
+- **Anonymous retro rollups** from the install base (`ad605bd`). Per-skill aggregates ride the
+  existing anonymous `/ingest/codesift` endpoint: which skill ran, friction category, whether the
+  audit/adversarial gates produced a verdict, median effort. Identifying fields (project, branch,
+  commit sha, free-text) are **not read at all** — omitted from the field map rather than scrubbed,
+  so the property survives a format change.
+
+### Fixed
+- **First-run notice now covers the rollup** (`6057722`). The consent text was a closed enumeration
+  — "tool names, latencies, error/empty rates, bucketed env" — and the rollup is a different
+  category of data. Every negative claim stayed true, but a user who read that list had not agreed
+  to skill-level or quality-gate telemetry. Nothing tested that string, so it could silently fall
+  behind the payload; two assertions now pair the notice to what the aggregator can emit.
+
 ## [0.13.1] — 2026-08-03
 
 ### Fixed
