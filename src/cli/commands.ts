@@ -324,7 +324,17 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       stale.push({ name, root: root as string });
       continue; // deliberately NOT added to `live`
     }
-    if (typeof ip === "string") live.add(ip.split("/").pop()!.replace(".index.json", ""));
+    // Take the HASH STEM with the same shape the sweep below matches, rather than stripping one
+    // known suffix. `.replace(".index.json", "")` silently no-ops on any other form — so after the
+    // SQLite migration an entry whose `index_path` ends in `.index.db` never reached this set, and
+    // every artifact under that hash looked orphaned. Measured 2026-08-07 on one such entry:
+    // 8.33 GB of LIVE data (a 240,706-symbol index plus 3.9 GB of embeddings) was one `prune` away
+    // from deletion. Deriving the stem the same way in both halves of this command is what makes
+    // them agree by construction instead of by coincidence.
+    if (typeof ip === "string") {
+      const stem = /^([0-9a-f]{8,})\./.exec(ip.split("/").pop() ?? "")?.[1];
+      if (stem) live.add(stem);
+    }
   }
   // Safety: an empty live set would mark every artifact orphaned. Refuse rather
   // than risk nuking a valid (but momentarily empty-looking) data dir.

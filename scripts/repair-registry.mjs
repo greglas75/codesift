@@ -93,7 +93,11 @@ for (const o of orphans) {
   repos[o.repo] = {
     name: o.repo,
     root: o.root,
-    index_path: o.file,
+    // Canonical form is the `.index.json` path even when storage is SQLite — `sqlitePathFor()`
+    // derives the `.db` from it, and every other registry entry uses that form. Writing the `.db`
+    // path here made the entry invisible to `prune`'s live-set, which is how this repair nearly
+    // destroyed the 8.33 GB it had just rescued.
+    index_path: o.file.replace(/\.index\.db$/, ".index.json"),
     symbol_count: o.symbols,
     file_count: o.files,
     updated_at: o.updated_at || Date.now(),
