@@ -181,7 +181,82 @@ Done when all of these hold:
 6. CI runs on a self-hosted runner for `push`/tags, with fork PRs demonstrably not able to execute on
    it.
 
-## 5. Not verified — do first
+## 5. The full suite does not finish on the farm — measured
+
+Three attempts, none completed:
+
+| attempt | outcome |
+|---|---|
+| 1 | ran ~10 min with no visible output (see 1.2), I killed it believing it hung |
+| 2 | cancelled by my own timeout at 2m53s — but re-attaching dumped **1413 lines**, so it had been working |
+| 3 | **killed by the farm at its absolute ceiling: `TIMEOUT after 14410s — absolute ceiling 14400s`** |
+
+Four hours. Locally the same suite finishes in **1–3 minutes**. The last tests to complete before the
+stall were the shell-out benchmarks in `tests/scripts/` — `validate-nextjs-accuracy.ts`,
+`benchmark-nextjs-tools.ts`, `validate-nextjs-route-count.ts`. Those spawn child processes; they are
+the first place to look.
+
+Note the arithmetic: attempt 3 was launched ~25 minutes before it died on a 14410 s clock. It did not
+start that clock. **`rt` adopted an older, already-stuck job for the same mirror instead of
+submitting a new one**, and then inherited its ceiling. That also explains the two queue entries for
+one invocation in 1.2. A new invocation must never silently adopt a stuck job — or if it does, it
+must say so, because the user is then debugging an execution they did not start.
+
+Zero test failures were reported across all three attempts. The suite is not failing on the farm; it
+is **not finishing**.
+
+## 6. Doing this across all the repos — the shape of the problem
+
+Measured under `~/DEV`:
+
+- **103 directories carry `.tf.json`** — but they resolve to **43 real repos plus 60 worktrees named
+  `-farmfix*` / `-cifix*` / `-ci-combined`.** traveliger 7, QuotasMobi 7, tgm-survey-tester 6,
+  tgm-survey-platform 6, TGMSurveys 6, translation-qa 5, Inovoicer 5…
+
+Sixty worktrees whose names say "farm fix" and "ci fix". The per-repo approach has already been tried
+sixty times and has not converged. Each attempt also costs a fresh farm mirror seed and (until the
+2026-08-06 registry fix) collapsed onto its parent's codesift registry name, so tools answered from
+whichever copy indexed last.
+
+**What is actually missing is not a fix — it is a verdict.** Every one of those worktrees exists
+because somebody changed something and had no way to tell whether it worked.
+
+### 6.1 Build the parity check first
+
+One command per repo: run the suite locally and on the farm, diff the two pass/fail sets, print
+`PASS` or the differing test names. Nothing else on this list matters as much, because without it
+each repo is an investigation and with it each repo is a yes/no.
+
+Then keep a table of 43 rows — repo, last parity result, date. The work becomes a queue instead of a
+fog.
+
+### 6.2 What is global, and what is not — do not confuse them
+
+Measured, not assumed:
+
+- **git-dependent tests are RARE.** Only two repos shell out to git from their tests: codesift-mcp
+  (31 files) and QuotasMobi (1). So **do not** ship `.git` to every mirror to fix two repos — make it
+  opt-in in `.tf.json` (`"git": true` or similar) and pay the cost only where a repo's tests read
+  history. codesift-mcp is the outlier for a real reason: reading git history IS its product.
+- **The `env` block is broader:** 9 of the `.tf.json` files set `env`, so 9 repos get the
+  build-corrupting `NODE_ENV` warning. One mechanical sweep.
+- **The `rt` defects in 1.2 and section 5 are global** and cost trust everywhere: silent long runs,
+  a `SUSPECT` label that blames the job for a client problem, and job adoption that makes a run die
+  on a stranger's clock. Fix these before touching any repo, or every parity result will be suspect.
+- **Node parity is per-repo but mechanical:** each repo should pin its node in `.tf.json`; the farm
+  should refuse-or-shout on a mismatch instead of printing a note.
+
+### 6.3 Order
+
+1. Fix the three `rt` defects (streaming, SUSPECT labelling, job adoption). Everything downstream
+   depends on believing what the farm reports.
+2. Ship the parity check.
+3. Sweep the 9 `env` blocks.
+4. Run parity across all 43; fix only what actually differs.
+5. Delete the 60 `-farmfix*` / `-cifix*` worktrees once their repos pass — they are the debris of the
+   approach this replaces.
+
+## 7. Not verified — do first
 
 I never got one clean full-suite farm run: my first attempt I killed myself (believing 1.2 was a
 hang), and the second was cancelled by a timeout. **So the complete list of farm-only failures is not
