@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import type { CodeChunk } from "../types.js";
 import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
 
@@ -72,19 +73,41 @@ export async function saveChunks(
 }
 
 /** Generic NDJSON loader — reads file, parses each line, filters with a type guard, maps to value. */
+/**
+ * Read an ndjson file into a Map, one line at a time.
+ *
+ * This used to be `await readFile(path, "utf-8")` followed by `raw.split("\n")` — the whole file as
+ * one string, then a second full copy as an array. Both die above V8's hard MAX_STRING_LENGTH
+ * (536,870,888 chars), and the `catch { return null }` around it turned that into "this repo has no
+ * embeddings".
+ *
+ * That is not hypothetical. Measured 2026-08-09 against the live data dir, two chunk-embedding files
+ * are ALREADY unreadable and silently return null:
+ *
+ *     3,223.3 MB -> ERR_FS_FILE_TOO_LARGE      (fails in 2 ms)
+ *       765.6 MB -> "Invalid string length"    (fails in 625 ms)
+ *
+ * 3.99 GB of embeddings that cost hours of model time, present on disk, reported as absent. A
+ * control file at 497.4 MB loads fine, which is exactly what makes it invisible: it works until a
+ * repo crosses half a gigabyte, and then it stops working without saying so.
+ *
+ * Streaming has no ceiling and holds one line at a time. It is also the same shape
+ * `loadSharedCache` already uses — this file was the outlier.
+ */
 async function loadNdjsonMap<K extends string, V>(
   filePath: string,
   guard: (parsed: unknown) => boolean,
   toEntry: (parsed: unknown) => [K, V],
 ): Promise<Map<K, V> | null> {
+  const map = new Map<K, V>();
   try {
-    const raw = await readFile(filePath, "utf-8");
-    const map = new Map<K, V>();
-
-    for (const line of raw.split("\n")) {
+    const rl = createInterface({
+      input: createReadStream(filePath, { encoding: "utf-8" }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-
       try {
         const parsed: unknown = JSON.parse(trimmed);
         if (guard(parsed)) {
@@ -92,14 +115,16 @@ async function loadNdjsonMap<K extends string, V>(
           map.set(key, value);
         }
       } catch {
-        // Skip malformed lines
+        // Skip a malformed line rather than abandoning the whole file. A truncated tail is the
+        // expected failure — a writer killed mid-append leaves one.
       }
     }
-
-    return map.size > 0 ? map : null;
   } catch {
-    return null;
+    // Missing or unreadable file. Anything already parsed is still worth returning: under the old
+    // whole-file read a single bad byte cost the entire map.
+    return map.size > 0 ? map : null;
   }
+  return map.size > 0 ? map : null;
 }
 
 /**

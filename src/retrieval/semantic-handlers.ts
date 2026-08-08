@@ -47,7 +47,7 @@ async function loadSemanticContext(
   const { createEmbeddingProvider, cosineSimilarity } = await import("../search/semantic.js");
   const { loadConfig: getConfig } = await import("../config.js");
   const { getRepo } = await import("../storage/registry.js");
-  const { loadChunks, loadChunkEmbeddings, getChunkPath, getChunkEmbeddingPath } =
+  const { loadChunks, getChunkPath } =
     await import("../storage/chunk-store.js");
 
   const config = getConfig();
@@ -70,9 +70,14 @@ async function loadSemanticContext(
   let chunkEmbeddings: Map<string, Float32Array> | null = null;
 
   if (repoMeta) {
+    // Chunk embeddings come from the cache, not a fresh parse. This call used to re-read and
+    // re-parse the whole ndjson on EVERY query: 958–1,208 ms and a +686 MB RSS spike each time,
+    // 87% of the query's wall clock, for a file that had not changed since the previous question.
+    // The cosine similarity the query exists to compute was 2%.
+    const { getChunkEmbeddingCache } = await import("../tools/index-tools/registry.js");
     [chunks, chunkEmbeddings] = await Promise.all([
       loadChunks(getChunkPath(repoMeta.index_path)),
-      loadChunkEmbeddings(getChunkEmbeddingPath(repoMeta.index_path)),
+      getChunkEmbeddingCache(repo),
     ]);
   }
 

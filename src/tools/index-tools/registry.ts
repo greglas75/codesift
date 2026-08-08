@@ -399,6 +399,68 @@ export function _resetEmbeddingLoadCountForTesting(): void {
  * or if embeddings are disabled (lite mode). Bounds resident RAM via LRU, and
  * dedupes concurrent first-access so the load runs exactly once per repo.
  */
+/**
+ * Chunk embeddings, cached exactly like symbol embeddings.
+ *
+ * `loadChunkEmbeddings` had NO cache and NO budget and was called on EVERY semantic query — the
+ * single largest measured cost in the system. Measured 2026-08-09 on a warm 439.0 MB / 26,975-chunk
+ * file: 958 / 1,104 / 1,208 ms per query with a +686 MB RSS spike each time, which is 87% of a
+ * semantic query's wall clock. The cosine similarity the query actually exists to compute is 2%.
+ * Re-parsing the same gigabyte on every question is not a format problem, so it is fixed before any
+ * format changes.
+ *
+ * Deliberately the SAME map, keyed `<repo>:chunks`, rather than a second cache: the RAM budget is a
+ * statement about total resident embedding bytes, and chunk vectors are embedding bytes. Two
+ * independent budgets would each be satisfied while together doubling the footprint.
+ */
+export async function getChunkEmbeddingCache(
+  repoName: string,
+): Promise<Map<string, Float32Array> | null> {
+  if (embeddingsDisabled()) return null;
+  const cacheKey = `${repoName}:chunks`;
+
+  const cached = embeddingCaches.get(cacheKey);
+  if (cached) {
+    embeddingCaches.delete(cacheKey);
+    embeddingCaches.set(cacheKey, cached);
+    return cached;
+  }
+
+  const inFlight = embeddingLoadsInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const loadPromise = (async (): Promise<Map<string, Float32Array> | null> => {
+    const config = loadConfig();
+    const meta = await getRepo(config.registryPath, repoName);
+    if (!meta) return null;
+
+    // Same model-mismatch rule as the symbol path: vectors from another model are not stale, they
+    // are incomparable, and every downstream path drops them silently into "nothing matched".
+    const { getEmbeddingMetaPath, loadEmbeddingMeta } = await import("../../storage/embedding-store.js");
+    const { expectedEmbeddingModel } = await import("../../search/semantic.js");
+    const embMeta = await loadEmbeddingMeta(getEmbeddingMetaPath(meta.index_path));
+    if (embMeta && config.embeddingProvider) {
+      const want = expectedEmbeddingModel(config.embeddingProvider, config.localModel, config.ollamaModel);
+      if (embMeta.model !== want) return null;
+    }
+
+    const { loadChunkEmbeddings, getChunkEmbeddingPath } = await import("../../storage/chunk-store.js");
+    const loaded = await loadChunkEmbeddings(getChunkEmbeddingPath(meta.index_path));
+    if (!loaded || loaded.size === 0) return null;
+
+    embeddingCaches.set(cacheKey, loaded);
+    evictEmbeddingCachesOverBudget(cacheKey);
+    return loaded;
+  })();
+
+  embeddingLoadsInFlight.set(cacheKey, loadPromise);
+  try {
+    return await loadPromise;
+  } finally {
+    embeddingLoadsInFlight.delete(cacheKey);
+  }
+}
+
 export async function getEmbeddingCache(
   repoName: string,
 ): Promise<Map<string, Float32Array> | null> {
