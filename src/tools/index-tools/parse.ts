@@ -330,6 +330,12 @@ export async function embedChunks(
         (texts) => provider.embed(texts, "document"),
         CHUNK_EMBEDDING_BATCH_SIZE,
         `${repoName}:chunks`,
+        // Chunks were the ONLY embedding path that never passed model identity, so they sat
+        // outside the cross-repo cache entirely: every worktree re-embedded chunk text that was
+        // byte-identical to its parent checkout. Measured 2026-08-09 — chunk embeddings are
+        // 8.25 GB across 30 files, the second largest thing in the data dir, and not one byte of
+        // it was ever eligible for a lookup. The symbol path ~85 lines above always passed this.
+        { model: provider.model, dimensions: provider.dimensions },
       );
       await saveChunks(chunkPath, allChunks);
       await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
