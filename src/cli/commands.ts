@@ -336,6 +336,50 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       if (stem) live.add(stem);
     }
   }
+  // An index database is LIVE if its own `meta` says it describes a directory that still exists —
+  // whether or not the registry knows about it.
+  //
+  // The registry is not the authority on what exists; it is a lookup table, and it drifts. Measured
+  // 2026-08-07: `local/tgm-survey-platform` had been re-registered onto a worktree that was later
+  // deleted, leaving the MAIN checkout's index — 240,706 symbols, and 8.33 GB once its embeddings
+  // are counted — described by no entry at all. Prune classified every byte of it as orphaned.
+  // Twenty-four hours later three MORE databases had drifted the same way, so this is a rate, not
+  // an incident.
+  //
+  // Asking each database who it is costs one small read per unregistered hash, and removes a whole
+  // class of data loss: a repo still present on disk can no longer be deleted because a JSON file
+  // lost track of it. Re-registering also means the next lookup finds it.
+  const rescued: string[] = [];
+  for (const name of readdirSync(dataDir)) {
+    const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
+    if (!m?.[1] || live.has(m[1])) continue;
+    try {
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
+      const rows = db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>;
+      db.close();
+      const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+      const root = meta["root"];
+      const repo = meta["repo"];
+      if (!root || !repo) continue;
+      statSync(root); // throws when the tree is gone — then it really is garbage
+      live.add(m[1]);
+      rescued.push(repo);
+      if (!dryRun) {
+        const { registerRepo } = await import("../storage/registry.js");
+        // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
+        // live-set above is built from these strings.
+        await registerRepo(join(dataDir, "registry.json"), {
+          name: repo,
+          root,
+          index_path: join(dataDir, `${m[1]}.index.json`),
+        } as never);
+      }
+    } catch {
+      /* unreadable, or the tree is gone — leave it to the sweep */
+    }
+  }
+
   // Safety: an empty live set would mark every artifact orphaned. Refuse rather
   // than risk nuking a valid (but momentarily empty-looking) data dir.
   if (live.size === 0) {
@@ -366,6 +410,8 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   }
 
   output({
+    rescued_repos: rescued.length,
+    rescued_examples: rescued.slice(0, 5),
     stale_repos: stale.length,
     stale_examples: stale.slice(0, 5).map((s) => s.name),
     pruned: !dryRun,
