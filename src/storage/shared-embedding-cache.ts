@@ -42,7 +42,17 @@ import { join } from "node:path";
  *
  * v2 record layout, little-endian throughout:
  *
- *     [16 B key][2 B dim][dim*4 B float32 vector]
+ *     [16 B key][2 B dim][4 B crc32 of the vector bytes][dim*4 B float32 vector]
+ *
+ * The checksum is not ceremony. Corruption injection against the first draft of this reader
+ * (2026-08-09) measured what a record without one costs: two flipped bytes inside a vector were
+ * served as a valid embedding — 1000 of 1000 records "read successfully", one of them silently
+ * wrong — and 99.417% of a 3,090-byte record was payload that nothing verified. A wrong vector is
+ * worse than a missing one: it produces a plausible similarity score instead of a cache miss.
+ *
+ * It also buys RESYNC. That same pass showed one implausible dim byte at record 10 cost 99% of the
+ * file, because the reader stopped rather than guess. With a checksum the reader can skip exactly
+ * one record and carry on, and be right about having skipped it.
  *
  * The key is `contentKey`'s 32 hex chars as raw bytes. `dim` is per record
  * rather than in a header because two models with different dimensions can
@@ -66,6 +76,32 @@ const CACHE_VERSION = 2;
 
 /** Bytes of key stored per record — `contentKey` is 32 hex chars = 16 bytes. */
 const KEY_BYTES = 16;
+
+/** key + dim + crc, before the vector payload. */
+const HEADER_BYTES = KEY_BYTES + 2 + 4;
+
+/**
+ * CRC-32 of the vector bytes.
+ *
+ * Not cryptographic and not meant to be: the threat is a torn write or a flipped bit, not an
+ * adversary. 4 bytes on a 3,090-byte record is 0.13% for the difference between "this vector is
+ * wrong" and "this vector is wrong and nobody can tell".
+ */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer, start: number, end: number): number {
+  let c = 0xffffffff;
+  for (let i = start; i < end; i++) c = (CRC_TABLE[(c ^ (buf[i] as number)) & 0xff] as number) ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
 
 /**
  * Largest single `appendFileSync` payload.
@@ -123,6 +159,8 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 
   if (existsSync(path)) {
     let fd: number | undefined;
+    let corrupt = 0;
+    let skippedTail = false;
     try {
       const size = statSync(path).size;
       fd = openSync(path, "r");
@@ -142,20 +180,33 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
         const data = carry.length > 0 ? Buffer.concat([carry, buf.subarray(0, got)]) : buf.subarray(0, got);
         let p = 0;
         for (;;) {
-          if (p + KEY_BYTES + 2 > data.length) break;
+          if (p + HEADER_BYTES > data.length) break;
           const dim = data.readUInt16LE(p + KEY_BYTES);
           if (dim === 0 || dim > MAX_DIM) {
-            // Not a plausible record: the file is corrupt from here on. Keep
-            // what was read and stop, rather than resyncing on a guess.
+            // Cannot know where the next record starts, so this is where reading ends. Say how much
+            // was kept: the first draft did this silently, and one bad byte at record 10 cost 99%
+            // of the file with no way to notice.
+            skippedTail = true;
             p = data.length;
             offset = size;
             break;
           }
-          const total = KEY_BYTES + 2 + dim * 4;
+          const total = HEADER_BYTES + dim * 4;
           if (p + total > data.length) break; // record spans the slab boundary
+
+          const want = data.readUInt32LE(p + KEY_BYTES + 2);
+          if (crc32(data, p + HEADER_BYTES, p + total) !== want) {
+            // The length is intact, so the NEXT record's offset is still known: skip exactly this
+            // one and keep going. Without the checksum this record would have been served as a
+            // valid vector — a wrong embedding produces a plausible score, not a cache miss.
+            corrupt++;
+            p += total;
+            continue;
+          }
+
           const key = data.subarray(p, p + KEY_BYTES).toString("hex");
           const vec = new Float32Array(dim);
-          for (let i = 0; i < dim; i++) vec[i] = data.readFloatLE(p + KEY_BYTES + 2 + i * 4);
+          for (let i = 0; i < dim; i++) vec[i] = data.readFloatLE(p + HEADER_BYTES + i * 4);
           map.set(key, vec);
           p += total;
         }
@@ -164,6 +215,13 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
     } catch {
       // Unreadable — behave as if empty.
     } finally {
+      if (corrupt > 0 || skippedTail) {
+        console.error(
+          `[codesift] shared embedding cache: kept ${map.size} vectors, dropped ${corrupt} failing ` +
+            `checksum${skippedTail ? " and stopped early at an unreadable record" : ""}. ` +
+            `It is derived — delete ${path} to rebuild.`,
+        );
+      }
       if (fd !== undefined) {
         try {
           closeSync(fd);
@@ -181,10 +239,11 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 
 function encodeRecord(key: string, vec: Float32Array): Buffer | null {
   if (key.length !== KEY_BYTES * 2 || vec.length === 0 || vec.length > MAX_DIM) return null;
-  const rec = Buffer.allocUnsafe(KEY_BYTES + 2 + vec.length * 4);
+  const rec = Buffer.allocUnsafe(HEADER_BYTES + vec.length * 4);
   rec.write(key, 0, KEY_BYTES, "hex");
   rec.writeUInt16LE(vec.length, KEY_BYTES);
-  for (let i = 0; i < vec.length; i++) rec.writeFloatLE(vec[i] as number, KEY_BYTES + 2 + i * 4);
+  for (let i = 0; i < vec.length; i++) rec.writeFloatLE(vec[i] as number, HEADER_BYTES + i * 4);
+  rec.writeUInt32LE(crc32(rec, HEADER_BYTES, rec.length), KEY_BYTES + 2);
   return rec;
 }
 

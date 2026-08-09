@@ -100,13 +100,13 @@ describe("round trip is exact and compact", () => {
     }
   });
 
-  it("uses fixed-width records — 3,090 bytes per 768-dim vector, not 16,248", async () => {
+  it("uses fixed-width records — 3,094 bytes per 768-dim vector, not 16,248", async () => {
     await loadSharedCache();
     const n = 100;
     appendSharedCache(Array.from({ length: n }, (_, i) => ({ key: keyOf(i), vec: vec(i) })));
 
     const size = (await stat(await cacheFile())).size;
-    expect(size).toBe(n * (16 + 2 + DIM * 4));
+    expect(size).toBe(n * (16 + 2 + 4 + DIM * 4));
     // Against v1's measured 16,248 bytes per line.
     expect(size / n).toBeLessThan(16_248 / 5);
   });
@@ -155,7 +155,7 @@ describe("a torn tail costs one record, not the cache", () => {
     const path = await cacheFile();
     const fh = await open(path, "r+");
     // Corrupt the SECOND record's dim field to something absurd.
-    const rec = 16 + 2 + DIM * 4;
+    const rec = 16 + 2 + 4 + DIM * 4;
     await fh.write(Buffer.from([0xff, 0xff]), 0, 2, rec + 16);
     await fh.close();
 
@@ -228,5 +228,48 @@ describe("a second repo with identical content does not call the model", () => {
     await batchEmbed(new Map([["b:1", "beta"]]), new Map(), embed, 100, "b", model);
     // Two distinct texts: a cache that returned a hit here would be silently corrupting results.
     expect(textsEmbedded).toBe(2);
+  });
+});
+
+/**
+ * A record that fails its checksum must not be served.
+ *
+ * Corruption injection against the first draft measured the cost of not checking: two flipped bytes
+ * inside a vector produced 1000 of 1000 records "read successfully", one of them silently wrong.
+ * A wrong embedding yields a plausible similarity score, which is worse than a cache miss — the
+ * miss is recoverable and the wrong answer is not detectable.
+ *
+ * And one implausible dim byte at record 10 cost 99% of the file, because the reader stopped rather
+ * than guess where the next record began. With the length intact the next offset IS known, so a
+ * failing checksum now costs exactly one record.
+ */
+describe("a corrupt vector is dropped, not served", () => {
+  it("skips the damaged record and keeps every other one", async () => {
+    await loadSharedCache();
+    const entries = Array.from({ length: 20 }, (_, i) => ({ key: keyOf(i), vec: vec(i) }));
+    appendSharedCache(entries);
+
+    const REC = 16 + 2 + 4 + DIM * 4;
+    const fh = await open(await cacheFile(), "r+");
+    // Flip two bytes deep inside record 5's vector — the shape stays perfectly plausible.
+    await fh.write(Buffer.from([0x7f, 0x7f]), 0, 2, REC * 5 + 16 + 2 + 4 + 400);
+    await fh.close();
+
+    _resetSharedCacheForTests();
+    const loaded = await loadSharedCache();
+
+    expect(loaded.size).toBe(19);          // one dropped, not one served wrong
+    expect(loaded.has(keyOf(5))).toBe(false);
+    expect(loaded.has(keyOf(4))).toBe(true);
+    expect(loaded.has(keyOf(19))).toBe(true); // and reading continued past it
+  });
+
+  it("round trip still returns the exact vector when the checksum matches", async () => {
+    await loadSharedCache();
+    const e = { key: keyOf(1), vec: vec(1) };
+    appendSharedCache([e]);
+    _resetSharedCacheForTests();
+    const loaded = await loadSharedCache();
+    expect(Array.from(loaded.get(e.key) as Float32Array)).toEqual(Array.from(e.vec));
   });
 });
