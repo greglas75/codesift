@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import type { CodeChunk } from "../types.js";
-import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
+import { cleanupOrphanTempFiles } from "./_shared.js";
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -57,19 +57,47 @@ export async function saveChunks(
   chunkPath: string,
   chunks: CodeChunk[],
 ): Promise<void> {
-  const lines = chunks.map((c) =>
-    JSON.stringify({
-      id: c.id,
-      file: c.file,
-      startLine: c.startLine,
-      endLine: c.endLine,
-      text: c.text,
-      tokenCount: c.tokenCount,
-    } satisfies ChunkLine),
-  );
+  // Streams for the same reason saveChunkEmbeddings does, one function below: a
+  // single `lines.join("\n")` throws `RangeError: Invalid string length` once the
+  // combined ndjson passes V8's max string length (~512 MiB), and this file holds
+  // the chunk TEXT, so it is the larger of the two. The sibling was fixed and this
+  // one was not — the largest chunks.ndjson on this machine is 154 MB (30% of the
+  // ceiling), so it is a latent failure, and one that would land at the END of a
+  // multi-hour embedding run with the vectors already computed.
+  await cleanupOrphanTempFiles(chunkPath);
 
-  const data = lines.join("\n") + "\n";
-  await atomicWriteFile(chunkPath, data);
+  const tmpPath = `${chunkPath}.tmp.${Date.now()}`;
+  const { createWriteStream } = await import("node:fs");
+  const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
+
+  let streamError: Error | null = null;
+  stream.on("error", (err) => { streamError = err; });
+
+  try {
+    for (const c of chunks) {
+      if (streamError) throw streamError;
+      const line = JSON.stringify({
+        id: c.id,
+        file: c.file,
+        startLine: c.startLine,
+        endLine: c.endLine,
+        text: c.text,
+        tokenCount: c.tokenCount,
+      } satisfies ChunkLine) + "\n";
+      if (!stream.write(line)) {
+        await new Promise<void>((resolve) => stream.once("drain", resolve));
+      }
+    }
+    if (streamError) throw streamError;
+    await new Promise<void>((resolve, reject) => {
+      stream.end(() => streamError ? reject(streamError) : resolve());
+    });
+    const { rename } = await import("node:fs/promises");
+    await rename(tmpPath, chunkPath);
+  } catch (err) {
+    try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 /** Generic NDJSON loader — reads file, parses each line, filters with a type guard, maps to value. */
