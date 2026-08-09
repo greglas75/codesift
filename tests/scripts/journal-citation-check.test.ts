@@ -9,7 +9,17 @@ const REPO_ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "")
 const FIXTURE = join(REPO_ROOT, "tests/fixtures/journal/citation-golden.md");
 const SCRIPT = join(REPO_ROOT, "scripts/journal-citation-check.ts");
 
-describe("journal-citation-check", () => {
+// The check decides whether a cited SHA is real by asking `git log --all`, so it needs actual
+// history — and the expected counts below (15/20) are counts of things that resolve against THIS
+// repo's commits. The test-farm mirror ships the working tree without `.git`, where every SHA
+// looks ungrounded and the whole file failed on an environment gap rather than a defect. Skipping
+// where the premise does not hold beats a red suite that everyone learns to ignore.
+const hasGitHistory = spawnSync("git", ["rev-parse", "--git-dir"], {
+  cwd: REPO_ROOT,
+  encoding: "utf-8",
+}).status === 0;
+
+describe.skipIf(!hasGitHistory)("journal-citation-check", () => {
   // (a) Golden fixture: 15 grounded / 20 total = 75%
   it("returns 15/20 grounded (75%) for citation-golden.md and passes threshold 70", async () => {
     const result = await runCitationCheck(FIXTURE, 70);

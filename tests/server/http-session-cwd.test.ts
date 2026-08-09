@@ -12,6 +12,35 @@ import {
 } from "../../src/server-helpers/request-context.js";
 
 /**
+ * A socket from the client's keep-alive pool that the previous server already
+ * closed. Undici surfaces it as a transport failure with no HTTP response at all,
+ * which is exactly what distinguishes it from a server that answered and rejected
+ * us — the latter is a real regression and must never be retried away.
+ */
+function isDeadPooledSocket(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let e: unknown = err; e && !seen.has(e); e = (e as { cause?: unknown }).cause) {
+    seen.add(e);
+    const code = (e as { code?: unknown }).code;
+    if (code === "UND_ERR_SOCKET" || code === "ECONNRESET" || code === "ECONNREFUSED") return true;
+    if (/other side closed|socket hang up/i.test(String((e as { message?: unknown }).message ?? ""))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Ask for the tool list, tolerating exactly one dead-pooled-socket failure. */
+async function listToolsAcrossRestart(client: Client): ReturnType<Client["listTools"]> {
+  try {
+    return await client.listTools();
+  } catch (err) {
+    if (!isDeadPooledSocket(err)) throw err;
+    return await client.listTools();
+  }
+}
+
+/**
  * The shared HTTP daemon is ONE process for every client on the machine, started
  * by launchd in `/`. Repo auto-resolution reads a working directory, so without
  * a per-session one every daemon-served call answered
@@ -123,7 +152,18 @@ describe("HTTP daemon — stateless serving", () => {
     close = second.close;
 
     // Same client object, no re-initialize.
-    const after = await client.listTools();
+    //
+    // One transport-level retry, and only that. Closing the first server leaves the
+    // client's pooled keep-alive socket dangling, so the first request after the swap
+    // can die in undici with UND_ERR_SOCKET ("other side closed") before it ever
+    // reaches the new process — measured 2 failures in 10 runs on the test farm, where
+    // the extra load widens the window. That is HTTP connection reuse, not the thing
+    // this test is about, and a real client retries it too.
+    //
+    // The regression this guards against looks different: it REACHES the new server and
+    // comes back "no valid session", which is an MCP-level error and is not retried
+    // here — so the retry cannot hide the failure the test exists to catch.
+    const after = await listToolsAcrossRestart(client);
     expect(after.tools.length).toBeGreaterThan(0);
 
     await client.close();
