@@ -133,12 +133,32 @@ Note the farm **is** burst-i9, and `100.69.215.9:11434` (ollama) is that same ho
 reaches ollama behaves differently there than on a laptop — possibly *better*, which is worse,
 because it hides a broken default. Each of these needs to either mock the endpoint or skip loudly.
 
-### 2.3 Known pre-existing flake, do not let it mask a regression
+### 2.3 Known pre-existing flake — FIXED 2026-08-10
 
 `tests/server/http-session-cwd.test.ts > "keeps serving the same client after the server instance is
-replaced"` fails **1 in 10** runs in isolation (measured at v0.14.0; matches the rate recorded for
-B-6 at v0.12.0). Fix the readiness race in the test's own restart sequence, or the farm will produce
-red runs nobody trusts.
+replaced"` failed **1 in 10** locally and **2 in 10 on the farm** (`rt --repeat 10`), where the extra
+load widens the window.
+
+It was not a readiness race, which is what this section previously guessed. Closing the first server
+leaves the client's pooled keep-alive socket dangling, so the next request dies inside undici with
+`UND_ERR_SOCKET` / "other side closed" **before it ever reaches the new process** — HTTP connection
+reuse, not the session the test is about. The test now tolerates exactly one transport-level failure
+(no HTTP response at all) and still propagates an MCP-level `no valid session`, which is the
+regression it exists to catch. **12/12** after the change.
+
+Worth copying elsewhere: `rt --repeat N <cmd>` runs N times in ONE job and reports the failure RATE.
+It turns "is this a flake?" into a measurement instead of an argument.
+
+### 2.4 Git-dependent tests must skip where the mirror has no `.git`
+
+`tests/scripts/journal-citation-check.test.ts` validates cited SHAs with `git log --all`, and its
+expected counts are counts against this repo's real history. The farm mirrors the working tree
+**without `.git`**, so every SHA looked ungrounded and the file failed on an environment gap. It now
+skips when `git rev-parse --git-dir` fails — visibly, as a skip — and runs in full locally.
+
+The better fix is farm-side (mirror `.git`), and it is still listed in section 1. Until then, any
+test that shells out to git needs the same guard: a red suite that everyone learns to ignore is worse
+than a skip that says why.
 
 ---
 
@@ -181,20 +201,43 @@ Done when all of these hold:
 6. CI runs on a self-hosted runner for `push`/tags, with fork PRs demonstrably not able to execute on
    it.
 
-## 5. The full suite does not finish on the farm — measured
+## 5. The full suite did not finish on the farm — SOLVED 2026-08-10
 
-Three attempts, none completed:
+**Root cause: `tests/storage/stable-host-id.test.ts` used `/proc/nonexistent-codesift-dir` as its
+"data dir that cannot be written" fixture.** macOS has no `/proc`, so it passed locally. On Linux
+`mkdirSync(path, { recursive: true })` under procfs does not fail — it **spins**, burning 100% of a
+core forever. The non-recursive form throws `ENOENT` in 0 ms, which is what makes it look harmless.
+Reproduced directly on the farm (Node v22.23.1):
 
-| attempt | outcome |
-|---|---|
-| 1 | ran ~10 min with no visible output (see 1.2), I killed it believing it hung |
-| 2 | cancelled by my own timeout at 2m53s — but re-attaching dumped **1413 lines**, so it had been working |
-| 3 | **killed by the farm at its absolute ceiling: `TIMEOUT after 14410s — absolute ceiling 14400s`** |
+```
+mkdirSync("/proc/nope")                    -> throws ENOENT in 0 ms
+mkdirSync("/proc/nope", {recursive:true})  -> never returns, 98.8% CPU
+```
 
-Four hours. Locally the same suite finishes in **1–3 minutes**. The last tests to complete before the
-stall were the shell-out benchmarks in `tests/scripts/` — `validate-nextjs-accuracy.ts`,
-`benchmark-nextjs-tools.ts`, `validate-nextjs-route-count.ts`. Those spawn child processes; they are
-the first place to look.
+Fixed by pointing the fixture at a regular FILE with a path hung off it, which fails `ENOTDIR`
+instantly on both platforms. The suite now finishes on the farm in **~36–55 s**, exit 0.
+
+**Do not use `/proc`, `/dev`, or `/sys` paths in test fixtures.** A path that is merely absent on
+the dev machine can be a live virtual filesystem on the runner.
+
+How it was found, because the method generalises: the log records every completed test file, so
+diffing that against `find tests -name '*.test.ts'` named the culprit in one step — 389 of 390 done,
+one missing. No bisect needed.
+
+Two earlier leads recorded here were **wrong** and are struck for the record: the `tests/scripts/`
+shell-out benchmarks (they were simply the last files to print before the stall), and the suite
+"not failing, just not finishing" framing (it was one file, and it was a real defect).
+
+Two related farm behaviours confirmed while fixing it:
+
+- `rt --cancel <runid>` is the supported way to free a wedged job. One wedged run held a core for
+  **54 minutes**; the watchdog's silence threshold (600 s) never fired against 3211 s of silence, so
+  **the silence timeout does not work** — still open, and it is what let a single stuck job idle a
+  farm slot indefinitely.
+- The local stream can go silent while the job is healthy. `SUSPECT (silent Ns)` in `rt --queue`
+  means the CLIENT stopped receiving, not that the job is stuck. Check the farm-side log
+  (`/home/tf/logs/<runid>.log`) before concluding anything — attempt 1 above was killed for exactly
+  this misreading.
 
 Note the arithmetic: attempt 3 was launched ~25 minutes before it died on a 14410 s clock. It did not
 start that clock. **`rt` adopted an older, already-stuck job for the same mirror instead of
