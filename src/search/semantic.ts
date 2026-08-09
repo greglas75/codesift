@@ -3,16 +3,42 @@ import { StaticEmbeddingProvider } from "./static-embedding-provider.js";
 
 const MAX_SYMBOL_SOURCE_CHARS = 200;
 const MAX_ERROR_DETAIL_CHARS = 200;
-// Per-request embed timeout. 30s suits remote APIs (Voyage/OpenAI) with small
-// batches, but a local Ollama GPU embedding a large batch of long chunks can
-// legitimately take longer — a 1024-batch measured ~28s, and bigger/longer
-// batches abort mid-flight, so embedSymbols/embedChunks then silently write
-// nothing. Configurable via CODESIFT_EMBEDDING_TIMEOUT_MS.
-const EMBEDDING_TIMEOUT_MS = (() => {
+// Per-request embed timeout.
+//
+// This used to be a flat 30s, with a comment that already described the failure it
+// caused ("bigger/longer batches abort mid-flight, so embedSymbols/embedChunks then
+// silently write nothing") and pointed at an env var as the remedy — while leaving
+// the default at the value known to be marginal. It duly happened: designer's chunk
+// pass died on `The operation was aborted due to timeout` after its symbol pass had
+// already written 3.6 GB.
+//
+// A per-request deadline that ignores how much work the request carries is the bug.
+// Embedding cost tracks total input SIZE, not item count, which is why chunks failed
+// where symbols did not despite a SMALLER batch (96 vs 128): a chunk is a code block,
+// a symbol is a signature. Measured on this machine under load, Ollama +
+// embeddinggemma: 96 chunks / 98,605 chars → 17.5s, i.e. ~177 ms per 1000 chars.
+//
+// The budget below allows ~700 ms per 1000 chars — a 4x margin over that measurement
+// — on top of a 30s floor that preserves the old behaviour for the small batches
+// remote APIs get. An explicit CODESIFT_EMBEDDING_TIMEOUT_MS still wins outright.
+const EMBEDDING_TIMEOUT_FLOOR_MS = 30_000;
+const EMBEDDING_TIMEOUT_MS_PER_1K_CHARS = 700;
+const EMBEDDING_TIMEOUT_CEILING_MS = 900_000;
+
+const EMBEDDING_TIMEOUT_OVERRIDE_MS = (() => {
   const raw = process.env["CODESIFT_EMBEDDING_TIMEOUT_MS"];
   const n = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 30_000;
+  return Number.isFinite(n) && n > 0 ? n : null;
 })();
+
+/** Deadline for one embed request, scaled by the characters it actually carries. */
+export function embeddingTimeoutMs(texts: readonly string[]): number {
+  if (EMBEDDING_TIMEOUT_OVERRIDE_MS !== null) return EMBEDDING_TIMEOUT_OVERRIDE_MS;
+  let chars = 0;
+  for (const t of texts) chars += t.length;
+  const scaled = EMBEDDING_TIMEOUT_FLOOR_MS + (chars / 1000) * EMBEDDING_TIMEOUT_MS_PER_1K_CHARS;
+  return Math.min(EMBEDDING_TIMEOUT_CEILING_MS, Math.round(scaled));
+}
 
 // ---------------------------------------------------------------------------
 // Provider abstraction
@@ -169,6 +195,13 @@ async function fetchEmbeddings(
   requestBody: Record<string, unknown>,
   providerName: string,
 ): Promise<number[][]> {
+  // The texts live in the request body for every OpenAI-compatible provider, so the
+  // deadline is derived from the same place for local and remote alike. A body that
+  // does not carry an input array simply gets the 30s floor, which is what remote
+  // batches used before this scaled.
+  const inputs = requestBody["input"];
+  const texts = Array.isArray(inputs) ? inputs.filter((x): x is string => typeof x === "string") : [];
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -176,7 +209,7 @@ async function fetchEmbeddings(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
+    signal: AbortSignal.timeout(embeddingTimeoutMs(texts)),
   });
 
   if (!response.ok) {
@@ -279,7 +312,7 @@ export class OllamaProvider implements EmbeddingProvider {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: this.model, input: capped }),
-      signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
+      signal: AbortSignal.timeout(embeddingTimeoutMs(capped)),
     });
 
     if (!response.ok) {
