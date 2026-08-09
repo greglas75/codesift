@@ -334,12 +334,13 @@ export async function batchEmbed(
       stillToEmbed.push({ ...item, key });
     }
   }
-  toEmbed.length = 0;
-  toEmbed.push(...stillToEmbed);
-
-  // Process in batches (only symbols that need embedding)
-  for (let i = 0; i < toEmbed.length; i += batchSize) {
-    const batch = toEmbed.slice(i, i + batchSize);
+  // Iterate `stillToEmbed` directly. Copying it back into `toEmbed` via
+  // `push(...stillToEmbed)` spread one argument per symbol onto the call stack,
+  // which V8 overflows somewhere between 100k and 125k arguments — so every repo
+  // above ~100k symbols threw "Maximum call stack size exceeded" here and could
+  // never be embedded at all (12 repos on this machine, the four largest first).
+  for (let i = 0; i < stillToEmbed.length; i += batchSize) {
+    const batch = stillToEmbed.slice(i, i + batchSize);
     const texts = batch.map((b) => b.text);
 
     const vectors = await embedFn(texts);
@@ -350,8 +351,7 @@ export async function batchEmbed(
       if (entry && vec) {
         const f32 = new Float32Array(vec);
         result.set(entry.id, f32);
-        const key = (entry as { key?: string }).key;
-        if (key) freshlyEmbedded.push({ key, vec: f32 });
+        if (entry.key) freshlyEmbedded.push({ key: entry.key, vec: f32 });
       }
     }
   }

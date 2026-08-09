@@ -48,8 +48,21 @@ async function main(): Promise<void> {
     return;
   }
 
-  await embedSymbols(index.symbols, indexPath, repoName, config);
-  await embedChunks(index.files, rootPath, repoName, indexPath, config, index.symbols);
+  // Both report failure instead of throwing: embedding is non-fatal to INDEXING,
+  // but it is the entire job of this process, so a failure here must not be
+  // reported to the parent as a completed run. The marker is the parent's only
+  // success signal, and it used to be written unconditionally — a repo whose
+  // embedding threw looked identical to one that finished.
+  const symbolsOk = await embedSymbols(index.symbols, indexPath, repoName, config);
+  const chunksOk = await embedChunks(index.files, rootPath, repoName, indexPath, config, index.symbols);
+  if (!symbolsOk || !chunksOk) {
+    process.stderr.write(
+      `embed-child: ${repoName} incomplete (symbols=${symbolsOk ? "ok" : "failed"}, ` +
+      `chunks=${chunksOk ? "ok" : "failed"}) — see the logged reason above\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   process.stdout.write(`${EMBED_CHILD_OK_MARKER}\n`);
 }

@@ -73,7 +73,19 @@ describe("resolveHostTag", () => {
   });
 
   it("falls back to the live hostname when the data dir cannot be written", () => {
-    process.env["CODESIFT_DATA_DIR"] = "/proc/nonexistent-codesift-dir";
+    // The unwritable dir is a REGULAR FILE with a path hung off it, so mkdir fails
+    // with ENOTDIR instantly on every platform.
+    //
+    // This used to be "/proc/nonexistent-codesift-dir", which is only unwritable
+    // on Linux — and there `mkdirSync(..., {recursive: true})` does not fail, it
+    // SPINS: measured on the test farm (Node v22.23.1, Linux) it burned 100% of a
+    // core indefinitely, while the non-recursive form throws ENOENT in 0 ms. macOS
+    // has no /proc at all, so the fixture passed locally and wedged the entire
+    // suite on the farm — 389 of 390 files finished and the run never ended.
+    const blocker = join(dir, "not-a-directory");
+    writeFileSync(blocker, "x", "utf-8");
+    process.env["CODESIFT_DATA_DIR"] = join(blocker, "data");
+
     expect(resolveHostTag().length).toBeGreaterThan(0);
   });
 });

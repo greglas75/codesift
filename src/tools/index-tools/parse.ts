@@ -220,15 +220,24 @@ export function propagateDirtySignatures(
 
 /**
  * Embed symbols using the configured embedding provider.
- * Non-fatal — BM25 search still works if embedding fails.
+ *
+ * Non-fatal — BM25 search still works if embedding fails, so the indexing path
+ * deliberately ignores the result. It is RETURNED rather than only logged
+ * because a caller whose whole job is embedding (`embed-child`) must be able to
+ * tell failure from success: it used to print its success marker unconditionally
+ * after this returned, so a stack overflow that embedded nothing was reported to
+ * the parent as a completed run.
+ *
+ * @returns true when embeddings were written (or there is no provider to write
+ *   them with), false when the attempt failed and the reason was logged.
  */
 export async function embedSymbols(
   symbols: CodeSymbol[],
   indexPath: string,
   repoName: string,
   config: ReturnType<typeof loadConfig>,
-): Promise<void> {
-  if (!config.embeddingProvider) return;
+): Promise<boolean> {
+  if (!config.embeddingProvider) return true;
 
   const embeddingPath = getEmbeddingPath(indexPath);
   const metaPath = getEmbeddingMetaPath(indexPath);
@@ -257,9 +266,11 @@ export async function embedSymbols(
       updated_at: Date.now(),
     });
     embeddingCaches.set(repoName, embeddings);
+    return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
+    return false;
   }
 }
 
@@ -312,8 +323,8 @@ export async function embedChunks(
   indexPath: string,
   config: ReturnType<typeof loadConfig>,
   symbols?: CodeSymbol[],
-): Promise<void> {
-  if (!config.embeddingProvider) return;
+): Promise<boolean> {
+  if (!config.embeddingProvider) return true;
 
   const chunkPath = getChunkPath(indexPath);
   const chunkEmbeddingPath = getChunkEmbeddingPath(indexPath);
@@ -340,9 +351,11 @@ export async function embedChunks(
       await saveChunks(chunkPath, allChunks);
       await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
     }
+    return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[codesift] Chunk embedding failed for ${repoName}: ${message}`);
+    return false;
   }
 }
 
