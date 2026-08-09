@@ -13,7 +13,7 @@ import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintFunnel, aggre
 import { buildEnvProfile } from "./env-profile.js";
 import { getAnonId } from "./anon-id.js";
 import { buildLevel1Payload, assertSanitized } from "./sanitizer.js";
-import { aggregateRetros } from "./retro-aggregator.js";
+import { scanRetros } from "./retro-aggregator.js";
 
 const FLUSH_TIMEOUT_MS = 2000; // hard cap per spec §3
 const INITIAL_FLUSH_DELAY_MS = 10_000;
@@ -25,22 +25,40 @@ function dataDir(): string {
 function watermarkPath(): string {
   return join(dataDir(), "telemetry-watermark");
 }
+/**
+ * Retros get their OWN watermark. They are an independent stream with an independent clock, and
+ * the shared one silently ate them: it advances to the newest CODESIFT TOOL CALL of each flush,
+ * and a retro older than that (the normal case — CodeSift use continues after a skill ends) was
+ * then filtered out and, because the watermark only moves forward, never reconsidered.
+ *
+ * Absent on upgrade, so it starts at 0 and the first flush backfills the machine's retro history.
+ * That is intended: those runs happened and were never reported.
+ */
+function retroWatermarkPath(): string {
+  return join(dataDir(), "telemetry-watermark-retros");
+}
 
-function readWatermark(): number {
+function readTs(path: string): number {
   try {
-    const n = Number(readFileSync(watermarkPath(), "utf-8").trim());
+    const n = Number(readFileSync(path, "utf-8").trim());
     return Number.isFinite(n) ? n : 0;
   } catch {
     return 0;
   }
 }
-function writeWatermark(ts: number): void {
+function writeTs(path: string, ts: number): void {
   try {
     mkdirSync(dataDir(), { recursive: true });
-    writeFileSync(watermarkPath(), String(ts), "utf-8");
+    writeFileSync(path, String(ts), "utf-8");
   } catch {
     /* ignore */
   }
+}
+function readWatermark(): number {
+  return readTs(watermarkPath());
+}
+function writeWatermark(ts: number): void {
+  writeTs(watermarkPath(), ts);
 }
 
 /** Baked default collector — anonymous ingest needs NO token (the endpoint is
@@ -90,17 +108,29 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
   const ep = endpoint();
   const since = readWatermark();
   const entries = await readLocalUsageEntries(since);
-  if (entries.length === 0) return "empty";
   const maxTs = entries.reduce((m, e) => (e.ts > m ? e.ts : m), since);
 
   let body: unknown;
   let path: string;
+  let retroSince = 0;
+  let retroMaxTs = 0;
   if (level === "full") {
-    // Level 2 (opt-in): raw entries, batched. Full detail — query/paths included.
+    // Level 2 (opt-in): raw entries, batched. Full detail — query/paths included. Retros do not
+    // ride this level, so no tool usage genuinely means nothing to send.
+    if (entries.length === 0) return "empty";
     path = "/ingest/codesift";
     body = { schema_version: 1, level: "full", anon_id: getAnonId(), entries };
   } else {
     // Level 1 (anon): aggregate-only, allowlisted, guarded.
+    // Read retros BEFORE deciding there is nothing to send. They are an independent stream: a
+    // machine can run zuvo skills with no CodeSift tool calls at all (measured: CodeSift was
+    // unavailable / not-indexed / transport-closed in ~40% of zuvo runs), and the old
+    // `entries.length === 0 -> empty` return fired first, so those machines reported NOTHING and
+    // read as "zuvo is not installed here".
+    retroSince = readTs(retroWatermarkPath());
+    const scan = await scanRetros(retroSince);
+    retroMaxTs = scan.maxTs;
+    if (entries.length === 0 && scan.rows.length === 0) return "empty";
     path = "/ingest/codesift";
     const payload = buildLevel1Payload({
       anonId: getAnonId(),
@@ -111,8 +141,8 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
       // Absent when zuvo is not installed. Rides this payload rather than getting its own channel
       // because this is the channel that reaches anyone: `/ingest/zuvo` is token-gated (it carries
       // repo names and debt text) and its sender ships over SSH to a tailnet address, so it has
-      // exactly one reporting install. This one has eleven.
-      retros: await aggregateRetros(since),
+      // exactly one reporting install.
+      retros: scan.rows,
       now,
     });
     assertSanitized(payload); // never send an unsanitized L1 payload
@@ -124,6 +154,10 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
   if (!ok) return "failed"; // leave watermark — retry next flush
 
   writeWatermark(maxTs);
+  // Advance the retro watermark independently, and only forward. Guarded so a flush that carried
+  // no retros (or a level that does not carry them) cannot move it — moving it on an empty scan
+  // would re-create the original bug in a new place.
+  if (retroMaxTs > retroSince) writeTs(retroWatermarkPath(), retroMaxTs);
   return "sent";
 }
 
