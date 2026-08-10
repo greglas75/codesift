@@ -863,6 +863,24 @@ describe("extractOutboundCalls — bounded fetch options", () => {
     expect(calls[0]).toMatchObject({ method: "GET" });
   });
 
+  it("recognizes a method promoted by an inline object spread", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { ...{ method: "POST" } })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "POST" });
+  });
+
+  it("does not let braces in a regex hide a top-level method", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { pattern: /{/, method: "POST" })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "POST" });
+  });
+
   it("defaults an unterminated fetch to GET instead of scanning later calls", () => {
     const calls = extractOutboundCalls(
       `fetch("/broken", { headers: {}\nfetch("/later", { method: "POST" })`,

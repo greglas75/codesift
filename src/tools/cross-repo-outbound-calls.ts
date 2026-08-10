@@ -135,7 +135,9 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
  * Returns "GET" if not found.
  */
 function sniffFetchMethodFromWindow(window: string): string {
-  let objectDepth = 0;
+  const objectFrames: boolean[] = [];
+  let parenthesisDepth = 0;
+  let bracketDepth = 0;
   const skipQuoted = (start: number): number => {
     const quote = window[start]!;
     for (let index = start + 1; index < window.length; index++) {
@@ -158,6 +160,31 @@ function sniffFetchMethodFromWindow(window: string): string {
     const value = window.slice(valueStart + 1, valueEnd - 1);
     return /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(value) ? value.toUpperCase() : null;
   };
+  const startsSpreadObject = (brace: number): boolean => {
+    let index = brace - 1;
+    while (/\s/.test(window[index] ?? "")) index--;
+    return window.slice(index - 2, index + 1) === "...";
+  };
+  const startsRegex = (slash: number): boolean => {
+    let index = slash - 1;
+    while (/\s/.test(window[index] ?? "")) index--;
+    return index < 0 || /[(:,=!?;[{]/.test(window[index] ?? "");
+  };
+  const skipRegex = (start: number): number => {
+    let inCharacterClass = false;
+    for (let index = start + 1; index < window.length; index++) {
+      const char = window[index]!;
+      if (char === "\\") index++;
+      else if (char === "[") inCharacterClass = true;
+      else if (char === "]") inCharacterClass = false;
+      else if (char === "/" && !inCharacterClass) {
+        index++;
+        while (/[A-Za-z]/.test(window[index] ?? "")) index++;
+        return index;
+      }
+    }
+    return window.length;
+  };
 
   for (let index = 0; index < window.length;) {
     const char = window[index]!;
@@ -172,26 +199,55 @@ function sniffFetchMethodFromWindow(window: string): string {
       index = end === -1 ? window.length : end + 2;
       continue;
     }
+    if (char === "/" && startsRegex(index)) {
+      index = skipRegex(index);
+      continue;
+    }
     if (char === "{") {
-      objectDepth++;
+      const parentExposesOptions = objectFrames.at(-1) ?? false;
+      objectFrames.push(
+        objectFrames.length === 0
+          ? parenthesisDepth === 0 && bracketDepth === 0
+          : parentExposesOptions && startsSpreadObject(index),
+      );
       index++;
       continue;
     }
     if (char === "}") {
-      objectDepth = Math.max(0, objectDepth - 1);
+      objectFrames.pop();
+      index++;
+      continue;
+    }
+    if (char === "(") {
+      parenthesisDepth++;
+      index++;
+      continue;
+    }
+    if (char === ")") {
+      parenthesisDepth = Math.max(0, parenthesisDepth - 1);
+      index++;
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth++;
+      index++;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
       index++;
       continue;
     }
     if (char === "'" || char === '"' || char === "`") {
       const keyEnd = skipQuoted(index);
-      if (objectDepth === 1 && window.slice(index + 1, keyEnd - 1) === "method") {
+      if (objectFrames.at(-1) === true && window.slice(index + 1, keyEnd - 1) === "method") {
         const method = readMethodValue(skipWhitespace(keyEnd));
         if (method) return method;
       }
       index = keyEnd;
       continue;
     }
-    if (objectDepth === 1 && window.startsWith("method", index)) {
+    if (objectFrames.at(-1) === true && window.startsWith("method", index)) {
       const before = window[index - 1] ?? "";
       const after = window[index + 6] ?? "";
       if (!/[A-Za-z0-9_$]/.test(before) && !/[A-Za-z0-9_$]/.test(after)) {
