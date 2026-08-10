@@ -916,7 +916,25 @@ describe("matchGroupContracts (T15 orchestration)", () => {
       };
       const r = await matchGroupContracts("big", { registryPath, resolver: countingResolver });
       expect(seen.length).toBe(MAX_GROUP_REPOS);
+      expect(seen).toEqual(repos.slice(0, MAX_GROUP_REPOS));
       expect(r.warnings.some((w) => w.includes("capped at " + MAX_GROUP_REPOS))).toBe(true);
+    });
+  });
+
+  it("T15-4b: a group exactly at MAX_GROUP_REPOS is not reported as truncated", async () => {
+    await withRegistry(async (registryPath) => {
+      const repos = Array.from({ length: MAX_GROUP_REPOS }, (_, i) => `r${i}`);
+      await registerGroup(registryPath, { name: "at-cap", repos });
+      const seen: string[] = [];
+      const countingResolver: RepoResolver = async (repo) => {
+        seen.push(repo);
+        return { indexed: true, producers: [], consumers: [] };
+      };
+
+      const r = await matchGroupContracts("at-cap", { registryPath, resolver: countingResolver });
+
+      expect(seen).toEqual(repos);
+      expect(r.warnings.some((w) => w.includes("capped at " + MAX_GROUP_REPOS))).toBe(false);
     });
   });
 
