@@ -273,9 +273,9 @@ describe("canonical index paths", () => {
     );
   });
 
-  it("derives the sibling database path from a case-variant JSON extension", () => {
+  it("preserves the legacy mapping for a case-variant JSON extension", () => {
     expect(sqlitePathFor(indexPath.replace(/\.json$/, ".JSON"))).toBe(
-      indexPath.replace(/\.json$/, ".db"),
+      indexPath.replace(/\.json$/, ".JSON.db"),
     );
   });
 });

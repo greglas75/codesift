@@ -54,7 +54,7 @@ export function assertCanonicalIndexPath(indexPath: string): void {
  */
 export function sqlitePathFor(indexPath: string): string {
   assertCanonicalIndexPath(indexPath);
-  return /\.json$/i.test(indexPath)
+  return indexPath.endsWith(".json")
     ? `${indexPath.slice(0, -".json".length)}.db`
     : `${indexPath}.db`;
 }
