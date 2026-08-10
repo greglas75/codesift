@@ -4,13 +4,17 @@
  */
 import { getCodeIndex } from "./index-tools.js";
 import { buildAdjacencyIndex, buildCallTree, stripSource } from "./graph-tools.js";
-import type { CodeSymbol, CodeIndex, CallNode, RouteFramework } from "../types.js";
+import type { CodeSymbol, CodeIndex, CallNode } from "../types.js";
 import { findAstroHandlers } from "./astro-routes.js";
 import { matchPath } from "./route-shared.js";
 export { matchPath } from "./route-shared.js";
 import { deriveUrlPath, computeLayoutChain, traceMiddleware, scanDirective } from "../utils/nextjs.js";
-import type { MiddlewareTraceResult } from "../utils/nextjs.js";
 import { join } from "node:path";
+import { routeToMermaid } from "./route-tools/route-mermaid.js";
+import type { DbCall, RouteHandler, RouteTraceResult } from "./route-tools/types.js";
+
+export { routeToMermaid } from "./route-tools/route-mermaid.js";
+export type { RouteTraceResult } from "./route-tools/types.js";
 
 const DB_PATTERNS = [
   /prisma\.\w+\.(findMany|findFirst|findUnique|create|update|delete|upsert|count|aggregate|groupBy)/,
@@ -31,33 +35,6 @@ const DB_PATTERNS = [
   /session\.(add|delete|commit|rollback|flush|execute|query)\s*\(/,
   /\.select_related\(|\.prefetch_related\(/,
 ];
-
-interface RouteHandler {
-  symbol: ReturnType<typeof stripSource>;
-  file: string;
-  method?: string;
-  framework: RouteFramework;
-  router?: "app" | "pages";
-}
-
-interface DbCall {
-  symbol_name: string;
-  file: string;
-  line: number;
-  operation: string;
-}
-
-export interface RouteTraceResult {
-  path: string;
-  handlers: RouteHandler[];
-  call_chain: Array<{ name: string; file: string; kind: string; depth: number }>;
-  db_calls: DbCall[];
-  middleware?: MiddlewareTraceResult;
-  layout_chain?: string[];
-  server_actions?: Array<{ name: string; file: string; called_from?: string | undefined }>;
-}
-
-type RouteCallNode = RouteTraceResult["call_chain"][number];
 
 /**
  * Find NestJS route handlers via @Controller + @Get/@Post/etc. decorators.
@@ -430,128 +407,6 @@ function findDbCalls(symbols: CodeSymbol[]): DbCall[] {
     }
   }
   return calls;
-}
-
-function nodeKey(node: Pick<RouteCallNode, "name" | "file">): string {
-  return `${node.file}:${node.name}`;
-}
-
-function nodeAlias(
-  node: Pick<RouteCallNode, "name" | "file">,
-  aliases: Map<string, string>,
-): string {
-  const key = nodeKey(node);
-  const existing = aliases.get(key);
-  if (existing) return existing;
-
-  const baseName = node.file.split("/").pop()?.replace(/\.\w+$/, "") ?? node.name;
-  const alias = `${baseName}_${node.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
-  aliases.set(key, alias);
-  return alias;
-}
-
-function appendDbCalls(
-  lines: string[],
-  dbCalls: DbCall[],
-  node: Pick<RouteCallNode, "name" | "file">,
-  actor: string,
-): void {
-  const callsForNode = dbCalls.filter((db) =>
-    db.file === node.file && db.symbol_name === node.name,
-  );
-
-  for (const db of callsForNode.slice(0, 3)) {
-    lines.push(`    ${actor}->>+DB: ${db.operation}`);
-    lines.push(`    DB-->>-${actor}: result`);
-  }
-}
-
-/**
- * Render a RouteTraceResult as a Mermaid sequence diagram.
- * @internal exported for unit testing
- */
-export function routeToMermaid(result: RouteTraceResult): string {
-  if (result.handlers.length === 0) {
-    return "sequenceDiagram\n    Note over Client: No handler found for " + result.path;
-  }
-
-  const lines: string[] = ["sequenceDiagram"];
-  const handler = result.handlers[0]!;
-  const method = handler.method ?? "REQUEST";
-  const aliases = new Map<string, string>();
-
-  // Add Middleware participant if middleware applies
-  if (result.middleware?.applies) {
-    lines.push(`    participant Middleware`);
-    lines.push(`    Client->>+Middleware: ${method} ${result.path}`);
-    lines.push(`    Middleware->>+Controller: continue`);
-  } else {
-    lines.push(`    Client->>+Controller: ${method} ${result.path}`);
-  }
-
-  // Add Layout chain rendering
-  if (result.layout_chain && result.layout_chain.length > 0) {
-    let prev = "Controller";
-    for (let i = 0; i < result.layout_chain.length; i++) {
-      const layoutName = `Layout${i + 1}`;
-      const layoutFile = result.layout_chain[i]!;
-      lines.push(`    participant ${layoutName}`);
-      lines.push(`    ${prev}->>+${layoutName}: render (${layoutFile})`);
-      prev = layoutName;
-    }
-  }
-
-  const root = result.call_chain[0];
-  if (root) {
-    appendDbCalls(lines, result.db_calls, root, "Controller");
-  }
-
-  const descendants = result.call_chain
-    .filter((node, idx) => idx > 0 && node.depth > 0)
-    .slice(0, 12);
-  const stack: Array<{ node: RouteCallNode; alias: string }> = [];
-
-  const closeUntilDepth = (nextDepth: number): void => {
-    while (stack.length > 0 && (stack[stack.length - 1]?.node.depth ?? -1) >= nextDepth) {
-      const finished = stack.pop();
-      if (!finished) break;
-      const returnTo = stack.length > 0 ? stack[stack.length - 1]!.alias : "Controller";
-      lines.push(`    ${finished.alias}-->>-${returnTo}: result`);
-    }
-  };
-
-  for (let i = 0; i < descendants.length; i++) {
-    const node = descendants[i]!;
-    closeUntilDepth(node.depth);
-
-    const parentActor = stack.length > 0 ? stack[stack.length - 1]!.alias : "Controller";
-    const alias = nodeAlias(node, aliases);
-    lines.push(`    ${parentActor}->>+${alias}: ${node.name}()`);
-    appendDbCalls(lines, result.db_calls, node, alias);
-    stack.push({ node, alias });
-
-    const nextDepth = descendants[i + 1]?.depth ?? 0;
-    closeUntilDepth(nextDepth);
-  }
-
-  closeUntilDepth(0);
-
-  // Close layout chain
-  if (result.layout_chain && result.layout_chain.length > 0) {
-    for (let i = result.layout_chain.length - 1; i >= 0; i--) {
-      const layoutName = `Layout${i + 1}`;
-      const returnTo = i > 0 ? `Layout${i}` : "Controller";
-      lines.push(`    ${layoutName}-->>-${returnTo}: rendered`);
-    }
-  }
-
-  if (result.middleware?.applies) {
-    lines.push(`    Controller-->>-Middleware: response`);
-    lines.push(`    Middleware-->>-Client: response`);
-  } else {
-    lines.push(`    Controller-->>-Client: response`);
-  }
-  return lines.join("\n");
 }
 
 /**
