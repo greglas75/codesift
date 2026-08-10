@@ -85,11 +85,29 @@ if (!APPLY) {
   process.exit(0);
 }
 
+const deadNames = new Set(deadRoots.map((entry) => entry.name));
+const candidatesByRepo = new Map();
+for (const orphan of orphans) {
+  const candidates = candidatesByRepo.get(orphan.repo) ?? [];
+  candidates.push(orphan);
+  candidatesByRepo.set(orphan.repo, candidates);
+}
+
+// A healthy registry owner must never be displaced by a detached database
+// carrying the same legacy name. When the existing owner is dead or absent,
+// repair only a single unambiguous candidate; filesystem iteration order is
+// not a sound way to choose between two live checkouts.
+const repairs = [];
+for (const [repo, candidates] of candidatesByRepo) {
+  if ((repos[repo] && !deadNames.has(repo)) || candidates.length !== 1) continue;
+  repairs.push(candidates[0]);
+}
+
 const backup = `${REGISTRY}.bak-${Date.now()}`;
 copyFileSync(REGISTRY, backup);
 
 for (const d of deadRoots) delete repos[d.name];
-for (const o of orphans) {
+for (const o of repairs) {
   repos[o.repo] = {
     name: o.repo,
     root: o.root,
@@ -108,4 +126,4 @@ registry.updated_at = Date.now();
 writeFileSync(REGISTRY, JSON.stringify(registry), "utf-8");
 
 console.log(`\nbackup: ${backup}`);
-console.log(`removed ${deadRoots.length}, re-registered ${orphans.length}, now ${Object.keys(repos).length} entries`);
+console.log(`removed ${deadRoots.length}, re-registered ${repairs.length}, now ${Object.keys(repos).length} entries`);
