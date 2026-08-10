@@ -35,9 +35,38 @@ function instantiatesTemplate(concretePath: string, normalizedTemplate: string):
   return true;
 }
 
+/** Match a Next.js catch-all while preserving the public `{param}` normal form. */
+function instantiatesProducer(concretePath: string, producer: RepoEndpoint): boolean {
+  const rawSegments = pathSegments(producer.path);
+  const catchAllIndex = rawSegments.findIndex((segment) =>
+    /^\[\.\.\.[^\]]+\]$/.test(segment) || /^\[\[\.\.\.[^\]]+\]\]$/.test(segment));
+  if (catchAllIndex === -1) {
+    return instantiatesTemplate(concretePath, producer.normalized_path);
+  }
+
+  // Next.js catch-all parameters are terminal. Fall back to the conservative
+  // fixed-width matcher if an extractor ever returns a different shape.
+  if (catchAllIndex !== rawSegments.length - 1) {
+    return instantiatesTemplate(concretePath, producer.normalized_path);
+  }
+
+  const concreteSegments = pathSegments(concretePath);
+  const templateSegments = pathSegments(producer.normalized_path);
+  const optional = rawSegments[catchAllIndex]!.startsWith("[[");
+  const minimumSegments = catchAllIndex + (optional ? 0 : 1);
+  if (concreteSegments.length < minimumSegments) return false;
+
+  for (let index = 0; index < catchAllIndex; index++) {
+    const templateSegment = templateSegments[index]!;
+    if (templateSegment !== "{param}" && templateSegment !== concreteSegments[index]) return false;
+  }
+  return true;
+}
+
 /** Test whether a partial consumer URL prefix matches a template's literal head. */
 function matchesPartialPrefix(urlPrefix: string, normalizedTemplate: string): boolean {
   if (!urlPrefix) return false;
+  if (pathSegments(urlPrefix).length === 0) return false;
   const head = templateLiteralHead(normalizedTemplate);
   // Normalise: ensure both end with "/" for prefix comparison
   const normPrefix = urlPrefix.endsWith("/") ? urlPrefix : urlPrefix + "/";
@@ -71,13 +100,13 @@ export function matchContracts(
       // Cross-repo only
       if (p.repo === c.repo) continue;
       // Method must match
-      if (p.method !== c.method) continue;
+      if (p.method.toUpperCase() !== c.method.toUpperCase()) continue;
 
       let confidence: ContractMatch["confidence"] | null = null;
 
       if (!c.partial) {
         // Exact: concrete path must instantiate the normalised template
-        if (instantiatesTemplate(c.url_prefix, p.normalized_path)) {
+        if (instantiatesProducer(c.url_prefix, p)) {
           confidence = "exact";
         }
       } else {

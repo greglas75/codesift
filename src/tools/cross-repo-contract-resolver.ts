@@ -63,17 +63,21 @@ async function defaultRepoResolver(repo: string): Promise<RepoContractData> {
   const CONSUMER_SCAN_CONCURRENCY = 16;
   for (let b = 0; b < scanFiles.length; b += CONSUMER_SCAN_CONCURRENCY) {
     const batch = scanFiles.slice(b, b + CONSUMER_SCAN_CONCURRENCY);
-    const calls = await Promise.all(batch.map(async (fe) => {
+    const scans = await Promise.all(batch.map(async (fe) => {
       let src: string;
       try {
         src = await readFile(join(index.root, fe.path), "utf-8");
-      } catch {
-        return [] as OutboundCall[]; // file vanished / unreadable — skip
+      } catch (err: unknown) {
+        return {
+          calls: [] as OutboundCall[],
+          warning: `repo "${repo}" consumer scan failed for "${fe.path}": ${err instanceof Error ? err.message : String(err)}`,
+        };
       }
-      return extractOutboundCalls(src, fe.path);
+      return { calls: extractOutboundCalls(src, fe.path) };
     }));
-    for (const fileCalls of calls) {
-      for (const call of fileCalls) consumers.push({ ...call, repo });
+    for (const scan of scans) {
+      if (scan.warning) repoWarnings.push(scan.warning);
+      for (const call of scan.calls) consumers.push({ ...call, repo });
     }
   }
 

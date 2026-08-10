@@ -110,4 +110,15 @@ describe("defaultRepoResolver", () => {
     );
     expect(result.consumers.every((call) => call.repo === "web")).toBe(true);
   });
+
+  it("warns when an indexed consumer file cannot be read", async () => {
+    getCodeIndexMock.mockResolvedValue(makeIndex(fixtureRoot, ["missing.ts"]));
+
+    const result = await defaultRepoResolver("web");
+
+    expect(result.consumers).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/repo "web" consumer scan failed for "missing\.ts"/),
+    ]);
+  });
 });

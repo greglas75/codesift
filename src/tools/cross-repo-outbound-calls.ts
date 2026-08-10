@@ -22,12 +22,37 @@ export interface OutboundCall {
  *   "/api/users"                        → "/api/users"
  */
 function stripOrigin(url: string): string {
-  // Match http(s)://host(:port) prefix
-  const m = url.match(/^https?:\/\/[^/]+(\/.*)?$/);
+  // Match http(s)://host(:port) and protocol-relative origins.
+  const m = url.match(/^(?:https?:)?\/\/[^/]+(\/.*)?$/i);
   if (m) {
     return m[1] ?? "/";
   }
   return url;
+}
+
+function isInterpolationStart(value: string, index: number): boolean {
+  if (value[index] !== "$" || value[index + 1] !== "{") return false;
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor--) backslashes++;
+  return backslashes % 2 === 0;
+}
+
+function findStaticSlash(value: string, start: number): number {
+  let depth = 0;
+  for (let index = start; index < value.length; index++) {
+    const char = value[index]!;
+    if (isInterpolationStart(value, index)) {
+      depth++;
+      index++;
+    } else if (char === "{" && depth > 0) {
+      depth++;
+    } else if (char === "}" && depth > 0) {
+      depth--;
+    } else if (char === "/" && depth === 0) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 /**
@@ -46,7 +71,9 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
   const trimmed = rawUrlContent.trim();
 
   // Does the content contain any ${ ... } interpolations?
-  const hasInterp = trimmed.includes("${");
+  const firstInterpolation = trimmed.split("").findIndex((_, index) =>
+    isInterpolationStart(trimmed, index));
+  const hasInterp = firstInterpolation !== -1;
 
   if (!hasInterp) {
     // Plain string / no interpolation — strip origin, then strip query/fragment (C1)
@@ -63,29 +90,16 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
   // Find first "/" that is NOT inside a ${...} block.
   // Track brace DEPTH inside ${} so inner objects `{ key: val }` don't
   // prematurely close the expression (C2 fix).
-  let depth = 0;
-  let firstSlashIdx = -1;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed[i]!;
-    if (c === "$" && trimmed[i + 1] === "{") {
-      depth++;
-      i++; // skip '{'
-      continue;
-    }
-    if (c === "{" && depth > 0) {
-      // Inner brace — increase depth (C2 fix)
-      depth++;
-      continue;
-    }
-    if (c === "}" && depth > 0) {
-      depth--;
-      continue;
-    }
-    if (depth === 0 && c === "/" && firstSlashIdx === -1) {
-      firstSlashIdx = i;
-      break;
-    }
-  }
+  const scheme = trimmed.match(/^https?:\/\//i);
+  const protocolRelative = trimmed.startsWith("//");
+  const leadingInterpolation = firstInterpolation === 0;
+  const firstSlashIdx = scheme
+    ? findStaticSlash(trimmed, scheme[0].length)
+    : protocolRelative
+      ? findStaticSlash(trimmed, 2)
+      : leadingInterpolation
+        ? findStaticSlash(trimmed, 0)
+        : 0;
 
   if (firstSlashIdx === -1) {
     // No static path segment at all
@@ -95,11 +109,10 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
   // From firstSlashIdx, collect static prefix until the next interpolation.
   // Also stop at `?` or `#` (C1) since query/fragment is not a path prefix.
   let prefix = "";
-  let d = 0;
   let hitInterp = false;
   for (let i = firstSlashIdx; i < trimmed.length; i++) {
     const c = trimmed[i]!;
-    if (c === "$" && trimmed[i + 1] === "{") {
+    if (isInterpolationStart(trimmed, i)) {
       // Hit an interpolation — stop here, prefix is partial
       hitInterp = true;
       break;
@@ -108,24 +121,13 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
     if (c === "?" || c === "#") {
       break;
     }
-    if (c === "{" && d > 0) {
-      d++;
-      continue;
-    }
-    if (c === "}" && d > 0) {
-      d--;
-      continue;
-    }
-    if (d === 0) {
-      prefix += c;
-    }
+    prefix += c;
   }
 
   // The result is partial when:
   // - there was a leading interpolation (firstSlashIdx > 0 means content before the slash)
   // - or the prefix ends at an interpolation (hitInterp)
-  const leadingInterp = firstSlashIdx > 0;
-  return { url_prefix: prefix, partial: leadingInterp || hitInterp };
+  return { url_prefix: prefix, partial: leadingInterpolation || Boolean(scheme) || protocolRelative || hitInterp };
 }
 
 /**
@@ -134,11 +136,99 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
  * Returns "GET" if not found.
  */
 function sniffFetchMethodFromWindow(window: string): string {
-  const methodMatch = window.match(/\bmethod\s*:\s*['"]([A-Za-z]+)['"]/);
-  if (methodMatch) {
-    return methodMatch[1]!.toUpperCase();
+  const skipQuoted = (start: number): number => {
+    const quote = window[start]!;
+    for (let index = start + 1; index < window.length; index++) {
+      if (window[index] === "\\") index++;
+      else if (window[index] === quote) return index + 1;
+    }
+    return window.length;
+  };
+  const skipWhitespace = (start: number): number => {
+    let index = start;
+    while (/\s/.test(window[index] ?? "")) index++;
+    return index;
+  };
+
+  for (let index = 0; index < window.length;) {
+    const char = window[index]!;
+    const next = window[index + 1] ?? "";
+    if (char === "/" && next === "/") {
+      const newline = window.indexOf("\n", index + 2);
+      index = newline === -1 ? window.length : newline + 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = window.indexOf("*/", index + 2);
+      index = end === -1 ? window.length : end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      index = skipQuoted(index);
+      continue;
+    }
+    if (window.startsWith("method", index)) {
+      const before = window[index - 1] ?? "";
+      const after = window[index + 6] ?? "";
+      if (!/[A-Za-z0-9_$]/.test(before) && !/[A-Za-z0-9_$]/.test(after)) {
+        const colon = skipWhitespace(index + 6);
+        const valueStart = skipWhitespace(colon + 1);
+        const quote = window[valueStart];
+        if (window[colon] === ":" && (quote === "'" || quote === '"')) {
+          const remainder = window.slice(valueStart + 1);
+          const value = remainder.match(/^([A-Za-z]+)/);
+          if (value && remainder[value[1]!.length] === quote) return value[1]!.toUpperCase();
+        }
+      }
+    }
+    index++;
   }
   return "GET";
+}
+
+/** Find the closing parenthesis for the current fetch call, skipping strings/comments. */
+function findFetchCallEnd(source: string, start: number): number {
+  let depth = 1;
+  let quote: "'" | '"' | "`" | null = null;
+  let lineComment = false;
+  let blockComment = false;
+  let escaped = false;
+
+  for (let index = start; index < source.length; index++) {
+    const char = source[index]!;
+    const next = source[index + 1] ?? "";
+    if (lineComment) {
+      if (char === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        index++;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      lineComment = true;
+      index++;
+    } else if (char === "/" && next === "*") {
+      blockComment = true;
+      index++;
+    } else if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+    } else if (char === "(") {
+      depth++;
+    } else if (char === ")" && --depth === 0) {
+      return index;
+    }
+  }
+  return source.length;
 }
 
 /**
@@ -169,21 +259,7 @@ export function extractOutboundCalls(source: string, file: string): OutboundCall
 
     let method: string;
     if (lc.callee === "fetch") {
-      // For fetch, scan the source ahead of the call site for method: "VERB"
-      // We need a substring of source starting after the URL literal.
-      // Use line as rough anchor — search a window after the call.
-      // We approximate by scanning from a position we can derive from source.
-      // Since the lexer already consumed the URL, scan next ~200 chars of source
-      // from just after the URL literal.
-      // Simplest: search the source from lc.line onwards for `method:`.
-      // More accurately: findOutboundCalls gives us the line, so we scan a
-      // window of the raw source from the end of the call's URL literal.
-      // We don't have the exact offset, but we can search a window around the
-      // line.  Use source.indexOf approach: locate the URL in source and scan.
-      // For robustness, scan the 300-char window of source starting from the
-      // first character of the matching line.
-      const lineStart = findLineStart(source, lc.line);
-      const window = source.slice(lineStart, lineStart + 300);
+      const window = source.slice(lc.urlEnd, findFetchCallEnd(source, lc.urlEnd));
       method = sniffFetchMethodFromWindow(window);
     } else {
       // axios / got: method comes from the callee (axios.get → GET)
@@ -200,19 +276,4 @@ export function extractOutboundCalls(source: string, file: string): OutboundCall
   }
 
   return results;
-}
-
-/**
- * Find the character index of the start of line `lineNumber` (1-based) in `source`.
- */
-function findLineStart(source: string, lineNumber: number): number {
-  if (lineNumber <= 1) return 0;
-  let line = 1;
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] === "\n") {
-      line++;
-      if (line === lineNumber) return i + 1;
-    }
-  }
-  return source.length;
 }
