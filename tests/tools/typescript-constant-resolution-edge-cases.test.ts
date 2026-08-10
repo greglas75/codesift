@@ -1,0 +1,254 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as parserManager from "../../src/parser/parser-manager.js";
+import { resolveTypeScriptConstantValue } from "../../src/tools/typescript-constants-tools.js";
+import {
+  createConstantResolutionFixture,
+  type ConstantResolutionFixture,
+} from "./helpers/constant-resolution-fixture.js";
+
+let fixture: ConstantResolutionFixture;
+
+beforeEach(async () => {
+  fixture = await createConstantResolutionFixture();
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await fixture.cleanup();
+});
+
+describe("resolveTypeScriptConstantValue — edge cases", () => {
+  it("throws a specific error when the repository does not exist", async () => {
+    await expect(resolveTypeScriptConstantValue("missing-repository", "VALUE")).rejects.toThrow(
+      'Repository "missing-repository" not found.',
+    );
+  });
+
+  it("throws a specific error when the TypeScript parser is unavailable", async () => {
+    const repo = await fixture.write({
+      "src/constants.ts": "export const VALUE = 1\n",
+    });
+    vi.spyOn(parserManager, "getParser").mockResolvedValueOnce(null);
+
+    await expect(resolveTypeScriptConstantValue(repo, "VALUE")).rejects.toThrow(
+      "TypeScript parser unavailable",
+    );
+  });
+
+  it("resolves supported literal families with exact values", async () => {
+    const repo = await fixture.write({
+      "src/literals.ts": `export const EMPTY_TEMPLATE = \`\`
+export const STATIC_TEMPLATE = \`hello\`
+export const FLOAT = 1.5
+export const SEPARATED_INTEGER = 1_000
+export const EXPONENT = 1e3
+export const TRUE_VALUE = true
+export const FALSE_VALUE = false
+export const NULL_VALUE = null
+export const LIST_VALUE = ["a", 2, false, null]
+export const OBJECT_VALUE = { "api": "https://api.example.com", retries: 3, enabled: true, none: null }
+export const PARENTHESIZED = (3)
+export const NEGATIVE = -5
+export const POSITIVE = +5
+`,
+    });
+    const expected = new Map<string, unknown>([
+      ["EMPTY_TEMPLATE", ""],
+      ["STATIC_TEMPLATE", "hello"],
+      ["FLOAT", 1.5],
+      ["SEPARATED_INTEGER", 1000],
+      ["EXPONENT", 1000],
+      ["TRUE_VALUE", true],
+      ["FALSE_VALUE", false],
+      ["NULL_VALUE", null],
+      ["LIST_VALUE", ["a", 2, false, null]],
+      ["OBJECT_VALUE", { api: "https://api.example.com", retries: 3, enabled: true, none: null }],
+      ["PARENTHESIZED", 3],
+      ["NEGATIVE", -5],
+      ["POSITIVE", 5],
+    ]);
+
+    for (const [name, value] of expected) {
+      const result = await resolveTypeScriptConstantValue(repo, name);
+      expect(result.matches[0]).toMatchObject({ resolved: true, value });
+    }
+  });
+
+  it("returns exact reasons for unsupported and unsafe values", async () => {
+    const repo = await fixture.write({
+      "src/unsupported.ts": `declare const name: string
+export const DYNAMIC_TEMPLATE = \`hello \${name}\`
+export const UNSAFE_INTEGER = 9007199254740992
+export const CALL_VALUE = other()
+export const BITWISE_NOT = ~5
+export const VOID_VALUE = void 0
+const BASE = { retries: 3 }
+const timeout = 10
+export const SPREAD_OBJECT = { ...BASE, timeout: 10 }
+export const SHORTHAND_OBJECT = { timeout }
+`,
+    });
+    const expectedReasons = new Map([
+      ["DYNAMIC_TEMPLATE", "Unsupported TypeScript value node: template_string"],
+      ["UNSAFE_INTEGER", "Integer literal outside safe Number range"],
+      ["CALL_VALUE", "Unsupported TypeScript value node: call_expression"],
+      ["BITWISE_NOT", "Unsupported TypeScript value node: unary_expression"],
+      ["VOID_VALUE", "Unsupported TypeScript value node: unary_expression"],
+      ["SPREAD_OBJECT", "Unsupported TypeScript value node: spread_element"],
+      ["SHORTHAND_OBJECT", "Unsupported TypeScript value node: shorthand_property_identifier"],
+    ]);
+
+    for (const [name, reason] of expectedReasons) {
+      const result = await resolveTypeScriptConstantValue(repo, name);
+      expect(result.matches[0]).toMatchObject({ resolved: false, reason });
+    }
+  });
+
+  it("ignores type-only imports and equals signs inside parameter types", async () => {
+    const repo = await fixture.write({
+      "src/base.ts": "export const CONFIG = { retries: 3 }\nexport const TYPE_CONFIG = { retries: 4 }\n",
+      "src/consumer.ts": `import type { CONFIG } from "./base"
+import { type TYPE_CONFIG } from "./base"
+export const TYPE_ONLY_VALUE = CONFIG
+export const SPECIFIER_TYPE_ONLY = TYPE_CONFIG
+export function noDefault(mode: "a=b") { return mode }
+`,
+    });
+
+    const typeOnly = await resolveTypeScriptConstantValue(repo, "TYPE_ONLY_VALUE");
+    const specifierTypeOnly = await resolveTypeScriptConstantValue(repo, "SPECIFIER_TYPE_ONLY");
+    const noDefault = await resolveTypeScriptConstantValue(repo, "noDefault");
+
+    expect(typeOnly.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for CONFIG in src/consumer.ts",
+    });
+    expect(specifierTypeOnly.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for TYPE_CONFIG in src/consumer.ts",
+    });
+    expect(noDefault.matches[0]).toMatchObject({
+      resolved: false,
+      default_parameters: [],
+      reason: "Function has no default parameters",
+    });
+  });
+
+  it("reports missing properties, bindings, and dynamic keys precisely", async () => {
+    const repo = await fixture.write({
+      "src/missing.ts": `declare function getKey(): string
+export const CONFIG = { api: "https://api.example.com" }
+export const MISSING_PROPERTY = CONFIG.missing
+export const MISSING_BINDING = UNKNOWN_VALUE
+export const DYNAMIC_KEY = CONFIG[getKey()]
+export const INHERITED_PROPERTY = CONFIG.toString
+`,
+    });
+
+    const missingProperty = await resolveTypeScriptConstantValue(repo, "MISSING_PROPERTY");
+    const missingBinding = await resolveTypeScriptConstantValue(repo, "MISSING_BINDING");
+    const dynamicKey = await resolveTypeScriptConstantValue(repo, "DYNAMIC_KEY");
+    const inheritedProperty = await resolveTypeScriptConstantValue(repo, "INHERITED_PROPERTY");
+
+    expect(missingProperty.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Property missing not found on resolved object",
+    });
+    expect(missingBinding.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for UNKNOWN_VALUE in src/missing.ts",
+    });
+    expect(dynamicKey.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Unsupported TypeScript value node: subscript_expression",
+    });
+    expect(inheritedProperty.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Property toString not found on resolved object",
+    });
+  });
+
+  it("resolves literal default exports through a default import", async () => {
+    const repo = await fixture.write({
+      "src/base.ts": "export /* generated */ default [\"a\", 2]\n",
+      "src/consumer.ts": `import defaults from "./base"
+export const DEFAULTS = defaults
+`,
+    });
+
+    const result = await resolveTypeScriptConstantValue(repo, "DEFAULTS");
+
+    expect(result.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "list",
+      value: ["a", 2],
+    });
+  });
+
+  it("resolves decorated parameter defaults by the AST pattern field", async () => {
+    const repo = await fixture.write({
+      "src/decorated.ts": `declare function Inject(token: unknown): ParameterDecorator
+declare const TOKEN: unique symbol
+const DEFAULT_SERVICE = "primary"
+export class Service {
+  constructor(@Inject(TOKEN) private service = DEFAULT_SERVICE) {}
+}
+`,
+    });
+
+    const result = await resolveTypeScriptConstantValue(repo, "constructor");
+
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]).toMatchObject({
+      resolved: true,
+      default_parameters: [
+        expect.objectContaining({ name: "service", resolved: true, value: "primary" }),
+      ],
+    });
+  });
+
+  it("returns explicit outcomes for cycles, unresolved list entries, and functions without defaults", async () => {
+    const repo = await fixture.write({
+      "src/edge.ts": `export const A = B
+export const B = A
+export const BAD_LIST = [UNKNOWN]
+export function noDefaults(value: string) { return value }
+`,
+    });
+
+    const cycle = await resolveTypeScriptConstantValue(repo, "A");
+    const badList = await resolveTypeScriptConstantValue(repo, "BAD_LIST");
+    const noDefaults = await resolveTypeScriptConstantValue(repo, "noDefaults");
+
+    expect(cycle.matches[0]).toMatchObject({ resolved: false, reason: "Cycle detected while resolving A" });
+    expect(badList.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for UNKNOWN in src/edge.ts",
+    });
+    expect(noDefaults.matches[0]).toMatchObject({
+      resolved: false,
+      default_parameters: [],
+      reason: "Function has no default parameters",
+    });
+  });
+
+  it("filters candidates by file pattern and returns multiple matches in stable file order", async () => {
+    const repo = await fixture.write({
+      "src/a.ts": "export const DUPLICATE = 1\n",
+      "src/b.ts": "export const DUPLICATE = 2\n",
+    });
+
+    const all = await resolveTypeScriptConstantValue(repo, "DUPLICATE");
+    const filtered = await resolveTypeScriptConstantValue(repo, "DUPLICATE", { file_pattern: "src/b.ts" });
+    const absent = await resolveTypeScriptConstantValue(repo, "MISSING");
+
+    expect(all.matches.map(({ file, value }) => [file, value])).toEqual([
+      ["src/a.ts", 1],
+      ["src/b.ts", 2],
+    ]);
+    expect(filtered.matches).toEqual([
+      expect.objectContaining({ file: "src/b.ts", value: 2 }),
+    ]);
+    expect(absent.matches).toEqual([]);
+  });
+});
