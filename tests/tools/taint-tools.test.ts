@@ -279,4 +279,214 @@ def render(request):
     expect(result.traces.every((trace) => trace.sink.symbol_name === "render")).toBe(true);
     expect(result.traces.every((trace) => trace.hops.some((hop) => hop.kind === "container"))).toBe(true);
   });
+
+  it("detects direct request.body flows into sinks", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.safestring import mark_safe
+
+def render_html(request):
+    return mark_safe(request.body)
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      source_patterns: ["request.body"],
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]).toMatchObject({
+      source: { kind: "request.body" },
+      sink: { kind: "mark_safe" },
+    });
+  });
+
+  it("stops helper traversal exactly at max_depth", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/helpers.py": `from django.utils.safestring import mark_safe
+
+def wrap_html(value):
+    return mark_safe(value)
+`,
+      "app/views.py": `from .helpers import wrap_html
+
+def render_html(request):
+    return wrap_html(request.GET["html"])
+`,
+    });
+
+    const stopped = await taintTrace(repo, {
+      file_pattern: "app/",
+      sink_patterns: ["mark_safe"],
+      max_depth: 0,
+    });
+    const traversed = await taintTrace(repo, {
+      file_pattern: "app/",
+      sink_patterns: ["mark_safe"],
+      max_depth: 1,
+    });
+
+    expect(stopped.traces).toEqual([]);
+    expect(traversed.traces).toHaveLength(1);
+    expect(traversed.traces[0]!.sink.symbol_name).toBe("wrap_html");
+  });
+
+  it("uses the call stack to stop mutually recursive helper expansion", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.safestring import mark_safe
+
+def first(value):
+    return second(value)
+
+def second(value):
+    return first(value)
+
+def render_html(request):
+    return mark_safe(first(request.GET["html"]))
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces.every((trace) =>
+      trace.hops.filter((hop) => hop.detail === "return from first").length === 1
+      && trace.hops.filter((hop) => hop.detail === "return from second").length === 1
+    )).toBe(true);
+  });
+
+  it("marks unresolved helper propagation as heuristic", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.safestring import mark_safe
+
+def render_html(request):
+    return mark_safe(normalize_html(request.GET["html"]))
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]!.heuristic).toBe(true);
+    expect(result.traces[0]!.hops.some((hop) =>
+      hop.detail === "heuristic propagation through normalize_html"
+    )).toBe(true);
+  });
+
+  it("resolves aliased imports even when helper names are ambiguous", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/helpers.py": `from django.utils.safestring import mark_safe
+
+def wrap_html(value):
+    return mark_safe(value)
+`,
+      "app/shadow.py": `def wrap_html(value):
+    return value
+`,
+      "app/views.py": `from .helpers import wrap_html as render_alias
+
+def render_html(request):
+    return render_alias(request.GET["html"])
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/",
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]).toMatchObject({
+      entry_symbol: "render_html",
+      sink: {
+        file: "app/helpers.py",
+        symbol_name: "wrap_html",
+      },
+    });
+  });
+
+  it("uses the unique cross-file helper fallback when no import binding exists", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/helpers.py": `from django.utils.safestring import mark_safe
+
+def global_wrap(value):
+    return mark_safe(value)
+`,
+      "app/views.py": `def render_html(request):
+    return global_wrap(request.GET["html"])
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/",
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]!.sink.symbol_name).toBe("global_wrap");
+  });
+
+  it("resolves taint through self method calls", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.safestring import mark_safe
+
+class HtmlView:
+    @staticmethod
+    def wrap_html(value):
+        return mark_safe(value)
+
+    def get(self, request):
+        return self.wrap_html(request.GET["html"])
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]).toMatchObject({
+      entry_symbol: "get",
+      sink: { symbol_name: "wrap_html" },
+    });
+  });
+
+  it("downgrades confidence at exactly four propagation hops", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.safestring import mark_safe
+
+def render_html(request):
+    value = request.GET["html"]
+    first = value
+    second = first
+    third = second
+    return mark_safe(third)
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]!.hops).toHaveLength(4);
+    expect(result.traces[0]!.confidence).toBe("medium");
+  });
 });
