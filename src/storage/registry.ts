@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
@@ -61,7 +61,7 @@ type RegistryFileLock = { release(): Promise<void> };
 async function acquireRegistryFileLock(registryPath: string): Promise<RegistryFileLock> {
   await mkdir(dirname(registryPath), { recursive: true });
   const DatabaseSync = await loadSqliteCtor();
-  if (!DatabaseSync) return acquireRegistryDirectoryLock(registryPath);
+  if (!DatabaseSync) return acquireRegistryPortableLock(registryPath);
 
   const db = new DatabaseSync(`${registryPath}.lock.db`);
   const deadline = Date.now() + 5 * 60_000;
@@ -92,58 +92,60 @@ type DirectoryLockOwner = { pid: number; token: string };
 
 /**
  * Node 20 has no `node:sqlite`, but remains a supported JSON-backend runtime.
- * Atomic directory creation provides the same cross-process exclusion there.
- * A crashed owner is reclaimed only after its PID is gone; an incomplete owner
- * file gets a short grace period so contenders cannot steal a lock between
- * mkdir and writeFile.
+ * An atomic hard link provides the same cross-process exclusion there. The
+ * candidate file is complete before it can become the public lock path, so
+ * contenders never observe the mkdir/write ownership gap that a lock directory
+ * would have. A crashed owner is reclaimed only after its PID is gone.
  */
-async function acquireRegistryDirectoryLock(registryPath: string): Promise<RegistryFileLock> {
-  const lockDir = `${registryPath}.lock`;
-  const ownerPath = join(lockDir, "owner.json");
+async function acquireRegistryPortableLock(registryPath: string): Promise<RegistryFileLock> {
+  const lockPath = `${registryPath}.lock`;
   const deadline = Date.now() + 5 * 60_000;
   const token = randomUUID();
+  const candidatePath = `${lockPath}.candidate-${process.pid}-${token}`;
+  await writeFile(
+    candidatePath,
+    JSON.stringify({ pid: process.pid, token }),
+    { encoding: "utf8", flag: "wx" },
+  );
 
-  while (true) {
-    try {
-      await mkdir(lockDir);
+  try {
+    while (true) {
       try {
-        await writeFile(ownerPath, JSON.stringify({ pid: process.pid, token }), "utf8");
+        await link(candidatePath, lockPath);
+        return {
+          release: async () => {
+            const owner = await readRegistryLockOwner(lockPath);
+            if (owner?.token !== token) return;
+            await unlink(lockPath);
+          },
+        };
       } catch (error) {
-        await rmdir(lockDir).catch(() => undefined);
-        throw error;
-      }
-      return {
-        release: async () => {
-          const owner = await readDirectoryLockOwner(ownerPath);
-          if (owner?.token !== token) return;
-          await unlink(ownerPath).catch(() => undefined);
-          await rmdir(lockDir).catch(() => undefined);
-        },
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (await directoryLockIsAbandoned(lockDir, ownerPath)) {
-        const tombstone = `${lockDir}.stale-${process.pid}-${randomUUID()}`;
-        try {
-          await rename(lockDir, tombstone);
-          await rm(tombstone, { recursive: true, force: true });
-          continue;
-        } catch (reapError) {
-          const code = (reapError as NodeJS.ErrnoException).code;
-          if (code !== "ENOENT") throw reapError;
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (await registryLockIsAbandoned(lockPath)) {
+          const tombstone = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+          try {
+            await rename(lockPath, tombstone);
+            await unlink(tombstone);
+            continue;
+          } catch (reapError) {
+            const code = (reapError as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT") throw reapError;
+          }
         }
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for registry lock: ${registryPath}`);
+        }
+        await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for registry lock: ${registryPath}`);
-      }
-      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
     }
+  } finally {
+    await unlink(candidatePath).catch(() => undefined);
   }
 }
 
-async function readDirectoryLockOwner(ownerPath: string): Promise<DirectoryLockOwner | null> {
+async function readRegistryLockOwner(lockPath: string): Promise<DirectoryLockOwner | null> {
   try {
-    const parsed = JSON.parse(await readFile(ownerPath, "utf8")) as Partial<DirectoryLockOwner>;
+    const parsed = JSON.parse(await readFile(lockPath, "utf8")) as Partial<DirectoryLockOwner>;
     return Number.isInteger(parsed.pid) && typeof parsed.token === "string"
       ? { pid: parsed.pid as number, token: parsed.token }
       : null;
@@ -152,14 +154,12 @@ async function readDirectoryLockOwner(ownerPath: string): Promise<DirectoryLockO
   }
 }
 
-async function directoryLockIsAbandoned(lockDir: string, ownerPath: string): Promise<boolean> {
-  const owner = await readDirectoryLockOwner(ownerPath);
-  if (owner) return !processIsAlive(owner.pid);
-  try {
-    return Date.now() - (await stat(lockDir)).mtimeMs > 5_000;
-  } catch {
-    return false;
-  }
+async function registryLockIsAbandoned(lockPath: string): Promise<boolean> {
+  const owner = await readRegistryLockOwner(lockPath);
+  // A valid lock is always published from a complete candidate file. Invalid
+  // or temporarily unreadable metadata is therefore fail-closed: do not reap
+  // something whose dead owner cannot be proved.
+  return owner !== null && !processIsAlive(owner.pid);
 }
 
 function processIsAlive(pid: number): boolean {
