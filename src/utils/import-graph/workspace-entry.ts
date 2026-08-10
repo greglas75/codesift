@@ -49,7 +49,9 @@ function pickConditionalEntry(root: unknown, depth = 0): string | null {
 function pickEntry(pkg: ParsedPackageJson | null): string | null | undefined {
   if (!pkg) return undefined;
   if (typeof pkg.source === "string") return pkg.source;
-  if (typeof pkg.exports === "string") return pkg.exports;
+  if (typeof pkg.exports === "string") {
+    return pkg.exports.trim() ? pkg.exports : null;
+  }
   if (pkg.exports && typeof pkg.exports === "object") {
     const exportsMap = pkg.exports as Record<string, unknown>;
     const rootExport = exportsMap["."]

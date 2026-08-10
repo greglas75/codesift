@@ -181,6 +181,13 @@ describe("resolveWorkspaceEntry", () => {
     expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBeNull();
   });
 
+  it("treats an empty string export as authoritative absence", async () => {
+    const root = await workspaceRoot({ exports: "" });
+    const files = new Set(["packages/pkg/src/index.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBeNull();
+  });
+
 });
 
 describe("relativeWorkspaceRoot", () => {
