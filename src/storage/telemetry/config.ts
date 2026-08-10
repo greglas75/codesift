@@ -120,8 +120,9 @@ export function maybePrintFirstRunNotice(): void {
       // its own clause rather than being folded into "usage stats".
       "[codesift] Anonymous usage stats are ON (tool names, latencies, error/empty rates,\n" +
       "  bucketed env). If zuvo is installed, also anonymous per-skill rollups: which skill\n" +
-      "  ran, friction category, whether the audit/adversarial gates produced a verdict or\n" +
-      "  were skipped, and median effort — NO queries, paths, repo names, branches, commit\n" +
+      "  ran, friction category, whether the audit/adversarial gates produced a verdict, were\n" +
+      "  skipped, or do not exist for that skill, and median effort — NO queries, paths,\n" +
+      "  repo names, branches, commit\n" +
       "  hashes, free text or code. See exactly what is sent: `codesift telemetry show`.\n" +
       "  Opt out: CODESIFT_TELEMETRY=off (or DO_NOT_TRACK=1).\n",
     );
