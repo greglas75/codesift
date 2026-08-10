@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  collectExtractorVersionMismatches as facadeCollectVersionMismatches,
   getIndexCacheSizeForTesting as facadeCacheSize,
+  getIndexWriteCountForTesting as facadeWriteCount,
+  isExtractorVersionCurrent as facadeIsVersionCurrent,
   resetIndexBackendForTesting as facadeResetBackend,
   resetIndexCacheForTesting as facadeResetCache,
+  resetIndexWriteCountForTesting as facadeResetWriteCount,
   resetMigrationCacheForTesting as facadeResetMigration,
   resolveIndexBackend as facadeResolveBackend,
   sqlitePathFor as facadeSqlitePathFor,
@@ -18,6 +22,14 @@ import {
   resolveIndexBackend,
   sqlitePathFor,
 } from "../../src/storage/index-migration.js";
+import {
+  getIndexWriteCountForTesting,
+  resetIndexWriteCountForTesting,
+} from "../../src/storage/index-json-mutations.js";
+import {
+  collectExtractorVersionMismatches,
+  isExtractorVersionCurrent,
+} from "../../src/storage/index-version.js";
 import type { CodeIndex } from "../../src/types.js";
 
 const emptyIndex: CodeIndex = {
@@ -32,6 +44,13 @@ const emptyIndex: CodeIndex = {
 };
 
 describe("index-store facade", () => {
+  afterEach(() => {
+    resetIndexCacheForTesting();
+    resetIndexWriteCountForTesting();
+    resetIndexBackendForTesting();
+    resetMigrationCacheForTesting();
+  });
+
   it("re-exports cache helpers from the module that owns the cache state", () => {
     expect(facadeResetCache).toBe(resetIndexCacheForTesting);
     expect(facadeCacheSize).toBe(getIndexCacheSizeForTesting);
@@ -51,5 +70,15 @@ describe("index-store facade", () => {
     expect(facadeResetBackend).toBe(resetIndexBackendForTesting);
     expect(facadeResetMigration).toBe(resetMigrationCacheForTesting);
     expect(facadeSqlitePathFor).toBe(sqlitePathFor);
+  });
+
+  it("re-exports version helpers from the module that owns version checks", () => {
+    expect(facadeCollectVersionMismatches).toBe(collectExtractorVersionMismatches);
+    expect(facadeIsVersionCurrent).toBe(isExtractorVersionCurrent);
+  });
+
+  it("re-exports write counters from the module that owns mutation state", () => {
+    expect(facadeWriteCount).toBe(getIndexWriteCountForTesting);
+    expect(facadeResetWriteCount).toBe(resetIndexWriteCountForTesting);
   });
 });

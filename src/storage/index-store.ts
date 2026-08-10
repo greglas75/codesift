@@ -29,6 +29,15 @@ import {
   resolveIndexBackend,
   sqlitePathFor,
 } from "./index-migration.js";
+import {
+  isExtractorVersionCurrent,
+  loadVersionAwareIndex,
+  type IndexOrStaleResult,
+} from "./index-version.js";
+import {
+  removeFileFromJsonIndex,
+  saveIncrementalJson,
+} from "./index-json-mutations.js";
 export {
   getIndexCacheBytesForTesting,
   getIndexCacheSizeForTesting,
@@ -42,9 +51,17 @@ export {
   resolveIndexBackend,
   sqlitePathFor,
 } from "./index-migration.js";
-
-/** Serialize concurrent writes to the same index path. */
-const writeLocks = new Map<string, Promise<void>>();
+export {
+  collectExtractorVersionMismatches,
+  isExtractorVersionCurrent,
+  type ExtractorVersionCheckable,
+  type ExtractorVersionMismatchRow,
+  type IndexOrStaleResult,
+} from "./index-version.js";
+export {
+  getIndexWriteCountForTesting,
+  resetIndexWriteCountForTesting,
+} from "./index-json-mutations.js";
 
 async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<void> {
   await migrateLegacyIndex(indexPath, dbPath, loadJsonIndex);
@@ -290,85 +307,6 @@ async function loadJsonIndex(indexPath: string): Promise<CodeIndex | null> {
  *  helper instead of calling loadIndex directly so stale indexes surface as
  *  structured errors via staleToMcpError (src/tools/_helpers.ts) rather than
  *  silent empty results. */
-export type IndexOrStaleResult =
-  | { status: "ok"; index: CodeIndex }
-  | {
-      /** The store exists but could not be read — locked, corrupt, unreadable. Distinct from a
-       *  null return, which means "nothing is indexed here". A caller that treats this as an
-       *  empty index reports a confident, wrong "no results". */
-      status: "unreadable";
-      reason: "storage_error";
-      /** SQLITE_* / errno code, for operators and for deciding whether a retry is sane. */
-      code: string;
-      message: string;
-    }
-  | {
-      status: "stale";
-      reason: "extractor_version_mismatch";
-      /** Language whose extractor version drifted (e.g., "typescript", "python"). */
-      language: string;
-      expected_version: string;
-      actual_version: string;
-      /** Present when multiple `currentVersions` keys drift at once — operators
-       *  should not assume fixing the primary `language` alone refreshes everything. */
-      mismatch_detail?: string;
-    };
-
-export type ExtractorVersionMismatchRow = {
-  language: string;
-  expected: string;
-  actual: string;
-};
-
-/** All languages whose stored `extractor_version` entry does not match
- *  `currentVersions`, applying the same tolerances as `loadIndexOrStale`
- *  (newly added keys with no files in that language are skipped). */
-/**
- * Only the two fields the check actually reads, so an `IndexSummary` (ADR-004 stage 2) can be
- * validated without materialising symbols just to satisfy a parameter type.
- */
-export type ExtractorVersionCheckable = Pick<CodeIndex, "extractor_version" | "files">;
-
-export function collectExtractorVersionMismatches(
-  index: ExtractorVersionCheckable,
-  currentVersions: Record<string, string>,
-): ExtractorVersionMismatchRow[] {
-  const stored = index.extractor_version ?? {};
-  const storedKeys = Object.keys(stored);
-  const indexedLanguages = new Set<string>();
-  for (const file of index.files) indexedLanguages.add(file.language);
-
-  const out: ExtractorVersionMismatchRow[] = [];
-
-  // Degenerate index: no files AND no version keys — treat as empty/uninitialized.
-  // Use the sentinel language "*" so callers and operators can recognize the case
-  // instead of being misled into thinking a specific extractor drifted (the prior
-  // implementation reported `Object.keys(currentVersions)[0]`, which was arbitrary).
-  if (index.files.length === 0 && storedKeys.length === 0) {
-    const langKeys = Object.keys(currentVersions);
-    if (langKeys.length === 0) return [];
-    out.push({
-      language: "*",
-      expected: "any",
-      actual: "empty_index",
-    });
-    return out;
-  }
-
-  for (const lang of Object.keys(currentVersions)) {
-    const expected = currentVersions[lang];
-    const actual = stored[lang];
-    if (expected === actual) continue;
-    if (actual === undefined && !indexedLanguages.has(lang)) continue;
-    out.push({
-      language: lang,
-      expected: expected ?? "unknown",
-      actual: actual ?? "missing",
-    });
-  }
-  return out;
-}
-
 /** Load an index with version-aware stale detection.
  *
  * Returns:
@@ -390,178 +328,10 @@ export async function loadIndexOrStale(
   indexPath: string,
   currentVersions: Record<string, string>,
 ): Promise<IndexOrStaleResult | null> {
-  let parsed: CodeIndex | null;
-  try {
-    parsed = await readIndex(indexPath);
-  } catch (err) {
-    const code = classifyStorageError(err);
-    if (code === null) throw err;
-    return {
-      status: "unreadable",
-      reason: "storage_error",
-      code,
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
-
-  try {
-    if (!parsed) return null;
-    const mismatches = collectExtractorVersionMismatches(parsed, currentVersions);
-    if (mismatches.length > 0) {
-      const first = mismatches[0]!;
-      return {
-        status: "stale",
-        reason: "extractor_version_mismatch",
-        language: first.language,
-        expected_version: first.expected,
-        actual_version: first.actual,
-        ...(mismatches.length > 1
-          ? {
-              mismatch_detail: mismatches
-                .map(
-                  (m) =>
-                    `${m.language}: expected ${m.expected}, got ${m.actual}`,
-                )
-                .join("; "),
-            }
-          : {}),
-      };
-    }
-    return { status: "ok", index: parsed };
-  } catch {
-    return null;
-  }
+  return loadVersionAwareIndex(indexPath, currentVersions, readIndex);
 }
 
-/**
- * Check whether the stored `extractor_version` snapshot matches the current
- * set of extractor versions. Returns false when any language present in BOTH
- * `currentVersions` and `index.files` is missing from the stored snapshot or
- * has a different value. Languages added to `currentVersions` after this index
- * was written are tolerated when the index has no files in that language —
- * matches the tolerance applied by `collectExtractorVersionMismatches`. A missing
- * `extractor_version` field on a fully legacy index is still treated as a
- * version miss.
- */
-export function isExtractorVersionCurrent(
-  index: ExtractorVersionCheckable,
-  currentVersions: Record<string, string>,
-): boolean {
-  if (!index.extractor_version) return false;
-  return collectExtractorVersionMismatches(index, currentVersions).length === 0;
-}
-
-/**
- * A single pending edit to an on-disk index, waiting to be folded into the next
- * write. `apply` mutates the loaded index in place; `missing` decides what to do
- * when there is no index on disk at all.
- */
-interface IndexMutation {
-  /** Mutates in place; returns false when it was a no-op. */
-  apply: (index: CodeIndex) => boolean;
-  /** "throw" for updates that require an existing index, "skip" for removals. */
-  missing: "throw" | "skip";
-  resolve: () => void;
-  reject: (err: unknown) => void;
-}
-
-const pendingMutations = new Map<string, IndexMutation[]>();
-const scheduledFlushes = new Map<string, Promise<void>>();
-
-/**
- * Count of full index rewrites. Exposed for tests: the whole point of batching
- * is that N queued edits cost fewer than N rewrites, and ESM will not let a
- * test spy on `node:fs/promises` to measure that from the outside.
- */
-let indexWriteCount = 0;
-export function getIndexWriteCountForTesting(): number {
-  return indexWriteCount;
-}
-export function resetIndexWriteCountForTesting(): void {
-  indexWriteCount = 0;
-}
-
-/**
- * Fold every queued mutation for one index into a SINGLE load + save.
- *
- * The index is one JSON blob per repo, so each write costs a full parse plus a
- * full stringify of the whole thing — 263 MB on tgm-survey-platform, 391 MB on
- * Mobi3. Agents edit in bursts and the PostToolUse hook calls index_file once
- * per edit, so the old one-write-per-edit path re-serialised the entire repo N
- * times for N files. Telemetry over 10,613 index_file calls: 235 ms median
- * overall, but 3.7 s median / 15.2 s p90 on tgm-survey-platform, 7.5 h of wall
- * clock in total. Batching collapses a burst of N edits to one parse+write.
- *
- * Ordering and durability are unchanged: mutations still apply in submission
- * order, and a caller's promise still resolves only once its own edit is on
- * disk. This does not fix the underlying whole-blob format — it removes the
- * repeated cost of it.
- */
-async function flushIndexMutations(indexPath: string): Promise<void> {
-  const batch = pendingMutations.get(indexPath);
-  if (!batch || batch.length === 0) return;
-  // Take ownership before the first await: anything queued from here on belongs
-  // to the next flush, which the scheduler chains after this one.
-  pendingMutations.delete(indexPath);
-
-  try {
-    const existing = await loadIndex(indexPath);
-    if (!existing) {
-      // Updates need an index to update; removals against a missing index are
-      // already in the desired state.
-      for (const mutation of batch) {
-        if (mutation.missing === "throw") {
-          mutation.reject(new Error(`Cannot incrementally update: index not found at ${indexPath}`));
-        } else {
-          mutation.resolve();
-        }
-      }
-      return;
-    }
-
-    let changed = false;
-    for (const mutation of batch) {
-      if (mutation.apply(existing)) changed = true;
-    }
-    // A batch of pure no-ops (e.g. removing files the index never had) must not
-    // rewrite the whole blob — that was the point of the old early return.
-    if (changed) {
-      existing.updated_at = Date.now();
-      indexWriteCount++;
-      await saveIndex(indexPath, existing);
-    }
-    for (const mutation of batch) mutation.resolve();
-  } catch (err) {
-    for (const mutation of batch) mutation.reject(err);
-  }
-}
-
-/** Queue a mutation and make sure exactly one flush is pending per index. */
-function enqueueIndexMutation(
-  indexPath: string,
-  missing: IndexMutation["missing"],
-  apply: (index: CodeIndex) => boolean,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const queue = pendingMutations.get(indexPath);
-    if (queue) queue.push({ apply, missing, resolve, reject });
-    else pendingMutations.set(indexPath, [{ apply, missing, resolve, reject }]);
-
-    // A flush already waiting has not drained yet, so it will pick this up.
-    if (scheduledFlushes.has(indexPath)) return;
-
-    const prev = writeLocks.get(indexPath) ?? Promise.resolve();
-    const next = prev.then(() => {
-      // Release the slot before draining so mutations that arrive during the
-      // load/save schedule their own follow-up flush instead of being lost.
-      scheduledFlushes.delete(indexPath);
-      return flushIndexMutations(indexPath);
-    });
-    scheduledFlushes.set(indexPath, next);
-    // Swallow errors on the lock chain so one failure cannot block later writers.
-    writeLocks.set(indexPath, next.catch(() => {}));
-  });
-}
+const jsonMutationIo = { loadIndex, saveIndex };
 
 /**
  * Incrementally update an index for a single changed file.
@@ -584,22 +354,7 @@ export async function saveIncremental(
     invalidateIndexCache(dbPath);
     return;
   }
-  return enqueueIndexMutation(indexPath, "throw", (existing) => {
-    const filtered = existing.symbols.filter((symbol) => symbol.file !== updatedFile);
-    const merged = [...filtered, ...newSymbols];
-
-    existing.symbols = merged;
-    existing.symbol_count = merged.length;
-
-    // Update files[] to keep it in sync
-    if (fileEntry) {
-      existing.files = existing.files.filter((f) => f.path !== updatedFile);
-      existing.files.push(fileEntry);
-      existing.file_count = existing.files.length;
-    }
-    // A re-index of a file always rewrites its symbols, so this is never a no-op.
-    return true;
-  });
+  return saveIncrementalJson(indexPath, updatedFile, newSymbols, fileEntry, jsonMutationIo);
 }
 
 /**
@@ -618,17 +373,7 @@ export async function removeFileFromIndex(
     invalidateIndexCache(dbPath);
     return;
   }
-  return enqueueIndexMutation(indexPath, "skip", (existing) => {
-    const hadSymbols = existing.symbols.some((s) => s.file === deletedFile);
-    const hadFile = existing.files.some((f) => f.path === deletedFile);
-    if (!hadSymbols && !hadFile) return false;
-
-    existing.symbols = existing.symbols.filter((s) => s.file !== deletedFile);
-    existing.symbol_count = existing.symbols.length;
-    existing.files = existing.files.filter((f) => f.path !== deletedFile);
-    existing.file_count = existing.files.length;
-    return true;
-  });
+  return removeFileFromJsonIndex(indexPath, deletedFile, jsonMutationIo);
 }
 
 /**
