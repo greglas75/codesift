@@ -724,7 +724,11 @@ Design rationale and rejected alternatives: [`docs/adr/ADR-003-index-storage-for
 
 CodeSift sends **anonymous, aggregate** usage stats so the tool can be improved based on how it's actually used. It is **opt-out** and sends **only** the fields below — never your queries, file paths, repo/file/symbol names, code, hostname, username, or IP.
 
-**Exactly what is sent (allowlist):** a random per-install id (not derived from your machine); bucketed environment (OS, arch, RAM bucket, cores, Node & CodeSift version, repo-size bucket, top-3 file extensions); and per-tool-per-day aggregates (call count, latency p50/p95/max, error rate, empty-result rate, cache-hit rate) plus response-hint emission counts. The allowlist is enforced in code — see [`src/storage/telemetry/sanitizer.ts`](src/storage/telemetry/sanitizer.ts).
+**Exactly what is sent (allowlist):** a random per-install id (not derived from your machine); bucketed environment (OS, arch, RAM bucket, cores, Node & CodeSift version, repo-size bucket, top-3 file extensions); and per-tool-per-day aggregates (call count, latency p50/p95/max, error rate, empty-result rate, cache-hit rate) plus response-hint emission counts.
+
+**If [zuvo](https://github.com/greglas75/zuvo-plugin) is also installed**, anonymous per-skill rollups are included as well: which skill ran, its friction category, whether the audit/adversarial gates produced a verdict or were skipped, and median effort — as daily medians and counts, never sums, so total workload does not leak. A retro line's four identifying fields (project, branch, commit sha, free-text note) are **never read at all** — they are omitted from the field map rather than read and scrubbed, so anonymity survives a format change instead of depending on one. The key is absent entirely when no zuvo is installed, so "absent" and "ran but produced nothing" stay distinguishable. With no zuvo on the machine, nothing in this paragraph applies.
+
+The allowlist is enforced in code — see [`src/storage/telemetry/sanitizer.ts`](src/storage/telemetry/sanitizer.ts) — and the first-run notice is held to it by a test that fails if the payload can emit a dimension the notice does not name.
 
 **See the exact payload** that would be sent from your machine:
 

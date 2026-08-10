@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, appendFileSync, openSync, readSync, closeSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, appendFileSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { homedir, totalmem } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -116,9 +118,51 @@ const MAX_APPEND_BYTES = 8 * 1024 * 1024;
 /** Sanity bound on a decoded dimension, so a corrupt byte cannot request a huge allocation. */
 const MAX_DIM = 8192;
 
+/**
+ * Ceiling on how much of the cache is held resident, in bytes of vector payload.
+ *
+ * This bound is not optional decoration. Until the writer was fixed, appends threw
+ * `RangeError` above ~33k entries into a bare catch, so the file was accidentally frozen at 4.56%
+ * of the corpus and nobody had to think about the read side. Fixing the writer — and adding chunk
+ * texts to the same cache — let it grow for real, and `loadSharedCache` materialises EVERY record
+ * into a `Map` that no budget governs: measured +1.17 GB RSS and a multi-second event-loop freeze
+ * in a long-lived MCP server, on a machine that routinely runs 24–37 codesift processes at once.
+ *
+ * Stopping early is the correct degradation for this structure. The cache is a write-side
+ * optimization whose only failure mode is a cache MISS, so a partially loaded one is still
+ * completely correct — it just recomputes more. That is the same contract as an unreadable file.
+ *
+ * Default is deliberately modest and scales with the machine, matching the embedding/index budgets
+ * (`CODESIFT_MAX_EMBEDDING_MEM_MB`, `CODESIFT_MAX_INDEX_CACHE_MB`). Override with
+ * `CODESIFT_MAX_SHARED_CACHE_MB`; `0` disables the shared cache read entirely.
+ */
+function sharedCacheBudgetBytes(): number {
+  const raw = process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
+  if (raw !== undefined) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) return n * 1024 * 1024;
+  }
+  const totalGb = totalmem() / 1024 ** 3;
+  const mb = totalGb <= 16 ? 64 : totalGb <= 32 ? 128 : 256;
+  return mb * 1024 * 1024;
+}
+
+/**
+ * Basename of the cache file this build reads and writes.
+ *
+ * Exported so `prune` can reclaim SUPERSEDED versions without hard-coding a name
+ * that would drift on the next format bump: it deletes every `shared-embeddings.*`
+ * that is not this one. A format bump otherwise strands the old file forever —
+ * nothing opens it and nothing deletes it, because it has no hash prefix for the
+ * artifact sweep to match (1.05 GB measured after the v1→v2 bump).
+ */
+export function currentSharedCacheFilename(): string {
+  return `shared-embeddings.v${CACHE_VERSION}.bin`;
+}
+
 function cachePath(): string {
   const dataDir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
-  return join(dataDir, `shared-embeddings.v${CACHE_VERSION}.bin`);
+  return join(dataDir, currentSharedCacheFilename());
 }
 
 /**
@@ -157,13 +201,20 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
   if (memory && loadedFrom === path) return memory;
   const map = new Map<string, Float32Array>();
 
-  if (existsSync(path)) {
-    let fd: number | undefined;
+  const budget = sharedCacheBudgetBytes();
+  if (budget > 0 && existsSync(path)) {
+    let handle: FileHandle | undefined;
     let corrupt = 0;
     let skippedTail = false;
+    let resident = 0;
+    let stoppedAtBudget = false;
     try {
       const size = statSync(path).size;
-      fd = openSync(path, "r");
+      // Async open/read: this runs inside the long-lived MCP server, where the
+      // synchronous version blocked the event loop for seconds on a file that is
+      // now hundreds of megabytes. Nothing here needs to be synchronous — the
+      // function has always been async, it just was not using it.
+      handle = await open(path, "r");
       // Read in slabs rather than one buffer: the file is expected to outgrow
       // any single comfortable allocation, which is how v1 died.
       const SLAB = 4 * 1024 * 1024;
@@ -173,7 +224,7 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
       while (offset < size) {
         const want = Math.min(SLAB, size - offset);
         const buf = Buffer.allocUnsafe(want);
-        const got = readSync(fd, buf, 0, want, offset);
+        const { bytesRead: got } = await handle.read(buf, 0, want, offset);
         if (got <= 0) break;
         offset += got;
 
@@ -204,10 +255,19 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
             continue;
           }
 
+          if (resident + dim * 4 > budget) {
+            // Stop, do not evict. Entries are equally valuable here — there is no recency to
+            // exploit, since a key is looked up once per corpus pass — so the cheapest correct
+            // policy is to keep the prefix already paid for and let the rest be recomputed.
+            stoppedAtBudget = true;
+            offset = size;
+            break;
+          }
           const key = data.subarray(p, p + KEY_BYTES).toString("hex");
           const vec = new Float32Array(dim);
           for (let i = 0; i < dim; i++) vec[i] = data.readFloatLE(p + HEADER_BYTES + i * 4);
           map.set(key, vec);
+          resident += dim * 4;
           p += total;
         }
         carry = p < data.length ? Buffer.from(data.subarray(p)) : Buffer.alloc(0);
@@ -222,9 +282,17 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
             `It is derived — delete ${path} to rebuild.`,
         );
       }
-      if (fd !== undefined) {
+      if (stoppedAtBudget) {
+        console.error(
+          `[codesift] shared embedding cache: loaded ${map.size} vectors ` +
+            `(${(resident / 1024 ** 2).toFixed(0)} MB), stopping at the ` +
+            `${(budget / 1024 ** 2).toFixed(0)} MB budget. The rest will be recomputed rather than ` +
+            `looked up. Raise CODESIFT_MAX_SHARED_CACHE_MB to trade memory for fewer model calls.`,
+        );
+      }
+      if (handle !== undefined) {
         try {
-          closeSync(fd);
+          await handle.close();
         } catch {
           /* already gone */
         }

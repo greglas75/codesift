@@ -96,6 +96,21 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       const repo = meta["repo"];
       if (!root || !repo) continue;
       statSync(root); // throws when the tree is gone — then it really is garbage
+
+      // The live guard above is keyed by hash, while registration replaces an
+      // entry by repository name. Do not let an orphan database repoint a
+      // healthy entry that already owns the same name.
+      const existing = reg.repos?.[repo];
+      if (existing?.root && existing.root !== root) {
+        let existingAlive = true;
+        try {
+          statSync(existing.root);
+        } catch {
+          existingAlive = false;
+        }
+        if (existingAlive) continue;
+      }
+
       live.add(m[1]);
       protectedNames.add(repo);
       if (!dryRun) {
@@ -142,6 +157,22 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       files++;
     } catch { /* skip unreadable/already-gone */ }
   }
+
+  // Shared-cache versions have no repository hash prefix, so the artifact
+  // sweep cannot discover superseded formats. Keep the current version and
+  // reclaim only older derived cache files.
+  const { currentSharedCacheFilename } = await import("../storage/shared-embedding-cache.js");
+  const currentShared = currentSharedCacheFilename();
+  for (const name of readdirSync(dataDir)) {
+    if (!name.startsWith("shared-embeddings.") || name === currentShared) continue;
+    const full = join(dataDir, name);
+    try {
+      bytes += statSync(full).size;
+      if (!dryRun) unlinkSync(full);
+      files++;
+    } catch { /* skip unreadable/already-gone */ }
+  }
+
   // De-register the dead entries. After the sweep, so a failure above leaves the
   // registry untouched rather than half-cleaned.
   if (!dryRun && stale.length > 0) {

@@ -35,7 +35,7 @@ import type { BM25Index } from "../../search/bm25.js";
 import { loadConfig, localEmbeddingsDisabled, embeddingMemBudgetBytes } from "../../config.js";
 import { ensureIndexFresh } from "./file-indexer.js";
 import { indexFolder } from "./folder-indexer.js";
-import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches } from "./state.js";
+import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches, chunkCacheKey, invalidateEmbeddingCaches } from "./state.js";
 import type { CodeIndex, RepoMeta } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
 
@@ -75,8 +75,7 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   // Remove in-memory caches
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
-  embeddingCaches.delete(repoName);
-  embeddingCaches.delete(`${repoName}:chunks`);
+  invalidateEmbeddingCaches(repoName);
 
   // Delete index file + embedding files + chunk files
   const embeddingPath = getEmbeddingPath(meta.index_path);
@@ -413,12 +412,16 @@ export function _resetEmbeddingLoadCountForTesting(): void {
  * Deliberately the SAME map, keyed `<repo>:chunks`, rather than a second cache: the RAM budget is a
  * statement about total resident embedding bytes, and chunk vectors are embedding bytes. Two
  * independent budgets would each be satisfied while together doubling the footprint.
+ *
+ * Because the key is DERIVED, every invalidation must go through
+ * {@link invalidateEmbeddingCaches} — see the note there for what a direct
+ * `embeddingCaches.delete(repoName)` silently fails to do.
  */
 export async function getChunkEmbeddingCache(
   repoName: string,
 ): Promise<Map<string, Float32Array> | null> {
   if (embeddingsDisabled()) return null;
-  const cacheKey = `${repoName}:chunks`;
+  const cacheKey = chunkCacheKey(repoName);
 
   const cached = embeddingCaches.get(cacheKey);
   if (cached) {

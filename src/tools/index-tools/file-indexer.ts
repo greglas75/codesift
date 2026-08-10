@@ -13,7 +13,7 @@ import { loadConfig } from "../../config.js";
 import { scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
 import { indexFolder } from "./folder-indexer.js";
-import { bm25Indexes, codeIndexes, embeddingCaches } from "./state.js";
+import { bm25Indexes, codeIndexes, invalidateEmbeddingCaches } from "./state.js";
 
 /**
  * In-process record of the last indexed state per absolute file path.
@@ -157,8 +157,7 @@ export async function indexFile(filePath: string): Promise<{
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(matchingRepo.name);
   codeIndexes.delete(matchingRepo.name);
-  embeddingCaches.delete(matchingRepo.name);
-  embeddingCaches.delete(`${matchingRepo.name}:chunks`);
+  invalidateEmbeddingCaches(matchingRepo.name);
 
   let secretsWarning: string | undefined;
   if (secretFindingsCount > 0) {
@@ -251,8 +250,7 @@ export async function ensureIndexFresh(repoName: string): Promise<{
 
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
-  embeddingCaches.delete(repoName);
-  embeddingCaches.delete(`${repoName}:chunks`);
+  invalidateEmbeddingCaches(repoName);
 
   freshnessChecked.set(repoName, Date.now());
   return { status: "refreshed", files_updated: changedFiles.length };

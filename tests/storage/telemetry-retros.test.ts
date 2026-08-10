@@ -249,4 +249,28 @@ describe("N/A is neither a verdict nor a skip", () => {
     expect(b.blind_audit_ran).toBe(0);
     expect(b.blind_audit_na).toBe(0);
   });
+
+  it("carries the N/A counters all the way into the payload", async () => {
+    // Counting them locally and dropping them at the sanitizer would make the correction
+    // unreadable at the far end: `blind_audit_ran` falls, and nothing says whether that is skills
+    // skipping their gate or skills that never had one. 108 of 164 recorded verdicts came from
+    // skills with no such step, so that is most of the signal, not an edge case.
+    const lines = [
+      retroLine({ blind: "N/A", adversarial: "N/A" }),
+      retroLine({ blind: "clean:strict", adversarial: "3findings" }),
+    ].join("\n");
+    await writeFile(logPath, lines + "\n", "utf-8");
+
+    const retros = await aggregateRetros(0, logPath);
+    const payload = buildLevel1Payload({ anonId: "a", env: ENV, tools: [], retros, now: 1 });
+
+    const sent = payload.retros?.[0];
+    expect(sent).toBeDefined();
+    expect(sent?.blind_audit_ran).toBe(1);
+    expect(sent?.blind_audit_na).toBe(1);
+    expect(sent?.adversarial_ran).toBe(1);
+    expect(sent?.adversarial_na).toBe(1);
+    // Still an allowlisted payload, not a spread of the aggregate.
+    expect(() => assertSanitized(payload)).not.toThrow();
+  });
 });
