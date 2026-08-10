@@ -45,6 +45,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       symbol_count?: number;
       file_count?: number;
       updated_at?: number;
+      last_git_commit?: string;
     }>;
     updated_at?: number;
   };
@@ -168,6 +169,9 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
         }
         if (typeof previous?.updated_at === "number" && Number.isFinite(previous.updated_at)) {
           replacement.updated_at = previous.updated_at;
+        }
+        if (typeof previous?.last_git_commit === "string") {
+          replacement.last_git_commit = previous.last_git_commit;
         }
         reg.repos[repo] = replacement;
         registryDirty = true;

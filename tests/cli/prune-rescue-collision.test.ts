@@ -49,7 +49,7 @@ async function runPrune(): Promise<Record<string, unknown>> {
 
 const registry = () =>
   JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8")) as {
-    repos: Record<string, { root?: string; index_path?: string }>;
+    repos: Record<string, { root?: string; index_path?: string; last_git_commit?: string }>;
   };
 
 beforeEach(() => {
@@ -76,7 +76,12 @@ afterEach(() => {
 describe("prune rescue vs stale de-registration", () => {
   it("keeps the entry it just rescued, and its artifacts, across two runs", async () => {
     writeRegistry({
-      "local/foo": { name: "local/foo", root: join(tmpdir(), "gone-worktree"), index_path: join(dir, `${HASH_DEAD}.index.json`) },
+      "local/foo": {
+        name: "local/foo",
+        root: join(tmpdir(), "gone-worktree"),
+        index_path: join(dir, `${HASH_DEAD}.index.json`),
+        last_git_commit: "abc123",
+      },
       "local/other": { name: "local/other", root: dir, index_path: join(dir, `${HASH_OTHER}.index.json`) },
     });
     makeDb(join(dir, `${HASH_LIVE}.index.db`), "local/foo", liveRoot);
@@ -88,6 +93,7 @@ describe("prune rescue vs stale de-registration", () => {
 
     // The rescue must SURVIVE the de-registration in the same run.
     expect(registry().repos["local/foo"]?.root).toBe(liveRoot);
+    expect(registry().repos["local/foo"]?.last_git_commit).toBe("abc123");
 
     // And a second run must not undo it — the failure mode was that run 2 saw the artifacts as
     // orphaned and deleted them, which is how a live index becomes garbage.
