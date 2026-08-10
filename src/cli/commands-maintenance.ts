@@ -13,10 +13,10 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   const { loadConfig } = await import("../config.js");
   const { withRegistryLock } = await import("../storage/registry.js");
   const registryPath = loadConfig().registryPath;
-  await withRegistryLock(registryPath, () => handlePruneLocked(flags));
+  await withRegistryLock(registryPath, () => handlePruneLocked(flags, registryPath));
 }
 
-async function handlePruneLocked(flags: Flags): Promise<void> {
+async function handlePruneLocked(flags: Flags, registryPath: string): Promise<void> {
   const { readFileSync, readdirSync, statSync, unlinkSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { loadConfig } = await import("../config.js");
@@ -49,7 +49,7 @@ async function handlePruneLocked(flags: Flags): Promise<void> {
   };
   let registryDirty = false;
   try {
-    reg = JSON.parse(readFileSync(join(dataDir, "registry.json"), "utf-8")) as typeof reg;
+    reg = JSON.parse(readFileSync(registryPath, "utf-8")) as typeof reg;
   } catch {
     die("prune: cannot read registry.json — aborting so live data is never deleted.");
     return;
@@ -150,6 +150,7 @@ async function handlePruneLocked(flags: Flags): Promise<void> {
         // live-set above is built from these strings.
         reg.repos ??= {};
         reg.repos[repo] = {
+          ...reg.repos[repo],
           name: repo,
           root,
           index_path: join(dataDir, `${m[1]}.index.json`),
@@ -174,6 +175,24 @@ async function handlePruneLocked(flags: Flags): Promise<void> {
     die("prune: registry lists 0 repos — aborting (refusing to treat all artifacts as orphans).");
   }
 
+  // Commit every registry rescue/removal before deleting derived files. If the
+  // atomic registry write fails, prune exits with all artifacts still intact.
+  if (!dryRun && stale.length > 0) {
+    for (const s of stale) {
+      if (!rescuedNames.has(s.name) && !protectedNames.has(s.name)) {
+        if (reg.repos && s.name in reg.repos) {
+          delete reg.repos[s.name];
+          registryDirty = true;
+        }
+      }
+    }
+  }
+  if (registryDirty) {
+    reg.updated_at = Date.now();
+    const { saveRegistryUnderLock } = await import("../storage/registry.js");
+    await saveRegistryUnderLock(registryPath, reg as never);
+  }
+
   // Suffix list lives with the helpers that build these names, so a new artifact kind
   // cannot quietly become unreclaimable garbage — see ARTIFACT_SUFFIXES.
   const { artifactPattern } = await import("../storage/_shared.js");
@@ -181,7 +200,7 @@ async function handlePruneLocked(flags: Flags): Promise<void> {
   const registryProtectsHash = (hash: string): boolean => {
     try {
       const fresh = JSON.parse(
-        readFileSync(join(dataDir, "registry.json"), "utf-8"),
+        readFileSync(registryPath, "utf-8"),
       ) as typeof reg;
       return Object.values(fresh.repos ?? {}).some((entry) => {
         const file = entry.index_path?.split("/").pop() ?? "";
@@ -204,7 +223,7 @@ async function handlePruneLocked(flags: Flags): Promise<void> {
       // committed its registry entry. Delay collection for one run and also
       // re-read registry immediately before every destructive unlink.
       const ageMs = Date.now() - fileStat.mtimeMs;
-      if ((ageMs >= 0 && ageMs < pruneGraceMs) || registryProtectsHash(m[1]!)) {
+      if (ageMs < pruneGraceMs || registryProtectsHash(m[1]!)) {
         kept++;
         continue;
       }
@@ -228,30 +247,11 @@ async function handlePruneLocked(flags: Flags): Promise<void> {
     try {
       const fileStat = statSync(full);
       const ageMs = Date.now() - fileStat.mtimeMs;
-      if (ageMs >= 0 && ageMs < pruneGraceMs) continue;
+      if (ageMs < pruneGraceMs) continue;
       if (!dryRun) unlinkSync(full);
       bytes += fileStat.size;
       files++;
     } catch { /* skip unreadable/already-gone */ }
-  }
-
-  // De-register the dead entries. After the sweep, so a failure above leaves the
-  // registry untouched rather than half-cleaned.
-  if (!dryRun && stale.length > 0) {
-    for (const s of stale) {
-      if (!rescuedNames.has(s.name) && !protectedNames.has(s.name)) {
-        if (reg.repos && s.name in reg.repos) {
-          delete reg.repos[s.name];
-          registryDirty = true;
-        }
-      }
-    }
-  }
-
-  if (registryDirty) {
-    reg.updated_at = Date.now();
-    const { saveRegistry } = await import("../storage/registry.js");
-    await saveRegistry(join(dataDir, "registry.json"), reg as never);
   }
 
   output({

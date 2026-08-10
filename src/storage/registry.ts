@@ -26,8 +26,10 @@ export async function loadRegistry(registryPath: string): Promise<Registry> {
 /**
  * Save the registry atomically.
  * Writes to a temp file first, then renames to prevent partial reads.
+ * The caller must already hold `withRegistryLock`; the explicit name keeps
+ * future mutation paths from silently bypassing cross-process serialization.
  */
-export async function saveRegistry(
+export async function saveRegistryUnderLock(
   registryPath: string,
   registry: Registry,
 ): Promise<void> {
@@ -58,7 +60,7 @@ async function acquireRegistryFileLock(registryPath: string): Promise<RegistryLo
   await mkdir(dirname(registryPath), { recursive: true });
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(`${registryPath}.lock.db`);
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 5 * 60_000;
   while (true) {
     try {
       db.exec("BEGIN EXCLUSIVE");
@@ -110,7 +112,7 @@ export async function registerRepo(
     const registry = await loadRegistry(registryPath);
     registry.repos[meta.name] = meta;
     registry.updated_at = Date.now();
-    await saveRegistry(registryPath, registry);
+    await saveRegistryUnderLock(registryPath, registry);
   });
 }
 
@@ -150,7 +152,7 @@ export async function updateRepoMeta(
     if (!existing) return;
     Object.assign(existing, updates);
     registry.updated_at = Date.now();
-    await saveRegistry(registryPath, registry);
+    await saveRegistryUnderLock(registryPath, registry);
   });
 }
 
@@ -171,7 +173,7 @@ export async function removeRepo(
 
     delete registry.repos[name];
     registry.updated_at = Date.now();
-    await saveRegistry(registryPath, registry);
+    await saveRegistryUnderLock(registryPath, registry);
     return true;
   });
 }
