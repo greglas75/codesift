@@ -54,10 +54,8 @@ describe("Flask route tracing", () => {
     mockedGetCodeIndex.mockResolvedValue(makeIndex([sym]));
 
     const result = await traceRoute("test", "/users");
-    expect(result).toHaveProperty("handlers");
     const r = result as { handlers: unknown[] };
-    expect(r.handlers.length).toBeGreaterThan(0);
-    expect(r.handlers[0]).toMatchObject({ framework: "flask" });
+    expect(r.handlers).toContainEqual(expect.objectContaining({ framework: "flask" }));
   });
 
   it("finds Flask @app.get shorthand", async () => {
@@ -70,8 +68,7 @@ describe("Flask route tracing", () => {
     mockedGetCodeIndex.mockResolvedValue(makeIndex([sym]));
 
     const result = await traceRoute("test", "/items/42") as { handlers: Array<{ method?: string }> };
-    expect(result.handlers.length).toBeGreaterThan(0);
-    expect(result.handlers[0]!.method).toBe("GET");
+    expect(result.handlers).toContainEqual(expect.objectContaining({ method: "GET" }));
   });
 
   it("does not match wrong path", async () => {
@@ -102,9 +99,10 @@ describe("FastAPI route tracing", () => {
     mockedGetCodeIndex.mockResolvedValue(makeIndex([sym]));
 
     const result = await traceRoute("test", "/users/123") as { handlers: Array<{ framework: string; method?: string }> };
-    expect(result.handlers.length).toBeGreaterThan(0);
-    expect(result.handlers[0]!.framework).toBe("fastapi");
-    expect(result.handlers[0]!.method).toBe("GET");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      framework: "fastapi",
+      method: "GET",
+    }));
   });
 
   it("finds FastAPI @router.post handler", async () => {
@@ -117,34 +115,6 @@ describe("FastAPI route tracing", () => {
     mockedGetCodeIndex.mockResolvedValue(makeIndex([sym]));
 
     const result = await traceRoute("test", "/items/") as { handlers: Array<{ method?: string }> };
-    expect(result.handlers.length).toBeGreaterThan(0);
-    expect(result.handlers[0]!.method).toBe("POST");
-  });
-});
-
-describe("Django route tracing", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
-
-  it("finds Django path() handler", async () => {
-    const viewSym = makeSym({
-      name: "user_list",
-      file: "myapp/views.py",
-      source: "def user_list(request):\n    return HttpResponse()",
-    });
-    const urlsSym = makeSym({
-      name: "urlpatterns",
-      file: "myapp/urls.py",
-      kind: "variable",
-      source: `urlpatterns = [\n    path('users/', views.user_list, name='user-list'),\n]`,
-    });
-
-    const index = makeIndex([viewSym, urlsSym]);
-    // Django handler reads urls.py from disk — we need to mock readFile
-    // Since traceRoute uses dynamic import, we'll test via the index
-    // For this test, we verify the handler can find the view reference
-    mockedGetCodeIndex.mockResolvedValue(index);
-
-    // Django reads from disk so this test is an integration test.
-    // Skip disk-dependent test in unit context — covered in integration tests.
+    expect(result.handlers).toContainEqual(expect.objectContaining({ method: "POST" }));
   });
 });

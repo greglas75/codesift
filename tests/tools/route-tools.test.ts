@@ -47,7 +47,7 @@ export class UsersController {
     const index = mockIndex(tmpRoot, ["src/users/users.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/api/users");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
     expect(handlers[0]!.method).toBe("GET");
     expect(handlers[0]!.framework).toBe("nestjs");
   });
@@ -67,7 +67,7 @@ export class HealthController {
     const index = mockIndex(tmpRoot, ["src/users/health.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/health");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
     expect(handlers[0]!.method).toBe("GET");
   });
 
@@ -84,7 +84,7 @@ export class AppController {
     const index = mockIndex(tmpRoot, ["src/users/app.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/users");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
   });
 
   it("finds handler with @Controller() + @Get() (both empty)", async () => {
@@ -100,7 +100,7 @@ export class RootController {
     const index = mockIndex(tmpRoot, ["src/users/root.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
   });
 });
 
@@ -118,7 +118,7 @@ export class UsersController {
     const index = mockIndex(tmpRoot, ["src/users/users.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/api/users/123");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
     expect(handlers[0]!.method).toBe("GET");
   });
 
@@ -153,8 +153,7 @@ export class TestController {
     const index = mockIndex(tmpRoot, ["src/users/test.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/test");
-    // Should not throw, but may or may not find the handler (no parens is unusual)
-    expect(handlers).toBeDefined();
+    expect(handlers).toEqual([]);
   });
 
   it("returns empty array when no controller files exist", async () => {
@@ -470,9 +469,10 @@ describe("traceRoute — Astro", () => {
     await withIndex(index, async () => {
       const result = await traceRoute("test", "/blog/hello");
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
-      expect(result.handlers.length).toBeGreaterThan(0);
-      expect(result.handlers[0]!.framework).toBe("astro");
-      expect(result.handlers[0]!.file).toBe("src/pages/blog/[slug].astro");
+      expect(result.handlers).toContainEqual(expect.objectContaining({
+        framework: "astro",
+        file: "src/pages/blog/[slug].astro",
+      }));
     });
   });
 
@@ -493,11 +493,11 @@ describe("traceRoute — Astro", () => {
     await withIndex(index, async () => {
       const result = await traceRoute("test", "/api/data");
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
-      expect(result.handlers.length).toBeGreaterThan(0);
-      const handler = result.handlers[0]!;
-      expect(handler.framework).toBe("astro");
-      expect(handler.file).toBe("src/pages/api/data.ts");
-      expect(handler.method).toBe("GET");
+      expect(result.handlers).toContainEqual(expect.objectContaining({
+        framework: "astro",
+        file: "src/pages/api/data.ts",
+        method: "GET",
+      }));
     });
   });
 });
@@ -515,8 +515,9 @@ export async function POST(request: Request) {
 }`,
     });
     const result = await traceRoute(repo, "/api/upload");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
-    expect(result.handlers[0]!.symbol.name).toBe("POST");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      symbol: expect.objectContaining({ name: "POST" }),
+    }));
   });
 
   it("still finds handler in route.ts file (regression)", async () => {
@@ -527,8 +528,9 @@ export async function GET() {
 }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
-    expect(result.handlers[0]!.symbol.name).toBe("GET");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      symbol: expect.objectContaining({ name: "GET" }),
+    }));
   });
 });
 
@@ -541,8 +543,7 @@ describe("PagesRouter handler detection", () => {
 }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
-    expect(result.handlers[0]!.router).toBe("pages");
+    expect(result.handlers).toContainEqual(expect.objectContaining({ router: "pages" }));
   });
 
   it("returns both handlers in hybrid App + Pages Router", async () => {
@@ -556,7 +557,7 @@ export async function GET() {
 }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(2);
+    expect(result.handlers).toHaveLength(2);
     const routers = result.handlers.map((h) => h.router);
     expect(routers).toContain("pages");
     expect(routers).toContain("app");
@@ -571,7 +572,7 @@ export async function GET() {
 export default h;`,
     });
     const result = await traceRoute(repo, "/api/exotic");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
+    expect(result.handlers).toContainEqual(expect.objectContaining({ router: "pages" }));
   });
 });
 
@@ -608,9 +609,10 @@ export function middleware(req) { return NextResponse.next(); }`,
 export async function GET() { return NextResponse.json({}); }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.middleware).toBeDefined();
-    expect(result.middleware!.applies).toBe(true);
-    expect(result.middleware!.matchers).toEqual(["/api/:path*"]);
+    expect(result.middleware).toEqual(expect.objectContaining({
+      applies: true,
+      matchers: ["/api/:path*"],
+    }));
   });
 
   it("returns middleware.applies=false when matcher does not cover path", async () => {
@@ -622,8 +624,7 @@ export function middleware(req) { return NextResponse.next(); }`,
 export async function GET() { return NextResponse.json({}); }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.middleware).toBeDefined();
-    expect(result.middleware!.applies).toBe(false);
+    expect(result.middleware).toEqual(expect.objectContaining({ applies: false }));
   });
 });
 
@@ -646,9 +647,7 @@ export async function POST() {
 }`,
     });
     const result = await traceRoute(repo, "/users");
-    expect(result.server_actions).toBeDefined();
-    expect(result.server_actions!.length).toBeGreaterThanOrEqual(1);
-    expect(result.server_actions!.some((a) => a.name === "updateUser")).toBe(true);
+    expect(result.server_actions).toContainEqual(expect.objectContaining({ name: "updateUser" }));
   });
 
   it("returns empty server_actions when no use server files", async () => {
@@ -669,10 +668,10 @@ app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
 export default app;`,
     });
     const result = await traceRoute(repo, "/health");
-    expect(result.handlers.length).toBeGreaterThan(0);
-    const honoHandler = result.handlers.find((h) => h.framework === "hono");
-    expect(honoHandler).toBeDefined();
-    expect(honoHandler?.method).toBe("GET");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      framework: "hono",
+      method: "GET",
+    }));
   });
 
   it("traces Hono parameterized path (AC-R1 with param)", async () => {
@@ -683,8 +682,7 @@ app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
 export default app;`,
     });
     const result = await traceRoute(repo, "/users/:id");
-    const honoHandler = result.handlers.find((h) => h.framework === "hono");
-    expect(honoHandler).toBeDefined();
+    expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "hono" }));
   });
 
   it("does not detect function-body use server (file-level only)", async () => {
