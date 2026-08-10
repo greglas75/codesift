@@ -85,6 +85,12 @@ function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "sta
   return { ...rest, id: shortId };
 }
 
+function matchesSymbolId(symbol: CodeSymbol, requestedId: string): boolean {
+  if (symbol.id === requestedId) return true;
+  const separator = symbol.id.indexOf(":");
+  return separator >= 0 && symbol.id.slice(separator + 1) === requestedId;
+}
+
 /**
  * Read a source file and extract lines for a symbol (1-based, inclusive).
  * Uses byte offsets when available for precise reads without loading full file.
@@ -107,8 +113,13 @@ async function extractSource(
       try {
         const length = endByte - startByte;
         const buf = Buffer.alloc(length);
-        await fh.read(buf, 0, length, startByte);
-        return buf.toString("utf-8");
+        let total = 0;
+        while (total < length) {
+          const { bytesRead } = await fh.read(buf, total, length - total, startByte + total);
+          if (bytesRead === 0) break;
+          total += bytesRead;
+        }
+        if (total === length) return buf.toString("utf-8");
       } finally {
         await fh.close();
       }
@@ -215,7 +226,7 @@ export async function getSymbol(
   // states the rule for names ("two symbols named `handler` must stay ambiguous — silently
   // picking one is worse than the miss it replaces"); it was never applied to ids because they
   // were assumed unique.
-  const matches = index.symbols.filter((s) => s.id === symbolId);
+  const matches = index.symbols.filter((s) => matchesSymbolId(s, symbolId));
   if (matches.length === 0) return null;
   if (matches.length > 1) {
     const where = matches
@@ -285,16 +296,18 @@ export async function getSymbols(
   const requestedIds = new Set(symbolIds);
   const symbolMap = new Map<string, CodeSymbol>();
   const collisions = new Map<string, CodeSymbol[]>();
-  for (const sym of index.symbols) {
-    if (!requestedIds.has(sym.id)) continue;
-    const seen = symbolMap.get(sym.id);
-    if (seen === undefined) {
-      symbolMap.set(sym.id, sym);
-      continue;
+  for (const requestedId of requestedIds) {
+    for (const sym of index.symbols) {
+      if (!matchesSymbolId(sym, requestedId)) continue;
+      const seen = symbolMap.get(requestedId);
+      if (seen === undefined) {
+        symbolMap.set(requestedId, sym);
+        continue;
+      }
+      const group = collisions.get(requestedId) ?? [seen];
+      group.push(sym);
+      collisions.set(requestedId, group);
     }
-    const group = collisions.get(sym.id) ?? [seen];
-    group.push(sym);
-    collisions.set(sym.id, group);
   }
   if (collisions.size > 0) {
     const detail = [...collisions.entries()]
@@ -315,7 +328,7 @@ export async function getSymbols(
   }
 
   // Group symbols by file to read each file only once
-  const byFile = new Map<string, CodeSymbol[]>();
+  const byFile = new Map<string, Array<{ requestedId: string; symbol: CodeSymbol }>>();
   for (const id of symbolIds) {
     const sym = symbolMap.get(id);
     if (!sym) continue;
@@ -325,7 +338,7 @@ export async function getSymbols(
       group = [];
       byFile.set(sym.file, group);
     }
-    group.push(sym);
+    group.push({ requestedId: id, symbol: sym });
   }
 
   // Read all files in parallel, extract source for all symbols in each file
@@ -342,12 +355,12 @@ export async function getSymbols(
     const [, symbols] = fileEntries[i]!;
     const lines = fileContents[i]?.split("\n");
 
-    for (const sym of symbols) {
+    for (const { requestedId, symbol: sym } of symbols) {
       const result = { ...sym };
       if (lines) {
         result.source = lines.slice(sym.start_line - 1, sym.end_line).join("\n");
       }
-      results.set(sym.id, result);
+      results.set(requestedId, result);
     }
   }
 

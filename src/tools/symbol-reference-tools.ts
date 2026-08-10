@@ -1,8 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { findReferencesLsp } from "../lsp/lsp-tools.js";
 import type { Reference } from "../types.js";
+import { matchFilePattern } from "../utils/glob.js";
 import {
   isNoisePath,
   MAX_CONTEXT_LENGTH,
@@ -50,24 +52,27 @@ export async function findReferencesBatch(
   sink?: ReferenceScanSink,
 ): Promise<Record<string, Reference[]>> {
   const index = await requireCodeIndex(repo);
-  const patterns = symbolNames.map((name) => ({
+  const uniqueNames = [...new Set(symbolNames)];
+  const patterns = uniqueNames.map((name) => ({
     name,
     regex: wordBoundaryPattern(name),
   }));
 
-  const fileFilter = filePattern
-    ? new RegExp(filePattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*"))
-    : null;
-
   const result: Record<string, Reference[]> = {};
-  for (const name of symbolNames) result[name] = [];
+  for (const name of uniqueNames) result[name] = [];
 
   let filesScanned = 0;
   let filesSkippedNoise = 0;
   let filesUnreadable = 0;
+  let timedOut = false;
+  const searchStart = Date.now();
 
   for (const fileEntry of index.files) {
-    if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
+    if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) {
+      timedOut = true;
+      break;
+    }
+    if (filePattern && !matchFilePattern(fileEntry.path, filePattern)) continue;
     if (!filePattern && isNoisePath(fileEntry.path)) {
       // Sensible default — but it means "no references" really means "none outside generated
       // and vendored code", and the caller could not tell that scoping had happened.
@@ -111,13 +116,14 @@ export async function findReferencesBatch(
   }
 
   if (sink) {
-    const capped = symbolNames.filter((n) => (result[n]?.length ?? 0) >= MAX_REFERENCES);
-    const complete = filesSkippedNoise === 0 && filesUnreadable === 0 && capped.length === 0;
+    const capped = uniqueNames.filter((n) => (result[n]?.length ?? 0) >= MAX_REFERENCES);
+    const complete = !timedOut && filesSkippedNoise === 0 && filesUnreadable === 0 && capped.length === 0;
     const reasons: string[] = [];
     if (filesSkippedNoise > 0) {
       reasons.push(`${filesSkippedNoise} generated/vendored files skipped (pass file_pattern to include them)`);
     }
     if (filesUnreadable > 0) reasons.push(`${filesUnreadable} files could not be read`);
+    if (timedOut) reasons.push(`scan exceeded ${SEARCH_TIMEOUT_MS}ms`);
     if (capped.length > 0) reasons.push(`${capped.length} symbol(s) hit the ${MAX_REFERENCES}-reference cap`);
     sink.coverage = {
       status: complete ? "complete" : "partial",
@@ -160,35 +166,32 @@ function hasRipgrep(): boolean {
   return rgAvailable;
 }
 
+const execFileAsync = promisify(execFile);
+
 /**
  * Find references using ripgrep with word-boundary matching.
  * Returns compact `file:line: context` string when results ≤ threshold.
  */
-function findReferencesWithRipgrep(
+async function findReferencesWithRipgrep(
   root: string,
   symbolName: string,
   maxResults: number,
   filePattern?: string,
-): Reference[] | string {
+): Promise<Reference[] | null> {
   const args: string[] = [
-    "-n", "--no-heading", "-w",
+    "-n", "--no-heading", "-F",
     "--max-columns", String(MAX_CONTEXT_LENGTH),
     "--max-columns-preview",
     "--max-count", String(Math.min(maxResults * 2, 5000)),
   ];
 
-  // Exclude noise dirs
-  for (const dir of RG_EXCLUDE_DIRS) {
-    args.push("--glob", `!${dir}`);
-  }
-  // Exclude noise extensions
-  for (const ext of [".snap", ".lock", ".map", ".svg", ".png", ".jpg", ".ico", ".woff", ".woff2", ".md", ".json", ".yaml", ".yml", ".toml", ".css", ".scss", ".html"]) {
-    args.push("--glob", `!*${ext}`);
-  }
-
   if (filePattern) {
     args.push("--glob", filePattern);
   } else {
+    for (const dir of RG_EXCLUDE_DIRS) args.push("--glob", `!${dir}`);
+    for (const ext of [".snap", ".lock", ".map", ".svg", ".png", ".jpg", ".ico", ".woff", ".woff2", ".md", ".json", ".yaml", ".yml", ".toml", ".css", ".scss", ".html"]) {
+      args.push("--glob", `!*${ext}`);
+    }
     // Default to code files only (matches what agent would grep for)
     args.push("--type-add", "code:*.{ts,tsx,js,jsx,py,go,rs,java,kt,kts,rb,php,vue,svelte}");
     args.push("--type", "code");
@@ -198,23 +201,15 @@ function findReferencesWithRipgrep(
 
   let stdout: string;
   try {
-    stdout = execFileSync("rg", args, {
+    const result = await execFileAsync("rg", args, {
       encoding: "utf-8",
       maxBuffer: 20 * 1024 * 1024,
       timeout: SEARCH_TIMEOUT_MS,
     });
+    stdout = result.stdout;
   } catch (err: unknown) {
-    if (err && typeof err === "object" && "status" in err) {
-      if ((err as { status: number }).status === 1) return []; // no matches
-      if ("stdout" in err && typeof (err as { stdout: unknown }).stdout === "string") {
-        stdout = (err as { stdout: string }).stdout;
-        if (!stdout) return [];
-      } else {
-        return [];
-      }
-    } else {
-      return [];
-    }
+    if (err && typeof err === "object" && "code" in err && (err as { code?: number }).code === 1) return [];
+    return null;
   }
 
   const rootPrefix = root.endsWith("/") ? root : root + "/";
@@ -229,7 +224,7 @@ function findReferencesWithRipgrep(
 
     const absPath = match[1];
     const relPath = absPath.startsWith(rootPrefix) ? absPath.slice(rootPrefix.length) : absPath;
-    if (isNoisePath(relPath)) continue;
+    if (!filePattern && isNoisePath(relPath)) continue;
 
     refs.push({
       file: relPath,
@@ -251,21 +246,17 @@ export async function findReferences(
   filePattern?: string,
 ): Promise<Reference[]> {
   // Try LSP first (type-safe, no false positives)
-  const lspRefs = await findReferencesLsp(repo, symbolName);
-  if (lspRefs !== null) return lspRefs;
+  if (!filePattern) {
+    const lspRefs = await findReferencesLsp(repo, symbolName);
+    if (lspRefs !== null) return lspRefs;
+  }
 
   // Use ripgrep when available (10x+ faster than Node.js file walk)
-  if (hasRipgrep()) {
+  if (!filePattern && hasRipgrep()) {
     const index = await requireCodeIndex(repo);
-    const result = findReferencesWithRipgrep(index.root, symbolName, MAX_REFERENCES, filePattern);
-    // ripgrep helper may return compact string; convert back to Reference[]
-    if (typeof result === "string") {
-      return result.split("\n").filter(Boolean).map((line) => {
-        const m = line.match(/^(.+?):(\d+): (.*)/);
-        return m ? { file: m[1]!, line: parseInt(m[2]!, 10), context: m[3]! } : { file: "", line: 0, context: line };
-      });
-    }
-    return result;
+    const result = await findReferencesWithRipgrep(index.root, symbolName, MAX_REFERENCES, filePattern);
+    if (result !== null) return result;
+    // Any rg failure other than its explicit no-match exit falls through to the index-backed scan.
   }
 
   // Node.js fallback
@@ -273,17 +264,13 @@ export async function findReferences(
   const pattern = wordBoundaryPattern(symbolName);
   const searchStart = Date.now();
 
-  const fileFilter = filePattern
-    ? new RegExp(filePattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*"))
-    : null;
-
   const refs: Reference[] = [];
 
   for (const fileEntry of index.files) {
     if (refs.length >= MAX_REFERENCES) break;
     if (Date.now() - searchStart > SEARCH_TIMEOUT_MS) break;
 
-    if (fileFilter && !fileFilter.test(fileEntry.path)) continue;
+    if (filePattern && !matchFilePattern(fileEntry.path, filePattern)) continue;
     if (!filePattern && isNoisePath(fileEntry.path)) continue;
 
     let content: string;

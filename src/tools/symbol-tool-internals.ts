@@ -49,5 +49,5 @@ export async function requireBM25Index(repo: string): Promise<BM25Index> {
 
 export function wordBoundaryPattern(name: string): RegExp {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`);
+  return new RegExp(`(?<![$_\\p{ID_Continue}])${escaped}(?![$_\\u200C\\u200D\\p{ID_Continue}])`, "u");
 }

@@ -505,6 +505,9 @@ describe("symbol_tools", () => {
       expect(result!.symbol.kind).toBe("function");
       expect(result!.symbol.file).toBe("src/payment.ts");
       expect(result!.symbol.source).toContain("function processPayment");
+
+      const roundTrip = await getSymbol(repo, result!.symbol.id);
+      expect(roundTrip?.symbol.name).toBe("processPayment");
     });
 
     it("includes child symbols by default for class symbols", async () => {
@@ -555,6 +558,9 @@ describe("symbol_tools", () => {
       for (const sym of results) {
         expect(sym.source).toContain(sym.name);
       }
+
+      const roundTrip = await getSymbols(repo, results.map((symbol) => symbol.id));
+      expect(roundTrip.map((symbol) => symbol.name)).toEqual(results.map((symbol) => symbol.name));
     });
 
     it("preserves requested order", async () => {
@@ -652,6 +658,15 @@ describe("symbol_tools", () => {
       // Should appear in types.ts (definition) and user-service.ts (import + usage)
       expect(files).toContain("src/types.ts");
       expect(files).toContain("src/user-service.ts");
+    });
+
+    it("honors file patterns consistently", async () => {
+      const repo = await indexFixture();
+
+      const refs = await findReferences(repo, "getUserById", "src/user-service.ts");
+
+      expect(refs.length).toBeGreaterThan(0);
+      expect(refs.every((reference) => reference.file === "src/user-service.ts")).toBe(true);
     });
   });
 

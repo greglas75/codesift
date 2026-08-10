@@ -229,7 +229,8 @@ function buildReactContext(
   const child_components = [...childSet].sort();
 
   // Extract parent components: find other components whose source uses <ThisComponent>
-  const ownPattern = new RegExp(`<${component.name}\\b`);
+  const escapedComponentName = component.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ownPattern = new RegExp(`<${escapedComponentName}\\b`);
   const parent_components = allSymbols
     .filter(
       (s) =>
@@ -261,9 +262,10 @@ function buildReactContext(
   // Look for an interface or type alias with the same name as props_type.
   let props_interface_source: string | null = null;
   if (props_type) {
-    const decl = allSymbols.find(
+    const declarations = allSymbols.filter(
       (s) => (s.kind === "interface" || s.kind === "type") && s.name === props_type,
     );
+    const decl = declarations.find((s) => s.file === component.file) ?? declarations[0];
     if (decl?.source) {
       // Cap to 800 chars to keep bundle compact
       props_interface_source = decl.source.length > 800
@@ -279,19 +281,16 @@ function buildReactContext(
  * Extract type/interface names referenced in source by matching against known symbols.
  */
 function extractTypesUsed(source: string, allSymbols: CodeSymbol[]): string[] {
-  const typeNames = allSymbols
+  const typeNames = new Set(allSymbols
     .filter((s) => (s.kind === "interface" || s.kind === "type" || s.kind === "enum") && s.name.length >= 3)
-    .map((s) => s.name);
+    .map((s) => s.name));
 
-  if (typeNames.length === 0) return [];
+  if (typeNames.size === 0) return [];
 
-  // Single combined regex instead of N separate tests (O(n) vs O(n*m))
-  const escaped = typeNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const combined = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
   const used = new Set<string>();
-  let m;
-  while ((m = combined.exec(source)) !== null) {
-    used.add(m[1]!);
+  for (const match of source.matchAll(/[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}]*/gu)) {
+    const name = match[0];
+    if (typeNames.has(name)) used.add(name);
   }
 
   return [...used].sort();
