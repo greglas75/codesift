@@ -42,6 +42,11 @@ function getBindingLine(binding: AssignmentBinding | ImportBinding | DefaultExpo
   return binding.line;
 }
 
+function isStaticTemplateString(node: TSNode): boolean {
+  return node.type === "template_string"
+    && !node.namedChildren.some((child) => child.type === "template_substitution");
+}
+
 async function evaluateValueNode(
   filePath: string,
   node: TSNode,
@@ -59,7 +64,7 @@ async function evaluateValueNode(
         used_import: false,
       };
     case "template_string": {
-      if (node.namedChildren.length === 0) {
+      if (isStaticTemplateString(node)) {
         return {
           resolved: true,
           value_kind: "string",
@@ -73,7 +78,7 @@ async function evaluateValueNode(
     }
     case "number": {
       const raw = node.text;
-      const n = Number(raw);
+      const n = Number(raw.replaceAll("_", ""));
       if (!Number.isFinite(n)) {
         return {
           resolved: false,
@@ -160,7 +165,7 @@ async function evaluateValueNode(
       };
     }
     case "object": {
-      const obj: Record<string, PythonLiteralValue> = {};
+      const obj = Object.create(null) as Record<string, PythonLiteralValue>;
       let usedImport = false;
       const aliasChain: ResolutionHop[] = [];
       for (const pair of node.namedChildren) {
@@ -266,7 +271,7 @@ async function evaluateMemberExpression(
     key = propertyNode.text;
   } else if (propertyNode.type === "string") {
     key = stripTypeScriptString(propertyNode.text);
-  } else if (propertyNode.type === "template_string" && propertyNode.namedChildren.length === 0) {
+  } else if (isStaticTemplateString(propertyNode)) {
     key = stripTypeScriptString(propertyNode.text);
   } else {
     return unsupportedNode(node, [], false);
@@ -296,8 +301,8 @@ async function evaluateMemberExpression(
     };
   }
 
-  const propertyValue = (objectResult.value as Record<string, PythonLiteralValue>)[key];
-  if (propertyValue === undefined) {
+  const resolvedObject = objectResult.value as Record<string, PythonLiteralValue>;
+  if (!Object.hasOwn(resolvedObject, key)) {
     return {
       resolved: false,
       value_text: node.text,
@@ -306,6 +311,7 @@ async function evaluateMemberExpression(
       reason: `Property ${key} not found on resolved object`,
     };
   }
+  const propertyValue = resolvedObject[key] as PythonLiteralValue;
 
   const valueKind = Array.isArray(propertyValue)
     ? "list"

@@ -72,6 +72,38 @@ describe("TypeScript constant file contexts", () => {
     expect(state.fileCache).toEqual(new Map([["broken.ts", null]]));
   });
 
+  it("bounds cached misses with the same limit as parsed file contexts", async () => {
+    const parse = vi.fn();
+    const state = createState(parse as ResolutionState["parser"]["parse"]);
+
+    for (let index = 0; index < 129; index += 1) {
+      await loadTypeScriptFileContext(state, `missing-${index}.js`);
+    }
+
+    expect(parse).not.toHaveBeenCalled();
+    expect(state.fileCache.size).toBe(128);
+    expect(state.fileCache.has("missing-0.js")).toBe(false);
+    expect(state.fileCache.get("missing-128.js")).toBeNull();
+  });
+
+  it("rejects and disposes syntax-error trees before caching the miss", async () => {
+    await writeFile(join(fixture.root, "broken.ts"), "export const VALUE = {\n");
+    const deleteTree = vi.fn();
+    const tree = {
+      rootNode: { hasError: true, namedChildren: [] },
+      delete: deleteTree,
+    } as unknown as TypeScriptFileContext["tree"];
+    const parse = vi.fn(() => tree);
+    const state = createState(parse as ResolutionState["parser"]["parse"]);
+
+    await expect(loadTypeScriptFileContext(state, "broken.ts")).resolves.toBeNull();
+    await expect(loadTypeScriptFileContext(state, "broken.ts")).resolves.toBeNull();
+
+    expect(parse).toHaveBeenCalledOnce();
+    expect(deleteTree).toHaveBeenCalledOnce();
+    expect(state.fileCache).toEqual(new Map([["broken.ts", null]]));
+  });
+
   it("retires evicted trees and deletes them only during final disposal", async () => {
     await writeFile(join(fixture.root, "latest.ts"), "export const VALUE = 1\n");
     const deleteTree = vi.fn();

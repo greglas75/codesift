@@ -23,6 +23,15 @@ function trimResolverFileCache(state: ResolutionState): void {
   }
 }
 
+function cacheFileContext(
+  state: ResolutionState,
+  filePath: string,
+  context: TypeScriptFileContext | null,
+): void {
+  state.fileCache.set(filePath, context);
+  trimResolverFileCache(state);
+}
+
 function disposeTypeScriptFileContexts(state: ResolutionState): void {
   for (const context of state.fileCache.values()) {
     context?.tree.delete();
@@ -127,9 +136,12 @@ function collectImportBindings(
 }
 
 function extractDefaultExport(node: TSNode): DefaultExportBinding | undefined {
-  if (!node.text.startsWith("export default")) return undefined;
+  const defaultTokenIndex = node.children.findIndex((child) => child.type === "default");
+  if (defaultTokenIndex < 0) return undefined;
 
-  const inner = node.namedChildren[0];
+  const inner = node.children
+    .slice(defaultTokenIndex + 1)
+    .find((child) => child.isNamed && child.type !== "comment");
   if (!inner) {
     return {
       line: node.startPosition.row + 1,
@@ -172,7 +184,7 @@ async function loadTypeScriptFileContext(
   if (cached !== undefined) return cached;
 
   if (!isTypeScriptFile(filePath)) {
-    cache.set(filePath, null);
+    cacheFileContext(state, filePath, null);
     return null;
   }
 
@@ -184,13 +196,18 @@ async function loadTypeScriptFileContext(
       ? String((err as NodeJS.ErrnoException).code)
       : "";
     if (code !== "ENOENT") throw err;
-    cache.set(filePath, null);
+    cacheFileContext(state, filePath, null);
     return null;
   }
 
   const tree = state.parser.parse(source);
   if (!tree) {
-    cache.set(filePath, null);
+    cacheFileContext(state, filePath, null);
+    return null;
+  }
+  if (tree.rootNode.hasError) {
+    tree.delete();
+    cacheFileContext(state, filePath, null);
     return null;
   }
   const assignments = new Map<string, AssignmentBinding>();
@@ -227,8 +244,7 @@ async function loadTypeScriptFileContext(
   };
   if (defaultExport) context.default_export = defaultExport;
 
-  cache.set(filePath, context);
-  trimResolverFileCache(state);
+  cacheFileContext(state, filePath, context);
   return context;
 }
 

@@ -30,8 +30,7 @@ function getDefaultParameterParts(node: TSNode): DefaultParameterParts | null {
   if (node.type !== "required_parameter" && node.type !== "optional_parameter") {
     return null;
   }
-  const children = node.namedChildren;
-  const nameNode = children[0];
+  const nameNode = node.childForFieldName("pattern") ?? node.namedChildren[0];
   const valueNode = node.childForFieldName("value");
   if (!nameNode) return null;
   if (!valueNode) return null;
@@ -168,7 +167,10 @@ async function resolveFunctionDefaults(
     };
   }
 
-  const tree = state.parser.parse(symbol.source);
+  const parseSource = symbol.kind === "method"
+    ? `class __CodeSiftMethodContainer { ${symbol.source} }`
+    : symbol.source;
+  const tree = state.parser.parse(parseSource);
   if (!tree) {
     return {
       language: "typescript",

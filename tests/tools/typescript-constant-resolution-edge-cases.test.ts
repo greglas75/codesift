@@ -38,7 +38,9 @@ describe("resolveTypeScriptConstantValue — edge cases", () => {
   it("resolves supported literal families with exact values", async () => {
     const repo = await fixture.write({
       "src/literals.ts": `export const EMPTY_TEMPLATE = \`\`
+export const STATIC_TEMPLATE = \`hello\`
 export const FLOAT = 1.5
+export const SEPARATED_INTEGER = 1_000
 export const EXPONENT = 1e3
 export const TRUE_VALUE = true
 export const FALSE_VALUE = false
@@ -52,7 +54,9 @@ export const POSITIVE = +5
     });
     const expected = new Map<string, unknown>([
       ["EMPTY_TEMPLATE", ""],
+      ["STATIC_TEMPLATE", "hello"],
       ["FLOAT", 1.5],
+      ["SEPARATED_INTEGER", 1000],
       ["EXPONENT", 1000],
       ["TRUE_VALUE", true],
       ["FALSE_VALUE", false],
@@ -73,7 +77,6 @@ export const POSITIVE = +5
   it("returns exact reasons for unsupported and unsafe values", async () => {
     const repo = await fixture.write({
       "src/unsupported.ts": `declare const name: string
-export const STATIC_TEMPLATE = \`hello\`
 export const DYNAMIC_TEMPLATE = \`hello \${name}\`
 export const UNSAFE_INTEGER = 9007199254740992
 export const CALL_VALUE = other()
@@ -86,7 +89,6 @@ export const SHORTHAND_OBJECT = { timeout }
 `,
     });
     const expectedReasons = new Map([
-      ["STATIC_TEMPLATE", "Unsupported TypeScript value node: template_string"],
       ["DYNAMIC_TEMPLATE", "Unsupported TypeScript value node: template_string"],
       ["UNSAFE_INTEGER", "Integer literal outside safe Number range"],
       ["CALL_VALUE", "Unsupported TypeScript value node: call_expression"],
@@ -139,12 +141,14 @@ export const CONFIG = { api: "https://api.example.com" }
 export const MISSING_PROPERTY = CONFIG.missing
 export const MISSING_BINDING = UNKNOWN_VALUE
 export const DYNAMIC_KEY = CONFIG[getKey()]
+export const INHERITED_PROPERTY = CONFIG.toString
 `,
     });
 
     const missingProperty = await resolveTypeScriptConstantValue(repo, "MISSING_PROPERTY");
     const missingBinding = await resolveTypeScriptConstantValue(repo, "MISSING_BINDING");
     const dynamicKey = await resolveTypeScriptConstantValue(repo, "DYNAMIC_KEY");
+    const inheritedProperty = await resolveTypeScriptConstantValue(repo, "INHERITED_PROPERTY");
 
     expect(missingProperty.matches[0]).toMatchObject({
       resolved: false,
@@ -158,11 +162,15 @@ export const DYNAMIC_KEY = CONFIG[getKey()]
       resolved: false,
       reason: "Unsupported TypeScript value node: subscript_expression",
     });
+    expect(inheritedProperty.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Property toString not found on resolved object",
+    });
   });
 
   it("resolves literal default exports through a default import", async () => {
     const repo = await fixture.write({
-      "src/base.ts": "export default [\"a\", 2]\n",
+      "src/base.ts": "export /* generated */ default [\"a\", 2]\n",
       "src/consumer.ts": `import defaults from "./base"
 export const DEFAULTS = defaults
 `,
@@ -174,6 +182,28 @@ export const DEFAULTS = defaults
       resolved: true,
       value_kind: "list",
       value: ["a", 2],
+    });
+  });
+
+  it("resolves decorated parameter defaults by the AST pattern field", async () => {
+    const repo = await fixture.write({
+      "src/decorated.ts": `declare function Inject(token: unknown): ParameterDecorator
+declare const TOKEN: unique symbol
+const DEFAULT_SERVICE = "primary"
+export class Service {
+  constructor(@Inject(TOKEN) private service = DEFAULT_SERVICE) {}
+}
+`,
+    });
+
+    const result = await resolveTypeScriptConstantValue(repo, "constructor");
+
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0]).toMatchObject({
+      resolved: true,
+      default_parameters: [
+        expect.objectContaining({ name: "service", resolved: true, value: "primary" }),
+      ],
     });
   });
 
