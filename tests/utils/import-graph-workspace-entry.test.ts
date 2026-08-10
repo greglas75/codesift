@@ -236,4 +236,25 @@ describe("buildWorkspaceAliasResolver ordering", () => {
       ),
     ).toBe("apps/web/admin/src/value.ts");
   });
+
+  it("expands every wildcard in a tsconfig path target", () => {
+    const mappedWorkspace = workspace("@org/web", "/repo/apps/web");
+    mappedWorkspace.tsconfig_paths = [
+      { from_pattern: "@generated/*", to_paths: ["src/*/generated/*"] },
+    ];
+    const index: CodeIndex = {
+      repo: "test/repeated-target-wildcards",
+      root: "/repo",
+      symbols: [],
+      files: [file("apps/web/src/utils/generated/utils.ts")],
+      workspaces: [mappedWorkspace],
+    };
+
+    expect(
+      buildWorkspaceAliasResolver(index).resolve(
+        "@generated/utils",
+        "apps/web/src/pages/index.ts",
+      ),
+    ).toBe("apps/web/src/utils/generated/utils.ts");
+  });
 });

@@ -71,7 +71,7 @@ function resolveTsconfigPath(
     if ((wildcard && !importPath.startsWith(prefix)) || (!wildcard && prefix !== importPath)) continue;
     const captured = wildcard ? importPath.slice(prefix.length) : "";
     for (const target of mapping.to_paths) {
-      const expanded = wildcard ? target.replace("*", captured) : target;
+      const expanded = wildcard ? target.replaceAll("*", captured) : target;
       for (const candidate of [expanded, ...(workspaceRoot ? [`${workspaceRoot}/${expanded}`] : [])]) {
         const found = lookupFile(candidate, lookup);
         if (found) return found;
