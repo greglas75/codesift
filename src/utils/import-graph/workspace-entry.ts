@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 
 const DEFAULT_WORKSPACE_ENTRIES = [
   "src/index.ts", "src/index.tsx", "src/index.js",
@@ -15,8 +16,11 @@ interface ParsedPackageJson {
 }
 
 export function relativeWorkspaceRoot(absPath: string, indexRoot: string): string | null {
-  if (!absPath.startsWith(indexRoot)) return null;
-  return absPath.slice(indexRoot.length).replace(/^[\\/]+/, "");
+  const rel = relative(indexRoot, absPath);
+  if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) {
+    return null;
+  }
+  return rel.replaceAll("\\", "/");
 }
 
 function readWorkspacePackageJson(absRoot: string): ParsedPackageJson | null {
@@ -40,6 +44,7 @@ function pickConditionalEntry(root: unknown): string | null {
 function pickEntry(pkg: ParsedPackageJson | null): string | null {
   if (!pkg) return null;
   if (typeof pkg.source === "string") return pkg.source;
+  if (typeof pkg.exports === "string") return pkg.exports;
   if (typeof pkg.module === "string") return pkg.module;
   if (typeof pkg.main === "string") return pkg.main;
   if (!pkg.exports || typeof pkg.exports !== "object") return null;

@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildWorkspaceAliasResolver } from "../../src/utils/import-graph/workspace-alias.js";
-import { resolveWorkspaceEntry } from "../../src/utils/import-graph/workspace-entry.js";
+import {
+  relativeWorkspaceRoot,
+  resolveWorkspaceEntry,
+} from "../../src/utils/import-graph/workspace-entry.js";
 import type { CodeIndex, Workspace } from "../../src/types.js";
 
 const tempRoots: string[] = [];
@@ -79,6 +82,36 @@ describe("resolveWorkspaceEntry", () => {
     expect(resolveWorkspaceEntry(root, "packages/pkg", new Set(), normalized)).toBe(
       "packages/pkg/dist/index.ts",
     );
+  });
+
+  it("supports string-valued package exports", async () => {
+    const root = await workspaceRoot({ exports: "./src/public.ts" });
+    const files = new Set(["packages/pkg/src/public.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("prefers authoritative exports over a legacy main entry", async () => {
+    const root = await workspaceRoot({
+      exports: "./src/public.ts",
+      main: "./dist/legacy.js",
+    });
+    const files = new Set([
+      "packages/pkg/src/public.ts",
+      "packages/pkg/dist/legacy.js",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+});
+
+describe("relativeWorkspaceRoot", () => {
+  it("rejects sibling paths that only share the repository prefix", () => {
+    expect(relativeWorkspaceRoot("/repo/application-extra", "/repo/app")).toBeNull();
   });
 });
 

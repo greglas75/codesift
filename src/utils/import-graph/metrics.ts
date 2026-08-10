@@ -15,6 +15,7 @@ export function buildFilePageRank(edges: ImportEdge[]): Map<string, number> {
   try {
     const graph = new DirectedGraph();
     for (const edge of edges) {
+      if (typeof edge.from !== "string" || typeof edge.to !== "string") continue;
       if (!graph.hasNode(edge.from)) graph.addNode(edge.from);
       if (!graph.hasNode(edge.to)) graph.addNode(edge.to);
       if (edge.from === edge.to) continue;
