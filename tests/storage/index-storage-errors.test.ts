@@ -242,14 +242,17 @@ describe("unreadable JSON store", () => {
 });
 
 describe("canonical index paths", () => {
-  it("rejects a derived SQLite path instead of silently reading a .db.db sibling", async () => {
-    useBackend("sqlite");
-    const dbPath = sqlitePathFor(indexPath);
+  it.each(["json", "sqlite"] as const)(
+    "rejects a derived SQLite path on the %s backend",
+    async (backend) => {
+      useBackend(backend);
+      const dbPath = sqlitePathFor(indexPath);
 
-    await expect(loadIndex(dbPath)).rejects.toThrow(
-      `Expected a canonical index path, received SQLite database path: ${dbPath}`,
-    );
-  });
+      await expect(loadIndex(dbPath)).rejects.toThrow(
+        `Expected a canonical index path, received SQLite database path: ${dbPath}`,
+      );
+    },
+  );
 
   it.each([".DB", ".db-wal", ".DB-SHM", ".DB-JOURNAL"])(
     "rejects the case-insensitive SQLite artifact suffix %s",
@@ -262,4 +265,17 @@ describe("canonical index paths", () => {
       );
     },
   );
+
+  it("rejects a JSON-looking path whose stem is already a database path", () => {
+    const disguisedDbPath = indexPath.replace(/\.json$/, ".db.json");
+    expect(() => sqlitePathFor(disguisedDbPath)).toThrow(
+      `Expected a canonical index path, received SQLite database path: ${disguisedDbPath}`,
+    );
+  });
+
+  it("derives the sibling database path from a case-variant JSON extension", () => {
+    expect(sqlitePathFor(indexPath.replace(/\.json$/, ".JSON"))).toBe(
+      indexPath.replace(/\.json$/, ".db"),
+    );
+  });
 });

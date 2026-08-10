@@ -24,6 +24,7 @@ import {
   invalidateIndexCache,
 } from "./index-cache.js";
 import {
+  assertCanonicalIndexPath,
   ensureSqliteMigrated as migrateLegacyIndex,
   resolveIndexBackend,
   sqlitePathFor,
@@ -58,6 +59,7 @@ export async function saveIndex(
   index: CodeIndex,
   opts?: { sourceComplete?: boolean },
 ): Promise<void> {
+  assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await saveIndexSqlite(dbPath, index, opts);
@@ -103,6 +105,7 @@ export async function getFileEntry(
   indexPath: string,
   filePath: string,
 ): Promise<FileEntry | undefined> {
+  assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);
@@ -120,6 +123,7 @@ export async function getFileEntry(
  * callers can be written once against the narrow shape rather than branching on the backend.
  */
 export async function loadIndexSummary(indexPath: string): Promise<IndexSummary | null> {
+  assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);
@@ -172,6 +176,7 @@ export function summariseIndex(index: CodeIndex): IndexSummary {
 
 /** Backend-agnostic read, without version enforcement. */
 async function readIndex(indexPath: string): Promise<CodeIndex | null> {
+  assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);
@@ -569,6 +574,7 @@ export async function saveIncremental(
   newSymbols: CodeSymbol[],
   fileEntry?: FileEntry,
 ): Promise<void> {
+  assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);
@@ -604,6 +610,7 @@ export async function removeFileFromIndex(
   indexPath: string,
   deletedFile: string,
 ): Promise<void> {
+  assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);

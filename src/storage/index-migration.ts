@@ -38,18 +38,23 @@ export function resetIndexBackendForTesting(): void {
   backendPromise = undefined;
 }
 
+/** Reject SQLite artifacts where callers must provide the canonical index path. */
+export function assertCanonicalIndexPath(indexPath: string): void {
+  if (/\.db(?:-(?:wal|shm|journal))?(?:\.json)?$/i.test(indexPath)) {
+    throw new TypeError(
+      `Expected a canonical index path, received SQLite database path: ${indexPath}`,
+    );
+  }
+}
+
 /**
  * Keep both formats side by side so the JSON file remains a usable rollback artifact.
  * Throws when given an already-derived SQLite file or sidecar: accepting one would silently
  * derive a second, unrelated database path.
  */
 export function sqlitePathFor(indexPath: string): string {
-  if (/\.db(?:-(?:wal|shm|journal))?$/i.test(indexPath)) {
-    throw new TypeError(
-      `Expected a canonical index path, received SQLite database path: ${indexPath}`,
-    );
-  }
-  return indexPath.endsWith(".json")
+  assertCanonicalIndexPath(indexPath);
+  return /\.json$/i.test(indexPath)
     ? `${indexPath.slice(0, -".json".length)}.db`
     : `${indexPath}.db`;
 }
