@@ -57,7 +57,7 @@ function matchesPartialPrefix(urlPrefix: string, normalizedTemplate: string): bo
  *
  * One consumer can match multiple producers (all reported).
  * Multiple consumers can match one producer (all reported).
- * Deduplication: identical (producer_repo, consumer_file, line, path, method) → single entry.
+ * Deduplication: identical (producer_repo, consumer_repo, consumer_file, line, path, method) → single entry.
  */
 export function matchContracts(
   producers: RepoEndpoint[],
@@ -90,7 +90,7 @@ export function matchContracts(
       if (confidence === null) continue;
 
       // Deduplication key
-      const key = `${p.repo}|${c.file}|${c.line}|${p.normalized_path}|${c.method}`;
+      const key = `${p.repo}|${c.repo}|${c.file}|${c.line}|${p.normalized_path}|${c.method}`;
       if (seen.has(key)) continue;
       seen.add(key);
 

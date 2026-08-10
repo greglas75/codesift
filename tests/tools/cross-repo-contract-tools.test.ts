@@ -616,6 +616,17 @@ describe("matchContracts", () => {
     expect(matches).toHaveLength(1);
   });
 
+  it("T14-7b: preserves matches from different consumer repos at the same file and line", () => {
+    const producers: RepoEndpoint[] = [producer("api", "GET", "/users/:id")];
+    const web = consumer("web", "GET", "/users/1", false, "src/generated-client.ts", 5);
+    const mobile = consumer("mobile", "GET", "/users/1", false, "src/generated-client.ts", 5);
+
+    const matches = matchContracts(producers, [web, mobile]);
+
+    expect(matches).toHaveLength(2);
+    expect(matches.map((match) => match.consumer_repo).sort()).toEqual(["mobile", "web"]);
+  });
+
   // ── T14-8: empty inputs ───────────────────────────────────────────────────
   it("T14-8: empty producers → []", () => {
     expect(matchContracts([], [consumer("web", "GET", "/users/1", false)])).toEqual([]);
