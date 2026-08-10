@@ -18,9 +18,18 @@
  * file and checks the thing an agent would actually execute.
  *
  * Usage:  node scripts/check-agent-codesift.mjs [--json]
- * Exit 0 = everything an agent can open resolves; 1 = at least one project would fail.
+ * Exit 0 = everything an agent can open resolves; 1 = at least one project would fail;
+ * 2 = the checker configuration itself could not be read.
  */
-import { readFileSync, existsSync, realpathSync, statSync, readdirSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  readFileSync,
+  existsSync,
+  realpathSync,
+  statSync,
+  readdirSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -59,18 +68,18 @@ function effectiveEntry(dir) {
  * SILENTLY, so a `codesift` that has fallen off PATH disables the read/bash prechecks with no error
  * anywhere. Checking only absolute paths would miss the quieter half.
  */
-function resolveStdio(entry) {
-  const raw = entry.args?.length ? entry.args[0] : entry.command;
-  if (!raw) return { ok: false, why: "no command or args" };
-  const argv0 = raw.trim().split(/\s+/)[0].replace(/^~/, homedir());
+function resolveExecutable(raw) {
+  if (!raw) return { ok: false, why: "no command" };
+  const argv0 = raw.trim().replace(/^~/, homedir());
 
   if (argv0.includes("/")) {
     try {
       const real = realpathSync(argv0);
       if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
+      accessSync(real, constants.X_OK);
       return { ok: true, real };
     } catch {
-      return { ok: false, why: `${argv0} does not resolve to an existing file` };
+      return { ok: false, why: `${argv0} does not resolve to an executable file` };
     }
   }
 
@@ -78,7 +87,10 @@ function resolveStdio(entry) {
     if (!dir) continue;
     const candidate = join(dir, argv0);
     try {
-      if (statSync(candidate).isFile()) return { ok: true, real: realpathSync(candidate) };
+      if (statSync(candidate).isFile()) {
+        accessSync(candidate, constants.X_OK);
+        return { ok: true, real: realpathSync(candidate) };
+      }
     } catch {
       /* next PATH entry */
     }
@@ -86,23 +98,61 @@ function resolveStdio(entry) {
   return { ok: false, why: `\`${argv0}\` is not on PATH — hooks using it fail silently` };
 }
 
-let daemonHealth = null;
-function checkDaemon(url) {
-  if (daemonHealth !== null) return daemonHealth; // one probe per run, not per project
+function runtimeScriptArg(entry) {
+  const runtime = entry.command?.trim().split("/").pop();
+  if (!["node", "nodejs", "bun", "deno"].includes(runtime)) return null;
+  return entry.args?.find((arg) => !arg.startsWith("-") && (arg.includes("/") || arg.startsWith("~"))) ?? null;
+}
+
+function resolveStdio(entry) {
+  const executable = resolveExecutable(entry.command);
+  if (!executable.ok) return executable;
+
+  const scriptArg = runtimeScriptArg(entry);
+  if (!scriptArg) return executable;
+  const scriptPath = scriptArg.replace(/^~/, homedir());
   try {
-    const origin = new URL(url).origin;
+    const real = realpathSync(scriptPath);
+    if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
+    return { ok: true, real, executable: executable.real };
+  } catch {
+    return { ok: false, why: `${scriptPath} does not resolve to an existing script` };
+  }
+}
+
+const daemonHealth = new Map();
+function checkDaemon(url) {
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch (err) {
+    return { ok: false, why: `invalid daemon URL: ${err.message}` };
+  }
+  const cached = daemonHealth.get(origin);
+  if (cached) return cached;
+  try {
     const out = execFileSync("curl", ["-s", "-m", "5", "-o", "/dev/null", "-w", "%{http_code}", `${origin}/health`], {
       encoding: "utf-8",
     }).trim();
-    daemonHealth = out === "200" ? { ok: true } : { ok: false, why: `daemon /health returned ${out}` };
+    const result = out === "200" ? { ok: true } : { ok: false, why: `daemon /health returned ${out}` };
+    daemonHealth.set(origin, result);
+    return result;
   } catch (err) {
-    daemonHealth = { ok: false, why: `daemon unreachable: ${err.message}` };
+    const result = { ok: false, why: `daemon unreachable: ${err.message}` };
+    daemonHealth.set(origin, result);
+    return result;
   }
-  return daemonHealth;
 }
 
-const projectDirs = Object.keys(config.projects ?? {}).filter((d) => existsSync(d));
+const configuredProjectDirs = Object.keys(config.projects ?? {});
+const projectDirs = configuredProjectDirs.filter((d) => existsSync(d));
 const results = [];
+
+for (const dir of configuredProjectDirs) {
+  if (!existsSync(dir)) {
+    results.push({ dir, scope: "project", transport: "-", ok: false, why: "configured project directory is missing" });
+  }
+}
 
 for (const dir of projectDirs) {
   const { scope, entry } = effectiveEntry(dir);
@@ -110,14 +160,14 @@ for (const dir of projectDirs) {
     results.push({ dir, scope, transport: "-", ok: false, why: "no codesift entry at any scope" });
     continue;
   }
-  if (entry.type === "http") {
+  if (entry.type === "http" || typeof entry.url === "string") {
     const health = checkDaemon(entry.url);
     // The URL pins a cwd. A stale one is not a hard failure — the daemon answers — but it means
     // this project's answers describe a directory that no longer exists, which is hint H19 as a
     // permanent condition rather than a transient one.
     let cwdNote = null;
     try {
-      const cwd = decodeURIComponent(new URL(entry.url).searchParams.get("cwd") ?? "");
+      const cwd = new URL(entry.url).searchParams.get("cwd") ?? "";
       if (cwd && !existsSync(cwd)) cwdNote = `pinned cwd missing: ${cwd}`;
       else if (cwd && cwd !== dir) cwdNote = `pinned cwd is ${cwd}, not this project`;
     } catch {
@@ -143,7 +193,14 @@ const listed = new Set(projectDirs);
 const unlisted = [];
 for (const root of [join(homedir(), "DEV"), join(homedir(), "projects")]) {
   if (!existsSync(root)) continue;
-  for (const name of readdirSync(root)) {
+  let names;
+  try {
+    names = readdirSync(root);
+  } catch (err) {
+    results.push({ dir: root, scope: "discovery", transport: "-", ok: false, why: `unreadable: ${err.message}` });
+    continue;
+  }
+  for (const name of names) {
     const dir = join(root, name);
     try {
       if (!statSync(dir).isDirectory() || !existsSync(join(dir, ".git"))) continue;
@@ -158,11 +215,12 @@ const globalEntry = config.mcpServers?.codesift ?? null;
 let fallback;
 if (!globalEntry) {
   fallback = { ok: false, why: "no global codesift entry — every unlisted directory has NO codesift" };
-} else if (globalEntry.type === "http") {
+} else if (globalEntry.type === "http" || typeof globalEntry.url === "string") {
   const h = checkDaemon(globalEntry.url);
-  fallback = h.ok
-    ? { ok: true, why: "global entry is http with a PINNED cwd — every unlisted directory resolves to that one repo (H19)" }
-    : { ok: false, why: h.why };
+  const pinnedCwd = new URL(globalEntry.url).searchParams.get("cwd");
+  fallback = h.ok && pinnedCwd && unlisted.length > 0
+    ? { ok: false, why: `global HTTP entry pins ${pinnedCwd}; ${unlisted.length} unlisted repos would resolve to the wrong repo (H19)` }
+    : h;
 } else {
   const r = resolveStdio(globalEntry);
   fallback = r.ok
@@ -211,7 +269,14 @@ for (const file of OTHER_CLIENTS) {
     const v = m[1];
     if (v && v.includes("codesift")) cmds.add(v);
   }
-  if (cmds.size === 0) {
+  const scriptPaths = new Set();
+  for (const m of text.matchAll(/(?:(?:"args"\s*:)|(?:^|\n)\s*args\s*=)\s*\[([^\]]*)\]/g)) {
+    for (const value of m[1].matchAll(/"([^"\n]+)"/g)) {
+      const arg = value[1];
+      if (arg?.includes("codesift") && (arg.includes("/") || arg.startsWith("~"))) scriptPaths.add(arg);
+    }
+  }
+  if (cmds.size === 0 && scriptPaths.size === 0) {
     results.push({ dir: file, scope: "client", transport: "-", ok: true, why: "no codesift path (http or absent)" });
     continue;
   }
@@ -221,6 +286,28 @@ for (const file of OTHER_CLIENTS) {
       ? `resolves into a working tree (${r.real}) — a build there will break this client`
       : null;
     results.push({ dir: `${file} -> ${cmd}`, scope: "client", transport: "stdio", ok: r.ok, why: r.ok ? note : r.why });
+  }
+  for (const scriptPath of scriptPaths) {
+    const expanded = scriptPath.replace(/^~/, homedir());
+    let result;
+    try {
+      const real = realpathSync(expanded);
+      result = statSync(real).isFile()
+        ? { ok: true, real }
+        : { ok: false, why: `${real} is not a file` };
+    } catch {
+      result = { ok: false, why: `${expanded} does not resolve to an existing script` };
+    }
+    const note = result.ok && /\/DEV\/|\/projects\//.test(result.real)
+      ? `resolves into a working tree (${result.real}) — a build there will break this client`
+      : null;
+    results.push({
+      dir: `${file} -> ${scriptPath}`,
+      scope: "client",
+      transport: "stdio",
+      ok: result.ok,
+      why: result.ok ? note : result.why,
+    });
   }
 }
 
