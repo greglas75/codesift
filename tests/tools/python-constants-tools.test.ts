@@ -56,6 +56,45 @@ FLAGS = ["a", "b"]
     expect(result.matches[0]!.alias_chain.map((hop) => hop.name)).toEqual(["DEFAULT_URL", "API_URL"]);
   });
 
+  it("distinguishes Python lists from tuples", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/collections.py": `FLAGS = ["a", "b"]
+COORDINATES = (10, 20)
+`,
+    });
+
+    const flags = await resolveConstantValue(repo, "FLAGS");
+    const coordinates = await resolveConstantValue(repo, "COORDINATES");
+
+    expect(flags.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "list",
+      value: ["a", "b"],
+    });
+    expect(coordinates.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "tuple",
+      value: [10, 20],
+    });
+  });
+
+  it("reports alias cycles before exhausting max_depth", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/cycles.py": `FIRST = SECOND
+SECOND = FIRST
+`,
+    });
+
+    const result = await resolveConstantValue(repo, "FIRST");
+
+    expect(result.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Cycle detected while resolving FIRST",
+    });
+  });
+
   it("resolves imported aliases across Python files", async () => {
     const repo = await writeFixture({
       "app/__init__.py": "",
@@ -143,6 +182,172 @@ def fetch(limit: int = COUNT, url: str = DEFAULT_URL, enabled=False, missing=oth
     expect(result.matches[0]!.resolved).toBe(false);
     expect(result.matches[0]!.reason).toContain("Unsupported Python value node");
     expect(result.matches[0]!.value_text).toBe('int("5")');
+  });
+
+  it("normalizes finite numeric literals without returning rounded integers", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/numbers.py": `READABLE = 1_000_000
+HEX_MASK = 0xFF_FF
+TOO_LARGE = 9007199254740993
+TOO_LARGE_FLOAT = 1e400
+`,
+    });
+
+    const readable = await resolveConstantValue(repo, "READABLE");
+    const hexMask = await resolveConstantValue(repo, "HEX_MASK");
+    const tooLarge = await resolveConstantValue(repo, "TOO_LARGE");
+    const tooLargeFloat = await resolveConstantValue(repo, "TOO_LARGE_FLOAT");
+
+    expect(readable.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "integer",
+      value: 1_000_000,
+    });
+    expect(hexMask.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "integer",
+      value: 65_535,
+    });
+    expect(tooLarge.matches[0]).toMatchObject({
+      resolved: false,
+      value_text: "9007199254740993",
+      reason: "Integer literal exceeds JavaScript safe integer range: 9007199254740993",
+    });
+    expect(tooLarge.matches[0]).not.toHaveProperty("value");
+    expect(tooLargeFloat.matches[0]).toMatchObject({
+      resolved: false,
+      value_text: "1e400",
+      reason: "Float literal is outside the supported finite range: 1e400",
+    });
+    expect(tooLargeFloat.matches[0]).not.toHaveProperty("value");
+  });
+
+  it("preserves Python unary numeric semantics", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/unary.py": `NEGATIVE = -5
+POSITIVE = +5
+INVERTED = ~5
+INVALID_INVERT = ~1.5
+`,
+    });
+
+    const negative = await resolveConstantValue(repo, "NEGATIVE");
+    const positive = await resolveConstantValue(repo, "POSITIVE");
+    const inverted = await resolveConstantValue(repo, "INVERTED");
+    const invalidInvert = await resolveConstantValue(repo, "INVALID_INVERT");
+
+    expect(negative.matches[0]).toMatchObject({ resolved: true, value: -5, value_text: "-5" });
+    expect(positive.matches[0]).toMatchObject({ resolved: true, value: 5, value_text: "+5" });
+    expect(inverted.matches[0]).toMatchObject({ resolved: true, value: -6, value_text: "~5" });
+    expect(invalidInvert.matches[0]).toMatchObject({
+      resolved: false,
+      value_text: "~1.5",
+      reason: "Unsupported unary operator or operand: ~1.5",
+    });
+  });
+
+  it("rejects dictionary values that cannot be represented losslessly", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/dicts.py": `OVERRIDES = {"unsafe": True}
+SPREAD = {"safe": True, **OVERRIDES}
+COLLIDING = {1: "number", "1": "string"}
+PROTO = {"__proto__": "literal"}
+PYTHON_EQUAL = {1: "number", True: "boolean"}
+`,
+    });
+
+    const spread = await resolveConstantValue(repo, "SPREAD");
+    const colliding = await resolveConstantValue(repo, "COLLIDING");
+    const proto = await resolveConstantValue(repo, "PROTO");
+    const pythonEqual = await resolveConstantValue(repo, "PYTHON_EQUAL");
+
+    expect(spread.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("Unsupported dictionary entry"),
+    });
+    expect(colliding.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("dictionary key collision"),
+    });
+    expect(proto.matches[0]).toMatchObject({
+      resolved: true,
+    });
+    expect(Object.hasOwn(proto.matches[0]!.value as object, "__proto__")).toBe(true);
+    expect((proto.matches[0]!.value as Record<string, unknown>)["__proto__"]).toBe("literal");
+    expect(pythonEqual.matches[0]).toMatchObject({
+      resolved: true,
+      value: { 1: "boolean" },
+    });
+  });
+
+  it("does not claim unsupported Python string forms were evaluated", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/strings.py": String.raw`ESCAPED = "line\nfeed"
+RAW = r"line\nfeed"
+FORMATTED = f"value={RAW}"
+BYTES = b"bytes"
+`,
+    });
+
+    const escaped = await resolveConstantValue(repo, "ESCAPED");
+    const raw = await resolveConstantValue(repo, "RAW");
+    const formatted = await resolveConstantValue(repo, "FORMATTED");
+    const bytes = await resolveConstantValue(repo, "BYTES");
+
+    expect(escaped.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("Unsupported Python string literal"),
+    });
+    expect(raw.matches[0]).toMatchObject({
+      resolved: true,
+      value: String.raw`line\nfeed`,
+    });
+    expect(formatted.matches[0]).toMatchObject({ resolved: false });
+    expect(bytes.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("Unsupported Python string literal"),
+    });
+  });
+
+  it("does not treat an imported module path as a local binding", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/thing.py": `thing = 7
+OTHER = 1
+`,
+      "app/use.py": `from .thing import OTHER
+ALIAS = thing
+`,
+    });
+
+    const result = await resolveConstantValue(repo, "ALIAS");
+
+    expect(result.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for thing in app/use.py",
+    });
+  });
+
+  it("enforces max_depth across same-file alias chains", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/aliases.py": `BASE = 5
+ALIAS = BASE
+`,
+    });
+
+    const bounded = await resolveConstantValue(repo, "ALIAS", { max_depth: 0 });
+    const permitted = await resolveConstantValue(repo, "ALIAS", { max_depth: 1 });
+
+    expect(bounded.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Max resolution depth (0) exceeded",
+    });
+    expect(permitted.matches[0]).toMatchObject({ resolved: true, value: 5 });
   });
 
   it("returns an empty list when the symbol does not exist in Python scope", async () => {
