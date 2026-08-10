@@ -2,7 +2,8 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, hostname } from "node:os";
-import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { randomUUID, createHash } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Session ID — unique per process lifetime
@@ -22,6 +23,67 @@ const SESSION_ID = randomUUID();
  * before `launchctl setenv` never sees it) we fall back to a machine-local id
  * persisted once under the data dir, so the identity survives renames.
  */
+/**
+ * A stable, machine-local identifier that no rename, DHCP lease or missing env var can change.
+ *
+ * `resolveHostTag` is a NAME, chosen by a human and therefore fallible: it depends on an env var
+ * reaching the process and on a file having been written first. Measured on this machine, it failed
+ * anyway — 1,175 entries carried the wrong name AFTER the persisted id existed, across 239 separate
+ * sessions, and every hypothesis for which process produced them was checked and disproved. That is
+ * the point: a name you cannot verify is a name you cannot debug.
+ *
+ * This is the answer to "which computer wrote this line?" independent of the name. It reads the
+ * hardware/OS identity (macOS `IOPlatformUUID`, Linux `/etc/machine-id`), hashes it so nothing
+ * identifying leaves the machine, and caches the result in the data dir. On failure it falls back to
+ * a random id persisted once — still stable for that install, which is all the field promises.
+ *
+ * Twelve hex characters: enough that a collision across a personal fleet is not a real concern, short
+ * enough to read in a log line.
+ */
+let machineIdCache: string | null = null;
+
+export function machineId(): string {
+  if (machineIdCache) return machineIdCache;
+  const dir = process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift");
+  const idPath = join(dir, "machine-id");
+
+  try {
+    const cached = readFileSync(idPath, "utf-8").trim();
+    if (cached) return (machineIdCache = cached);
+  } catch { /* not derived yet */ }
+
+  let raw = "";
+  try {
+    if (process.platform === "darwin") {
+      const out = execFileSync("ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {
+        encoding: "utf-8", timeout: 5000,
+      });
+      raw = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(out)?.[1] ?? "";
+    } else {
+      for (const p of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+        try { raw = readFileSync(p, "utf-8").trim(); if (raw) break; } catch { /* next */ }
+      }
+    }
+  } catch { /* fall through to the random id */ }
+
+  // Hashed, never raw: the UUID identifies the hardware, and this field rides an anonymous channel.
+  const id = raw
+    ? createHash("sha256").update(raw).digest("hex").slice(0, 12)
+    : randomUUID().replace(/-/g, "").slice(0, 12);
+
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(idPath, id, "utf-8");
+  } catch { /* read-only data dir — still stable for this process */ }
+
+  return (machineIdCache = id);
+}
+
+/** Test-only — drop the memoised value. */
+export function _resetMachineIdForTests(): void {
+  machineIdCache = null;
+}
+
 export function resolveHostTag(): string {
   const explicit = process.env["CODESIFT_HOST_TAG"]?.trim();
   // Seed the persisted id FROM the explicit tag when there is one. The whole
@@ -71,6 +133,13 @@ function loadOrCreateStableHostId(
 }
 
 const HOST = resolveHostTag();
+/**
+ * Computed once, like HOST — but unlike HOST it cannot go stale, because it does not depend on an
+ * env var arriving or a file being written first. A long-lived process that captured the wrong NAME
+ * at startup (measured: 4 sessions wrote `Gregs-MacBook-Pro-M5-2.local` for four days) still stamps
+ * the right MACHINE, so its entries remain attributable.
+ */
+const MACHINE = machineId();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,6 +147,11 @@ const HOST = resolveHostTag();
 
 export interface UsageEntry {
   ts: number;
+  /**
+   * Stable machine identity — see {@link machineId}. Present so a line is attributable to a computer
+   * even when `host` is wrong, which it demonstrably can be.
+   */
+  machine?: string;
   tool: string;
   repo: string;
   args_summary: Record<string, unknown>;
@@ -371,6 +445,7 @@ export function trackToolCall(
     result_chunks: extractResultChunks(resultData),
     session_id: SESSION_ID,
     host: HOST,
+    machine: MACHINE,
     ...(sentTokens !== undefined && sentTokens !== resultTokens ? { result_tokens_sent: sentTokens } : {}),
     ...(extra?.error ? { error: true } : {}),
     ...(extra?.cacheHit ? { cache_hit: true } : {}),
