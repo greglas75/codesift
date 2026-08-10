@@ -1,4 +1,10 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findClassAtPosition,
+  findNestClassRanges,
+  maskNestSource,
+  readNestSource,
+  requireNestCodeIndex,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -52,9 +58,8 @@ export async function nestScheduleMap(
     // Quick substring filter to skip files without schedule/event decorators
     if (!/@Cron|@Interval|@Timeout|@OnEvent/.test(source)) continue;
 
-    // Find enclosing class name — single-class-per-file assumption for simplicity
-    const classMatch = /(?:export\s+)?class\s+(\w+)/.exec(source);
-    const className = classMatch?.[1] ?? "UnknownClass";
+    const classRanges = findNestClassRanges(source);
+    const masked = maskNestSource(source);
 
     // Parse each decorator type
     const decoratorPatterns: Array<{
@@ -69,13 +74,13 @@ export async function nestScheduleMap(
       },
       {
         type: "@Interval",
-        regex: /@Interval\s*\(\s*(\d+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
-        parseArg: (arg) => ({ interval_ms: parseInt(arg, 10) }),
+        regex: /@Interval\s*\(\s*([0-9][0-9_]*(?:\.[0-9_]+)?(?:e[+-]?[0-9_]+)?)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/gi,
+        parseArg: parseDelayLiteral,
       },
       {
         type: "@Timeout",
-        regex: /@Timeout\s*\(\s*(\d+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
-        parseArg: (arg) => ({ interval_ms: parseInt(arg, 10) }),
+        regex: /@Timeout\s*\(\s*([0-9][0-9_]*(?:\.[0-9_]+)?(?:e[+-]?[0-9_]+)?)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/gi,
+        parseArg: parseDelayLiteral,
       },
       {
         type: "@OnEvent",
@@ -88,11 +93,13 @@ export async function nestScheduleMap(
       regex.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = regex.exec(source)) !== null) {
+        if (masked[m.index] !== "@") continue;
+        const owner = findClassAtPosition(classRanges, m.index);
         if (entries.length >= maxSchedules) { truncated = true; break; }
         const arg = m[1]!;
         const handler = m[2]!;
         entries.push({
-          class_name: className,
+          class_name: owner?.name ?? "UnknownClass",
           file: file.path,
           handler,
           decorator: type,
@@ -106,15 +113,28 @@ export async function nestScheduleMap(
     const fallbackRe = /@(Cron|Interval|Timeout|OnEvent)\s*\(\s*([A-Z][\w.]+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
     let fm: RegExpExecArray | null;
     while ((fm = fallbackRe.exec(source)) !== null) {
+      if (masked[fm.index] !== "@") continue;
+      const owner = findClassAtPosition(classRanges, fm.index);
       if (entries.length >= maxSchedules) { truncated = true; break; }
       const handler = fm[3]!;
-      // Skip if already captured by a literal regex above
-      if (entries.some((e) => e.file === file.path && e.handler === handler)) continue;
+      const decorator = `@${fm[1]!}` as NestScheduledEntry["decorator"];
+      const className = owner?.name ?? "UnknownClass";
+      if (
+        entries.some(
+          (entry) =>
+            entry.file === file.path &&
+            entry.class_name === className &&
+            entry.handler === handler &&
+            entry.decorator === decorator,
+        )
+      ) {
+        continue;
+      }
       entries.push({
         class_name: className,
         file: file.path,
         handler,
-        decorator: `@${fm[1]!}` as NestScheduledEntry["decorator"],
+        decorator,
         expression: fm[2]!, // raw constant expression, e.g. "CronExpression.EVERY_10_SECONDS"
       });
     }
@@ -125,4 +145,12 @@ export async function nestScheduleMap(
     ...(errors.length > 0 ? { errors } : {}),
     ...(truncated ? { truncated } : {}),
   };
+}
+
+function parseDelayLiteral(arg: string): { expression?: string; interval_ms?: number } {
+  const value = Number(arg.replaceAll("_", ""));
+  if (Number.isSafeInteger(value) && value >= 0) {
+    return { interval_ms: value };
+  }
+  return { expression: arg };
 }

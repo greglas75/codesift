@@ -1,4 +1,10 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findDecoratedClass,
+  findDecoratorCalls,
+  findNestClassRanges,
+  readNestSource,
+  requireNestCodeIndex,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -49,20 +55,17 @@ export async function nestScopeAudit(
 
     if (!/@Injectable/.test(source)) continue;
 
-    // Parse each @Injectable class and capture scope
-    const injRe = /@Injectable\s*\(([^)]*)\)\s*(?:export\s+)?class\s+(\w+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = injRe.exec(source)) !== null) {
-      const args = m[1] ?? "";
-      const name = m[2]!;
+    const classRanges = findNestClassRanges(source);
+    for (const call of findDecoratorCalls(source, "Injectable")) {
+      const owner = findDecoratedClass(classRanges, call);
+      if (!owner) continue;
+      const args = call.args;
+      const name = owner.name;
       const scopeMatch = args.match(/scope:\s*Scope\.(\w+)/);
       const scope = (scopeMatch?.[1] ?? "DEFAULT") as ProviderInfo["scope"];
       providers.set(name, { name, file: file.path, scope });
 
-      // Extract constructor-injected types (simple regex — reuse existing helper via import would be cleaner)
-      const classIdx = source.indexOf(`class ${name}`);
-      if (classIdx === -1) continue;
-      const classSource = source.slice(classIdx);
+      const classSource = source.slice(owner.bodyStart + 1, owner.end - 1);
       const ctorMatch = /constructor\s*\(([\s\S]*?)\)\s*\{/.exec(classSource);
       if (!ctorMatch) continue;
       const ctorBody = ctorMatch[1]!;
@@ -88,7 +91,7 @@ export async function nestScopeAudit(
 
   // For each REQUEST/TRANSIENT provider, walk the reverse graph (BFS) to find all consumers
   const walkConsumers = (startName: string): string[] => {
-    const visited = new Set<string>();
+    const visited = new Set<string>([startName]);
     const queue = [startName];
     const consumers: string[] = [];
     while (queue.length > 0) {

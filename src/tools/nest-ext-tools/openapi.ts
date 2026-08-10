@@ -1,4 +1,9 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findDecoratorCalls,
+  maskNestSource,
+  readNestSource,
+  requireNestCodeIndex,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -116,79 +121,119 @@ export async function nestOpenAPIExtract(
       ? [...tagsMatch[1]!.matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]!)
       : undefined;
 
-    // Each HTTP method decorator
-    const methods = ["Get", "Post", "Put", "Delete", "Patch", "All", "Head", "Options"];
+    const openApiMethods = ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options"];
+    const methods = [...openApiMethods, "All"];
+    const masked = maskNestSource(source);
+    const routeMatches: Array<{
+      method: string;
+      index: number;
+      routePath: string;
+    }> = [];
+
     for (const method of methods) {
       const methodRe = new RegExp(
-        `@${method}\\s*\\(\\s*(?:['"\`]([^'"\`]*)['"\`])?\\s*\\)`,
+        `@${method}\\s*\\(\\s*(?:['"\\x60]([^'"\\x60]*)['"\\x60])?\\s*\\)`,
         "g",
       );
-      let mm: RegExpExecArray | null;
-      while ((mm = methodRe.exec(source)) !== null) {
-        const routePath = mm[1] ?? "";
-        // Scan forward 500 chars for stacked @Api* decorators + handler name
-        const lookFwd = source.slice(mm.index, mm.index + 800);
+      let methodMatch: RegExpExecArray | null;
+      while ((methodMatch = methodRe.exec(source)) !== null) {
+        if (masked[methodMatch.index] !== "@") continue;
+        routeMatches.push({
+          method,
+          index: methodMatch.index,
+          routePath: methodMatch[1] ?? "",
+        });
+      }
+    }
+    routeMatches.sort((left, right) => left.index - right.index);
 
-        const summaryMatch = /@ApiOperation\s*\(\s*\{[^}]*summary:\s*['"`]([^'"`]+)['"`]/.exec(lookFwd);
-        const descMatch = /@ApiOperation\s*\(\s*\{[^}]*description:\s*['"`]([^'"`]+)['"`]/.exec(lookFwd);
-        const bearerMatch = /@ApiBearerAuth\s*\(/.test(lookFwd);
+    for (const [routeIndex, route] of routeMatches.entries()) {
+      const nextRoute = routeMatches[routeIndex + 1];
+      const routeSlice = source.slice(route.index, nextRoute?.index ?? source.length);
+      const handlerMatch =
+        /(?:^|\n)\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?\w+\s*\([\s\S]*?\)\s*(?::[^\n{]+)?\s*\{/m.exec(
+          routeSlice,
+        );
+      const lookFwd = handlerMatch
+        ? routeSlice.slice(0, handlerMatch.index + handlerMatch[0].length)
+        : routeSlice;
+      const maskedLookFwd = maskNestSource(lookFwd);
+      const operationArgs = findDecoratorCalls(lookFwd, "ApiOperation")[0]?.args ?? "";
+      const summary = /\bsummary:\s*['"`]([^'"`]+)['"`]/.exec(operationArgs)?.[1];
+      const description = /\bdescription:\s*['"`]([^'"`]+)['"`]/.exec(operationArgs)?.[1];
+      const bearerAuth = findDecoratorCalls(lookFwd, "ApiBearerAuth").length > 0;
 
-        // Collect @ApiResponse decorators
-        const responses: OpenAPIOperation["responses"] = {};
-        const respRe = /@ApiResponse\s*\(\s*\{\s*status:\s*(\d+)(?:[\s\S]*?description:\s*['"`]([^'"`]+)['"`])?(?:[\s\S]*?type:\s*(\w+))?/g;
-        let rm: RegExpExecArray | null;
-        while ((rm = respRe.exec(lookFwd)) !== null) {
-          const status = rm[1]!;
-          const description = rm[2];
-          const type = rm[3];
-          responses[status] = {
-            ...(description ? { description } : {}),
-            ...(type ? { content: { "application/json": { schema: { $ref: `#/components/schemas/${type}` } } } } : {}),
-          };
-        }
-        // Default 200 if no @ApiResponse
-        if (Object.keys(responses).length === 0) {
-          responses["200"] = { description: "Success" };
-        }
+      const responses: OpenAPIOperation["responses"] = {};
+      for (const responseCall of findDecoratorCalls(lookFwd, "ApiResponse")) {
+        const status = /\bstatus:\s*(\d+)/.exec(responseCall.args)?.[1];
+        if (!status) continue;
+        const responseDescription =
+          /\bdescription:\s*['"`]([^'"`]+)['"`]/.exec(responseCall.args)?.[1];
+        const responseType = /\btype:\s*(\w+)/.exec(responseCall.args)?.[1];
+        responses[status] = {
+          ...(responseDescription ? { description: responseDescription } : {}),
+          ...(responseType
+            ? {
+                content: {
+                  "application/json": {
+                    schema: { $ref: `#/components/schemas/${responseType}` },
+                  },
+                },
+              }
+            : {}),
+        };
+      }
+      if (Object.keys(responses).length === 0) {
+        responses["200"] = { description: "Success" };
+      }
 
-        // @Param / @Query / @Body
-        const parameters: OpenAPIOperation["parameters"] = [];
-        const paramRe = /@(Param|Query)\s*\(\s*['"`](\w+)['"`]\s*\)\s*(\w+)\s*:\s*(\w+)/g;
-        let pm2: RegExpExecArray | null;
-        while ((pm2 = paramRe.exec(lookFwd)) !== null) {
-          parameters.push({
-            name: pm2[2]!,
-            in: pm2[1] === "Param" ? "path" : "query",
-            required: pm2[1] === "Param", // path params always required
-            schema: { type: mapTsTypeToOpenAPI(pm2[4]!) },
-          });
-        }
+      const parameters: OpenAPIOperation["parameters"] = [];
+      const paramRe = /@(Param|Query)\s*\(\s*['"`](\w+)['"`]\s*\)\s*(\w+)\s*:\s*(\w+)/g;
+      let parameterMatch: RegExpExecArray | null;
+      while ((parameterMatch = paramRe.exec(lookFwd)) !== null) {
+        if (maskedLookFwd[parameterMatch.index] !== "@") continue;
+        parameters.push({
+          name: parameterMatch[2]!,
+          in: parameterMatch[1] === "Param" ? "path" : "query",
+          required: parameterMatch[1] === "Param",
+          schema: { type: mapTsTypeToOpenAPI(parameterMatch[4]!) },
+        });
+      }
 
-        let requestBody: OpenAPIOperation["requestBody"] | undefined;
-        const bodyMatch = /@Body\s*\(\s*\)\s*(\w+)\s*:\s*(\w+)/.exec(lookFwd);
-        if (bodyMatch) {
-          requestBody = {
-            content: { "application/json": { schema: { $ref: `#/components/schemas/${bodyMatch[2]}` } } },
-          };
-        }
+      let requestBody: OpenAPIOperation["requestBody"] | undefined;
+      const bodyMatch = /@Body\s*\(\s*\)\s*(\w+)\s*:\s*(\w+)/.exec(lookFwd);
+      if (bodyMatch && maskedLookFwd[bodyMatch.index] === "@") {
+        requestBody = {
+          content: {
+            "application/json": {
+              schema: { $ref: `#/components/schemas/${bodyMatch[2]}` },
+            },
+          },
+        };
+      }
 
-        const fullPath = `/${ctrlPrefix}/${routePath}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
+      const fullPath =
+        `/${ctrlPrefix}/${route.routePath}`
+          .replace(/\/+/g, "/")
+          .replace(/:([A-Za-z_]\w*)/g, "{$1}")
+          .replace(/\/$/, "") || "/";
 
-        if (!paths[fullPath]) paths[fullPath] = {};
-
-        const op: OpenAPIOperation = {
+      if (!paths[fullPath]) paths[fullPath] = {};
+      const emittedMethods = route.method === "All" ? openApiMethods : [route.method];
+      for (const emittedMethod of emittedMethods) {
+        const operation: OpenAPIOperation = {
           path: fullPath,
-          method: method.toUpperCase(),
+          method: emittedMethod.toUpperCase(),
           parameters,
           responses,
         };
-        if (summaryMatch) op.summary = summaryMatch[1]!;
-        if (descMatch) op.description = descMatch[1]!;
-        if (tags) op.tags = tags;
-        if (bearerMatch) op.security = [{ bearer: [] }];
-        if (requestBody) op.requestBody = requestBody;
+        if (summary) operation.summary = summary;
+        if (description) operation.description = description;
+        if (tags) operation.tags = tags;
+        if (bearerAuth) operation.security = [{ bearer: [] }];
+        if (requestBody) operation.requestBody = requestBody;
 
-        paths[fullPath]![method.toLowerCase()] = op;
+        paths[fullPath]![emittedMethod.toLowerCase()] = operation;
       }
     }
   }

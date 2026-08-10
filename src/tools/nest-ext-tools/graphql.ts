@@ -1,4 +1,12 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findClassAtPosition,
+  findDecoratedClass,
+  findDecoratorCalls,
+  findNestClassRanges,
+  maskNestSource,
+  readNestSource,
+  requireNestCodeIndex,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -39,15 +47,22 @@ export async function nestGraphQLMap(
     const source = await readNestSource(index, file.path, errors);
     if (source === undefined) continue;
 
-    // Find resolver class name (searches for class declaration near @Resolver decorator)
-    const resolverClassMatch = /@Resolver\s*\([\s\S]*?\)\s*(?:export\s+)?class\s+(\w+)/.exec(source);
-    const resolverClass = resolverClassMatch?.[1] ?? "UnknownResolver";
+    const masked = maskNestSource(source);
+    const classRanges = findNestClassRanges(source);
+    const resolverClasses = new Set(
+      findDecoratorCalls(source, "Resolver")
+        .map((call) => findDecoratedClass(classRanges, call)?.start)
+        .filter((start): start is number => start !== undefined),
+    );
 
     // Extract GraphQL operation decorators with their handler names
     // R-2 fix: cap decorator args to 300 chars to prevent cross-method boundary matching
     const opRe = /@(Query|Mutation|Subscription|ResolveField)\s*\(([\s\S]{0,300}?)\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
     let m: RegExpExecArray | null;
     while ((m = opRe.exec(source)) !== null) {
+      if (masked[m.index] !== "@") continue;
+      const owner = findClassAtPosition(classRanges, m.index);
+      if (!owner || !resolverClasses.has(owner.start)) continue;
       if (entries.length >= maxEntries) { truncated = true; break; }
       const operation = m[1]! as NestGraphQLEntry["operation"];
       const args = m[2]!;
@@ -56,7 +71,7 @@ export async function nestGraphQLMap(
       // Extract return type from decorator arg: () => Article → Article
       const returnTypeMatch = /\(\s*\)\s*=>\s*(?:\[\s*)?(\w+)/.exec(args);
       const entry: NestGraphQLEntry = {
-        resolver_class: resolverClass,
+        resolver_class: owner.name,
         file: file.path,
         operation,
         handler,

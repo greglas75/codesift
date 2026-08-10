@@ -1,4 +1,12 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findClassAtPosition,
+  findDecoratorCalls,
+  findNestClassRanges,
+  firstNestDecoratorArgument,
+  readNestSource,
+  requireNestCodeIndex,
+  stripLeadingNestComments,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -43,18 +51,27 @@ export async function nestMicroserviceMap(
     // Quick substring filter
     if (!/@(MessagePattern|EventPattern)/.test(source)) continue;
 
-    const classMatch = /class\s+(\w+)/.exec(source);
-    const controller = classMatch?.[1] ?? "UnknownController";
-
-    const patternRe = /@(MessagePattern|EventPattern)\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
-    let m: RegExpExecArray | null;
-    while ((m = patternRe.exec(source)) !== null) {
+    const classRanges = findNestClassRanges(source);
+    const calls = (["MessagePattern", "EventPattern"] as const)
+      .flatMap((type) =>
+        findDecoratorCalls(source, type).map((call) => ({ ...call, type })),
+      )
+      .sort((left, right) => left.start - right.start);
+    for (const call of calls) {
+      const owner = findClassAtPosition(classRanges, call.start);
+      const handlerMatch =
+        /^\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/.exec(
+          source.slice(call.end),
+        );
+      if (!handlerMatch) continue;
       if (patterns.length >= maxPatterns) { truncated = true; break; }
+      const firstArg = stripLeadingNestComments(firstNestDecoratorArgument(call.args));
+      const stringPattern = /^['"`]([^'"`]+)['"`]$/.exec(firstArg)?.[1];
       patterns.push({
-        type: m[1]! as "MessagePattern" | "EventPattern",
-        pattern: m[2]!,
-        handler: m[3]!,
-        controller,
+        type: call.type,
+        pattern: stringPattern ?? firstArg,
+        handler: handlerMatch[1]!,
+        controller: owner?.name ?? "UnknownController",
         file: file.path,
       });
     }

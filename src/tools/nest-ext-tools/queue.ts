@@ -1,4 +1,13 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findClassAtPosition,
+  findDecoratedClass,
+  findDecoratorCalls,
+  findNestClassRanges,
+  isNodeModulesPath,
+  maskNestSource,
+  readNestSource,
+  requireNestCodeIndex,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -40,80 +49,60 @@ export async function nestQueueMap(
   const candidateFiles = index.files.filter((f) => {
     if (!f.path.endsWith(".ts") && !f.path.endsWith(".js")) return false;
     if (/\.(spec|test)\./.test(f.path)) return false;
-    if (f.path.includes("/node_modules/")) return false;
+    if (isNodeModulesPath(f.path)) return false;
     return true;
   });
 
-  for (const file of candidateFiles) {
-    if (processors.length >= maxProcessors) { truncated = true; break; }
+  candidateFilesLoop: for (const file of candidateFiles) {
     const source = await readNestSource(index, file.path, errors);
     if (source === undefined) continue;
 
-    // Quick substring filter
     if (!/@Processor|@InjectQueue/.test(source)) continue;
 
-    // --- Parse @Processor('queue-name') classes ---
-    const procRe = /@Processor\s*\(\s*(?:['"`]([^'"`]+)['"`])?\s*\)\s*(?:export\s+)?class\s+(\w+)/g;
-    let pm: RegExpExecArray | null;
-    while ((pm = procRe.exec(source)) !== null) {
-      if (processors.length >= maxProcessors) { truncated = true; break; }
-      const queueName = pm[1] ?? "default";
-      const processorClass = pm[2]!;
+    const classRanges = findNestClassRanges(source);
+    for (const call of findDecoratorCalls(source, "Processor")) {
+      const owner = findDecoratedClass(classRanges, call);
+      if (!owner) continue;
+      if (processors.length >= maxProcessors) {
+        truncated = true;
+        break candidateFilesLoop;
+      }
 
-      // Find the class body (forward scan for @Process handlers)
-      const classStart = pm.index + pm[0].length;
-      const nextClassMatch = /(?:export\s+)?class\s+\w+/.exec(source.slice(classStart));
-      const classEnd = nextClassMatch ? classStart + nextClassMatch.index : source.length;
-      const classBody = source.slice(classStart, classEnd);
-
+      const queueName = /^\s*['"`]([^'"`]+)['"`]/.exec(call.args)?.[1] ?? "default";
+      const classBody = source.slice(owner.bodyStart + 1, owner.end - 1);
+      const maskedBody = maskNestSource(classBody);
       const handlers: NestQueueProcessor["handlers"] = [];
-      const handlerDecorators: Array<[string, NestQueueProcessor["handlers"][number]["decorator"]]> = [
-        ["Process", "@Process"],
-        ["OnQueueActive", "@OnQueueActive"],
-        ["OnQueueCompleted", "@OnQueueCompleted"],
-        ["OnQueueFailed", "@OnQueueFailed"],
-        ["OnQueueStalled", "@OnQueueStalled"],
-        ["OnQueueWaiting", "@OnQueueWaiting"],
-        ["OnQueueProgress", "@OnQueueProgress"],
-        ["OnQueueError", "@OnQueueError"],
-      ];
-
-      for (const [decName, decType] of handlerDecorators) {
-        // Match decorator with optional job name arg, then method name (skip modifiers)
-        const re = new RegExp(
-          `@${decName}\\s*\\(\\s*(?:['"\`]([^'"\`]+)['"\`])?\\s*\\)\\s*\\n?\\s*(?:(?:public|private|protected|static)\\s+)?(?:async\\s+)?(\\w+)\\s*\\(`,
-          "g",
-        );
-        let hm: RegExpExecArray | null;
-        while ((hm = re.exec(classBody)) !== null) {
-          const jobName = hm[1];
-          const handler = hm[2]!;
-          handlers.push({
-            decorator: decType,
-            handler,
-            ...(jobName ? { job_name: jobName } : {}),
-          });
-        }
+      const handlerRe = /@(Process|OnQueueActive|OnQueueCompleted|OnQueueFailed|OnQueueStalled|OnQueueWaiting|OnQueueProgress|OnQueueError)\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{([^}]*)\})?\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
+      let handlerMatch: RegExpExecArray | null;
+      while ((handlerMatch = handlerRe.exec(classBody)) !== null) {
+        if (maskedBody[handlerMatch.index] !== "@") continue;
+        const objectArgs = handlerMatch[3] ?? "";
+        const jobName =
+          handlerMatch[2] ?? /\bname:\s*['"`]([^'"`]+)['"`]/.exec(objectArgs)?.[1];
+        handlers.push({
+          decorator: ("@" + handlerMatch[1]!) as NestQueueProcessor["handlers"][number]["decorator"],
+          handler: handlerMatch[4]!,
+          ...(jobName ? { job_name: jobName } : {}),
+        });
       }
 
       processors.push({
-        processor_class: processorClass,
+        processor_class: owner.name,
         queue_name: queueName,
         file: file.path,
         handlers,
       });
     }
 
-    // --- Parse @InjectQueue('queue-name') producers ---
-    const injectRe = /@InjectQueue\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
-    let im: RegExpExecArray | null;
-    while ((im = injectRe.exec(source)) !== null) {
-      const queueName = im[1]!;
-      // Find the enclosing class
-      const beforeInject = source.slice(0, im.index);
-      const lastClass = beforeInject.match(/(?:export\s+)?class\s+(\w+)[\s\S]*$/);
-      const className = lastClass ? lastClass[1]! : "UnknownClass";
-      producers.push({ class_name: className, queue_name: queueName, file: file.path });
+    for (const call of findDecoratorCalls(source, "InjectQueue")) {
+      const queueName = /^\s*['"`]([^'"`]+)['"`]/.exec(call.args)?.[1];
+      if (!queueName) continue;
+      const owner = findClassAtPosition(classRanges, call.start);
+      producers.push({
+        class_name: owner?.name ?? "UnknownClass",
+        queue_name: queueName,
+        file: file.path,
+      });
     }
   }
 

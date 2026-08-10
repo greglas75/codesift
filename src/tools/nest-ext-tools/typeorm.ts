@@ -1,4 +1,14 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findDecoratedClass,
+  findDecoratorCalls,
+  findNestClassRanges,
+  findTopLevelStringProperty,
+  firstNestDecoratorArgument,
+  maskNestSource,
+  readNestSource,
+  requireNestCodeIndex,
+  stripLeadingNestComments,
+} from "./shared.js";
 import { detectCycles, type NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -41,39 +51,39 @@ export async function nestTypeOrmMap(
     (f) => f.path.endsWith(".entity.ts") || f.path.endsWith(".entity.js"),
   );
 
-  for (const file of entityFiles) {
-    if (entities.length >= maxEntities) { truncated = true; break; }
+  entityFilesLoop: for (const file of entityFiles) {
     const source = await readNestSource(index, file.path, errors);
     if (source === undefined) continue;
 
-    // @Entity() or @Entity('table_name') followed by class declaration
-    // R-10 fix: also accept object-form @Entity({ name: 'users' }) — capture table from name field
-    const entityRe = /@Entity\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{[^}]*\})?\s*\)\s*(?:export\s+)?class\s+(\w+)/g;
-    let em: RegExpExecArray | null;
-    while ((em = entityRe.exec(source)) !== null) {
-      if (entities.length >= maxEntities) { truncated = true; break; }
-      let tableName = em[1]; // from string form @Entity('users')
-      const entityName = em[2]!;
-      // R-10: extract table name from object form @Entity({ name: 'users' })
-      if (!tableName) {
-        const objNameMatch = em[0].match(/\{\s*[^}]*name:\s*['"`]([^'"`]+)['"`]/);
-        if (objNameMatch) tableName = objNameMatch[1]!;
+    const classRanges = findNestClassRanges(source);
+    for (const call of findDecoratorCalls(source, "Entity")) {
+      const owner = findDecoratedClass(classRanges, call);
+      if (!owner) continue;
+      if (entities.length >= maxEntities) {
+        truncated = true;
+        break entityFilesLoop;
       }
-      const node: NestEntityNode = { name: entityName, file: file.path };
+
+      const firstArg = stripLeadingNestComments(firstNestDecoratorArgument(call.args));
+      let tableName = /^\s*['"`]([^'"`]+)['"`]/.exec(firstArg)?.[1];
+      if (!tableName) {
+        tableName = findTopLevelStringProperty(firstArg, "name");
+      }
+      const node: NestEntityNode = { name: owner.name, file: file.path };
       if (tableName) node.table = tableName;
       entities.push(node);
 
-      // Find relations within this entity's class body
-      // Scan forward from the class match until the next @Entity or end of file
-      const classStart = em.index + em[0].length;
-      const nextEntityMatch = /@Entity\s*\(/.exec(source.slice(classStart));
-      const classEnd = nextEntityMatch ? classStart + nextEntityMatch.index : source.length;
-      const classBody = source.slice(classStart, classEnd);
-
-      const relRe = /@(OneToMany|ManyToOne|OneToOne|ManyToMany)\s*\(\s*\(\)\s*=>\s*(\w+)/g;
+      const classBody = source.slice(owner.bodyStart + 1, owner.end - 1);
+      const maskedBody = maskNestSource(classBody);
+      const relRe = /@(OneToMany|ManyToOne|OneToOne|ManyToMany)\s*\(\s*(?:\([^)]*\)|\w+)\s*=>\s*(\w+)/g;
       let rm: RegExpExecArray | null;
       while ((rm = relRe.exec(classBody)) !== null) {
-        edges.push({ from: entityName, to: rm[2]!, relation: rm[1]! as NestEntityEdge["relation"] });
+        if (maskedBody[rm.index] !== "@") continue;
+        edges.push({
+          from: owner.name,
+          to: rm[2]!,
+          relation: rm[1]! as NestEntityEdge["relation"],
+        });
       }
     }
   }

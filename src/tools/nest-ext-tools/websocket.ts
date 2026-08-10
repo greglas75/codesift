@@ -1,4 +1,11 @@
-import { readNestSource, requireNestCodeIndex } from "./shared.js";
+import {
+  findDecoratedClass,
+  findDecoratorCalls,
+  findNestClassRanges,
+  maskNestSource,
+  readNestSource,
+  requireNestCodeIndex,
+} from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -39,41 +46,35 @@ export async function nestWebSocketMap(
     const source = await readNestSource(index, file.path, errors);
     if (source === undefined) continue;
 
-    // Parse @WebSocketGateway decorator with optional port + options
-    // Form 1: @WebSocketGateway()
-    // Form 2: @WebSocketGateway(3001)
-    // Form 3: @WebSocketGateway(3001, { namespace: '/chat' })
-    // Form 4: @WebSocketGateway({ namespace: '/chat' })
-    const wsGwRe = /@WebSocketGateway\s*\(([\s\S]*?)\)\s*(?:export\s+)?class\s+(\w+)/;
-    const gwMatch = wsGwRe.exec(source);
-    if (!gwMatch) continue;
+    const classRanges = findNestClassRanges(source);
+    for (const call of findDecoratorCalls(source, "WebSocketGateway")) {
+      const owner = findDecoratedClass(classRanges, call);
+      if (!owner) continue;
+      if (gateways.length >= maxGateways) { truncated = true; break; }
 
-    const gwArgs = gwMatch[1]!;
-    const gatewayClass = gwMatch[2]!;
+      const entry: NestGatewayEntry = {
+        gateway_class: owner.name,
+        file: file.path,
+        events: [],
+      };
 
-    const entry: NestGatewayEntry = {
-      gateway_class: gatewayClass,
-      file: file.path,
-      events: [],
-    };
+      const portMatch = /^\s*(\d+)\s*(?:,|$)/.exec(call.args);
+      if (portMatch) entry.port = parseInt(portMatch[1]!, 10);
 
-    // Port — first integer literal in args
-    // R-4 fix: only accept a leading bare integer as port (not nums inside namespace strings)
-    const portMatch = /^\s*(\d+)\s*(?:,|\))/.exec(gwArgs);
-    if (portMatch) entry.port = parseInt(portMatch[1]!, 10);
+      const nsMatch = /namespace:\s*['"`]([^'"`]+)['"`]/.exec(call.args);
+      if (nsMatch) entry.namespace = nsMatch[1]!;
 
-    // Namespace — from options object
-    const nsMatch = /namespace:\s*['"`]([^'"`]+)['"`]/.exec(gwArgs);
-    if (nsMatch) entry.namespace = nsMatch[1]!;
+      const classBody = source.slice(owner.bodyStart + 1, owner.end - 1);
+      const maskedBody = maskNestSource(classBody);
+      const subRe = /@SubscribeMessage\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
+      let sm: RegExpExecArray | null;
+      while ((sm = subRe.exec(classBody)) !== null) {
+        if (maskedBody[sm.index] !== "@") continue;
+        entry.events.push({ event: sm[1]!, handler: sm[2]! });
+      }
 
-    // Find @SubscribeMessage handlers
-    const subRe = /@SubscribeMessage\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
-    let sm: RegExpExecArray | null;
-    while ((sm = subRe.exec(source)) !== null) {
-      entry.events.push({ event: sm[1]!, handler: sm[2]! });
+      gateways.push(entry);
     }
-
-    gateways.push(entry);
   }
 
   return {
