@@ -363,8 +363,36 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       const repo = meta["repo"];
       if (!root || !repo) continue;
       statSync(root); // throws when the tree is gone — then it really is garbage
+
+      // The guard above is keyed by HASH, but `registerRepo` writes by NAME
+      // (`registry.repos[name] = meta`, a whole-entry replace). Two different
+      // databases can legitimately claim the same name — two clones sharing a
+      // remote, a worktree and its parent — so a hash that is not in the live set
+      // says nothing about whether that NAME is already spoken for by a healthy
+      // entry. Rescuing on top of one silently repoints a working repo at another
+      // tree and discards its metadata, to fix a problem it did not have.
+      const existing = reg.repos?.[repo];
+      if (existing?.root && existing.root !== root) {
+        let existingAlive = true;
+        try {
+          statSync(existing.root);
+        } catch {
+          existingAlive = false;
+        }
+        if (existingAlive) continue; // a healthy entry owns this name — leave it alone
+      }
+
       live.add(m[1]);
       rescued.push(repo);
+      // Whatever we just re-registered is emphatically NOT stale, even though the
+      // entry that carried this name a moment ago pointed at a deleted tree — which
+      // is the exact state the rescue exists for. `stale` was computed before the
+      // rescue ran, so without this the de-registration below deletes the entry the
+      // rescue just wrote and prune undoes itself in a single run, reporting
+      // `rescued_repos: 1` while leaving nothing behind.
+      const staleIdx = stale.findIndex((s) => s.name === repo);
+      if (staleIdx !== -1) stale.splice(staleIdx, 1);
+
       if (!dryRun) {
         const { registerRepo } = await import("../storage/registry.js");
         // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
@@ -395,6 +423,26 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
     const m = re.exec(name);
     if (!m) continue;
     if (live.has(m[1]!)) { kept++; continue; }
+    const full = join(dataDir, name);
+    try {
+      bytes += statSync(full).size;
+      if (!dryRun) unlinkSync(full);
+      files++;
+    } catch { /* skip unreadable/already-gone */ }
+  }
+
+  // Superseded shared caches. These carry no hash prefix, so `artifactPattern()` —
+  // which requires one — cannot see them, and nothing else ever deletes them: a
+  // format bump simply stops opening the old file and leaves it on disk forever.
+  // Measured 1.05 GB of stranded v1 on this machine after the v2 bump.
+  //
+  // Safe because the file is DERIVED — worst case the next index recomputes what it
+  // held — and the CURRENT version is excluded by name, so a running writer's file
+  // is never the one removed.
+  const { currentSharedCacheFilename } = await import("../storage/shared-embedding-cache.js");
+  const currentShared = currentSharedCacheFilename();
+  for (const name of readdirSync(dataDir)) {
+    if (!name.startsWith("shared-embeddings.") || name === currentShared) continue;
     const full = join(dataDir, name);
     try {
       bytes += statSync(full).size;
