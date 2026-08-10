@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-08-10
+
+### Fixed
+
+- **Usage entries now carry a machine identity that cannot drift.** `host` is a NAME, and names
+  drift: one Mac produced five identities in `usage.jsonl` — a pinned tag, its `.local` name, `Mac`,
+  and two bare IPs — splitting its own statistics five ways. A persisted host-id was supposed to end
+  that and did not: **1,175 entries carried the wrong name after that file existed, across 239
+  separate sessions**, and every hypothesis for which process wrote them was checked and disproved.
+
+  Entries now also carry `machine`: twelve hex characters derived from the hardware identity (macOS
+  `IOPlatformUUID`, Linux `/etc/machine-id`), hashed — this rides an anonymous channel, so the raw
+  UUID must never leave — and persisted under the data dir. It answers "which computer wrote this
+  line?" without depending on an env var arriving, a file being written first, or anyone choosing
+  correctly.
+
+  It stays **local**: the field is on the usage entry, not on the aggregates the anonymous payload is
+  built from, so nothing about it changes what leaves the machine. Verified against the payload
+  builder, not assumed.
+
+  This also closes the one failure mode that was explainable: `HOST` is computed once at module load,
+  so a long-lived process started before the pin existed wrote the stale name for as long as it ran
+  (measured: 4 sessions over four days). `MACHINE` is computed the same way but cannot go stale.
+
 ## [0.15.0] — 2026-08-10
 
 Eleven modules split behind stable facades, plus the fixes that surfaced while doing it. No new MCP
