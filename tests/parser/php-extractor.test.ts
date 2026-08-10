@@ -1,6 +1,8 @@
 import { initParser, getParser } from "../../src/parser/parser-manager.js";
 import { extractPhpSymbols } from "../../src/parser/extractors/php.js";
 
+// Test level: small — in-process parser and extractor with local WASM fixtures.
+
 beforeAll(async () => {
   await initParser();
 });
@@ -330,7 +332,7 @@ class User extends ActiveRecord {
     expect(cls!.kind).toBe("class");
 
     const methods = symbols.filter(s => s.kind === "method");
-    expect(methods.length).toBeGreaterThanOrEqual(4);
+    expect(methods).toHaveLength(4);
     expect(methods.map(m => m.name)).toContain("tableName");
     expect(methods.map(m => m.name)).toContain("rules");
     expect(methods.map(m => m.name)).toContain("getProfile");
@@ -627,7 +629,7 @@ class Survey {
     const traits = cls!.meta!.uses_traits as string[];
     // tree-sitter-php may flatten multi-trait `use A, B;` into one or two
     // declarations depending on grammar version — accept either form.
-    expect(traits.length).toBeGreaterThan(0);
+    expect(traits).toHaveLength(3);
     expect(traits).toContain("TimestampBehavior");
   });
 
@@ -738,7 +740,7 @@ class User {}
     const cls = symbols.find((s) => s.name === "User");
     const attrs = cls!.meta?.attributes as Array<{ name: string }>;
     expect(attrs.map((a) => a.name)).toContain("Entity");
-    expect(attrs.length).toBeGreaterThanOrEqual(2);
+    expect(attrs).toHaveLength(3);
   });
 });
 
