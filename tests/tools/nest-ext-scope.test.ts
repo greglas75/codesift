@@ -218,6 +218,9 @@ class CacheConsumer {
   it("does not merge providers with the same class name across files", async () => {
     await writeFile(join(tmpRoot, "src/first.service.ts"), `
 @Injectable({ scope: Scope.REQUEST }) class SharedService {}
+@Injectable() class FirstConsumer {
+  constructor(shared: SharedService) {}
+}
 `);
     await writeFile(join(tmpRoot, "src/second.service.ts"), `
 @Injectable({ scope: Scope.TRANSIENT }) class SharedService {}
@@ -229,6 +232,34 @@ class CacheConsumer {
     const result = await nestScopeAudit("test-repo");
 
     expect(result.request_scoped[0]!.provider).toBe("SharedService (src/first.service.ts)");
+    expect(result.request_scoped[0]!.escalated_consumers).toEqual(["FirstConsumer"]);
     expect(result.transient_scoped[0]!.provider).toBe("SharedService (src/second.service.ts)");
+  });
+
+  it("excludes dependencies and test fixtures before applying the provider limit", async () => {
+    await mkdir(join(tmpRoot, "node_modules/vendor"), { recursive: true });
+    await writeFile(join(tmpRoot, "node_modules/vendor/vendor.service.ts"), `
+@Injectable({ scope: Scope.REQUEST }) class VendorService {}
+`);
+    await writeFile(join(tmpRoot, "src/fixture.service.spec.ts"), `
+@Injectable({ scope: Scope.REQUEST }) class FixtureService {}
+`);
+    await writeFile(join(tmpRoot, "src/app.service.ts"), `
+@Injectable({ scope: Scope.REQUEST }) class AppService {}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, [
+        "node_modules/vendor/vendor.service.ts",
+        "src/fixture.service.spec.ts",
+        "src/app.service.ts",
+      ]),
+    );
+
+    const result = await nestScopeAudit("test-repo", { max_providers: 1 });
+
+    expect(result.request_scoped).toEqual([
+      expect.objectContaining({ provider: "AppService" }),
+    ]);
+    expect(result.truncated).toBeUndefined();
   });
 });

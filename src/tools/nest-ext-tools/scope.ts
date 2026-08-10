@@ -3,6 +3,7 @@ import {
   findDecoratorCalls,
   findNestClassRanges,
   firstNestDecoratorArgument,
+  isNodeModulesPath,
   readNestSource,
   requireNestCodeIndex,
   splitTopLevelNestArguments,
@@ -38,6 +39,7 @@ export async function nestScopeAudit(
   const maxProviders = options?.max_providers ?? 200;
   const errors: NestToolError[] = [];
   let truncated = false;
+  let graphIncomplete = false;
 
   // First: build a full DI edge map (source → target) across all injectable providers.
   // We need the INVERSE graph: for each request-scoped provider, find all transitive
@@ -51,7 +53,11 @@ export async function nestScopeAudit(
   const providers = new Map<string, ProviderInfo>();
   const rawInjectEdges: Array<{ from: string; target: string }> = []; // consumer → injected token
 
-  const candidateFiles = index.files.filter((f) => f.path.endsWith(".ts") || f.path.endsWith(".js"));
+  const candidateFiles = index.files.filter((file) =>
+    (file.path.endsWith(".ts") || file.path.endsWith(".js"))
+    && !isNodeModulesPath(file.path)
+    && !/\.(?:spec|test)\.[cm]?[jt]s$/.test(file.path)
+  );
   for (const file of candidateFiles) {
     if (providers.size >= maxProviders) { truncated = true; break; }
     const source = await readNestSource(index, file.path, errors);
@@ -107,8 +113,16 @@ export async function nestScopeAudit(
   const injectedBy = new Map<string, Set<string>>();
   for (const edge of rawInjectEdges) {
     const targets = keysByName.get(edge.target);
-    if (!targets || targets.length !== 1) continue;
-    const target = targets[0]!;
+    let target = targets?.length === 1 ? targets[0] : undefined;
+    if (!target && targets && targets.length > 1) {
+      const sourceFile = providers.get(edge.from)?.file;
+      const sameFileTargets = targets.filter((key) => providers.get(key)?.file === sourceFile);
+      if (sameFileTargets.length === 1) target = sameFileTargets[0];
+    }
+    if (!target) {
+      graphIncomplete = true;
+      continue;
+    }
     if (!injectedBy.has(target)) injectedBy.set(target, new Set());
     injectedBy.get(target)!.add(edge.from);
   }
@@ -164,7 +178,7 @@ export async function nestScopeAudit(
     transient_scoped,
     ...(errors.length > 0 ? { errors } : {}),
     ...(truncated ? { truncated } : {}),
-    ...(truncated ? { graph_incomplete: true } : {}),
+    ...(truncated || graphIncomplete ? { graph_incomplete: true } : {}),
   };
 }
 
