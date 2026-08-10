@@ -12,7 +12,7 @@ import { getDocstring } from "./php-doc.js";
 import {
   buildPropertyMeta,
   collectModifiers,
-  getPropertyName,
+  getPropertyEntries,
   getSignature,
   parseAttributes,
 } from "./php-node-metadata.js";
@@ -50,6 +50,16 @@ function handleNamespace(
   node: TSNode,
   state: WalkState,
 ): void {
+  const symbol = createNamespaceSymbol(context, node, state.parentId);
+  const body = node.childForFieldName("body");
+  if (body) walkChildren(context, body, { parentId: symbol.id, parentIsTest: false });
+}
+
+function createNamespaceSymbol(
+  context: PhpExtractionContext,
+  node: TSNode,
+  parentId?: string,
+): CodeSymbol {
   const name = node.childForFieldName("name")?.text ?? "<anonymous>";
   const symbol = makeSymbol(
     node,
@@ -58,11 +68,10 @@ function handleNamespace(
     context.filePath,
     context.source,
     context.repo,
-    { parentId: state.parentId },
+    { parentId },
   );
   context.symbols.push(symbol);
-  const body = node.childForFieldName("body");
-  if (body) walkChildren(context, body, { parentId: symbol.id, parentIsTest: false });
+  return symbol;
 }
 
 function classOptions(
@@ -290,21 +299,23 @@ function handleProperty(
   node: TSNode,
   state: WalkState,
 ): void {
-  const name = getPropertyName(node);
-  if (!name) return;
+  const entries = getPropertyEntries(node);
+  if (entries.length === 0) return;
   const docstring = getDocstring(node, context.source);
   const meta = buildPropertyMeta(node, docstring);
-  context.symbols.push(
-    makeSymbol(
-      node,
-      name,
-      "field",
-      context.filePath,
-      context.source,
-      context.repo,
-      symbolOptions(state.parentId, docstring, meta),
-    ),
-  );
+  for (const entry of entries) {
+    context.symbols.push(
+      makeSymbol(
+        entry.node,
+        entry.name,
+        "field",
+        context.filePath,
+        context.source,
+        context.repo,
+        symbolOptions(state.parentId, docstring, { ...meta }),
+      ),
+    );
+  }
 }
 
 function handleConstants(
@@ -367,6 +378,18 @@ function walkNode(context: PhpExtractionContext, node: TSNode, state: WalkState)
   walkChildren(context, node, state);
 }
 
+function walkTopLevel(context: PhpExtractionContext, root: TSNode): void {
+  let state: WalkState = { parentIsTest: false };
+  for (const child of root.namedChildren) {
+    if (child.type === "namespace_definition" && !child.childForFieldName("body")) {
+      const namespace = createNamespaceSymbol(context, child);
+      state = { parentId: namespace.id, parentIsTest: false };
+      continue;
+    }
+    walkNode(context, child, state);
+  }
+}
+
 export function extractPhpSymbols(
   tree: TSTree,
   filePath: string,
@@ -374,6 +397,6 @@ export function extractPhpSymbols(
   repo: string,
 ): CodeSymbol[] {
   const context: PhpExtractionContext = { symbols: [], filePath, source, repo };
-  walkNode(context, tree.rootNode, { parentIsTest: false });
+  walkTopLevel(context, tree.rootNode);
   return context.symbols;
 }

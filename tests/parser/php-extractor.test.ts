@@ -130,8 +130,6 @@ class User {
   public string $name;
 }
 `);
-    // Note: in non-braced namespace, siblings follow after namespace_definition
-    // The tree-sitter grammar may put class as sibling, not child
     const ns = symbols.find(s => s.kind === "namespace");
     expect(ns).toBeDefined();
     expect(ns!.name).toBe("App\\Models");
@@ -139,6 +137,26 @@ class User {
     const cls = symbols.find(s => s.name === "User");
     expect(cls).toBeDefined();
     expect(cls!.kind).toBe("class");
+    expect(cls!.parent).toBe(ns!.id);
+  });
+
+  it("tracks each semicolon namespace across following siblings", async () => {
+    const symbols = await parse(`<?php
+namespace App\\One;
+class First {}
+namespace App\\Two;
+class Second {}
+`);
+    const firstNamespace = symbols.find((s) => s.name === "App\\One");
+    const secondNamespace = symbols.find((s) => s.name === "App\\Two");
+    const firstClass = symbols.find((s) => s.name === "First");
+    const secondClass = symbols.find((s) => s.name === "Second");
+    expect(firstNamespace).toBeDefined();
+    expect(secondNamespace).toBeDefined();
+    expect(firstClass).toBeDefined();
+    expect(secondClass).toBeDefined();
+    expect(firstClass!.parent).toBe(firstNamespace!.id);
+    expect(secondClass!.parent).toBe(secondNamespace!.id);
   });
 
   it("extracts braced namespace with children", async () => {
@@ -431,6 +449,54 @@ class User {
     const getPosts = symbols.filter(s => s.name === "getPosts");
     expect(getPosts).toHaveLength(1);
     expect(getPosts[0].meta?.synthetic).toBeUndefined();
+  });
+
+  it("deduplicates PHPDoc methods case-insensitively like PHP", async () => {
+    const symbols = await parse(`<?php
+/** @method array getposts() */
+class User {
+    public function getPosts(): array { return []; }
+}
+`);
+    const methods = symbols.filter(
+      (symbol) => symbol.kind === "method" && symbol.name.toLowerCase() === "getposts",
+    );
+    expect(methods).toHaveLength(1);
+    expect(methods[0]?.name).toBe("getPosts");
+    expect(methods[0]?.meta?.synthetic).toBeUndefined();
+  });
+
+  it("emits one synthetic symbol for repeated PHPDoc tags", async () => {
+    const symbols = await parse(`<?php
+/**
+ * @property int $id
+ * @property int $id
+ * @method touch()
+ * @method touch()
+ */
+class User {}
+`);
+    expect(symbols.filter((symbol) => symbol.kind === "field" && symbol.name === "id")).toHaveLength(
+      1,
+    );
+    expect(
+      symbols.filter((symbol) => symbol.kind === "method" && symbol.name === "touch"),
+    ).toHaveLength(1);
+  });
+
+  it("deduplicates PHPDoc properties against dollar-prefixed real fields", async () => {
+    const symbols = await parse(`<?php
+/** @property int $id */
+class User {
+    public int $id;
+}
+`);
+    const idFields = symbols.filter(
+      (symbol) => symbol.kind === "field" && symbol.name.replace(/^\$/, "") === "id",
+    );
+    expect(idFields).toHaveLength(1);
+    expect(idFields[0]?.name).toBe("$id");
+    expect(idFields[0]?.meta?.synthetic).toBeUndefined();
   });
 
   it("does not synthesize when class has no docblock", async () => {
@@ -745,6 +811,21 @@ class User {}
 });
 
 describe("extractPhpSymbols — typed properties + @var (Sprint 1 part 2)", () => {
+  it("emits every field in a multi-property declaration", async () => {
+    const symbols = await parse(`<?php
+class Foo {
+  public string $first, $second;
+}
+`);
+    const fields = symbols.filter((symbol) => symbol.kind === "field");
+    expect(fields.map((field) => field.name)).toEqual(["$first", "$second"]);
+    expect(fields.every((field) => field.meta?.type === "string")).toBe(true);
+    expect(fields.every((field) => field.meta?.visibility === "public")).toBe(true);
+    expect(fields[0]?.start_byte).toBeLessThan(fields[1]!.start_byte!);
+    expect(fields.map((field) => field.source)).toEqual(["$first", "$second"]);
+    expect(fields[0]?.meta).not.toBe(fields[1]?.meta);
+  });
+
   it("extracts inline type from PHP 7.4+ typed property", async () => {
     const symbols = await parse(`<?php
 class Foo {

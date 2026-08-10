@@ -10,6 +10,7 @@ export type PhpModifiers = {
 };
 
 export type PhpAttribute = { name: string; args?: string };
+export type PhpPropertyEntry = { name: string; node: TSNode };
 
 type BooleanModifier = Exclude<keyof PhpModifiers, "visibility">;
 
@@ -81,22 +82,37 @@ function walkAttributeList(list: TSNode, attributes: PhpAttribute[]): void {
 
 export function parseAttributes(node: TSNode): PhpAttribute[] {
   const attributes: PhpAttribute[] = [];
+  const precedingLists: TSNode[] = [];
   let previous = node.previousNamedSibling;
   while (previous?.type === "attribute_list") {
-    walkAttributeList(previous, attributes);
+    precedingLists.push(previous);
     previous = previous.previousNamedSibling;
   }
+  for (const list of precedingLists.reverse()) walkAttributeList(list, attributes);
   for (const child of node.namedChildren) {
     if (child.type === "attribute_list") walkAttributeList(child, attributes);
   }
   return attributes;
 }
 
+export function getPropertyEntries(node: TSNode): PhpPropertyEntry[] {
+  const entries: PhpPropertyEntry[] = [];
+  for (const property of node.namedChildren) {
+    if (property.type !== "property_element") continue;
+    const variable = property.namedChildren.find((child) => child.type === "variable_name");
+    const name = variable?.namedChildren.find((child) => child.type === "name");
+    if (name) entries.push({ name: `$${name.text}`, node: property });
+  }
+  return entries;
+}
+
+export function getPropertyNames(node: TSNode): string[] {
+  return getPropertyEntries(node).map((entry) => entry.name);
+}
+
+/** Return the first field name for callers that only handle single declarations. */
 export function getPropertyName(node: TSNode): string | null {
-  const property = node.namedChildren.find((child) => child.type === "property_element");
-  const variable = property?.namedChildren.find((child) => child.type === "variable_name");
-  const name = variable?.namedChildren.find((child) => child.type === "name");
-  return name ? `$${name.text}` : null;
+  return getPropertyNames(node)[0] ?? null;
 }
 
 const TYPE_NODE_NAMES = new Set([

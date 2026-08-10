@@ -15,7 +15,9 @@ import {
   buildPropertyMeta,
   collectModifiers,
   getInlineType,
+  getPropertyEntries,
   getPropertyName,
+  getPropertyNames,
   getSignature,
   parseAttributes,
 } from "../../src/parser/extractors/php-node-metadata.js";
@@ -182,12 +184,36 @@ describe("PHP node metadata helpers", () => {
     ]);
   });
 
+  it("preserves source order for stacked preceding attribute lists", () => {
+    const first = attributeList([attribute("First")]);
+    const second = astNode("attribute_list", "", [attribute("Second")], {}, first);
+    const declaration = astNode("class", "", [], {}, second);
+    expect(parseAttributes(declaration)).toEqual([{ name: "First" }, { name: "Second" }]);
+  });
+
   it("extracts property names and inline types across present and absent shapes", () => {
     const variable = astNode("variable_name", "$email", [named("name", "email")]);
     const property = astNode("property_element", "$email", [variable]);
-    expect(getPropertyName(astNode("property_declaration", "", [property]))).toBe("$email");
+    const secondVariable = astNode("variable_name", "$name", [named("name", "name")]);
+    const secondProperty = astNode("property_element", "$name", [secondVariable]);
+    expect(
+      getPropertyEntries(astNode("property_declaration", "", [property, secondProperty])),
+    ).toEqual([
+      { name: "$email", node: property },
+      { name: "$name", node: secondProperty },
+    ]);
+    expect(getPropertyNames(astNode("property_declaration", "", [property, secondProperty]))).toEqual([
+      "$email",
+      "$name",
+    ]);
+    expect(getPropertyName(astNode("property_declaration", "", [property, secondProperty]))).toBe(
+      "$email",
+    );
+    expect(getPropertyNames(astNode("property_declaration"))).toEqual([]);
     expect(getPropertyName(astNode("property_declaration"))).toBeNull();
-    expect(getPropertyName(astNode("property_declaration", "", [astNode("property_element")]))).toBeNull();
+    expect(
+      getPropertyNames(astNode("property_declaration", "", [astNode("property_element")])),
+    ).toEqual([]);
     expect(getInlineType(astNode("property", "", [named("union_type", "A|B")]))).toBe("A|B");
     expect(getInlineType(astNode("property"))).toBeUndefined();
   });
@@ -316,6 +342,20 @@ describe("PHPDoc and synthetic symbol helpers", () => {
 });
 
 describe("PHP walker defensive shapes", () => {
+  it("keeps incomplete nested namespace nodes without inventing children", () => {
+    const nestedNamespace = astNode("namespace_definition", "fixture");
+    const root = astNode("program", "fixture", [astNode("wrapper", "fixture", [nestedNamespace])]);
+    const symbols = extractPhpSymbols(
+      { rootNode: root } as unknown as TSTree,
+      "test.php",
+      "fixture",
+      "test",
+    );
+    expect(symbols.map(({ name, kind }) => ({ name, kind }))).toEqual([
+      { name: "<anonymous>", kind: "namespace" },
+    ]);
+  });
+
   it("handles anonymous declarations and incomplete child nodes without emitting junk", () => {
     const classBody = astNode("declaration_list", "", [
       astNode("use_declaration", "", [named("name", "Timestamped")]),

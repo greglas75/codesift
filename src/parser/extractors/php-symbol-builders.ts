@@ -11,6 +11,10 @@ export type PhpExtractionContext = {
   repo: string;
 };
 
+function comparableMemberName(name: string, kind: SymbolKind): string {
+  return kind === "field" ? name.replace(/^\$/, "") : name.toLowerCase();
+}
+
 /** Add Yii-style docblock members unless a real member already exists. */
 export function synthesizeDocstringTags(
   context: PhpExtractionContext,
@@ -21,14 +25,14 @@ export function synthesizeDocstringTags(
   if (!docstring) return;
   for (const tag of parsePhpDocTags(docstring)) {
     const targetKind: SymbolKind = tag.tag === "property" ? "field" : "method";
-    const realMemberExists = context.symbols.some(
+    const memberExists = context.symbols.some(
       (symbol) =>
         symbol.parent === parent.id &&
-        symbol.name === tag.name &&
-        symbol.kind === targetKind &&
-        !symbol.meta?.synthetic,
+        comparableMemberName(symbol.name, symbol.kind) ===
+          comparableMemberName(tag.name, targetKind) &&
+        symbol.kind === targetKind,
     );
-    if (realMemberExists) continue;
+    if (memberExists) continue;
 
     const options: {
       parentId: string;
