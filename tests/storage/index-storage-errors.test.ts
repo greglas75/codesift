@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   saveIndex,
   loadIndex,
@@ -47,6 +49,7 @@ function makeIndex(overrides?: Partial<CodeIndex>): CodeIndex {
 let dir: string;
 let indexPath: string;
 const previousBackend = process.env["CODESIFT_INDEX_BACKEND"];
+const execFileAsync = promisify(execFile);
 
 function useBackend(backend: "json" | "sqlite"): void {
   process.env["CODESIFT_INDEX_BACKEND"] = backend;
@@ -192,18 +195,48 @@ describe("unreadable JSON store", () => {
     await saveIndex(indexPath, makeIndex({ symbols: [makeSymbol("a.ts", "x", 1)] }));
     await chmod(indexPath, 0o000);
 
-    let threw: unknown = null;
     try {
-      await loadIndex(indexPath);
-    } catch (err) {
-      threw = err;
+      if (process.getuid?.() === 0) {
+        // Root can read mode-000 files, so exercise the same built artifact as an unprivileged
+        // process instead of silently skipping the assertion in containerised CI.
+        await chmod(dir, 0o755);
+        const moduleUrl = new URL("../../dist/storage/index-store.js", import.meta.url).href;
+        const script = `
+          const { loadIndex } = await import(process.argv[1]);
+          try {
+            await loadIndex(process.argv[2]);
+            process.stdout.write(JSON.stringify({ threw: false }));
+          } catch (error) {
+            process.stdout.write(JSON.stringify({
+              threw: true,
+              name: error?.name,
+              code: error?.code,
+            }));
+          }
+        `;
+        const { stdout } = await execFileAsync(
+          process.execPath,
+          ["--input-type=module", "--eval", script, moduleUrl, indexPath],
+          {
+            uid: 65_534,
+            gid: 65_534,
+            env: { ...process.env, CODESIFT_INDEX_BACKEND: "json" },
+          },
+        );
+        expect(JSON.parse(stdout)).toEqual({
+          threw: true,
+          name: "IndexStorageError",
+          code: "EACCES",
+        });
+        return;
+      }
+
+      await expect(loadIndex(indexPath)).rejects.toMatchObject({
+        name: "IndexStorageError",
+        code: "EACCES",
+      });
     } finally {
       await chmod(indexPath, 0o644).catch(() => {});
     }
-
-    // Running as root defeats a permission test; skip the assertion rather than fail falsely.
-    if (process.getuid?.() === 0) return;
-    expect(threw).toBeInstanceOf(IndexStorageError);
-    expect((threw as IndexStorageError).code).toBe("EACCES");
   });
 });

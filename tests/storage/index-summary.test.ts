@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -7,6 +7,7 @@ import {
   saveIndexSqlite,
   loadIndexSqlite,
   closeAllIndexDbs,
+  IndexStorageError,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
@@ -95,6 +96,11 @@ describe("loadIndexSummarySqlite", () => {
   it("returns null for a database with no index, without reporting a fault", async () => {
     const empty = join(dir, "empty.index.db");
     expect(await loadIndexSummarySqlite(empty)).toBeNull();
+  });
+
+  it("rejects a corrupt database instead of reporting an empty summary", async () => {
+    await writeFile(dbPath, "this is not a database\n".repeat(64));
+    await expect(loadIndexSummarySqlite(dbPath)).rejects.toThrow(IndexStorageError);
   });
 
   it("carries the lossy-migration marker through, so status can report it", async () => {
