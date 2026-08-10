@@ -40,6 +40,7 @@ const keyOf = (n: number): string => contentKey("embeddinggemma", DIM, `symbol-$
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "codesift-sharedv2-"));
   process.env["CODESIFT_DATA_DIR"] = dir;
+  process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "256";
   _resetSharedCacheForTests();
 });
 

@@ -17,6 +17,10 @@ import {
   recordIndexFootprint,
 } from "../../src/storage/index-footprint.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
+const itWithSqlite = HAS_NODE_SQLITE ? it : it.skip;
 
 /**
  * The cache was bounded by ENTRY COUNT, which prices a 411 MB index and a 2 MB one identically.
@@ -103,7 +107,7 @@ describe("index footprint", () => {
     expect(large).toBeGreaterThan(small * 100);
   });
 
-  it("counts source text, so two indexes with equal symbol counts are not priced the same", async () => {
+  itWithSqlite("counts source text, so two indexes with equal symbol counts are not priced the same", async () => {
     const lean = join(dir, "lean.index.json");
     const fat = join(dir, "fat.index.json");
     await saveIndex(lean, sizedIndex(40, 0));
@@ -121,7 +125,7 @@ describe("index footprint", () => {
   });
 });
 
-describe("index cache evicts on a byte budget", () => {
+describeWithSqlite("index cache evicts on a byte budget", () => {
   it("drops older repos once the budget is exceeded, regardless of entry count", async () => {
     // Budget of 1 MB against ~40 KB of padded source per index: the third load must not simply
     // sit alongside the first two the way an entry cap of 3 allowed.

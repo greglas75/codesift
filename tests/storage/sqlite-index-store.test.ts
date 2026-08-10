@@ -17,6 +17,9 @@ import {
   SCHEMA_VERSION,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
 
 function makeFile(path: string, language: string, mtime = 1000): FileEntry {
   return {
@@ -69,12 +72,11 @@ afterEach(async () => {
 
 describe("sqlite availability", () => {
   it("reports availability on this runtime", async () => {
-    // Node >= 22.5 in CI and locally; the JSON fallback covers the negative case.
-    expect(await isSqliteAvailable()).toBe(true);
+    expect(await isSqliteAvailable()).toBe(HAS_NODE_SQLITE);
   });
 });
 
-describe("whole-index round trip", () => {
+describeWithSqlite("whole-index round trip", () => {
   it("returns null before anything is written", async () => {
     expect(await loadIndexSqlite(dbPath)).toBeNull();
   });
@@ -199,7 +201,7 @@ describe("whole-index round trip", () => {
   });
 });
 
-describe("incremental update", () => {
+describeWithSqlite("incremental update", () => {
   beforeEach(async () => {
     await saveIndexSqlite(
       dbPath,
@@ -256,7 +258,7 @@ describe("incremental update", () => {
   });
 });
 
-describe("removal", () => {
+describeWithSqlite("removal", () => {
   beforeEach(async () => {
     await saveIndexSqlite(
       dbPath,
@@ -287,7 +289,7 @@ describe("removal", () => {
   });
 });
 
-describe("narrow accessors", () => {
+describeWithSqlite("narrow accessors", () => {
   beforeEach(async () => {
     await saveIndexSqlite(
       dbPath,
@@ -317,7 +319,7 @@ describe("narrow accessors", () => {
   });
 });
 
-describe("schema guard", () => {
+describeWithSqlite("schema guard", () => {
   it("refuses an index written by a newer schema", async () => {
     await saveIndexSqlite(dbPath, makeIndex());
     const db = await openIndexDb(dbPath);
@@ -330,7 +332,7 @@ describe("schema guard", () => {
   });
 });
 
-describe("cross-process change signal", () => {
+describeWithSqlite("cross-process change signal", () => {
   it("exposes a data_version that a second connection's commit advances", async () => {
     await saveIndexSqlite(dbPath, makeIndex({ symbols: [makeSymbol("a.ts", "foo", 1)] }));
     const before = await getDataVersion(dbPath);
@@ -347,7 +349,7 @@ describe("cross-process change signal", () => {
   });
 });
 
-describe("symbol ids are not unique, and the store must not pretend they are", () => {
+describeWithSqlite("symbol ids are not unique, and the store must not pretend they are", () => {
   // `id` is `repo:file:name:line`. A minified bundle puts hundreds of distinct symbols on
   // line 1 of one file; PHPDoc `@method` synthesis emits a `field` and a `method` at the
   // same line. Under a PRIMARY KEY with ON CONFLICT DO UPDATE each collision silently
@@ -407,7 +409,7 @@ describe("symbol ids are not unique, and the store must not pretend they are", (
   });
 });
 
-describe("loading an index does not freeze the process", () => {
+describeWithSqlite("loading an index does not freeze the process", () => {
   // Under the shared daemon a cold load is not the caller's own time — every other
   // client waits behind it. Measured on the largest index here (240,133 symbols), a
   // plain .map() blocked the event loop for 4.8s with ZERO timer ticks, so /health

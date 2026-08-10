@@ -9,6 +9,9 @@ import {
   closeAllIndexDbs,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
 
 /**
  * The narrow read (ADR-004 stage 2). Its whole value is that it does NOT build symbols, so the
@@ -61,7 +64,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-describe("loadIndexSummarySqlite", () => {
+describeWithSqlite("loadIndexSummarySqlite", () => {
   it("agrees with the full load on every field it reports", async () => {
     const symbols = Array.from({ length: 40 }, (_, i) => sym(`f${i % 7}.ts`, `fn${i}`, i + 1));
     await saveIndexSqlite(dbPath, makeIndex(symbols));
@@ -111,7 +114,7 @@ describe("loadIndexSummarySqlite", () => {
   });
 });
 
-describe("summary staleness agrees with the full-load path", () => {
+describeWithSqlite("summary staleness agrees with the full-load path", () => {
   it("does not report an untracked-language index as never-indexed", async () => {
     // BEHAV-1: `isExtractorVersionCurrent` short-circuits on a missing `extractor_version`, while
     // `collectExtractorVersionMismatches` only flags languages actually present in `files`. An
@@ -126,7 +129,7 @@ describe("summary staleness agrees with the full-load path", () => {
   });
 });
 
-describe("summary cache", () => {
+describeWithSqlite("summary cache", () => {
   it("serves a repeat read from cache and hands back a copy, not the stored object", async () => {
     const { loadIndexSummary, resetSummaryCacheForTesting } = await import(
       "../../src/storage/index-store.js"

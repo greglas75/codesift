@@ -16,16 +16,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
 import { resetConfigCache } from "../../src/config.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const DatabaseSync = HAS_NODE_SQLITE
+  ? (await import("node:sqlite")).DatabaseSync
+  : undefined;
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
 
 const HASH_LIVE = "aaaaaaaaaaaa";   // on disk, tree exists, NOT in the registry
 const HASH_DEAD = "bbbbbbbbbbbb";   // in the registry, tree deleted
 const HASH_OTHER = "cccccccccccc";  // an unrelated live repo, so the "0 repos" guard never fires
 
 function makeDb(path: string, repo: string, root: string): void {
-  const db = new DatabaseSync(path);
+  const db = new DatabaseSync!(path);
   db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
   const ins = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
   ins.run("repo", repo);
@@ -73,7 +78,7 @@ afterEach(() => {
   rmSync(liveRoot, { recursive: true, force: true });
 });
 
-describe("prune rescue vs stale de-registration", () => {
+describeWithSqlite("prune rescue vs stale de-registration", () => {
   it("keeps the entry it just rescued, and its artifacts, across two runs", async () => {
     writeRegistry({
       "local/foo": { name: "local/foo", root: join(tmpdir(), "gone-worktree"), index_path: join(dir, `${HASH_DEAD}.index.json`) },

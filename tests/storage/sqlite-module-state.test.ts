@@ -13,6 +13,9 @@ import {
   openIndexDb,
   setSqliteCtorForTesting,
 } from "../../src/storage/sqlite-index-store.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
 
 /**
  * The precondition that makes splitting this backend safe, asserted rather than assumed.
@@ -48,7 +51,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-describe("sqlite ctor memo is a single module-scope binding", () => {
+describeWithSqlite("sqlite ctor memo is a single module-scope binding", () => {
   it("hands back the pinned constructor itself, on every call", async () => {
     // Identity, not just reachability. Asserting only that `null` disables sqlite would also pass
     // against an implementation with NO memo at all — one that re-imports `node:sqlite` per call —
@@ -90,7 +93,7 @@ describe("sqlite ctor memo is a single module-scope binding", () => {
   });
 });
 
-describe("open-connection cache is a single module-scope binding", () => {
+describeWithSqlite("open-connection cache is a single module-scope binding", () => {
   it("a handle opened through an accessor is the one closeAllIndexDbs closes", async () => {
     // CROSS-MODULE: `getFileEntrySqlite` lives in `accessors.ts` and opens through the cache;
     // `closeAllIndexDbs` lives in `connection.ts`. If those two ever walked different maps, the
@@ -130,7 +133,7 @@ describe("open-connection cache is a single module-scope binding", () => {
   });
 });
 
-describe("concurrent opens do not orphan a handle", () => {
+describeWithSqlite("concurrent opens do not orphan a handle", () => {
   it("two simultaneous openIndexDb calls share one connection", async () => {
     const dbPath = join(dir, "race.index.db");
 
