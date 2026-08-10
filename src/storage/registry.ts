@@ -1,8 +1,10 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { link, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
+import { loadSqliteCtor } from "./sqlite/runtime.js";
 
 /**
  * Load the multi-repo registry from disk.
@@ -54,17 +56,24 @@ export async function saveRegistryUnderLock(
  */
 const registryWriteLocks = new Map<string, Promise<unknown>>();
 
-type RegistryLockDb = { exec(sql: string): void; close(): void };
+type RegistryFileLock = { release(): Promise<void> };
 
-async function acquireRegistryFileLock(registryPath: string): Promise<RegistryLockDb> {
+async function acquireRegistryFileLock(registryPath: string): Promise<RegistryFileLock> {
   await mkdir(dirname(registryPath), { recursive: true });
-  const { DatabaseSync } = await import("node:sqlite");
+  const DatabaseSync = await loadSqliteCtor();
+  if (!DatabaseSync) return acquireRegistryPortableLock(registryPath);
+
   const db = new DatabaseSync(`${registryPath}.lock.db`);
   const deadline = Date.now() + 5 * 60_000;
   while (true) {
     try {
       db.exec("BEGIN EXCLUSIVE");
-      return db;
+      return {
+        release: async () => {
+          try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+          db.close();
+        },
+      };
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : String(error);
@@ -79,6 +88,115 @@ async function acquireRegistryFileLock(registryPath: string): Promise<RegistryLo
   }
 }
 
+type DirectoryLockOwner = { pid: number; token: string };
+
+/**
+ * Node 20 has no `node:sqlite`, but remains a supported JSON-backend runtime.
+ * An atomic hard link provides the same cross-process exclusion there. The
+ * candidate file is complete before it can become the public lock path, so
+ * contenders never observe the mkdir/write ownership gap that a lock directory
+ * would have. A crashed owner is reclaimed only after its PID is gone.
+ */
+async function acquireRegistryPortableLock(registryPath: string): Promise<RegistryFileLock> {
+  // Distinct from the SQLite `.lock.db` and from any historical lock-directory
+  // experiment, so a stale artifact cannot change the file-lock semantics.
+  const lockPath = `${registryPath}.lock.file`;
+  const deadline = Date.now() + 5 * 60_000;
+  const token = randomUUID();
+  const candidatePath = `${lockPath}.candidate-${process.pid}-${token}`;
+  await cleanupAbandonedLockCandidates(lockPath);
+  await writeFile(
+    candidatePath,
+    JSON.stringify({ pid: process.pid, token }),
+    { encoding: "utf8", flag: "wx" },
+  );
+
+  try {
+    while (true) {
+      try {
+        await link(candidatePath, lockPath);
+        return {
+          release: async () => {
+            const owner = await readRegistryLockOwner(lockPath);
+            if (owner?.token !== token) return;
+            try {
+              await unlink(lockPath);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
+          },
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (await registryLockIsAbandoned(lockPath)) {
+          const tombstone = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+          try {
+            await rename(lockPath, tombstone);
+            await unlink(tombstone);
+            continue;
+          } catch (reapError) {
+            const code = (reapError as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT") throw reapError;
+          }
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for registry lock: ${registryPath}`);
+        }
+        await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
+      }
+    }
+  } finally {
+    await unlink(candidatePath).catch(() => undefined);
+  }
+}
+
+async function cleanupAbandonedLockCandidates(lockPath: string): Promise<void> {
+  const parent = dirname(lockPath);
+  const prefix = `${basename(lockPath)}.candidate-`;
+  let names: string[];
+  try {
+    names = await readdir(parent);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const pid = Number.parseInt(name.slice(prefix.length).split("-", 1)[0] ?? "", 10);
+    if (Number.isInteger(pid) && !processIsAlive(pid)) {
+      await unlink(join(parent, name)).catch(() => undefined);
+    }
+  }
+}
+
+async function readRegistryLockOwner(lockPath: string): Promise<DirectoryLockOwner | null> {
+  try {
+    const parsed = JSON.parse(await readFile(lockPath, "utf8")) as Partial<DirectoryLockOwner>;
+    return Number.isInteger(parsed.pid) && typeof parsed.token === "string"
+      ? { pid: parsed.pid as number, token: parsed.token }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function registryLockIsAbandoned(lockPath: string): Promise<boolean> {
+  const owner = await readRegistryLockOwner(lockPath);
+  // A valid lock is always published from a complete candidate file. Invalid
+  // or temporarily unreadable metadata is therefore fail-closed: do not reap
+  // something whose dead owner cannot be proved.
+  return owner !== null && !processIsAlive(owner.pid);
+}
+
+function processIsAlive(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /**
  * Serialize registry mutations both within this process and across CLI/daemon
  * processes. Callers that perform destructive work from a registry snapshot
@@ -87,12 +205,11 @@ async function acquireRegistryFileLock(registryPath: string): Promise<RegistryLo
 export function withRegistryLock<T>(registryPath: string, work: () => Promise<T>): Promise<T> {
   const prev = registryWriteLocks.get(registryPath) ?? Promise.resolve();
   const lockedWork = async (): Promise<T> => {
-    const lockDb = await acquireRegistryFileLock(registryPath);
+    const fileLock = await acquireRegistryFileLock(registryPath);
     try {
       return await work();
     } finally {
-      try { lockDb.exec("ROLLBACK"); } catch { /* transaction already closed */ }
-      lockDb.close();
+      await fileLock.release();
     }
   };
   const next = prev.then(lockedWork, lockedWork);

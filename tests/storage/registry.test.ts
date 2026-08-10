@@ -8,9 +8,13 @@ import {
   resolveRegisteredRepoMeta,
 } from "../../src/storage/registry.js";
 import type { RepoMeta } from "../../src/types.js";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 async function writeGitOrigin(repoRoot: string, url: string): Promise<void> {
   await mkdir(join(repoRoot, ".git"), { recursive: true });
@@ -165,6 +169,34 @@ describe("registry", () => {
       const left = (await listRepos(registryPath)).map((r) => r.name).sort();
       expect(left).toEqual(names.slice(10).sort());
     });
+
+    it("serializes separate Node 20-compatible fallback processes", async () => {
+      const registryModule = new URL("../../src/storage/registry.ts", import.meta.url).href;
+      const runtimeModule = new URL("../../src/storage/sqlite/runtime.ts", import.meta.url).href;
+      const worker = `
+        import { registerRepo } from ${JSON.stringify(registryModule)};
+        import { setSqliteCtorForTesting } from ${JSON.stringify(runtimeModule)};
+        setSqliteCtorForTesting(null);
+        const [registryPath, name] = process.argv.slice(1);
+        await registerRepo(registryPath, {
+          name,
+          root: "/tmp/" + name,
+          index_path: "/tmp/.codesift/" + name + ".index.json",
+          symbol_count: 1,
+          file_count: 1,
+          updated_at: Date.now(),
+        });
+      `;
+      const names = Array.from({ length: 8 }, (_, i) => `local/process-${i}`);
+
+      await Promise.all(names.map((name) => execFileAsync(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", worker, registryPath, name],
+      )));
+
+      expect((await listRepos(registryPath)).map((repo) => repo.name).sort())
+        .toEqual([...names].sort());
+    }, 30_000);
   });
 
   describe("getRepoName", () => {

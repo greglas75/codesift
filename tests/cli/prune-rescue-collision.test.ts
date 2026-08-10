@@ -13,7 +13,7 @@
 //     name is already owned by a healthy repo, so a rescue could repoint a working repo at a
 //     different tree and discard its metadata.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
@@ -54,7 +54,7 @@ async function runPrune(): Promise<Record<string, unknown>> {
 
 const registry = () =>
   JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8")) as {
-    repos: Record<string, { root?: string; index_path?: string }>;
+    repos: Record<string, { root?: string; index_path?: string; last_git_commit?: string }>;
   };
 
 beforeEach(() => {
@@ -81,7 +81,12 @@ afterEach(() => {
 describeWithSqlite("prune rescue vs stale de-registration", () => {
   it("keeps the entry it just rescued, and its artifacts, across two runs", async () => {
     writeRegistry({
-      "local/foo": { name: "local/foo", root: join(tmpdir(), "gone-worktree"), index_path: join(dir, `${HASH_DEAD}.index.json`) },
+      "local/foo": {
+        name: "local/foo",
+        root: join(tmpdir(), "gone-worktree"),
+        index_path: join(dir, `${HASH_DEAD}.index.json`),
+        last_git_commit: "abc123",
+      },
       "local/other": { name: "local/other", root: dir, index_path: join(dir, `${HASH_OTHER}.index.json`) },
     });
     makeDb(join(dir, `${HASH_LIVE}.index.db`), "local/foo", liveRoot);
@@ -93,6 +98,7 @@ describeWithSqlite("prune rescue vs stale de-registration", () => {
 
     // The rescue must SURVIVE the de-registration in the same run.
     expect(registry().repos["local/foo"]?.root).toBe(liveRoot);
+    expect(registry().repos["local/foo"]?.last_git_commit).toBe("abc123");
 
     // And a second run must not undo it — the failure mode was that run 2 saw the artifacts as
     // orphaned and deleted them, which is how a live index becomes garbage.
@@ -152,15 +158,23 @@ describeWithSqlite("prune rescue vs stale de-registration", () => {
   });
 
   it("still de-registers a dead entry nobody rescued", async () => {
+    const deadDb = join(dir, `${HASH_DEAD}.index.db`);
     writeRegistry({
       "local/dead": { name: "local/dead", root: join(tmpdir(), "gone-for-good"), index_path: join(dir, `${HASH_DEAD}.index.json`) },
       "local/other": { name: "local/other", root: dir, index_path: join(dir, `${HASH_OTHER}.index.json`) },
     });
+    makeDb(deadDb, "local/dead", join(tmpdir(), "gone-for-good"));
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(deadDb, old, old);
 
     const out = await runPrune();
 
     expect(out["stale_repos"]).toBe(1);
     expect(registry().repos["local/dead"]).toBeUndefined();
     expect(registry().repos["local/other"]).toBeDefined();
+    expect(existsSync(deadDb)).toBe(true); // protected for the run that removed its registry row
+
+    await runPrune();
+    expect(existsSync(deadDb)).toBe(false);
   });
 });

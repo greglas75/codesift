@@ -36,6 +36,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   // fall out as orphans through the sweep below.
   const live = new Set<string>();
   const stale: Array<{ name: string; root: string }> = [];
+  const staleHashes = new Set<string>();
   let reg: {
     repos?: Record<string, {
       name?: string;
@@ -44,6 +45,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       symbol_count?: number;
       file_count?: number;
       updated_at?: number;
+      last_git_commit?: string;
     }>;
     updated_at?: number;
   };
@@ -72,6 +74,10 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     }
     if (rootGone) {
       stale.push({ name, root: root as string });
+      if (typeof ip === "string") {
+        const stem = /^([0-9a-f]{8,})\./.exec(ip.split("/").pop() ?? "")?.[1];
+        if (stem) staleHashes.add(stem);
+      }
       continue; // deliberately NOT added to `live`
     }
     // Take the HASH STEM with the same shape the sweep below matches, rather than stripping one
@@ -153,12 +159,25 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
         // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
         // live-set above is built from these strings.
         reg.repos ??= {};
-        reg.repos[repo] = {
-          ...reg.repos[repo],
+        const previous = reg.repos[repo];
+        const replacement: NonNullable<typeof reg.repos>[string] = {
           name: repo,
           root,
           index_path: join(dataDir, `${m[1]}.index.json`),
         };
+        if (typeof previous?.symbol_count === "number" && Number.isFinite(previous.symbol_count)) {
+          replacement.symbol_count = previous.symbol_count;
+        }
+        if (typeof previous?.file_count === "number" && Number.isFinite(previous.file_count)) {
+          replacement.file_count = previous.file_count;
+        }
+        if (typeof previous?.updated_at === "number" && Number.isFinite(previous.updated_at)) {
+          replacement.updated_at = previous.updated_at;
+        }
+        if (typeof previous?.last_git_commit === "string") {
+          replacement.last_git_commit = previous.last_git_commit;
+        }
+        reg.repos[repo] = replacement;
         registryDirty = true;
       }
       rescued.push(repo);
@@ -185,6 +204,16 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   // Commit every registry rescue/removal before deleting derived files. If the
   // atomic registry write fails, prune exits with all artifacts still intact.
   if (!dryRun && stale.length > 0) {
+    const staleNames = new Set(
+      stale
+        .filter((entry) => !rescuedNames.has(entry.name) && !protectedNames.has(entry.name))
+        .map((entry) => entry.name),
+    );
+    const effectiveRepoCount = Object.keys(reg.repos ?? {})
+      .filter((name) => !staleNames.has(name)).length;
+    if (effectiveRepoCount === 0) {
+      die("prune: every registry entry is stale — aborting before registry or artifacts change.");
+    }
     for (const s of stale) {
       if (!rescuedNames.has(s.name) && !protectedNames.has(s.name)) {
         if (reg.repos && s.name in reg.repos) {
@@ -222,7 +251,9 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   for (const name of readdirSync(dataDir)) {
     const m = re.exec(name);
     if (!m) continue;
-    if (live.has(m[1]!)) { kept++; continue; }
+    // A stale entry removed during THIS run gets one full run of retention.
+    // The next prune re-evaluates its database metadata before collecting it.
+    if (live.has(m[1]!) || staleHashes.has(m[1]!)) { kept++; continue; }
     const full = join(dataDir, name);
     try {
       const fileStat = statSync(full);
