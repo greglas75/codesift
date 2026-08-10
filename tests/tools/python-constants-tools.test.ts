@@ -56,6 +56,45 @@ FLAGS = ["a", "b"]
     expect(result.matches[0]!.alias_chain.map((hop) => hop.name)).toEqual(["DEFAULT_URL", "API_URL"]);
   });
 
+  it("distinguishes Python lists from tuples", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/collections.py": `FLAGS = ["a", "b"]
+COORDINATES = (10, 20)
+`,
+    });
+
+    const flags = await resolveConstantValue(repo, "FLAGS");
+    const coordinates = await resolveConstantValue(repo, "COORDINATES");
+
+    expect(flags.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "list",
+      value: ["a", "b"],
+    });
+    expect(coordinates.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "tuple",
+      value: [10, 20],
+    });
+  });
+
+  it("reports alias cycles before exhausting max_depth", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/cycles.py": `FIRST = SECOND
+SECOND = FIRST
+`,
+    });
+
+    const result = await resolveConstantValue(repo, "FIRST");
+
+    expect(result.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Cycle detected while resolving FIRST",
+    });
+  });
+
   it("resolves imported aliases across Python files", async () => {
     const repo = await writeFixture({
       "app/__init__.py": "",
