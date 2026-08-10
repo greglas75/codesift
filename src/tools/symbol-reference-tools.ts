@@ -179,7 +179,7 @@ async function findReferencesWithRipgrep(
   filePattern?: string,
 ): Promise<Reference[] | null> {
   const args: string[] = [
-    "-n", "--no-heading", "-F",
+    "-n", "--no-heading", "-F", "-w",
     "--max-columns", String(MAX_CONTEXT_LENGTH),
     "--max-columns-preview",
     "--max-count", String(Math.min(maxResults * 2, 5000)),

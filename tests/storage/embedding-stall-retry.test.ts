@@ -89,6 +89,16 @@ describe("batchEmbed stall retry", () => {
     );
   });
 
+  it.each([
+    { label: "empty", vectors: Array.from({ length: 12 }, () => []) },
+    { label: "inconsistent", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1] : [1, 2]) },
+    { label: "non-finite", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1, Number.NaN] : [1, 2]) },
+  ])("rejects $label provider vectors before they reach storage", async ({ vectors }) => {
+    await expect(batchEmbed(texts(12), new Map(), async () => vectors, 12)).rejects.toThrow(
+      "malformed vectors",
+    );
+  });
+
   it("gives up instead of splitting forever", async () => {
     let calls = 0;
     const embed = async (): Promise<number[][]> => { calls++; throw stall(); };

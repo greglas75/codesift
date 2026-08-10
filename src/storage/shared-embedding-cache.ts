@@ -267,6 +267,7 @@ export function appendSharedCache(entries: Array<{ key: string; vec: Float32Arra
     let batch: Buffer[] = [];
     let batchEntries: Array<{ key: string; vec: Float32Array }> = [];
     let batchBytes = 0;
+    const pendingKeys = new Set<string>();
     const flush = (): void => {
       if (batch.length === 0) return;
       // One append per chunk, always ending on a record boundary, so a
@@ -281,9 +282,10 @@ export function appendSharedCache(entries: Array<{ key: string; vec: Float32Arra
     };
 
     for (const { key, vec } of entries) {
-      if (memory?.has(key)) continue; // already stored — v1 wrote it again
+      if (memory?.has(key) || pendingKeys.has(key)) continue; // already stored — v1 wrote it again
       const rec = encodeRecord(key, vec);
       if (!rec) continue;
+      pendingKeys.add(key);
       if (batchBytes + rec.length > MAX_APPEND_BYTES) flush();
       batch.push(rec);
       batchEntries.push({ key, vec });

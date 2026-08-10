@@ -668,6 +668,12 @@ describe("symbol_tools", () => {
       expect(refs.length).toBeGreaterThan(0);
       expect(refs.every((reference) => reference.file === "src/user-service.ts")).toBe(true);
     });
+
+    it("does not treat substrings inside longer identifiers as references", async () => {
+      const repo = await indexFixture();
+
+      expect(await findReferences(repo, "getUser")).toEqual([]);
+    });
   });
 
   describe("batch references and unused imports", () => {

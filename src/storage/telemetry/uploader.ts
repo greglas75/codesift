@@ -4,7 +4,18 @@
 // configured (CODESIFT_TELEMETRY_URL); with no endpoint nothing leaves the
 // machine, which is the safe default until the public collector is exposed
 // (staged rollout: notice first, push later).
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -35,6 +46,48 @@ function watermarkPath(): string {
  */
 function retroWatermarkPath(): string {
   return join(dataDir(), "telemetry-watermark-retros-offset");
+}
+function retroIdentityPath(): string {
+  return join(dataDir(), "telemetry-watermark-retros-identity");
+}
+function retroLogPath(): string {
+  return join(homedir(), ".zuvo", "retros.log");
+}
+
+/** Identity plus a digest of bytes immediately before an offset; stable across later appends. */
+function retroLogIdentity(offset: number): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(retroLogPath(), "r");
+    const stat = fstatSync(fd);
+    if (offset < 0 || offset > stat.size) return null;
+    const start = Math.max(0, offset - 256);
+    const tail = Buffer.alloc(offset - start);
+    const bytes = readSync(fd, tail, 0, tail.length, start);
+    if (bytes !== tail.length) return null;
+    const hash = createHash("sha256").update(tail).digest("hex").slice(0, 16);
+    return `${stat.dev}:${stat.ino}:${offset}:${hash}`;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+function readText(path: string): string | null {
+  try { return readFileSync(path, "utf-8").trim(); } catch { return null; }
+}
+
+function writeText(path: string, value: string): void {
+  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    mkdirSync(dataDir(), { recursive: true });
+    writeFileSync(tmp, value, { encoding: "utf-8", flag: "wx" });
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* no temp file to clean */ }
+    console.error(`[codesift] telemetry cursor identity could not be persisted: ${String(err)}`);
+  }
 }
 
 function readTs(path: string): number {
@@ -131,6 +184,7 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
   let path: string;
   let retroSinceOffset = 0;
   let retroNextOffset = 0;
+  let retroCursorReset = false;
   if (level === "full") {
     // Level 2 (opt-in): raw entries, batched. Full detail — query/paths included. Retros do not
     // ride this level, so no tool usage genuinely means nothing to send.
@@ -144,8 +198,15 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
     // unavailable / not-indexed / transport-closed in ~40% of zuvo runs), and the old
     // `entries.length === 0 -> empty` return fired first, so those machines reported NOTHING and
     // read as "zuvo is not installed here".
-    retroSinceOffset = readTs(retroWatermarkPath());
-    const scan = await scanRetros(retroSinceOffset, undefined, "offset");
+    const savedOffset = readTs(retroWatermarkPath());
+    const savedIdentity = retroLogIdentity(savedOffset);
+    if (savedIdentity !== null && readText(retroIdentityPath()) === savedIdentity) {
+      retroSinceOffset = savedOffset;
+    } else {
+      retroCursorReset = savedOffset > 0;
+      retroSinceOffset = 0;
+    }
+    const scan = await scanRetros(retroSinceOffset, retroLogPath(), "offset");
     retroNextOffset = scan.nextOffset;
     if (entries.length === 0 && scan.rows.length === 0) return "empty";
     path = "/ingest/codesift";
@@ -174,7 +235,12 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
   // Advance the retro cursor independently, and only forward. Guarded so a flush that carried
   // no retros (or a level that does not carry them) cannot move it — moving it on an empty scan
   // would re-create the original bug in a new place.
-  if (retroNextOffset > retroSinceOffset) writeTs(retroWatermarkPath(), retroNextOffset);
+  if (retroNextOffset > retroSinceOffset) {
+    if (retroCursorReset) writeText(retroWatermarkPath(), String(retroNextOffset));
+    else writeTs(retroWatermarkPath(), retroNextOffset);
+    const nextIdentity = retroLogIdentity(retroNextOffset);
+    if (nextIdentity !== null) writeText(retroIdentityPath(), nextIdentity);
+  }
   return "sent";
 }
 

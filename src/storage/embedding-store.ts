@@ -327,6 +327,11 @@ async function embedBatchWithStallRetry(
     if (vectors.length !== texts.length) {
       throw new Error(`embedding provider returned ${vectors.length} vectors for ${texts.length} texts`);
     }
+    const dimensions = vectors[0]?.length ?? 0;
+    if (dimensions === 0 || vectors.some((vector) =>
+      vector.length !== dimensions || vector.some((value) => !Number.isFinite(value)))) {
+      throw new Error("embedding provider returned malformed vectors");
+    }
     return vectors;
   } catch (err: unknown) {
     if (!isTransientStall(err) || depth >= MAX_STALL_SPLITS || texts.length < MIN_SPLITTABLE_BATCH) {

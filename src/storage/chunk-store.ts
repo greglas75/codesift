@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { finished } from "node:stream/promises";
 import type { CodeChunk } from "../types.js";
 import { cleanupOrphanTempFiles } from "./_shared.js";
 
@@ -90,17 +91,21 @@ async function writeAtomicNdjson(filePath: string, lines: Iterable<string>): Pro
   const tmpPath = `${filePath}.tmp.${process.pid}.${randomUUID()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8", flags: "wx" });
+  // Attach before the first write: a fast open/write failure can otherwise emit `error` before the
+  // later finish wait is installed, turning a recoverable disk fault into an unhandled event.
+  const completion = finished(stream);
 
   try {
     for (const line of lines) {
       if (!stream.write(line)) await once(stream, "drain");
     }
     stream.end();
-    await once(stream, "finish");
+    await completion;
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, filePath);
   } catch (err) {
     stream.destroy();
+    await completion.catch(() => undefined);
     try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
     throw err;
   }
@@ -144,13 +149,13 @@ async function loadNdjsonMap<K extends string, V>(
       if (!trimmed) continue;
       try {
         const parsed: unknown = JSON.parse(trimmed);
-        if (guard(parsed)) {
-          const [key, value] = toEntry(parsed);
-          map.set(key, value);
-        }
+        if (!guard(parsed)) return null;
+        const [key, value] = toEntry(parsed);
+        map.set(key, value);
       } catch {
-        // Skip a malformed line rather than abandoning the whole file. A truncated tail is the
-        // expected failure — a writer killed mid-append leaves one.
+        // Atomic writers never expose an in-progress target. A malformed line therefore means the
+        // cache is corrupt; returning a partial map would make missing results look authoritative.
+        return null;
       }
     }
   } catch {

@@ -15,10 +15,16 @@ const SCRIPT = join(REPO_ROOT, "scripts/journal-citation-check.ts");
 // repo's commits. The test-farm mirror ships the working tree without `.git`, where every SHA
 // looks ungrounded and the whole file failed on an environment gap rather than a defect. Skipping
 // where the premise does not hold beats a red suite that everyone learns to ignore.
-const hasGitHistory = spawnSync("git", ["cat-file", "-e", "bfa5fce^{commit}"], {
-  cwd: REPO_ROOT,
-  encoding: "utf-8",
-}).status === 0;
+const REQUIRED_COMMITS = [
+  "bfa5fce", "b718659", "7729fc4", "3e4b644", "5ccbb80", "b395926", "66deb67",
+  "ed8ec72", "cd1a1dc", "3e4908a", "ef6b781", "4d4cf88", "2bbf62d", "5c03108",
+];
+const hasGitHistory = REQUIRED_COMMITS.every((sha) =>
+  spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], {
+    cwd: REPO_ROOT,
+    encoding: "utf-8",
+  }).status === 0,
+);
 
 describe.skipIf(!hasGitHistory)("journal-citation-check", () => {
   // (a) Golden fixture: 15 grounded / 20 total = 75%

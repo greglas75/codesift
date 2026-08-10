@@ -296,9 +296,11 @@ export async function getSymbols(
   const requestedIds = new Set(symbolIds);
   const symbolMap = new Map<string, CodeSymbol>();
   const collisions = new Map<string, CodeSymbol[]>();
-  for (const requestedId of requestedIds) {
-    for (const sym of index.symbols) {
-      if (!matchesSymbolId(sym, requestedId)) continue;
+  for (const sym of index.symbols) {
+    const separator = sym.id.indexOf(":");
+    const candidates = separator >= 0 ? [sym.id, sym.id.slice(separator + 1)] : [sym.id];
+    for (const requestedId of new Set(candidates)) {
+      if (!requestedIds.has(requestedId)) continue;
       const seen = symbolMap.get(requestedId);
       if (seen === undefined) {
         symbolMap.set(requestedId, sym);

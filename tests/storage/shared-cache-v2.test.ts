@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -114,6 +115,15 @@ describe("round trip is exact and compact", () => {
 });
 
 describe("duplicates are not re-appended", () => {
+  it("deduplicates repeated keys within one append call", async () => {
+    await loadSharedCache();
+    const entry = { key: keyOf(1), vec: vec(1) };
+
+    appendSharedCache([entry, entry]);
+
+    expect((await stat(await cacheFile())).size).toBe(16 + 2 + 4 + DIM * 4);
+  });
+
   it("writing the same keys twice does not grow the file", async () => {
     await loadSharedCache();
     const entries = Array.from({ length: 50 }, (_, i) => ({ key: keyOf(i), vec: vec(i) }));
@@ -148,8 +158,12 @@ describe("duplicates are not re-appended", () => {
 
   it("rejects a non-hex key instead of encoding uninitialized key bytes", async () => {
     const cache = await loadSharedCache();
+    const before = existsSync(await cacheFile()) ? (await stat(await cacheFile())).size : 0;
     appendSharedCache([{ key: "z".repeat(32), vec: vec(1) }]);
     expect(cache.size).toBe(0);
+    expect(existsSync(await cacheFile()) ? (await stat(await cacheFile())).size : 0).toBe(before);
+    _resetSharedCacheForTests();
+    expect((await loadSharedCache()).has("z".repeat(32))).toBe(false);
   });
 });
 

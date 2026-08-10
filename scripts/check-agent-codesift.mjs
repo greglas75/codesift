@@ -101,7 +101,16 @@ function resolveExecutable(raw) {
 function runtimeScriptArg(entry) {
   const runtime = entry.command?.trim().split("/").pop();
   if (!["node", "nodejs", "bun", "deno"].includes(runtime)) return null;
-  return entry.args?.find((arg) => !arg.startsWith("-") && (arg.includes("/") || arg.startsWith("~"))) ?? null;
+  const consumesNext = new Set(["--require", "-r", "--loader", "--experimental-loader", "--import"]);
+  const args = entry.args ?? [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (consumesNext.has(arg)) { i++; continue; }
+    if (arg === "--") return args[i + 1] ?? null;
+    if (arg.startsWith("-")) continue;
+    if (arg.includes("/") || arg.startsWith("~")) return arg;
+  }
+  return null;
 }
 
 function resolveStdio(entry) {
@@ -217,7 +226,7 @@ if (!globalEntry) {
   fallback = { ok: false, why: "no global codesift entry — every unlisted directory has NO codesift" };
 } else if (globalEntry.type === "http" || typeof globalEntry.url === "string") {
   const h = checkDaemon(globalEntry.url);
-  const pinnedCwd = new URL(globalEntry.url).searchParams.get("cwd");
+  const pinnedCwd = h.ok ? new URL(globalEntry.url).searchParams.get("cwd") : null;
   fallback = h.ok && pinnedCwd && unlisted.length > 0
     ? { ok: false, why: `global HTTP entry pins ${pinnedCwd}; ${unlisted.length} unlisted repos would resolve to the wrong repo (H19)` }
     : h;

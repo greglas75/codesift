@@ -69,6 +69,26 @@ describe("check-agent-codesift", () => {
     );
   });
 
+  it("skips runtime option values before validating the actual script", () => {
+    const fx = fixture();
+    const preload = join(fx.home, "preload.js");
+    const missing = join(fx.home, "missing-codesift.js");
+    writeFileSync(preload, "", "utf-8");
+    const result = run(fx, {
+      projects: {
+        [fx.project]: {
+          mcpServers: { codesift: { command: process.execPath, args: ["--require", preload, missing] } },
+        },
+      },
+      mcpServers: { codesift: { command: process.execPath } },
+    });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).broken).toEqual(
+      expect.arrayContaining([expect.objectContaining({ why: expect.stringContaining(missing) })]),
+    );
+  });
+
   it("health-checks each distinct daemon origin", () => {
     const fx = fixture();
     const secondProject = join(fx.home, "DEV", "other");
@@ -115,6 +135,16 @@ describe("check-agent-codesift", () => {
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout).broken).toEqual(
       expect.arrayContaining([expect.objectContaining({ why: expect.stringContaining("wrong repo") })]),
+    );
+  });
+
+  it("reports a malformed global HTTP URL instead of crashing", () => {
+    const fx = fixture();
+    const result = run(fx, { mcpServers: { codesift: { type: "http", url: "://bad" } } });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).broken).toEqual(
+      expect.arrayContaining([expect.objectContaining({ why: expect.stringContaining("invalid daemon URL") })]),
     );
   });
 });

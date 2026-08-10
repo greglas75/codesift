@@ -66,7 +66,11 @@ describe("saveChunks", () => {
     expect(loaded?.size).toBe(2_000);
     const texts = [...(loaded?.values() ?? [])].map((value) => value.text);
     expect(texts.every((text) => text.startsWith("first-") || text.startsWith("second-"))).toBe(true);
-    expect(new Set(texts.map((text) => text.split("-")[0])).size).toBe(1);
+    const winner = texts[0]?.split("-")[0];
+    expect(winner === "first" || winner === "second").toBe(true);
+    for (let i = 0; i < 2_000; i++) {
+      expect(loaded?.get(`repo:src/f${i}.ts:${i}`)?.text).toBe(`${winner}-${i}`);
+    }
     expect(readdirSync(dir).filter((file) => file.includes(".tmp."))).toEqual([]);
   });
 
@@ -84,6 +88,14 @@ describe("saveChunks", () => {
   it("writes an empty file for an empty chunk list", async () => {
     await saveChunks(path, []);
     expect(readFileSync(path, "utf-8")).toBe("");
+  });
+
+  it("rejects a partially corrupt cache instead of returning incomplete chunks", async () => {
+    await saveChunks(path, [chunk(1), chunk(2)]);
+    const complete = readFileSync(path, "utf-8").trimEnd();
+    writeFileSync(path, `${complete}\n{broken json}\n`, "utf-8");
+
+    expect(await loadChunks(path)).toBeNull();
   });
 
   it("sweeps a stale temp file from an earlier killed write, but not a fresh one", async () => {

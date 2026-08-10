@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { appendFile, mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdtemp, rename, rm, writeFile, mkdir } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -193,6 +193,30 @@ describe("retros flush independently of CodeSift tool usage", () => {
 
     const payload = posted[1] as { retros?: { skill: string }[] };
     expect(payload.retros).toEqual([expect.objectContaining({ skill: "review" })]);
+  });
+
+  it("resets the byte cursor when the retro log is rotated and replaced", async () => {
+    const path = join(zuvoDir, "retros.log");
+    await writeFile(path, retroLine(TS_MID) + "\n", "utf-8");
+    await writeUsage([]);
+    await flushTelemetry(Date.now());
+
+    await rename(path, `${path}.1`);
+    await writeFile(
+      path,
+      retroLine(TS_OLD, "review") + "\n" + retroLine(TS_MID, "review") + "\n",
+      "utf-8",
+    );
+    expect(await flushTelemetry(Date.now())).toBe("sent");
+
+    const payload = posted[1] as { retros?: Array<{ skill: string; count: number }> };
+    expect(payload.retros).toHaveLength(2);
+    expect(payload.retros).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ skill: "review", count: 1 }),
+      ]),
+    );
+    expect(payload.retros?.reduce((sum, retro) => sum + retro.count, 0)).toBe(2);
   });
 
   it("(E) no zuvo and no tool usage still means nothing is sent", async () => {

@@ -352,6 +352,7 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   const rescued: string[] = [];
   const rescueConflicts: string[] = [];
   const rescueFailures: string[] = [];
+  const protectedStaleNames = new Set<string>();
   const staleNames = new Set(stale.map((entry) => entry.name));
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
@@ -367,6 +368,9 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       if (!root || !repo) continue;
       statSync(root); // throws when the tree is gone — then it really is garbage
       live.add(m[1]);
+      // Once a live database claims a stale name, preserve that registry entry unless replacement
+      // succeeds. A conflict or transient write failure must not de-register the only breadcrumb.
+      protectedStaleNames.add(repo);
       const current = reg.repos?.[repo];
       if (current?.root && current.root !== root && !staleNames.has(repo)) {
         rescueConflicts.push(repo);
@@ -422,7 +426,9 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
     const { removeRepo } = await import("../storage/registry.js");
     const rescuedNames = new Set(rescued);
     for (const s of stale) {
-      if (!rescuedNames.has(s.name)) await removeRepo(join(dataDir, "registry.json"), s.name);
+      if (!rescuedNames.has(s.name) && !protectedStaleNames.has(s.name)) {
+        await removeRepo(join(dataDir, "registry.json"), s.name);
+      }
     }
   }
 
