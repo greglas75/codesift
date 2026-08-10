@@ -27,6 +27,7 @@ import {
 const DIM = 768;
 let dir: string;
 const prevDataDir = process.env["CODESIFT_DATA_DIR"];
+const prevSharedCacheMb = process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
 
 function vec(seed: number): Float32Array {
   const v = new Float32Array(DIM);
@@ -39,12 +40,19 @@ const keyOf = (n: number): string => contentKey("embeddinggemma", DIM, `symbol-$
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "codesift-sharedv2-"));
   process.env["CODESIFT_DATA_DIR"] = dir;
+  // This suite verifies the on-disk format, including a >100 MiB regression
+  // fixture. Small CI runners intentionally default the production reader to
+  // 64 MiB, so give format tests an explicit budget instead of making their
+  // result depend on host RAM.
+  process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "256";
   _resetSharedCacheForTests();
 });
 
 afterEach(async () => {
   if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
   else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
+  if (prevSharedCacheMb === undefined) delete process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
+  else process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = prevSharedCacheMb;
   _resetSharedCacheForTests();
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
