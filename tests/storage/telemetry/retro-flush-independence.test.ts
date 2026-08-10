@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,6 +33,14 @@ let dataDir: string;
 let zuvoDir: string;
 let posted: unknown[];
 let realFetch: typeof globalThis.fetch;
+const ENV_KEYS = [
+  "CODESIFT_DATA_DIR",
+  "HOME",
+  "CODESIFT_TELEMETRY",
+  "CODESIFT_TELEMETRY_URL",
+  "DO_NOT_TRACK",
+] as const;
+let previousEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>;
 
 const TS_OLD = "2026-08-01T10:00:00Z";
 const TS_MID = "2026-08-02T10:00:00Z";
@@ -51,6 +59,9 @@ async function writeUsage(entries: { ts: number; tool: string }[]): Promise<void
 }
 
 beforeEach(async () => {
+  previousEnv = Object.fromEntries(
+    ENV_KEYS.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]),
+  );
   home = await mkdtemp(join(tmpdir(), "cs-flush-"));
   dataDir = join(home, ".codesift");
   zuvoDir = join(home, ".zuvo");
@@ -73,6 +84,11 @@ beforeEach(async () => {
 
 afterEach(async () => {
   globalThis.fetch = realFetch;
+  for (const key of ENV_KEYS) {
+    const previous = previousEnv[key];
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
   await rm(home, { recursive: true, force: true });
 });
 
@@ -156,8 +172,7 @@ describe("retros flush independently of CodeSift tool usage", () => {
     await writeUsage([]);
     await flushTelemetry(Date.now());
 
-    await writeFile(join(zuvoDir, "retros.log"),
-      retroLine(TS_OLD) + "\n" + retroLine(TS_MID, "review") + "\n", "utf-8");
+    await appendFile(join(zuvoDir, "retros.log"), retroLine(TS_MID, "review") + "\n", "utf-8");
     const result = await flushTelemetry(Date.now());
 
     expect(result).toBe("sent");
@@ -173,7 +188,7 @@ describe("retros flush independently of CodeSift tool usage", () => {
     await writeUsage([]);
     await flushTelemetry(Date.now());
 
-    await writeFile(path, retroLine(TS_MID) + "\n" + retroLine(TS_OLD, "review") + "\n", "utf-8");
+    await appendFile(path, retroLine(TS_OLD, "review") + "\n", "utf-8");
     expect(await flushTelemetry(Date.now())).toBe("sent");
 
     const payload = posted[1] as { retros?: { skill: string }[] };

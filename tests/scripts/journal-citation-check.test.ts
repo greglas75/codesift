@@ -3,9 +3,10 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runCitationCheck, extractLiterals } from "../../scripts/journal-citation-check.js";
 
-const REPO_ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const FIXTURE = join(REPO_ROOT, "tests/fixtures/journal/citation-golden.md");
 const SCRIPT = join(REPO_ROOT, "scripts/journal-citation-check.ts");
 
@@ -14,7 +15,7 @@ const SCRIPT = join(REPO_ROOT, "scripts/journal-citation-check.ts");
 // repo's commits. The test-farm mirror ships the working tree without `.git`, where every SHA
 // looks ungrounded and the whole file failed on an environment gap rather than a defect. Skipping
 // where the premise does not hold beats a red suite that everyone learns to ignore.
-const hasGitHistory = spawnSync("git", ["rev-parse", "--git-dir"], {
+const hasGitHistory = spawnSync("git", ["cat-file", "-e", "bfa5fce^{commit}"], {
   cwd: REPO_ROOT,
   encoding: "utf-8",
 }).status === 0;

@@ -223,6 +223,11 @@ describe("a second repo with identical content does not call the model", () => {
     const callsAfterFirst = modelCalls;
     expect(callsAfterFirst).toBeGreaterThan(0);
 
+    // A linked worktree can be indexed by another process. Force the second lookup to reload the
+    // persisted file so this proves cross-process reuse rather than only the in-memory fast path.
+    _resetSharedCacheForTests();
+    await loadSharedCache();
+
     // Same TEXTS, different repo and different symbol ids — exactly a worktree of the first.
     const worktreeTexts = new Map(
       Array.from({ length: 40 }, (_, i) => [`repoB:sym${i}`, `function f${i}() {}`]),
