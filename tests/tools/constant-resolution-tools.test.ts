@@ -1,10 +1,5 @@
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { CodeSymbol } from "../../src/types.js";
-import { indexFolder } from "../../src/tools/index-tools.js";
-import { resetConfigCache } from "../../src/config.js";
 import { resolveConstantValue } from "../../src/tools/constant-resolution-tools.js";
 import { resolveTypeScriptConstantValue } from "../../src/tools/typescript-constants-tools.js";
 import { disposeTypeScriptFileContexts } from "../../src/tools/typescript-constants/file-context.js";
@@ -13,32 +8,23 @@ import type {
   ResolutionState,
   TypeScriptFileContext,
 } from "../../src/tools/typescript-constants/types.js";
+import {
+  createConstantResolutionFixture,
+  type ConstantResolutionFixture,
+} from "./helpers/constant-resolution-fixture.js";
 
-let tmpDir: string;
-let fixtureDir: string;
+let fixture: ConstantResolutionFixture;
 
 beforeEach(async () => {
-  tmpDir = await mkdtemp(join(tmpdir(), "codesift-constant-resolution-"));
-  fixtureDir = join(tmpDir, "constant-resolution-project");
-  await mkdir(fixtureDir, { recursive: true });
-
-  process.env["CODESIFT_DATA_DIR"] = join(tmpDir, ".codesift");
-  resetConfigCache();
+  fixture = await createConstantResolutionFixture();
 });
 
 afterEach(async () => {
-  delete process.env["CODESIFT_DATA_DIR"];
-  resetConfigCache();
-  await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await fixture.cleanup();
 });
 
 async function writeFixture(files: Record<string, string>): Promise<string> {
-  for (const [relativePath, content] of Object.entries(files)) {
-    const absPath = join(fixtureDir, relativePath);
-    await mkdir(join(absPath, ".."), { recursive: true });
-    await writeFile(absPath, content);
-  }
-  return (await indexFolder(fixtureDir, { watch: false })).repo;
+  return await fixture.write(files);
 }
 
 describe("resolveConstantValue — TypeScript", () => {
