@@ -1,10 +1,14 @@
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { indexFolder } from "../../src/tools/index-tools.js";
 import { resetConfigCache } from "../../src/config.js";
+import * as parserManager from "../../src/parser/parser-manager.js";
 import { taintTrace } from "../../src/tools/taint-tools.js";
+import type { TaintTraceFramework } from "../../src/tools/taint-tools.js";
+
+// Test level: medium integration (real filesystem, indexer, and parser; no network or sleeps).
 
 let tmpDir: string;
 let fixtureDir: string;
@@ -19,6 +23,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   delete process.env["CODESIFT_DATA_DIR"];
   resetConfigCache();
   await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -172,5 +177,106 @@ def render_html():
     });
 
     expect(result.traces).toEqual([]);
+  });
+
+  it("rejects unsupported frameworks and unknown repositories with specific errors", async () => {
+    const unsupportedFramework = "python-fastapi" as TaintTraceFramework;
+
+    await expect(taintTrace("unused", { framework: unsupportedFramework })).rejects.toThrow(
+      'taint_trace is not implemented for framework "python-fastapi" yet.',
+    );
+    await expect(taintTrace("repo-that-does-not-exist-for-taint-tests")).rejects.toThrow(
+      'Repository "repo-that-does-not-exist-for-taint-tests" not found.',
+    );
+  });
+
+  it("reports parser initialization failure after repository resolution", async () => {
+    const repo = await writeFixture({
+      "app/views.py": "def render_html(request):\n    return request.body\n",
+    });
+    const getParserSpy = vi.spyOn(parserManager, "getParser").mockResolvedValueOnce(null);
+
+    await expect(taintTrace(repo)).rejects.toThrow("Python parser unavailable");
+    expect(getParserSpy).toHaveBeenCalledWith("python");
+  });
+
+  it("stops propagation through known sanitizers", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.html import escape
+from django.utils.safestring import mark_safe
+
+def render_html(request):
+    unsafe = request.body
+    safe = escape(unsafe)
+    return mark_safe(safe)
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      source_patterns: ["request.body"],
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.source_patterns).toEqual(["request.body"]);
+    expect(result.sink_patterns).toEqual(["mark_safe"]);
+    expect(result.traces).toEqual([]);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("marks the result truncated at the configured trace boundary", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.shortcuts import redirect
+from django.utils.safestring import mark_safe
+
+def render_html(request):
+    value = request.data.get("next")
+    mark_safe(value)
+    return redirect(value)
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      source_patterns: ["request.data"],
+      max_traces: 1,
+    });
+
+    expect(result.traces).toHaveLength(1);
+    expect(result.traces[0]!.sink.kind).toBe("mark_safe");
+    expect(result.truncated).toBe(true);
+  });
+
+  it("tracks container and branch propagation into loop sinks", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/views.py": `from django.utils.safestring import mark_safe
+
+def render(request):
+    raw = request.COOKIES.get("html")
+    if request.headers.get("X-Format"):
+        prepared = f"<b>{raw}</b>"
+    else:
+        prepared = {"html": raw}["html"]
+    for value in [prepared]:
+        mark_safe(prepared)
+`,
+    });
+
+    const result = await taintTrace(repo, {
+      file_pattern: "app/views.py",
+      source_patterns: ["request.COOKIES"],
+      sink_patterns: ["mark_safe"],
+    });
+
+    expect(result.traces).toHaveLength(2);
+    expect(result.traces.map((trace) => trace.source.kind)).toEqual([
+      "request.COOKIES",
+      "request.COOKIES",
+    ]);
+    expect(result.traces.every((trace) => trace.sink.symbol_name === "render")).toBe(true);
+    expect(result.traces.every((trace) => trace.hops.some((hop) => hop.kind === "container"))).toBe(true);
   });
 });
