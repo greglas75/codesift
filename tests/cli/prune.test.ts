@@ -63,10 +63,26 @@ describe("codesift prune", () => {
 
   it("aborts when the registry lists 0 repos (never treats all as orphans)", async () => {
     writeFileSync(join(dir, "registry.json"), JSON.stringify({ repos: {} }));
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const exit = vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("die"); }) as never);
     await expect(COMMAND_MAP["prune"]!([], { json: true })).rejects.toThrow();
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining(
+      "prune: registry lists 0 repos — aborting (refusing to treat all artifacts as orphans).",
+    ));
     // orphan still present — nothing was deleted
     expect(existsSync(join(dir, `${ORPH}.embeddings.ndjson`))).toBe(true);
     exit.mockRestore();
+  });
+
+  it("aborts with a specific error when registry.json is unreadable", async () => {
+    writeFileSync(join(dir, "registry.json"), "not-json");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.spyOn(process, "exit").mockImplementation((() => { throw new Error("die"); }) as never);
+
+    await expect(COMMAND_MAP["prune"]!([], { json: true })).rejects.toThrow();
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining(
+      "prune: cannot read registry.json — aborting so live data is never deleted.",
+    ));
+    expect(existsSync(join(dir, `${ORPH}.embeddings.ndjson`))).toBe(true);
   });
 });

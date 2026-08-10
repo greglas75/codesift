@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -22,6 +22,7 @@ describe("codesift serve — daemon lock + health (Task 7)", () => {
   });
   afterEach(async () => {
     for (const h of handles) await h.close().catch(() => {});
+    vi.restoreAllMocks();
     delete process.env.CODESIFT_DATA_DIR;
     resetConfigCache();
     rmSync(dir, { recursive: true, force: true });
@@ -30,6 +31,25 @@ describe("codesift serve — daemon lock + health (Task 7)", () => {
   it("isProcessAlive: true for self, false for an impossible pid", () => {
     expect(isProcessAlive(process.pid)).toBe(true);
     expect(isProcessAlive(2147480000)).toBe(false);
+  });
+
+  it("isProcessAlive rejects non-positive PIDs and treats EPERM as alive", () => {
+    expect(isProcessAlive(0)).toBe(false);
+    expect(isProcessAlive(-1)).toBe(false);
+    expect(isProcessAlive(Number.NaN)).toBe(false);
+
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    });
+    expect(isProcessAlive(4242)).toBe(true);
+    expect(kill).toHaveBeenCalledWith(4242, 0);
+  });
+
+  it("readDaemonLock rejects a partially malformed lock", () => {
+    const { pidPath, portPath } = daemonLockPaths(dir);
+    writeFileSync(pidPath, "not-a-pid");
+    writeFileSync(portPath, "7077");
+    expect(readDaemonLock(dir)).toBeNull();
   });
 
   it("writes daemon.pid + daemon.port, serves /health, close removes the lock", async () => {
@@ -47,6 +67,9 @@ describe("codesift serve — daemon lock + health (Task 7)", () => {
     await h.close();
     handles.length = 0;
     expect(readDaemonLock(dir)).toBeNull();
+    const { pidPath, portPath } = daemonLockPaths(dir);
+    expect(existsSync(pidPath)).toBe(false);
+    expect(existsSync(portPath)).toBe(false);
   });
 
   it("refuses a second start while a live daemon holds the lock", async () => {
