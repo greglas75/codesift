@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- Cross-repo contract matching no longer collapses consumers from different repositories when
+  generated clients share the same relative file path and line number.
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
