@@ -173,8 +173,32 @@ describe("index-store", () => {
       expect(updated!.symbol_count).toBe(9);
 
       // ...but they must not have cost 8 separate rewrites of the whole blob.
-      expect(getIndexWriteCountForTesting()).toBeLessThan(8);
+      expect(getIndexWriteCountForTesting()).toBe(1);
     });
+
+      it("persists an earlier change when a later mutation in the same batch is a no-op", async () => {
+        const indexPath = join(tmpDir, "mixed-batch.index.json");
+        await saveIndex(indexPath, makeIndex());
+
+        resetIndexWriteCountForTesting();
+        await Promise.all([
+          saveIncremental(indexPath, "src/added.ts", [makeSymbol("src/added.ts", "added", 1)]),
+          removeFileFromIndex(indexPath, "src/never-existed.ts"),
+        ]);
+
+        const updated = await loadIndex(indexPath);
+        expect(updated!.symbols.map((symbol) => symbol.name)).toEqual(["added"]);
+        expect(getIndexWriteCountForTesting()).toBe(1);
+      });
+
+      it("refreshes updated_at when a batch changes the index", async () => {
+        const indexPath = join(tmpDir, "updated-at.index.json");
+        await saveIndex(indexPath, makeIndex({ updated_at: 1 }));
+
+        await saveIncremental(indexPath, "src/a.ts", [makeSymbol("src/a.ts", "a", 1)]);
+
+        expect((await loadIndex(indexPath))!.updated_at).toBeGreaterThan(1);
+      });
 
       it("removing files the index never had does not rewrite the blob", async () => {
         const indexPath = join(tmpDir, "noop.index.json");
@@ -252,6 +276,32 @@ describe("index-store", () => {
       const missingPath = join(tmpDir, "missing-remove.index.json");
       // Should not throw
       await removeFileFromIndex(missingPath, "src/a.ts");
+    });
+
+    it("removes an orphaned symbol even when its file entry is already absent", async () => {
+      const previous = process.env["CODESIFT_INDEX_BACKEND"];
+      process.env["CODESIFT_INDEX_BACKEND"] = "json";
+      resetIndexBackendForTesting();
+      const indexPath = join(tmpDir, "remove-orphan-symbol.index.json");
+      try {
+        await saveIndex(
+          indexPath,
+          makeIndex({
+            symbols: [makeSymbol("src/orphan.ts", "orphan", 1)],
+            symbol_count: 1,
+          }),
+        );
+
+        await removeFileFromIndex(indexPath, "src/orphan.ts");
+
+        const updated = await loadIndex(indexPath);
+        expect(updated!.symbols).toEqual([]);
+        expect(updated!.symbol_count).toBe(0);
+      } finally {
+        if (previous === undefined) delete process.env["CODESIFT_INDEX_BACKEND"];
+        else process.env["CODESIFT_INDEX_BACKEND"] = previous;
+        resetIndexBackendForTesting();
+      }
     });
   });
 

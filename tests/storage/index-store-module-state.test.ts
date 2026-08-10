@@ -13,6 +13,7 @@ import {
 } from "../../src/storage/index-store.js";
 import {
   cacheLoadedIndex,
+  getCachedIndex,
   getIndexCacheSizeForTesting,
   resetIndexCacheForTesting,
 } from "../../src/storage/index-cache.js";
@@ -63,6 +64,25 @@ describe("index-store facade", () => {
     expect(facadeCacheSize()).toBe(1);
     facadeResetCache();
     expect(getIndexCacheSizeForTesting()).toBe(0);
+  });
+
+  it("returns a cached index only for the matching data version", () => {
+    cacheLoadedIndex("/tmp/versioned.index.db", emptyIndex, 7);
+
+    expect(getCachedIndex("/tmp/versioned.index.db", 7)).toEqual(emptyIndex);
+    expect(getCachedIndex("/tmp/versioned.index.db", 8)).toBeNull();
+  });
+
+  it("refreshes full-index LRU order on a cache hit", () => {
+    for (const name of ["a", "b", "c"]) {
+      cacheLoadedIndex(`/tmp/${name}.index.db`, { ...emptyIndex, repo: name }, 1);
+    }
+
+    expect(getCachedIndex("/tmp/a.index.db", 1)?.repo).toBe("a");
+    cacheLoadedIndex("/tmp/d.index.db", { ...emptyIndex, repo: "d" }, 1);
+
+    expect(getCachedIndex("/tmp/a.index.db", 1)?.repo).toBe("a");
+    expect(getCachedIndex("/tmp/b.index.db", 1)).toBeNull();
   });
 
   it("re-exports backend helpers from the module that owns migration state", () => {
