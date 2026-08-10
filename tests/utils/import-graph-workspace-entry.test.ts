@@ -166,6 +166,21 @@ describe("resolveWorkspaceEntry", () => {
     );
   });
 
+  it("does not fall back when exports omits the package root", async () => {
+    const root = await workspaceRoot({
+      exports: { "./utils": "./src/utils.ts" },
+      module: "./dist/module.js",
+      main: "./dist/main.js",
+    });
+    const files = new Set([
+      "packages/pkg/src/index.ts",
+      "packages/pkg/dist/module.js",
+      "packages/pkg/dist/main.js",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBeNull();
+  });
+
 });
 
 describe("relativeWorkspaceRoot", () => {

@@ -34,19 +34,20 @@ function readWorkspacePackageJson(absRoot: string): ParsedPackageJson | null {
   }
 }
 
-function pickConditionalEntry(root: unknown): string | null {
+function pickConditionalEntry(root: unknown, depth = 0): string | null {
+  if (depth > 8 || Array.isArray(root)) return null;
   if (typeof root === "string") return root;
   if (!root || typeof root !== "object") return null;
   const conditional = root as Record<string, unknown>;
   for (const key of RUNTIME_EXPORT_CONDITIONS) {
-    const entry = pickConditionalEntry(conditional[key]);
+    const entry = pickConditionalEntry(conditional[key], depth + 1);
     if (entry) return entry;
   }
   return null;
 }
 
-function pickEntry(pkg: ParsedPackageJson | null): string | null {
-  if (!pkg) return null;
+function pickEntry(pkg: ParsedPackageJson | null): string | null | undefined {
+  if (!pkg) return undefined;
   if (typeof pkg.source === "string") return pkg.source;
   if (typeof pkg.exports === "string") return pkg.exports;
   if (pkg.exports && typeof pkg.exports === "object") {
@@ -55,10 +56,11 @@ function pickEntry(pkg: ParsedPackageJson | null): string | null {
       ?? (Object.keys(exportsMap).some((key) => key.startsWith(".")) ? null : exportsMap);
     const exportedEntry = pickConditionalEntry(rootExport);
     if (exportedEntry) return exportedEntry;
+    return null;
   }
   if (typeof pkg.module === "string") return pkg.module;
   if (typeof pkg.main === "string") return pkg.main;
-  return null;
+  return undefined;
 }
 
 export function resolveWorkspaceEntry(
@@ -68,6 +70,7 @@ export function resolveWorkspaceEntry(
   normalizedPaths: Map<string, string>,
 ): string | null {
   const configuredEntry = pickEntry(readWorkspacePackageJson(workspaceRoot));
+  if (configuredEntry === null) return null;
   const relativeEntries = configuredEntry
     ? [configuredEntry.replace(/^\.?\/+/, ""), ...DEFAULT_WORKSPACE_ENTRIES]
     : [...DEFAULT_WORKSPACE_ENTRIES];
