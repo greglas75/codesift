@@ -60,6 +60,9 @@ export class BillingService {
   @Timeout(5000)
   handleStartup() {}
 
+  @Timeout(0)
+  handleImmediately() {}
+
   @OnEvent('user.created')
   async onUserCreated(payload: any) {}
 }
@@ -68,7 +71,7 @@ export class BillingService {
     mockedGetCodeIndex.mockResolvedValue(index);
 
     const result = await nestScheduleMap("test-repo");
-    expect(result.entries).toHaveLength(4);
+    expect(result.entries).toHaveLength(5);
 
     const cron = result.entries.find((e) => e.decorator === "@Cron");
     expect(cron).toEqual(expect.objectContaining({ handler: "handleDailyBilling" }));
@@ -80,6 +83,11 @@ export class BillingService {
 
     const timeout = result.entries.find((e) => e.decorator === "@Timeout");
     expect(timeout!.interval_ms).toBe(5000);
+
+    const immediate = result.entries.find((e) => e.handler === "handleImmediately");
+    expect(immediate).toEqual(
+      expect.objectContaining({ decorator: "@Timeout", interval_ms: 0 }),
+    );
 
     const onEvent = result.entries.find((e) => e.decorator === "@OnEvent");
     expect(onEvent!.expression).toBe("user.created");
@@ -115,6 +123,48 @@ export class BillingService {
     mockedGetCodeIndex.mockResolvedValue(index);
     const result = await nestScheduleMap("test-repo", { max_schedules: 2 });
     expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("stops before reading a later file after reaching max_schedules", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/first.service.ts"), `
+class FirstJobs { @Cron('* * * * *') first() {} }
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, [
+        "src/jobs/first.service.ts",
+        "src/jobs/missing.service.ts",
+      ]),
+    );
+
+    const result = await nestScheduleMap("test-repo", { max_schedules: 1 });
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ handler: "first", file: "src/jobs/first.service.ts" }),
+    ]);
+    expect(result.errors).toBeUndefined();
+    expect(result.truncated).toBe(true);
+  });
+
+  it("does not scan beyond max_files_scanned", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/first.service.ts"), `
+class FirstJobs { @Cron('* * * * *') first() {} }
+`);
+    await writeFile(join(tmpRoot, "src/jobs/second.service.ts"), `
+class SecondJobs { @Cron('* * * * *') second() {} }
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, [
+        "src/jobs/first.service.ts",
+        "src/jobs/second.service.ts",
+      ]),
+    );
+
+    const result = await nestScheduleMap("test-repo", { max_files_scanned: 1 });
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ handler: "first", file: "src/jobs/first.service.ts" }),
+    ]);
     expect(result.truncated).toBe(true);
   });
 

@@ -93,6 +93,26 @@ export class OrdersController {
     expect(result.truncated).toBe(true);
   });
 
+  it("stops before reading a later controller after reaching max_patterns", async () => {
+    await writeFile(join(tmpRoot, "src/orders/first.controller.ts"), `
+class FirstController { @MessagePattern('first') first() {} }
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, [
+        "src/orders/first.controller.ts",
+        "src/orders/missing.controller.ts",
+      ]),
+    );
+
+    const result = await nestMicroserviceMap("test-repo", { max_patterns: 1 });
+
+    expect(result.patterns).toEqual([
+      expect.objectContaining({ handler: "first", controller: "FirstController" }),
+    ]);
+    expect(result.errors).toBeUndefined();
+    expect(result.truncated).toBe(true);
+  });
+
   it("CQ8: unreadable controller file appended to errors", async () => {
     const index = mockIndexWithRoot(tmpRoot, ["src/orders/missing.controller.ts"]);
     mockedGetCodeIndex.mockResolvedValue(index);

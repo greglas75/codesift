@@ -124,6 +124,10 @@ class TransientService {}
 class GenericConsumer {
   constructor(service: Promise<TransientService>) {}
 }
+@Injectable()
+class RepositoryConsumer {
+  constructor(service: Repository<TransientService>) {}
+}
 `);
     mockedGetCodeIndex.mockResolvedValue(
       mockIndexWithRoot(tmpRoot, ["src/transient.service.ts"]),
@@ -136,7 +140,7 @@ class GenericConsumer {
         provider: "TransientService",
         scope: "TRANSIENT",
         file: "src/transient.service.ts",
-        escalated_consumers: ["GenericConsumer"],
+        escalated_consumers: ["GenericConsumer", "RepositoryConsumer"],
       },
     ]);
   });

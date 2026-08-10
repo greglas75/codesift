@@ -107,6 +107,26 @@ class SecondGateway {}
     expect(result.truncated).toBe(true);
   });
 
+  it("stops before reading a later gateway after reaching max_gateways", async () => {
+    await writeFile(join(tmpRoot, "src/first.gateway.ts"), `
+@WebSocketGateway() class FirstGateway {}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, [
+        "src/first.gateway.ts",
+        "src/missing.gateway.ts",
+      ]),
+    );
+
+    const result = await nestWebSocketMap("test-repo", { max_gateways: 1 });
+
+    expect(result.gateways).toEqual([
+      expect.objectContaining({ gateway_class: "FirstGateway", file: "src/first.gateway.ts" }),
+    ]);
+    expect(result.errors).toBeUndefined();
+    expect(result.truncated).toBe(true);
+  });
+
   it("adversarial regression: ignores commented gateways and permits intervening class decorators", async () => {
     await writeFile(join(tmpRoot, "src/guarded.gateway.ts"), `
 // @WebSocketGateway() class RemovedGateway {}

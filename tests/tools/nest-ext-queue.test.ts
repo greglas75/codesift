@@ -99,6 +99,32 @@ export class MailService {
     expect(result.producers[0]!.class_name).toBe("MailService");
   });
 
+  it("uses stable fallbacks for argument-less processors and unowned producers", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/fallbacks.processor.ts"), `
+@Processor()
+class DefaultProcessor {}
+
+@InjectQueue('orphan')
+const orphanQueue: Queue;
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/jobs/fallbacks.processor.ts"]),
+    );
+
+    const result = await nestQueueMap("test-repo");
+
+    expect(result.processors).toEqual([
+      expect.objectContaining({ processor_class: "DefaultProcessor", queue_name: "default" }),
+    ]);
+    expect(result.producers).toEqual([
+      {
+        class_name: "UnknownClass",
+        queue_name: "orphan",
+        file: "src/jobs/fallbacks.processor.ts",
+      },
+    ]);
+  });
+
   it("CQ8: unreadable file appended to errors", async () => {
     const index = mockIndexWithRoot(tmpRoot, ["src/jobs/missing.processor.ts"]);
     mockedGetCodeIndex.mockResolvedValue(index);

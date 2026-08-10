@@ -110,6 +110,49 @@ export class ArticleResolver {
     expect(result.truncated).toBe(true);
   });
 
+  it("stops before reading a later resolver after reaching max_entries", async () => {
+    await writeFile(join(tmpRoot, "src/first.resolver.ts"), `
+@Resolver() class FirstResolver { @Query() first() {} }
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, [
+        "src/first.resolver.ts",
+        "src/missing.resolver.ts",
+      ]),
+    );
+
+    const result = await nestGraphQLMap("test-repo", { max_entries: 1 });
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ handler: "first", resolver_class: "FirstResolver" }),
+    ]);
+    expect(result.errors).toBeUndefined();
+    expect(result.truncated).toBe(true);
+  });
+
+  it("extracts operations from JavaScript resolver files", async () => {
+    await writeFile(join(tmpRoot, "src/legacy.resolver.js"), `
+@Resolver()
+class LegacyResolver {
+  @Query()
+  legacy() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/legacy.resolver.js"]),
+    );
+
+    const result = await nestGraphQLMap("test-repo");
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({
+        file: "src/legacy.resolver.js",
+        handler: "legacy",
+        resolver_class: "LegacyResolver",
+      }),
+    ]);
+  });
+
   it("CQ8: unreadable file appended to errors", async () => {
     const index = mockIndexWithRoot(tmpRoot, ["src/missing.resolver.ts"]);
     mockedGetCodeIndex.mockResolvedValue(index);
