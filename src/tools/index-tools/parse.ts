@@ -24,8 +24,7 @@ import {
   contentHashesForPath,
 } from "../../storage/embedding-store.js";
 import {
-  saveChunks,
-  saveChunkEmbeddings,
+  saveChunkIndex,
   loadChunkEmbeddings,
   getChunkPath,
   getChunkEmbeddingPath,
@@ -33,7 +32,7 @@ import {
 import { chunkFile, chunkBySymbols } from "../../search/chunker.js";
 import { loadConfig } from "../../config.js";
 import type { CodeSymbol, FileEntry, CodeChunk } from "../../types.js";
-import { embeddingCaches } from "./state.js";
+import { embeddingCaches, invalidateEmbeddingCache } from "./state.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -348,8 +347,14 @@ export async function embedChunks(
         // it was ever eligible for a lookup. The symbol path ~85 lines above always passed this.
         { model: provider.model, dimensions: provider.dimensions },
       );
-      await saveChunks(chunkPath, allChunks);
-      await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
+      // A semantic query may have populated the process-wide cache before this
+      // re-index. Invalidate before the first publication so a failed second
+      // write cannot leave the old generation resident.
+      invalidateEmbeddingCache(`${repoName}:chunks`);
+      await saveChunkIndex(chunkPath, allChunks, chunkEmbeddingPath, chunkEmbeddings);
+      // Close the publication window: a query may have loaded the old manifest
+      // after the first bump but before the atomic manifest swap.
+      invalidateEmbeddingCache(`${repoName}:chunks`);
     }
     return true;
   } catch (err: unknown) {

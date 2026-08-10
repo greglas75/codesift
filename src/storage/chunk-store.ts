@@ -1,5 +1,9 @@
 import { createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createInterface } from "node:readline";
+import { finished } from "node:stream/promises";
+import { basename, dirname, join } from "node:path";
 import type { CodeChunk } from "../types.js";
 import { cleanupOrphanTempFiles } from "./_shared.js";
 
@@ -36,6 +40,77 @@ interface ChunkLine {
   tokenCount: number;
 }
 
+interface ChunkIndexManifest {
+  version: 1;
+  chunks: string;
+  embeddings: string;
+}
+
+function getChunkManifestPath(filePath: string): string {
+  if (filePath.endsWith(".chunks.ndjson")) {
+    return filePath.replace(/\.chunks\.ndjson$/, ".chunk-index.json");
+  }
+  if (filePath.endsWith(".chunk-embeddings.ndjson")) {
+    return filePath.replace(/\.chunk-embeddings\.ndjson$/, ".chunk-index.json");
+  }
+  return `${filePath}.chunk-index.json`;
+}
+
+async function loadChunkManifest(filePath: string): Promise<ChunkIndexManifest | null> {
+  let raw: string;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    raw = await readFile(getChunkManifestPath(filePath), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  const parsed = JSON.parse(raw) as Partial<ChunkIndexManifest>;
+  const safeName = (value: unknown): value is string =>
+    typeof value === "string" &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    basename(value) === value;
+  if (
+    parsed.version !== 1 ||
+    !safeName(parsed.chunks) ||
+    !safeName(parsed.embeddings)
+  ) throw new Error(`Invalid chunk index manifest: ${getChunkManifestPath(filePath)}`);
+  return parsed as ChunkIndexManifest;
+}
+
+export interface ResolvedChunkIndexPaths {
+  chunks: string;
+  embeddings: string;
+}
+
+/** Resolve both files from one manifest snapshot so a query cannot straddle generations. */
+export async function resolveChunkIndexPaths(
+  chunkPath: string,
+  embeddingPath: string,
+): Promise<ResolvedChunkIndexPaths> {
+  if (getChunkManifestPath(chunkPath) !== getChunkManifestPath(embeddingPath)) {
+    throw new Error("Chunk and embedding paths must share one index manifest");
+  }
+  const manifest = await loadChunkManifest(chunkPath);
+  if (!manifest) return { chunks: chunkPath, embeddings: embeddingPath };
+  const directory = dirname(chunkPath);
+  return {
+    chunks: join(directory, manifest.chunks),
+    embeddings: join(directory, manifest.embeddings),
+  };
+}
+
+async function resolveActiveChunkFile(
+  filePath: string,
+  kind: "chunks" | "embeddings",
+): Promise<string> {
+  const manifest = await loadChunkManifest(filePath);
+  return manifest ? join(dirname(filePath), manifest[kind]) : filePath;
+}
+
 function isChunkLine(value: unknown): value is ChunkLine {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
@@ -66,16 +141,15 @@ export async function saveChunks(
   // multi-hour embedding run with the vectors already computed.
   await cleanupOrphanTempFiles(chunkPath);
 
-  const tmpPath = `${chunkPath}.tmp.${Date.now()}`;
+  const tmpPath = `${chunkPath}.tmp.${process.pid}.${randomUUID()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
-
-  let streamError: Error | null = null;
-  stream.on("error", (err) => { streamError = err; });
+  // Observe errors from the first write, including writes that did not apply
+  // backpressure and therefore never installed a temporary drain listener.
+  const completion = finished(stream);
 
   try {
     for (const c of chunks) {
-      if (streamError) throw streamError;
       const line = JSON.stringify({
         id: c.id,
         file: c.file,
@@ -85,16 +159,18 @@ export async function saveChunks(
         tokenCount: c.tokenCount,
       } satisfies ChunkLine) + "\n";
       if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
+        // events.once rejects when a writable emits "error" before "drain".
+        // A resolve-only drain waiter hangs forever on ENOSPC/EIO.
+        await once(stream, "drain");
       }
     }
-    if (streamError) throw streamError;
-    await new Promise<void>((resolve, reject) => {
-      stream.end(() => streamError ? reject(streamError) : resolve());
-    });
+    stream.end();
+    await completion;
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, chunkPath);
   } catch (err) {
+    stream.destroy();
+    await completion.catch(() => undefined);
     try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
     throw err;
   }
@@ -126,20 +202,54 @@ async function loadNdjsonMap<K extends string, V>(
   filePath: string,
   guard: (parsed: unknown) => boolean,
   toEntry: (parsed: unknown) => [K, V],
+  maxResidentBytes = Number.POSITIVE_INFINITY,
+  parsedEntryBytes: (parsed: unknown) => number = () => 0,
+  parsedKey?: (parsed: unknown) => K,
 ): Promise<Map<K, V> | null> {
   const map = new Map<K, V>();
+  const entryBytes = new Map<K, number>();
+  let residentBytes = 0;
+  let exceededBudget = false;
   try {
+    const input = createReadStream(filePath, { encoding: "utf-8" });
     const rl = createInterface({
-      input: createReadStream(filePath, { encoding: "utf-8" }),
+      input,
       crlfDelay: Infinity,
     });
     for await (const line of rl) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
+        // Refuse a single oversized JSON record before materialising its
+        // transient number[] alongside the resident Float32Array map.
+        if (
+          Number.isFinite(maxResidentBytes) &&
+          Buffer.byteLength(trimmed, "utf8") > maxResidentBytes - residentBytes
+        ) {
+          exceededBudget = true;
+          rl.close();
+          input.destroy();
+          break;
+        }
         const parsed: unknown = JSON.parse(trimmed);
         if (guard(parsed)) {
+          const estimatedBytes = parsedEntryBytes(parsed);
+          const knownKey = parsedKey?.(parsed);
+          const previousBytes = knownKey === undefined ? 0 : (entryBytes.get(knownKey) ?? 0);
+          if (residentBytes - previousBytes + estimatedBytes > maxResidentBytes) {
+            exceededBudget = true;
+            map.clear();
+            rl.close();
+            input.destroy();
+            console.error(
+              `[codesift] chunk embeddings skipped: resident vectors exceed ` +
+                `${Math.round(maxResidentBytes / 1024 / 1024)} MB budget`,
+            );
+            break;
+          }
           const [key, value] = toEntry(parsed);
+          residentBytes += estimatedBytes - previousBytes;
+          entryBytes.set(key, estimatedBytes);
           map.set(key, value);
         }
       } catch {
@@ -152,6 +262,7 @@ async function loadNdjsonMap<K extends string, V>(
     // whole-file read a single bad byte cost the entire map.
     return map.size > 0 ? map : null;
   }
+  if (exceededBudget) return null;
   return map.size > 0 ? map : null;
 }
 
@@ -161,9 +272,11 @@ async function loadNdjsonMap<K extends string, V>(
  */
 export async function loadChunks(
   chunkPath: string,
+  resolvedPath?: string,
 ): Promise<Map<string, CodeChunk> | null> {
+  const activePath = resolvedPath ?? await resolveActiveChunkFile(chunkPath, "chunks");
   return loadNdjsonMap<string, CodeChunk>(
-    chunkPath,
+    activePath,
     isChunkLine,
     (parsed) => [(parsed as CodeChunk).id, parsed as CodeChunk],
   );
@@ -195,29 +308,63 @@ export async function saveChunkEmbeddings(
   // Same orphan sweep as saveEmbeddings — a killed process leaves these behind.
   await cleanupOrphanTempFiles(embeddingPath);
 
-  const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
+  const tmpPath = `${embeddingPath}.tmp.${process.pid}.${randomUUID()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
-
-  let streamError: Error | null = null;
-  stream.on("error", (err) => { streamError = err; });
+  const completion = finished(stream);
 
   try {
     for (const [id, vec] of embeddings) {
-      if (streamError) throw streamError;
       const line = JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
       if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
+        await once(stream, "drain");
       }
     }
-    if (streamError) throw streamError;
-    await new Promise<void>((resolve, reject) => {
-      stream.end(() => streamError ? reject(streamError) : resolve());
-    });
+    stream.end();
+    await completion;
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, embeddingPath);
   } catch (err) {
+    stream.destroy();
+    await completion.catch(() => undefined);
     try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
+/**
+ * Publish chunk metadata and vectors by atomically switching one manifest.
+ * A crash or concurrent writer can leave unreferenced generation files, but
+ * readers observe either the complete old pair or the complete new pair.
+ */
+export async function saveChunkIndex(
+  chunkPath: string,
+  chunks: CodeChunk[],
+  embeddingPath: string,
+  embeddings: Map<string, Float32Array>,
+): Promise<void> {
+  const generation = `${process.pid}.${randomUUID()}`;
+  const generationChunkPath = `${chunkPath}.generation.${generation}`;
+  const generationEmbeddingPath = `${embeddingPath}.generation.${generation}`;
+  const manifestPath = getChunkManifestPath(chunkPath);
+  const manifestTmpPath = `${manifestPath}.tmp.${generation}`;
+  const { rename, unlink, writeFile } = await import("node:fs/promises");
+  try {
+    await saveChunks(generationChunkPath, chunks);
+    await saveChunkEmbeddings(generationEmbeddingPath, embeddings);
+    const manifest: ChunkIndexManifest = {
+      version: 1,
+      chunks: basename(generationChunkPath),
+      embeddings: basename(generationEmbeddingPath),
+    };
+    await writeFile(manifestTmpPath, `${JSON.stringify(manifest)}\n`, "utf8");
+    await rename(manifestTmpPath, manifestPath);
+  } catch (err) {
+    await Promise.all([
+      unlink(generationChunkPath).catch(() => undefined),
+      unlink(generationEmbeddingPath).catch(() => undefined),
+      unlink(manifestTmpPath).catch(() => undefined),
+    ]);
     throw err;
   }
 }
@@ -234,10 +381,19 @@ function isChunkEmbeddingLine(parsed: unknown): boolean {
  */
 export async function loadChunkEmbeddings(
   embeddingPath: string,
+  maxResidentBytes = Number.POSITIVE_INFINITY,
+  resolvedPath?: string,
 ): Promise<Map<string, Float32Array> | null> {
+  const activePath = resolvedPath ?? await resolveActiveChunkFile(embeddingPath, "embeddings");
   return loadNdjsonMap<string, Float32Array>(
-    embeddingPath,
+    activePath,
     isChunkEmbeddingLine,
     (parsed) => [(parsed as ChunkEmbeddingLine).id, new Float32Array((parsed as ChunkEmbeddingLine).vec)],
+    maxResidentBytes,
+    (parsed) => {
+      const entry = parsed as ChunkEmbeddingLine;
+      return entry.vec.length * Float32Array.BYTES_PER_ELEMENT + entry.id.length * 2 + 128;
+    },
+    (parsed) => (parsed as ChunkEmbeddingLine).id,
   );
 }

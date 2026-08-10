@@ -8,7 +8,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { saveChunks, loadChunks } from "../../src/storage/chunk-store.js";
+import {
+  saveChunks,
+  saveChunkIndex,
+  loadChunks,
+  loadChunkEmbeddings,
+} from "../../src/storage/chunk-store.js";
 import type { CodeChunk } from "../../src/types.js";
 
 let dir: string;
@@ -54,6 +59,44 @@ describe("saveChunks", () => {
 
     const loaded = await loadChunks(path);
     expect([...(loaded?.keys() ?? [])]).toEqual(["repo:src/f9.ts:9"]);
+  });
+
+  it("keeps the previous chunks when publishing embeddings fails", async () => {
+    await saveChunks(path, [chunk(1)]);
+
+    await expect(
+      saveChunkIndex(
+        path,
+        [chunk(9)],
+        join(dir, "missing", "abc123.chunk-embeddings.ndjson"),
+        new Map([["repo:src/f9.ts:9", new Float32Array([0.1, 0.2])]]),
+      ),
+    ).rejects.toThrow();
+
+    const loaded = await loadChunks(path);
+    expect([...(loaded?.keys() ?? [])]).toEqual(["repo:src/f1.ts:1"]);
+    expect(readdirSync(dir).some((file) => file.includes(".backup."))).toBe(false);
+  });
+
+  it("publishes chunks and embeddings through one atomic manifest", async () => {
+    const embeddingPath = join(dir, "abc123.chunk-embeddings.ndjson");
+    const embeddings = new Map([["repo:src/f9.ts:9", new Float32Array([0.1, 0.2])]]);
+
+    await saveChunkIndex(path, [chunk(9)], embeddingPath, embeddings);
+
+    expect([...(await loadChunks(path))!.keys()]).toEqual(["repo:src/f9.ts:9"]);
+    expect(Array.from((await loadChunkEmbeddings(embeddingPath))!.get("repo:src/f9.ts:9")!))
+      .toEqual([expect.closeTo(0.1), expect.closeTo(0.2)]);
+    expect(readdirSync(dir).filter((file) => file.endsWith(".chunk-index.json"))).toHaveLength(1);
+  });
+
+  it("rejects manifest paths that escape the index directory", async () => {
+    writeFileSync(
+      join(dir, "abc123.chunk-index.json"),
+      JSON.stringify({ version: 1, chunks: "..", embeddings: "safe.ndjson" }),
+    );
+
+    await expect(loadChunks(path)).rejects.toThrow("Invalid chunk index manifest");
   });
 
   it("survives chunk text containing newlines and quotes", async () => {

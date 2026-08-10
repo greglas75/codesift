@@ -47,7 +47,7 @@ async function loadSemanticContext(
   const { createEmbeddingProvider, cosineSimilarity } = await import("../search/semantic.js");
   const { loadConfig: getConfig } = await import("../config.js");
   const { getRepo } = await import("../storage/registry.js");
-  const { loadChunks, getChunkPath } =
+  const { loadChunks, getChunkPath, getChunkEmbeddingPath, resolveChunkIndexPaths } =
     await import("../storage/chunk-store.js");
 
   const config = getConfig();
@@ -75,9 +75,14 @@ async function loadSemanticContext(
     // 87% of the query's wall clock, for a file that had not changed since the previous question.
     // The cosine similarity the query exists to compute was 2%.
     const { getChunkEmbeddingCache } = await import("../tools/index-tools/registry.js");
+    const chunkPath = getChunkPath(repoMeta.index_path);
+    const activePaths = await resolveChunkIndexPaths(
+      chunkPath,
+      getChunkEmbeddingPath(repoMeta.index_path),
+    );
     [chunks, chunkEmbeddings] = await Promise.all([
-      loadChunks(getChunkPath(repoMeta.index_path)),
-      getChunkEmbeddingCache(repo),
+      loadChunks(chunkPath, activePaths.chunks),
+      getChunkEmbeddingCache(repo, activePaths.embeddings),
     ]);
   }
 
