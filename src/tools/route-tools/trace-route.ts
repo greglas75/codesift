@@ -69,4 +69,3 @@ export async function traceRoute(
     ? { mermaid: routeToMermaid(result) }
     : result;
 }
-
