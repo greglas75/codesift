@@ -212,6 +212,7 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
         }
         carry = p < data.length ? Buffer.from(data.subarray(p)) : Buffer.alloc(0);
       }
+      if (carry.length > 0) skippedTail = true;
     } catch {
       // Unreadable — behave as if empty.
     } finally {
@@ -238,7 +239,7 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 }
 
 function encodeRecord(key: string, vec: Float32Array): Buffer | null {
-  if (key.length !== KEY_BYTES * 2 || vec.length === 0 || vec.length > MAX_DIM) return null;
+  if (!/^[0-9a-f]{32}$/i.test(key) || vec.length === 0 || vec.length > MAX_DIM) return null;
   const rec = Buffer.allocUnsafe(HEADER_BYTES + vec.length * 4);
   rec.write(key, 0, KEY_BYTES, "hex");
   rec.writeUInt16LE(vec.length, KEY_BYTES);
@@ -264,13 +265,18 @@ export function appendSharedCache(entries: Array<{ key: string; vec: Float32Arra
     mkdirSync(join(path, ".."), { recursive: true });
 
     let batch: Buffer[] = [];
+    let batchEntries: Array<{ key: string; vec: Float32Array }> = [];
     let batchBytes = 0;
     const flush = (): void => {
       if (batch.length === 0) return;
       // One append per chunk, always ending on a record boundary, so a
       // concurrent writer can interleave BETWEEN records but never inside one.
       appendFileSync(path, Buffer.concat(batch));
+      if (memory) {
+        for (const entry of batchEntries) memory.set(entry.key, entry.vec);
+      }
       batch = [];
+      batchEntries = [];
       batchBytes = 0;
     };
 
@@ -278,9 +284,9 @@ export function appendSharedCache(entries: Array<{ key: string; vec: Float32Arra
       if (memory?.has(key)) continue; // already stored — v1 wrote it again
       const rec = encodeRecord(key, vec);
       if (!rec) continue;
-      if (memory) memory.set(key, vec);
       if (batchBytes + rec.length > MAX_APPEND_BYTES) flush();
       batch.push(rec);
+      batchEntries.push({ key, vec });
       batchBytes += rec.length;
     }
     flush();

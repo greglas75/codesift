@@ -291,6 +291,8 @@ export function contentHashesFor(cacheKey: string): ReadonlyMap<string, number> 
  * and sending it again, or in halves, just fails more slowly.
  */
 function isTransientStall(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return false;
+  if (err instanceof Error && err.name === "AbortError") return false;
   if (err instanceof DOMException && err.name === "TimeoutError") return true;
   const message = err instanceof Error ? err.message : String(err);
   return /aborted|timed? ?out|ECONNRESET|socket hang up|fetch failed|other side closed/i.test(message);
@@ -321,7 +323,11 @@ async function embedBatchWithStallRetry(
   depth = 0,
 ): Promise<number[][]> {
   try {
-    return await embedFn(texts);
+    const vectors = await embedFn(texts);
+    if (vectors.length !== texts.length) {
+      throw new Error(`embedding provider returned ${vectors.length} vectors for ${texts.length} texts`);
+    }
+    return vectors;
   } catch (err: unknown) {
     if (!isTransientStall(err) || depth >= MAX_STALL_SPLITS || texts.length < MIN_SPLITTABLE_BATCH) {
       throw err;

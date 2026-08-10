@@ -120,9 +120,11 @@ describe("retros flush independently of CodeSift tool usage", () => {
       await flushTelemetry(Date.now());
 
       const toolWm = Number(readFileSync(join(dataDir, "telemetry-watermark"), "utf-8"));
-      const retroWm = Number(readFileSync(join(dataDir, "telemetry-watermark-retros"), "utf-8"));
+      const retroWm = Number(
+        readFileSync(join(dataDir, "telemetry-watermark-retros-offset"), "utf-8"),
+      );
       expect(toolWm).toBe(Date.parse(TS_MID));
-      expect(retroWm).toBe(Date.parse(TS_OLD));
+      expect(retroWm).toBe(Buffer.byteLength(retroLine(TS_OLD) + "\n"));
       // The whole point: they are different numbers, from different clocks.
       expect(retroWm).not.toBe(toolWm);
     });
@@ -155,12 +157,25 @@ describe("retros flush independently of CodeSift tool usage", () => {
     expect(payload.retros?.[0]?.skill).toBe("review");
   });
 
+  it("(D2) sends a retro appended later even when its timestamp is older", async () => {
+    const path = join(zuvoDir, "retros.log");
+    await writeFile(path, retroLine(TS_MID) + "\n", "utf-8");
+    await writeUsage([]);
+    await flushTelemetry(Date.now());
+
+    await writeFile(path, retroLine(TS_MID) + "\n" + retroLine(TS_OLD, "review") + "\n", "utf-8");
+    expect(await flushTelemetry(Date.now())).toBe("sent");
+
+    const payload = posted[1] as { retros?: { skill: string }[] };
+    expect(payload.retros).toEqual([expect.objectContaining({ skill: "review" })]);
+  });
+
   it("(E) no zuvo and no tool usage still means nothing is sent", async () => {
     await writeUsage([]);
     const result = await flushTelemetry(Date.now());
     expect(result).toBe("empty");
     expect(posted).toHaveLength(0);
-    expect(existsSync(join(dataDir, "telemetry-watermark-retros"))).toBe(false);
+    expect(existsSync(join(dataDir, "telemetry-watermark-retros-offset"))).toBe(false);
   });
 
   it("(F) scanRetros reports the newest timestamp it saw, including filtered-out lines",

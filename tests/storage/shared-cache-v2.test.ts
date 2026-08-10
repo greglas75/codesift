@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, stat, open } from "node:fs/promises";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -42,6 +42,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
   else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
   _resetSharedCacheForTests();
@@ -127,6 +128,29 @@ describe("duplicates are not re-appended", () => {
     _resetSharedCacheForTests();
     expect((await loadSharedCache()).size).toBe(50);
   });
+
+  it("retries persistence after a failed append instead of poisoning in-memory dedup", async () => {
+    const blocker = join(dir, "blocked-data-dir");
+    await writeFile(blocker, "not a directory", "utf-8");
+    process.env["CODESIFT_DATA_DIR"] = blocker;
+    await loadSharedCache();
+    const entry = { key: keyOf(1), vec: vec(1) };
+
+    appendSharedCache([entry]);
+    await rm(blocker);
+    await mkdir(blocker);
+    appendSharedCache([entry]);
+
+    _resetSharedCacheForTests();
+    const loaded = await loadSharedCache();
+    expect(loaded.has(entry.key)).toBe(true);
+  });
+
+  it("rejects a non-hex key instead of encoding uninitialized key bytes", async () => {
+    const cache = await loadSharedCache();
+    appendSharedCache([{ key: "z".repeat(32), vec: vec(1) }]);
+    expect(cache.size).toBe(0);
+  });
 });
 
 describe("a torn tail costs one record, not the cache", () => {
@@ -143,9 +167,11 @@ describe("a torn tail costs one record, not the cache", () => {
     await fh.close();
 
     _resetSharedCacheForTests();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const loaded = await loadSharedCache();
     expect(loaded.size).toBe(9);
     expect(loaded.has(keyOf(0))).toBe(true);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("stopped early"));
   });
 
   it("stops at an impossible dimension instead of allocating on a corrupt byte", async () => {

@@ -70,6 +70,25 @@ describe("batchEmbed stall retry", () => {
     expect(calls).toBe(1);
   });
 
+  it("does not retry a caller-initiated abort", async () => {
+    let calls = 0;
+    const embed = async (): Promise<number[][]> => {
+      calls++;
+      throw new DOMException("The operation was aborted", "AbortError");
+    };
+
+    await expect(batchEmbed(texts(32), new Map(), embed, 32)).rejects.toThrow(/aborted/i);
+    expect(calls).toBe(1);
+  });
+
+  it("rejects a short provider response before vectors can shift onto the wrong symbols", async () => {
+    const embed = async (batch: string[]): Promise<number[][]> => batch.slice(1).map(vecFor);
+
+    await expect(batchEmbed(texts(12), new Map(), embed, 12)).rejects.toThrow(
+      "returned 11 vectors for 12 texts",
+    );
+  });
+
   it("gives up instead of splitting forever", async () => {
     let calls = 0;
     const embed = async (): Promise<number[][]> => { calls++; throw stall(); };

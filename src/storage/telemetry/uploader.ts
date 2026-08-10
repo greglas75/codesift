@@ -26,16 +26,15 @@ function watermarkPath(): string {
   return join(dataDir(), "telemetry-watermark");
 }
 /**
- * Retros get their OWN watermark. They are an independent stream with an independent clock, and
- * the shared one silently ate them: it advances to the newest CODESIFT TOOL CALL of each flush,
- * and a retro older than that (the normal case — CodeSift use continues after a skill ends) was
- * then filtered out and, because the watermark only moves forward, never reconsidered.
+ * Retros get their OWN byte-offset cursor. They are append-only but can be written by processes
+ * whose clocks disagree, so a timestamp watermark loses late records with an older or identical
+ * timestamp. A byte offset follows append order and does not depend on event time.
  *
  * Absent on upgrade, so it starts at 0 and the first flush backfills the machine's retro history.
  * That is intended: those runs happened and were never reported.
  */
 function retroWatermarkPath(): string {
-  return join(dataDir(), "telemetry-watermark-retros");
+  return join(dataDir(), "telemetry-watermark-retros-offset");
 }
 
 function readTs(path: string): number {
@@ -112,8 +111,8 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
 
   let body: unknown;
   let path: string;
-  let retroSince = 0;
-  let retroMaxTs = 0;
+  let retroSinceOffset = 0;
+  let retroNextOffset = 0;
   if (level === "full") {
     // Level 2 (opt-in): raw entries, batched. Full detail — query/paths included. Retros do not
     // ride this level, so no tool usage genuinely means nothing to send.
@@ -127,9 +126,9 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
     // unavailable / not-indexed / transport-closed in ~40% of zuvo runs), and the old
     // `entries.length === 0 -> empty` return fired first, so those machines reported NOTHING and
     // read as "zuvo is not installed here".
-    retroSince = readTs(retroWatermarkPath());
-    const scan = await scanRetros(retroSince);
-    retroMaxTs = scan.maxTs;
+    retroSinceOffset = readTs(retroWatermarkPath());
+    const scan = await scanRetros(retroSinceOffset, undefined, "offset");
+    retroNextOffset = scan.nextOffset;
     if (entries.length === 0 && scan.rows.length === 0) return "empty";
     path = "/ingest/codesift";
     const payload = buildLevel1Payload({
@@ -154,10 +153,10 @@ export async function flushTelemetry(now: number): Promise<"off" | "empty" | "se
   if (!ok) return "failed"; // leave watermark — retry next flush
 
   writeWatermark(maxTs);
-  // Advance the retro watermark independently, and only forward. Guarded so a flush that carried
+  // Advance the retro cursor independently, and only forward. Guarded so a flush that carried
   // no retros (or a level that does not carry them) cannot move it — moving it on an empty scan
   // would re-create the original bug in a new place.
-  if (retroMaxTs > retroSince) writeTs(retroWatermarkPath(), retroMaxTs);
+  if (retroNextOffset > retroSinceOffset) writeTs(retroWatermarkPath(), retroNextOffset);
   return "sent";
 }
 
