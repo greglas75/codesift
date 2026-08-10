@@ -18,7 +18,15 @@
  *
  * Usage:  node scripts/repair-registry.mjs [--apply]     (default: dry run)
  */
-import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -89,7 +97,14 @@ const backup = `${REGISTRY}.bak-${Date.now()}`;
 copyFileSync(REGISTRY, backup);
 
 for (const d of deadRoots) delete repos[d.name];
+let registered = 0;
+const skippedClashes = [];
 for (const o of orphans) {
+  const current = repos[o.repo];
+  if (current && current.root !== o.root && existsSync(current.root)) {
+    skippedClashes.push({ repo: o.repo, current: current.root, candidate: o.root });
+    continue;
+  }
   repos[o.repo] = {
     name: o.repo,
     root: o.root,
@@ -102,10 +117,24 @@ for (const o of orphans) {
     file_count: o.files,
     updated_at: o.updated_at || Date.now(),
   };
+  registered++;
 }
 registry.repos = repos;
 registry.updated_at = Date.now();
-writeFileSync(REGISTRY, JSON.stringify(registry), "utf-8");
+const tmp = `${REGISTRY}.tmp.${process.pid}.${Date.now()}`;
+try {
+  writeFileSync(tmp, JSON.stringify(registry), { encoding: "utf-8", flag: "wx" });
+  renameSync(tmp, REGISTRY);
+} catch (err) {
+  try { unlinkSync(tmp); } catch { /* no temp file to clean */ }
+  throw err;
+}
 
 console.log(`\nbackup: ${backup}`);
-console.log(`removed ${deadRoots.length}, re-registered ${orphans.length}, now ${Object.keys(repos).length} entries`);
+for (const clash of skippedClashes) {
+  console.log(`skipped ${clash.repo}: live entry ${clash.current} conflicts with ${clash.candidate}`);
+}
+console.log(
+  `removed ${deadRoots.length}, re-registered ${registered}, skipped ${skippedClashes.length} conflicts, ` +
+    `now ${Object.keys(repos).length} entries`,
+);

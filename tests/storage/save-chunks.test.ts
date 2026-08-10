@@ -56,6 +56,20 @@ describe("saveChunks", () => {
     expect([...(loaded?.keys() ?? [])]).toEqual(["repo:src/f9.ts:9"]);
   });
 
+  it("keeps concurrent writers isolated until one complete file wins", async () => {
+    const first = Array.from({ length: 2_000 }, (_, i) => chunk(i, `first-${i}`));
+    const second = Array.from({ length: 2_000 }, (_, i) => chunk(i, `second-${i}`));
+
+    await Promise.all([saveChunks(path, first), saveChunks(path, second)]);
+
+    const loaded = await loadChunks(path);
+    expect(loaded?.size).toBe(2_000);
+    const texts = [...(loaded?.values() ?? [])].map((value) => value.text);
+    expect(texts.every((text) => text.startsWith("first-") || text.startsWith("second-"))).toBe(true);
+    expect(new Set(texts.map((text) => text.split("-")[0])).size).toBe(1);
+    expect(readdirSync(dir).filter((file) => file.includes(".tmp."))).toEqual([]);
+  });
+
   it("survives chunk text containing newlines and quotes", async () => {
     // The writer emits one JSON line per chunk, so embedded newlines have to stay
     // escaped inside the string rather than splitting the record in two.

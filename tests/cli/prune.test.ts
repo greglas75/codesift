@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
 import { resetConfigCache } from "../../src/config.js";
 
@@ -68,5 +69,59 @@ describe("codesift prune", () => {
     // orphan still present — nothing was deleted
     expect(existsSync(join(dir, `${ORPH}.embeddings.ndjson`))).toBe(true);
     exit.mockRestore();
+  });
+
+  it("keeps a conflicting live database without overwriting the registered repo", async () => {
+    const registeredRoot = join(dir, "registered");
+    const conflictingRoot = join(dir, "conflicting");
+    mkdirSync(registeredRoot);
+    mkdirSync(conflictingRoot);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      repos: {
+        "local/live": {
+          name: "local/live",
+          root: registeredRoot,
+          index_path: join(dir, `${LIVE}.index.json`),
+        },
+      },
+    }));
+    const db = new DatabaseSync(join(dir, `${ORPH}.index.db`));
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("repo", "local/live");
+    db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("root", conflictingRoot);
+    db.close();
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+    expect(registry.repos["local/live"].root).toBe(registeredRoot);
+    expect(existsSync(join(dir, `${ORPH}.index.db`))).toBe(true);
+    expect(JSON.parse(stdout).rescue_conflicts).toBe(1);
+  });
+
+  it("does not delete a replacement registration after rescuing a stale repo name", async () => {
+    const missingRoot = join(dir, "missing");
+    const replacementRoot = join(dir, "replacement");
+    mkdirSync(replacementRoot);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      repos: {
+        "local/live": {
+          name: "local/live",
+          root: missingRoot,
+          index_path: join(dir, `${LIVE}.index.json`),
+        },
+      },
+    }));
+    const db = new DatabaseSync(join(dir, `${ORPH}.index.db`));
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("repo", "local/live");
+    db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("root", replacementRoot);
+    db.close();
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+    expect(registry.repos["local/live"].root).toBe(replacementRoot);
+    expect(JSON.parse(stdout).rescued_repos).toBe(1);
   });
 });

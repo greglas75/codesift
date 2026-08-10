@@ -1,4 +1,6 @@
 import { createReadStream } from "node:fs";
+import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { CodeChunk } from "../types.js";
 import { cleanupOrphanTempFiles } from "./_shared.js";
@@ -64,19 +66,15 @@ export async function saveChunks(
   // one was not — the largest chunks.ndjson on this machine is 154 MB (30% of the
   // ceiling), so it is a latent failure, and one that would land at the END of a
   // multi-hour embedding run with the vectors already computed.
-  await cleanupOrphanTempFiles(chunkPath);
+  await writeAtomicNdjson(
+    chunkPath,
+    chunkLines(chunks),
+  );
+}
 
-  const tmpPath = `${chunkPath}.tmp.${Date.now()}`;
-  const { createWriteStream } = await import("node:fs");
-  const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
-
-  let streamError: Error | null = null;
-  stream.on("error", (err) => { streamError = err; });
-
-  try {
-    for (const c of chunks) {
-      if (streamError) throw streamError;
-      const line = JSON.stringify({
+function* chunkLines(chunks: Iterable<CodeChunk>): Iterable<string> {
+  for (const c of chunks) {
+    yield JSON.stringify({
         id: c.id,
         file: c.file,
         startLine: c.startLine,
@@ -84,17 +82,25 @@ export async function saveChunks(
         text: c.text,
         tokenCount: c.tokenCount,
       } satisfies ChunkLine) + "\n";
-      if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
-      }
+  }
+}
+
+async function writeAtomicNdjson(filePath: string, lines: Iterable<string>): Promise<void> {
+  await cleanupOrphanTempFiles(filePath);
+  const tmpPath = `${filePath}.tmp.${process.pid}.${randomUUID()}`;
+  const { createWriteStream } = await import("node:fs");
+  const stream = createWriteStream(tmpPath, { encoding: "utf-8", flags: "wx" });
+
+  try {
+    for (const line of lines) {
+      if (!stream.write(line)) await once(stream, "drain");
     }
-    if (streamError) throw streamError;
-    await new Promise<void>((resolve, reject) => {
-      stream.end(() => streamError ? reject(streamError) : resolve());
-    });
+    stream.end();
+    await once(stream, "finish");
     const { rename } = await import("node:fs/promises");
-    await rename(tmpPath, chunkPath);
+    await rename(tmpPath, filePath);
   } catch (err) {
+    stream.destroy();
     try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
     throw err;
   }
@@ -148,9 +154,9 @@ async function loadNdjsonMap<K extends string, V>(
       }
     }
   } catch {
-    // Missing or unreadable file. Anything already parsed is still worth returning: under the old
-    // whole-file read a single bad byte cost the entire map.
-    return map.size > 0 ? map : null;
+    // A stream-level failure means completeness is unknown. Returning a partial map would make a
+    // damaged cache indistinguishable from a valid one and silently degrade semantic results.
+    return null;
   }
   return map.size > 0 ? map : null;
 }
@@ -193,32 +199,17 @@ export async function saveChunkEmbeddings(
   // exit 0 and no chunk file, so semantic search stayed symbol-only there. This
   // mirrors saveEmbeddings, which already streams for the same reason.
   // Same orphan sweep as saveEmbeddings — a killed process leaves these behind.
-  await cleanupOrphanTempFiles(embeddingPath);
+  await writeAtomicNdjson(
+    embeddingPath,
+    chunkEmbeddingLines(embeddings),
+  );
+}
 
-  const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
-  const { createWriteStream } = await import("node:fs");
-  const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
-
-  let streamError: Error | null = null;
-  stream.on("error", (err) => { streamError = err; });
-
-  try {
-    for (const [id, vec] of embeddings) {
-      if (streamError) throw streamError;
-      const line = JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
-      if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
-      }
-    }
-    if (streamError) throw streamError;
-    await new Promise<void>((resolve, reject) => {
-      stream.end(() => streamError ? reject(streamError) : resolve());
-    });
-    const { rename } = await import("node:fs/promises");
-    await rename(tmpPath, embeddingPath);
-  } catch (err) {
-    try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }
-    throw err;
+function* chunkEmbeddingLines(
+  embeddings: Iterable<[string, Float32Array]>,
+): Iterable<string> {
+  for (const [id, vec] of embeddings) {
+    yield JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
   }
 }
 

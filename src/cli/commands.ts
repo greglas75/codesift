@@ -350,6 +350,9 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // class of data loss: a repo still present on disk can no longer be deleted because a JSON file
   // lost track of it. Re-registering also means the next lookup finds it.
   const rescued: string[] = [];
+  const rescueConflicts: string[] = [];
+  const rescueFailures: string[] = [];
+  const staleNames = new Set(stale.map((entry) => entry.name));
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
     if (!m?.[1] || live.has(m[1])) continue;
@@ -364,16 +367,27 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       if (!root || !repo) continue;
       statSync(root); // throws when the tree is gone — then it really is garbage
       live.add(m[1]);
-      rescued.push(repo);
-      if (!dryRun) {
+      const current = reg.repos?.[repo];
+      if (current?.root && current.root !== root && !staleNames.has(repo)) {
+        rescueConflicts.push(repo);
+        continue;
+      }
+      if (dryRun) {
+        rescued.push(repo);
+      } else {
         const { registerRepo } = await import("../storage/registry.js");
         // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
         // live-set above is built from these strings.
-        await registerRepo(join(dataDir, "registry.json"), {
-          name: repo,
-          root,
-          index_path: join(dataDir, `${m[1]}.index.json`),
-        } as never);
+        try {
+          await registerRepo(join(dataDir, "registry.json"), {
+            name: repo,
+            root,
+            index_path: join(dataDir, `${m[1]}.index.json`),
+          } as never);
+          rescued.push(repo);
+        } catch (err) {
+          rescueFailures.push(`${repo}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     } catch {
       /* unreadable, or the tree is gone — leave it to the sweep */
@@ -406,12 +420,19 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // registry untouched rather than half-cleaned.
   if (!dryRun && stale.length > 0) {
     const { removeRepo } = await import("../storage/registry.js");
-    for (const s of stale) await removeRepo(join(dataDir, "registry.json"), s.name);
+    const rescuedNames = new Set(rescued);
+    for (const s of stale) {
+      if (!rescuedNames.has(s.name)) await removeRepo(join(dataDir, "registry.json"), s.name);
+    }
   }
 
   output({
     rescued_repos: rescued.length,
     rescued_examples: rescued.slice(0, 5),
+    rescue_conflicts: rescueConflicts.length,
+    rescue_conflict_examples: rescueConflicts.slice(0, 5),
+    rescue_failures: rescueFailures.length,
+    rescue_failure_examples: rescueFailures.slice(0, 5),
     stale_repos: stale.length,
     stale_examples: stale.slice(0, 5).map((s) => s.name),
     pruned: !dryRun,
