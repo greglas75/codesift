@@ -1,124 +1,91 @@
+import type { CodeSymbol, CodeIndex } from "../../types.js";
+import { deriveUrlPath } from "../../utils/nextjs.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
-import { deriveUrlPath } from "../../utils/nextjs.js";
-import type { CodeIndex } from "../../types.js";
 import type { RouteHandler } from "./types.js";
 
-/**
- * Find Next.js App Router handlers — file path IS the route.
- */
-export function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
-  const handlers: RouteHandler[] = [];
-  const normalized = searchPath.replace(/^\/|\/$/g, "");
-
-  for (const file of index.files) {
-    // Match app/api/...route.{ts,tsx,js,jsx} or app/...route.{ts,tsx,js,jsx}
-    if (!/\/route\.[jt]sx?$/.test(file.path)) continue;
-
-    // Extract route path from file path: app/api/users/[id]/route.ts → /api/users/[id]
-    const routeMatch = file.path.match(/app\/(.*?)\/route\.[jt]sx?$/);
-    if (!routeMatch) continue;
-
-    // Strip route groups: (auth)/login → login
-    const filePath = routeMatch[1]!.replace(/\([^)]+\)\/?/g, "");
-    if (matchPath(filePath, normalized)) {
-      // Find exported handler functions (GET, POST, etc.)
-      const fileSymbols = index.symbols.filter((s) =>
-        s.file === file.path && /^(GET|POST|PUT|DELETE|PATCH)$/.test(s.name),
-      );
-
-      for (const sym of fileSymbols) {
-        handlers.push({
-          symbol: stripSource(sym),
-          file: sym.file,
-          method: sym.name,
-          framework: "nextjs",
-          router: "app",
-        });
-      }
-
-      // If no named exports found, add the file itself
-      if (fileSymbols.length === 0) {
-        handlers.push({
-          symbol: { id: file.path, name: "route", kind: "function", file: file.path, start_line: 1, end_line: 1 } as ReturnType<typeof stripSource>,
-          file: file.path,
-          framework: "nextjs",
-          router: "app",
-        });
-      }
-    }
-  }
-
-  return handlers;
+function syntheticHandler(file: string, name: string): CodeSymbol {
+  return {
+    id: file,
+    name,
+    kind: "function",
+    file,
+    start_line: 1,
+    end_line: 1,
+  } as CodeSymbol;
 }
 
-/**
- * Find Pages Router API route handlers via default exports in pages/api/.
- * @internal exported for unit testing
- */
-export function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
-  const handlers: RouteHandler[] = [];
-
-  // Require Next.js project signal to disambiguate from Astro's src/pages/api/*.
-  // Accept next.config.* at root/src OR an App Router convention file.
-  const hasNextSignal = index.files.some((f) =>
-    /^(src\/)?next\.config\.[mc]?[jt]sx?$/.test(f.path) ||
-    /(^|\/)app\/.*\/(page|layout|route)\.[jt]sx?$/.test(f.path),
+function appHandlersForFile(index: CodeIndex, file: string): RouteHandler[] {
+  const symbols = index.symbols.filter(
+    (symbol) => symbol.file === file && /^(GET|POST|PUT|DELETE|PATCH)$/.test(symbol.name),
   );
-  if (!hasNextSignal) return handlers;
+  if (symbols.length === 0) {
+    return [{
+      symbol: syntheticHandler(file, "route"),
+      file,
+      framework: "nextjs",
+      router: "app",
+    }];
+  }
+  return symbols.map((symbol) => ({
+    symbol: stripSource(symbol),
+    file: symbol.file,
+    method: symbol.name,
+    framework: "nextjs",
+    router: "app",
+  }));
+}
+
+/** Find Next.js App Router handlers whose file path defines the route. */
+export function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
 
   for (const file of index.files) {
-    // Only match files under pages/api/ (not src/pages/api/ which is Astro convention)
-    if (!/^(\.\/)?pages\/api\//.test(file.path)) continue;
-
-    // Derive URL path from file path
-    const urlPath = deriveUrlPath(file.path, "pages");
-    const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
-    const normalizedUrl = urlPath.replace(/^\/|\/$/g, "");
-
-    if (normalizedUrl !== normalizedSearch) continue;
-
-    // Find default export or named handler in the file
-    const fileSymbols = index.symbols.filter((s) => s.file === file.path);
-
-    // Look for default export
-    const defaultExport = fileSymbols.find((s) => s.name === "default" || s.name === "handler");
-
-    if (defaultExport) {
-      handlers.push({
-        symbol: stripSource(defaultExport),
-        file: file.path,
-        framework: "nextjs",
-        router: "pages",
-      });
-    } else if (fileSymbols.length > 0) {
-      // Try variable indirection: find any exported function
-      const exported = fileSymbols.find((s) =>
-        s.kind === "function" || s.kind === "variable",
-      );
-      if (exported) {
-        handlers.push({
-          symbol: stripSource(exported),
-          file: file.path,
-          framework: "nextjs",
-          router: "pages",
-        });
-      }
-    }
-
-    // Fallback: at least mark the file as having a handler
-    if (handlers.filter((h) => h.file === file.path).length === 0) {
-      handlers.push({
-        symbol: {
-          id: file.path, name: "handler", kind: "function",
-          file: file.path, start_line: 1, end_line: 1,
-        } as ReturnType<typeof stripSource>,
-        file: file.path,
-        framework: "nextjs",
-        router: "pages",
-      });
+    const routeMatch = /app\/(.*?)\/route\.[jt]sx?$/.exec(file.path);
+    if (!routeMatch) continue;
+    const routePath = routeMatch[1]!.replace(/\([^)]+\)\/?/g, "");
+    if (matchPath(routePath, normalizedSearch)) {
+      handlers.push(...appHandlersForFile(index, file.path));
     }
   }
+  return handlers;
+}
+function hasNextProjectSignal(index: CodeIndex): boolean {
+  return index.files.some((file) =>
+    /^(src\/)?next\.config\.[mc]?[jt]sx?$/.test(file.path) ||
+    /(^|\/)app\/.*\/(page|layout|route)\.[jt]sx?$/.test(file.path)
+  );
+}
 
+function pagesHandlerForFile(index: CodeIndex, file: string): RouteHandler {
+  const symbols = index.symbols.filter((symbol) => symbol.file === file);
+  const symbol = symbols.find((candidate) =>
+    candidate.name === "default" || candidate.name === "handler"
+  ) ?? symbols.find((candidate) =>
+    candidate.kind === "function" || candidate.kind === "variable"
+  );
+
+  return {
+    symbol: symbol ? stripSource(symbol) : syntheticHandler(file, "handler"),
+    file,
+    framework: "nextjs",
+    router: "pages",
+  };
+}
+
+/** Find Next.js Pages Router API handlers while excluding Astro's src/pages convention. */
+export function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+  if (!hasNextProjectSignal(index)) return [];
+
+  const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
+  const handlers: RouteHandler[] = [];
+  for (const file of index.files) {
+    if (!/^(\.\/)?pages\/api\//.test(file.path)) continue;
+    const normalizedRoute = deriveUrlPath(file.path, "pages").replace(/^\/|\/$/g, "");
+    if (normalizedRoute === normalizedSearch) {
+      handlers.push(pagesHandlerForFile(index, file.path));
+    }
+  }
   return handlers;
 }

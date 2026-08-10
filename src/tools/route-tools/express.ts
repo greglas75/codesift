@@ -1,36 +1,36 @@
+import type { CodeIndex, CodeSymbol } from "../../types.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
-import type { CodeIndex } from "../../types.js";
 import type { RouteHandler } from "./types.js";
+
+const EXPRESS_METHODS = ["get", "post", "put", "delete", "patch"];
+
+function isProductionJavaScript(symbol: CodeSymbol): boolean {
+  return Boolean(symbol.source) &&
+    /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(symbol.file) &&
+    !/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(symbol.file);
+}
+
+function handlersForSymbol(symbol: CodeSymbol, searchPath: string): RouteHandler[] {
+  const handlers: RouteHandler[] = [];
+  for (const method of EXPRESS_METHODS) {
+    const pattern = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`);
+    const routePath = pattern.exec(symbol.source ?? "")?.[2];
+    if (routePath !== undefined && matchPath(routePath, searchPath)) {
+      handlers.push({
+        symbol: stripSource(symbol),
+        file: symbol.file,
+        method: method.toUpperCase(),
+        framework: "express",
+      });
+    }
+  }
+  return handlers;
+}
 
 /** Find Express-style route handlers in production JS/TS symbols. */
 export function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
-  const handlers: RouteHandler[] = [];
-  const methods = ["get", "post", "put", "delete", "patch"];
-
-  for (const sym of index.symbols) {
-    if (!sym.source) continue;
-    // Only scan JS/TS files — .get()/.post() is ambiguous across languages
-    if (!/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(sym.file)) continue;
-    // Skip test files to avoid matching test harness client calls
-    if (/\.(test|spec)\.(ts|tsx|js|jsx)$/.test(sym.file)) continue;
-
-    for (const method of methods) {
-      const re = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`);
-      const match = re.exec(sym.source);
-      if (!match) continue;
-
-      const routePath = match[2] ?? "";
-      if (matchPath(routePath, searchPath)) {
-        handlers.push({
-          symbol: stripSource(sym),
-          file: sym.file,
-          method: method.toUpperCase(),
-          framework: "express",
-        });
-      }
-    }
-  }
-
-  return handlers;
+  return index.symbols
+    .filter(isProductionJavaScript)
+    .flatMap((symbol) => handlersForSymbol(symbol, searchPath));
 }
