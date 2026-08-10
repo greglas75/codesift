@@ -323,6 +323,25 @@ describe("traceRoute — framework dispatch characterization", () => {
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
       expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "express" }));
     });
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/missing");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toEqual([]);
+    });
+  });
+
+  it("ignores an indexed route file that disappeared from disk", async () => {
+    const index = {
+      ...makeIndex([{ path: "routes/api.php", language: "php" }]),
+      root: tmpRoot,
+    };
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/orders");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toEqual([]);
+    });
   });
 
   it("resolves a Yii2 controller action by convention", async () => {
