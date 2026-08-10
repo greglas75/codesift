@@ -3,12 +3,13 @@ import { join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { EXTRACTOR_VERSIONS } from "../index-shared.js";
 import { getLanguageForExtension } from "../../parser/parser-manager.js";
-import { saveIndex, loadIndex, getIndexPath } from "../../storage/index-store.js";
+import { saveIndex, loadIndex, loadIndexSummary, getIndexPath } from "../../storage/index-store.js";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
 import {
   registerRepo,
   listRepos as listRegistryRepos,
   removeRepo,
+  getRepo,
   getRepoName,
   updateRepoMeta,
 } from "../../storage/registry.js";
@@ -163,6 +164,56 @@ export async function indexFolder(
   const startTime = Date.now();
 
   const indexPath = getIndexPath(config.dataDir, rootPath);
+
+  // A linked worktree being indexed for the FIRST time can be copied from its parent instead of
+  // parsed. Measured: parent 14,891 files, worktree 14,405, eleven different — 0.08%. The copy is
+  // milliseconds; the parse is minutes.
+  //
+  // First time only. An existing index carries incremental updates the parent never saw, and
+  // overwriting it with the parent's content would silently discard them — worse than being slow.
+  // `include_paths` also opts out: a scoped index is deliberately partial, and a seed would quietly
+  // make it whole-repo.
+  if (!options?.include_paths) {
+    const alreadyIndexed = await getRepo(config.registryPath, repoName);
+    if (!alreadyIndexed) {
+      const { seedWorktreeIndexFromParent } = await import("./worktree-seed.js");
+      const seed = await seedWorktreeIndexFromParent(rootPath, repoName, indexPath);
+      if (seed.seeded) {
+        console.error(
+          `[codesift] Seeded ${repoName} from ${seed.parent_repo} in ${seed.elapsed_ms} ms ` +
+          `(${seed.files} files, ${seed.symbols} symbols) — bringing it to this tree's HEAD…`,
+        );
+        const { catchUpSeededWorktree } = await import("./worktree-seed.js");
+        const caught = await catchUpSeededWorktree(rootPath, repoName, seed.seeded_at_commit ?? null);
+        if (caught.caught_up) {
+          const summary = await loadIndexSummary(indexPath);
+          console.error(
+            `[codesift] ${repoName}: caught up ${caught.updated} changed + ${caught.removed} removed ` +
+            `file(s) — ${Date.now() - startTime} ms total instead of a full parse`,
+          );
+          return {
+            repo: repoName,
+            root: rootPath,
+            file_count: summary?.file_count ?? seed.files ?? 0,
+            symbol_count: summary?.symbol_count ?? seed.symbols ?? 0,
+            duration_ms: Date.now() - startTime,
+            reason: `seeded from ${seed.parent_repo}`,
+            ...(seed.parent_repo !== undefined ? { seeded_from: seed.parent_repo } : {}),
+            files_reparsed: caught.updated ?? 0,
+          };
+        }
+        // The seed is on disk but cannot be trusted to be a near-match (unreachable commit, or too
+        // many differences to be worth patching). Fall through to the full walk, which OVERWRITES
+        // it — slow and correct beats fast and wrong.
+        console.error(`[codesift] ${repoName}: seed not usable (${caught.reason}) — full index`);
+      }
+      // Not seedable — say why once, then fall through to the full walk below. This is the line
+      // that tells a user why their worktree took minutes instead of milliseconds.
+      if (seed.reason && seed.reason !== "not a linked worktree") {
+        console.error(`[codesift] ${repoName}: full index (${seed.reason})`);
+      }
+    }
+  }
 
   // Read .codesiftignore for user-defined exclude patterns
   let excludePatterns: string[] | undefined;

@@ -23,4 +23,13 @@ export interface IndexFolderResult {
   reason?: string;
   last_indexed?: string;
   hint?: string;
+  /**
+   * Set when this index was COPIED from a parent checkout rather than parsed, naming the parent it
+   * came from. A linked worktree differs from its parent by a handful of files (measured: 11 of
+   * 14,405), so parsing the tree to discover that is the entire cost of indexing paid for almost
+   * nothing. Its presence is also the honest answer to "why was this so fast".
+   */
+  seeded_from?: string;
+  /** Files re-parsed after a seed to bring it from the parent's commit to this tree's HEAD. */
+  files_reparsed?: number;
 }
