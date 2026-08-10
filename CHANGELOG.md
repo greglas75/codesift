@@ -22,6 +22,10 @@ that is right about a bug is not a fix.
 - Cross-repo contract matching no longer collapses consumers from different repositories when
   generated clients share the same relative file path and line number.
 
+- Route tracing now keeps framework-specific discovery behind the stable `route-tools` facade
+  and correctly handles repeated Express routes, nested Ktor prefixes, separated NestJS
+  decorators, Yii2 rule verbs, escaped Mermaid labels, and Django class-based views.
+
 - **Repositories over ~100k symbols could never be embedded — not once.** `batchEmbed` copied its
   work queue with `toEmbed.push(...stillToEmbed)`, spreading one argument per symbol onto the call
   stack; V8 overflows that between 100k and 125k arguments (measured). Every such repo threw

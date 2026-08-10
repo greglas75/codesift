@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findNestJSHandlers, traceRoute, matchPath } from "../../src/tools/route-tools.js";
+import {
+  findNestJSHandlers,
+  matchPath,
+  routeToMermaid,
+  traceRoute,
+} from "../../src/tools/route-tools.js";
 import { indexFolder } from "../../src/tools/index-tools.js";
 import { resetConfigCache } from "../../src/config.js";
 import * as indexTools from "../../src/tools/index-tools.js";
@@ -42,7 +47,7 @@ export class UsersController {
     const index = mockIndex(tmpRoot, ["src/users/users.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/api/users");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
     expect(handlers[0]!.method).toBe("GET");
     expect(handlers[0]!.framework).toBe("nestjs");
   });
@@ -62,7 +67,7 @@ export class HealthController {
     const index = mockIndex(tmpRoot, ["src/users/health.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/health");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
     expect(handlers[0]!.method).toBe("GET");
   });
 
@@ -79,7 +84,7 @@ export class AppController {
     const index = mockIndex(tmpRoot, ["src/users/app.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/users");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
   });
 
   it("finds handler with @Controller() + @Get() (both empty)", async () => {
@@ -95,7 +100,7 @@ export class RootController {
     const index = mockIndex(tmpRoot, ["src/users/root.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
   });
 });
 
@@ -113,8 +118,24 @@ export class UsersController {
     const index = mockIndex(tmpRoot, ["src/users/users.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/api/users/123");
-    expect(handlers.length).toBe(1);
+    expect(handlers).toHaveLength(1);
     expect(handlers[0]!.method).toBe("GET");
+  });
+
+  it("finds a handler when another decorator appears before the method", async () => {
+    const source = `
+@Controller('api')
+export class UsersController {
+  @Get('users')
+  @UseGuards(AuthGuard)
+  findAll() { return []; }
+}`;
+    await writeFile(join(tmpRoot, "src/users/users.controller.ts"), source);
+    const handlers = await findNestJSHandlers(
+      mockIndex(tmpRoot, ["src/users/users.controller.ts"]),
+      "/api/users",
+    );
+    expect(handlers).toContainEqual(expect.objectContaining({ method: "GET" }));
   });
 });
 
@@ -132,8 +153,7 @@ export class TestController {
     const index = mockIndex(tmpRoot, ["src/users/test.controller.ts"]);
 
     const handlers = await findNestJSHandlers(index, "/test");
-    // Should not throw, but may or may not find the handler (no parens is unusual)
-    expect(handlers).toBeDefined();
+    expect(handlers).toEqual([]);
   });
 
   it("returns empty array when no controller files exist", async () => {
@@ -192,7 +212,7 @@ afterEach(async () => {
   if (tmpDir) {
     delete process.env["CODESIFT_DATA_DIR"];
     resetConfigCache();
-    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+    await rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -245,6 +265,200 @@ describe("matchPath", () => {
   });
 });
 
+describe("route-tools public facade", () => {
+  it("keeps the historical runtime exports reachable", () => {
+    expect(findNestJSHandlers).toBeTypeOf("function");
+    expect(matchPath).toBeTypeOf("function");
+    expect(routeToMermaid).toBeTypeOf("function");
+    expect(traceRoute).toBeTypeOf("function");
+  });
+
+  it("renders an explicit empty-route Mermaid result", () => {
+    expect(routeToMermaid({
+      path: "/missing",
+      handlers: [],
+      call_chain: [],
+      db_calls: [],
+    })).toBe("sequenceDiagram\n    Note over Client: No handler found for /missing");
+  });
+
+  it("keeps user paths on one Mermaid line", () => {
+    const mermaid = routeToMermaid({
+      path: "/safe\n    participant Injected",
+      handlers: [{
+        symbol: { id: "handler", repo: "test", name: "GET", kind: "function", file: "route.ts", start_line: 1, end_line: 1 },
+        file: "route.ts",
+        method: "GET",
+        framework: "express",
+      }],
+      call_chain: [],
+      db_calls: [],
+    });
+    expect(mermaid).not.toContain("\n    participant Injected");
+  });
+});
+
+describe("traceRoute — framework dispatch characterization", () => {
+  it("finds Express handlers without scanning test files", async () => {
+    const index = makeIndex(
+      [
+        { path: "src/server.ts" },
+        { path: "src/server.test.ts" },
+      ],
+      [
+        { name: "health", file: "src/server.ts", source: "app.get('/health', health); app.get('/ready', ready)" },
+        { name: "fixture", file: "src/server.test.ts", source: "app.get('/health', fixture)" },
+      ],
+    );
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/health");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toHaveLength(1);
+      expect(result.handlers[0]).toMatchObject({ framework: "express", file: "src/server.ts", method: "GET" });
+    });
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/ready");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "express" }));
+    });
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/missing");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toEqual([]);
+    });
+  });
+
+  it("ignores an indexed route file that disappeared from disk", async () => {
+    const index = {
+      ...makeIndex([{ path: "routes/api.php", language: "php" }]),
+      root: tmpRoot,
+    };
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/orders");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toEqual([]);
+    });
+  });
+
+  it("resolves a Yii2 controller action by convention", async () => {
+    const controllerId = "test:controllers/SiteController.php:SiteController:1";
+    const index = makeIndex(
+      [{ path: "controllers/SiteController.php", language: "php" }],
+      [
+        { id: controllerId, name: "SiteController", kind: "class", file: "controllers/SiteController.php" },
+        { name: "actionIndex", kind: "method", file: "controllers/SiteController.php", parent: controllerId },
+      ],
+    );
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/site");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "yii2", method: "GET" }));
+    });
+  });
+
+  it("preserves the HTTP verb from a Yii2 URL rule", async () => {
+    await mkdir(join(tmpRoot, "config"), { recursive: true });
+    await writeFile(
+      join(tmpRoot, "config/web.php"),
+      `<?php return ['urlManager' => ['rules' => ['POST api/users' => 'user/create']]];`,
+    );
+    const controllerId = "test:controllers/UserController.php:UserController:1";
+    const index = {
+      ...makeIndex(
+        [
+          { path: "config/web.php", language: "php" },
+          { path: "controllers/UserController.php", language: "php" },
+        ],
+        [
+          { id: controllerId, name: "UserController", kind: "class", file: "controllers/UserController.php" },
+          { name: "actionCreate", kind: "method", file: "controllers/UserController.php", parent: controllerId },
+        ],
+      ),
+      root: tmpRoot,
+    };
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/api/users");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "yii2", method: "POST" }));
+    });
+  });
+
+  it("finds Laravel, Ktor, Spring Kotlin, and Django routes from real files", async () => {
+    const repo = await createIndexedFixture({
+      "routes/api.php": `<?php
+Route::post('/orders', [OrderController::class, 'store']);`,
+      "src/Application.kt": `fun Application.routes() {
+  routing {
+    get("/health") { call.respondText("ok") }
+  }
+}`,
+      "src/UserController.kt": `@RestController
+@RequestMapping("/users")
+class UserController {
+  @GetMapping("/{id}")
+  fun show(): String = "ok"
+}`,
+      "myapp/urls.py": `from django.urls import path
+from . import views
+urlpatterns = [path('posts/<int:id>/', views.detail)]`,
+      "myapp/views.py": `def detail(request, id):
+    return id`,
+    });
+
+    const laravel = await traceRoute(repo, "/orders");
+    const ktor = await traceRoute(repo, "/health");
+    const spring = await traceRoute(repo, "/users/42");
+    const django = await traceRoute(repo, "/posts/42/");
+
+    for (const result of [laravel, ktor, spring, django]) {
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+    }
+    expect(laravel.handlers).toContainEqual(expect.objectContaining({ framework: "laravel", method: "POST" }));
+    expect(ktor.handlers).toContainEqual(expect.objectContaining({ framework: "ktor", method: "GET" }));
+    expect(spring.handlers).toContainEqual(expect.objectContaining({ framework: "spring-kotlin", method: "GET" }));
+    expect(django.handlers).toContainEqual(expect.objectContaining({ framework: "django" }));
+  });
+
+  it("joins nested Ktor prefixes that omit leading slashes", async () => {
+    const repo = await createIndexedFixture({
+      "src/Application.kt": `fun Application.routes() {
+  routing {
+    route("api") {
+      route("v1") {
+        get("users") { call.respondText("ok") }
+      }
+    }
+  }
+}`,
+    });
+    const result = await traceRoute(repo, "/api/v1/users");
+    if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+    expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "ktor", method: "GET" }));
+  });
+
+  it("resolves Django class-based views instead of the as_view adapter", async () => {
+    const repo = await createIndexedFixture({
+      "myapp/urls.py": `from django.urls import path
+from . import views
+urlpatterns = [path('users/', views.UserList.as_view())]`,
+      "myapp/views.py": `class UserList:
+  pass`,
+    });
+    const result = await traceRoute(repo, "/users/");
+    if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      framework: "django",
+      file: "myapp/views.py",
+      symbol: expect.objectContaining({ name: "UserList" }),
+    }));
+  });
+});
+
 // ---------------------------------------------------------------------------
 // traceRoute — Astro dispatch (Task 15)
 // ---------------------------------------------------------------------------
@@ -274,9 +488,10 @@ describe("traceRoute — Astro", () => {
     await withIndex(index, async () => {
       const result = await traceRoute("test", "/blog/hello");
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
-      expect(result.handlers.length).toBeGreaterThan(0);
-      expect(result.handlers[0]!.framework).toBe("astro");
-      expect(result.handlers[0]!.file).toBe("src/pages/blog/[slug].astro");
+      expect(result.handlers).toContainEqual(expect.objectContaining({
+        framework: "astro",
+        file: "src/pages/blog/[slug].astro",
+      }));
     });
   });
 
@@ -297,11 +512,11 @@ describe("traceRoute — Astro", () => {
     await withIndex(index, async () => {
       const result = await traceRoute("test", "/api/data");
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
-      expect(result.handlers.length).toBeGreaterThan(0);
-      const handler = result.handlers[0]!;
-      expect(handler.framework).toBe("astro");
-      expect(handler.file).toBe("src/pages/api/data.ts");
-      expect(handler.method).toBe("GET");
+      expect(result.handlers).toContainEqual(expect.objectContaining({
+        framework: "astro",
+        file: "src/pages/api/data.ts",
+        method: "GET",
+      }));
     });
   });
 });
@@ -319,8 +534,9 @@ export async function POST(request: Request) {
 }`,
     });
     const result = await traceRoute(repo, "/api/upload");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
-    expect(result.handlers[0]!.symbol.name).toBe("POST");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      symbol: expect.objectContaining({ name: "POST" }),
+    }));
   });
 
   it("still finds handler in route.ts file (regression)", async () => {
@@ -331,8 +547,9 @@ export async function GET() {
 }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
-    expect(result.handlers[0]!.symbol.name).toBe("GET");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      symbol: expect.objectContaining({ name: "GET" }),
+    }));
   });
 });
 
@@ -345,8 +562,7 @@ describe("PagesRouter handler detection", () => {
 }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
-    expect(result.handlers[0]!.router).toBe("pages");
+    expect(result.handlers).toContainEqual(expect.objectContaining({ router: "pages" }));
   });
 
   it("returns both handlers in hybrid App + Pages Router", async () => {
@@ -360,7 +576,7 @@ export async function GET() {
 }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(2);
+    expect(result.handlers).toHaveLength(2);
     const routers = result.handlers.map((h) => h.router);
     expect(routers).toContain("pages");
     expect(routers).toContain("app");
@@ -375,7 +591,7 @@ export async function GET() {
 export default h;`,
     });
     const result = await traceRoute(repo, "/api/exotic");
-    expect(result.handlers.length).toBeGreaterThanOrEqual(1);
+    expect(result.handlers).toContainEqual(expect.objectContaining({ router: "pages" }));
   });
 });
 
@@ -412,9 +628,10 @@ export function middleware(req) { return NextResponse.next(); }`,
 export async function GET() { return NextResponse.json({}); }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.middleware).toBeDefined();
-    expect(result.middleware!.applies).toBe(true);
-    expect(result.middleware!.matchers).toEqual(["/api/:path*"]);
+    expect(result.middleware).toEqual(expect.objectContaining({
+      applies: true,
+      matchers: ["/api/:path*"],
+    }));
   });
 
   it("returns middleware.applies=false when matcher does not cover path", async () => {
@@ -426,8 +643,7 @@ export function middleware(req) { return NextResponse.next(); }`,
 export async function GET() { return NextResponse.json({}); }`,
     });
     const result = await traceRoute(repo, "/api/users");
-    expect(result.middleware).toBeDefined();
-    expect(result.middleware!.applies).toBe(false);
+    expect(result.middleware).toEqual(expect.objectContaining({ applies: false }));
   });
 });
 
@@ -450,9 +666,7 @@ export async function POST() {
 }`,
     });
     const result = await traceRoute(repo, "/users");
-    expect(result.server_actions).toBeDefined();
-    expect(result.server_actions!.length).toBeGreaterThanOrEqual(1);
-    expect(result.server_actions!.some((a) => a.name === "updateUser")).toBe(true);
+    expect(result.server_actions).toContainEqual(expect.objectContaining({ name: "updateUser" }));
   });
 
   it("returns empty server_actions when no use server files", async () => {
@@ -473,10 +687,10 @@ app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
 export default app;`,
     });
     const result = await traceRoute(repo, "/health");
-    expect(result.handlers.length).toBeGreaterThan(0);
-    const honoHandler = result.handlers.find((h) => h.framework === "hono");
-    expect(honoHandler).toBeDefined();
-    expect(honoHandler?.method).toBe("GET");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      framework: "hono",
+      method: "GET",
+    }));
   });
 
   it("traces Hono parameterized path (AC-R1 with param)", async () => {
@@ -487,8 +701,7 @@ app.get("/users/:id", (c) => c.json({ id: c.req.param("id") }));
 export default app;`,
     });
     const result = await traceRoute(repo, "/users/:id");
-    const honoHandler = result.handlers.find((h) => h.framework === "hono");
-    expect(honoHandler).toBeDefined();
+    expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "hono" }));
   });
 
   it("does not detect function-body use server (file-level only)", async () => {
