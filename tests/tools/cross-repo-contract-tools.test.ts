@@ -818,10 +818,16 @@ describe("extractOutboundCalls — bounded fetch options", () => {
     expect(calls[0]).toMatchObject({ url_prefix: "/users", partial: false });
   });
 
-  it("starts a relative interpolated prefix at its first path slash", () => {
+  it("preserves every static segment in a relative interpolated prefix", () => {
     const calls = extractOutboundCalls("fetch(`v1/api/${version}/users`)", "f.ts");
 
-    expect(calls[0]).toMatchObject({ url_prefix: "/api/", partial: true });
+    expect(calls[0]).toMatchObject({ url_prefix: "v1/api/", partial: true });
+  });
+
+  it("preserves every segment in a plain relative URL", () => {
+    const calls = extractOutboundCalls('fetch("v1/api/users")', "f.ts");
+
+    expect(calls[0]).toMatchObject({ url_prefix: "v1/api/users", partial: false });
   });
 
   it("ignores method-shaped text in fetch options", () => {
@@ -848,13 +854,25 @@ describe("extractOutboundCalls — bounded fetch options", () => {
     expect(calls[0]).toMatchObject({ method: "POST" });
   });
 
+  it("ignores method properties nested below the fetch options object", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { headers: { "method": "POST" } })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "GET" });
+  });
+
   it("defaults an unterminated fetch to GET instead of scanning later calls", () => {
     const calls = extractOutboundCalls(
       `fetch("/broken", { headers: {}\nfetch("/later", { method: "POST" })`,
       "f.ts",
     );
 
-    expect(calls[0]).toMatchObject({ url_prefix: "/broken", method: "GET" });
+    expect(calls).toMatchObject([
+      { url_prefix: "/broken", method: "GET" },
+      { url_prefix: "/later", method: "POST" },
+    ]);
   });
 });
 

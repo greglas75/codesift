@@ -6,7 +6,7 @@ export interface OutboundCall {
   url_prefix: string;
   /** HTTP method, uppercased. Defaults to "GET" when not detectable. */
   method: string;
-  /** True when the URL contains a dynamic segment (template var, concat, path param). */
+  /** True when the path contains a dynamic segment (template var, concat, path param). */
   partial: boolean;
   /** Source file path as provided to extractOutboundCalls. */
   file: string;
@@ -99,7 +99,7 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
       ? findStaticSlash(trimmed, 2)
       : leadingInterpolation
         ? findStaticSlash(trimmed, 0)
-        : findStaticSlash(trimmed, 0);
+        : 0;
 
   if (firstSlashIdx === -1) {
     // No static path segment at all
@@ -124,9 +124,8 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
     prefix += c;
   }
 
-  // The result is partial when:
-  // - there was a leading interpolation (firstSlashIdx > 0 means content before the slash)
-  // - or the prefix ends at an interpolation (hitInterp)
+  // `partial` describes path stability, not whether the origin or query is dynamic.
+  // The path is partial when it starts after a leading interpolation or ends at one.
   return { url_prefix: prefix, partial: leadingInterpolation || hitInterp };
 }
 
@@ -136,6 +135,7 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
  * Returns "GET" if not found.
  */
 function sniffFetchMethodFromWindow(window: string): string {
+  let objectDepth = 0;
   const skipQuoted = (start: number): number => {
     const quote = window[start]!;
     for (let index = start + 1; index < window.length; index++) {
@@ -156,7 +156,7 @@ function sniffFetchMethodFromWindow(window: string): string {
     if (quote !== "'" && quote !== '"' && quote !== "`") return null;
     const valueEnd = skipQuoted(valueStart);
     const value = window.slice(valueStart + 1, valueEnd - 1);
-    return /^[A-Za-z]+$/.test(value) ? value.toUpperCase() : null;
+    return /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(value) ? value.toUpperCase() : null;
   };
 
   for (let index = 0; index < window.length;) {
@@ -172,16 +172,26 @@ function sniffFetchMethodFromWindow(window: string): string {
       index = end === -1 ? window.length : end + 2;
       continue;
     }
+    if (char === "{") {
+      objectDepth++;
+      index++;
+      continue;
+    }
+    if (char === "}") {
+      objectDepth = Math.max(0, objectDepth - 1);
+      index++;
+      continue;
+    }
     if (char === "'" || char === '"' || char === "`") {
       const keyEnd = skipQuoted(index);
-      if (window.slice(index + 1, keyEnd - 1) === "method") {
+      if (objectDepth === 1 && window.slice(index + 1, keyEnd - 1) === "method") {
         const method = readMethodValue(skipWhitespace(keyEnd));
         if (method) return method;
       }
       index = keyEnd;
       continue;
     }
-    if (window.startsWith("method", index)) {
+    if (objectDepth === 1 && window.startsWith("method", index)) {
       const before = window[index - 1] ?? "";
       const after = window[index + 6] ?? "";
       if (!/[A-Za-z0-9_$]/.test(before) && !/[A-Za-z0-9_$]/.test(after)) {
@@ -196,7 +206,7 @@ function sniffFetchMethodFromWindow(window: string): string {
 }
 
 /** Find the closing parenthesis for the current fetch call, skipping strings/comments. */
-function findFetchCallEnd(source: string, start: number): number {
+function findFetchCallEnd(source: string, start: number): number | null {
   let depth = 1;
   let quote: "'" | '"' | "`" | null = null;
   let lineComment = false;
@@ -237,7 +247,7 @@ function findFetchCallEnd(source: string, start: number): number {
       return index;
     }
   }
-  return start;
+  return null;
 }
 
 /**
@@ -268,7 +278,8 @@ export function extractOutboundCalls(source: string, file: string): OutboundCall
 
     let method: string;
     if (lc.callee === "fetch") {
-      const window = source.slice(lc.urlEnd, findFetchCallEnd(source, lc.urlEnd));
+      const callEnd = findFetchCallEnd(source, lc.urlEnd);
+      const window = callEnd === null ? "" : source.slice(lc.urlEnd, callEnd);
       method = sniffFetchMethodFromWindow(window);
     } else {
       // axios / got: method comes from the callee (axios.get → GET)
