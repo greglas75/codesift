@@ -76,6 +76,7 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
+  embeddingCaches.delete(`${repoName}:chunks`);
 
   // Delete index file + embedding files + chunk files
   const embeddingPath = getEmbeddingPath(meta.index_path);

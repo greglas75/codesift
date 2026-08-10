@@ -1,6 +1,18 @@
 import type { Flags } from "./args.js";
 import { getFlag, getBoolFlag, requireArg, parseCommaSeparated, output } from "./args.js";
 
+export function scanEmbeddingMarker(
+  tail: string,
+  chunk: string,
+  marker: string,
+): { sawMarker: boolean; tail: string } {
+  const combined = tail + chunk;
+  return {
+    sawMarker: combined.includes(marker),
+    tail: marker.length > 1 ? combined.slice(-(marker.length - 1)) : "",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Index commands
 // ---------------------------------------------------------------------------
@@ -38,8 +50,11 @@ async function runEmbeddingChild(repoName: string, rootPath: string): Promise<vo
     });
 
     let sawMarker = false;
+    let markerTail = "";
     child.stdout.on("data", (buf: Buffer) => {
-      if (buf.toString().includes(EMBED_CHILD_OK_MARKER)) sawMarker = true;
+      const scan = scanEmbeddingMarker(markerTail, buf.toString(), EMBED_CHILD_OK_MARKER);
+      if (scan.sawMarker) sawMarker = true;
+      markerTail = scan.tail;
     });
     child.on("error", (err) => {
       process.stderr.write(`[codesift] embedding skipped: ${err.message}\n`);

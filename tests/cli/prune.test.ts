@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
@@ -59,6 +59,21 @@ describe("codesift prune", () => {
     const out = JSON.parse(stdout);
     expect(out.dry_run).toBe(true);
     expect(out.orphan_files).toBe(3);
+  });
+
+  it("preserves live artifacts when stat fails for a reason other than absence", async () => {
+    const loop = join(dir, "loop");
+    symlinkSync(loop, loop);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      repos: {
+        "local/live": { name: "local/live", root: loop, index_path: join(dir, `${LIVE}.index.json`) },
+      },
+    }));
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    expect(existsSync(join(dir, `${LIVE}.embeddings.ndjson`))).toBe(true);
+    expect(JSON.parse(stdout).stale_repos).toBe(0);
   });
 
   it("aborts when the registry lists 0 repos (never treats all as orphans)", async () => {

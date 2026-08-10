@@ -78,6 +78,35 @@ describe("codesift serve — daemon lock + health (Task 7)", () => {
     await expect(startDaemon({ dataDir: dir, port: 0 })).rejects.toThrow(/already running/i);
   });
 
+  it("atomically rejects one of two concurrent starters", async () => {
+    const [first, second] = await Promise.allSettled([
+      startDaemon({ dataDir: dir, port: 0 }),
+      startDaemon({ dataDir: dir, port: 0 }),
+    ]);
+    const fulfilled = [first, second].filter((r): r is PromiseFulfilledResult<DaemonHandle> => r.status === "fulfilled");
+    const rejected = [first, second].filter((r) => r.status === "rejected");
+    handles.push(...fulfilled.map((r) => r.value));
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+  });
+
+  it("allows only one winner when concurrent starters reclaim the same stale lock", async () => {
+    const { pidPath, portPath } = daemonLockPaths(dir);
+    writeFileSync(pidPath, "2147480000");
+    writeFileSync(portPath, "1");
+
+    const results = await Promise.allSettled([
+      startDaemon({ dataDir: dir, port: 0 }),
+      startDaemon({ dataDir: dir, port: 0 }),
+    ]);
+    const fulfilled = results.filter((r): r is PromiseFulfilledResult<DaemonHandle> => r.status === "fulfilled");
+    handles.push(...fulfilled.map((r) => r.value));
+
+    expect(fulfilled).toHaveLength(1);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+  });
+
   it("reclaims a STALE pidfile (process not alive — kill -9 / OOM recovery)", async () => {
     const { pidPath, portPath } = daemonLockPaths(dir);
     writeFileSync(pidPath, "2147480000"); // impossible/dead pid
@@ -85,5 +114,14 @@ describe("codesift serve — daemon lock + health (Task 7)", () => {
     const h = await startDaemon({ dataDir: dir, port: 0 }); // must NOT refuse — reclaim
     handles.push(h);
     expect(readDaemonLock(dir)!.pid).toBe(process.pid);
+  });
+
+  it("releases the SQLite ownership lock so the daemon can restart cleanly", async () => {
+    const first = await startDaemon({ dataDir: dir, port: 0 });
+    await first.close();
+
+    const second = await startDaemon({ dataDir: dir, port: 0 });
+    handles.push(second);
+    expect(readDaemonLock(dir)?.port).toBe(second.port);
   });
 });

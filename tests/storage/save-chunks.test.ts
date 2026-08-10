@@ -4,11 +4,11 @@
 // saveChunkEmbeddings was already fixed for. It now streams, so these cover the mechanism that
 // replaced the join: round-trip fidelity, no temp-file residue, replace-not-append semantics, and
 // text that would corrupt a line-oriented format if it were written naively.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { saveChunks, loadChunks } from "../../src/storage/chunk-store.js";
+import { saveChunks, loadChunks, _chunkTempPathForTesting } from "../../src/storage/chunk-store.js";
 import type { CodeChunk } from "../../src/types.js";
 
 let dir: string;
@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -54,6 +55,23 @@ describe("saveChunks", () => {
 
     const loaded = await loadChunks(path);
     expect([...(loaded?.keys() ?? [])]).toEqual(["repo:src/f9.ts:9"]);
+  });
+
+  it("uses distinct temp files for concurrent writers", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1234);
+    expect(_chunkTempPathForTesting(path)).not.toBe(_chunkTempPathForTesting(path));
+    await Promise.all([
+      saveChunks(path, [chunk(1), chunk(2)]),
+      saveChunks(path, [chunk(8), chunk(9)]),
+    ]);
+
+    const loaded = await loadChunks(path);
+    const keys = [...loaded!.keys()].join(",");
+    expect([
+      "repo:src/f1.ts:1,repo:src/f2.ts:2",
+      "repo:src/f8.ts:8,repo:src/f9.ts:9",
+    ]).toContain(keys);
+    expect(readdirSync(dir).filter((f) => f.includes(".tmp."))).toEqual([]);
   });
 
   it("survives chunk text containing newlines and quotes", async () => {

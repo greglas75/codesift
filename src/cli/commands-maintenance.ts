@@ -46,8 +46,9 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
     if (typeof root === "string" && root.length > 0) {
       try {
         statSync(root);
-      } catch {
-        rootGone = true;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        rootGone = code === "ENOENT" || code === "ENOTDIR";
       }
     }
     if (rootGone) {
@@ -80,21 +81,23 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // class of data loss: a repo still present on disk can no longer be deleted because a JSON file
   // lost track of it. Re-registering also means the next lookup finds it.
   const rescued: string[] = [];
+  const rescuedNames = new Set<string>();
+  const protectedNames = new Set<string>();
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
     if (!m?.[1] || live.has(m[1])) continue;
+    let db: import("node:sqlite").DatabaseSync | undefined;
     try {
       const { DatabaseSync } = await import("node:sqlite");
-      const db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
+      db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
       const rows = db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>;
-      db.close();
       const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
       const root = meta["root"];
       const repo = meta["repo"];
       if (!root || !repo) continue;
       statSync(root); // throws when the tree is gone — then it really is garbage
       live.add(m[1]);
-      rescued.push(repo);
+      protectedNames.add(repo);
       if (!dryRun) {
         const { registerRepo } = await import("../storage/registry.js");
         // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
@@ -105,8 +108,15 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
           index_path: join(dataDir, `${m[1]}.index.json`),
         } as never);
       }
-    } catch {
-      /* unreadable, or the tree is gone — leave it to the sweep */
+      rescued.push(repo);
+      rescuedNames.add(repo);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Only definite absence makes the database garbage. Any other I/O or
+      // permission failure is inconclusive, so preserve this hash.
+      if (code !== "ENOENT" && code !== "ENOTDIR") live.add(m[1]);
+    } finally {
+      try { db?.close(); } catch { /* already closed */ }
     }
   }
 
@@ -136,7 +146,11 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // registry untouched rather than half-cleaned.
   if (!dryRun && stale.length > 0) {
     const { removeRepo } = await import("../storage/registry.js");
-    for (const s of stale) await removeRepo(join(dataDir, "registry.json"), s.name);
+    for (const s of stale) {
+      if (!rescuedNames.has(s.name) && !protectedNames.has(s.name)) {
+        await removeRepo(join(dataDir, "registry.json"), s.name);
+      }
+    }
   }
 
   output({

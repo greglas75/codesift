@@ -158,6 +158,7 @@ export async function indexFile(filePath: string): Promise<{
   bm25Indexes.delete(matchingRepo.name);
   codeIndexes.delete(matchingRepo.name);
   embeddingCaches.delete(matchingRepo.name);
+  embeddingCaches.delete(`${matchingRepo.name}:chunks`);
 
   let secretsWarning: string | undefined;
   if (secretFindingsCount > 0) {
@@ -251,6 +252,7 @@ export async function ensureIndexFresh(repoName: string): Promise<{
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
+  embeddingCaches.delete(`${repoName}:chunks`);
 
   freshnessChecked.set(repoName, Date.now());
   return { status: "refreshed", files_updated: changedFiles.length };

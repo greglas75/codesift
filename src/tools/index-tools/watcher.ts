@@ -133,6 +133,7 @@ async function handleFileChange(
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
+  embeddingCaches.delete(`${repoName}:chunks`);
 }
 
 /**
@@ -151,6 +152,7 @@ async function handleFileDelete(
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
   embeddingCaches.delete(repoName);
+  embeddingCaches.delete(`${repoName}:chunks`);
   scanOnDeleted(repoName, relativeFile);
 
   // Invalidate Hono model cache

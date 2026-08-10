@@ -350,6 +350,10 @@ export async function embedChunks(
       );
       await saveChunks(chunkPath, allChunks);
       await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
+      // A long-lived daemon may already hold the previous generation. Force
+      // the next query to load the just-written file instead of serving stale
+      // chunk IDs/vectors indefinitely.
+      embeddingCaches.delete(`${repoName}:chunks`);
     }
     return true;
   } catch (err: unknown) {
