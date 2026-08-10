@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findNestJSHandlers, traceRoute, matchPath } from "../../src/tools/route-tools.js";
+import {
+  findNestJSHandlers,
+  matchPath,
+  routeToMermaid,
+  traceRoute,
+} from "../../src/tools/route-tools.js";
 import { indexFolder } from "../../src/tools/index-tools.js";
 import { resetConfigCache } from "../../src/config.js";
 import * as indexTools from "../../src/tools/index-tools.js";
@@ -242,6 +247,99 @@ describe("matchPath", () => {
 
   it("does not match different static segments", () => {
     expect(matchPath("/blog/hello", "/blog/world")).toBe(false);
+  });
+});
+
+describe("route-tools public facade", () => {
+  it("keeps the historical runtime exports reachable", () => {
+    expect(findNestJSHandlers).toBeTypeOf("function");
+    expect(matchPath).toBeTypeOf("function");
+    expect(routeToMermaid).toBeTypeOf("function");
+    expect(traceRoute).toBeTypeOf("function");
+  });
+
+  it("renders an explicit empty-route Mermaid result", () => {
+    expect(routeToMermaid({
+      path: "/missing",
+      handlers: [],
+      call_chain: [],
+      db_calls: [],
+    })).toBe("sequenceDiagram\n    Note over Client: No handler found for /missing");
+  });
+});
+
+describe("traceRoute — framework dispatch characterization", () => {
+  it("finds Express handlers without scanning test files", async () => {
+    const index = makeIndex(
+      [
+        { path: "src/server.ts" },
+        { path: "src/server.test.ts" },
+      ],
+      [
+        { name: "health", file: "src/server.ts", source: "app.get('/health', health)" },
+        { name: "fixture", file: "src/server.test.ts", source: "app.get('/health', fixture)" },
+      ],
+    );
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/health");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toHaveLength(1);
+      expect(result.handlers[0]).toMatchObject({ framework: "express", file: "src/server.ts", method: "GET" });
+    });
+  });
+
+  it("resolves a Yii2 controller action by convention", async () => {
+    const controllerId = "test:controllers/SiteController.php:SiteController:1";
+    const index = makeIndex(
+      [{ path: "controllers/SiteController.php", language: "php" }],
+      [
+        { id: controllerId, name: "SiteController", kind: "class", file: "controllers/SiteController.php" },
+        { name: "actionIndex", kind: "method", file: "controllers/SiteController.php", parent: controllerId },
+      ],
+    );
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/site");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "yii2", method: "GET" }));
+    });
+  });
+
+  it("finds Laravel, Ktor, Spring Kotlin, and Django routes from real files", async () => {
+    const repo = await createIndexedFixture({
+      "routes/api.php": `<?php
+Route::post('/orders', [OrderController::class, 'store']);`,
+      "src/Application.kt": `fun Application.routes() {
+  routing {
+    get("/health") { call.respondText("ok") }
+  }
+}`,
+      "src/UserController.kt": `@RestController
+@RequestMapping("/users")
+class UserController {
+  @GetMapping("/{id}")
+  fun show(): String = "ok"
+}`,
+      "myapp/urls.py": `from django.urls import path
+from . import views
+urlpatterns = [path('posts/<int:id>/', views.detail)]`,
+      "myapp/views.py": `def detail(request, id):
+    return id`,
+    });
+
+    const laravel = await traceRoute(repo, "/orders");
+    const ktor = await traceRoute(repo, "/health");
+    const spring = await traceRoute(repo, "/users/42");
+    const django = await traceRoute(repo, "/posts/42/");
+
+    for (const result of [laravel, ktor, spring, django]) {
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+    }
+    expect(laravel.handlers).toContainEqual(expect.objectContaining({ framework: "laravel", method: "POST" }));
+    expect(ktor.handlers).toContainEqual(expect.objectContaining({ framework: "ktor", method: "GET" }));
+    expect(spring.handlers).toContainEqual(expect.objectContaining({ framework: "spring-kotlin", method: "GET" }));
+    expect(django.handlers).toContainEqual(expect.objectContaining({ framework: "django" }));
   });
 });
 
