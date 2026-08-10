@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { indexFolder, getCodeIndex } from "../../src/tools/index-tools.js";
 import { searchSymbols, searchText } from "../../src/tools/search-tools.js";
 import { getFileTree, getFileOutline, getRepoOutline } from "../../src/tools/outline-tools.js";
-import { getSymbol, getSymbols, findAndShow, findReferences, findDeadCode, getContextBundle } from "../../src/tools/symbol-tools.js";
+import {
+  findAndShow,
+  findDeadCode,
+  findReferences,
+  findReferencesBatch,
+  findUnusedImports,
+  getContextBundle,
+  getSymbol,
+  getSymbols,
+} from "../../src/tools/symbol-tools.js";
 import { assembleContext, getKnowledgeMap } from "../../src/tools/context-tools.js";
 import { analyzeComplexity } from "../../src/tools/complexity-tools.js";
 import { findClones } from "../../src/tools/clone-tools.js";
@@ -629,6 +638,53 @@ describe("symbol_tools", () => {
       // Should appear in types.ts (definition) and user-service.ts (import + usage)
       expect(files).toContain("src/types.ts");
       expect(files).toContain("src/user-service.ts");
+    });
+  });
+
+  describe("batch references and unused imports", () => {
+    it("findReferencesBatch returns references for each requested symbol", async () => {
+      const repo = await indexFixture();
+
+      const result = await findReferencesBatch(repo, ["getUserById", "UserService"], "src/*.ts");
+
+      expect(result.getUserById?.map((reference) => reference.file)).toContain("src/user-service.ts");
+      expect(result.UserService?.map((reference) => reference.file)).toContain("src/user-service.ts");
+    });
+
+    it("findUnusedImports reports an imported name absent from the file body", async () => {
+      await createFixtureProject();
+      await writeFile(
+        join(fixtureDir, "src", "unused-import.ts"),
+        'import { User } from "./types.js";\nexport const marker = 1;\n',
+      );
+      await indexFolder(fixtureDir, { watch: false });
+
+      const result = await findUnusedImports(REPO, { file_pattern: "unused-import.ts" });
+
+      expect(result.unused).toEqual([
+        {
+          file: "src/unused-import.ts",
+          line: 1,
+          import_text: 'import { User } from "./types.js";',
+          imported_name: "User",
+        },
+      ]);
+    });
+
+    it("findReferencesBatch reports the missing repository error", async () => {
+      await expect(
+        findReferencesBatch("local/missing-symbol-tools", ["missingSymbol"]),
+      ).rejects.toThrow(
+        'Repository "local/missing-symbol-tools" not found. Index it first with index_folder.',
+      );
+    });
+
+    it("findUnusedImports reports the missing repository error", async () => {
+      await expect(
+        findUnusedImports("local/missing-symbol-tools"),
+      ).rejects.toThrow(
+        'Repository "local/missing-symbol-tools" not found. Index it first with index_folder.',
+      );
     });
   });
 });
