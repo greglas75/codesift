@@ -18,7 +18,11 @@ This is that decision.
 Per-repo vectors live in `<hash>.embeddings.ndjson` (symbol level) and
 `<hash>.chunk-embeddings.ndjson` (chunk level), one JSON line per vector,
 `{"id": "…", "vec": [768 floats]}`. Alongside them sits a content-keyed shared cache,
-`shared-embeddings.v2.bin`, records `[16 B key][2 B dim][dim*4 B float32]`, key
+`shared-embeddings.v2.bin`, records `[16 B key][2 B dim][4 B crc32 of the vector bytes][dim*4 B
+float32]` — 3,094 bytes at 768 dims. (The corruption analysis further down argues from the
+**pre-checksum draft**, whose record was 3,090 bytes and had no `crc32` field; that analysis is what
+put the checksum there. This line is the shipped layout, and it is the one to build an inspector
+from.) Key is
 `contentKey(model, dimensions, text)` = sha256 truncated to 128 bits
 (`src/storage/shared-embedding-cache.ts`). The shared cache is a **write-side** optimization: a
 repo containing text already embedded elsewhere does a lookup instead of a model call. Nothing
