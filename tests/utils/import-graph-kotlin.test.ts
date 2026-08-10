@@ -110,7 +110,9 @@ describe("resolveKotlinImport", () => {
   });
 
   it("returns null for wildcard imports", () => {
-    expect(resolveKotlinImport("com.example.*", kotlinFiles)).toBeNull();
+    const collidingFiles = new Map(kotlinFiles);
+    collidingFiles.set("*", ["src/main/kotlin/com/example/Wildcard.kt"]);
+    expect(resolveKotlinImport("com.example.*", collidingFiles)).toBeNull();
   });
 
   it("returns null for kotlin stdlib imports", () => {
@@ -119,7 +121,9 @@ describe("resolveKotlinImport", () => {
   });
 
   it("returns null for java/javax imports", () => {
-    expect(resolveKotlinImport("java.util.List", kotlinFiles)).toBeNull();
+    const collidingFiles = new Map(kotlinFiles);
+    collidingFiles.set("List", ["src/main/kotlin/local/List.kt"]);
+    expect(resolveKotlinImport("java.util.List", collidingFiles)).toBeNull();
     expect(resolveKotlinImport("javax.inject.Inject", kotlinFiles)).toBeNull();
   });
 

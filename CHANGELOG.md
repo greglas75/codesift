@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Import graph collection now falls back to regex imports when the TypeScript parser returns no
+  tree, instead of silently dropping every edge from that file. The import graph implementation
+  is also split into focused language, resolution, collection, and metric modules behind the
+  existing `src/utils/import-graph.ts` facade.
 - TypeScript constant resolution now bounds recursive namespace/expression traversal, supports
   literal bracket keys, reports unsupported destructured defaults explicitly, and releases
   temporary and cached tree-sitter trees without evicting an active parse tree. The public
