@@ -14,9 +14,10 @@ function isProductionJavaScript(symbol: CodeSymbol): boolean {
 function handlersForSymbol(symbol: CodeSymbol, searchPath: string): RouteHandler[] {
   const handlers: RouteHandler[] = [];
   for (const method of EXPRESS_METHODS) {
-    const pattern = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`);
-    const routePath = pattern.exec(symbol.source ?? "")?.[2];
-    if (routePath !== undefined && matchPath(routePath, searchPath)) {
+    const pattern = new RegExp(`\\.(${method})\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]`, "g");
+    for (const match of (symbol.source ?? "").matchAll(pattern)) {
+      const routePath = match[2] ?? "";
+      if (!matchPath(routePath, searchPath)) continue;
       handlers.push({
         symbol: stripSource(symbol),
         file: symbol.file,

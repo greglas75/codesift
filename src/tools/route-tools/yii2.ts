@@ -46,11 +46,11 @@ function conventionHandler(
   };
 }
 
-function configRuleHandler(index: CodeIndex, route: string): RouteHandler | null {
+function configRuleHandler(index: CodeIndex, route: string, method: string): RouteHandler | null {
   const target = routeTarget(route.split("/"));
   if (!target) return null;
   const handler = conventionHandler(index, target.controllerId, target.actionId);
-  return handler ? { ...handler, method: "GET" } : null;
+  return handler ? { ...handler, method } : null;
 }
 
 async function findYii2HandlersFromConfig(
@@ -61,13 +61,13 @@ async function findYii2HandlersFromConfig(
   if (!config) return [];
 
   const normalizedSearch = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
-  const pattern = /['"](?:(?:GET|POST|PUT|DELETE|PATCH)\s+)?([^'"]+)['"]\s*=>\s*['"]([^'"]+)['"]/g;
+  const pattern = /['"](?:(GET|POST|PUT|DELETE|PATCH)\s+)?([^'"]+)['"]\s*=>\s*['"]([^'"]+)['"]/g;
   const handlers: RouteHandler[] = [];
   for (const match of config.source.matchAll(pattern)) {
-    const rulePath = match[1]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
+    const rulePath = match[2]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
     if (!matchPath(rulePath, normalizedSearch)) continue;
 
-    const handler = configRuleHandler(index, match[2]!);
+    const handler = configRuleHandler(index, match[3]!, match[1]?.toUpperCase() ?? "GET");
     if (handler) handlers.push(handler);
   }
   return handlers;

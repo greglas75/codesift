@@ -121,6 +121,22 @@ export class UsersController {
     expect(handlers.length).toBe(1);
     expect(handlers[0]!.method).toBe("GET");
   });
+
+  it("finds a handler when another decorator appears before the method", async () => {
+    const source = `
+@Controller('api')
+export class UsersController {
+  @Get('users')
+  @UseGuards(AuthGuard)
+  findAll() { return []; }
+}`;
+    await writeFile(join(tmpRoot, "src/users/users.controller.ts"), source);
+    const handlers = await findNestJSHandlers(
+      mockIndex(tmpRoot, ["src/users/users.controller.ts"]),
+      "/api/users",
+    );
+    expect(handlers).toContainEqual(expect.objectContaining({ method: "GET" }));
+  });
 });
 
 describe("findNestJSHandlers — edge cases", () => {
@@ -266,6 +282,21 @@ describe("route-tools public facade", () => {
       db_calls: [],
     })).toBe("sequenceDiagram\n    Note over Client: No handler found for /missing");
   });
+
+  it("keeps user paths on one Mermaid line", () => {
+    const mermaid = routeToMermaid({
+      path: "/safe\n    participant Injected",
+      handlers: [{
+        symbol: { id: "handler", repo: "test", name: "GET", kind: "function", file: "route.ts", start_line: 1, end_line: 1 },
+        file: "route.ts",
+        method: "GET",
+        framework: "express",
+      }],
+      call_chain: [],
+      db_calls: [],
+    });
+    expect(mermaid).not.toContain("\n    participant Injected");
+  });
 });
 
 describe("traceRoute — framework dispatch characterization", () => {
@@ -276,7 +307,7 @@ describe("traceRoute — framework dispatch characterization", () => {
         { path: "src/server.test.ts" },
       ],
       [
-        { name: "health", file: "src/server.ts", source: "app.get('/health', health)" },
+        { name: "health", file: "src/server.ts", source: "app.get('/health', health); app.get('/ready', ready)" },
         { name: "fixture", file: "src/server.test.ts", source: "app.get('/health', fixture)" },
       ],
     );
@@ -286,6 +317,12 @@ describe("traceRoute — framework dispatch characterization", () => {
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
       expect(result.handlers).toHaveLength(1);
       expect(result.handlers[0]).toMatchObject({ framework: "express", file: "src/server.ts", method: "GET" });
+    });
+
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/ready");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "express" }));
     });
   });
 
@@ -303,6 +340,33 @@ describe("traceRoute — framework dispatch characterization", () => {
       const result = await traceRoute("test", "/site");
       if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
       expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "yii2", method: "GET" }));
+    });
+  });
+
+  it("preserves the HTTP verb from a Yii2 URL rule", async () => {
+    await mkdir(join(tmpRoot, "config"), { recursive: true });
+    await writeFile(
+      join(tmpRoot, "config/web.php"),
+      `<?php return ['urlManager' => ['rules' => ['POST api/users' => 'user/create']]];`,
+    );
+    const controllerId = "test:controllers/UserController.php:UserController:1";
+    const index = {
+      ...makeIndex(
+        [
+          { path: "config/web.php", language: "php" },
+          { path: "controllers/UserController.php", language: "php" },
+        ],
+        [
+          { id: controllerId, name: "UserController", kind: "class", file: "controllers/UserController.php" },
+          { name: "actionCreate", kind: "method", file: "controllers/UserController.php", parent: controllerId },
+        ],
+      ),
+      root: tmpRoot,
+    };
+    await withIndex(index, async () => {
+      const result = await traceRoute("test", "/api/users");
+      if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+      expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "yii2", method: "POST" }));
     });
   });
 
@@ -340,6 +404,23 @@ urlpatterns = [path('posts/<int:id>/', views.detail)]`,
     expect(ktor.handlers).toContainEqual(expect.objectContaining({ framework: "ktor", method: "GET" }));
     expect(spring.handlers).toContainEqual(expect.objectContaining({ framework: "spring-kotlin", method: "GET" }));
     expect(django.handlers).toContainEqual(expect.objectContaining({ framework: "django" }));
+  });
+
+  it("joins nested Ktor prefixes that omit leading slashes", async () => {
+    const repo = await createIndexedFixture({
+      "src/Application.kt": `fun Application.routes() {
+  routing {
+    route("api") {
+      route("v1") {
+        get("users") { call.respondText("ok") }
+      }
+    }
+  }
+}`,
+    });
+    const result = await traceRoute(repo, "/api/v1/users");
+    if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+    expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "ktor", method: "GET" }));
   });
 });
 

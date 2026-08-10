@@ -69,4 +69,3 @@ export function appendTracedCalls(lines: string[], result: RouteTraceResult): vo
   }
   closeStack(lines, stack, 0);
 }
-

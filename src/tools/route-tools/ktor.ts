@@ -88,7 +88,7 @@ function scanKtorFile(
   const state: ScopeState = { prefixes: [], braceDepth: 0 };
   for (const [lineIndex, line] of source.split("\n").entries()) {
     updateScopes(line, state);
-    const prefix = state.prefixes.map((scope) => scope.prefix).join("");
+    const prefix = state.prefixes.map((scope) => scope.prefix).join("/");
     for (const match of methodMatches(line)) {
       const fullPath = `${prefix}/${match.path}`.replace(/\/+/g, "/");
       if (matchPath(fullPath, searchPath)) {
