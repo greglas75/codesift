@@ -36,10 +36,12 @@ function readCall(
   context.emit("(");
   const urlLiteral = tryReadUrlArgument(context);
   if (!urlLiteral) return null;
+  const urlEnd = context.index;
   return {
     callee,
     ...(method ? { method } : {}),
     urlLiteral,
+    urlEnd,
     nextCodeToken: peekNextCodeToken(context),
     line,
   };

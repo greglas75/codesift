@@ -26,6 +26,7 @@ import {
 const DIM = 768;
 let dir: string;
 const prevDataDir = process.env["CODESIFT_DATA_DIR"];
+const prevCacheBudget = process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
 
 function vec(seed: number): Float32Array {
   const v = new Float32Array(DIM);
@@ -44,6 +45,8 @@ beforeEach(async () => {
 afterEach(async () => {
   if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
   else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
+  if (prevCacheBudget === undefined) delete process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
+  else process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = prevCacheBudget;
   _resetSharedCacheForTests();
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -54,6 +57,9 @@ async function cacheFile(): Promise<string> {
 
 describe("a batch past v1's ceiling is written, not silently dropped", () => {
   it("stores a batch past the string ceiling — v1 wrote zero bytes and said nothing", async () => {
+    // The regression writes ~110 MB. Production's default read budget scales
+    // with host RAM, so pin enough room to test the writer on small CI runners.
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "256";
     await loadSharedCache(); // establishes the in-memory map so dedup is live
 
     // Derive the ceiling from the actual encoded width rather than hardcoding 33,042: that number

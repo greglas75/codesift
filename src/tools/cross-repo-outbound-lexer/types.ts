@@ -11,6 +11,8 @@ export interface LexerOutboundCall {
   /** HTTP method from callee name (axios.get → "GET"). fetch/got default undefined. */
   method?: string;
   urlLiteral: UrlLiteral;
+  /** Source offset immediately after the closing URL quote/backtick. */
+  urlEnd: number;
   /** The first non-whitespace token after the closing quote/backtick. */
   nextCodeToken: string;
   /** 1-based line number of the call keyword. */

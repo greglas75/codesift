@@ -33,6 +33,10 @@ describe("normalizePathParams", () => {
     expect(normalizePathParams("/files/[...slug]")).toBe("/files/{param}");
   });
 
+  it("normalizes optional Next.js catch-all params", () => {
+    expect(normalizePathParams("/files/[[...slug]]")).toBe("/files/{param}");
+  });
+
   it("normalizes all three param styles in one path", () => {
     expect(normalizePathParams("/a/:x/b/{y}/c/[z]")).toBe("/a/{param}/b/{param}/c/{param}");
   });
@@ -616,6 +620,17 @@ describe("matchContracts", () => {
     expect(matches).toHaveLength(1);
   });
 
+  it("T14-7b: preserves matches from different consumer repos at the same file and line", () => {
+    const producers: RepoEndpoint[] = [producer("api", "GET", "/users/:id")];
+    const web = consumer("web", "GET", "/users/1", false, "src/generated-client.ts", 5);
+    const mobile = consumer("mobile", "GET", "/users/1", false, "src/generated-client.ts", 5);
+
+    const matches = matchContracts(producers, [web, mobile]);
+
+    expect(matches).toHaveLength(2);
+    expect(matches.map((match) => match.consumer_repo).sort()).toEqual(["mobile", "web"]);
+  });
+
   // ── T14-8: empty inputs ───────────────────────────────────────────────────
   it("T14-8: empty producers → []", () => {
     expect(matchContracts([], [consumer("web", "GET", "/users/1", false)])).toEqual([]);
@@ -670,6 +685,42 @@ describe("matchContracts", () => {
     const matches = matchContracts(producers, consumers);
     expect(matches).toHaveLength(1);
     expect(matches[0]!.confidence).toBe("partial");
+  });
+
+  it("does not treat a partial literal segment as a path-segment prefix", () => {
+    const producers: RepoEndpoint[] = [producer("api", "GET", "/users/:id")];
+    const consumers: ConsumerCall[] = [consumer("web", "GET", "/us", true)];
+
+    expect(matchContracts(producers, consumers)).toHaveLength(0);
+  });
+
+  it("does not let the root prefix match a parameter-first route", () => {
+    const producers: RepoEndpoint[] = [producer("api", "GET", "/:tenant/users")];
+    const consumers: ConsumerCall[] = [consumer("web", "GET", "/", true)];
+
+    expect(matchContracts(producers, consumers)).toHaveLength(0);
+  });
+
+  it("matches every concrete tail segment of a required Next.js catch-all", () => {
+    const producers: RepoEndpoint[] = [producer("api", "GET", "/files/[...slug]")];
+    const consumers: ConsumerCall[] = [consumer("web", "GET", "/files/a/b/c", false)];
+
+    expect(matchContracts(producers, consumers)).toHaveLength(1);
+  });
+
+  it("matches an empty tail for an optional Next.js catch-all", () => {
+    const producers: RepoEndpoint[] = [producer("api", "GET", "/files/[[...slug]]")];
+    const consumers: ConsumerCall[] = [consumer("web", "GET", "/files", false)];
+
+    expect(matchContracts(producers, consumers)).toHaveLength(1);
+  });
+
+  it("compares methods case-insensitively for custom resolvers", () => {
+    const producers = [producer("api", "get", "/users")];
+    const consumers = [consumer("web", "get", "/users", false)];
+    producers[0]!.method = "get";
+
+    expect(matchContracts(producers, consumers)).toHaveLength(1);
   });
 
   it("partial consumer with empty url_prefix does not match anything", () => {
@@ -736,6 +787,110 @@ describe("extractOutboundCalls — C4: multi-line fetch/template", () => {
     const calls = extractOutboundCalls(src, "f.ts");
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ url_prefix: "/api/x", partial: false });
+  });
+});
+
+describe("extractOutboundCalls — bounded fetch options", () => {
+  it("does not assign a later fetch call's method to an earlier call", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/first"); fetch("/second", { method: "POST" })`,
+      "f.ts",
+    );
+
+    expect(calls.map(({ url_prefix, method }) => ({ url_prefix, method }))).toEqual([
+      { url_prefix: "/first", method: "GET" },
+      { url_prefix: "/second", method: "POST" },
+    ]);
+  });
+
+  it("extracts the path after a dynamic host in an absolute template URL", () => {
+    const calls = extractOutboundCalls("fetch(`https://${host}/api/users`)", "f.ts");
+
+    expect(calls[0]).toMatchObject({ url_prefix: "/api/users", partial: false });
+  });
+
+  it("keeps the path exact when only an absolute URL query is dynamic", () => {
+    const calls = extractOutboundCalls(
+      "fetch(`https://api.example.com/users?filter=${value}`)",
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ url_prefix: "/users", partial: false });
+  });
+
+  it("preserves every static segment in a relative interpolated prefix", () => {
+    const calls = extractOutboundCalls("fetch(`v1/api/${version}/users`)", "f.ts");
+
+    expect(calls[0]).toMatchObject({ url_prefix: "v1/api/", partial: true });
+  });
+
+  it("preserves every segment in a plain relative URL", () => {
+    const calls = extractOutboundCalls('fetch("v1/api/users")', "f.ts");
+
+    expect(calls[0]).toMatchObject({ url_prefix: "v1/api/users", partial: false });
+  });
+
+  it("ignores method-shaped text in fetch options", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { headers: { note: "method: 'DELETE'" } })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "GET" });
+  });
+
+  it("ignores method-shaped comments in fetch options", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { /* method: "DELETE" */ cache: "no-store" })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "GET" });
+  });
+
+  it("recognizes a quoted fetch method property", () => {
+    const calls = extractOutboundCalls(`fetch("/users", { "method": "POST" })`, "f.ts");
+
+    expect(calls[0]).toMatchObject({ method: "POST" });
+  });
+
+  it("ignores method properties nested below the fetch options object", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { headers: { "method": "POST" } })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "GET" });
+  });
+
+  it("recognizes a method promoted by an inline object spread", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { ...{ method: "POST" } })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "POST" });
+  });
+
+  it("does not let braces in a regex hide a top-level method", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/users", { pattern: /{/, method: "POST" })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ method: "POST" });
+  });
+
+  it("defaults an unterminated fetch to GET instead of scanning later calls", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/broken", { headers: {}\nfetch("/later", { method: "POST" })`,
+      "f.ts",
+    );
+
+    expect(calls).toMatchObject([
+      { url_prefix: "/broken", method: "GET" },
+      { url_prefix: "/later", method: "POST" },
+    ]);
   });
 });
 
@@ -905,7 +1060,25 @@ describe("matchGroupContracts (T15 orchestration)", () => {
       };
       const r = await matchGroupContracts("big", { registryPath, resolver: countingResolver });
       expect(seen.length).toBe(MAX_GROUP_REPOS);
+      expect(seen).toEqual(repos.slice(0, MAX_GROUP_REPOS));
       expect(r.warnings.some((w) => w.includes("capped at " + MAX_GROUP_REPOS))).toBe(true);
+    });
+  });
+
+  it("T15-4b: a group exactly at MAX_GROUP_REPOS is not reported as truncated", async () => {
+    await withRegistry(async (registryPath) => {
+      const repos = Array.from({ length: MAX_GROUP_REPOS }, (_, i) => `r${i}`);
+      await registerGroup(registryPath, { name: "at-cap", repos });
+      const seen: string[] = [];
+      const countingResolver: RepoResolver = async (repo) => {
+        seen.push(repo);
+        return { indexed: true, producers: [], consumers: [] };
+      };
+
+      const r = await matchGroupContracts("at-cap", { registryPath, resolver: countingResolver });
+
+      expect(seen).toEqual(repos);
+      expect(r.warnings.some((w) => w.includes("capped at " + MAX_GROUP_REPOS))).toBe(false);
     });
   });
 
