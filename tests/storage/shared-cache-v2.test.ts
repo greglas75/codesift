@@ -26,6 +26,7 @@ import {
 const DIM = 768;
 let dir: string;
 const prevDataDir = process.env["CODESIFT_DATA_DIR"];
+const prevSharedCacheBudget = process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
 
 function vec(seed: number): Float32Array {
   const v = new Float32Array(DIM);
@@ -38,12 +39,17 @@ const keyOf = (n: number): string => contentKey("embeddinggemma", DIM, `symbol-$
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "codesift-sharedv2-"));
   process.env["CODESIFT_DATA_DIR"] = dir;
+  // This suite deliberately writes more than 64 MB. Make its read-side
+  // expectation independent of the runner's total RAM and default budget.
+  process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "256";
   _resetSharedCacheForTests();
 });
 
 afterEach(async () => {
   if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
   else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
+  if (prevSharedCacheBudget === undefined) delete process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
+  else process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = prevSharedCacheBudget;
   _resetSharedCacheForTests();
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });

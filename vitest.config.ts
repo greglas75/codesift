@@ -9,6 +9,21 @@ const prismaAstEsm = fileURLToPath(
   new URL("./node_modules/@mrleebo/prisma-ast/dist/prisma-ast.esm.js", import.meta.url),
 );
 
+const [nodeMajor = 0, nodeMinor = 0] = process.versions.node
+  .split(".")
+  .map((part) => Number.parseInt(part, 10));
+const hasNodeSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 5);
+const sqliteOnlyTests = hasNodeSqlite
+  ? []
+  : [
+      "tests/cli/prune-rescue-collision.test.ts",
+      "tests/storage/index-backend-migration.test.ts",
+      "tests/storage/index-cache-memory-budget.test.ts",
+      "tests/storage/index-storage-errors.test.ts",
+      "tests/storage/index-summary.test.ts",
+      "tests/storage/sqlite-*.test.ts",
+    ];
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -87,6 +102,10 @@ export default defineConfig({
             "tests/retrieval/**/*.test.ts",
             "tests/utils/**/*.test.ts",
           ],
+          // Node 20 is a supported JSON-backend runtime, but `node:sqlite`
+          // itself was only added in Node 22.5. Keep the rest of the suite on
+          // Node 20 and omit only contracts that exercise SQLite directly.
+          exclude: sqliteOnlyTests,
           environment: "node",
           // `forks`, not `vmForks`. Same isolation for this suite, about half
           // the wall clock (~80s -> ~45s), and the prisma-ast/chevrotain tests
