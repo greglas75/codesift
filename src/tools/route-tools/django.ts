@@ -1,0 +1,67 @@
+import { stripSource } from "../graph-tools.js";
+import { matchPath } from "../route-shared.js";
+import type { CodeIndex } from "../../types.js";
+import type { RouteHandler } from "./types.js";
+
+/**
+ * Find Django route handlers by parsing urlpatterns in urls.py files.
+ * Handles path(), re_path(), and include() chains.
+ */
+export async function findDjangoHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+  const handlers: RouteHandler[] = [];
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+
+  // Find urls.py files
+  const urlFiles = index.files.filter((f) =>
+    f.path.endsWith("urls.py"),
+  );
+
+  for (const file of urlFiles) {
+    let source: string;
+    try {
+      source = await readFile(join(index.root, file.path), "utf-8");
+    } catch { continue; }
+
+    // Extract path() patterns: path('users/', views.user_list, name='...')
+    // and path('users/<int:pk>/', views.user_detail)
+    const pathRe = /path\s*\(\s*['"]([^'"]*)['"]\s*,\s*([\w.]+)/g;
+    let match: RegExpExecArray | null;
+
+    // Get the URL prefix from the file's directory context
+    // e.g., if this urls.py is included from a parent with prefix 'api/'
+    while ((match = pathRe.exec(source)) !== null) {
+      const routePath = match[1] ?? "";
+      const viewRef = match[2] ?? "";
+
+      // Skip include() references
+      if (viewRef === "include") continue;
+
+      // Convert Django <type:name> to :name for matchPath
+      const normalizedPath = `/${routePath}`.replace(/<\w+:(\w+)>/g, ":$1").replace(/\/+/g, "/");
+      if (!matchPath(normalizedPath, searchPath)) continue;
+
+      // Resolve view reference to a symbol
+      const viewName = viewRef.split(".").pop() ?? viewRef;
+      const sym = index.symbols.find((s) => s.name === viewName && s.file.endsWith(".py"));
+
+      handlers.push({
+        symbol: sym
+          ? stripSource(sym)
+          : {
+              id: `${file.path}:${viewName}`,
+              name: viewName,
+              kind: "function",
+              file: file.path,
+              start_line: 1,
+              end_line: 1,
+            } as ReturnType<typeof stripSource>,
+        file: sym?.file ?? file.path,
+        framework: "django",
+      });
+    }
+  }
+
+  return handlers;
+}
+
