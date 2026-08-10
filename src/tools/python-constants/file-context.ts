@@ -38,7 +38,10 @@ async function loadPythonFileContext(
   }
 
   const tree = parser.parse(source);
-  if (!tree) return null;
+  if (!tree) {
+    cache.set(filePath, null);
+    return null;
+  }
   const files = index.files.map((entry) => entry.path);
   const srcLayout = detectSrcLayout(files);
   const assignments = new Map<string, AssignmentBinding>();

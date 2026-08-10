@@ -17,6 +17,7 @@ async function evaluateValueNode(
   filePath: string,
   node: TSNode,
   state: ResolutionState,
+  depth = 0,
 ): Promise<EvaluationResult> {
   switch (node.type) {
     case "string":
@@ -28,24 +29,46 @@ async function evaluateValueNode(
         alias_chain: [],
         used_import: false,
       };
-    case "integer":
+    case "integer": {
+      const value = Number(node.text.replaceAll("_", ""));
+      if (!Number.isSafeInteger(value)) {
+        return {
+          resolved: false,
+          value_text: node.text,
+          alias_chain: [],
+          used_import: false,
+          reason: `Integer literal exceeds JavaScript safe integer range: ${node.text}`,
+        };
+      }
       return {
         resolved: true,
         value_kind: "integer",
-        value: Number(node.text),
+        value,
         value_text: node.text,
         alias_chain: [],
         used_import: false,
       };
-    case "float":
+    }
+    case "float": {
+      const value = Number(node.text.replaceAll("_", ""));
+      if (!Number.isFinite(value)) {
+        return {
+          resolved: false,
+          value_text: node.text,
+          alias_chain: [],
+          used_import: false,
+          reason: `Float literal is outside the supported finite range: ${node.text}`,
+        };
+      }
       return {
         resolved: true,
         value_kind: "float",
-        value: Number(node.text),
+        value,
         value_text: node.text,
         alias_chain: [],
         used_import: false,
       };
+    }
     case "true":
       return {
         resolved: true,
@@ -74,14 +97,14 @@ async function evaluateValueNode(
         used_import: false,
       };
     case "identifier":
-      return await resolveNamedValue(filePath, node.text, state, 0);
+      return await resolveNamedValue(filePath, node.text, state, depth + 1);
     case "list":
     case "tuple": {
       const items: PythonLiteralValue[] = [];
       let usedImport = false;
       const aliasChain: ResolutionHop[] = [];
       for (const child of node.namedChildren) {
-        const result = await evaluateValueNode(filePath, child, state);
+        const result = await evaluateValueNode(filePath, child, state, depth);
         aliasChain.push(...result.alias_chain);
         usedImport = usedImport || result.used_import;
         if (!result.resolved || result.value === undefined) {
@@ -114,8 +137,8 @@ async function evaluateValueNode(
         const valueNode = pair.namedChildren[1];
         if (!keyNode || !valueNode) return unsupportedNode(node, aliasChain, usedImport);
 
-        const keyResult = await evaluateValueNode(filePath, keyNode, state);
-        const valueResult = await evaluateValueNode(filePath, valueNode, state);
+        const keyResult = await evaluateValueNode(filePath, keyNode, state, depth);
+        const valueResult = await evaluateValueNode(filePath, valueNode, state, depth);
         aliasChain.push(...keyResult.alias_chain, ...valueResult.alias_chain);
         usedImport = usedImport || keyResult.used_import || valueResult.used_import;
 
@@ -150,12 +173,14 @@ async function evaluateValueNode(
     }
     case "parenthesized_expression": {
       const inner = node.namedChildren[0];
-      return inner ? await evaluateValueNode(filePath, inner, state) : unsupportedNode(node, [], false);
+      return inner
+        ? await evaluateValueNode(filePath, inner, state, depth)
+        : unsupportedNode(node, [], false);
     }
     case "unary_operator": {
       const operand = node.namedChildren[0];
       if (!operand) return unsupportedNode(node, [], false);
-      const inner = await evaluateValueNode(filePath, operand, state);
+      const inner = await evaluateValueNode(filePath, operand, state, depth);
       if (!inner.resolved || typeof inner.value !== "number") {
         return {
           resolved: false,
@@ -165,7 +190,8 @@ async function evaluateValueNode(
           reason: inner.reason ?? `Unsupported unary operand: ${operand.text}`,
         };
       }
-      if (node.text.startsWith("-")) {
+      const operator = node.text.slice(0, node.text.indexOf(operand.text)).trim();
+      if (operator === "-") {
         return {
           resolved: true,
           value_kind: inner.value_kind === "float" ? "float" : "integer",
@@ -175,7 +201,29 @@ async function evaluateValueNode(
           used_import: inner.used_import,
         };
       }
-      return inner;
+      if (operator === "+") {
+        return { ...inner, value_text: node.text };
+      }
+      if (operator === "~" && inner.value_kind === "integer") {
+        const value = Number(~BigInt(inner.value));
+        if (Number.isSafeInteger(value)) {
+          return {
+            resolved: true,
+            value_kind: "integer",
+            value,
+            value_text: node.text,
+            alias_chain: inner.alias_chain,
+            used_import: inner.used_import,
+          };
+        }
+      }
+      return {
+        resolved: false,
+        value_text: node.text,
+        alias_chain: inner.alias_chain,
+        used_import: inner.used_import,
+        reason: `Unsupported unary operator or operand: ${node.text}`,
+      };
     }
     default:
       return unsupportedNode(node, [], false);
@@ -224,7 +272,7 @@ async function resolveNamedValue(
 
     const assignment = context.assignments.get(name);
     if (assignment) {
-      const result = await evaluateValueNode(filePath, assignment.rhs, state);
+      const result = await evaluateValueNode(filePath, assignment.rhs, state, depth);
       return {
         ...result,
         alias_chain: [{ name, file: filePath, line: getBindingLine(assignment) }, ...result.alias_chain],

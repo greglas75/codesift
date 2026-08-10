@@ -145,6 +145,88 @@ def fetch(limit: int = COUNT, url: str = DEFAULT_URL, enabled=False, missing=oth
     expect(result.matches[0]!.value_text).toBe('int("5")');
   });
 
+  it("normalizes finite numeric literals without returning rounded integers", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/numbers.py": `READABLE = 1_000_000
+HEX_MASK = 0xFF_FF
+TOO_LARGE = 9007199254740993
+TOO_LARGE_FLOAT = 1e400
+`,
+    });
+
+    const readable = await resolveConstantValue(repo, "READABLE");
+    const hexMask = await resolveConstantValue(repo, "HEX_MASK");
+    const tooLarge = await resolveConstantValue(repo, "TOO_LARGE");
+    const tooLargeFloat = await resolveConstantValue(repo, "TOO_LARGE_FLOAT");
+
+    expect(readable.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "integer",
+      value: 1_000_000,
+    });
+    expect(hexMask.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "integer",
+      value: 65_535,
+    });
+    expect(tooLarge.matches[0]).toMatchObject({
+      resolved: false,
+      value_text: "9007199254740993",
+      reason: "Integer literal exceeds JavaScript safe integer range: 9007199254740993",
+    });
+    expect(tooLarge.matches[0]).not.toHaveProperty("value");
+    expect(tooLargeFloat.matches[0]).toMatchObject({
+      resolved: false,
+      value_text: "1e400",
+      reason: "Float literal is outside the supported finite range: 1e400",
+    });
+    expect(tooLargeFloat.matches[0]).not.toHaveProperty("value");
+  });
+
+  it("preserves Python unary numeric semantics", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/unary.py": `NEGATIVE = -5
+POSITIVE = +5
+INVERTED = ~5
+INVALID_INVERT = ~1.5
+`,
+    });
+
+    const negative = await resolveConstantValue(repo, "NEGATIVE");
+    const positive = await resolveConstantValue(repo, "POSITIVE");
+    const inverted = await resolveConstantValue(repo, "INVERTED");
+    const invalidInvert = await resolveConstantValue(repo, "INVALID_INVERT");
+
+    expect(negative.matches[0]).toMatchObject({ resolved: true, value: -5, value_text: "-5" });
+    expect(positive.matches[0]).toMatchObject({ resolved: true, value: 5, value_text: "+5" });
+    expect(inverted.matches[0]).toMatchObject({ resolved: true, value: -6, value_text: "~5" });
+    expect(invalidInvert.matches[0]).toMatchObject({
+      resolved: false,
+      value_text: "~1.5",
+      reason: "Unsupported unary operator or operand: ~1.5",
+    });
+  });
+
+  it("enforces max_depth across same-file alias chains", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/aliases.py": `BASE = 5
+ALIAS = BASE
+`,
+    });
+
+    const bounded = await resolveConstantValue(repo, "ALIAS", { max_depth: 0 });
+    const permitted = await resolveConstantValue(repo, "ALIAS", { max_depth: 1 });
+
+    expect(bounded.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "Max resolution depth (0) exceeded",
+    });
+    expect(permitted.matches[0]).toMatchObject({ resolved: true, value: 5 });
+  });
+
   it("returns an empty list when the symbol does not exist in Python scope", async () => {
     const repo = await writeFixture({
       "app/__init__.py": "",
