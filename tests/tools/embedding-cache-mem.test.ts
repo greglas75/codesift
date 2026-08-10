@@ -2,8 +2,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getEmbeddingCache, invalidateCache, _cachedEmbeddingReposForTesting } from "../../src/tools/index-tools.js";
+import {
+  getEmbeddingCache,
+  invalidateCache,
+  _cachedEmbeddingReposForTesting,
+} from "../../src/tools/index-tools.js";
 import { getChunkEmbeddingCache } from "../../src/tools/index-tools/registry.js";
+import {
+  getChunkEmbeddingPath,
+  getChunkPath,
+  resolveChunkIndexPaths,
+  saveChunkIndex,
+} from "../../src/storage/chunk-store.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const DIMS = 768;
@@ -21,9 +31,20 @@ function writeRepo(dir: string, hash: string): string {
   return idxPath;
 }
 
+function writeChunkEmbeddings(dir: string, hash: string, count: number): void {
+  const lines: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const vec = Array.from({ length: DIMS }, (_, j) => ((i + j) % 17) / 17);
+    lines.push(JSON.stringify({ id: `${hash}:chunk${i}`, vec }));
+  }
+  writeFileSync(join(dir, `${hash}.chunk-embeddings.ndjson`), lines.join("\n") + "\n");
+}
+
 describe("getEmbeddingCache — lite mode + LRU memory bound", () => {
   let dir: string;
+  let previousEmbeddingMemMb: string | undefined;
   beforeEach(() => {
+    previousEmbeddingMemMb = process.env.CODESIFT_MAX_EMBEDDING_MEM_MB;
     dir = mkdtempSync(join(tmpdir(), "emb-mem-"));
     const repos: Record<string, unknown> = {};
     for (const name of ["local/a", "local/b", "local/c"]) {
@@ -41,7 +62,8 @@ describe("getEmbeddingCache — lite mode + LRU memory bound", () => {
     vi.restoreAllMocks();
     delete process.env.CODESIFT_DATA_DIR;
     delete process.env.CODESIFT_DISABLE_LOCAL_EMBEDDINGS;
-    delete process.env.CODESIFT_MAX_EMBEDDING_MEM_MB;
+    if (previousEmbeddingMemMb === undefined) delete process.env.CODESIFT_MAX_EMBEDDING_MEM_MB;
+    else process.env.CODESIFT_MAX_EMBEDDING_MEM_MB = previousEmbeddingMemMb;
     resetConfigCache();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -93,5 +115,37 @@ describe("getEmbeddingCache — lite mode + LRU memory bound", () => {
     expect(_cachedEmbeddingReposForTesting()).not.toContain("local/a:chunks");
     expect(existsSync(chunkPath)).toBe(false);
     expect(await getChunkEmbeddingCache("local/a")).toBeNull();
+  });
+
+  it("refuses a chunk embedding map larger than the resident-memory budget", async () => {
+    process.env.CODESIFT_MAX_EMBEDDING_MEM_MB = "1";
+    resetConfigCache();
+    writeChunkEmbeddings(dir, "local_a", 400); // ~1.2 MiB of Float32Array payload alone
+
+    const loaded = await getChunkEmbeddingCache("local/a");
+
+    expect(loaded).toBeNull();
+    expect(_cachedEmbeddingReposForTesting()).not.toContain("local/a:chunks");
+  });
+
+  it("reloads a chunk cache when the manifest points at a new generation", async () => {
+    writeChunkEmbeddings(dir, "local_a", 1);
+    expect((await getChunkEmbeddingCache("local/a"))?.has("local_a:chunk0")).toBe(true);
+
+    const indexPath = join(dir, "local_a.index.json");
+    const chunkPath = getChunkPath(indexPath);
+    const embeddingPath = getChunkEmbeddingPath(indexPath);
+    await saveChunkIndex(
+      chunkPath,
+      [],
+      embeddingPath,
+      new Map([["fresh", new Float32Array(DIMS).fill(0.25)]]),
+    );
+    const active = await resolveChunkIndexPaths(chunkPath, embeddingPath);
+
+    const refreshed = await getChunkEmbeddingCache("local/a");
+    expect(refreshed?.has("fresh")).toBe(true);
+    expect(refreshed?.has("local_a:chunk0")).toBe(false);
+    expect(active.embeddings).toContain(".generation.");
   });
 });

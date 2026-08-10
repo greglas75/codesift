@@ -9,7 +9,14 @@ import { indexFile, clearLastIndexedStateForTesting, ensureIndexFresh, resetFres
 import { listAllRepos, invalidateCache, getBM25Index, getCodeIndex, getIndexSummary, getEmbeddingCache, autoIndexCurrentRepo, _cachedEmbeddingReposForTesting, _embeddingLoadCountForTesting, _resetEmbeddingLoadCountForTesting, type RepoSummary } from "./index-tools/registry.js";
 import { embedSymbols } from "./index-tools/parse.js";
 import { drainLegacyHashQueue, ASTRO_LOCK_FILENAME, EXTRACTOR_VERSIONS_FILENAME, checkAstroExtractorVersion, type AstroReindexResult } from "./index-tools/snapshots.js";
-import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches } from "./index-tools/state.js";
+import {
+  activeWatchers,
+  bm25Indexes,
+  codeIndexes,
+  embeddingCaches,
+  embeddingCacheGenerations,
+  embeddingCacheSources,
+} from "./index-tools/state.js";
 
 const GIT_CLONE_TIMEOUT_MS = 120_000;
 const GIT_CHECKOUT_TIMEOUT_MS = 30_000;
@@ -136,5 +143,7 @@ export async function stopAllWatchersForTesting(): Promise<void> {
   bm25Indexes.clear();
   codeIndexes.clear();
   embeddingCaches.clear();
+  embeddingCacheGenerations.clear();
+  embeddingCacheSources.clear();
   resetFreshnessCache();
 }

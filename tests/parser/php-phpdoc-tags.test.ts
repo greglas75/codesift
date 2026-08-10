@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parsePhpDocTags } from "../../src/parser/extractors/php.js";
+import {
+  parsePhpDocTags,
+  parsePhpDocVar,
+} from "../../src/parser/extractors/php.js";
+
+// Test level: small — pure in-process parsing with no I/O or timing.
 
 describe("parsePhpDocTags", () => {
   it("returns empty array for undefined", () => {
@@ -65,5 +70,23 @@ describe("parsePhpDocTags", () => {
     const tags = parsePhpDocTags(doc);
     expect(tags).toHaveLength(2);
     expect(tags.map((t) => t.name).sort()).toEqual(["id", "password"]);
+  });
+});
+
+describe("parsePhpDocVar", () => {
+  it("returns undefined when the docblock is absent", () => {
+    expect(parsePhpDocVar(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when the docblock has no @var tag", () => {
+    expect(parsePhpDocVar("/** User display name. */")).toBeUndefined();
+  });
+
+  it("preserves nullable union syntax", () => {
+    expect(parsePhpDocVar("/** @var User|null */")).toBe("User|null");
+  });
+
+  it("preserves array shorthand syntax", () => {
+    expect(parsePhpDocVar("/** @var int[] */")).toBe("int[]");
   });
 });

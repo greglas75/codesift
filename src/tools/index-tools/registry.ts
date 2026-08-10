@@ -35,7 +35,18 @@ import type { BM25Index } from "../../search/bm25.js";
 import { loadConfig, localEmbeddingsDisabled, embeddingMemBudgetBytes } from "../../config.js";
 import { ensureIndexFresh } from "./file-indexer.js";
 import { indexFolder } from "./folder-indexer.js";
-import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches, chunkCacheKey, invalidateEmbeddingCaches } from "./state.js";
+import {
+  activeWatchers,
+  bm25Indexes,
+  codeIndexes,
+  embeddingCaches,
+  embeddingCacheGenerations,
+  embeddingCacheSources,
+  cacheEmbeddingIfGenerationCurrent,
+  invalidateEmbeddingCache,
+  chunkCacheKey,
+  invalidateEmbeddingCaches,
+} from "./state.js";
 import type { CodeIndex, RepoMeta } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
 
@@ -366,6 +377,7 @@ function evictEmbeddingCachesOverBudget(pinned: string): void {
     if (total <= budget) break;
     if (k === pinned) continue;
     embeddingCaches.delete(k);
+    embeddingCacheSources.delete(k);
     total -= sizes.get(k) ?? 0;
   }
 }
@@ -419,18 +431,41 @@ export function _resetEmbeddingLoadCountForTesting(): void {
  */
 export async function getChunkEmbeddingCache(
   repoName: string,
+  resolvedEmbeddingPath?: string,
 ): Promise<Map<string, Float32Array> | null> {
   if (embeddingsDisabled()) return null;
+  let activeEmbeddingPath = resolvedEmbeddingPath;
+  if (!activeEmbeddingPath) {
+    const config = loadConfig();
+    const meta = await getRepo(config.registryPath, repoName);
+    if (!meta) return null;
+    const {
+      getChunkPath,
+      getChunkEmbeddingPath,
+      resolveChunkIndexPaths,
+    } = await import("../../storage/chunk-store.js");
+    activeEmbeddingPath = (await resolveChunkIndexPaths(
+      getChunkPath(meta.index_path),
+      getChunkEmbeddingPath(meta.index_path),
+    )).embeddings;
+  }
   const cacheKey = chunkCacheKey(repoName);
 
   const cached = embeddingCaches.get(cacheKey);
-  if (cached) {
+  if (cached && embeddingCacheSources.get(cacheKey) === activeEmbeddingPath) {
     embeddingCaches.delete(cacheKey);
     embeddingCaches.set(cacheKey, cached);
     return cached;
   }
+  if (cached) {
+    // The generation-aware form, not a bare delete: it also clears the source and bumps the
+    // generation, so a load already in flight cannot republish the map we are dropping.
+    invalidateEmbeddingCache(cacheKey);
+  }
 
-  const inFlight = embeddingLoadsInFlight.get(cacheKey);
+  const generation = embeddingCacheGenerations.get(cacheKey) ?? 0;
+  const loadKey = `${cacheKey}\0${activeEmbeddingPath}\0${generation}`;
+  const inFlight = embeddingLoadsInFlight.get(loadKey);
   if (inFlight) return inFlight;
 
   const loadPromise = (async (): Promise<Map<string, Float32Array> | null> => {
@@ -449,19 +484,33 @@ export async function getChunkEmbeddingCache(
     }
 
     const { loadChunkEmbeddings, getChunkEmbeddingPath } = await import("../../storage/chunk-store.js");
-    const loaded = await loadChunkEmbeddings(getChunkEmbeddingPath(meta.index_path));
+    embeddingLoadCount++;
+    const loaded = await loadChunkEmbeddings(
+      getChunkEmbeddingPath(meta.index_path),
+      embeddingMemBudgetBytes(),
+      activeEmbeddingPath,
+    );
     if (!loaded || loaded.size === 0) return null;
-
-    embeddingCaches.set(cacheKey, loaded);
-    evictEmbeddingCachesOverBudget(cacheKey);
+    // A completed re-index may invalidate this key while its previous file is
+    // still being read. Never let that stale result repopulate the cache.
+    const cachedCurrentGeneration = cacheEmbeddingIfGenerationCurrent(
+      cacheKey,
+      generation,
+      loaded,
+      activeEmbeddingPath,
+    );
+    if (cachedCurrentGeneration) evictEmbeddingCachesOverBudget(cacheKey);
+    // A generation bump only prevents stale cache publication. The caller
+    // explicitly requested this immutable snapshot, so its loaded data remains
+    // valid for that query even when a newer generation became active meanwhile.
     return loaded;
   })();
 
-  embeddingLoadsInFlight.set(cacheKey, loadPromise);
+  embeddingLoadsInFlight.set(loadKey, loadPromise);
   try {
     return await loadPromise;
   } finally {
-    embeddingLoadsInFlight.delete(cacheKey);
+    embeddingLoadsInFlight.delete(loadKey);
   }
 }
 

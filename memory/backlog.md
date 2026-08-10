@@ -103,7 +103,6 @@
 - [ ] `typescript-constants-tools.ts|numeric|Number-precision` — large literals / Infinity → unresolved
 - [ ] `constant-resolution-tools.ts|API|file_pattern` — document or strict path matching for `file_pattern`
 - [ ] `index-store.ts|edge|empty-extractor` — `{}` + empty `files` should not count as version-current
-- [ ] `typescript-constants-tools.ts|CQ11|split-module` — reduce file size / split helpers
 - [ ] `typescript-constants-tools.ts|coverage|path-alias` — resolve or document tsconfig path imports
 - [ ] `constant-resolution-tools.ts|UX|infer-lang-fallback` — avoid silent default to python-only
 
@@ -231,3 +230,72 @@
   the string `"laravel", "symfony", "yii2"` and calls it Yii2 detection. Biome caught it: the test
   imported `detectStack` and never called it. Renamed to what it actually checks; a real test needs
   a temp dir with a `composer.json` requiring `yiisoft/yii2`, run through `detectStack`.
+
+## From cross-repo contract refactor (2026-08-10)
+
+- [ ] **B-20 [MEDIUM, correctness]** `cross-repo-outbound-calls.ts|ADV|fetch-method-window` —
+  fetch method inference scans a raw 300-character window and can consume a neighboring call's
+  `method`. A correct fix needs call-span offsets from `cross-repo-outbound-lexer.ts`, outside the
+  refactor fence. Source: `zuvo:refactor` adversarial review.
+
+## From import graph refactor (2026-08-10)
+
+- [ ] **B-22 [MEDIUM, correctness]** `path-map.ts|ADV|above-root-relative-import` —
+  `resolveImportPath` permits excess `..` segments to pop beyond the indexed source root, after
+  which the remaining path can match an unrelated indexed file. Define whether above-root imports
+  must be rejected or resolved against a workspace boundary, then add a regression matrix before
+  changing this pre-existing behavior. Source: `zuvo:refactor` adversarial review.
+- [ ] **B-23 [MEDIUM, correctness]** `language-imports.ts|ADV|php-leading-backslash-use` —
+  PHP import extraction does not recognize fully-qualified declarations such as
+  `use \\App\\Foo;`. Extend the parser and resolver together, with grouped/aliased and comment/string
+  negatives, because accepting the syntax changes the graph rather than merely moving code.
+  Source: `zuvo:refactor` adversarial review.
+
+## From test audit 2026-08-10 — TypeScript constant resolution
+
+- [ ] **B-21 [MEDIUM, Test]** `constant-resolution-tools.test.ts|Q11|defensive-branches` — the suite now passes 23/23 with 92.1% line and 75.55% branch coverage across the split TypeScript resolver, but defensive AST/import-context branches remain uncovered, so critical gate Q11 stays at 0 after the two-iteration test-quality cap. Residual anchors: `src/tools/typescript-constants/file-context.ts:47-50,75-86,126-155`, `src/tools/typescript-constants/symbol-resolver.ts:29-31,156-161`, and `src/tools/typescript-constants/value-evaluator.ts:173-203,273-315,397-417`. Continue with malformed import/export AST fixtures and non-ENOENT read failures; do not weaken exact result/reason assertions. File: `tests/tools/constant-resolution-tools.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+
+## From route tools refactor and test audit (2026-08-10)
+
+- [ ] **B-24 [MEDIUM, Test]** `route-tools.test.ts|Q8-Q11|framework-edge-inventory` — the 39-test suite has exact positive assertions but no exhaustive negative/error inventory for every framework scanner; targeted branch coverage remains 73.30%. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-25 [MEDIUM, Test]** `route-tools-python.test.ts|Q8-Q11|decorator-edge-inventory` — Python decorator parsing lacks a complete branch-to-test inventory for malformed, stacked, and ambiguous decorators. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-26 [MEDIUM, Test]** `route-formatter.test.ts|Q8-Q11|malformed-render-inputs` — formatter coverage lacks exhaustive empty and malformed route/call-chain inputs. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-27 [MEDIUM, Test]** `tools.test.ts|Q8-Q11|route-integration-errors` — the route integration section covers the happy path but not a complete set of index, filesystem, and parser failures. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-28 [MEDIUM, correctness]** `next.ts|ADV|pages-exact-match` — Pages Router exact matching is inconsistent with other Next.js route forms. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-29 [MEDIUM, correctness]** `django.ts|ADV|include-prefix-resolution` — Django `include()` prefixes are not resolved into child URL patterns. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-30 [MEDIUM, correctness]** `django.ts|ADV|symbol-name-collision` — Django handler resolution can select the wrong same-named symbol. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-31 [MEDIUM, resilience]** `file-sources.ts|ADV|read-errors-swallowed` — route source loading converts every read failure to missing content, hiding permission and operational errors as absent routes. Source: `zuvo:refactor` adversarial review (reported twice). Seen: 2. Added: 2026-08-10.
+- [ ] **B-32 [LOW, diagnostics]** `trace-route.ts|ADV|synthetic-start-line-skip` — synthetic symbols without usable start lines are skipped without an explanation. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-33 [MEDIUM, correctness]** `spring-kotlin.ts|ADV|first-request-mapping-prefix` — the first `@RequestMapping` can be mistaken for a class prefix and later mappings are ignored. Source: `zuvo:refactor` adversarial review (reported twice). Seen: 2. Added: 2026-08-10.
+- [ ] **B-34 [LOW, correctness]** `trace-route.ts|ADV|duplicate-db-calls` — duplicate callee symbols can emit duplicate database-call entries. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-35 [MEDIUM, correctness]** `next-trace.ts|ADV|caller-array-index` — Next.js caller enrichment can associate metadata through the wrong caller-array index. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-36 [MEDIUM, rendering]** `mermaid-call-chain.ts|ADV|participant-alias-collision` — distinct call-chain participants can normalize to the same Mermaid alias. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-37 [MEDIUM, contract]** `trace-route.ts|ADV|mermaid-return-shape` — the optional Mermaid branch has a return-shape compatibility risk that needs an explicit public-contract decision. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-38 [LOW, efficiency]** `trace-route.ts|ADV|enrichment-without-handlers` — Next.js enrichment work is skipped or inconsistently applied when discovery returns no handlers. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-39 [MEDIUM, correctness]** `handler-discovery.ts|ADV|cross-framework-merge` — running all scanners and merging results can misclassify files containing overlapping framework syntax. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-40 [MEDIUM, rendering]** `route-mermaid.ts|ADV|label-escaping` — non-path Mermaid labels still need complete syntax escaping. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-41 [MEDIUM, correctness]** `next.ts|ADV|root-app-route` — a root App Router route can be skipped by path derivation. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-42 [MEDIUM, correctness]** `nest.ts|ADV|ambiguous-symbol-selection` — NestJS discovery can bind a decorator to the wrong same-named method symbol. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-43 [MEDIUM, correctness]** `nest.ts|ADV|method-modifier-parsing` — NestJS method modifiers can be mistaken for handler names. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-44 [MEDIUM, correctness]** `next.ts|ADV|head-options-exports` — Next.js `HEAD` and `OPTIONS` route exports are not discovered. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-45 [MEDIUM, correctness]** `hono.ts|ADV|first-app-selection` — Hono discovery assumes the first app construction is the routed application. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-46 [MEDIUM, resilience]** `hono.ts|ADV|extractor-errors-hidden` — Hono extractor failures are converted to empty route results without diagnostics. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-47 [MEDIUM, portability]** `hono.ts|ADV|platform-path-prefix` — Hono source-path normalization assumes one platform separator form. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-48 [MEDIUM, correctness]** `spring-kotlin.ts|ADV|annotation-adjacency` — Spring Kotlin discovery requires a mapping annotation to immediately precede `fun`, missing valid intervening syntax. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-49 [MEDIUM, correctness]** `django.ts|ADV|re-path-confusion` — the Django `path()` matcher can also consume `re_path()` constructs. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-50 [MEDIUM, correctness]** `ktor.ts|ADV|string-brace-depth` — braces inside Kotlin strings can corrupt Ktor nesting-depth tracking. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-51 [MEDIUM, correctness]** `laravel.ts|ADV|namespaced-string-controller` — Laravel namespaced string controllers are not resolved. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+- [ ] **B-52 [MEDIUM, completeness]** `yii2.ts|ADV|first-config-only` — Yii2 discovery scans only the first matching configuration file. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
+
+## From test audit 2026-08-10 — Nest extension analyzers
+
+The split suite passes 46/46 and the two audit iterations raised focused coverage from 96.19% to 99.77% lines and from 74.12% to 81.97% branches. Q11 remains 0 because the listed parser alternatives are still unexecuted; preserve exact outputs while adding table-driven `.js`, malformed-decorator/class, and zero-limit fixtures.
+
+- [ ] **B-53 [MEDIUM, Test]** `nest-ext-graphql.test.ts|Q11|parser-fallback-branches` — cover `.js` resolver selection, the per-file pre-limit exit, and operation decorators outside a resolver class. File: `tests/tools/nest-ext-graphql.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-54 [MEDIUM, Test]** `nest-ext-websocket.test.ts|Q11|parser-fallback-branches` — cover `.js` gateway selection, a gateway decorator without a following class, and ignored commented handlers. File: `tests/tools/nest-ext-websocket.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-55 [MEDIUM, Test]** `nest-ext-schedule.test.ts|Q11|parser-fallback-branches` — cover `.js` candidates, quick-filter exits, ownerless decorators, and fallback dedup alternatives. File: `tests/tools/nest-ext-schedule.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-56 [MEDIUM, Test]** `nest-ext-typeorm.test.ts|Q11|parser-fallback-branches` — cover `.js` entity selection and an entity decorator without a following class. File: `tests/tools/nest-ext-typeorm.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-57 [MEDIUM, Test]** `nest-ext-microservice.test.ts|Q11|parser-fallback-branches` — cover `.js` controllers, the no-pattern fast path, missing handlers, and the ownerless-controller fallback. File: `tests/tools/nest-ext-microservice.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-58 [MEDIUM, Test]** `nest-ext-queue.test.ts|Q11|parser-fallback-branches` — cover `.js`/fast-path filters, ownerless decorators, and default queue/job-name fallbacks. File: `tests/tools/nest-ext-queue.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-59 [MEDIUM, Test]** `nest-ext-scope.test.ts|Q11|parser-fallback-branches` — cover `.js` candidates, no-`Injectable` and no-owner fast paths, and reverse-graph set reuse. File: `tests/tools/nest-ext-scope.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.
+- [ ] **B-60 [MEDIUM, Test]** `nest-ext-openapi.test.ts|Q11|parser-fallback-branches` — cover `.js`/spec filters, empty schema classes, optional decorator metadata, and route/security/parameter fallbacks. File: `tests/tools/nest-ext-openapi.test.ts:1`. Source: `zuvo:test-audit`. Seen: 1. Added: 2026-08-10.

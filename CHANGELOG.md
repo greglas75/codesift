@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- PHP symbol extraction now keeps semicolon-namespace parents, emits every field in multi-property
+  declarations with its own source range, preserves stacked attribute order, and deduplicates
+  PHPDoc members using PHP's field/method naming rules.
 - Import graph collection now falls back to regex imports when the TypeScript parser returns no
   tree, instead of silently dropping every edge from that file. The import graph implementation
   is also split into focused language, resolution, collection, and metric modules behind the

@@ -6,6 +6,27 @@ export const activeWatchers = new Map<string, FSWatcher>();
 export const bm25Indexes = new Map<string, BM25Index>();
 export const codeIndexes = new Map<string, CodeIndex>();
 export const embeddingCaches = new Map<string, Map<string, Float32Array>>();
+export const embeddingCacheGenerations = new Map<string, number>();
+export const embeddingCacheSources = new Map<string, string>();
+
+export function invalidateEmbeddingCache(cacheKey: string): void {
+  embeddingCaches.delete(cacheKey);
+  embeddingCacheSources.delete(cacheKey);
+  embeddingCacheGenerations.set(cacheKey, (embeddingCacheGenerations.get(cacheKey) ?? 0) + 1);
+}
+
+/** Compare and publish synchronously so invalidation cannot interleave with the set. */
+export function cacheEmbeddingIfGenerationCurrent(
+  cacheKey: string,
+  generation: number,
+  embeddings: Map<string, Float32Array>,
+  source?: string,
+): boolean {
+  if ((embeddingCacheGenerations.get(cacheKey) ?? 0) !== generation) return false;
+  embeddingCaches.set(cacheKey, embeddings);
+  if (source) embeddingCacheSources.set(cacheKey, source);
+  return true;
+}
 
 export const lastFullIndexAt = new Map<string, number>();
 
@@ -38,6 +59,12 @@ export function chunkCacheKey(repoName: string): string {
  * bug was that five call sites each independently forgot the same thing.
  */
 export function invalidateEmbeddingCaches(repoName: string): void {
-  embeddingCaches.delete(repoName);
-  embeddingCaches.delete(chunkCacheKey(repoName));
+  // Delegates to the generation-aware single-key form rather than deleting directly. Two
+  // invalidation mechanisms landed here from separate branches — a plain delete (symbols AND
+  // chunks) and a generation bump (one key, so a concurrent load cannot republish what was just
+  // invalidated). Keeping both as independent code paths would mean a repo removed through this
+  // function never bumps its generation, and an in-flight load could put the old map back after
+  // the caches were cleared. One mechanism, called twice.
+  invalidateEmbeddingCache(repoName);
+  invalidateEmbeddingCache(chunkCacheKey(repoName));
 }

@@ -33,8 +33,15 @@ let dataDir: string;
 let zuvoDir: string;
 let posted: unknown[];
 let realFetch: typeof globalThis.fetch;
-const ENV_KEYS = ["CODESIFT_DATA_DIR", "HOME", "CODESIFT_TELEMETRY", "CODESIFT_TELEMETRY_URL", "DO_NOT_TRACK"] as const;
-let previousEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+let previousEnv: Record<string, string | undefined>;
+
+const MUTATED_ENV = [
+  "CODESIFT_DATA_DIR",
+  "HOME",
+  "CODESIFT_TELEMETRY",
+  "CODESIFT_TELEMETRY_URL",
+  "DO_NOT_TRACK",
+] as const;
 
 const TS_OLD = "2026-08-01T10:00:00Z";
 const TS_MID = "2026-08-02T10:00:00Z";
@@ -53,10 +60,7 @@ async function writeUsage(entries: { ts: number; tool: string }[]): Promise<void
 }
 
 beforeEach(async () => {
-  previousEnv = {};
-  for (const key of ENV_KEYS) {
-    if (process.env[key] !== undefined) previousEnv[key] = process.env[key];
-  }
+  previousEnv = Object.fromEntries(MUTATED_ENV.map((key) => [key, process.env[key]]));
   home = await mkdtemp(join(tmpdir(), "cs-flush-"));
   dataDir = join(home, ".codesift");
   zuvoDir = join(home, ".zuvo");
@@ -79,10 +83,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   globalThis.fetch = realFetch;
-  for (const key of ENV_KEYS) {
-    const value = previousEnv[key];
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+  for (const key of MUTATED_ENV) {
+    const previous = previousEnv[key];
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
   }
   await rm(home, { recursive: true, force: true });
 });
