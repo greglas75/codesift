@@ -66,7 +66,6 @@ export async function collectSourceEdges(
     context.normalizedPaths,
     context.addEdge,
   );
-  if (typescript.skipFile) return;
   if (!typescript.astHandled) {
     collectRegexEdges(filePath, source, context.normalizedPaths, context.addEdge);
   }
