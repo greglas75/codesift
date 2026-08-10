@@ -54,4 +54,30 @@ describe("repair-registry", () => {
     const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
     expect(registry.repos["local/app"].root).toBe(registeredRoot);
   });
+
+  it("replaces a dead owner when exactly one live database can own the name", () => {
+    const rescuedRoot = join(dir, "rescued-root");
+    mkdirSync(rescuedRoot);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      repos: {
+        "local/app": {
+          name: "local/app",
+          root: join(dir, "deleted-root"),
+          index_path: join(dir, "aaaaaaaaaaaa.index.json"),
+        },
+      },
+    }));
+    writeIndexDb(join(dir, "bbbbbbbbbbbb.index.db"), "local/app", rescuedRoot);
+
+    execFileSync(process.execPath, [SCRIPT, "--apply"], {
+      env: { ...process.env, CODESIFT_DATA_DIR: dir },
+      stdio: "pipe",
+    });
+
+    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+    expect(registry.repos["local/app"]).toMatchObject({
+      root: rescuedRoot,
+      index_path: join(dir, "bbbbbbbbbbbb.index.json"),
+    });
+  });
 });

@@ -350,27 +350,49 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // class of data loss: a repo still present on disk can no longer be deleted because a JSON file
   // lost track of it. Re-registering also means the next lookup finds it.
   const rescued: string[] = [];
+  const indeterminate: string[] = [];
   const rescueCandidates = new Map<string, Array<{ root: string; indexPath: string }>>();
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
     if (!m?.[1] || live.has(m[1])) continue;
+    let rows: Array<{ key: string; value: string }>;
+    let db: import("node:sqlite").DatabaseSync | undefined;
     try {
       const { DatabaseSync } = await import("node:sqlite");
-      const db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
-      const rows = db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>;
-      db.close();
-      const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-      const root = meta["root"];
-      const repo = meta["repo"];
-      if (!root || !repo) continue;
-      statSync(root); // throws when the tree is gone — then it really is garbage
-      live.add(m[1]);
-      const candidates = rescueCandidates.get(repo) ?? [];
-      candidates.push({ root, indexPath: join(dataDir, `${m[1]}.index.json`) });
-      rescueCandidates.set(repo, candidates);
+      db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
+      rows = db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>;
     } catch {
-      /* unreadable, or the tree is gone — leave it to the sweep */
+      // Classification failed, so deletion is not justified. Protect this hash
+      // and report it for manual inspection instead of converting a transient
+      // read/permission failure into irreversible data loss.
+      live.add(m[1]);
+      indeterminate.push(name);
+      continue;
+    } finally {
+      try { db?.close(); } catch { /* already closed or unreadable */ }
     }
+    const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const root = meta["root"];
+    const repo = meta["repo"];
+    if (!root || !repo) {
+      live.add(m[1]);
+      indeterminate.push(name);
+      continue;
+    }
+    try {
+      statSync(root);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        continue; // the recorded tree is definitively gone, so this is garbage
+      }
+      live.add(m[1]);
+      indeterminate.push(name);
+      continue;
+    }
+    live.add(m[1]);
+    const candidates = rescueCandidates.get(repo) ?? [];
+    candidates.push({ root, indexPath: join(dataDir, `${m[1]}.index.json`) });
+    rescueCandidates.set(repo, candidates);
   }
 
   // Re-register only when there is one unambiguous owner for the name. A live
@@ -434,6 +456,8 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   output({
     rescued_repos: rescued.length,
     rescued_examples: rescued.slice(0, 5),
+    indeterminate_databases: indeterminate.length,
+    indeterminate_examples: indeterminate.slice(0, 5),
     stale_repos: stale.length,
     stale_examples: stale.slice(0, 5).map((s) => s.name),
     pruned: !dryRun,

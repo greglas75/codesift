@@ -8,6 +8,7 @@ import { resetConfigCache } from "../../src/config.js";
 
 const LIVE = "aaaaaaaaaaaa";   // hash present in registry
 const ORPH = "bbbbbbbbbbbb";   // hash NOT in registry
+const INDETERMINATE = "cccccccccccc";
 
 function writeIndexDb(path: string, repo: string, root: string): void {
   const db = new DatabaseSync(path);
@@ -124,5 +125,14 @@ describe("codesift prune", () => {
       root: rescuedRoot,
       index_path: join(dir, `${ORPH}.index.json`),
     });
+  });
+
+  it("keeps an unreadable database instead of deleting data it cannot classify", async () => {
+    writeFileSync(join(dir, `${INDETERMINATE}.index.db`), "not a sqlite database");
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    expect(existsSync(join(dir, `${INDETERMINATE}.index.db`))).toBe(true);
+    expect(JSON.parse(stdout).indeterminate_databases).toBe(1);
   });
 });
