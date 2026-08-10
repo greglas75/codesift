@@ -329,7 +329,8 @@ async function embedBatchWithStallRetry(
     }
     const dimensions = vectors[0]?.length ?? 0;
     if (dimensions === 0 || vectors.some((vector) =>
-      vector.length !== dimensions || vector.some((value) => !Number.isFinite(value)))) {
+      vector.length !== dimensions || vector.some((value) =>
+        !Number.isFinite(value) || !Number.isFinite(Math.fround(value))))) {
       throw new Error("embedding provider returned malformed vectors");
     }
     return vectors;

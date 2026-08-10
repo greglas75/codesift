@@ -89,6 +89,26 @@ describe("check-agent-codesift", () => {
     );
   });
 
+  it("skips Node env-file values before validating the actual script", () => {
+    const fx = fixture();
+    const envFile = join(fx.home, "node.env");
+    const missing = join(fx.home, "missing-codesift.js");
+    writeFileSync(envFile, "KEY=value\n", "utf-8");
+    const result = run(fx, {
+      projects: {
+        [fx.project]: {
+          mcpServers: { codesift: { command: process.execPath, args: ["--env-file", envFile, missing] } },
+        },
+      },
+      mcpServers: { codesift: { command: process.execPath } },
+    });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).broken).toEqual(
+      expect.arrayContaining([expect.objectContaining({ why: expect.stringContaining(missing) })]),
+    );
+  });
+
   it("health-checks each distinct daemon origin", () => {
     const fx = fixture();
     const secondProject = join(fx.home, "DEV", "other");

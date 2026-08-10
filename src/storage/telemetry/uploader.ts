@@ -78,15 +78,17 @@ function readText(path: string): string | null {
   try { return readFileSync(path, "utf-8").trim(); } catch { return null; }
 }
 
-function writeText(path: string, value: string): void {
+function writeText(path: string, value: string): boolean {
   const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
   try {
     mkdirSync(dataDir(), { recursive: true });
     writeFileSync(tmp, value, { encoding: "utf-8", flag: "wx" });
     renameSync(tmp, path);
+    return true;
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* no temp file to clean */ }
     console.error(`[codesift] telemetry cursor identity could not be persisted: ${String(err)}`);
+    return false;
   }
 }
 
@@ -98,24 +100,26 @@ function readTs(path: string): number {
     return 0;
   }
 }
-function writeTs(path: string, ts: number): void {
+function writeTs(path: string, ts: number): boolean {
   const current = readTs(path);
-  if (current >= ts) return;
+  if (current >= ts) return true;
   const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
   try {
     mkdirSync(dataDir(), { recursive: true });
     writeFileSync(tmp, String(ts), { encoding: "utf-8", flag: "wx" });
     renameSync(tmp, path);
+    return true;
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* no temp file to clean */ }
     console.error(`[codesift] telemetry watermark could not be persisted: ${String(err)}`);
+    return false;
   }
 }
 function readWatermark(): number {
   return readTs(watermarkPath());
 }
-function writeWatermark(ts: number): void {
-  writeTs(watermarkPath(), ts);
+function writeWatermark(ts: number): boolean {
+  return writeTs(watermarkPath(), ts);
 }
 
 /** Baked default collector — anonymous ingest needs NO token (the endpoint is
@@ -206,7 +210,17 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
       retroCursorReset = savedOffset > 0;
       retroSinceOffset = 0;
     }
-    const scan = await scanRetros(retroSinceOffset, retroLogPath(), "offset");
+    let scanIdentity = retroLogIdentity(retroSinceOffset);
+    let scan = await scanRetros(retroSinceOffset, retroLogPath(), "offset");
+    if (scanIdentity !== retroLogIdentity(retroSinceOffset)) {
+      // The path changed between validation and read. Retry from the beginning of the replacement
+      // and refuse to upload if it rotates again during the retry.
+      retroCursorReset = true;
+      retroSinceOffset = 0;
+      scanIdentity = retroLogIdentity(0);
+      scan = await scanRetros(0, retroLogPath(), "offset");
+      if (scanIdentity !== retroLogIdentity(0)) return "failed";
+    }
     retroNextOffset = scan.nextOffset;
     if (entries.length === 0 && scan.rows.length === 0) return "empty";
     path = "/ingest/codesift";
@@ -231,17 +245,21 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
   if (!ok) ok = await postGzip(ep.url + path, ep.token, body); // single retry
   if (!ok) return "failed"; // leave watermark — retry next flush
 
-  writeWatermark(maxTs);
+  let persisted = writeWatermark(maxTs);
   // Advance the retro cursor independently, and only forward. Guarded so a flush that carried
   // no retros (or a level that does not carry them) cannot move it — moving it on an empty scan
   // would re-create the original bug in a new place.
   if (retroNextOffset > retroSinceOffset) {
-    if (retroCursorReset) writeText(retroWatermarkPath(), String(retroNextOffset));
-    else writeTs(retroWatermarkPath(), retroNextOffset);
+    const offsetPersisted = retroCursorReset
+      ? writeText(retroWatermarkPath(), String(retroNextOffset))
+      : writeTs(retroWatermarkPath(), retroNextOffset);
     const nextIdentity = retroLogIdentity(retroNextOffset);
-    if (nextIdentity !== null) writeText(retroIdentityPath(), nextIdentity);
+    const identityPersisted = offsetPersisted && nextIdentity !== null
+      ? writeText(retroIdentityPath(), nextIdentity)
+      : false;
+    persisted = persisted && offsetPersisted && identityPersisted;
   }
-  return "sent";
+  return persisted ? "sent" : "failed";
 }
 
 let timer: NodeJS.Timeout | null = null;

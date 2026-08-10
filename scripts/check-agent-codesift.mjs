@@ -101,7 +101,13 @@ function resolveExecutable(raw) {
 function runtimeScriptArg(entry) {
   const runtime = entry.command?.trim().split("/").pop();
   if (!["node", "nodejs", "bun", "deno"].includes(runtime)) return null;
-  const consumesNext = new Set(["--require", "-r", "--loader", "--experimental-loader", "--import"]);
+  const consumesNext = new Set([
+    "--require", "-r", "--loader", "--experimental-loader", "--import",
+    "--env-file", "--env-file-if-exists", "--watch-path", "--conditions", "-C",
+    "--eval", "-e", "--print", "-p", "--inspect-port", "--diagnostic-dir",
+    "--icu-data-dir", "--openssl-config", "--redirect-warnings", "--report-directory",
+    "--report-filename", "--snapshot-blob", "--title", "--tls-cipher-list",
+  ]);
   const args = entry.args ?? [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];

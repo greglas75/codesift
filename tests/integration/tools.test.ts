@@ -674,6 +674,20 @@ describe("symbol_tools", () => {
 
       expect(await findReferences(repo, "getUser")).toEqual([]);
     });
+
+    it("finds identifiers whose valid spelling contains a dollar sign", async () => {
+      await createFixtureProject();
+      await writeFile(
+        join(fixtureDir, "src", "dollar.ts"),
+        "export const $store = 1;\nexport const readStore = () => $store;\n",
+      );
+      await indexFolder(fixtureDir, { watch: false });
+
+      const refs = await findReferences(REPO, "$store");
+
+      expect(refs).toHaveLength(2);
+      expect(refs.every((reference) => reference.context.includes("$store"))).toBe(true);
+    });
   });
 
   describe("batch references and unused imports", () => {

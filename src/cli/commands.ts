@@ -366,11 +366,21 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       const root = meta["root"];
       const repo = meta["repo"];
       if (!root || !repo) continue;
-      statSync(root); // throws when the tree is gone — then it really is garbage
       live.add(m[1]);
+      protectedStaleNames.add(repo);
+      try {
+        statSync(root);
+      } catch (err) {
+        // A confirmed missing tree is garbage. Permission/I/O/transient mount failures are not
+        // proof of absence, so keep both its artifacts and registry breadcrumb for a later prune.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          live.delete(m[1]);
+          protectedStaleNames.delete(repo);
+        }
+        continue;
+      }
       // Once a live database claims a stale name, preserve that registry entry unless replacement
       // succeeds. A conflict or transient write failure must not de-register the only breadcrumb.
-      protectedStaleNames.add(repo);
       const current = reg.repos?.[repo];
       if (current?.root && current.root !== root && !staleNames.has(repo)) {
         rescueConflicts.push(repo);

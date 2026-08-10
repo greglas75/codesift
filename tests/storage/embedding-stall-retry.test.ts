@@ -93,6 +93,7 @@ describe("batchEmbed stall retry", () => {
     { label: "empty", vectors: Array.from({ length: 12 }, () => []) },
     { label: "inconsistent", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1] : [1, 2]) },
     { label: "non-finite", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1, Number.NaN] : [1, 2]) },
+    { label: "float32-overflowing", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1, 1e100] : [1, 2]) },
   ])("rejects $label provider vectors before they reach storage", async ({ vectors }) => {
     await expect(batchEmbed(texts(12), new Map(), async () => vectors, 12)).rejects.toThrow(
       "malformed vectors",

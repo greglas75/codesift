@@ -179,7 +179,7 @@ async function findReferencesWithRipgrep(
   filePattern?: string,
 ): Promise<Reference[] | null> {
   const args: string[] = [
-    "-n", "--no-heading", "-F", "-w",
+    "-n", "--no-heading", "-F",
     "--max-columns", String(MAX_CONTEXT_LENGTH),
     "--max-columns-preview",
     "--max-count", String(Math.min(maxResults * 2, 5000)),
@@ -215,6 +215,7 @@ async function findReferencesWithRipgrep(
   const rootPrefix = root.endsWith("/") ? root : root + "/";
   const lines = stdout.split("\n").filter(Boolean);
   const refs: Reference[] = [];
+  const identifierPattern = wordBoundaryPattern(symbolName);
 
   for (const rawLine of lines) {
     if (refs.length >= maxResults) break;
@@ -225,6 +226,9 @@ async function findReferencesWithRipgrep(
     const absPath = match[1];
     const relPath = absPath.startsWith(rootPrefix) ? absPath.slice(rootPrefix.length) : absPath;
     if (!filePattern && isNoisePath(relPath)) continue;
+    // `rg -w` is incorrect for valid identifiers such as `$store` and `#handler`. The literal
+    // search keeps metacharacters safe; this Unicode-aware filter supplies language boundaries.
+    if (!identifierPattern.test(match[3])) continue;
 
     refs.push({
       file: relPath,
