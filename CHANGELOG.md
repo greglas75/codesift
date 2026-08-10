@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- Storage: index APIs now reject SQLite database and sidecar paths (`.db`, `-wal`, `-shm`,
+  `-journal`, case-insensitively) instead of silently deriving a second `.db` path; cache and
+  migration state were also split from `index-store.ts` behind its existing public facade.
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
