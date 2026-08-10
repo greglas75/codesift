@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, stat, open } from "node:fs/promises";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -27,7 +27,6 @@ import {
 const DIM = 768;
 let dir: string;
 const prevDataDir = process.env["CODESIFT_DATA_DIR"];
-const prevCacheBudget = process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
 
 function vec(seed: number): Float32Array {
   const v = new Float32Array(DIM);
@@ -40,15 +39,13 @@ const keyOf = (n: number): string => contentKey("embeddinggemma", DIM, `symbol-$
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "codesift-sharedv2-"));
   process.env["CODESIFT_DATA_DIR"] = dir;
-  process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "256";
   _resetSharedCacheForTests();
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
   else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
-  if (prevCacheBudget === undefined) delete process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
-  else process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = prevCacheBudget;
   _resetSharedCacheForTests();
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -59,9 +56,6 @@ async function cacheFile(): Promise<string> {
 
 describe("a batch past v1's ceiling is written, not silently dropped", () => {
   it("stores a batch past the string ceiling — v1 wrote zero bytes and said nothing", async () => {
-    // The regression writes ~110 MB. Production's default read budget scales
-    // with host RAM, so pin enough room to test the writer on small CI runners.
-    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "256";
     await loadSharedCache(); // establishes the in-memory map so dedup is live
 
     // Derive the ceiling from the actual encoded width rather than hardcoding 33,042: that number
@@ -92,18 +86,6 @@ describe("a batch past v1's ceiling is written, not silently dropped", () => {
 });
 
 describe("round trip is exact and compact", () => {
-  it("rejects malformed non-hex cache keys", async () => {
-    await loadSharedCache();
-    const existedBefore = existsSync(await cacheFile());
-    const sizeBefore = existedBefore ? (await stat(await cacheFile())).size : null;
-    appendSharedCache([{ key: "z".repeat(32), vec: vec(1) }]);
-
-    expect(existsSync(await cacheFile())).toBe(existedBefore);
-    if (sizeBefore !== null) expect((await stat(await cacheFile())).size).toBe(sizeBefore);
-    _resetSharedCacheForTests();
-    expect((await loadSharedCache()).has("z".repeat(32))).toBe(false);
-  });
-
   it("returns bit-identical float32 vectors", async () => {
     await loadSharedCache();
     const entries = [0, 1, 2].map((i) => ({ key: keyOf(i), vec: vec(i) }));
@@ -133,6 +115,15 @@ describe("round trip is exact and compact", () => {
 });
 
 describe("duplicates are not re-appended", () => {
+  it("deduplicates repeated keys within one append call", async () => {
+    await loadSharedCache();
+    const entry = { key: keyOf(1), vec: vec(1) };
+
+    appendSharedCache([entry, entry]);
+
+    expect((await stat(await cacheFile())).size).toBe(16 + 2 + 4 + DIM * 4);
+  });
+
   it("writing the same keys twice does not grow the file", async () => {
     await loadSharedCache();
     const entries = Array.from({ length: 50 }, (_, i) => ({ key: keyOf(i), vec: vec(i) }));
@@ -148,20 +139,31 @@ describe("duplicates are not re-appended", () => {
     expect((await loadSharedCache()).size).toBe(50);
   });
 
-  it("normalizes hexadecimal key casing before deduplication", async () => {
+  it("retries persistence after a failed append instead of poisoning in-memory dedup", async () => {
+    const blocker = join(dir, "blocked-data-dir");
+    await writeFile(blocker, "not a directory", "utf-8");
+    process.env["CODESIFT_DATA_DIR"] = blocker;
     await loadSharedCache();
-    const lower = keyOf(1);
-    appendSharedCache([
-      { key: lower.toUpperCase(), vec: vec(1) },
-      { key: lower, vec: vec(2) },
-    ]);
+    const entry = { key: keyOf(1), vec: vec(1) };
 
-    const recordBytes = 16 + 2 + 4 + DIM * 4;
-    expect((await stat(await cacheFile())).size).toBe(recordBytes);
+    appendSharedCache([entry]);
+    await rm(blocker);
+    await mkdir(blocker);
+    appendSharedCache([entry]);
+
     _resetSharedCacheForTests();
     const loaded = await loadSharedCache();
-    expect(loaded.has(lower)).toBe(true);
-    expect(loaded.size).toBe(1);
+    expect(loaded.has(entry.key)).toBe(true);
+  });
+
+  it("rejects a non-hex key instead of encoding uninitialized key bytes", async () => {
+    const cache = await loadSharedCache();
+    const before = existsSync(await cacheFile()) ? (await stat(await cacheFile())).size : 0;
+    appendSharedCache([{ key: "z".repeat(32), vec: vec(1) }]);
+    expect(cache.size).toBe(0);
+    expect(existsSync(await cacheFile()) ? (await stat(await cacheFile())).size : 0).toBe(before);
+    _resetSharedCacheForTests();
+    expect((await loadSharedCache()).has("z".repeat(32))).toBe(false);
   });
 });
 
@@ -179,9 +181,11 @@ describe("a torn tail costs one record, not the cache", () => {
     await fh.close();
 
     _resetSharedCacheForTests();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const loaded = await loadSharedCache();
     expect(loaded.size).toBe(9);
     expect(loaded.has(keyOf(0))).toBe(true);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("stopped early"));
   });
 
   it("stops at an impossible dimension instead of allocating on a corrupt byte", async () => {
@@ -232,6 +236,11 @@ describe("a second repo with identical content does not call the model", () => {
     expect(textsEmbedded).toBe(40);
     const callsAfterFirst = modelCalls;
     expect(callsAfterFirst).toBeGreaterThan(0);
+
+    // A linked worktree can be indexed by another process. Force the second lookup to reload the
+    // persisted file so this proves cross-process reuse rather than only the in-memory fast path.
+    _resetSharedCacheForTests();
+    await loadSharedCache();
 
     // Same TEXTS, different repo and different symbol ids — exactly a worktree of the first.
     const worktreeTexts = new Map(

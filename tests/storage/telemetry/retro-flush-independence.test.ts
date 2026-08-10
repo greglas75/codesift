@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdtemp, rename, rm, writeFile, mkdir } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,15 +33,14 @@ let dataDir: string;
 let zuvoDir: string;
 let posted: unknown[];
 let realFetch: typeof globalThis.fetch;
-let previousEnv: Record<string, string | undefined>;
-
-const MUTATED_ENV = [
+const ENV_KEYS = [
   "CODESIFT_DATA_DIR",
   "HOME",
   "CODESIFT_TELEMETRY",
   "CODESIFT_TELEMETRY_URL",
   "DO_NOT_TRACK",
 ] as const;
+let previousEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>;
 
 const TS_OLD = "2026-08-01T10:00:00Z";
 const TS_MID = "2026-08-02T10:00:00Z";
@@ -60,7 +59,9 @@ async function writeUsage(entries: { ts: number; tool: string }[]): Promise<void
 }
 
 beforeEach(async () => {
-  previousEnv = Object.fromEntries(MUTATED_ENV.map((key) => [key, process.env[key]]));
+  previousEnv = Object.fromEntries(
+    ENV_KEYS.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]),
+  );
   home = await mkdtemp(join(tmpdir(), "cs-flush-"));
   dataDir = join(home, ".codesift");
   zuvoDir = join(home, ".zuvo");
@@ -83,7 +84,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   globalThis.fetch = realFetch;
-  for (const key of MUTATED_ENV) {
+  for (const key of ENV_KEYS) {
     const previous = previousEnv[key];
     if (previous === undefined) delete process.env[key];
     else process.env[key] = previous;
@@ -92,6 +93,16 @@ afterEach(async () => {
 });
 
 describe("retros flush independently of CodeSift tool usage", () => {
+  it("coalesces overlapping flush calls into one upload", async () => {
+    await writeFile(join(zuvoDir, "retros.log"), retroLine(TS_OLD) + "\n", "utf-8");
+    await writeUsage([]);
+
+    const results = await Promise.all([flushTelemetry(Date.now()), flushTelemetry(Date.now())]);
+
+    expect(results).toEqual(["sent", "sent"]);
+    expect(posted).toHaveLength(1);
+  });
+
   it("(A) sends retros when there is NO tool usage at all", async () => {
     // The exact shape that reported nothing: zuvo ran, CodeSift did not.
     await writeFile(join(zuvoDir, "retros.log"), retroLine(TS_OLD) + "\n", "utf-8");
@@ -135,9 +146,11 @@ describe("retros flush independently of CodeSift tool usage", () => {
       await flushTelemetry(Date.now());
 
       const toolWm = Number(readFileSync(join(dataDir, "telemetry-watermark"), "utf-8"));
-      const retroWm = Number(readFileSync(join(dataDir, "telemetry-watermark-retros"), "utf-8"));
+      const retroWm = Number(
+        readFileSync(join(dataDir, "telemetry-watermark-retros-offset"), "utf-8"),
+      );
       expect(toolWm).toBe(Date.parse(TS_MID));
-      expect(retroWm).toBe(Date.parse(TS_OLD));
+      expect(retroWm).toBe(Buffer.byteLength(retroLine(TS_OLD) + "\n"));
       // The whole point: they are different numbers, from different clocks.
       expect(retroWm).not.toBe(toolWm);
     });
@@ -159,8 +172,7 @@ describe("retros flush independently of CodeSift tool usage", () => {
     await writeUsage([]);
     await flushTelemetry(Date.now());
 
-    await writeFile(join(zuvoDir, "retros.log"),
-      retroLine(TS_OLD) + "\n" + retroLine(TS_MID, "review") + "\n", "utf-8");
+    await appendFile(join(zuvoDir, "retros.log"), retroLine(TS_MID, "review") + "\n", "utf-8");
     const result = await flushTelemetry(Date.now());
 
     expect(result).toBe("sent");
@@ -170,12 +182,49 @@ describe("retros flush independently of CodeSift tool usage", () => {
     expect(payload.retros?.[0]?.skill).toBe("review");
   });
 
+  it("(D2) sends a retro appended later even when its timestamp is older", async () => {
+    const path = join(zuvoDir, "retros.log");
+    await writeFile(path, retroLine(TS_MID) + "\n", "utf-8");
+    await writeUsage([]);
+    await flushTelemetry(Date.now());
+
+    await appendFile(path, retroLine(TS_OLD, "review") + "\n", "utf-8");
+    expect(await flushTelemetry(Date.now())).toBe("sent");
+
+    const payload = posted[1] as { retros?: { skill: string }[] };
+    expect(payload.retros).toEqual([expect.objectContaining({ skill: "review" })]);
+  });
+
+  it("resets the byte cursor when the retro log is rotated and replaced", async () => {
+    const path = join(zuvoDir, "retros.log");
+    await writeFile(path, retroLine(TS_MID) + "\n", "utf-8");
+    await writeUsage([]);
+    await flushTelemetry(Date.now());
+
+    await rename(path, `${path}.1`);
+    await writeFile(
+      path,
+      retroLine(TS_OLD, "review") + "\n" + retroLine(TS_MID, "review") + "\n",
+      "utf-8",
+    );
+    expect(await flushTelemetry(Date.now())).toBe("sent");
+
+    const payload = posted[1] as { retros?: Array<{ skill: string; count: number }> };
+    expect(payload.retros).toHaveLength(2);
+    expect(payload.retros).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ skill: "review", count: 1 }),
+      ]),
+    );
+    expect(payload.retros?.reduce((sum, retro) => sum + retro.count, 0)).toBe(2);
+  });
+
   it("(E) no zuvo and no tool usage still means nothing is sent", async () => {
     await writeUsage([]);
     const result = await flushTelemetry(Date.now());
     expect(result).toBe("empty");
     expect(posted).toHaveLength(0);
-    expect(existsSync(join(dataDir, "telemetry-watermark-retros"))).toBe(false);
+    expect(existsSync(join(dataDir, "telemetry-watermark-retros-offset"))).toBe(false);
   });
 
   it("(F) scanRetros reports the newest timestamp it saw, including filtered-out lines",

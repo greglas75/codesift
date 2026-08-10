@@ -18,7 +18,8 @@
  * file and checks the thing an agent would actually execute.
  *
  * Usage:  node scripts/check-agent-codesift.mjs [--json]
- * Exit 0 = everything an agent can open resolves; 1 = at least one project would fail.
+ * Exit 0 = everything an agent can open resolves; 1 = at least one project would fail;
+ * 2 = the checker configuration itself could not be read.
  */
 import {
   accessSync,
@@ -30,7 +31,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const JSON_OUT = process.argv.includes("--json");
@@ -67,54 +68,29 @@ function effectiveEntry(dir) {
  * SILENTLY, so a `codesift` that has fallen off PATH disables the read/bash prechecks with no error
  * anywhere. Checking only absolute paths would miss the quieter half.
  */
-function resolveStdio(entry, baseDir = process.cwd()) {
-  let explicitCommand = entry.command?.trim();
-  const rawCommand = explicitCommand
-    || entry.args?.find((arg) => typeof arg === "string" && !arg.startsWith("-"))?.trim();
-  if (!rawCommand) return { ok: false, why: "no command" };
-  if (!explicitCommand) {
-    if (new Set(["node", "nodejs", "bun", "deno"]).has(rawCommand)) {
-      explicitCommand = rawCommand;
-      const commandIndex = entry.args.indexOf(rawCommand);
-      entry = { ...entry, command: rawCommand, args: entry.args.slice(commandIndex + 1) };
-    } else {
-      const candidate = rawCommand.replace(/^~/, homedir());
-      return resolveDirectFile(candidate.startsWith("/") ? candidate : resolve(baseDir, candidate), false);
-    }
-  }
-  const argv0 = rawCommand.split(/\s+/)[0].replace(/^~/, homedir());
-
-  function resolveDirectFile(candidate, executable) {
-    try {
-      const real = realpathSync(candidate);
-      if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
-      if (executable) accessSync(real, constants.X_OK);
-      return { ok: true, real };
-    } catch {
-      return {
-        ok: false,
-        why: executable
-          ? `${candidate} does not resolve to an executable file`
-          : `${candidate} does not resolve to an existing file`,
-      };
-    }
-  }
-  const resolveFile = resolveDirectFile;
+function resolveExecutable(raw) {
+  if (!raw) return { ok: false, why: "no command" };
+  const argv0 = raw.trim().replace(/^~/, homedir());
 
   if (argv0.includes("/")) {
-    const commandPath = argv0.startsWith("/") ? argv0 : resolve(baseDir, argv0);
-    const command = resolveFile(commandPath, true);
-    if (!command.ok) return command;
-    return resolveInterpreterTarget(entry, rawCommand, command, resolveFile, baseDir);
+    try {
+      const real = realpathSync(argv0);
+      if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
+      accessSync(real, constants.X_OK);
+      return { ok: true, real };
+    } catch {
+      return { ok: false, why: `${argv0} does not resolve to an executable file` };
+    }
   }
 
   for (const dir of (process.env["PATH"] ?? "").split(":")) {
     if (!dir) continue;
     const candidate = join(dir, argv0);
     try {
-      if (!statSync(candidate).isFile()) continue;
-      accessSync(candidate, constants.X_OK);
-      return resolveInterpreterTarget(entry, rawCommand, { ok: true, real: realpathSync(candidate) }, resolveFile, baseDir);
+      if (statSync(candidate).isFile()) {
+        accessSync(candidate, constants.X_OK);
+        return { ok: true, real: realpathSync(candidate) };
+      }
     } catch {
       /* next PATH entry */
     }
@@ -122,36 +98,41 @@ function resolveStdio(entry, baseDir = process.cwd()) {
   return { ok: false, why: `\`${argv0}\` is not on PATH — hooks using it fail silently` };
 }
 
-function resolveInterpreterTarget(entry, rawCommand, command, resolveFile, baseDir) {
-  const executable = command.real.split("/").pop();
-  const interpreters = new Set(["node", "nodejs", "bun", "deno"]);
-  if (!interpreters.has(executable)) return command;
-  const argv = [...rawCommand.split(/\s+/).slice(1), ...(entry.args ?? [])];
-  const evalFlags = new Set(["-e", "--eval", "-p", "--print"]);
-  const flagsWithValue = new Set([
-    "-r",
-    "--require",
-    "--loader",
-    "--import",
-    "--conditions",
-    "--input-type",
-    "--experimental-sea-config",
+function runtimeScriptArg(entry) {
+  const runtime = entry.command?.trim().split("/").pop();
+  if (!["node", "nodejs", "bun", "deno"].includes(runtime)) return null;
+  const consumesNext = new Set([
+    "--require", "-r", "--loader", "--experimental-loader", "--import",
+    "--env-file", "--env-file-if-exists", "--watch-path", "--conditions", "-C",
+    "--eval", "-e", "--print", "-p", "--inspect-port", "--diagnostic-dir",
+    "--icu-data-dir", "--openssl-config", "--redirect-warnings", "--report-directory",
+    "--report-filename", "--snapshot-blob", "--title", "--tls-cipher-list",
   ]);
-  let target;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (typeof arg !== "string") continue;
-    if (evalFlags.has(arg)) return command; // inline source, no script path
-    if (flagsWithValue.has(arg)) { i++; continue; }
+  const args = entry.args ?? [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (consumesNext.has(arg)) { i++; continue; }
+    if (arg === "--") return args[i + 1] ?? null;
     if (arg.startsWith("-")) continue;
-    if (interpreters.has(arg)) continue;
-    if ((executable === "bun" || executable === "deno") && arg === "run") continue;
-    target = arg;
-    break;
+    if (arg.includes("/") || arg.startsWith("~")) return arg;
   }
-  if (!target) return command;
-  const expanded = target.replace(/^~/, homedir());
-  return resolveFile(expanded.startsWith("/") ? expanded : resolve(baseDir, expanded), false);
+  return null;
+}
+
+function resolveStdio(entry) {
+  const executable = resolveExecutable(entry.command);
+  if (!executable.ok) return executable;
+
+  const scriptArg = runtimeScriptArg(entry);
+  if (!scriptArg) return executable;
+  const scriptPath = scriptArg.replace(/^~/, homedir());
+  try {
+    const real = realpathSync(scriptPath);
+    if (!statSync(real).isFile()) return { ok: false, why: `${real} is not a file` };
+    return { ok: true, real, executable: executable.real };
+  } catch {
+    return { ok: false, why: `${scriptPath} does not resolve to an existing script` };
+  }
 }
 
 const daemonHealth = new Map();
@@ -159,8 +140,12 @@ function checkDaemon(url) {
   let origin;
   try {
     origin = new URL(url).origin;
-    const cached = daemonHealth.get(origin);
-    if (cached) return cached;
+  } catch (err) {
+    return { ok: false, why: `invalid daemon URL: ${err.message}` };
+  }
+  const cached = daemonHealth.get(origin);
+  if (cached) return cached;
+  try {
     const out = execFileSync("curl", ["-s", "-m", "5", "-o", "/dev/null", "-w", "%{http_code}", `${origin}/health`], {
       encoding: "utf-8",
     }).trim();
@@ -169,25 +154,28 @@ function checkDaemon(url) {
     return result;
   } catch (err) {
     const result = { ok: false, why: `daemon unreachable: ${err.message}` };
-    if (origin) daemonHealth.set(origin, result);
+    daemonHealth.set(origin, result);
     return result;
   }
 }
 
-const projectDirs = Object.keys(config.projects ?? {});
+const configuredProjectDirs = Object.keys(config.projects ?? {});
+const projectDirs = configuredProjectDirs.filter((d) => existsSync(d));
 const results = [];
 
-for (const dir of projectDirs) {
+for (const dir of configuredProjectDirs) {
   if (!existsSync(dir)) {
-    results.push({ dir, scope: "project", transport: "-", ok: false, why: "project path missing" });
-    continue;
+    results.push({ dir, scope: "project", transport: "-", ok: false, why: "configured project directory is missing" });
   }
+}
+
+for (const dir of projectDirs) {
   const { scope, entry } = effectiveEntry(dir);
   if (!entry) {
     results.push({ dir, scope, transport: "-", ok: false, why: "no codesift entry at any scope" });
     continue;
   }
-  if (entry.type === "http") {
+  if (entry.type === "http" || typeof entry.url === "string") {
     const health = checkDaemon(entry.url);
     // The URL pins a cwd. A stale one is not a hard failure — the daemon answers — but it means
     // this project's answers describe a directory that no longer exists, which is hint H19 as a
@@ -202,7 +190,7 @@ for (const dir of projectDirs) {
     }
     results.push({ dir, scope, transport: "http", ok: health.ok, why: health.ok ? cwdNote : health.why });
   } else {
-    const r = resolveStdio(entry, dir);
+    const r = resolveStdio(entry);
     // The failure that started all this: a path that resolves INTO a working tree, which a build
     // deletes. Reachable right now, and broken the moment somebody runs `npm run build`.
     const note = r.ok && /\/DEV\/|\/projects\//.test(r.real)
@@ -218,43 +206,38 @@ for (const dir of projectDirs) {
 // a candidate an agent can open tomorrow.
 const listed = new Set(projectDirs);
 const unlisted = [];
-function discoverRepos(root, depth = 0) {
-  if (depth > 2 || !existsSync(root)) return;
+for (const root of [join(homedir(), "DEV"), join(homedir(), "projects")]) {
+  if (!existsSync(root)) continue;
   let names;
   try {
     names = readdirSync(root);
-  } catch {
-    return;
+  } catch (err) {
+    results.push({ dir: root, scope: "discovery", transport: "-", ok: false, why: `unreadable: ${err.message}` });
+    continue;
   }
   for (const name of names) {
     const dir = join(root, name);
     try {
-      if (!statSync(dir).isDirectory()) continue;
-      if (existsSync(join(dir, ".git"))) {
-        if (!listed.has(dir)) unlisted.push(dir);
-        continue;
-      }
-      discoverRepos(dir, depth + 1);
+      if (!statSync(dir).isDirectory() || !existsSync(join(dir, ".git"))) continue;
     } catch {
-      /* unreadable subtree */
+      continue;
     }
+    if (!listed.has(dir)) unlisted.push(dir);
   }
-}
-for (const root of [join(homedir(), "DEV"), join(homedir(), "projects")]) {
-  discoverRepos(root);
 }
 
 const globalEntry = config.mcpServers?.codesift ?? null;
 let fallback;
 if (!globalEntry) {
   fallback = { ok: false, why: "no global codesift entry — every unlisted directory has NO codesift" };
-} else if (globalEntry.type === "http") {
+} else if (globalEntry.type === "http" || typeof globalEntry.url === "string") {
   const h = checkDaemon(globalEntry.url);
-  fallback = h.ok
-    ? { ok: true, why: "global entry is http with a PINNED cwd — every unlisted directory resolves to that one repo (H19)" }
-    : { ok: false, why: h.why };
+  const pinnedCwd = h.ok ? new URL(globalEntry.url).searchParams.get("cwd") : null;
+  fallback = h.ok && pinnedCwd && unlisted.length > 0
+    ? { ok: false, why: `global HTTP entry pins ${pinnedCwd}; ${unlisted.length} unlisted repos would resolve to the wrong repo (H19)` }
+    : h;
 } else {
-  const r = resolveStdio(globalEntry, homedir());
+  const r = resolveStdio(globalEntry);
   fallback = r.ok
     ? {
         ok: true,
@@ -297,42 +280,48 @@ for (const file of OTHER_CLIENTS) {
   // `[projects."/Users/greglas/DEV/codesift-mcp"]` section header as a missing executable. A
   // checker that cries wolf about a directory is a checker people stop reading.
   const cmds = new Set();
-  const argPaths = new Set();
   for (const m of text.matchAll(/(?:"command"\s*:|(?:^|\n)\s*command\s*=)\s*"([^"\n]+)"/g)) {
     const v = m[1];
     if (v && v.includes("codesift")) cmds.add(v);
   }
-  // Node-based MCP entries keep the actual program in `args`, not `command`.
-  // Only path-like values are actionable here; package names used through npx
-  // are validated by resolving the npx executable itself.
-  for (const m of text.matchAll(/(?:(?:"args"\s*:)|(?:(?:^|\n)\s*args\s*=))\s*\[([^\]]*)\]/g)) {
+  const scriptPaths = new Set();
+  for (const m of text.matchAll(/(?:(?:"args"\s*:)|(?:^|\n)\s*args\s*=)\s*\[([^\]]*)\]/g)) {
     for (const value of m[1].matchAll(/"([^"\n]+)"/g)) {
       const arg = value[1];
-      if (arg?.includes("codesift") && arg.includes("/")) argPaths.add(arg);
+      if (arg?.includes("codesift") && (arg.includes("/") || arg.startsWith("~"))) scriptPaths.add(arg);
     }
   }
-  if (cmds.size === 0 && argPaths.size === 0) {
+  if (cmds.size === 0 && scriptPaths.size === 0) {
     results.push({ dir: file, scope: "client", transport: "-", ok: true, why: "no codesift path (http or absent)" });
     continue;
   }
   for (const cmd of cmds) {
-    const r = resolveStdio({ command: cmd }, dirname(file));
+    const r = resolveStdio({ command: cmd });
     const note = r.ok && /\/DEV\/|\/projects\//.test(r.real)
       ? `resolves into a working tree (${r.real}) — a build there will break this client`
       : null;
     results.push({ dir: `${file} -> ${cmd}`, scope: "client", transport: "stdio", ok: r.ok, why: r.ok ? note : r.why });
   }
-  for (const argPath of argPaths) {
-    const r = resolveStdio({ command: process.execPath, args: [argPath] }, dirname(file));
-    const note = r.ok && /\/DEV\/|\/projects\//.test(r.real)
-      ? `resolves into a working tree (${r.real}) — a build there will break this client`
+  for (const scriptPath of scriptPaths) {
+    const expanded = scriptPath.replace(/^~/, homedir());
+    let result;
+    try {
+      const real = realpathSync(expanded);
+      result = statSync(real).isFile()
+        ? { ok: true, real }
+        : { ok: false, why: `${real} is not a file` };
+    } catch {
+      result = { ok: false, why: `${expanded} does not resolve to an existing script` };
+    }
+    const note = result.ok && /\/DEV\/|\/projects\//.test(result.real)
+      ? `resolves into a working tree (${result.real}) — a build there will break this client`
       : null;
     results.push({
-      dir: `${file} -> ${argPath}`,
+      dir: `${file} -> ${scriptPath}`,
       scope: "client",
       transport: "stdio",
-      ok: r.ok,
-      why: r.ok ? note : r.why,
+      ok: result.ok,
+      why: result.ok ? note : result.why,
     });
   }
 }

@@ -144,13 +144,13 @@ function dayOf(tsField: string): string | null {
 export interface RetroScan {
   rows: RetroAggregate[];
   /**
-   * Newest retro timestamp actually seen in the log (0 when none). The caller advances a
-   * RETRO-specific watermark from this — never from the tool-usage watermark. The two streams
-   * have independent clocks: a zuvo run and a CodeSift tool call are unrelated events, and
-   * sharing one watermark silently ate retros whose timestamp predated the newest tool call at
-   * flush time (which is the normal case, since people keep using CodeSift after a skill ends).
+   * Newest retro timestamp actually seen in the log (0 when none). Retained for callers that need
+   * event-time filtering; the uploader uses nextOffset because append order is reliable when
+   * clocks are not.
    */
   maxTs: number;
+  /** Byte offset immediately after the last complete line considered by an offset scan. */
+  nextOffset: number;
 }
 
 export async function aggregateRetros(
@@ -163,12 +163,30 @@ export async function aggregateRetros(
 export async function scanRetros(
   sinceTs = 0,
   logPath = join(homedir(), ".zuvo", "retros.log"),
+  cursor: "timestamp" | "offset" = "timestamp",
 ): Promise<RetroScan> {
-  let raw: string;
+  let file: Buffer;
   try {
-    raw = await readFile(logPath, "utf-8");
+    file = await readFile(logPath);
   } catch {
-    return { rows: [], maxTs: 0 }; // no zuvo on this machine
+    return { rows: [], maxTs: 0, nextOffset: cursor === "offset" ? sinceTs : 0 };
+  }
+  let raw: string;
+  let nextOffset = file.length;
+  const filterSinceTs = cursor === "timestamp" ? sinceTs : 0;
+  if (cursor === "offset") {
+    const start = sinceTs >= 0 && sinceTs <= file.length ? sinceTs : 0;
+    const unread = file.subarray(start);
+    const finalNewline = unread.lastIndexOf(0x0a);
+    if (finalNewline < 0) {
+      raw = "";
+      nextOffset = start;
+    } else {
+      raw = unread.subarray(0, finalNewline + 1).toString("utf-8");
+      nextOffset = start + finalNewline + 1;
+    }
+  } else {
+    raw = file.toString("utf-8");
   }
   let maxTs = 0;
 
@@ -195,7 +213,7 @@ export async function scanRetros(
     if (Number.isFinite(at) && at > maxTs) maxTs = at;
     // `<=`, not `<`: the watermark stores the newest ts already sent, so a line sitting exactly on
     // it was in the previous payload and would otherwise be re-sent on every flush forever.
-    if (sinceTs > 0 && Number.isFinite(at) && at <= sinceTs) continue;
+    if (filterSinceTs > 0 && Number.isFinite(at) && at <= filterSinceTs) continue;
 
     // Group on the NORMALISED values, not the raw ones: two lines whose prose differs both store
     // `"other"`, so keying on the raw text would emit two aggregate rows with identical content.
@@ -262,5 +280,5 @@ export async function scanRetros(
       adversarial_na: b.adversarial_na,
     }))
     .sort((a, b) => (a.day === b.day ? a.skill.localeCompare(b.skill) : a.day.localeCompare(b.day)));
-  return { rows, maxTs };
+  return { rows, maxTs, nextOffset };
 }

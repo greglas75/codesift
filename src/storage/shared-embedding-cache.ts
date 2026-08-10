@@ -271,6 +271,7 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
           p += total;
         }
         carry = p < data.length ? Buffer.from(data.subarray(p)) : Buffer.alloc(0);
+        if (carry.length > 0) skippedTail = true;
       }
     } catch {
       // Unreadable — behave as if empty.

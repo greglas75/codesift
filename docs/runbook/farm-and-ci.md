@@ -129,9 +129,10 @@ tests/cli/setup.test.ts                    tests/search/semantic.test.ts
 tests/search/…                             (src/storage/telemetry/uploader.ts — prod, not test)
 ```
 
-Note the farm **is** burst-i9, and `100.69.215.9:11434` (ollama) is that same host. A test that
-reaches ollama behaves differently there than on a laptop — possibly *better*, which is worse,
-because it hides a broken default. Each of these needs to either mock the endpoint or skip loudly.
+Note that the farm can also host the configured ollama service. A test that reaches a real service
+behaves differently there than on a laptop — possibly *better*, which is worse, because it hides a
+broken default. Each of these needs to either mock the endpoint or skip loudly. Keep concrete
+tailnet addresses and runner hostnames in the private operator inventory, not this public runbook.
 
 ### 2.3 Known pre-existing flake — FIXED 2026-08-10
 
@@ -156,9 +157,9 @@ expected counts are counts against this repo's real history. The farm mirrors th
 **without `.git`**, so every SHA looked ungrounded and the file failed on an environment gap. It now
 skips when `git rev-parse --git-dir` fails — visibly, as a skip — and runs in full locally.
 
-The better fix is farm-side (mirror `.git`), and it is still listed in section 1. Until then, any
-test that shells out to git needs the same guard: a red suite that everyone learns to ignore is worse
-than a skip that says why.
+The better fix is farm-side (mirror `.git`), and it is still listed in section 1. Until then, tests
+that inspect this checkout's history need the same guard. Tests that create and exercise their own
+temporary repositories do not depend on the mirror's `.git` and must continue to run.
 
 ---
 
@@ -169,9 +170,9 @@ than a skip that says why.
 .github/workflows/release.yml:26:  runs-on: ubuntu-latest
 ```
 
-Both jobs are on paid GitHub minutes while ~10 sibling repos run on coding-vps / burst-i9. The
-migration procedure exists as a skill: **`migrate-repo-to-selfhosted-ci`**, and the worked example is
-uptime's `docs/runbook/ci-self-hosted.md`.
+Both jobs are on paid GitHub minutes while sibling repos use self-hosted runners. The migration
+procedure exists as a skill: **`migrate-repo-to-selfhosted-ci`**, and the worked example is uptime's
+`docs/runbook/ci-self-hosted.md`. Concrete runner names belong in the private host/port registry.
 
 Three things that specifically apply here, from the cross-repo rules:
 
@@ -245,8 +246,8 @@ submitting a new one**, and then inherited its ceiling. That also explains the t
 one invocation in 1.2. A new invocation must never silently adopt a stuck job — or if it does, it
 must say so, because the user is then debugging an execution they did not start.
 
-Zero test failures were reported across all three attempts. The suite is not failing on the farm; it
-is **not finishing**.
+Those three attempts predated the fixture fix above. They reported zero test failures but never
+finished; the post-fix run completed with exit 0 in 36–55 seconds.
 
 ## 6. Doing this across all the repos — the shape of the problem
 
@@ -299,18 +300,15 @@ Measured, not assumed:
 5. Delete the 60 `-farmfix*` / `-cifix*` worktrees once their repos pass — they are the debris of the
    approach this replaces.
 
-## 7. Not verified — do first
+## 7. Reproducing the verified full-suite run
 
-I never got one clean full-suite farm run: my first attempt I killed myself (believing 1.2 was a
-hang), and the second was cancelled by a timeout. **So the complete list of farm-only failures is not
-known** — `journal-citation-check` (3/4) is confirmed, the rest is inferred from the `[hotspot] git
-log failed` chatter.
-
-First task for whoever picks this up:
+The post-fix full suite completed on the farm with exit 0 in 36–55 seconds. To reproduce it while
+preserving the test command's exit status:
 
 ```bash
+set -o pipefail
 rt npx vitest run 2>&1 | tee /tmp/farm-full.log      # NOT -q, and do not kill it
 grep -E "^ *× |Test Files |Tests " /tmp/farm-full.log
 ```
 
-Then diff that failure set against a local run before changing anything.
+Then diff the pass/fail and skip sets against a local run before changing anything.

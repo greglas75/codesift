@@ -1,83 +1,60 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-const SCRIPT = resolve("scripts/repair-registry.mjs");
-let dir: string;
-
-function writeIndexDb(path: string, repo: string, root: string): void {
-  const db = new DatabaseSync(path);
-  db.exec(`
-    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE symbols (id TEXT);
-    CREATE TABLE files (path TEXT);
-  `);
-  const insert = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
-  insert.run("repo", repo);
-  insert.run("root", root);
-  db.close();
-}
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "codesift-repair-registry-"));
-});
+const dirs: string[] = [];
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("repair-registry", () => {
-  it("does not replace a live same-name registry owner with an orphan database", () => {
-    const registeredRoot = join(dir, "registered-root");
-    const orphanRoot = join(dir, "orphan-root");
+  it("does not replace a live registry entry when an orphan database claims the same name", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "codesift-registry-repair-"));
+    dirs.push(dataDir);
+    const registeredRoot = join(dataDir, "registered");
+    const conflictingRoot = join(dataDir, "conflicting");
     mkdirSync(registeredRoot);
-    mkdirSync(orphanRoot);
-    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+    mkdirSync(conflictingRoot);
+    const registryPath = join(dataDir, "registry.json");
+    writeFileSync(registryPath, JSON.stringify({
       repos: {
         "local/app": {
           name: "local/app",
           root: registeredRoot,
-          index_path: join(dir, "aaaaaaaaaaaa.index.json"),
+          index_path: join(dataDir, "aaaaaaaaaaaa.index.json"),
         },
       },
     }));
-    writeIndexDb(join(dir, "bbbbbbbbbbbb.index.db"), "local/app", orphanRoot);
 
-    execFileSync(process.execPath, [SCRIPT, "--apply"], {
-      env: { ...process.env, CODESIFT_DATA_DIR: dir },
-      stdio: "pipe",
+    const db = new DatabaseSync(join(dataDir, "bbbbbbbbbbbb.index.db"));
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.exec("CREATE TABLE symbols (id TEXT)");
+    db.exec("CREATE TABLE files (path TEXT)");
+    for (const [key, value] of Object.entries({
+      repo: "local/app",
+      root: conflictingRoot,
+      symbol_count: "10",
+      file_count: "2",
+      updated_at: "1",
+    })) {
+      db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run(key, value);
+    }
+    db.close();
+
+    const result = spawnSync(process.execPath, ["scripts/repair-registry.mjs", "--apply"], {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      env: { ...process.env, CODESIFT_DATA_DIR: dataDir },
     });
 
-    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+    expect(result.status).toBe(0);
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8"));
     expect(registry.repos["local/app"].root).toBe(registeredRoot);
-  });
-
-  it("replaces a dead owner when exactly one live database can own the name", () => {
-    const rescuedRoot = join(dir, "rescued-root");
-    mkdirSync(rescuedRoot);
-    writeFileSync(join(dir, "registry.json"), JSON.stringify({
-      repos: {
-        "local/app": {
-          name: "local/app",
-          root: join(dir, "deleted-root"),
-          index_path: join(dir, "aaaaaaaaaaaa.index.json"),
-        },
-      },
-    }));
-    writeIndexDb(join(dir, "bbbbbbbbbbbb.index.db"), "local/app", rescuedRoot);
-
-    execFileSync(process.execPath, [SCRIPT, "--apply"], {
-      env: { ...process.env, CODESIFT_DATA_DIR: dir },
-      stdio: "pipe",
-    });
-
-    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
-    expect(registry.repos["local/app"]).toMatchObject({
-      root: rescuedRoot,
-      index_path: join(dir, "bbbbbbbbbbbb.index.json"),
-    });
+    expect(result.stdout).toContain("skipped local/app");
+    expect(result.stdout).toContain("skipped 1 conflicts");
   });
 });

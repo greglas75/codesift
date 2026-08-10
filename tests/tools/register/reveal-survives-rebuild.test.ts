@@ -88,5 +88,6 @@ describe("a revealed tool survives a server rebuild", () => {
     // default ListTools depressed adoption by >90%, so "restore what was revealed" must never
     // become "enable more by default".
     expect(after.registered.length).toBe(coreCount + 1);
+    expect(after.registered).toContain(HIDDEN);
   });
 });

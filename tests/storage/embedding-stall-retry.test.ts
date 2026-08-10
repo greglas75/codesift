@@ -70,6 +70,36 @@ describe("batchEmbed stall retry", () => {
     expect(calls).toBe(1);
   });
 
+  it("does not retry a caller-initiated abort", async () => {
+    let calls = 0;
+    const embed = async (): Promise<number[][]> => {
+      calls++;
+      throw new DOMException("The operation was aborted", "AbortError");
+    };
+
+    await expect(batchEmbed(texts(32), new Map(), embed, 32)).rejects.toThrow(/aborted/i);
+    expect(calls).toBe(1);
+  });
+
+  it("rejects a short provider response before vectors can shift onto the wrong symbols", async () => {
+    const embed = async (batch: string[]): Promise<number[][]> => batch.slice(1).map(vecFor);
+
+    await expect(batchEmbed(texts(12), new Map(), embed, 12)).rejects.toThrow(
+      "returned 11 vectors for 12 texts",
+    );
+  });
+
+  it.each([
+    { label: "empty", vectors: Array.from({ length: 12 }, () => []) },
+    { label: "inconsistent", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1] : [1, 2]) },
+    { label: "non-finite", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1, Number.NaN] : [1, 2]) },
+    { label: "float32-overflowing", vectors: Array.from({ length: 12 }, (_, i) => i === 4 ? [1, 1e100] : [1, 2]) },
+  ])("rejects $label provider vectors before they reach storage", async ({ vectors }) => {
+    await expect(batchEmbed(texts(12), new Map(), async () => vectors, 12)).rejects.toThrow(
+      "malformed vectors",
+    );
+  });
+
   it("gives up instead of splitting forever", async () => {
     let calls = 0;
     const embed = async (): Promise<number[][]> => { calls++; throw stall(); };

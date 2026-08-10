@@ -22,7 +22,7 @@ function isDeadPooledSocket(err: unknown): boolean {
   for (let e: unknown = err; e && !seen.has(e); e = (e as { cause?: unknown }).cause) {
     seen.add(e);
     const code = (e as { code?: unknown }).code;
-    if (code === "UND_ERR_SOCKET" || code === "ECONNRESET" || code === "ECONNREFUSED") return true;
+    if (code === "UND_ERR_SOCKET" || code === "ECONNRESET") return true;
     if (/other side closed|socket hang up/i.test(String((e as { message?: unknown }).message ?? ""))) {
       return true;
     }
