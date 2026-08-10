@@ -1,0 +1,242 @@
+import { execFileSync } from "node:child_process";
+import type { Flags } from "./args.js";
+import { getBoolFlag, output, die } from "./args.js";
+
+/**
+ * Delete orphaned per-repo cache artifacts (embeddings/index/meta/bm25/graph)
+ * whose hash stem is no longer in the registry. These accumulate from
+ * re-indexes (hash changes) and ephemeral/test repos that were indexed then
+ * deleted — each leaves multi-GB embedding files behind. Use --dry-run to
+ * preview. Regenerable: re-indexing recreates anything still needed.
+ */
+async function handlePrune(_args: string[], flags: Flags): Promise<void> {
+  const { readFileSync, readdirSync, statSync, unlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { loadConfig } = await import("../config.js");
+  const dataDir = loadConfig().dataDir;
+  const dryRun = getBoolFlag(flags, "dry-run");
+
+  // Live index hashes from the registry — everything else is orphaned cache.
+  //
+  // A registry entry counted as live even when its `root` no longer existed, so
+  // artifacts for deleted directories were protected indefinitely. Measured
+  // here: 101 of 119 indexed worktrees pointed at directories that were gone,
+  // holding 5.4 GB of embeddings for code that cannot be read. Task branches are
+  // created and deleted constantly, so this accumulates without bound.
+  //
+  // Entries whose root is missing are de-registered first; their artifacts then
+  // fall out as orphans through the sweep below.
+  const live = new Set<string>();
+  const stale: Array<{ name: string; root: string }> = [];
+  let reg: { repos?: Record<string, { index_path?: string; root?: string }> };
+  try {
+    reg = JSON.parse(readFileSync(join(dataDir, "registry.json"), "utf-8")) as typeof reg;
+  } catch {
+    die("prune: cannot read registry.json — aborting so live data is never deleted.");
+    return;
+  }
+  for (const [name, v] of Object.entries(reg.repos ?? {})) {
+    const ip = v.index_path;
+    const root = v.root;
+    // Only a root that is definitively absent counts. An unreadable path (a
+    // permissions error, an unmounted volume mid-check) throws and is treated
+    // as present — the conservative direction, since the cost of keeping a dead
+    // entry is disk, and the cost of dropping a live one is a re-index.
+    let rootGone = false;
+    if (typeof root === "string" && root.length > 0) {
+      try {
+        statSync(root);
+      } catch {
+        rootGone = true;
+      }
+    }
+    if (rootGone) {
+      stale.push({ name, root: root as string });
+      continue; // deliberately NOT added to `live`
+    }
+    // Take the HASH STEM with the same shape the sweep below matches, rather than stripping one
+    // known suffix. `.replace(".index.json", "")` silently no-ops on any other form — so after the
+    // SQLite migration an entry whose `index_path` ends in `.index.db` never reached this set, and
+    // every artifact under that hash looked orphaned. Measured 2026-08-07 on one such entry:
+    // 8.33 GB of LIVE data (a 240,706-symbol index plus 3.9 GB of embeddings) was one `prune` away
+    // from deletion. Deriving the stem the same way in both halves of this command is what makes
+    // them agree by construction instead of by coincidence.
+    if (typeof ip === "string") {
+      const stem = /^([0-9a-f]{8,})\./.exec(ip.split("/").pop() ?? "")?.[1];
+      if (stem) live.add(stem);
+    }
+  }
+  // An index database is LIVE if its own `meta` says it describes a directory that still exists —
+  // whether or not the registry knows about it.
+  //
+  // The registry is not the authority on what exists; it is a lookup table, and it drifts. Measured
+  // 2026-08-07: `local/tgm-survey-platform` had been re-registered onto a worktree that was later
+  // deleted, leaving the MAIN checkout's index — 240,706 symbols, and 8.33 GB once its embeddings
+  // are counted — described by no entry at all. Prune classified every byte of it as orphaned.
+  // Twenty-four hours later three MORE databases had drifted the same way, so this is a rate, not
+  // an incident.
+  //
+  // Asking each database who it is costs one small read per unregistered hash, and removes a whole
+  // class of data loss: a repo still present on disk can no longer be deleted because a JSON file
+  // lost track of it. Re-registering also means the next lookup finds it.
+  const rescued: string[] = [];
+  for (const name of readdirSync(dataDir)) {
+    const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
+    if (!m?.[1] || live.has(m[1])) continue;
+    try {
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
+      const rows = db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>;
+      db.close();
+      const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+      const root = meta["root"];
+      const repo = meta["repo"];
+      if (!root || !repo) continue;
+      statSync(root); // throws when the tree is gone — then it really is garbage
+      live.add(m[1]);
+      rescued.push(repo);
+      if (!dryRun) {
+        const { registerRepo } = await import("../storage/registry.js");
+        // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
+        // live-set above is built from these strings.
+        await registerRepo(join(dataDir, "registry.json"), {
+          name: repo,
+          root,
+          index_path: join(dataDir, `${m[1]}.index.json`),
+        } as never);
+      }
+    } catch {
+      /* unreadable, or the tree is gone — leave it to the sweep */
+    }
+  }
+
+  // Safety: an empty live set would mark every artifact orphaned. Refuse rather
+  // than risk nuking a valid (but momentarily empty-looking) data dir.
+  if (live.size === 0) {
+    die("prune: registry lists 0 repos — aborting (refusing to treat all artifacts as orphans).");
+  }
+
+  // Suffix list lives with the helpers that build these names, so a new artifact kind
+  // cannot quietly become unreclaimable garbage — see ARTIFACT_SUFFIXES.
+  const { artifactPattern } = await import("../storage/_shared.js");
+  const re = artifactPattern();
+  let files = 0, bytes = 0, kept = 0;
+  for (const name of readdirSync(dataDir)) {
+    const m = re.exec(name);
+    if (!m) continue;
+    if (live.has(m[1]!)) { kept++; continue; }
+    const full = join(dataDir, name);
+    try {
+      bytes += statSync(full).size;
+      if (!dryRun) unlinkSync(full);
+      files++;
+    } catch { /* skip unreadable/already-gone */ }
+  }
+  // De-register the dead entries. After the sweep, so a failure above leaves the
+  // registry untouched rather than half-cleaned.
+  if (!dryRun && stale.length > 0) {
+    const { removeRepo } = await import("../storage/registry.js");
+    for (const s of stale) await removeRepo(join(dataDir, "registry.json"), s.name);
+  }
+
+  output({
+    rescued_repos: rescued.length,
+    rescued_examples: rescued.slice(0, 5),
+    stale_repos: stale.length,
+    stale_examples: stale.slice(0, 5).map((s) => s.name),
+    pruned: !dryRun,
+    dry_run: dryRun,
+    orphan_files: files,
+    freed_gb: +(bytes / 1e9).toFixed(2),
+    kept_live_artifacts: kept,
+    data_dir: dataDir,
+  }, flags);
+}
+
+type ProcessRow = { pid: number; ppid: number; rssKb: number; command: string };
+
+function listProcesses(): ProcessRow[] {
+  const raw = execFileSync("ps", ["-axo", "pid=,ppid=,rss=,command="], { encoding: "utf-8" });
+  const rows: ProcessRow[] = [];
+  for (const line of raw.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match) continue;
+    rows.push({
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      rssKb: Number(match[3]),
+      command: match[4] ?? "",
+    });
+  }
+  return rows;
+}
+
+function classifyCleanupTarget(command: string, includeGlobalCodesift: boolean): string | null {
+  if (command === "" || command.includes("codesift cleanup-processes")) return null;
+  if (command.startsWith("node /Users/") && command.includes("/DEV/codesift-mcp/dist/server.js")) {
+    return "legacy-dev-dist-server";
+  }
+  if (command.includes("npm exec chrome-devtools-mcp") || command === "chrome-devtools-mcp") {
+    return "chrome-devtools-mcp";
+  }
+  if (command.includes("chrome-devtools-mcp/") && command.includes("/watchdog/main.js")) {
+    return "chrome-devtools-watchdog";
+  }
+  if (command.includes("npm exec @sentry/mcp-server")) {
+    return "sentry-mcp";
+  }
+  if (command.includes("npm exec @playwright/mcp")) {
+    return "playwright-mcp";
+  }
+  if (includeGlobalCodesift && command.includes("/.npm-global/bin/codesift-mcp")) {
+    return "global-codesift-mcp";
+  }
+  return null;
+}
+
+async function handleCleanupProcesses(_args: string[], flags: Flags): Promise<void> {
+  const dryRun = getBoolFlag(flags, "dry-run") === true;
+  const includeGlobalCodesift = getBoolFlag(flags, "global-codesift") === true;
+  const rows = listProcesses();
+  const targets = rows
+    .map((row) => ({ ...row, reason: classifyCleanupTarget(row.command, includeGlobalCodesift) }))
+    .filter((row): row is ProcessRow & { reason: string } => row.reason !== null);
+
+  const beforeMb = targets.reduce((sum, row) => sum + row.rssKb, 0) / 1024;
+  const killed: Array<ProcessRow & { reason: string }> = [];
+  const failed: Array<ProcessRow & { reason: string; error: string }> = [];
+
+  if (!dryRun) {
+    for (const row of targets) {
+      try {
+        process.kill(row.pid, "SIGKILL");
+        killed.push(row);
+      } catch (err) {
+        failed.push({ ...row, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
+  const byReason: Record<string, { count: number; rss_mb: number }> = {};
+  for (const row of targets) {
+    byReason[row.reason] ??= { count: 0, rss_mb: 0 };
+    byReason[row.reason]!.count += 1;
+    byReason[row.reason]!.rss_mb += row.rssKb / 1024;
+  }
+  for (const value of Object.values(byReason)) {
+    value.rss_mb = Number(value.rss_mb.toFixed(1));
+  }
+
+  output({
+    dry_run: dryRun,
+    include_global_codesift: includeGlobalCodesift,
+    matched: targets.length,
+    killed: dryRun ? 0 : killed.length,
+    failed: failed.length,
+    matched_rss_mb: Number(beforeMb.toFixed(1)),
+    by_reason: byReason,
+    failed_pids: failed.map((row) => ({ pid: row.pid, reason: row.reason, error: row.error })),
+  }, flags);
+}
+
+export { handlePrune, handleCleanupProcesses };
