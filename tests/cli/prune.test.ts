@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
@@ -7,6 +8,15 @@ import { resetConfigCache } from "../../src/config.js";
 
 const LIVE = "aaaaaaaaaaaa";   // hash present in registry
 const ORPH = "bbbbbbbbbbbb";   // hash NOT in registry
+
+function writeIndexDb(path: string, repo: string, root: string): void {
+  const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  const insert = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
+  insert.run("repo", repo);
+  insert.run("root", root);
+  db.close();
+}
 
 describe("codesift prune", () => {
   let dir: string;
@@ -68,5 +78,51 @@ describe("codesift prune", () => {
     // orphan still present — nothing was deleted
     expect(existsSync(join(dir, `${ORPH}.embeddings.ndjson`))).toBe(true);
     exit.mockRestore();
+  });
+
+  it("protects an unregistered database without replacing a live same-name repo", async () => {
+    const registeredRoot = join(dir, "registered-root");
+    const orphanRoot = join(dir, "orphan-root");
+    mkdirSync(registeredRoot);
+    mkdirSync(orphanRoot);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      repos: {
+        "local/live": {
+          name: "local/live",
+          root: registeredRoot,
+          index_path: join(dir, `${LIVE}.index.json`),
+        },
+      },
+    }));
+    writeIndexDb(join(dir, `${ORPH}.index.db`), "local/live", orphanRoot);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+    expect(registry.repos["local/live"].root).toBe(registeredRoot);
+    expect(existsSync(join(dir, `${ORPH}.index.db`))).toBe(true);
+  });
+
+  it("keeps a rescued replacement when the previous same-name root is stale", async () => {
+    const rescuedRoot = join(dir, "rescued-root");
+    mkdirSync(rescuedRoot);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      repos: {
+        "local/live": {
+          name: "local/live",
+          root: join(dir, "deleted-worktree"),
+          index_path: join(dir, `${LIVE}.index.json`),
+        },
+      },
+    }));
+    writeIndexDb(join(dir, `${ORPH}.index.db`), "local/live", rescuedRoot);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    const registry = JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8"));
+    expect(registry.repos["local/live"]).toMatchObject({
+      root: rescuedRoot,
+      index_path: join(dir, `${ORPH}.index.json`),
+    });
   });
 });

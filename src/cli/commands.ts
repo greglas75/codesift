@@ -350,6 +350,7 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // class of data loss: a repo still present on disk can no longer be deleted because a JSON file
   // lost track of it. Re-registering also means the next lookup finds it.
   const rescued: string[] = [];
+  const rescueCandidates = new Map<string, Array<{ root: string; indexPath: string }>>();
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
     if (!m?.[1] || live.has(m[1])) continue;
@@ -364,19 +365,36 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       if (!root || !repo) continue;
       statSync(root); // throws when the tree is gone — then it really is garbage
       live.add(m[1]);
-      rescued.push(repo);
-      if (!dryRun) {
-        const { registerRepo } = await import("../storage/registry.js");
-        // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
-        // live-set above is built from these strings.
-        await registerRepo(join(dataDir, "registry.json"), {
-          name: repo,
-          root,
-          index_path: join(dataDir, `${m[1]}.index.json`),
-        } as never);
-      }
+      const candidates = rescueCandidates.get(repo) ?? [];
+      candidates.push({ root, indexPath: join(dataDir, `${m[1]}.index.json`) });
+      rescueCandidates.set(repo, candidates);
     } catch {
       /* unreadable, or the tree is gone — leave it to the sweep */
+    }
+  }
+
+  // Re-register only when there is one unambiguous owner for the name. A live
+  // registry entry wins over any detached database with the same repo name;
+  // replacing it would make a healthy checkout unreachable. Likewise, two
+  // detached databases with one legacy name are both protected from deletion,
+  // but neither is selected arbitrarily as the registry owner.
+  const staleNames = new Set(stale.map((entry) => entry.name));
+  const rescuedStaleNames = new Set<string>();
+  for (const [repo, candidates] of rescueCandidates) {
+    const registered = reg.repos?.[repo];
+    if ((registered && !staleNames.has(repo)) || candidates.length !== 1) continue;
+    const candidate = candidates[0]!;
+    rescued.push(repo);
+    if (staleNames.has(repo)) rescuedStaleNames.add(repo);
+    if (!dryRun) {
+      const { registerRepo } = await import("../storage/registry.js");
+      // Canonical `.index.json` form: `sqlitePathFor()` derives the `.db` from it, and the
+      // live-set above is built from these strings.
+      await registerRepo(join(dataDir, "registry.json"), {
+        name: repo,
+        root: candidate.root,
+        index_path: candidate.indexPath,
+      } as never);
     }
   }
 
@@ -406,7 +424,11 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // registry untouched rather than half-cleaned.
   if (!dryRun && stale.length > 0) {
     const { removeRepo } = await import("../storage/registry.js");
-    for (const s of stale) await removeRepo(join(dataDir, "registry.json"), s.name);
+    for (const s of stale) {
+      if (!rescuedStaleNames.has(s.name)) {
+        await removeRepo(join(dataDir, "registry.json"), s.name);
+      }
+    }
   }
 
   output({
