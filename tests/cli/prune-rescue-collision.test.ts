@@ -13,7 +13,7 @@
 //     name is already owned by a healthy repo, so a rescue could repoint a working repo at a
 //     different tree and discard its metadata.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -147,15 +147,23 @@ describe("prune rescue vs stale de-registration", () => {
   });
 
   it("still de-registers a dead entry nobody rescued", async () => {
+    const deadDb = join(dir, `${HASH_DEAD}.index.db`);
     writeRegistry({
       "local/dead": { name: "local/dead", root: join(tmpdir(), "gone-for-good"), index_path: join(dir, `${HASH_DEAD}.index.json`) },
       "local/other": { name: "local/other", root: dir, index_path: join(dir, `${HASH_OTHER}.index.json`) },
     });
+    makeDb(deadDb, "local/dead", join(tmpdir(), "gone-for-good"));
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(deadDb, old, old);
 
     const out = await runPrune();
 
     expect(out["stale_repos"]).toBe(1);
     expect(registry().repos["local/dead"]).toBeUndefined();
     expect(registry().repos["local/other"]).toBeDefined();
+    expect(existsSync(deadDb)).toBe(true); // protected for the run that removed its registry row
+
+    await runPrune();
+    expect(existsSync(deadDb)).toBe(false);
   });
 });
