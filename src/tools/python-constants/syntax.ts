@@ -7,10 +7,22 @@ import type {
   ResolutionHop,
 } from "./model.js";
 
-function stripPythonString(text: string): string {
-  const match = text.match(/^[rRuUbBfF]*('{3}|"{3}|'|")([\s\S]*?)\1$/);
-  if (match) return match[2] ?? "";
-  return text.replace(/^['"]|['"]$/g, "");
+function parsePythonString(text: string): { value: string } | { reason: string } {
+  const match = text.match(/^([rRuUbBfF]*)("""|'''|"|')([\s\S]*)\2$/);
+  if (!match) {
+    return { reason: `Unsupported Python string literal: ${text}` };
+  }
+
+  const prefix = (match[1] ?? "").toLowerCase();
+  const value = match[3] ?? "";
+  if (prefix.includes("f") || prefix.includes("b")) {
+    return { reason: `Unsupported Python string literal prefix: ${prefix}` };
+  }
+  if (prefix.includes("r")) return { value };
+  if (value.includes("\\")) {
+    return { reason: `Unsupported Python string literal escape sequence: ${text}` };
+  }
+  return { value };
 }
 
 function isObjectKey(value: PythonLiteralValue): value is string | number | boolean | null {
@@ -98,6 +110,6 @@ export {
   getDefaultParameterParts,
   getImportModule,
   isObjectKey,
-  stripPythonString,
+  parsePythonString,
   unsupportedNode,
 };

@@ -9,7 +9,7 @@ import type {
 import {
   getBindingLine,
   isObjectKey,
-  stripPythonString,
+  parsePythonString,
   unsupportedNode,
 } from "./syntax.js";
 
@@ -20,15 +20,26 @@ async function evaluateValueNode(
   depth = 0,
 ): Promise<EvaluationResult> {
   switch (node.type) {
-    case "string":
+    case "string": {
+      const parsed = parsePythonString(node.text);
+      if ("reason" in parsed) {
+        return {
+          resolved: false,
+          value_text: node.text,
+          alias_chain: [],
+          used_import: false,
+          reason: parsed.reason,
+        };
+      }
       return {
         resolved: true,
         value_kind: "string",
-        value: stripPythonString(node.text),
+        value: parsed.value,
         value_text: node.text,
         alias_chain: [],
         used_import: false,
       };
+    }
     case "integer": {
       const value = Number(node.text.replaceAll("_", ""));
       if (!Number.isSafeInteger(value)) {
@@ -128,11 +139,20 @@ async function evaluateValueNode(
       };
     }
     case "dictionary": {
-      const obj: Record<string, PythonLiteralValue> = {};
+      const obj: Record<string, PythonLiteralValue> = Object.create(null) as Record<string, PythonLiteralValue>;
+      const keyFingerprints = new Map<string, string>();
       let usedImport = false;
       const aliasChain: ResolutionHop[] = [];
       for (const pair of node.namedChildren) {
-        if (pair.type !== "pair") continue;
+        if (pair.type !== "pair") {
+          return {
+            resolved: false,
+            value_text: node.text,
+            alias_chain: aliasChain,
+            used_import: usedImport,
+            reason: `Unsupported dictionary entry: ${pair.type}`,
+          };
+        }
         const keyNode = pair.namedChildren[0];
         const valueNode = pair.namedChildren[1];
         if (!keyNode || !valueNode) return unsupportedNode(node, aliasChain, usedImport);
@@ -160,7 +180,31 @@ async function evaluateValueNode(
             reason: valueResult.reason ?? `Could not resolve ${valueNode.text}`,
           };
         }
-        obj[String(keyResult.value)] = valueResult.value;
+        // Python booleans are numeric dictionary keys (`True == 1`, `False == 0`).
+        // Canonicalize them before checking the string-keyed public representation.
+        const serializedKey = typeof keyResult.value === "boolean"
+          ? String(Number(keyResult.value))
+          : String(keyResult.value);
+        const keyFingerprint = typeof keyResult.value === "boolean"
+          ? `number:${keyResult.value ? 1 : 0}`
+          : `${keyResult.value === null ? "null" : typeof keyResult.value}:${String(keyResult.value)}`;
+        const previousFingerprint = keyFingerprints.get(serializedKey);
+        if (previousFingerprint !== undefined && previousFingerprint !== keyFingerprint) {
+          return {
+            resolved: false,
+            value_text: node.text,
+            alias_chain: aliasChain,
+            used_import: usedImport,
+            reason: `Lossy dictionary key collision after serialization: ${serializedKey}`,
+          };
+        }
+        keyFingerprints.set(serializedKey, keyFingerprint);
+        Object.defineProperty(obj, serializedKey, {
+          value: valueResult.value,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
       }
       return {
         resolved: true,

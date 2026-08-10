@@ -248,6 +248,90 @@ INVALID_INVERT = ~1.5
     });
   });
 
+  it("rejects dictionary values that cannot be represented losslessly", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/dicts.py": `OVERRIDES = {"unsafe": True}
+SPREAD = {"safe": True, **OVERRIDES}
+COLLIDING = {1: "number", "1": "string"}
+PROTO = {"__proto__": "literal"}
+PYTHON_EQUAL = {1: "number", True: "boolean"}
+`,
+    });
+
+    const spread = await resolveConstantValue(repo, "SPREAD");
+    const colliding = await resolveConstantValue(repo, "COLLIDING");
+    const proto = await resolveConstantValue(repo, "PROTO");
+    const pythonEqual = await resolveConstantValue(repo, "PYTHON_EQUAL");
+
+    expect(spread.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("Unsupported dictionary entry"),
+    });
+    expect(colliding.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("dictionary key collision"),
+    });
+    expect(proto.matches[0]).toMatchObject({
+      resolved: true,
+    });
+    expect(Object.hasOwn(proto.matches[0]!.value as object, "__proto__")).toBe(true);
+    expect((proto.matches[0]!.value as Record<string, unknown>)["__proto__"]).toBe("literal");
+    expect(pythonEqual.matches[0]).toMatchObject({
+      resolved: true,
+      value: { 1: "boolean" },
+    });
+  });
+
+  it("does not claim unsupported Python string forms were evaluated", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/strings.py": String.raw`ESCAPED = "line\nfeed"
+RAW = r"line\nfeed"
+FORMATTED = f"value={RAW}"
+BYTES = b"bytes"
+`,
+    });
+
+    const escaped = await resolveConstantValue(repo, "ESCAPED");
+    const raw = await resolveConstantValue(repo, "RAW");
+    const formatted = await resolveConstantValue(repo, "FORMATTED");
+    const bytes = await resolveConstantValue(repo, "BYTES");
+
+    expect(escaped.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("Unsupported Python string literal"),
+    });
+    expect(raw.matches[0]).toMatchObject({
+      resolved: true,
+      value: String.raw`line\nfeed`,
+    });
+    expect(formatted.matches[0]).toMatchObject({ resolved: false });
+    expect(bytes.matches[0]).toMatchObject({
+      resolved: false,
+      reason: expect.stringContaining("Unsupported Python string literal"),
+    });
+  });
+
+  it("does not treat an imported module path as a local binding", async () => {
+    const repo = await writeFixture({
+      "app/__init__.py": "",
+      "app/thing.py": `thing = 7
+OTHER = 1
+`,
+      "app/use.py": `from .thing import OTHER
+ALIAS = thing
+`,
+    });
+
+    const result = await resolveConstantValue(repo, "ALIAS");
+
+    expect(result.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for thing in app/use.py",
+    });
+  });
+
   it("enforces max_depth across same-file alias chains", async () => {
     const repo = await writeFixture({
       "app/__init__.py": "",
