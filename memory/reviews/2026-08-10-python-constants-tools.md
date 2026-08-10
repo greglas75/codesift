@@ -2,8 +2,8 @@
 
 # Review: Python constant resolver refactor
 
-Scope: `origin/main...0cfbabe2a7f011b4a2312731cb881ce87ee8261d`  
-Diff type: mixed · Tier 3 · deployment risk: medium  
+Scope: `origin/main...0cfbabe2a7f011b4a2312731cb881ce87ee8261d`
+Diff type: mixed · Tier 3 · deployment risk: medium
 Verdict: APPROVE (degraded:same-model for the inline role checkpoints; cross-model proof completed)
 
 ## Outcome
