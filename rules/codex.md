@@ -217,7 +217,10 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 - Use `semantic_search` or `codebase_retrieval(type:"semantic")` for conceptual questions
 - Use `trace_route` FIRST for any API endpoint — NEVER multiple `search_text` + `trace_call_chain`
 - Use `detect_communities` BEFORE `get_knowledge_map` — NEVER `knowledge_map` without communities first
-- Use `index_file(path)` after editing — NEVER `index_folder` (9ms vs 3-8s)
+- Use `index_file(path)` after editing — NEVER `index_folder` (9ms vs 3-8s).
+  **Exception, and it is the one that keeps biting: a linked worktree.** "Already indexed"
+  is about the repo the answer comes FROM, and in a worktree that is the parent checkout,
+  not your tree. Index yours once — see NEVER below.
 - Pass `include_source=true` on `search_symbols`
 - Use `get_symbols` (batch) for 2+ symbols — NEVER sequential `get_symbol`
 - Batch 3+ searches into `codebase_retrieval`
@@ -226,7 +229,13 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 
 ## NEVER
 
-- Call `index_folder` if repo is already indexed — file watcher auto-updates
+- Call `index_folder` if repo is already indexed — file watcher auto-updates.
+  **This does NOT apply when your CWD is a linked git worktree.** Auto-indexing deliberately
+  refuses to index a worktree and defers to the parent checkout, so `index_status` reports the
+  PARENT as indexed and healthy while describing files that are not yours. Reading that as
+  "already indexed" and falling back to `rg` is the single most common way agents lose CodeSift
+  in a worktree. Run `index_folder(path=<your worktree>)` once — that is not a re-index, it is
+  the first index of a repo that has none.
 - Call `list_repos` in single-repo sessions — repo auto-resolves from CWD
 - Use manual Edit on multiple files for rename — use `rename_symbol`
 - Read entire file just to get a return type — use `get_type_info`

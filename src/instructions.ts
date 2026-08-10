@@ -34,8 +34,11 @@ ALWAYS: repo auto-resolves, skip list_repos. file_pattern when scoped. get_symbo
   for 2+. Batch 3+ into codebase_retrieval. token_budget to cap. index_file after edits.
   trace_route for endpoints. codebase_retrieval(type:semantic) for conceptual queries.
 
-NEVER: index_folder if already indexed. list_repos in single-repo. get_knowledge_map
-  without detect_communities (129K+). Read file for return type → get_type_info.
+NEVER: index_folder if already indexed — EXCEPT in a linked git worktree, where the
+  repo reported as indexed is the PARENT checkout, not your tree: index_folder(path=<cwd>)
+  once, and treat H19 or a file count that does not match your tree as the signal.
+  list_repos in single-repo. get_knowledge_map without detect_communities (129K+).
+  Read file for return type → get_type_info.
 
 KEY PARAMS
   search_symbols: detail_level=compact | token_budget=N | kind=function/class/component/hook
