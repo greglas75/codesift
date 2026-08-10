@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
@@ -98,10 +98,13 @@ type DirectoryLockOwner = { pid: number; token: string };
  * would have. A crashed owner is reclaimed only after its PID is gone.
  */
 async function acquireRegistryPortableLock(registryPath: string): Promise<RegistryFileLock> {
-  const lockPath = `${registryPath}.lock`;
+  // Distinct from the SQLite `.lock.db` and from any historical lock-directory
+  // experiment, so a stale artifact cannot change the file-lock semantics.
+  const lockPath = `${registryPath}.lock.file`;
   const deadline = Date.now() + 5 * 60_000;
   const token = randomUUID();
   const candidatePath = `${lockPath}.candidate-${process.pid}-${token}`;
+  await cleanupAbandonedLockCandidates(lockPath);
   await writeFile(
     candidatePath,
     JSON.stringify({ pid: process.pid, token }),
@@ -116,7 +119,11 @@ async function acquireRegistryPortableLock(registryPath: string): Promise<Regist
           release: async () => {
             const owner = await readRegistryLockOwner(lockPath);
             if (owner?.token !== token) return;
-            await unlink(lockPath);
+            try {
+              await unlink(lockPath);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
           },
         };
       } catch (error) {
@@ -140,6 +147,24 @@ async function acquireRegistryPortableLock(registryPath: string): Promise<Regist
     }
   } finally {
     await unlink(candidatePath).catch(() => undefined);
+  }
+}
+
+async function cleanupAbandonedLockCandidates(lockPath: string): Promise<void> {
+  const parent = dirname(lockPath);
+  const prefix = `${basename(lockPath)}.candidate-`;
+  let names: string[];
+  try {
+    names = await readdir(parent);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const pid = Number.parseInt(name.slice(prefix.length).split("-", 1)[0] ?? "", 10);
+    if (Number.isInteger(pid) && !processIsAlive(pid)) {
+      await unlink(join(parent, name)).catch(() => undefined);
+    }
   }
 }
 
