@@ -1,5 +1,7 @@
 import { createReadStream } from "node:fs";
+import { once } from "node:events";
 import { createInterface } from "node:readline";
+import { finished } from "node:stream/promises";
 import type { CodeChunk } from "../types.js";
 import { cleanupOrphanTempFiles } from "./_shared.js";
 
@@ -85,13 +87,16 @@ export async function saveChunks(
         tokenCount: c.tokenCount,
       } satisfies ChunkLine) + "\n";
       if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
+        if (streamError) throw streamError;
+        // `events.once` rejects when the emitter raises `error` before `drain`.
+        // Waiting for `drain` alone leaves this save pending forever after a
+        // disk/descriptor failure because a failed stream never drains.
+        await once(stream, "drain");
       }
     }
     if (streamError) throw streamError;
-    await new Promise<void>((resolve, reject) => {
-      stream.end(() => streamError ? reject(streamError) : resolve());
-    });
+    stream.end();
+    await finished(stream);
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, chunkPath);
   } catch (err) {
@@ -207,13 +212,13 @@ export async function saveChunkEmbeddings(
       if (streamError) throw streamError;
       const line = JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
       if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
+        if (streamError) throw streamError;
+        await once(stream, "drain");
       }
     }
     if (streamError) throw streamError;
-    await new Promise<void>((resolve, reject) => {
-      stream.end(() => streamError ? reject(streamError) : resolve());
-    });
+    stream.end();
+    await finished(stream);
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, embeddingPath);
   } catch (err) {
