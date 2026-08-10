@@ -507,6 +507,20 @@ describe("symbol_tools", () => {
       expect(result!.symbol.source).toContain("function processPayment");
     });
 
+    it("includes child symbols by default for class symbols", async () => {
+      const repo = await indexFixture();
+      const index = await getCodeIndex(repo);
+      const classSymbol = index!.symbols.find((s) => s.name === "UserService");
+
+      expect(classSymbol).toBeDefined();
+
+      const result = await getSymbol(repo, classSymbol!.id);
+
+      expect(result?.related?.map((symbol) => symbol.name)).toEqual(
+        expect.arrayContaining(["deleteUser", "findAll"]),
+      );
+    });
+
     it("returns null for non-existent symbol ID", async () => {
       const repo = await indexFixture();
 
