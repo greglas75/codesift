@@ -60,13 +60,16 @@ describe("TypeScript constant file contexts", () => {
     ]));
   });
 
-  it("returns null when parsing a readable TypeScript file fails", async () => {
+  it("caches null when parsing a readable TypeScript file fails", async () => {
     await writeFile(join(fixture.root, "broken.ts"), "export const VALUE = 1\n");
-    const state = createState(vi.fn(() => null) as ResolutionState["parser"]["parse"]);
+    const parse = vi.fn(() => null);
+    const state = createState(parse as ResolutionState["parser"]["parse"]);
 
     await expect(loadTypeScriptFileContext(state, "broken.ts")).resolves.toBeNull();
+    await expect(loadTypeScriptFileContext(state, "broken.ts")).resolves.toBeNull();
 
-    expect(state.fileCache.size).toBe(0);
+    expect(parse).toHaveBeenCalledOnce();
+    expect(state.fileCache).toEqual(new Map([["broken.ts", null]]));
   });
 
   it("retires evicted trees and deletes them only during final disposal", async () => {

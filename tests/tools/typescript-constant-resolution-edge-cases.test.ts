@@ -77,6 +77,12 @@ export const STATIC_TEMPLATE = \`hello\`
 export const DYNAMIC_TEMPLATE = \`hello \${name}\`
 export const UNSAFE_INTEGER = 9007199254740992
 export const CALL_VALUE = other()
+export const BITWISE_NOT = ~5
+export const VOID_VALUE = void 0
+const BASE = { retries: 3 }
+const timeout = 10
+export const SPREAD_OBJECT = { ...BASE, timeout: 10 }
+export const SHORTHAND_OBJECT = { timeout }
 `,
     });
     const expectedReasons = new Map([
@@ -84,12 +90,46 @@ export const CALL_VALUE = other()
       ["DYNAMIC_TEMPLATE", "Unsupported TypeScript value node: template_string"],
       ["UNSAFE_INTEGER", "Integer literal outside safe Number range"],
       ["CALL_VALUE", "Unsupported TypeScript value node: call_expression"],
+      ["BITWISE_NOT", "Unsupported TypeScript value node: unary_expression"],
+      ["VOID_VALUE", "Unsupported TypeScript value node: unary_expression"],
+      ["SPREAD_OBJECT", "Unsupported TypeScript value node: spread_element"],
+      ["SHORTHAND_OBJECT", "Unsupported TypeScript value node: shorthand_property_identifier"],
     ]);
 
     for (const [name, reason] of expectedReasons) {
       const result = await resolveTypeScriptConstantValue(repo, name);
       expect(result.matches[0]).toMatchObject({ resolved: false, reason });
     }
+  });
+
+  it("ignores type-only imports and equals signs inside parameter types", async () => {
+    const repo = await fixture.write({
+      "src/base.ts": "export const CONFIG = { retries: 3 }\nexport const TYPE_CONFIG = { retries: 4 }\n",
+      "src/consumer.ts": `import type { CONFIG } from "./base"
+import { type TYPE_CONFIG } from "./base"
+export const TYPE_ONLY_VALUE = CONFIG
+export const SPECIFIER_TYPE_ONLY = TYPE_CONFIG
+export function noDefault(mode: "a=b") { return mode }
+`,
+    });
+
+    const typeOnly = await resolveTypeScriptConstantValue(repo, "TYPE_ONLY_VALUE");
+    const specifierTypeOnly = await resolveTypeScriptConstantValue(repo, "SPECIFIER_TYPE_ONLY");
+    const noDefault = await resolveTypeScriptConstantValue(repo, "noDefault");
+
+    expect(typeOnly.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for CONFIG in src/consumer.ts",
+    });
+    expect(specifierTypeOnly.matches[0]).toMatchObject({
+      resolved: false,
+      reason: "No resolvable binding found for TYPE_CONFIG in src/consumer.ts",
+    });
+    expect(noDefault.matches[0]).toMatchObject({
+      resolved: false,
+      default_parameters: [],
+      reason: "Function has no default parameters",
+    });
   });
 
   it("reports missing properties, bindings, and dynamic keys precisely", async () => {

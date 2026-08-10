@@ -30,12 +30,11 @@ function getDefaultParameterParts(node: TSNode): DefaultParameterParts | null {
   if (node.type !== "required_parameter" && node.type !== "optional_parameter") {
     return null;
   }
-  if (!node.text.includes("=")) return null;
-
   const children = node.namedChildren;
   const nameNode = children[0];
-  const valueNode = children[children.length - 1];
+  const valueNode = node.childForFieldName("value");
   if (!nameNode) return null;
+  if (!valueNode) return null;
   if (nameNode.type !== "identifier") {
     return {
       kind: "unsupported",
@@ -44,8 +43,6 @@ function getDefaultParameterParts(node: TSNode): DefaultParameterParts | null {
       valueText: node.text,
     };
   }
-  if (!valueNode || children.length < 2) return null;
-
   return {
     kind: "supported",
     name: nameNode.text,

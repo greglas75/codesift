@@ -164,7 +164,7 @@ async function evaluateValueNode(
       let usedImport = false;
       const aliasChain: ResolutionHop[] = [];
       for (const pair of node.namedChildren) {
-        if (pair.type !== "pair") continue;
+        if (pair.type !== "pair") return unsupportedNode(pair, aliasChain, usedImport);
         const keyNode = pair.namedChildren[0];
         const valueNode = pair.namedChildren[1];
         if (!keyNode || !valueNode) return unsupportedNode(node, aliasChain, usedImport);
@@ -228,7 +228,8 @@ async function evaluateValueNode(
           reason: inner.reason ?? `Unsupported unary operand: ${operand.text}`,
         };
       }
-      if (node.text.startsWith("-")) {
+      const operator = node.childForFieldName("operator")?.type;
+      if (operator === "-") {
         return {
           resolved: true,
           value_kind: inner.value_kind === "float" ? "float" : "integer",
@@ -238,7 +239,7 @@ async function evaluateValueNode(
           used_import: inner.used_import,
         };
       }
-      return inner;
+      return operator === "+" ? inner : unsupportedNode(node, inner.alias_chain, inner.used_import);
     }
     case "member_expression":
     case "subscript_expression":

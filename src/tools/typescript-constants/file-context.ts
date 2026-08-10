@@ -72,6 +72,8 @@ function collectImportBindings(
   normalizedPaths: Map<string, string>,
   imports: Map<string, ImportBinding>,
 ): void {
+  if (node.children.some((child) => child.type === "type")) return;
+
   const stringNode = node.namedChildren.find((child) => child.type === "string");
   if (!stringNode) return;
 
@@ -98,6 +100,7 @@ function collectImportBindings(
     if (child.type === "named_imports") {
       for (const specifier of child.namedChildren) {
         if (specifier.type !== "import_specifier") continue;
+        if (specifier.children.some((entry) => entry.type === "type")) continue;
         const importedNode = specifier.namedChildren[0];
         const localNode = specifier.namedChildren[1] ?? importedNode;
         if (!importedNode || !localNode || localNode.type !== "identifier" || importedNode.type !== "identifier") continue;
@@ -186,7 +189,10 @@ async function loadTypeScriptFileContext(
   }
 
   const tree = state.parser.parse(source);
-  if (!tree) return null;
+  if (!tree) {
+    cache.set(filePath, null);
+    return null;
+  }
   const assignments = new Map<string, AssignmentBinding>();
   const imports = new Map<string, ImportBinding>();
   const normalizedPaths = state.normalizedPathMap;
