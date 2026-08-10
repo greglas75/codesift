@@ -240,3 +240,26 @@ describe("unreadable JSON store", () => {
     }
   });
 });
+
+describe("canonical index paths", () => {
+  it("rejects a derived SQLite path instead of silently reading a .db.db sibling", async () => {
+    useBackend("sqlite");
+    const dbPath = sqlitePathFor(indexPath);
+
+    await expect(loadIndex(dbPath)).rejects.toThrow(
+      `Expected a canonical index path, received SQLite database path: ${dbPath}`,
+    );
+  });
+
+  it.each([".DB", ".db-wal", ".DB-SHM", ".DB-JOURNAL"])(
+    "rejects the case-insensitive SQLite artifact suffix %s",
+    async (suffix) => {
+      useBackend("sqlite");
+      const sqliteArtifactPath = indexPath.replace(/\.json$/, suffix);
+
+      await expect(loadIndex(sqliteArtifactPath)).rejects.toThrow(
+        `Expected a canonical index path, received SQLite database path: ${sqliteArtifactPath}`,
+      );
+    },
+  );
+});

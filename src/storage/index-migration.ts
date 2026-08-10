@@ -38,8 +38,17 @@ export function resetIndexBackendForTesting(): void {
   backendPromise = undefined;
 }
 
-/** Keep both formats side by side so the JSON file remains a usable rollback artifact. */
+/**
+ * Keep both formats side by side so the JSON file remains a usable rollback artifact.
+ * Throws when given an already-derived SQLite file or sidecar: accepting one would silently
+ * derive a second, unrelated database path.
+ */
 export function sqlitePathFor(indexPath: string): string {
+  if (/\.db(?:-(?:wal|shm|journal))?$/i.test(indexPath)) {
+    throw new TypeError(
+      `Expected a canonical index path, received SQLite database path: ${indexPath}`,
+    );
+  }
   return indexPath.endsWith(".json")
     ? `${indexPath.slice(0, -".json".length)}.db`
     : `${indexPath}.db`;
