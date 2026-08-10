@@ -46,6 +46,7 @@ export interface ResolutionState {
   index: CodeIndex;
   parser: Parser;
   fileCache: Map<string, TypeScriptFileContext | null>;
+  retiredTrees: TSTree[];
   normalizedPathMap: Map<string, string>;
   visited: Set<string>;
   maxDepth: number;

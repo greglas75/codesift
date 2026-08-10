@@ -46,6 +46,7 @@ async function evaluateValueNode(
   filePath: string,
   node: TSNode,
   state: ResolutionState,
+  depth = 0,
 ): Promise<EvaluationResult> {
   switch (node.type) {
     case "string":
@@ -129,13 +130,13 @@ async function evaluateValueNode(
         used_import: false,
       };
     case "identifier":
-      return await resolveNamedValue(filePath, node.text, state, 0);
+      return await resolveNamedValue(filePath, node.text, state, depth + 1);
     case "array": {
       const items: PythonLiteralValue[] = [];
       let usedImport = false;
       const aliasChain: ResolutionHop[] = [];
       for (const child of node.namedChildren) {
-        const result = await evaluateValueNode(filePath, child, state);
+        const result = await evaluateValueNode(filePath, child, state, depth);
         aliasChain.push(...result.alias_chain);
         usedImport = usedImport || result.used_import;
         if (!result.resolved || result.value === undefined) {
@@ -172,7 +173,7 @@ async function evaluateValueNode(
         if (keyNode.type === "property_identifier") {
           keyValue = keyNode.text;
         } else {
-          const keyResult = await evaluateValueNode(filePath, keyNode, state);
+          const keyResult = await evaluateValueNode(filePath, keyNode, state, depth);
           aliasChain.push(...keyResult.alias_chain);
           usedImport = usedImport || keyResult.used_import;
           if (!keyResult.resolved || keyResult.value === undefined || !isObjectKey(keyResult.value)) {
@@ -187,7 +188,7 @@ async function evaluateValueNode(
           keyValue = String(keyResult.value);
         }
 
-        const valueResult = await evaluateValueNode(filePath, valueNode, state);
+        const valueResult = await evaluateValueNode(filePath, valueNode, state, depth);
         aliasChain.push(...valueResult.alias_chain);
         usedImport = usedImport || valueResult.used_import;
         if (!valueResult.resolved || valueResult.value === undefined) {
@@ -212,12 +213,12 @@ async function evaluateValueNode(
     }
     case "parenthesized_expression": {
       const inner = node.namedChildren[0];
-      return inner ? await evaluateValueNode(filePath, inner, state) : unsupportedNode(node, [], false);
+      return inner ? await evaluateValueNode(filePath, inner, state, depth) : unsupportedNode(node, [], false);
     }
     case "unary_expression": {
       const operand = node.namedChildren[0];
       if (!operand) return unsupportedNode(node, [], false);
-      const inner = await evaluateValueNode(filePath, operand, state);
+      const inner = await evaluateValueNode(filePath, operand, state, depth);
       if (!inner.resolved || typeof inner.value !== "number") {
         return {
           resolved: false,
@@ -240,7 +241,8 @@ async function evaluateValueNode(
       return inner;
     }
     case "member_expression":
-      return await evaluateMemberExpression(filePath, node, state);
+    case "subscript_expression":
+      return await evaluateMemberExpression(filePath, node, state, depth);
     default:
       return unsupportedNode(node, [], false);
   }
@@ -250,16 +252,30 @@ async function evaluateMemberExpression(
   filePath: string,
   node: TSNode,
   state: ResolutionState,
+  depth: number,
 ): Promise<EvaluationResult> {
   const objectNode = node.childForFieldName("object") ?? node.namedChildren[0];
-  const propertyNode = node.childForFieldName("property") ?? node.namedChildren[1];
+  const propertyNode = node.childForFieldName("property")
+    ?? node.childForFieldName("index")
+    ?? node.namedChildren[1];
   if (!objectNode || !propertyNode) return unsupportedNode(node, [], false);
 
-  if (objectNode.type === "identifier" && propertyNode.type === "property_identifier") {
+  let key: string;
+  if (propertyNode.type === "property_identifier") {
+    key = propertyNode.text;
+  } else if (propertyNode.type === "string") {
+    key = stripTypeScriptString(propertyNode.text);
+  } else if (propertyNode.type === "template_string" && propertyNode.namedChildren.length === 0) {
+    key = stripTypeScriptString(propertyNode.text);
+  } else {
+    return unsupportedNode(node, [], false);
+  }
+
+  if (objectNode.type === "identifier") {
     const context = await loadTypeScriptFileContext(state, filePath);
     const imported = context?.imports.get(objectNode.text);
     if (imported?.kind === "namespace") {
-      const result = await resolveNamedValue(imported.source_file, propertyNode.text, state, 1);
+      const result = await resolveNamedValue(imported.source_file, key, state, depth + 1);
       return {
         ...result,
         used_import: true,
@@ -268,7 +284,7 @@ async function evaluateMemberExpression(
     }
   }
 
-  const objectResult = await evaluateValueNode(filePath, objectNode, state);
+  const objectResult = await evaluateValueNode(filePath, objectNode, state, depth);
   if (!objectResult.resolved || typeof objectResult.value !== "object" || objectResult.value === null || Array.isArray(objectResult.value)) {
     return {
       resolved: false,
@@ -279,7 +295,6 @@ async function evaluateMemberExpression(
     };
   }
 
-  const key = propertyNode.text;
   const propertyValue = (objectResult.value as Record<string, PythonLiteralValue>)[key];
   if (propertyValue === undefined) {
     return {
@@ -362,7 +377,7 @@ async function resolveNamedValue(
         };
       }
       if (context.default_export.node) {
-        const result = await evaluateValueNode(filePath, context.default_export.node, state);
+        const result = await evaluateValueNode(filePath, context.default_export.node, state, depth);
         return {
           ...result,
           alias_chain: [{ name: "default", file: filePath, line: getBindingLine(context.default_export) }, ...result.alias_chain],
@@ -372,7 +387,7 @@ async function resolveNamedValue(
 
     const assignment = context.assignments.get(name);
     if (assignment) {
-      const result = await evaluateValueNode(filePath, assignment.rhs, state);
+      const result = await evaluateValueNode(filePath, assignment.rhs, state, depth);
       return {
         ...result,
         alias_chain: [{ name, file: filePath, line: getBindingLine(assignment) }, ...result.alias_chain],

@@ -12,12 +12,26 @@ import type {
 
 const MAX_TS_RESOLVER_FILE_CACHE = 128;
 
-function trimResolverFileCache(cache: Map<string, TypeScriptFileContext | null>): void {
+function trimResolverFileCache(state: ResolutionState): void {
+  const cache = state.fileCache;
   while (cache.size > MAX_TS_RESOLVER_FILE_CACHE) {
     const first = cache.keys().next().value as string | undefined;
     if (first === undefined) break;
+    const context = cache.get(first);
+    if (context) state.retiredTrees.push(context.tree);
     cache.delete(first);
   }
+}
+
+function disposeTypeScriptFileContexts(state: ResolutionState): void {
+  for (const context of state.fileCache.values()) {
+    context?.tree.delete();
+  }
+  for (const tree of state.retiredTrees) {
+    tree.delete();
+  }
+  state.fileCache.clear();
+  state.retiredTrees.length = 0;
 }
 
 function isTypeScriptFile(filePath: string): boolean {
@@ -208,11 +222,12 @@ async function loadTypeScriptFileContext(
   if (defaultExport) context.default_export = defaultExport;
 
   cache.set(filePath, context);
-  trimResolverFileCache(cache);
+  trimResolverFileCache(state);
   return context;
 }
 
 export {
+  disposeTypeScriptFileContexts,
   isTypeScriptFile,
   loadTypeScriptFileContext,
   stripTypeScriptString,

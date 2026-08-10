@@ -7,7 +7,10 @@ import type {
   ConstantResolutionMatch,
   ConstantResolutionResult,
 } from "./python-constants-tools.js";
-import { isTypeScriptFile } from "./typescript-constants/file-context.js";
+import {
+  disposeTypeScriptFileContexts,
+  isTypeScriptFile,
+} from "./typescript-constants/file-context.js";
 import {
   resolveConstantSymbol,
   resolveFunctionDefaults,
@@ -47,22 +50,27 @@ export async function resolveTypeScriptConstantValue(
     index,
     parser,
     fileCache: new Map(),
+    retiredTrees: [],
     normalizedPathMap: buildNormalizedPathMap(index),
     visited: new Set(),
     maxDepth: options?.max_depth ?? MAX_DEFAULT_DEPTH,
   };
 
   const matches: ConstantResolutionMatch[] = [];
-  for (const candidate of candidates) {
-    if (candidate.kind === "constant" || candidate.kind === "variable") {
-      matches.push(await resolveConstantSymbol(candidate, state));
-    } else {
-      matches.push(await resolveFunctionDefaults(candidate, state));
+  try {
+    for (const candidate of candidates) {
+      if (candidate.kind === "constant" || candidate.kind === "variable") {
+        matches.push(await resolveConstantSymbol(candidate, state));
+      } else {
+        matches.push(await resolveFunctionDefaults(candidate, state));
+      }
     }
-  }
 
-  return {
-    query: symbolName,
-    matches,
-  };
+    return {
+      query: symbolName,
+      matches,
+    };
+  } finally {
+    disposeTypeScriptFileContexts(state);
+  }
 }
