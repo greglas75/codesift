@@ -422,6 +422,23 @@ urlpatterns = [path('posts/<int:id>/', views.detail)]`,
     if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
     expect(result.handlers).toContainEqual(expect.objectContaining({ framework: "ktor", method: "GET" }));
   });
+
+  it("resolves Django class-based views instead of the as_view adapter", async () => {
+    const repo = await createIndexedFixture({
+      "myapp/urls.py": `from django.urls import path
+from . import views
+urlpatterns = [path('users/', views.UserList.as_view())]`,
+      "myapp/views.py": `class UserList:
+  pass`,
+    });
+    const result = await traceRoute(repo, "/users/");
+    if ("mermaid" in result) throw new Error("Expected RouteTraceResult, got mermaid");
+    expect(result.handlers).toContainEqual(expect.objectContaining({
+      framework: "django",
+      file: "myapp/views.py",
+      symbol: expect.objectContaining({ name: "UserList" }),
+    }));
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,9 @@ export async function findDjangoHandlers(index: CodeIndex, searchPath: string): 
       if (!matchPath(normalizedPath, searchPath)) continue;
 
       // Resolve view reference to a symbol
-      const viewName = viewRef.split(".").pop() ?? viewRef;
+      const viewParts = viewRef.split(".");
+      const lastPart = viewParts.at(-1) ?? viewRef;
+      const viewName = lastPart === "as_view" ? (viewParts.at(-2) ?? lastPart) : lastPart;
       const sym = index.symbols.find((s) => s.name === viewName && s.file.endsWith(".py"));
 
       handlers.push({
