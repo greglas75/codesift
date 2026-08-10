@@ -10,7 +10,9 @@ const prismaAstEsm = fileURLToPath(
 );
 
 const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
-const supportsNativeSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 5);
+// `node:sqlite` arrived behind --experimental-sqlite in 22.5 and became
+// available without the flag in 22.13.
+const supportsNativeSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 13);
 const nativeSqliteTests = [
   "tests/cli/prune-rescue-collision.test.ts",
   "tests/storage/index-backend-migration.test.ts",
@@ -98,10 +100,11 @@ export default defineConfig({
             "tests/retrieval/**/*.test.ts",
             "tests/utils/**/*.test.ts",
           ],
-          // Node 20 is a supported JSON-backend runtime, but `node:sqlite` does
-          // not exist until 22.5. Keep the compatibility lane useful by running
-          // the rest of the suite there; Node 22 exercises every SQLite test.
-          exclude: supportsNativeSqlite ? [] : nativeSqliteTests,
+          // Node 20 is a supported JSON-backend runtime, but unflagged
+          // `node:sqlite` is unavailable before 22.13. Keep the compatibility
+          // lane useful by running the rest of the suite there. Omit `exclude`
+          // entirely on newer runtimes so Vitest retains its default exclusions.
+          ...(supportsNativeSqlite ? {} : { exclude: nativeSqliteTests }),
           environment: "node",
           // `forks`, not `vmForks`. Same isolation for this suite, about half
           // the wall clock (~80s -> ~45s), and the prisma-ast/chevrotain tests

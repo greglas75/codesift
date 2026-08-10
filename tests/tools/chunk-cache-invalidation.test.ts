@@ -67,9 +67,13 @@ describe("every invalidation site goes through the helper", () => {
     const { fileURLToPath } = await import("node:url");
 
     const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src");
-    const files = readdirSync(srcDir, { recursive: true, encoding: "utf8" })
-      .filter((file) => file.endsWith(".ts"))
-      .map((file) => join(srcDir, file));
+    const listTypeScriptFiles = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) return listTypeScriptFiles(path);
+        return entry.isFile() && entry.name.endsWith(".ts") ? [path] : [];
+      });
+    const files = listTypeScriptFiles(srcDir);
 
     const offenders: string[] = [];
     for (const file of files) {
