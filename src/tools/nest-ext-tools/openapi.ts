@@ -1,5 +1,9 @@
 import {
   findDecoratorCalls,
+  findNestClassRanges,
+  findClassAtPosition,
+  findNestDecoratorBlockStart,
+  findNestMethodAfter,
   maskNestSource,
   readNestSource,
   requireNestCodeIndex,
@@ -24,7 +28,7 @@ export interface OpenAPIOperation {
 
 export interface OpenAPISchema {
   type: "object";
-  properties: { [name: string]: { type?: string; $ref?: string; required?: boolean; description?: string; enum?: string[] } };
+  properties: { [name: string]: { type?: string; $ref?: string; items?: { type?: string; $ref?: string }; required?: boolean; description?: string; enum?: string[] } };
   required?: string[];
 }
 
@@ -68,22 +72,26 @@ export async function nestOpenAPIExtract(
       if (!/@ApiProperty/.test(body)) continue;
 
       const schema: OpenAPISchema = { type: "object", properties: {}, required: [] };
-      // Match @ApiProperty({ ... }) followed by field: type;
-      const propRe = /@ApiProperty(?:Optional)?\s*\(\s*(\{[^}]*\})?\s*\)\s*(?:(?:readonly|public|private)\s+)?(\w+)(\??)\s*:\s*(\w+(?:<[\w,\s]+>)?)/g;
-      let pm: RegExpExecArray | null;
-      while ((pm = propRe.exec(body)) !== null) {
-        const argsStr = pm[1] ?? "";
-        const fieldName = pm[2]!;
-        const isOptional = pm[3] === "?";
-        const tsType = pm[4]!;
+      const propertyCalls = (["ApiProperty", "ApiPropertyOptional"] as const)
+        .flatMap((decorator) =>
+          findDecoratorCalls(body, decorator).map((call) => ({ ...call, decorator })),
+        )
+        .sort((left, right) => left.start - right.start);
+      for (const propertyCall of propertyCalls) {
+        const fieldMatch = /^\s*(?:(?:readonly|public|private|protected|static)\s+)*(\w+)(\??)\s*:\s*([^;=\n]+)/.exec(
+          body.slice(propertyCall.end),
+        );
+        if (!fieldMatch) continue;
+        const argsStr = propertyCall.args;
+        const fieldName = fieldMatch[1]!;
+        const isOptional = fieldMatch[2] === "?" || propertyCall.decorator === "ApiPropertyOptional";
+        const tsType = fieldMatch[3]!.trim();
 
         // Extract description/enum from args
         const descMatch = /description:\s*['"`]([^'"`]+)['"`]/.exec(argsStr);
         const enumMatch = /enum:\s*\[([^\]]*)\]/.exec(argsStr);
 
-        const prop: OpenAPISchema["properties"][string] = {
-          type: mapTsTypeToOpenAPI(tsType),
-        };
+        const prop: OpenAPISchema["properties"][string] = mapTsTypeToOpenAPISchema(tsType);
         if (descMatch) prop.description = descMatch[1]!;
         if (enumMatch) {
           prop.enum = enumMatch[1]!
@@ -93,7 +101,7 @@ export async function nestOpenAPIExtract(
         }
 
         schema.properties[fieldName] = prop;
-        if (!isOptional && !/@ApiPropertyOptional/.test(pm[0])) {
+        if (!isOptional) {
           schema.required!.push(fieldName);
         }
       }
@@ -106,27 +114,21 @@ export async function nestOpenAPIExtract(
   }
 
   // Step 2: Extract routes from controllers + project @ApiOperation/@ApiResponse into paths
-  const controllerFiles = index.files.filter((f) => f.path.endsWith(".controller.ts"));
+  const controllerFiles = index.files.filter(
+    (f) => f.path.endsWith(".controller.ts") || f.path.endsWith(".controller.js"),
+  );
   for (const file of controllerFiles) {
     const source = await readNestSource(index, file.path, errors);
     if (source === undefined) continue;
 
-    // Controller prefix
-    const ctrlMatch = /@Controller\s*\(\s*(?:['"`]([^'"`]*)['"`]|\{[^}]*path:\s*['"`]([^'"`]*)['"`])/.exec(source);
-    const ctrlPrefix = ctrlMatch?.[1] ?? ctrlMatch?.[2] ?? "";
-
-    // @ApiTags at class level
-    const tagsMatch = /@ApiTags\s*\(\s*((?:['"`][^'"`]+['"`]\s*,?\s*)+)\)/.exec(source);
-    const tags = tagsMatch
-      ? [...tagsMatch[1]!.matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]!)
-      : undefined;
-
     const openApiMethods = ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options"];
     const methods = [...openApiMethods, "All"];
     const masked = maskNestSource(source);
+    const classRanges = findNestClassRanges(source);
     const routeMatches: Array<{
       method: string;
       index: number;
+      end: number;
       routePath: string;
     }> = [];
 
@@ -141,27 +143,46 @@ export async function nestOpenAPIExtract(
         routeMatches.push({
           method,
           index: methodMatch.index,
+          end: methodMatch.index + methodMatch[0].length,
           routePath: methodMatch[1] ?? "",
         });
       }
     }
     routeMatches.sort((left, right) => left.index - right.index);
 
-    for (const [routeIndex, route] of routeMatches.entries()) {
-      const nextRoute = routeMatches[routeIndex + 1];
-      const routeSlice = source.slice(route.index, nextRoute?.index ?? source.length);
-      const handlerMatch =
-        /(?:^|\n)\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?\w+\s*\([\s\S]*?\)\s*(?::[^\n{]+)?\s*\{/m.exec(
-          routeSlice,
-        );
-      const lookFwd = handlerMatch
-        ? routeSlice.slice(0, handlerMatch.index + handlerMatch[0].length)
-        : routeSlice;
+    for (const route of routeMatches) {
+      const owner = findClassAtPosition(classRanges, route.index);
+      const method = findNestMethodAfter(source, route.end);
+      if (!owner || !method || method.start >= owner.end) {
+        errors.push({ file: file.path, reason: `Could not resolve handler for @${route.method} at offset ${route.index}` });
+        continue;
+      }
+      const ownerIndex = classRanges.indexOf(owner);
+      const classLowerBound = ownerIndex > 0 ? classRanges[ownerIndex - 1]!.end : 0;
+      const classDeclarationStart = source.lastIndexOf("\n", owner.start - 1) + 1;
+      const classBlockStart = findNestDecoratorBlockStart(source, classDeclarationStart, classLowerBound);
+      const classDecorators = source.slice(classBlockStart, owner.bodyStart);
+      const ctrlArgs = findDecoratorCalls(classDecorators, "Controller")[0]?.args ?? "";
+      const ctrlMatch = /^\s*(?:['"`]([^'"`]*)['"`]|\{[\s\S]*?\bpath:\s*['"`]([^'"`]*)['"`])/.exec(ctrlArgs);
+      const ctrlPrefix = ctrlMatch?.[1] ?? ctrlMatch?.[2] ?? "";
+      const tagsArgs = findDecoratorCalls(classDecorators, "ApiTags")[0]?.args;
+      const tags = tagsArgs
+        ? [...tagsArgs.matchAll(/['"`]([^'"`]+)['"`]/g)].map((match) => match[1]!)
+        : undefined;
+      const classBearerAuth = findDecoratorCalls(classDecorators, "ApiBearerAuth").length > 0;
+
+      const blockStart = findNestDecoratorBlockStart(source, route.index, owner.bodyStart + 1);
+      const methodHeader = /^[\s\S]*?\)\s*(?::[^\n{]+)?\s*\{/.exec(source.slice(method.start));
+      if (!methodHeader) {
+        errors.push({ file: file.path, reason: `Could not parse handler ${method.name} for @${route.method}` });
+        continue;
+      }
+      const lookFwd = source.slice(blockStart, method.start + methodHeader[0].length);
       const maskedLookFwd = maskNestSource(lookFwd);
       const operationArgs = findDecoratorCalls(lookFwd, "ApiOperation")[0]?.args ?? "";
       const summary = /\bsummary:\s*['"`]([^'"`]+)['"`]/.exec(operationArgs)?.[1];
       const description = /\bdescription:\s*['"`]([^'"`]+)['"`]/.exec(operationArgs)?.[1];
-      const bearerAuth = findDecoratorCalls(lookFwd, "ApiBearerAuth").length > 0;
+      const bearerAuth = classBearerAuth || findDecoratorCalls(lookFwd, "ApiBearerAuth").length > 0;
 
       const responses: OpenAPIOperation["responses"] = {};
       for (const responseCall of findDecoratorCalls(lookFwd, "ApiResponse")) {
@@ -183,6 +204,28 @@ export async function nestOpenAPIExtract(
             : {}),
         };
       }
+      const specializedResponses: Record<string, string> = {
+        ApiOkResponse: "200", ApiCreatedResponse: "201", ApiAcceptedResponse: "202",
+        ApiNoContentResponse: "204", ApiBadRequestResponse: "400",
+        ApiUnauthorizedResponse: "401", ApiForbiddenResponse: "403",
+        ApiNotFoundResponse: "404", ApiConflictResponse: "409",
+        ApiUnprocessableEntityResponse: "422", ApiTooManyRequestsResponse: "429",
+        ApiInternalServerErrorResponse: "500", ApiBadGatewayResponse: "502",
+        ApiServiceUnavailableResponse: "503", ApiGatewayTimeoutResponse: "504",
+      };
+      for (const [decorator, status] of Object.entries(specializedResponses)) {
+        for (const responseCall of findDecoratorCalls(lookFwd, decorator)) {
+          const responseDescription =
+            /\bdescription:\s*['"`]([^'"`]+)['"`]/.exec(responseCall.args)?.[1];
+          const responseType = /\btype:\s*(\w+)/.exec(responseCall.args)?.[1];
+          responses[status] = {
+            ...(responseDescription ? { description: responseDescription } : {}),
+            ...(responseType
+              ? { content: { "application/json": { schema: { $ref: `#/components/schemas/${responseType}` } } } }
+              : {}),
+          };
+        }
+      }
       if (Object.keys(responses).length === 0) {
         responses["200"] = { description: "Success" };
       }
@@ -196,7 +239,7 @@ export async function nestOpenAPIExtract(
           name: parameterMatch[2]!,
           in: parameterMatch[1] === "Param" ? "path" : "query",
           required: parameterMatch[1] === "Param",
-          schema: { type: mapTsTypeToOpenAPI(parameterMatch[4]!) },
+          schema: { type: mapTsTypeToOpenAPISchema(parameterMatch[4]!).type ?? "object" },
         });
       }
 
@@ -233,7 +276,12 @@ export async function nestOpenAPIExtract(
         if (bearerAuth) operation.security = [{ bearer: [] }];
         if (requestBody) operation.requestBody = requestBody;
 
-        paths[fullPath]![emittedMethod.toLowerCase()] = operation;
+        const methodKey = emittedMethod.toLowerCase();
+        if (paths[fullPath]![methodKey]) {
+          errors.push({ file: file.path, reason: `Duplicate OpenAPI operation ${emittedMethod.toUpperCase()} ${fullPath}` });
+          continue;
+        }
+        paths[fullPath]![methodKey] = operation;
       }
     }
   }
@@ -251,15 +299,21 @@ export async function nestOpenAPIExtract(
 }
 
 /** Map TypeScript type names to OpenAPI 3.1 primitive types */
-function mapTsTypeToOpenAPI(tsType: string): string {
-  const normalized = tsType.replace(/<.*>/, "").trim();
+function mapTsTypeToOpenAPISchema(tsType: string): { type?: string; $ref?: string; items?: { type?: string; $ref?: string } } {
+  const arraySuffix = /^(.+?)\[\]$/.exec(tsType.trim());
+  const arrayGeneric = /^Array\s*<\s*(.+)\s*>$/.exec(tsType.trim());
+  const itemType = arraySuffix?.[1] ?? arrayGeneric?.[1];
+  if (itemType) {
+    return { type: "array", items: mapTsTypeToOpenAPISchema(itemType) };
+  }
+  const normalized = tsType.trim();
   switch (normalized) {
-    case "string": return "string";
-    case "number": return "number";
-    case "boolean": return "boolean";
-    case "Date": return "string";
-    case "Array":
-    case "any[]": return "array";
-    default: return "object";
+    case "string": return { type: "string" };
+    case "number": return { type: "number" };
+    case "boolean": return { type: "boolean" };
+    case "Date": return { type: "string" };
+    case "unknown":
+    case "any": return { type: "object" };
+    default: return { $ref: `#/components/schemas/${normalized}` };
   }
 }

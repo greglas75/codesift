@@ -162,4 +162,21 @@ class Audit {}
     });
     expect(result.edges.some((edge) => edge.to === "Ghost")).toBe(false);
   });
+
+  it("does not borrow a later property value for a shorthand entity name", async () => {
+    await writeFile(join(tmpRoot, "src/shorthand.entity.ts"), `
+const name = 'runtime-name';
+@Entity({ name, schema: 'audit' })
+class ShorthandEntity {}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/shorthand.entity.ts"]),
+    );
+
+    const result = await nestTypeOrmMap("test-repo");
+
+    expect(result.entities).toEqual([
+      { name: "ShorthandEntity", file: "src/shorthand.entity.ts" },
+    ]);
+  });
 });

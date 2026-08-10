@@ -210,11 +210,54 @@ class TypesDto {
         count: { type: "number" },
         enabled: { type: "boolean" },
         createdAt: { type: "string" },
-        names: { type: "array" },
-        metadata: { type: "object" },
+        names: { type: "array", items: { type: "string" } },
+        metadata: { $ref: "#/components/schemas/Metadata" },
       },
       required: ["count", "enabled", "createdAt", "names"],
     });
+  });
+
+  it("keeps Swagger decorators before routes and scopes metadata to each controller", async () => {
+    await writeFile(join(tmpRoot, "src/users/ordered.controller.ts"), `
+@ApiTags('public')
+@ApiBearerAuth()
+@Controller('public')
+class PublicController {
+  @ApiOperation({ summary: 'List public users' })
+  @ApiOkResponse({ description: 'Listed', type: CreateUserDto })
+  @Get('users')
+  list() {}
+}
+
+@ApiTags('admin')
+@Controller('admin')
+class AdminController {
+  @ApiCreatedResponse({ description: 'Created', type: CreateUserDto })
+  @Post('users')
+  create() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/users/ordered.controller.ts"]),
+    );
+
+    const result = await nestOpenAPIExtract("test-repo");
+
+    expect(result.paths["/public/users"]!.get).toEqual(
+      expect.objectContaining({
+        summary: "List public users",
+        tags: ["public"],
+        security: [{ bearer: [] }],
+        responses: expect.objectContaining({ "200": expect.objectContaining({ description: "Listed" }) }),
+      }),
+    );
+    expect(result.paths["/admin/users"]!.post).toEqual(
+      expect.objectContaining({
+        tags: ["admin"],
+        responses: expect.objectContaining({ "201": expect.objectContaining({ description: "Created" }) }),
+      }),
+    );
+    expect(result.paths["/admin/users"]!.post!.security).toBeUndefined();
   });
 
   it("returns precise read errors for missing OpenAPI source files", async () => {

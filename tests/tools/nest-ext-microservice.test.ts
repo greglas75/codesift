@@ -191,4 +191,24 @@ class NestedController {
 
     expect(result.patterns[0]!.pattern).toBe("createPattern(foo(1, 2), [A, B])");
   });
+
+  it("keeps message handlers with intervening method decorators", async () => {
+    await writeFile(join(tmpRoot, "src/orders/guarded.controller.ts"), `
+class GuardedController {
+  @MessagePattern('guarded')
+  @UseGuards(MessageGuard)
+  @UseInterceptors(TraceInterceptor)
+  handleGuarded() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/orders/guarded.controller.ts"]),
+    );
+
+    const result = await nestMicroserviceMap("test-repo");
+
+    expect(result.patterns).toEqual([
+      expect.objectContaining({ handler: "handleGuarded", pattern: "guarded" }),
+    ]);
+  });
 });

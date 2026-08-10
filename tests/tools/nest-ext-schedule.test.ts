@@ -281,4 +281,28 @@ class DuplicateJobs {
       expect.objectContaining({ handler: "heartbeat", expression: "HEARTBEAT_MS" }),
     ]);
   });
+
+  it("supports named delays and intervening method decorators", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/named.service.ts"), `
+class NamedJobs {
+  @Interval('health-check', 5_000)
+  @UseGuards(JobGuard)
+  health() {}
+
+  @Timeout('bootstrap', BOOTSTRAP_DELAY)
+  @UseInterceptors(TraceInterceptor)
+  bootstrap() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/jobs/named.service.ts"]),
+    );
+
+    const result = await nestScheduleMap("test-repo");
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ handler: "health", interval_ms: 5000 }),
+      expect.objectContaining({ handler: "bootstrap", expression: "BOOTSTRAP_DELAY" }),
+    ]);
+  });
 });

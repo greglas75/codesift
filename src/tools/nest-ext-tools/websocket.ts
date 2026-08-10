@@ -2,7 +2,8 @@ import {
   findDecoratedClass,
   findDecoratorCalls,
   findNestClassRanges,
-  maskNestSource,
+  findNestMethodAfter,
+  isNodeModulesPath,
   readNestSource,
   requireNestCodeIndex,
 } from "./shared.js";
@@ -28,23 +29,30 @@ export interface NestWebSocketMapResult {
 
 export async function nestWebSocketMap(
   repo: string,
-  options?: { max_gateways?: number },
+  options?: { max_gateways?: number; max_files_scanned?: number },
 ): Promise<NestWebSocketMapResult> {
   const index = await requireNestCodeIndex(repo);
 
   const maxGateways = options?.max_gateways ?? 100;
+  const maxFilesScanned = options?.max_files_scanned ?? 2000;
   const gateways: NestGatewayEntry[] = [];
   const errors: NestToolError[] = [];
   let truncated = false;
 
-  const gatewayFiles = index.files.filter(
-    (f) => f.path.endsWith(".gateway.ts") || f.path.endsWith(".gateway.js"),
-  );
+  const gatewayFiles = index.files.filter((f) => {
+    if (!f.path.endsWith(".ts") && !f.path.endsWith(".js")) return false;
+    if (/\.(spec|test)\./.test(f.path)) return false;
+    return !isNodeModulesPath(f.path);
+  });
 
+  let scanned = 0;
   for (const file of gatewayFiles) {
+    if (scanned >= maxFilesScanned) { truncated = true; break; }
     if (gateways.length >= maxGateways) { truncated = true; break; }
+    scanned++;
     const source = await readNestSource(index, file.path, errors);
     if (source === undefined) continue;
+    if (!/@WebSocketGateway/.test(source)) continue;
 
     const classRanges = findNestClassRanges(source);
     for (const call of findDecoratorCalls(source, "WebSocketGateway")) {
@@ -64,13 +72,12 @@ export async function nestWebSocketMap(
       const nsMatch = /namespace:\s*['"`]([^'"`]+)['"`]/.exec(call.args);
       if (nsMatch) entry.namespace = nsMatch[1]!;
 
-      const classBody = source.slice(owner.bodyStart + 1, owner.end - 1);
-      const maskedBody = maskNestSource(classBody);
-      const subRe = /@SubscribeMessage\s*\(\s*['"`]([^'"`]+)['"`]\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
-      let sm: RegExpExecArray | null;
-      while ((sm = subRe.exec(classBody)) !== null) {
-        if (maskedBody[sm.index] !== "@") continue;
-        entry.events.push({ event: sm[1]!, handler: sm[2]! });
+      for (const subscribeCall of findDecoratorCalls(source, "SubscribeMessage")) {
+        if (subscribeCall.start < owner.bodyStart || subscribeCall.start >= owner.end) continue;
+        const event = /^\s*['"`]([^'"`]+)['"`]/.exec(subscribeCall.args)?.[1];
+        const method = findNestMethodAfter(source, subscribeCall.end);
+        if (!event || !method || method.start >= owner.end) continue;
+        entry.events.push({ event, handler: method.name });
       }
 
       gateways.push(entry);

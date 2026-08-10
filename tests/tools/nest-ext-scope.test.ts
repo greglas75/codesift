@@ -140,7 +140,7 @@ class RepositoryConsumer {
         provider: "TransientService",
         scope: "TRANSIENT",
         file: "src/transient.service.ts",
-        escalated_consumers: ["GenericConsumer", "RepositoryConsumer"],
+        escalated_consumers: [],
       },
     ]);
   });
@@ -171,5 +171,64 @@ class RepositoryConsumer {
       expect.objectContaining({ provider: "RequestService" }),
     ]);
     expect(result.truncated).toBe(true);
+    expect(result.graph_incomplete).toBe(true);
+  });
+
+  it("enforces provider limits inside a file", async () => {
+    await writeFile(join(tmpRoot, "src/many.service.ts"), `
+@Injectable({ scope: Scope.REQUEST }) class FirstService {}
+@Injectable({ scope: Scope.REQUEST }) class SecondService {}
+@Injectable({ scope: Scope.REQUEST }) class ThirdService {}
+`);
+    mockedGetCodeIndex.mockResolvedValue(mockIndexWithRoot(tmpRoot, ["src/many.service.ts"]));
+
+    const result = await nestScopeAudit("test-repo", { max_providers: 2 });
+
+    expect(result.request_scoped).toHaveLength(2);
+    expect(result.request_scoped.map((issue) => issue.provider)).toEqual([
+      "FirstService",
+      "SecondService",
+    ]);
+    expect(result).toEqual(expect.objectContaining({ truncated: true, graph_incomplete: true }));
+  });
+
+  it("understands aliased scopes and explicit injection tokens", async () => {
+    await writeFile(join(tmpRoot, "src/aliased.service.ts"), `
+@Injectable({ scope: NestScope.REQUEST })
+class CacheService {}
+@Injectable()
+class CacheConsumer {
+  constructor(@Inject(CacheService) cache: CacheContract) {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/aliased.service.ts"]),
+    );
+
+    const result = await nestScopeAudit("test-repo");
+
+    expect(result.request_scoped).toEqual([
+      expect.objectContaining({
+        provider: "CacheService",
+        escalated_consumers: ["CacheConsumer"],
+      }),
+    ]);
+  });
+
+  it("does not merge providers with the same class name across files", async () => {
+    await writeFile(join(tmpRoot, "src/first.service.ts"), `
+@Injectable({ scope: Scope.REQUEST }) class SharedService {}
+`);
+    await writeFile(join(tmpRoot, "src/second.service.ts"), `
+@Injectable({ scope: Scope.TRANSIENT }) class SharedService {}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/first.service.ts", "src/second.service.ts"]),
+    );
+
+    const result = await nestScopeAudit("test-repo");
+
+    expect(result.request_scoped[0]!.provider).toBe("SharedService (src/first.service.ts)");
+    expect(result.transient_scoped[0]!.provider).toBe("SharedService (src/second.service.ts)");
   });
 });

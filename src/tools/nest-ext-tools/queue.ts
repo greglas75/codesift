@@ -3,8 +3,8 @@ import {
   findDecoratedClass,
   findDecoratorCalls,
   findNestClassRanges,
+  findNestMethodAfter,
   isNodeModulesPath,
-  maskNestSource,
   readNestSource,
   requireNestCodeIndex,
 } from "./shared.js";
@@ -19,7 +19,7 @@ export interface NestQueueProcessor {
   queue_name: string;
   file: string;
   handlers: Array<{
-    decorator: "@Process" | "@OnQueueActive" | "@OnQueueCompleted" | "@OnQueueFailed" | "@OnQueueStalled" | "@OnQueueWaiting" | "@OnQueueProgress" | "@OnQueueError";
+    decorator: "@Process" | "@OnQueueActive" | "@OnQueueCompleted" | "@OnQueueFailed" | "@OnQueueStalled" | "@OnQueueWaiting" | "@OnQueueProgress" | "@OnQueueError" | "WorkerHost.process";
     handler: string;
     job_name?: string; // For @Process('specific-job')
   }>;
@@ -35,11 +35,12 @@ export interface NestQueueMapResult {
 
 export async function nestQueueMap(
   repo: string,
-  options?: { max_processors?: number },
+  options?: { max_processors?: number; max_producers?: number },
 ): Promise<NestQueueMapResult> {
   const index = await requireNestCodeIndex(repo);
 
   const maxProcessors = options?.max_processors ?? 200;
+  const maxProducers = options?.max_producers ?? 200;
   const processors: NestQueueProcessor[] = [];
   const producers: NestQueueMapResult["producers"] = [];
   const errors: NestToolError[] = [];
@@ -69,21 +70,36 @@ export async function nestQueueMap(
       }
 
       const queueName = /^\s*['"`]([^'"`]+)['"`]/.exec(call.args)?.[1] ?? "default";
-      const classBody = source.slice(owner.bodyStart + 1, owner.end - 1);
-      const maskedBody = maskNestSource(classBody);
       const handlers: NestQueueProcessor["handlers"] = [];
-      const handlerRe = /@(Process|OnQueueActive|OnQueueCompleted|OnQueueFailed|OnQueueStalled|OnQueueWaiting|OnQueueProgress|OnQueueError)\s*\(\s*(?:['"`]([^'"`]+)['"`]|\{([^}]*)\})?\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
-      let handlerMatch: RegExpExecArray | null;
-      while ((handlerMatch = handlerRe.exec(classBody)) !== null) {
-        if (maskedBody[handlerMatch.index] !== "@") continue;
-        const objectArgs = handlerMatch[3] ?? "";
+      const handlerDecorators = [
+        "Process", "OnQueueActive", "OnQueueCompleted", "OnQueueFailed",
+        "OnQueueStalled", "OnQueueWaiting", "OnQueueProgress", "OnQueueError",
+      ] as const;
+      for (const decorator of handlerDecorators) {
+        for (const handlerCall of findDecoratorCalls(source, decorator)) {
+          if (handlerCall.start < owner.bodyStart || handlerCall.start >= owner.end) continue;
+          const method = findNestMethodAfter(source, handlerCall.end);
+          if (!method || method.start >= owner.end) continue;
+          const objectArgs = /^\s*\{([\s\S]*)\}\s*$/.exec(handlerCall.args)?.[1] ?? "";
         const jobName =
-          handlerMatch[2] ?? /\bname:\s*['"`]([^'"`]+)['"`]/.exec(objectArgs)?.[1];
-        handlers.push({
-          decorator: ("@" + handlerMatch[1]!) as NestQueueProcessor["handlers"][number]["decorator"],
-          handler: handlerMatch[4]!,
-          ...(jobName ? { job_name: jobName } : {}),
-        });
+            /^\s*['"`]([^'"`]+)['"`]/.exec(handlerCall.args)?.[1] ??
+            /\bname:\s*['"`]([^'"`]+)['"`]/.exec(objectArgs)?.[1];
+          handlers.push({
+            decorator: `@${decorator}`,
+            handler: method.name,
+            ...(jobName ? { job_name: jobName } : {}),
+          });
+        }
+      }
+
+      const classHeader = source.slice(owner.start, owner.bodyStart);
+      if (/\bextends\s+WorkerHost\b/.test(classHeader)) {
+        const processMethod = /(?:^|\n)\s*(?:(?:public|protected)\s+)?(?:async\s+)?process\s*\(/m.exec(
+          source.slice(owner.bodyStart + 1, owner.end - 1),
+        );
+        if (processMethod) {
+          handlers.push({ decorator: "WorkerHost.process", handler: "process" });
+        }
       }
 
       processors.push({
@@ -95,6 +111,7 @@ export async function nestQueueMap(
     }
 
     for (const call of findDecoratorCalls(source, "InjectQueue")) {
+      if (producers.length >= maxProducers) { truncated = true; break; }
       const queueName = /^\s*['"`]([^'"`]+)['"`]/.exec(call.args)?.[1];
       if (!queueName) continue;
       const owner = findClassAtPosition(classRanges, call.start);

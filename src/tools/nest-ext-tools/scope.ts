@@ -2,8 +2,10 @@ import {
   findDecoratedClass,
   findDecoratorCalls,
   findNestClassRanges,
+  firstNestDecoratorArgument,
   readNestSource,
   requireNestCodeIndex,
+  splitTopLevelNestArguments,
 } from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
@@ -24,6 +26,7 @@ export interface NestScopeAuditResult {
   transient_scoped: NestScopeIssue[];
   errors?: NestToolError[];
   truncated?: boolean;
+  graph_incomplete?: boolean;
 }
 
 export async function nestScopeAudit(
@@ -40,12 +43,13 @@ export async function nestScopeAudit(
   // We need the INVERSE graph: for each request-scoped provider, find all transitive
   // consumers that become implicitly request-scoped.
   interface ProviderInfo {
+    key: string;
     name: string;
     file: string;
     scope: "REQUEST" | "TRANSIENT" | "DEFAULT";
   }
   const providers = new Map<string, ProviderInfo>();
-  const injectEdges: Array<{ from: string; to: string }> = []; // consumer → injected
+  const rawInjectEdges: Array<{ from: string; target: string }> = []; // consumer → injected token
 
   const candidateFiles = index.files.filter((f) => f.path.endsWith(".ts") || f.path.endsWith(".js"));
   for (const file of candidateFiles) {
@@ -57,42 +61,69 @@ export async function nestScopeAudit(
 
     const classRanges = findNestClassRanges(source);
     for (const call of findDecoratorCalls(source, "Injectable")) {
+      if (providers.size >= maxProviders) {
+        truncated = true;
+        break;
+      }
       const owner = findDecoratedClass(classRanges, call);
       if (!owner) continue;
       const args = call.args;
       const name = owner.name;
-      const scopeMatch = args.match(/scope:\s*Scope\.(\w+)/);
+      const key = `${file.path}:${name}`;
+      const scopeMatch = args.match(/scope:\s*(?:\w+\.)?(REQUEST|TRANSIENT|DEFAULT)\b/);
       const scope = (scopeMatch?.[1] ?? "DEFAULT") as ProviderInfo["scope"];
-      providers.set(name, { name, file: file.path, scope });
+      providers.set(key, { key, name, file: file.path, scope });
 
       const classSource = source.slice(owner.bodyStart + 1, owner.end - 1);
       const ctorMatch = /constructor\s*\(([\s\S]*?)\)\s*\{/.exec(classSource);
       if (!ctorMatch) continue;
       const ctorBody = ctorMatch[1]!;
-      // Extract type references (match `: TypeName` or generic inner)
-      const typeRe = /:\s*(\w+)(?:<\s*(\w+)\s*>)?/g;
-      let tm: RegExpExecArray | null;
-      while ((tm = typeRe.exec(ctorBody)) !== null) {
-        const outer = tm[1]!;
-        const inner = tm[2];
-        // Container generic (Repository<User>) → use inner
-        const target = /^(Repository|Model|Collection|Array|Set|Map|List|Observable|Promise)$/.test(outer) && inner ? inner : outer;
-        injectEdges.push({ from: name, to: target });
+      for (const parameter of splitTopLevelNestArguments(ctorBody)) {
+        const injectCall = findDecoratorCalls(parameter, "Inject")[0];
+        const explicitToken = injectCall
+          ? normalizeInjectionToken(firstNestDecoratorArgument(injectCall.args))
+          : undefined;
+        const typeMatch = /:\s*(\w+)(?:<\s*(\w+)\s*>)?/.exec(parameter);
+        const outer = typeMatch?.[1];
+        const inner = typeMatch?.[2];
+        const inferred = outer && /^(Repository|Model|Collection|Array|Set|Map|List|Observable|Promise)$/.test(outer) && inner
+          ? inner
+          : outer;
+        const target = explicitToken ?? inferred;
+        if (!target || /^(string|number|boolean|unknown|any|object|symbol|bigint)$/.test(target)) continue;
+        rawInjectEdges.push({ from: key, target });
       }
     }
   }
 
+  const keysByName = new Map<string, string[]>();
+  for (const info of providers.values()) {
+    const keys = keysByName.get(info.name) ?? [];
+    keys.push(info.key);
+    keysByName.set(info.name, keys);
+  }
+
   // Build reverse index: for each target, who injects it?
   const injectedBy = new Map<string, Set<string>>();
-  for (const edge of injectEdges) {
-    if (!injectedBy.has(edge.to)) injectedBy.set(edge.to, new Set());
-    injectedBy.get(edge.to)!.add(edge.from);
+  for (const edge of rawInjectEdges) {
+    const targets = keysByName.get(edge.target);
+    if (!targets || targets.length !== 1) continue;
+    const target = targets[0]!;
+    if (!injectedBy.has(target)) injectedBy.set(target, new Set());
+    injectedBy.get(target)!.add(edge.from);
   }
 
   // For each REQUEST/TRANSIENT provider, walk the reverse graph (BFS) to find all consumers
-  const walkConsumers = (startName: string): string[] => {
-    const visited = new Set<string>([startName]);
-    const queue = [startName];
+  const displayName = (key: string): string => {
+    const info = providers.get(key);
+    if (!info) return key;
+    return (keysByName.get(info.name)?.length ?? 0) > 1
+      ? `${info.name} (${info.file})`
+      : info.name;
+  };
+  const walkConsumers = (startKey: string): string[] => {
+    const visited = new Set<string>([startKey]);
+    const queue = [startKey];
     const consumers: string[] = [];
     while (queue.length > 0) {
       const cur = queue.shift()!;
@@ -101,7 +132,7 @@ export async function nestScopeAudit(
       for (const parent of parents) {
         if (visited.has(parent)) continue;
         visited.add(parent);
-        consumers.push(parent);
+        consumers.push(displayName(parent));
         queue.push(parent);
       }
     }
@@ -110,20 +141,20 @@ export async function nestScopeAudit(
 
   const request_scoped: NestScopeIssue[] = [];
   const transient_scoped: NestScopeIssue[] = [];
-  for (const [name, info] of providers) {
+  for (const [key, info] of providers) {
     if (info.scope === "REQUEST") {
       request_scoped.push({
-        provider: name,
+        provider: displayName(key),
         scope: "REQUEST",
         file: info.file,
-        escalated_consumers: walkConsumers(name),
+        escalated_consumers: walkConsumers(key),
       });
     } else if (info.scope === "TRANSIENT") {
       transient_scoped.push({
-        provider: name,
+        provider: displayName(key),
         scope: "TRANSIENT",
         file: info.file,
-        escalated_consumers: walkConsumers(name),
+        escalated_consumers: [],
       });
     }
   }
@@ -133,5 +164,15 @@ export async function nestScopeAudit(
     transient_scoped,
     ...(errors.length > 0 ? { errors } : {}),
     ...(truncated ? { truncated } : {}),
+    ...(truncated ? { graph_incomplete: true } : {}),
   };
+}
+
+function normalizeInjectionToken(value: string): string | undefined {
+  const trimmed = value.trim();
+  const stringToken = /^['"`]([^'"`]+)['"`]$/.exec(trimmed)?.[1];
+  if (stringToken) return stringToken;
+  const forwardRef = /^forwardRef\s*\(\s*\(\s*\)\s*=>\s*(\w+)\s*\)$/.exec(trimmed)?.[1];
+  if (forwardRef) return forwardRef;
+  return /^(\w+)$/.exec(trimmed)?.[1];
 }

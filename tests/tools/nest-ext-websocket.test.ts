@@ -149,4 +149,39 @@ export class GuardedGateway {
       }),
     ]);
   });
+
+  it("discovers gateways in convention-free filenames and stacked event decorators", async () => {
+    await writeFile(join(tmpRoot, "src/realtime.ts"), `
+@WebSocketGateway({ namespace: '/realtime' })
+class RealtimeGateway {
+  @SubscribeMessage('ping')
+  @UseGuards(WsAuthGuard)
+  ping() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(mockIndexWithRoot(tmpRoot, ["src/realtime.ts"]));
+
+    const result = await nestWebSocketMap("test-repo");
+
+    expect(result.gateways).toEqual([
+      expect.objectContaining({
+        gateway_class: "RealtimeGateway",
+        namespace: "/realtime",
+        events: [{ event: "ping", handler: "ping" }],
+      }),
+    ]);
+  });
+
+  it("caps source scanning for convention-free gateway discovery", async () => {
+    await writeFile(join(tmpRoot, "src/plain.ts"), "export const plain = true;");
+    await writeFile(join(tmpRoot, "src/realtime.ts"), "@WebSocketGateway() class RealtimeGateway {}");
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/plain.ts", "src/realtime.ts"]),
+    );
+
+    const result = await nestWebSocketMap("test-repo", { max_files_scanned: 1 });
+
+    expect(result.gateways).toEqual([]);
+    expect(result.truncated).toBe(true);
+  });
 });

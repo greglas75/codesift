@@ -190,4 +190,25 @@ export class SecondResolver {
       expect.objectContaining({ handler: "second", resolver_class: "SecondResolver" }),
     ]);
   });
+
+  it("keeps operations with intervening method decorators", async () => {
+    await writeFile(join(tmpRoot, "src/guarded.resolver.ts"), `
+@Resolver()
+class GuardedResolver {
+  @Query(() => String)
+  @UseGuards(GqlAuthGuard)
+  @UseInterceptors(CacheInterceptor)
+  guarded() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/guarded.resolver.ts"]),
+    );
+
+    const result = await nestGraphQLMap("test-repo");
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ handler: "guarded", resolver_class: "GuardedResolver" }),
+    ]);
+  });
 });

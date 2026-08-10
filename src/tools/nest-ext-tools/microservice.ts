@@ -2,6 +2,7 @@ import {
   findClassAtPosition,
   findDecoratorCalls,
   findNestClassRanges,
+  findNestMethodAfter,
   firstNestDecoratorArgument,
   readNestSource,
   requireNestCodeIndex,
@@ -59,18 +60,15 @@ export async function nestMicroserviceMap(
       .sort((left, right) => left.start - right.start);
     for (const call of calls) {
       const owner = findClassAtPosition(classRanges, call.start);
-      const handlerMatch =
-        /^\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/.exec(
-          source.slice(call.end),
-        );
-      if (!handlerMatch) continue;
+      const method = findNestMethodAfter(source, call.end);
+      if (!method || (owner && method.start >= owner.end)) continue;
       if (patterns.length >= maxPatterns) { truncated = true; break; }
       const firstArg = stripLeadingNestComments(firstNestDecoratorArgument(call.args));
       const stringPattern = /^['"`]([^'"`]+)['"`]$/.exec(firstArg)?.[1];
       patterns.push({
         type: call.type,
         pattern: stringPattern ?? firstArg,
-        handler: handlerMatch[1]!,
+        handler: method.name,
         controller: owner?.name ?? "UnknownController",
         file: file.path,
       });

@@ -1,9 +1,12 @@
 import {
   findClassAtPosition,
+  findDecoratorCalls,
   findNestClassRanges,
-  maskNestSource,
+  findNestMethodAfter,
+  firstNestDecoratorArgument,
   readNestSource,
   requireNestCodeIndex,
+  splitTopLevelNestArguments,
 } from "./shared.js";
 import type { NestToolError } from "../nest-tools.js";
 
@@ -59,83 +62,42 @@ export async function nestScheduleMap(
     if (!/@Cron|@Interval|@Timeout|@OnEvent/.test(source)) continue;
 
     const classRanges = findNestClassRanges(source);
-    const masked = maskNestSource(source);
-
-    // Parse each decorator type
-    const decoratorPatterns: Array<{
-      type: NestScheduledEntry["decorator"];
-      regex: RegExp;
-      parseArg: (arg: string) => { expression?: string; interval_ms?: number };
-    }> = [
-      {
-        type: "@Cron",
-        regex: /@Cron\s*\(\s*['"`]([^'"`]+)['"`][^)]*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
-        parseArg: (arg) => ({ expression: arg }),
-      },
-      {
-        type: "@Interval",
-        regex: /@Interval\s*\(\s*([0-9][0-9_]*(?:\.[0-9_]+)?(?:e[+-]?[0-9_]+)?)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/gi,
-        parseArg: parseDelayLiteral,
-      },
-      {
-        type: "@Timeout",
-        regex: /@Timeout\s*\(\s*([0-9][0-9_]*(?:\.[0-9_]+)?(?:e[+-]?[0-9_]+)?)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/gi,
-        parseArg: parseDelayLiteral,
-      },
-      {
-        type: "@OnEvent",
-        regex: /@OnEvent\s*\(\s*['"`]([^'"`]+)['"`][^)]*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g,
-        parseArg: (arg) => ({ expression: arg }),
-      },
-    ];
-
-    for (const { type, regex, parseArg } of decoratorPatterns) {
-      regex.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = regex.exec(source)) !== null) {
-        if (masked[m.index] !== "@") continue;
-        const owner = findClassAtPosition(classRanges, m.index);
-        if (entries.length >= maxSchedules) { truncated = true; break; }
-        const arg = m[1]!;
-        const handler = m[2]!;
-        entries.push({
-          class_name: owner?.name ?? "UnknownClass",
-          file: file.path,
-          handler,
-          decorator: type,
-          ...parseArg(arg),
-        });
-      }
-    }
-
-    // R-12 fix: fallback — catch constant/expression args like @Cron(CronExpression.EVERY_10_SECONDS)
-    // These are not captured by the literal-specific regexes above.
-    const fallbackRe = /@(Cron|Interval|Timeout|OnEvent)\s*\(\s*([A-Z][\w.]+)\s*\)\s*\n?\s*(?:(?:public|private|protected|static)\s+)?(?:async\s+)?(\w+)\s*\(/g;
-    let fm: RegExpExecArray | null;
-    while ((fm = fallbackRe.exec(source)) !== null) {
-      if (masked[fm.index] !== "@") continue;
-      const owner = findClassAtPosition(classRanges, fm.index);
+    const calls = (["Cron", "Interval", "Timeout", "OnEvent"] as const)
+      .flatMap((name) =>
+        findDecoratorCalls(source, name).map((call) => ({ ...call, name })),
+      )
+      .sort((left, right) => left.start - right.start);
+    for (const call of calls) {
+      const owner = findClassAtPosition(classRanges, call.start);
       if (entries.length >= maxSchedules) { truncated = true; break; }
-      const handler = fm[3]!;
-      const decorator = `@${fm[1]!}` as NestScheduledEntry["decorator"];
+      const method = findNestMethodAfter(source, call.end);
+      if (!method || (owner && method.start >= owner.end)) continue;
+      const args = splitTopLevelNestArguments(call.args);
+      const first = firstNestDecoratorArgument(call.args);
+      const decorator = `@${call.name}` as NestScheduledEntry["decorator"];
+      const rawValue =
+        (call.name === "Interval" || call.name === "Timeout") && /^\s*['"`]/.test(first)
+          ? args[1]
+          : first;
+      if (!rawValue) continue;
+      const stringValue = /^\s*['"`]([^'"`]+)['"`]\s*$/.exec(rawValue)?.[1];
+      const parsed =
+        call.name === "Interval" || call.name === "Timeout"
+          ? parseDelayLiteral(stringValue ?? rawValue)
+          : { expression: stringValue ?? rawValue };
       const className = owner?.name ?? "UnknownClass";
-      if (
-        entries.some(
-          (entry) =>
-            entry.file === file.path &&
-            entry.class_name === className &&
-            entry.handler === handler &&
-            entry.decorator === decorator,
-        )
-      ) {
-        continue;
-      }
+      if (entries.some((entry) =>
+        entry.file === file.path &&
+        entry.class_name === className &&
+        entry.handler === method.name &&
+        entry.decorator === decorator
+      )) continue;
       entries.push({
         class_name: className,
         file: file.path,
-        handler,
+        handler: method.name,
         decorator,
-        expression: fm[2]!, // raw constant expression, e.g. "CronExpression.EVERY_10_SECONDS"
+        ...parsed,
       });
     }
   }

@@ -196,4 +196,46 @@ class SecondProducer {
     ]);
     expect(result.truncated).toBe(true);
   });
+
+  it("recognizes BullMQ WorkerHost and stacked queue decorators", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/worker.processor.ts"), `
+@Processor('worker')
+class WorkerProcessor extends WorkerHost {
+  async process(job: Job) {}
+
+  @OnQueueCompleted()
+  @UseInterceptors(TraceInterceptor)
+  completed() {}
+}
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/jobs/worker.processor.ts"]),
+    );
+
+    const result = await nestQueueMap("test-repo");
+
+    expect(result.processors[0]!.handlers).toEqual(
+      expect.arrayContaining([
+        { decorator: "WorkerHost.process", handler: "process" },
+        expect.objectContaining({ decorator: "@OnQueueCompleted", handler: "completed" }),
+      ]),
+    );
+  });
+
+  it("caps queue producers independently from processors", async () => {
+    await writeFile(join(tmpRoot, "src/jobs/producers.service.ts"), `
+class FirstProducer { constructor(@InjectQueue('first') queue: Queue) {} }
+class SecondProducer { constructor(@InjectQueue('second') queue: Queue) {} }
+`);
+    mockedGetCodeIndex.mockResolvedValue(
+      mockIndexWithRoot(tmpRoot, ["src/jobs/producers.service.ts"]),
+    );
+
+    const result = await nestQueueMap("test-repo", { max_producers: 1 });
+
+    expect(result.producers).toEqual([
+      { class_name: "FirstProducer", queue_name: "first", file: "src/jobs/producers.service.ts" },
+    ]);
+    expect(result.truncated).toBe(true);
+  });
 });
