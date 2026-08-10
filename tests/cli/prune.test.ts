@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, rmSync, symlinkSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
@@ -29,6 +29,10 @@ describe("codesift prune", () => {
     writeFileSync(join(dir, `${ORPH}.index.json`), "{}");
     writeFileSync(join(dir, `${ORPH}.embeddings.ndjson`), "y\n".repeat(100));
     writeFileSync(join(dir, `${ORPH}.bm25.json`), "{}");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    for (const suffix of ["index.json", "embeddings.ndjson", "bm25.json"]) {
+      utimesSync(join(dir, `${ORPH}.${suffix}`), old, old);
+    }
   });
 
   afterEach(() => {
@@ -59,6 +63,23 @@ describe("codesift prune", () => {
     const out = JSON.parse(stdout);
     expect(out.dry_run).toBe(true);
     expect(out.orphan_files).toBe(3);
+  });
+
+  it("removes only older recognized shared-cache versions", async () => {
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    const v1 = join(dir, "shared-embeddings.v1.ndjson");
+    const v2 = join(dir, "shared-embeddings.v2.bin");
+    const v3 = join(dir, "shared-embeddings.v3.bin");
+    const lock = join(dir, "shared-embeddings.writer.lock");
+    for (const path of [v1, v2, v3, lock]) writeFileSync(path, "cache");
+    utimesSync(v1, old, old);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    expect(existsSync(v1)).toBe(false);
+    expect(existsSync(v2)).toBe(true);
+    expect(existsSync(v3)).toBe(true);
+    expect(existsSync(lock)).toBe(true);
   });
 
   it("preserves live artifacts when stat fails for a reason other than absence", async () => {

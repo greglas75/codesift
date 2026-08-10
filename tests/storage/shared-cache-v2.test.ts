@@ -140,6 +140,22 @@ describe("duplicates are not re-appended", () => {
     _resetSharedCacheForTests();
     expect((await loadSharedCache()).size).toBe(50);
   });
+
+  it("normalizes hexadecimal key casing before deduplication", async () => {
+    await loadSharedCache();
+    const lower = keyOf(1);
+    appendSharedCache([
+      { key: lower.toUpperCase(), vec: vec(1) },
+      { key: lower, vec: vec(2) },
+    ]);
+
+    const recordBytes = 16 + 2 + 4 + DIM * 4;
+    expect((await stat(await cacheFile())).size).toBe(recordBytes);
+    _resetSharedCacheForTests();
+    const loaded = await loadSharedCache();
+    expect(loaded.has(lower)).toBe(true);
+    expect(loaded.size).toBe(1);
+  });
 });
 
 describe("a torn tail costs one record, not the cache", () => {

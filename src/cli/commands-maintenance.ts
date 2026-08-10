@@ -15,6 +15,7 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   const { loadConfig } = await import("../config.js");
   const dataDir = loadConfig().dataDir;
   const dryRun = getBoolFlag(flags, "dry-run");
+  const pruneGraceMs = 5 * 60 * 1000;
 
   // Live index hashes from the registry — everything else is orphaned cache.
   //
@@ -94,21 +95,34 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
       const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
       const root = meta["root"];
       const repo = meta["repo"];
-      if (!root || !repo) continue;
+      if (!root || !repo) {
+        live.add(m[1]);
+        continue;
+      }
       statSync(root); // throws when the tree is gone — then it really is garbage
 
       // The live guard above is keyed by hash, while registration replaces an
       // entry by repository name. Do not let an orphan database repoint a
       // healthy entry that already owns the same name.
       const existing = reg.repos?.[repo];
-      if (existing?.root && existing.root !== root) {
-        let existingAlive = true;
+      if (existing?.root) {
+        let existingGone = false;
         try {
           statSync(existing.root);
-        } catch {
-          existingAlive = false;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          existingGone = code === "ENOENT" || code === "ENOTDIR";
         }
-        if (existingAlive) continue;
+        if (!existingGone) {
+          // Same root means this database is an older generation and may be
+          // swept. A different live root is ambiguous, so preserve both and
+          // leave registry reconciliation to an explicit operator action.
+          if (existing.root !== root) {
+            live.add(m[1]);
+            protectedNames.add(repo);
+          }
+          continue;
+        }
       }
 
       live.add(m[1]);
@@ -145,6 +159,20 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // cannot quietly become unreclaimable garbage — see ARTIFACT_SUFFIXES.
   const { artifactPattern } = await import("../storage/_shared.js");
   const re = artifactPattern();
+  const registryProtectsHash = (hash: string): boolean => {
+    try {
+      const fresh = JSON.parse(
+        readFileSync(join(dataDir, "registry.json"), "utf-8"),
+      ) as typeof reg;
+      return Object.values(fresh.repos ?? {}).some((entry) => {
+        const file = entry.index_path?.split("/").pop() ?? "";
+        return /^([0-9a-f]{8,})\./.exec(file)?.[1] === hash;
+      });
+    } catch {
+      // An inconclusive registry read must protect data, not authorize deletion.
+      return true;
+    }
+  };
   let files = 0, bytes = 0, kept = 0;
   for (const name of readdirSync(dataDir)) {
     const m = re.exec(name);
@@ -152,8 +180,16 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
     if (live.has(m[1]!)) { kept++; continue; }
     const full = join(dataDir, name);
     try {
-      bytes += statSync(full).size;
+      const fileStat = statSync(full);
+      // A fresh artifact may belong to an index operation that has not yet
+      // committed its registry entry. Delay collection for one run and also
+      // re-read registry immediately before every destructive unlink.
+      if (Date.now() - fileStat.mtimeMs < pruneGraceMs || registryProtectsHash(m[1]!)) {
+        kept++;
+        continue;
+      }
       if (!dryRun) unlinkSync(full);
+      bytes += fileStat.size;
       files++;
     } catch { /* skip unreadable/already-gone */ }
   }
@@ -163,12 +199,16 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   // reclaim only older derived cache files.
   const { currentSharedCacheFilename } = await import("../storage/shared-embedding-cache.js");
   const currentShared = currentSharedCacheFilename();
+  const currentVersion = Number(/^shared-embeddings\.v(\d+)\.bin$/.exec(currentShared)?.[1]);
   for (const name of readdirSync(dataDir)) {
-    if (!name.startsWith("shared-embeddings.") || name === currentShared) continue;
+    const match = /^shared-embeddings\.v(\d+)\.(?:bin|ndjson)$/.exec(name);
+    if (!match?.[1] || Number(match[1]) >= currentVersion) continue;
     const full = join(dataDir, name);
     try {
-      bytes += statSync(full).size;
+      const fileStat = statSync(full);
+      if (Date.now() - fileStat.mtimeMs < pruneGraceMs) continue;
       if (!dryRun) unlinkSync(full);
+      bytes += fileStat.size;
       files++;
     } catch { /* skip unreadable/already-gone */ }
   }
@@ -201,7 +241,10 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
 type ProcessRow = { pid: number; ppid: number; rssKb: number; command: string };
 
 function listProcesses(): ProcessRow[] {
-  const raw = execFileSync("ps", ["-axo", "pid=,ppid=,rss=,command="], { encoding: "utf-8" });
+  const raw = execFileSync("ps", ["-axo", "pid=,ppid=,rss=,command="], {
+    encoding: "utf-8",
+    maxBuffer: 10 * 1024 * 1024,
+  });
   const rows: ProcessRow[] = [];
   for (const line of raw.split("\n")) {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
@@ -217,26 +260,41 @@ function listProcesses(): ProcessRow[] {
 }
 
 function classifyCleanupTarget(command: string, includeGlobalCodesift: boolean): string | null {
-  if (command === "" || command.includes("codesift cleanup-processes")) return null;
-  if (command.startsWith("node /Users/") && command.includes("/DEV/codesift-mcp/dist/server.js")) {
+  const node = String.raw`(?:node|\S*/node)`;
+  const npm = String.raw`(?:npm|\S*/npm)`;
+  if (command === "" || /(?:^|\s)codesift\s+cleanup-processes(?:\s|$)/.test(command)) return null;
+  if (new RegExp(`^${node}\\s+/Users/\\S+/DEV/codesift-mcp/dist/server\\.js(?:\\s|$)`).test(command)) {
     return "legacy-dev-dist-server";
   }
-  if (command.includes("npm exec chrome-devtools-mcp") || command === "chrome-devtools-mcp") {
+  if (new RegExp(`^${npm}\\s+exec\\s+chrome-devtools-mcp(?:@\\S+)?(?:\\s|$)`).test(command) ||
+      /^(?:\S*\/)?chrome-devtools-mcp(?:\s|$)/.test(command)) {
     return "chrome-devtools-mcp";
   }
-  if (command.includes("chrome-devtools-mcp/") && command.includes("/watchdog/main.js")) {
+  if (new RegExp(`^${node}\\s+\\S*chrome-devtools-mcp/\\S*/watchdog/main\\.js(?:\\s|$)`).test(command)) {
     return "chrome-devtools-watchdog";
   }
-  if (command.includes("npm exec @sentry/mcp-server")) {
+  if (new RegExp(`^${npm}\\s+exec\\s+@sentry/mcp-server(?:@\\S+)?(?:\\s|$)`).test(command)) {
     return "sentry-mcp";
   }
-  if (command.includes("npm exec @playwright/mcp")) {
+  if (new RegExp(`^${npm}\\s+exec\\s+@playwright/mcp(?:@\\S+)?(?:\\s|$)`).test(command)) {
     return "playwright-mcp";
   }
-  if (includeGlobalCodesift && command.includes("/.npm-global/bin/codesift-mcp")) {
+  if (includeGlobalCodesift &&
+      new RegExp(`^(?:${node}\\s+)?/Users/\\S+/.npm-global/bin/codesift-mcp(?:\\s|$)`).test(command)) {
     return "global-codesift-mcp";
   }
   return null;
+}
+
+function currentProcessCommand(pid: number): string | null {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf-8",
+      maxBuffer: 1024 * 1024,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 async function handleCleanupProcesses(_args: string[], flags: Flags): Promise<void> {
@@ -254,6 +312,10 @@ async function handleCleanupProcesses(_args: string[], flags: Flags): Promise<vo
   if (!dryRun) {
     for (const row of targets) {
       try {
+        const current = currentProcessCommand(row.pid);
+        if (current !== row.command || classifyCleanupTarget(current, includeGlobalCodesift) !== row.reason) {
+          throw new Error("process identity changed before kill");
+        }
         process.kill(row.pid, "SIGKILL");
         killed.push(row);
       } catch (err) {

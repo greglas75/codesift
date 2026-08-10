@@ -306,7 +306,8 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 }
 
 function encodeRecord(key: string, vec: Float32Array): Buffer | null {
-  if (!/^[0-9a-f]{32}$/i.test(key) || vec.length === 0 || vec.length > MAX_DIM) return null;
+  if (key.length !== KEY_BYTES * 2 || !/^[0-9a-f]+$/.test(key) ||
+      vec.length === 0 || vec.length > MAX_DIM) return null;
   const rec = Buffer.allocUnsafe(HEADER_BYTES + vec.length * 4);
   rec.write(key, 0, KEY_BYTES, "hex");
   rec.writeUInt16LE(vec.length, KEY_BYTES);
@@ -350,13 +351,14 @@ export function appendSharedCache(entries: Array<{ key: string; vec: Float32Arra
     };
 
     for (const { key, vec } of entries) {
-      if (memory?.has(key) || pendingKeys.has(key)) continue; // already stored or queued in this call
-      const rec = encodeRecord(key, vec);
+      const normalizedKey = key.toLowerCase();
+      if (memory?.has(normalizedKey) || pendingKeys.has(normalizedKey)) continue;
+      const rec = encodeRecord(normalizedKey, vec);
       if (!rec) continue;
       if (batchBytes + rec.length > MAX_APPEND_BYTES) flush();
       batch.push(rec);
-      batchEntries.push({ key, vec });
-      pendingKeys.add(key);
+      batchEntries.push({ key: normalizedKey, vec });
+      pendingKeys.add(normalizedKey);
       batchBytes += rec.length;
     }
     flush();
