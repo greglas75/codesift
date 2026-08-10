@@ -2,7 +2,101 @@
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-08-10
+
+Fourteen fixes, no new tools and no API change. The theme, visible only once they are read together:
+in four separate places a **comment already described the failure the code was still causing**. A
+flat 30s timeout whose comment said "bigger/longer batches abort mid-flight… then silently write
+nothing". A `lines.join()` whose sibling forty lines below carried the fix and the reason. A
+docstring promising "no parsing is repeated" over code that re-parsed the whole tree. Documentation
+that is right about a bug is not a fix.
+
 ### Fixed
+
+- **Repositories over ~100k symbols could never be embedded — not once.** `batchEmbed` copied its
+  work queue with `toEmbed.push(...stillToEmbed)`, spreading one argument per symbol onto the call
+  stack; V8 overflows that between 100k and 125k arguments (measured). Every such repo threw
+  `Maximum call stack size exceeded` **before issuing a single model call**. Twelve repos on the
+  development machine were over the line, including the four largest — which is why the biggest
+  checkouts had no vectors: they could not be built, ever. The copy existed only so the batching loop
+  could keep a variable name.
+
+- **A failed embedding run reported success.** `embedSymbols`/`embedChunks` log their failure and
+  return normally — correct for indexing, where missing vectors are non-fatal — but `embed-child`
+  then printed its success marker unconditionally, so a run that wrote nothing was indistinguishable
+  from one that finished. Both now return a result and the child exits non-zero naming which half
+  failed. This fix is what surfaced the two below on the night it shipped.
+
+- **One stalled request discarded an entire repository's work.** `batchEmbed` had no retry: a request
+  that stalled without answering threw all the way out and every batch that had already succeeded
+  went with it (measured: 1226s of completed work lost on one repo, 1871s on another). A stalled
+  batch is now retried with the batch halved — up to 4 splits, floor 8 items. An HTTP 4xx is
+  deliberately **not** retried: the model answered, and asking again in halves only fails more slowly
+  while hiding a genuine "this batch is malformed". With this in place the same repo completed
+  379,808 vectors in 65 minutes, surviving two stalls.
+
+- **The per-request embed deadline ignored how much work the request carried.** It was a flat 30s.
+  Cost tracks total input SIZE, not item count, which is why chunk batches failed where symbol
+  batches did not despite being SMALLER (96 vs 128) — a chunk is a code block, a symbol is a
+  signature. Measured: 96 chunks / 98,605 chars took 17.5s against that 30s ceiling. Now a 30s floor
+  plus 700 ms per 1000 characters, capped at 15 minutes; a single query still gets the floor, so
+  remote providers with small batches are unaffected. `CODESIFT_EMBEDDING_TIMEOUT_MS` still overrides.
+
+- **`saveChunks` built the whole ndjson as one string.** Past V8's ~512 MiB max string length that
+  throws `RangeError: Invalid string length` and the save fails wholesale. It holds the chunk TEXT,
+  so it is the larger of the two writers in that file — and the sibling below it had already been
+  fixed for exactly this. Latent rather than active (the largest such file measured 154 MB, 30% of
+  the ceiling), but it would land at the END of a multi-hour run with every vector already computed.
+  It also had no test; it now has seven.
+
+- **A flipped byte was served as a valid embedding.** The shared cache had no integrity check, so a
+  corrupted vector produced a plausible similarity score rather than a cache miss. Records now carry
+  a CRC-32 and a bad one is skipped without stopping the read.
+
+- **The shared embedding cache held 4.56% of the corpus and had stopped growing**, and 3.99 GB of
+  vectors were unreadable while the rest was re-parsed on every query. Chunk embeddings now share the
+  same bounded cache as symbols and the chunk path passes model identity, so a worktree of an already
+  embedded checkout costs lookups instead of model calls. Measured on a near-identical worktree:
+  **578s against 6,600s, an 11.4× reduction at a 96% hit rate**; three successive worktrees of one
+  repo took 20 seconds each.
+
+- **The shared cache is bounded again.** Fixing the writer removed an accident: appends used to die
+  at V8's string ceiling, so the file was frozen at 4.56% of the corpus and the read side never
+  needed a budget. Once it grew for real, `loadSharedCache` materialised every record synchronously
+  — measured +1.16 GB RSS and a **5,384 ms event-loop freeze** in a long-lived server. Now
+  RAM-scaled by default, tunable via `CODESIFT_MAX_SHARED_CACHE_MB` (`0` disables), and read
+  asynchronously. It stops at the budget rather than evicting: this cache's only failure mode is a
+  miss, so a partial one is still completely correct.
+
+- **Chunk vectors are invalidated with everything else.** They share the embedding cache under a
+  derived key, and every invalidation path deleted only the plain repo name — so after a re-index
+  in a long-lived process, chunk-level semantic search answered from **pre-reindex vectors for the
+  rest of that process's life**. Symbol search stayed correct, which is what hid it.
+
+- **`prune` no longer deletes the entry it just rescued.** The dead-entry list is computed before
+  the rescue runs, so a rescued database carrying the same name as a dead entry — exactly the state
+  the rescue exists for — had its new registration removed at the end of the same run. The rescue
+  also guarded by index hash while registering by name, which could repoint a healthy repo at a
+  different working tree. Superseded shared-cache files are reclaimable too (1.05 GB of the previous
+  format was stranded with nothing able to remove it).
+
+- **A revealed tool was hidden again on the very next request** in the HTTP daemon, because the
+  reveal state did not survive the per-request server rebuild.
+
+### Changed
+
+- **The telemetry documentation now matches the payload.** The README's "exactly what is sent"
+  allowlist was a closed list that omitted the per-skill rollup — and this is the release where
+  those rollups actually begin transmitting on machines that also have zuvo. The first-run notice
+  was already accurate (a test holds it to the payload); the README had fallen behind, and now
+  describes the rollup, the medians-not-sums property, and the four identifying fields that are
+  never read. The `N/A` gate counters also now reach the payload instead of being computed and
+  discarded, so "this skill has no such gate" is distinguishable at the receiving end rather than
+  looking like a skipped one.
+
+- **`prune` trusted a registry that had lost track of an index.** It now asks each index database who
+  it is: a repository still present on disk can no longer be deleted because a JSON file forgot it.
+
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
@@ -16,6 +110,19 @@
   index on the machine one `prune` from deletion.
 - Ops: the availability check covered one client while four were down; the fallback pointed at a
   working tree.
+
+### Internal
+
+- **The test suite could not finish on the Linux test farm** — one fixture used
+  `/proc/nonexistent-…` as its "unwritable directory". macOS has no `/proc`, so it passed locally; on
+  Linux `mkdirSync(recursive: true)` under procfs does not fail, it **spins**, burning a core
+  indefinitely. 389 of 390 files completed and the run never ended. The suite now finishes in ~37s.
+  A portable fixture (a regular file with a path hung off it) fails `ENOTDIR` instantly everywhere.
+- A restart test failed 2 in 10 runs on the farm; the cause was the client's pooled keep-alive socket
+  dying when the server was replaced, not the session it was written to guard. It now tolerates one
+  transport-level failure and still propagates an MCP-level rejection.
+- `docs/adr/ADR-005` records the embedding storage format decision, including a "What is not
+  measured" section naming fourteen gaps rather than rounding them into a recommendation.
 
 ## [0.14.0] — 2026-08-06
 

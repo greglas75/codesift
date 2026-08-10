@@ -4,7 +4,7 @@ import { startWatcher, stopWatcher } from "../../storage/watcher.js";
 import { loadConfig } from "../../config.js";
 import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
-import { activeWatchers, bm25Indexes, codeIndexes, embeddingCaches } from "./state.js";
+import { activeWatchers, bm25Indexes, codeIndexes, invalidateEmbeddingCaches } from "./state.js";
 
 const DEFAULT_MAX_WATCHERS = 8;
 
@@ -132,7 +132,7 @@ async function handleFileChange(
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
-  embeddingCaches.delete(repoName);
+  invalidateEmbeddingCaches(repoName);
 }
 
 /**
@@ -150,7 +150,7 @@ async function handleFileDelete(
   // Invalidate caches — lazy rebuild on next query via getBM25Index()
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
-  embeddingCaches.delete(repoName);
+  invalidateEmbeddingCaches(repoName);
   scanOnDeleted(repoName, relativeFile);
 
   // Invalidate Hono model cache
