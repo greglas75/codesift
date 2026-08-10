@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- Import graph collection now falls back to regex imports when the TypeScript parser returns no
+  tree, instead of silently dropping every edge from that file. The import graph implementation
+  is also split into focused language, resolution, collection, and metric modules behind the
+  existing `src/utils/import-graph.ts` facade.
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
