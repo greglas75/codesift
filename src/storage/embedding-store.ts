@@ -285,6 +285,60 @@ export function contentHashesFor(cacheKey: string): ReadonlyMap<string, number> 
  * @param cacheKey - Optional key to track content hashes across calls
  * @returns Map of symbolId → Float32Array (existing + new)
  */
+/**
+ * A failure that says nothing about the INPUT — the request never got an answer.
+ * An HTTP 4xx did get one and must not be retried: the model rejected the batch,
+ * and sending it again, or in halves, just fails more slowly.
+ */
+function isTransientStall(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "TimeoutError") return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /aborted|timed? ?out|ECONNRESET|socket hang up|fetch failed|other side closed/i.test(message);
+}
+
+/** How many times a stalled batch may be split before the failure is real. */
+const MAX_STALL_SPLITS = 4;
+/** Below this, splitting buys nothing — a stall on 8 items is not a size problem. */
+const MIN_SPLITTABLE_BATCH = 8;
+
+/**
+ * Issue one batch, surviving a request that stalls instead of answering.
+ *
+ * Without this a single stalled request throws all the way out of batchEmbed, the
+ * caller logs it, and the ENTIRE repo's pass is discarded — including every batch
+ * that already succeeded. Measured 2026-08-10 while re-embedding: ResearchShieldNew
+ * lost 1226s of work to one such request, and designer's chunk pass lost 1871s,
+ * both after hundreds of healthy batches. With retry in place the same repo
+ * finished 379,808 vectors in 65 minutes, having hit two stalls on the way.
+ *
+ * Halving rather than repeating: a batch that stalled once will usually stall again
+ * unchanged, and the halves are also the diagnosis — if one half sails through, the
+ * problem was volume, not content.
+ */
+async function embedBatchWithStallRetry(
+  embedFn: (texts: string[]) => Promise<number[][]>,
+  texts: string[],
+  depth = 0,
+): Promise<number[][]> {
+  try {
+    return await embedFn(texts);
+  } catch (err: unknown) {
+    if (!isTransientStall(err) || depth >= MAX_STALL_SPLITS || texts.length < MIN_SPLITTABLE_BATCH) {
+      throw err;
+    }
+    const half = Math.ceil(texts.length / 2);
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[codesift] embed batch of ${texts.length} stalled (${reason}) — retrying as ${half}+${texts.length - half}`,
+    );
+    const first = await embedBatchWithStallRetry(embedFn, texts.slice(0, half), depth + 1);
+    const second = await embedBatchWithStallRetry(embedFn, texts.slice(half), depth + 1);
+    // concat, not spread: a batch is small enough that `[...a, ...b]` would be safe, but the
+    // argument-stack overflow fixed in this same function is a good reason not to keep the habit.
+    return first.concat(second);
+  }
+}
+
 export async function batchEmbed(
   symbolTexts: Map<string, string>,
   existing: Map<string, Float32Array>,
@@ -343,7 +397,7 @@ export async function batchEmbed(
     const batch = stillToEmbed.slice(i, i + batchSize);
     const texts = batch.map((b) => b.text);
 
-    const vectors = await embedFn(texts);
+    const vectors = await embedBatchWithStallRetry(embedFn, texts);
 
     for (let j = 0; j < batch.length; j++) {
       const entry = batch[j];
