@@ -17,6 +17,10 @@ import {
   IndexStorageError,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
+const itWithSqlite = HAS_NODE_SQLITE ? it : it.skip;
 
 function makeSymbol(file: string, name: string, line: number): CodeSymbol {
   return {
@@ -107,7 +111,7 @@ describe("classifyStorageError", () => {
   });
 });
 
-describe("corrupt SQLite store", () => {
+describeWithSqlite("corrupt SQLite store", () => {
   beforeEach(async () => {
     useBackend("sqlite");
     // Real corruption, not a mock: bytes that are not an SQLite file at all.
@@ -140,13 +144,13 @@ describe("corrupt SQLite store", () => {
 });
 
 describe("absence is still absence", () => {
-  it("an unwritten sqlite index reads as null, not as an error", async () => {
+  itWithSqlite("an unwritten sqlite index reads as null, not as an error", async () => {
     useBackend("sqlite");
     expect(await loadIndex(indexPath)).toBeNull();
     expect(await loadIndexOrStale(indexPath, {})).toBeNull();
   });
 
-  it("a valid but empty sqlite db reads as null", async () => {
+  itWithSqlite("a valid but empty sqlite db reads as null", async () => {
     useBackend("sqlite");
     // saveIndex creates the schema; the meta `repo` key is what marks it populated.
     await saveIndex(indexPath, makeIndex());

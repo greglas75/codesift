@@ -62,13 +62,17 @@ describe("every invalidation site goes through the helper", () => {
   // The bug was five call sites each independently forgetting the same thing, so the guard is a
   // source-level invariant rather than five behavioural tests that the sixth call site would skip.
   it("no source file deletes an embedding cache entry by bare repo name", async () => {
-    const { readFileSync } = await import("node:fs");
+    const { readFileSync, readdirSync } = await import("node:fs");
     const { join, dirname } = await import("node:path");
     const { fileURLToPath } = await import("node:url");
-    const { globSync } = await import("node:fs");
-
     const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src");
-    const files = globSync("**/*.ts", { cwd: srcDir }).map((f) => join(srcDir, f));
+    const collectTsFiles = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) return collectTsFiles(path);
+        return entry.isFile() && entry.name.endsWith(".ts") ? [path] : [];
+      });
+    const files = collectTsFiles(srcDir);
 
     const offenders: string[] = [];
     for (const file of files) {

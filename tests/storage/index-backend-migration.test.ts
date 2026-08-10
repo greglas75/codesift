@@ -23,6 +23,10 @@ import {
   loadIndexSqlite,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
+const itWithSqlite = HAS_NODE_SQLITE ? it : it.skip;
 
 function makeSymbol(file: string, name: string, line: number): CodeSymbol {
   return {
@@ -90,12 +94,12 @@ describe("backend selection", () => {
     expect(await resolveIndexBackend()).toBe("json");
   });
 
-  it("honours an explicit sqlite pin", async () => {
+  itWithSqlite("honours an explicit sqlite pin", async () => {
     useBackend("sqlite");
     expect(await resolveIndexBackend()).toBe("sqlite");
   });
 
-  it("auto-detects sqlite on a runtime that has it", async () => {
+  itWithSqlite("auto-detects sqlite on a runtime that has it", async () => {
     delete process.env["CODESIFT_INDEX_BACKEND"];
     resetIndexBackendForTesting();
     expect(await resolveIndexBackend()).toBe("sqlite");
@@ -110,7 +114,7 @@ describe("backend selection", () => {
   });
 });
 
-describe("JSON -> SQLite migration", () => {
+describeWithSqlite("JSON -> SQLite migration", () => {
   const legacy = makeIndex({
     symbols: [makeSymbol("a.ts", "alpha", 1), makeSymbol("b.ts", "beta", 5)],
     files: [
@@ -199,7 +203,7 @@ describe("JSON -> SQLite migration", () => {
   });
 });
 
-describe("materialised index cache (sqlite only)", () => {
+describeWithSqlite("materialised index cache (sqlite only)", () => {
   beforeEach(async () => {
     useBackend("sqlite");
     resetIndexCacheForTesting();
@@ -261,7 +265,7 @@ describe("materialised index cache (sqlite only)", () => {
 });
 
 describe("adversarial-review fixes", () => {
-  it("returns a copy, so a caller mutating the result cannot poison the cache", async () => {
+  itWithSqlite("returns a copy, so a caller mutating the result cannot poison the cache", async () => {
     useBackend("sqlite");
     await saveIndex(
       indexPath,
@@ -283,7 +287,7 @@ describe("adversarial-review fixes", () => {
     expect(second!.symbols).toHaveLength(1);
   });
 
-  it("evicts least-recently-used indexes instead of growing without bound", async () => {
+  itWithSqlite("evicts least-recently-used indexes instead of growing without bound", async () => {
     useBackend("sqlite");
     const paths: string[] = [];
     // MAX_CACHED_INDEXES defaults to 3.
@@ -296,7 +300,7 @@ describe("adversarial-review fixes", () => {
     expect(getIndexCacheSizeForTesting()).toBeLessThanOrEqual(3);
   });
 
-  it("keeps a repeatedly-read index warm instead of evicting it by age", async () => {
+  itWithSqlite("keeps a repeatedly-read index warm instead of evicting it by age", async () => {
     useBackend("sqlite");
     const paths: string[] = [];
     for (let i = 0; i < 3; i++) {
@@ -335,7 +339,7 @@ describe("adversarial-review fixes", () => {
     }
   });
 
-  it("a second importer does not overwrite rows the first already committed", async () => {
+  itWithSqlite("a second importer does not overwrite rows the first already committed", async () => {
     // Stands in for two `codesift postindex-file` processes racing on first touch after
     // an upgrade: both see an empty db and both hold the same legacy JSON.
     const legacy = makeIndex({ symbols: [makeSymbol("a.ts", "fromJson", 1)] });
@@ -355,7 +359,7 @@ describe("adversarial-review fixes", () => {
     expect(loaded!.symbols.map((s) => s.name)).toEqual(["newerWork"]);
   });
 
-  it("warns when the JSON backend serves a snapshot SQLite has moved past", async () => {
+  itWithSqlite("warns when the JSON backend serves a snapshot SQLite has moved past", async () => {
     const legacy = makeIndex({ symbols: [makeSymbol("a.ts", "old", 1)] });
     await writeFile(indexPath, JSON.stringify(legacy), "utf-8");
 
@@ -406,7 +410,8 @@ describe("backend parity", () => {
   const backends: Array<"json" | "sqlite"> = ["json", "sqlite"];
 
   for (const backend of backends) {
-    describe(backend, () => {
+    const describeBackend = backend === "sqlite" ? describeWithSqlite : describe;
+    describeBackend(backend, () => {
       beforeEach(() => useBackend(backend));
 
       it("round-trips a saved index", async () => {

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import {
   classifyStorageError,
   closeAllIndexDbs,
@@ -12,6 +11,12 @@ import {
   saveIndexSqlite,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const DatabaseSync = HAS_NODE_SQLITE
+  ? (await import("node:sqlite")).DatabaseSync
+  : undefined;
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
 
 /**
  * The classifier reads the field the driver actually populates.
@@ -65,16 +70,16 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-describe("classifyStorageError reads node:sqlite's numeric errcode", () => {
+describeWithSqlite("classifyStorageError reads node:sqlite's numeric errcode", () => {
   it("classifies a REAL node:sqlite fault, not a synthetic shape", () => {
     // Captured from the driver. If node:sqlite ever changes how it reports faults, this test goes
     // red — which is the whole point; the previous fixtures could not.
     const dbPath = join(dir, "real.db");
-    const writer = new DatabaseSync(dbPath);
+    const writer = new DatabaseSync!(dbPath);
     writer.exec("CREATE TABLE t(x)");
     writer.close();
 
-    const readonly = new DatabaseSync(dbPath, { readOnly: true });
+    const readonly = new DatabaseSync!(dbPath, { readOnly: true });
     let caught: unknown = null;
     try {
       readonly.exec("INSERT INTO t VALUES (1)");
@@ -115,7 +120,7 @@ describe("classifyStorageError reads node:sqlite's numeric errcode", () => {
   });
 });
 
-describe("a failing write reports what actually went wrong", () => {
+describeWithSqlite("a failing write reports what actually went wrong", () => {
   it("survives SQLite's automatic rollback instead of being replaced by it", async () => {
     // SQLite auto-rolls back on SQLITE_FULL, so the explicit ROLLBACK in the catch used to throw
     // "cannot rollback - no transaction is active" and THAT propagated — a message that classifies
@@ -144,13 +149,13 @@ describe("a failing write reports what actually went wrong", () => {
   });
 });
 
-describe("an index from a newer CodeSift is a fault, not an empty repo", () => {
+describeWithSqlite("an index from a newer CodeSift is a fault, not an empty repo", () => {
   it("throws an IndexStorageError so read paths cannot swallow it", async () => {
     const dbPath = join(dir, "newer.index.db");
     await saveIndexSqlite(dbPath, makeIndex());
     closeAllIndexDbs();
 
-    const raw = new DatabaseSync(dbPath);
+    const raw = new DatabaseSync!(dbPath);
     raw.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run("99");
     raw.close();
 
@@ -170,7 +175,7 @@ describe("an index from a newer CodeSift is a fault, not an empty repo", () => {
   });
 });
 
-describe("a fault surfacing on the first page read is still a fault", () => {
+describeWithSqlite("a fault surfacing on the first page read is still a fault", () => {
   it("corrupt data pages reach the caller classified, not as an empty symbol list", async () => {
     // The dangerous shape: this accessor returns `[]` for legitimate absence, so an unclassified
     // fault here is indistinguishable from "this file has no symbols" — and nothing downstream

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import {
   loadIndexSqlite,
   saveIndexSqlite,
@@ -10,6 +9,12 @@ import {
   closeAllIndexDbs,
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+
+const DatabaseSync = HAS_NODE_SQLITE
+  ? (await import("node:sqlite")).DatabaseSync
+  : undefined;
+const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
 
 /**
  * v1 made `symbols.id` a PRIMARY KEY, but `repo:file:name:line` is not unique — so colliding
@@ -47,7 +52,7 @@ function makeIndex(symbols: CodeSymbol[]): CodeIndex {
 
 /** Build a database in the v1 shape: symbols.id as PRIMARY KEY. */
 function writeV1Database(path: string, rows: Array<{ id: string; name: string }>): void {
-  const db = new DatabaseSync(path);
+  const db = new DatabaseSync!(path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -87,7 +92,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-describe("v1 -> v2 migration is honest about what it could not recover", () => {
+describeWithSqlite("v1 -> v2 migration is honest about what it could not recover", () => {
   it("marks a migrated index as lossy", async () => {
     // Two DISTINCT symbols on line 1 of a minified bundle share an id; v1 kept only one.
     writeV1Database(dbPath, [
