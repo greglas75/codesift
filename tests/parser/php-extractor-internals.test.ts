@@ -172,7 +172,7 @@ describe("PHP node metadata helpers", () => {
 
   it("parses preceding, nested, grouped, and direct attributes", () => {
     const grouped = astNode("attribute_group", "", [
-      attribute("Route", "'/users'"),
+      attribute("Route", "  '/users'  "),
       attribute(),
     ]);
     const previous = attributeList([grouped, named("comment", "ignored")]);
