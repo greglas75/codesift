@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- PHP symbol extraction now keeps semicolon-namespace parents, emits every field in multi-property
+  declarations with its own source range, preserves stacked attribute order, and deduplicates
+  PHPDoc members using PHP's field/method naming rules.
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
