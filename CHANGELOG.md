@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript constant resolution now bounds recursive namespace/expression traversal, supports
+  literal bracket keys, reports unsupported destructured defaults explicitly, and releases
+  temporary and cached tree-sitter trees without evicting an active parse tree. The public
+  `resolveTypeScriptConstantValue` facade and import path are unchanged.
+
 ## [0.14.1] — 2026-08-10
 
 Fourteen fixes, no new tools and no API change. The theme, visible only once they are read together:
