@@ -4,7 +4,7 @@
 // configured (CODESIFT_TELEMETRY_URL); with no endpoint nothing leaves the
 // machine, which is the safe default until the public collector is exposed
 // (staged rollout: notice first, push later).
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -46,11 +46,16 @@ function readTs(path: string): number {
   }
 }
 function writeTs(path: string, ts: number): void {
+  const current = readTs(path);
+  if (current >= ts) return;
+  const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
   try {
     mkdirSync(dataDir(), { recursive: true });
-    writeFileSync(path, String(ts), "utf-8");
-  } catch {
-    /* ignore */
+    writeFileSync(tmp, String(ts), { encoding: "utf-8", flag: "wx" });
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* no temp file to clean */ }
+    console.error(`[codesift] telemetry watermark could not be persisted: ${String(err)}`);
   }
 }
 function readWatermark(): number {
@@ -100,7 +105,20 @@ async function postGzip(url: string, token: string, body: unknown): Promise<bool
  * payload, POSTs once (with a single retry), and advances the watermark ONLY on
  * success. Best-effort; never throws.
  */
-export async function flushTelemetry(now: number): Promise<"off" | "empty" | "sent" | "failed"> {
+type FlushResult = "off" | "empty" | "sent" | "failed";
+let flushInFlight: Promise<FlushResult> | null = null;
+
+export function flushTelemetry(now: number): Promise<FlushResult> {
+  if (flushInFlight) return flushInFlight;
+  const run = flushTelemetryOnce(now);
+  const tracked = run.finally(() => {
+    if (flushInFlight === tracked) flushInFlight = null;
+  });
+  flushInFlight = tracked;
+  return tracked;
+}
+
+async function flushTelemetryOnce(now: number): Promise<FlushResult> {
   const level = resolveTelemetryLevel();
   if (level === "off") return "off";
 

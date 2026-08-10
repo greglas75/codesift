@@ -77,6 +77,16 @@ afterEach(async () => {
 });
 
 describe("retros flush independently of CodeSift tool usage", () => {
+  it("coalesces overlapping flush calls into one upload", async () => {
+    await writeFile(join(zuvoDir, "retros.log"), retroLine(TS_OLD) + "\n", "utf-8");
+    await writeUsage([]);
+
+    const results = await Promise.all([flushTelemetry(Date.now()), flushTelemetry(Date.now())]);
+
+    expect(results).toEqual(["sent", "sent"]);
+    expect(posted).toHaveLength(1);
+  });
+
   it("(A) sends retros when there is NO tool usage at all", async () => {
     // The exact shape that reported nothing: zuvo ran, CodeSift did not.
     await writeFile(join(zuvoDir, "retros.log"), retroLine(TS_OLD) + "\n", "utf-8");

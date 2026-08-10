@@ -350,6 +350,9 @@ export async function embedChunks(
       );
       await saveChunks(chunkPath, allChunks);
       await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
+      // A semantic query may have populated this entry before the re-index. Replace it only after
+      // the new file is durable so subsequent queries cannot keep serving stale chunk vectors.
+      embeddingCaches.set(`${repoName}:chunks`, chunkEmbeddings);
     }
     return true;
   } catch (err: unknown) {
