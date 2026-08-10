@@ -1,6 +1,7 @@
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import type { CodeIndex } from "../../types.js";
+import { readIndexedFiles } from "./file-sources.js";
 import type { RouteHandler } from "./types.js";
 
 /**
@@ -12,17 +13,11 @@ export async function findKtorHandlers(index: CodeIndex, searchPath: string): Pr
   const methods = ["get", "post", "put", "delete", "patch", "head", "options"];
 
   // Ktor handlers are in .kt files, typically in files containing "routing {" or with "Route" in name
-  const kotlinFiles = index.files.filter((f) => /\.kts?$/.test(f.path));
+  const kotlinFiles = await readIndexedFiles(index, (path) => /\.kts?$/.test(path));
   if (kotlinFiles.length === 0) return handlers;
 
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-
   for (const file of kotlinFiles) {
-    let source: string;
-    try {
-      source = await readFile(join(index.root, file.path), "utf-8");
-    } catch { continue; }
+    const { path: filePath, source } = file;
 
     // Skip files without routing DSL
     if (!/\b(routing|route)\s*[({]/.test(source)) continue;
@@ -71,21 +66,21 @@ export async function findKtorHandlers(index: CodeIndex, searchPath: string): Pr
         // Find enclosing function symbol (if any) for this line
         const lineNum = i + 1;
         const sym = index.symbols.find(
-          (s) => s.file === file.path && s.start_line <= lineNum && s.end_line >= lineNum,
+          (s) => s.file === filePath && s.start_line <= lineNum && s.end_line >= lineNum,
         );
 
         handlers.push({
           symbol: sym
             ? stripSource(sym)
             : {
-                id: `${file.path}:${method}:${methodPath}`,
+                id: `${filePath}:${method}:${methodPath}`,
                 name: `${method} ${methodPath}`,
                 kind: "function",
-                file: file.path,
+                file: filePath,
                 start_line: lineNum,
                 end_line: lineNum,
               } as ReturnType<typeof stripSource>,
-          file: file.path,
+          file: filePath,
           method: method.toUpperCase(),
           framework: "ktor",
         });
@@ -95,4 +90,3 @@ export async function findKtorHandlers(index: CodeIndex, searchPath: string): Pr
 
   return handlers;
 }
-

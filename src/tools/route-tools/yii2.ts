@@ -72,7 +72,6 @@ export async function findYii2Handlers(index: CodeIndex, searchPath: string): Pr
 
   return handlers;
 }
-
 /**
  * Fallback: parse Yii2 urlManager rules from config/web.php.
  * Matches patterns like: 'GET api/users/<id>' => 'user/view'
@@ -124,4 +123,3 @@ async function findYii2HandlersFromConfig(index: CodeIndex, searchPath: string):
 
   return handlers;
 }
-

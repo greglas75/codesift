@@ -1,6 +1,7 @@
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import type { CodeIndex } from "../../types.js";
+import { readIndexedFiles } from "./file-sources.js";
 import type { RouteHandler } from "./types.js";
 
 /**
@@ -9,19 +10,10 @@ import type { RouteHandler } from "./types.js";
  */
 export async function findDjangoHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
   const handlers: RouteHandler[] = [];
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-
-  // Find urls.py files
-  const urlFiles = index.files.filter((f) =>
-    f.path.endsWith("urls.py"),
-  );
+  const urlFiles = await readIndexedFiles(index, (path) => path.endsWith("urls.py"));
 
   for (const file of urlFiles) {
-    let source: string;
-    try {
-      source = await readFile(join(index.root, file.path), "utf-8");
-    } catch { continue; }
+    const { path: filePath, source } = file;
 
     // Extract path() patterns: path('users/', views.user_list, name='...')
     // and path('users/<int:pk>/', views.user_detail)
@@ -49,14 +41,14 @@ export async function findDjangoHandlers(index: CodeIndex, searchPath: string): 
         symbol: sym
           ? stripSource(sym)
           : {
-              id: `${file.path}:${viewName}`,
+              id: `${filePath}:${viewName}`,
               name: viewName,
               kind: "function",
-              file: file.path,
+              file: filePath,
               start_line: 1,
               end_line: 1,
             } as ReturnType<typeof stripSource>,
-        file: sym?.file ?? file.path,
+        file: sym?.file ?? filePath,
         framework: "django",
       });
     }
@@ -64,4 +56,3 @@ export async function findDjangoHandlers(index: CodeIndex, searchPath: string): 
 
   return handlers;
 }
-

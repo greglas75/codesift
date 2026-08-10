@@ -1,6 +1,7 @@
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import type { CodeIndex } from "../../types.js";
+import { readIndexedFiles } from "./file-sources.js";
 import type { RouteHandler } from "./types.js";
 
 /**
@@ -19,17 +20,11 @@ export async function findSpringBootKotlinHandlers(
     { ann: "PatchMapping", method: "PATCH" },
   ];
 
-  const kotlinFiles = index.files.filter((f) => /\.kts?$/.test(f.path));
+  const kotlinFiles = await readIndexedFiles(index, (path) => /\.kts?$/.test(path));
   if (kotlinFiles.length === 0) return handlers;
 
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-
   for (const file of kotlinFiles) {
-    let source: string;
-    try {
-      source = await readFile(join(index.root, file.path), "utf-8");
-    } catch { continue; }
+    const { path: filePath, source } = file;
 
     // Must have @RestController or @Controller annotation
     if (!/@(?:RestController|Controller)\b/.test(source)) continue;
@@ -54,21 +49,21 @@ export async function findSpringBootKotlinHandlers(
         if (!matchPath(fullPath, searchPath)) continue;
 
         const sym = index.symbols.find(
-          (s) => s.file === file.path && s.name === funcName,
+          (s) => s.file === filePath && s.name === funcName,
         );
 
         handlers.push({
           symbol: sym
             ? stripSource(sym)
             : {
-                id: `${file.path}:${funcName}`,
+                id: `${filePath}:${funcName}`,
                 name: funcName,
                 kind: "method",
-                file: file.path,
+                file: filePath,
                 start_line: 1,
                 end_line: 1,
               } as ReturnType<typeof stripSource>,
-          file: file.path,
+          file: filePath,
           method,
           framework: "spring-kotlin",
         });
@@ -78,4 +73,3 @@ export async function findSpringBootKotlinHandlers(
 
   return handlers;
 }
-

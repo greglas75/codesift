@@ -1,6 +1,7 @@
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import type { CodeIndex } from "../../types.js";
+import { readIndexedFiles } from "./file-sources.js";
 import type { RouteHandler } from "./types.js";
 
 /**
@@ -8,22 +9,14 @@ import type { RouteHandler } from "./types.js";
  */
 export async function findLaravelHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
   const handlers: RouteHandler[] = [];
-  const routeFiles = index.files.filter((f) =>
-    /routes\/(web|api)\.php$/.test(f.path),
-  );
+  const routeFiles = await readIndexedFiles(index, (path) => /routes\/(web|api)\.php$/.test(path));
 
   if (routeFiles.length === 0) return handlers;
-
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
 
   const methods = ["get", "post", "put", "delete", "patch"];
 
   for (const file of routeFiles) {
-    let source: string;
-    try {
-      source = await readFile(join(index.root, file.path), "utf-8");
-    } catch { continue; }
+    const { path: filePath, source } = file;
 
     for (const method of methods) {
       // Match: Route::get('/path', [Controller::class, 'method']) or Route::get('/path', 'Controller@method')
@@ -49,8 +42,8 @@ export async function findLaravelHandlers(index: CodeIndex, searchPath: string):
         handlers.push({
           symbol: sym
             ? stripSource(sym)
-            : { id: `${controllerName}::${methodName}`, name: methodName, kind: "method", file: file.path, start_line: 0, end_line: 0 } as ReturnType<typeof stripSource>,
-          file: sym?.file ?? file.path,
+            : { id: `${controllerName}::${methodName}`, name: methodName, kind: "method", file: filePath, start_line: 0, end_line: 0 } as ReturnType<typeof stripSource>,
+          file: sym?.file ?? filePath,
           method: method.toUpperCase(),
           framework: "laravel",
         });
@@ -60,4 +53,3 @@ export async function findLaravelHandlers(index: CodeIndex, searchPath: string):
 
   return handlers;
 }
-
