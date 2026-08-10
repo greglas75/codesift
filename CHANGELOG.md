@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Fixed
+- Route tracing now keeps framework-specific discovery behind the stable `route-tools` facade
+  and correctly handles repeated Express routes, nested Ktor prefixes, separated NestJS
+  decorators, Yii2 rule verbs, escaped Mermaid labels, and Django class-based views.
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
