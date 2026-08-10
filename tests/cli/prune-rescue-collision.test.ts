@@ -49,7 +49,7 @@ async function runPrune(): Promise<Record<string, unknown>> {
 
 const registry = () =>
   JSON.parse(readFileSync(join(dir, "registry.json"), "utf-8")) as {
-    repos: Record<string, { root?: string }>;
+    repos: Record<string, { root?: string; index_path?: string }>;
   };
 
 beforeEach(() => {
@@ -114,6 +114,36 @@ describe("prune rescue vs stale de-registration", () => {
     } finally {
       rmSync(healthyRoot, { recursive: true, force: true });
     }
+  });
+
+  it("does not roll a healthy repo back to an older database for the same root", async () => {
+    writeRegistry({
+      "local/foo": {
+        name: "local/foo",
+        root: liveRoot,
+        index_path: join(dir, `${HASH_DEAD}.index.json`),
+      },
+      "local/other": { name: "local/other", root: dir, index_path: join(dir, `${HASH_OTHER}.index.json`) },
+    });
+    makeDb(join(dir, `${HASH_LIVE}.index.db`), "local/foo", liveRoot);
+
+    await runPrune();
+
+    expect(registry().repos["local/foo"]?.index_path).toBe(join(dir, `${HASH_DEAD}.index.json`));
+  });
+
+  it("protects a database whose metadata is incomplete", async () => {
+    const path = join(dir, `${HASH_LIVE}.index.db`);
+    const db = new DatabaseSync(path);
+    db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)");
+    db.close();
+    writeRegistry({
+      "local/other": { name: "local/other", root: dir, index_path: join(dir, `${HASH_OTHER}.index.json`) },
+    });
+
+    await runPrune();
+
+    expect(existsSync(path)).toBe(true);
   });
 
   it("still de-registers a dead entry nobody rescued", async () => {

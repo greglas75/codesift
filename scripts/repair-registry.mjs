@@ -18,7 +18,14 @@
  *
  * Usage:  node scripts/repair-registry.mjs [--apply]     (default: dry run)
  */
-import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  copyFileSync,
+  renameSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -38,16 +45,18 @@ for (const [name, meta] of Object.entries(repos)) {
 
 /** Read a database's own idea of who it is. Authoritative — it was written by the indexer. */
 function describeDb(file) {
+  let db;
   try {
-    const db = new DatabaseSync(`file:${file}?mode=ro`, { open: true });
+    db = new DatabaseSync(`file:${file}?mode=ro`, { open: true });
     const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
     const symbols = db.prepare("SELECT COUNT(*) AS n FROM symbols").get()?.n ?? 0;
     const files = db.prepare("SELECT COUNT(*) AS n FROM files").get()?.n ?? 0;
-    db.close();
     if (!meta["repo"] || !meta["root"]) return null;
     return { repo: meta["repo"], root: meta["root"], symbols, files, updated_at: Number(meta["updated_at"] ?? 0) };
   } catch {
     return null; // not a codesift index, or unreadable — never a reason to guess
+  } finally {
+    try { db?.close(); } catch { /* already closed */ }
   }
 }
 
@@ -89,7 +98,13 @@ const backup = `${REGISTRY}.bak-${Date.now()}`;
 copyFileSync(REGISTRY, backup);
 
 for (const d of deadRoots) delete repos[d.name];
-for (const o of orphans) {
+let registered = 0;
+const rankedOrphans = [...orphans].sort((a, b) =>
+  b.updated_at - a.updated_at || b.symbols - a.symbols || a.file.localeCompare(b.file));
+for (const o of rankedOrphans) {
+  // A live entry wins over an orphan with the same logical name. Replacing it
+  // would merely move the orphan problem to the healthy index we displaced.
+  if (repos[o.repo]) continue;
   repos[o.repo] = {
     name: o.repo,
     root: o.root,
@@ -102,10 +117,13 @@ for (const o of orphans) {
     file_count: o.files,
     updated_at: o.updated_at || Date.now(),
   };
+  registered++;
 }
 registry.repos = repos;
 registry.updated_at = Date.now();
-writeFileSync(REGISTRY, JSON.stringify(registry), "utf-8");
+const tmp = `${REGISTRY}.tmp-${process.pid}-${Date.now()}`;
+writeFileSync(tmp, JSON.stringify(registry), "utf-8");
+renameSync(tmp, REGISTRY);
 
 console.log(`\nbackup: ${backup}`);
-console.log(`removed ${deadRoots.length}, re-registered ${orphans.length}, now ${Object.keys(repos).length} entries`);
+console.log(`removed ${deadRoots.length}, re-registered ${registered}, now ${Object.keys(repos).length} entries`);

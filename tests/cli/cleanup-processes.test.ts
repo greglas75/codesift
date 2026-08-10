@@ -21,7 +21,13 @@ function psOutput(): string {
     " 105 1 65536 npm exec @playwright/mcp@latest",
     " 106 1 102400 node /Users/greglas/.npm-global/bin/codesift-mcp",
     " 107 1 2048 node /tmp/other.js",
+    " 108 1 2048 node /tmp/other.js --label npm exec @playwright/mcp",
   ].join("\n");
+}
+
+function commandForPid(pid: string): string {
+  const line = psOutput().split("\n").find((row) => row.trimStart().startsWith(`${pid} `));
+  return /^\s*\d+\s+\d+\s+\d+\s+(.+)$/.exec(line ?? "")?.[1] ?? "";
 }
 
 describe("codesift cleanup-processes", () => {
@@ -30,7 +36,10 @@ describe("codesift cleanup-processes", () => {
 
   beforeEach(() => {
     stdout = "";
-    mockExecFileSync.mockReturnValue(psOutput());
+    mockExecFileSync.mockImplementation((_file: string, args: string[]) => {
+      if (args[0] === "-axo") return psOutput();
+      return `${commandForPid(args[1] ?? "")}\n`;
+    });
     vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
       stdout += String(chunk);
       return true;
@@ -71,5 +80,18 @@ describe("codesift cleanup-processes", () => {
     const out = JSON.parse(stdout);
     expect(out.include_global_codesift).toBe(true);
     expect(out.by_reason["global-codesift-mcp"].count).toBe(1);
+  });
+
+  it("does not kill a PID whose command changed after the snapshot", async () => {
+    mockExecFileSync.mockImplementation((_file: string, args: string[]) => {
+      if (args[0] === "-axo") return psOutput();
+      if (args[1] === "105") return "node /tmp/reused.js\n";
+      return `${commandForPid(args[1] ?? "")}\n`;
+    });
+
+    await COMMAND_MAP["cleanup-processes"]!([], { json: true });
+
+    expect(killSpy).not.toHaveBeenCalledWith(105, "SIGKILL");
+    expect(JSON.parse(stdout).failed).toBe(1);
   });
 });

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { getEmbeddingCache, _cachedEmbeddingReposForTesting } from "../../src/tools/index-tools.js";
+import { getEmbeddingCache, invalidateCache, _cachedEmbeddingReposForTesting } from "../../src/tools/index-tools.js";
+import { getChunkEmbeddingCache } from "../../src/tools/index-tools/registry.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const DIMS = 768;
@@ -79,5 +80,18 @@ describe("getEmbeddingCache — lite mode + LRU memory bound", () => {
     const reloaded = await getEmbeddingCache("local/a"); // reload
     expect(reloaded).not.toBeNull();
     expect(reloaded!.size).toBe(VECS_PER_REPO);
+  });
+
+  it("invalidating a repo also removes its resident chunk embeddings", async () => {
+    const chunkPath = join(dir, "local_a.chunk-embeddings.ndjson");
+    writeFileSync(chunkPath, JSON.stringify({ id: "chunk-1", vec: [1, 2, 3] }) + "\n");
+    expect((await getChunkEmbeddingCache("local/a"))?.size).toBe(1);
+    expect(_cachedEmbeddingReposForTesting()).toContain("local/a:chunks");
+
+    await invalidateCache("local/a");
+
+    expect(_cachedEmbeddingReposForTesting()).not.toContain("local/a:chunks");
+    expect(existsSync(chunkPath)).toBe(false);
+    expect(await getChunkEmbeddingCache("local/a")).toBeNull();
   });
 });

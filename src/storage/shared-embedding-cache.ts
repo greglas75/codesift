@@ -306,7 +306,8 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 }
 
 function encodeRecord(key: string, vec: Float32Array): Buffer | null {
-  if (key.length !== KEY_BYTES * 2 || vec.length === 0 || vec.length > MAX_DIM) return null;
+  if (key.length !== KEY_BYTES * 2 || !/^[0-9a-f]+$/.test(key) ||
+      vec.length === 0 || vec.length > MAX_DIM) return null;
   const rec = Buffer.allocUnsafe(HEADER_BYTES + vec.length * 4);
   rec.write(key, 0, KEY_BYTES, "hex");
   rec.writeUInt16LE(vec.length, KEY_BYTES);
@@ -332,23 +333,32 @@ export function appendSharedCache(entries: Array<{ key: string; vec: Float32Arra
     mkdirSync(join(path, ".."), { recursive: true });
 
     let batch: Buffer[] = [];
+    let batchEntries: Array<{ key: string; vec: Float32Array }> = [];
+    const pendingKeys = new Set<string>();
     let batchBytes = 0;
     const flush = (): void => {
       if (batch.length === 0) return;
       // One append per chunk, always ending on a record boundary, so a
       // concurrent writer can interleave BETWEEN records but never inside one.
       appendFileSync(path, Buffer.concat(batch));
+      if (memory) {
+        for (const { key, vec } of batchEntries) memory.set(key, vec);
+      }
       batch = [];
+      batchEntries = [];
+      pendingKeys.clear();
       batchBytes = 0;
     };
 
     for (const { key, vec } of entries) {
-      if (memory?.has(key)) continue; // already stored — v1 wrote it again
-      const rec = encodeRecord(key, vec);
+      const normalizedKey = key.toLowerCase();
+      if (memory?.has(normalizedKey) || pendingKeys.has(normalizedKey)) continue;
+      const rec = encodeRecord(normalizedKey, vec);
       if (!rec) continue;
-      if (memory) memory.set(key, vec);
       if (batchBytes + rec.length > MAX_APPEND_BYTES) flush();
       batch.push(rec);
+      batchEntries.push({ key: normalizedKey, vec });
+      pendingKeys.add(normalizedKey);
       batchBytes += rec.length;
     }
     flush();

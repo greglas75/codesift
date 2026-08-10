@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, stat, open } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -90,6 +91,18 @@ describe("a batch past v1's ceiling is written, not silently dropped", () => {
 });
 
 describe("round trip is exact and compact", () => {
+  it("rejects malformed non-hex cache keys", async () => {
+    await loadSharedCache();
+    const existedBefore = existsSync(await cacheFile());
+    const sizeBefore = existedBefore ? (await stat(await cacheFile())).size : null;
+    appendSharedCache([{ key: "z".repeat(32), vec: vec(1) }]);
+
+    expect(existsSync(await cacheFile())).toBe(existedBefore);
+    if (sizeBefore !== null) expect((await stat(await cacheFile())).size).toBe(sizeBefore);
+    _resetSharedCacheForTests();
+    expect((await loadSharedCache()).has("z".repeat(32))).toBe(false);
+  });
+
   it("returns bit-identical float32 vectors", async () => {
     await loadSharedCache();
     const entries = [0, 1, 2].map((i) => ({ key: keyOf(i), vec: vec(i) }));
@@ -132,6 +145,22 @@ describe("duplicates are not re-appended", () => {
     expect(second).toBe(first);
     _resetSharedCacheForTests();
     expect((await loadSharedCache()).size).toBe(50);
+  });
+
+  it("normalizes hexadecimal key casing before deduplication", async () => {
+    await loadSharedCache();
+    const lower = keyOf(1);
+    appendSharedCache([
+      { key: lower.toUpperCase(), vec: vec(1) },
+      { key: lower, vec: vec(2) },
+    ]);
+
+    const recordBytes = 16 + 2 + 4 + DIM * 4;
+    expect((await stat(await cacheFile())).size).toBe(recordBytes);
+    _resetSharedCacheForTests();
+    const loaded = await loadSharedCache();
+    expect(loaded.has(lower)).toBe(true);
+    expect(loaded.size).toBe(1);
   });
 });
 

@@ -19,6 +19,7 @@ const mockInstallGitHooks = vi.fn().mockResolvedValue({
   skipped: [],
   hooksPath: `${process.env.HOME ?? "/Users/test"}/.claude/hooks`,
 });
+const mockCodebaseRetrieval = vi.fn().mockResolvedValue({ results: [], total_results: 0 });
 
 vi.mock("../../src/tools/complexity-tools.js", () => ({
   analyzeComplexity: mockAnalyzeComplexity,
@@ -52,6 +53,9 @@ vi.mock("../../src/cli/setup.js", () => ({
   formatSetupResult: vi.fn().mockReturnValue("setup result"),
   formatSetupLines: mockFormatSetupLines,
   SUPPORTED_PLATFORMS: ["claude", "cursor", "codex", "gemini", "antigravity"],
+}));
+vi.mock("../../src/retrieval/codebase-retrieval.js", () => ({
+  codebaseRetrieval: mockCodebaseRetrieval,
 }));
 
 import { COMMAND_MAP } from "../../src/cli/commands.js";
@@ -424,5 +428,61 @@ describe("handleSetup", () => {
   it("dies when platform is missing", async () => {
     await COMMAND_MAP["setup"]!([], {});
     expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// retrieve
+// ---------------------------------------------------------------------------
+
+describe("retrieve command", () => {
+  it("reports the exact missing --queries error", async () => {
+    await COMMAND_MAP["retrieve"]!(["local/test-repo"], {}).catch(() => {});
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Missing required flag: --queries <json>"),
+    );
+  });
+
+  it("reports the exact malformed JSON error", async () => {
+    await COMMAND_MAP["retrieve"]!(["local/test-repo"], { queries: "{" }).catch(() => {});
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid JSON for --queries flag"),
+    );
+  });
+
+  it("accepts a JSON array without taking an error path", async () => {
+    await COMMAND_MAP["retrieve"]!(["local/test-repo"], {
+      queries: JSON.stringify([{ type: "text", query: "needle" }]),
+    });
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(mockCodebaseRetrieval).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects entries without a string type", async () => {
+    await COMMAND_MAP["retrieve"]!(["local/test-repo"], {
+      queries: JSON.stringify([null]),
+    }).catch(() => {});
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Each --queries entry must be an object with a "type" string field'),
+    );
+  });
+
+  it("injects exclude_tests=true into semantic queries by default", async () => {
+    await COMMAND_MAP["retrieve"]!(["local/test-repo"], {
+      queries: JSON.stringify([{ type: "semantic", query: "auth flow" }]),
+    });
+
+    expect(mockCodebaseRetrieval).toHaveBeenCalledWith(
+      "local/test-repo",
+      [{ type: "semantic", query: "auth flow", exclude_tests: true }],
+      undefined,
+    );
   });
 });

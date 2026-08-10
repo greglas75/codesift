@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Registry, RepoMeta } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
 
@@ -26,8 +26,10 @@ export async function loadRegistry(registryPath: string): Promise<Registry> {
 /**
  * Save the registry atomically.
  * Writes to a temp file first, then renames to prevent partial reads.
+ * The caller must already hold `withRegistryLock`; the explicit name keeps
+ * future mutation paths from silently bypassing cross-process serialization.
  */
-export async function saveRegistry(
+export async function saveRegistryUnderLock(
   registryPath: string,
   registry: Registry,
 ): Promise<void> {
@@ -52,9 +54,48 @@ export async function saveRegistry(
  */
 const registryWriteLocks = new Map<string, Promise<unknown>>();
 
-function withRegistryLock<T>(registryPath: string, work: () => Promise<T>): Promise<T> {
+type RegistryLockDb = { exec(sql: string): void; close(): void };
+
+async function acquireRegistryFileLock(registryPath: string): Promise<RegistryLockDb> {
+  await mkdir(dirname(registryPath), { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(`${registryPath}.lock.db`);
+  const deadline = Date.now() + 5 * 60_000;
+  while (true) {
+    try {
+      db.exec("BEGIN EXCLUSIVE");
+      return db;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const message = error instanceof Error ? error.message : String(error);
+      const busy = code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" ||
+        /database is (?:busy|locked)/i.test(message);
+      if (!busy || Date.now() >= deadline) {
+        db.close();
+        throw error;
+      }
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
+    }
+  }
+}
+
+/**
+ * Serialize registry mutations both within this process and across CLI/daemon
+ * processes. Callers that perform destructive work from a registry snapshot
+ * (notably `prune`) may hold the same lock for their whole transaction.
+ */
+export function withRegistryLock<T>(registryPath: string, work: () => Promise<T>): Promise<T> {
   const prev = registryWriteLocks.get(registryPath) ?? Promise.resolve();
-  const next = prev.then(work, work);
+  const lockedWork = async (): Promise<T> => {
+    const lockDb = await acquireRegistryFileLock(registryPath);
+    try {
+      return await work();
+    } finally {
+      try { lockDb.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      lockDb.close();
+    }
+  };
+  const next = prev.then(lockedWork, lockedWork);
   // Swallow on the chain only — the caller still sees its own rejection.
   registryWriteLocks.set(registryPath, next.then(() => undefined, () => undefined));
   return next;
@@ -71,7 +112,7 @@ export async function registerRepo(
     const registry = await loadRegistry(registryPath);
     registry.repos[meta.name] = meta;
     registry.updated_at = Date.now();
-    await saveRegistry(registryPath, registry);
+    await saveRegistryUnderLock(registryPath, registry);
   });
 }
 
@@ -111,7 +152,7 @@ export async function updateRepoMeta(
     if (!existing) return;
     Object.assign(existing, updates);
     registry.updated_at = Date.now();
-    await saveRegistry(registryPath, registry);
+    await saveRegistryUnderLock(registryPath, registry);
   });
 }
 
@@ -132,7 +173,7 @@ export async function removeRepo(
 
     delete registry.repos[name];
     registry.updated_at = Date.now();
-    await saveRegistry(registryPath, registry);
+    await saveRegistryUnderLock(registryPath, registry);
     return true;
   });
 }

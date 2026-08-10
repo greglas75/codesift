@@ -15,12 +15,17 @@ vi.mock("../../src/tools/conversation-tools.js", () => ({
 import { COMMAND_MAP } from "../../src/cli/commands.js";
 
 describe("conversation CLI commands", () => {
+  let stdout = "";
   let stdoutSpy: MockInstance;
   let stderrSpy: MockInstance;
   let exitSpy: MockInstance;
 
   beforeEach(() => {
-    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    stdout = "";
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdout += String(chunk);
+      return true;
+    });
     stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     vi.clearAllMocks();
@@ -40,6 +45,13 @@ describe("conversation CLI commands", () => {
 
     expect(mockIndexConversations).toHaveBeenCalledWith(undefined);
     expect(stdoutSpy).toHaveBeenCalled();
+    expect(JSON.parse(stdout)).toEqual({
+      sessions_found: 1,
+      turns_indexed: 2,
+      skipped_noise_records: 0,
+      compacted_sessions: 0,
+      elapsed_ms: 10,
+    });
   });
 
   it("passes the optional path through and suppresses output in quiet mode", async () => {

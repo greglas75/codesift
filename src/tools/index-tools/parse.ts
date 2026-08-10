@@ -33,7 +33,7 @@ import {
 import { chunkFile, chunkBySymbols } from "../../search/chunker.js";
 import { loadConfig } from "../../config.js";
 import type { CodeSymbol, FileEntry, CodeChunk } from "../../types.js";
-import { embeddingCaches } from "./state.js";
+import { embeddingCaches, invalidateEmbeddingCaches } from "./state.js";
 
 const PARSE_CONCURRENCY = 8;
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
@@ -350,6 +350,10 @@ export async function embedChunks(
       );
       await saveChunks(chunkPath, allChunks);
       await saveChunkEmbeddings(chunkEmbeddingPath, chunkEmbeddings);
+      // A long-lived daemon may already hold the previous generation. Force
+      // the next query to load the just-written file instead of serving stale
+      // chunk IDs/vectors indefinitely.
+      invalidateEmbeddingCaches(repoName);
     }
     return true;
   } catch (err: unknown) {

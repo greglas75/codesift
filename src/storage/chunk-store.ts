@@ -1,5 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+import type { Writable } from "node:stream";
 import type { CodeChunk } from "../types.js";
 import { cleanupOrphanTempFiles } from "./_shared.js";
 
@@ -36,6 +38,28 @@ interface ChunkLine {
   tokenCount: number;
 }
 
+function waitForDrainOrError(stream: Writable): Promise<void> {
+  if (stream.errored) return Promise.reject(stream.errored);
+  if (stream.destroyed) return Promise.reject(new Error("write stream closed before draining"));
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      stream.off("drain", onDrain);
+      stream.off("error", onError);
+      stream.off("close", onClose);
+    };
+    const onDrain = (): void => { cleanup(); resolve(); };
+    const onError = (error: Error): void => { cleanup(); reject(error); };
+    const onClose = (): void => { cleanup(); reject(new Error("write stream closed before draining")); };
+    stream.once("drain", onDrain);
+    stream.once("error", onError);
+    stream.once("close", onClose);
+  });
+}
+
+export function _chunkTempPathForTesting(targetPath: string): string {
+  return `${targetPath}.tmp.${process.pid}.${randomUUID()}`;
+}
+
 function isChunkLine(value: unknown): value is ChunkLine {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
@@ -66,7 +90,7 @@ export async function saveChunks(
   // multi-hour embedding run with the vectors already computed.
   await cleanupOrphanTempFiles(chunkPath);
 
-  const tmpPath = `${chunkPath}.tmp.${Date.now()}`;
+  const tmpPath = _chunkTempPathForTesting(chunkPath);
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
 
@@ -85,7 +109,7 @@ export async function saveChunks(
         tokenCount: c.tokenCount,
       } satisfies ChunkLine) + "\n";
       if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
+        await waitForDrainOrError(stream);
       }
     }
     if (streamError) throw streamError;
@@ -195,7 +219,7 @@ export async function saveChunkEmbeddings(
   // Same orphan sweep as saveEmbeddings — a killed process leaves these behind.
   await cleanupOrphanTempFiles(embeddingPath);
 
-  const tmpPath = `${embeddingPath}.tmp.${Date.now()}`;
+  const tmpPath = _chunkTempPathForTesting(embeddingPath);
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
 
@@ -207,7 +231,7 @@ export async function saveChunkEmbeddings(
       if (streamError) throw streamError;
       const line = JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
       if (!stream.write(line)) {
-        await new Promise<void>((resolve) => stream.once("drain", resolve));
+        await waitForDrainOrError(stream);
       }
     }
     if (streamError) throw streamError;

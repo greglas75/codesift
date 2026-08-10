@@ -40,6 +40,19 @@ describe("wiki CLI commands", () => {
     expect(typeof COMMAND_MAP["wiki-lint"]).toBe("function");
   });
 
+  it("COMMAND_MAP dispatches wiki-generate to the generate handler", async () => {
+    const { COMMAND_MAP } = await import("../../src/cli/commands.js");
+    const { generateWiki } = await import("../../src/tools/wiki-tools.js");
+    const { lintWiki } = await import("../../src/tools/wiki-lint.js");
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await COMMAND_MAP["wiki-generate"]!(["my-repo"], { "no-lens": true });
+    writeSpy.mockRestore();
+
+    expect(generateWiki).toHaveBeenCalledWith("my-repo", expect.objectContaining({}));
+    expect(lintWiki).not.toHaveBeenCalled();
+  });
+
   // Test 3: handleWikiGenerate calls generateWiki with repo arg
   it("handleWikiGenerate calls generateWiki with repo arg", async () => {
     const { generateWiki } = await import("../../src/tools/wiki-tools.js");
