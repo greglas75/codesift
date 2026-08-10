@@ -3,6 +3,10 @@ import * as parserManager from "../../src/parser/parser-manager.js";
 import { resetParseCache } from "../../src/parser/parse-cache.js";
 import { createEdgeAccumulator } from "../../src/utils/import-graph/edge-accumulator.js";
 import {
+  buildNormalizedPathMap,
+  resolveImportPath,
+} from "../../src/utils/import-graph/path-map.js";
+import {
   collectSourceEdges,
   type SourceEdgeContext,
 } from "../../src/utils/import-graph/source-edge-collector.js";
@@ -49,11 +53,107 @@ describe("import edge accumulator", () => {
       { from: "src/a.ts", to: "src/b.ts", type_only: false },
     ]);
   });
+
+  it("merges star-import and raw metadata without downgrading a runtime edge", () => {
+    const accumulator = createEdgeAccumulator();
+
+    accumulator.add("src/a.ts", "src/b.ts");
+    accumulator.add("src/a.ts", "src/b.ts", {
+      type_only: true,
+      star_import: true,
+      raw: "from .b import *",
+    });
+
+    expect(accumulator.edges).toEqual([
+      {
+        from: "src/a.ts",
+        to: "src/b.ts",
+        type_only: false,
+        star_import: true,
+        raw: "from .b import *",
+      },
+    ]);
+  });
+
+  it("keeps distinct edges when file names contain the key delimiter", () => {
+    const accumulator = createEdgeAccumulator();
+
+    accumulator.add("a->b", "c");
+    accumulator.add("a", "b->c");
+
+    expect(accumulator.edges).toEqual([
+      { from: "a->b", to: "c" },
+      { from: "a", to: "b->c" },
+    ]);
+  });
+
+  it("keeps raw metadata aligned with the import semantics that were merged", () => {
+    const accumulator = createEdgeAccumulator();
+
+    accumulator.add("src/a.py", "src/b.py", { raw: "from .b import value" });
+    accumulator.add("src/a.py", "src/b.py", {
+      star_import: true,
+      raw: "from .b import *",
+    });
+
+    expect(accumulator.edges).toEqual([
+      {
+        from: "src/a.py",
+        to: "src/b.py",
+        star_import: true,
+        raw: "from .b import *",
+      },
+    ]);
+  });
+
+  it("clears stale type-only source text when runtime wins without raw text", () => {
+    const accumulator = createEdgeAccumulator();
+
+    accumulator.add("src/a.ts", "src/b.ts", {
+      type_only: true,
+      raw: "import type { B } from './b.js'",
+    });
+    accumulator.add("src/a.ts", "src/b.ts");
+
+    expect(accumulator.edges).toEqual([
+      { from: "src/a.ts", to: "src/b.ts", type_only: false },
+    ]);
+  });
+
+  it("does not attach type-only source text to an existing runtime edge", () => {
+    const accumulator = createEdgeAccumulator();
+
+    accumulator.add("src/a.ts", "src/b.ts");
+    accumulator.add("src/a.ts", "src/b.ts", {
+      type_only: true,
+      raw: "import type { B } from './b.js'",
+    });
+
+    expect(accumulator.edges).toEqual([
+      { from: "src/a.ts", to: "src/b.ts", type_only: false },
+    ]);
+  });
+});
+
+describe("normalized import paths", () => {
+  it("rejects relative imports that escape above the repository root", () => {
+    expect(resolveImportPath("src/main.ts", "../../../outside")).toBe("");
+  });
+
+  it("keeps a root self-reference distinct from an escaped import", () => {
+    expect(resolveImportPath("main.ts", ".")).toBe(".");
+  });
+
+  it("does not resolve extensionless imports through ambiguous source files", () => {
+    const index = makeIndex(["src/value.ts", "src/value.js"]);
+
+    expect(buildNormalizedPathMap(index).has("src/value")).toBe(false);
+  });
 });
 
 describe("collectSourceEdges fallback and dispatch contracts", () => {
   it("falls back to regex imports when the TypeScript parser is unavailable", async () => {
-    const parserSpy = vi.spyOn(parserManager, "getParser").mockResolvedValueOnce(null);
+    const parserSpy = vi.spyOn(parserManager, "getParser").mockResolvedValue(null);
     const addEdge = vi.fn();
     const index = makeIndex(["src/main.ts", "src/dep.ts"]);
     const context = makeContext(index, {
@@ -128,10 +228,7 @@ describe("collectSourceEdges fallback and dispatch contracts", () => {
       void pending.then(() => {
         settled = true;
       });
-      for (let attempt = 0; attempt < 10 && parserSpy.mock.calls.length === 0; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(parserSpy).toHaveBeenCalledWith("python");
+      await vi.waitFor(() => expect(parserSpy).toHaveBeenCalledWith("python"));
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(settled).toBe(false);
 

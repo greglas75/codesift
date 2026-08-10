@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildWorkspaceAliasResolver } from "../../src/utils/import-graph/workspace-alias.js";
-import { resolveWorkspaceEntry } from "../../src/utils/import-graph/workspace-entry.js";
+import {
+  relativeWorkspaceRoot,
+  resolveWorkspaceEntry,
+} from "../../src/utils/import-graph/workspace-entry.js";
 import type { CodeIndex, Workspace } from "../../src/types.js";
 
 const tempRoots: string[] = [];
@@ -80,6 +83,117 @@ describe("resolveWorkspaceEntry", () => {
       "packages/pkg/dist/index.ts",
     );
   });
+
+  it("supports string-valued package exports", async () => {
+    const root = await workspaceRoot({ exports: "./src/public.ts" });
+    const files = new Set(["packages/pkg/src/public.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("prefers authoritative exports over a legacy main entry", async () => {
+    const root = await workspaceRoot({
+      exports: "./src/public.ts",
+      main: "./dist/legacy.js",
+    });
+    const files = new Set([
+      "packages/pkg/src/public.ts",
+      "packages/pkg/dist/legacy.js",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("prefers object exports over legacy module and main entries", async () => {
+    const root = await workspaceRoot({
+      exports: { ".": { import: "./src/public.ts" } },
+      module: "./dist/module.js",
+      main: "./dist/main.js",
+    });
+    const files = new Set([
+      "packages/pkg/src/public.ts",
+      "packages/pkg/dist/module.js",
+      "packages/pkg/dist/main.js",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("supports flat conditional exports shorthand", async () => {
+    const root = await workspaceRoot({
+      exports: { import: "./src/public.ts", require: "./dist/public.cjs" },
+    });
+    const files = new Set(["packages/pkg/src/public.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("unwraps nested conditional exports", async () => {
+    const root = await workspaceRoot({
+      exports: { ".": { node: { import: "./src/node.ts" } } },
+    });
+    const files = new Set(["packages/pkg/src/node.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/node.ts",
+    );
+  });
+
+  it("does not select a types condition as the runtime entry", async () => {
+    const root = await workspaceRoot({
+      exports: {
+        ".": {
+          types: "./types/index.d.ts",
+          node: "./src/node.ts",
+        },
+      },
+    });
+    const files = new Set([
+      "packages/pkg/types/index.d.ts",
+      "packages/pkg/src/node.ts",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/node.ts",
+    );
+  });
+
+  it("does not fall back when exports omits the package root", async () => {
+    const root = await workspaceRoot({
+      exports: { "./utils": "./src/utils.ts" },
+      module: "./dist/module.js",
+      main: "./dist/main.js",
+    });
+    const files = new Set([
+      "packages/pkg/src/index.ts",
+      "packages/pkg/dist/module.js",
+      "packages/pkg/dist/main.js",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBeNull();
+  });
+
+  it("treats an empty string export as authoritative absence", async () => {
+    const root = await workspaceRoot({ exports: "" });
+    const files = new Set(["packages/pkg/src/index.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBeNull();
+  });
+
+});
+
+describe("relativeWorkspaceRoot", () => {
+  it("rejects sibling paths that only share the repository prefix", () => {
+    expect(relativeWorkspaceRoot("/repo/application-extra", "/repo/app")).toBeNull();
+  });
 });
 
 describe("buildWorkspaceAliasResolver ordering", () => {
@@ -121,5 +235,26 @@ describe("buildWorkspaceAliasResolver ordering", () => {
         "apps/web/admin/src/pages/index.ts",
       ),
     ).toBe("apps/web/admin/src/value.ts");
+  });
+
+  it("expands every wildcard in a tsconfig path target", () => {
+    const mappedWorkspace = workspace("@org/web", "/repo/apps/web");
+    mappedWorkspace.tsconfig_paths = [
+      { from_pattern: "@generated/*", to_paths: ["src/*/generated/*"] },
+    ];
+    const index: CodeIndex = {
+      repo: "test/repeated-target-wildcards",
+      root: "/repo",
+      symbols: [],
+      files: [file("apps/web/src/utils/generated/utils.ts")],
+      workspaces: [mappedWorkspace],
+    };
+
+    expect(
+      buildWorkspaceAliasResolver(index).resolve(
+        "@generated/utils",
+        "apps/web/src/pages/index.ts",
+      ),
+    ).toBe("apps/web/src/utils/generated/utils.ts");
   });
 });

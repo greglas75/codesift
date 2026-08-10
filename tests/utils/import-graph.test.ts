@@ -124,11 +124,14 @@ describe("buildFilePageRank", () => {
     expect(repeated).toEqual(once);
   });
 
-  it("returns an empty Map when graph construction rejects an invalid node", () => {
+  it("skips invalid nodes without discarding valid PageRank results", () => {
     const invalidEdges = [
+      { from: "A.ts", to: "B.ts" },
       { from: Symbol("invalid-node"), to: "B.ts" },
     ] as unknown as ImportEdge[];
-    expect(buildFilePageRank(invalidEdges)).toEqual(new Map());
+    const result = buildFilePageRank(invalidEdges);
+    expect(result.has("A.ts")).toBe(true);
+    expect(result.has("B.ts")).toBe(true);
   });
 
   it("handles cycle A → B → A", () => {

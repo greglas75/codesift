@@ -12,28 +12,48 @@ export function resolveImportPath(importerFile: string, importPath: string): str
   const importerDir = importerFile.includes("/")
     ? importerFile.slice(0, importerFile.lastIndexOf("/"))
     : ".";
-  const parts = importerDir.split("/");
+  const parts = importerDir === "." ? [] : importerDir.split("/");
 
-  for (const segment of importPath.split("/")) {
+  const importSegments = importPath.split("/");
+  for (const segment of importSegments) {
     if (segment === ".") continue;
-    if (segment === "..") parts.pop();
+    if (segment === "..") {
+      if (parts.length === 0) return "";
+      parts.pop();
+    }
     else parts.push(segment);
   }
 
+  if (parts.length === 0 && importSegments.every((segment) => segment === "." || segment === "")) {
+    return ".";
+  }
   return parts.join("/").replace(RELATIVE_IMPORT_EXTENSION, "");
 }
 
 /** Build normalized path map for matching imports to indexed files. */
 export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
   const normalizedPaths = new Map<string, string>();
+  const ambiguousPaths = new Set<string>();
+
+  const addPath = (key: string, filePath: string): void => {
+    if (ambiguousPaths.has(key)) return;
+    const existing = normalizedPaths.get(key);
+    if (existing && existing !== filePath) {
+      normalizedPaths.delete(key);
+      ambiguousPaths.add(key);
+      return;
+    }
+    normalizedPaths.set(key, filePath);
+  };
+
   for (const file of index.files) {
     const normalized = stripIndexedSourceExtension(file.path);
-    normalizedPaths.set(normalized, file.path);
+    addPath(normalized, file.path);
     if (normalized.endsWith("/index")) {
-      normalizedPaths.set(normalized.slice(0, -6), file.path);
+      addPath(normalized.slice(0, -6), file.path);
     }
     if (normalized.endsWith("/__init__")) {
-      normalizedPaths.set(normalized.slice(0, -9), file.path);
+      addPath(normalized.slice(0, -9), file.path);
     }
   }
   return normalizedPaths;

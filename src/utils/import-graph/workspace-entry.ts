@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
+import { isAbsolute, relative, sep } from "node:path";
 
 const DEFAULT_WORKSPACE_ENTRIES = [
   "src/index.ts", "src/index.tsx", "src/index.js",
   "index.ts", "index.tsx", "index.js",
 ] as const;
 const WORKSPACE_SOURCE_EXTENSION = /\.(astro|ts|tsx|js|jsx|mjs|cjs)$/;
+const RUNTIME_EXPORT_CONDITIONS = [
+  "import", "default", "require", "node",
+] as const;
 
 interface ParsedPackageJson {
   main?: string;
@@ -15,8 +19,11 @@ interface ParsedPackageJson {
 }
 
 export function relativeWorkspaceRoot(absPath: string, indexRoot: string): string | null {
-  if (!absPath.startsWith(indexRoot)) return null;
-  return absPath.slice(indexRoot.length).replace(/^[\\/]+/, "");
+  const rel = relative(indexRoot, absPath);
+  if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) {
+    return null;
+  }
+  return rel.replaceAll("\\", "/");
 }
 
 function readWorkspacePackageJson(absRoot: string): ParsedPackageJson | null {
@@ -27,23 +34,35 @@ function readWorkspacePackageJson(absRoot: string): ParsedPackageJson | null {
   }
 }
 
-function pickConditionalEntry(root: unknown): string | null {
+function pickConditionalEntry(root: unknown, depth = 0): string | null {
+  if (depth > 8 || Array.isArray(root)) return null;
   if (typeof root === "string") return root;
   if (!root || typeof root !== "object") return null;
   const conditional = root as Record<string, unknown>;
-  for (const key of ["import", "default", "require"] as const) {
-    if (typeof conditional[key] === "string") return conditional[key];
+  for (const key of RUNTIME_EXPORT_CONDITIONS) {
+    const entry = pickConditionalEntry(conditional[key], depth + 1);
+    if (entry) return entry;
   }
   return null;
 }
 
-function pickEntry(pkg: ParsedPackageJson | null): string | null {
-  if (!pkg) return null;
+function pickEntry(pkg: ParsedPackageJson | null): string | null | undefined {
+  if (!pkg) return undefined;
   if (typeof pkg.source === "string") return pkg.source;
+  if (typeof pkg.exports === "string") {
+    return pkg.exports.trim() ? pkg.exports : null;
+  }
+  if (pkg.exports && typeof pkg.exports === "object") {
+    const exportsMap = pkg.exports as Record<string, unknown>;
+    const rootExport = exportsMap["."]
+      ?? (Object.keys(exportsMap).some((key) => key.startsWith(".")) ? null : exportsMap);
+    const exportedEntry = pickConditionalEntry(rootExport);
+    if (exportedEntry) return exportedEntry;
+    return null;
+  }
   if (typeof pkg.module === "string") return pkg.module;
   if (typeof pkg.main === "string") return pkg.main;
-  if (!pkg.exports || typeof pkg.exports !== "object") return null;
-  return pickConditionalEntry((pkg.exports as Record<string, unknown>)["."]);
+  return undefined;
 }
 
 export function resolveWorkspaceEntry(
@@ -53,6 +72,7 @@ export function resolveWorkspaceEntry(
   normalizedPaths: Map<string, string>,
 ): string | null {
   const configuredEntry = pickEntry(readWorkspacePackageJson(workspaceRoot));
+  if (configuredEntry === null) return null;
   const relativeEntries = configuredEntry
     ? [configuredEntry.replace(/^\.?\/+/, ""), ...DEFAULT_WORKSPACE_ENTRIES]
     : [...DEFAULT_WORKSPACE_ENTRIES];

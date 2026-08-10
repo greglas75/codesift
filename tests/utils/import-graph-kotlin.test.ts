@@ -144,9 +144,49 @@ describe("resolveKotlinImport", () => {
     expect(resolveKotlinImport("UserService", kotlinFiles)).toBeNull();
   });
 
-  it("falls back to single candidate even if package path doesn't match", () => {
+  it("does not guess when the only basename candidate belongs to another package", () => {
     expect(
       resolveKotlinImport("com.other.location.UserRepository", kotlinFiles),
-    ).toBe("src/main/kotlin/com/example/repo/UserRepository.kt");
+    ).toBeNull();
+  });
+
+  it("matches package paths on directory-segment boundaries", () => {
+    const collidingFiles = new Map<string, string[]>([
+      ["Widget", ["src/main/kotlin/notcom/example/Widget.kt"]],
+    ]);
+
+    expect(resolveKotlinImport("com.example.Widget", collidingFiles)).toBeNull();
+  });
+
+  it("does not match a package that is only a suffix of the declared path", () => {
+    const collidingFiles = new Map<string, string[]>([
+      ["Widget", ["src/main/kotlin/com/example/Widget.kt"]],
+    ]);
+
+    expect(resolveKotlinImport("example.Widget", collidingFiles)).toBeNull();
+  });
+
+  it("resolves packages that themselves contain a kotlin segment", () => {
+    const files = new Map<string, string[]>([
+      ["Widget", ["src/main/kotlin/com/kotlin/example/Widget.kt"]],
+    ]);
+
+    expect(resolveKotlinImport("com.kotlin.example.Widget", files)).toBe(
+      "src/main/kotlin/com/kotlin/example/Widget.kt",
+    );
+  });
+
+  it("rejects duplicate exact package matches across source sets", () => {
+    const files = new Map<string, string[]>([
+      [
+        "Widget",
+        [
+          "src/main/kotlin/com/example/Widget.kt",
+          "src/test/kotlin/com/example/Widget.kt",
+        ],
+      ],
+    ]);
+
+    expect(resolveKotlinImport("com.example.Widget", files)).toBeNull();
   });
 });

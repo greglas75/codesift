@@ -52,10 +52,22 @@ export function resolveKotlinImport(
   const packagePath = parts.slice(0, -1).join("/");
   const candidates = kotlinFilesByBasename.get(simpleName);
   if (!candidates) return null;
+  const matches: string[] = [];
   for (const candidate of candidates) {
-    if (candidate.includes(packagePath)) return candidate;
+    const withoutExtension = candidate.replace(/\.kts?$/, "");
+    const fileSeparator = withoutExtension.lastIndexOf("/");
+    const candidateDirectory = fileSeparator >= 0
+      ? withoutExtension.slice(0, fileSeparator)
+      : "";
+    const sourceRootMatch = /(?:^|\/)src\/[^/]+\/kotlin\//.exec(`${candidateDirectory}/`);
+    const candidatePackage = sourceRootMatch?.index !== undefined
+      ? candidateDirectory.slice(sourceRootMatch.index + sourceRootMatch[0].length)
+      : candidateDirectory;
+    if (candidatePackage === packagePath) {
+      matches.push(candidate);
+    }
   }
-  return candidates.length === 1 ? candidates[0] ?? null : null;
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string[]> {

@@ -29,6 +29,13 @@ docstring promising "no parsing is repeated" over code that re-parsed the whole 
 that is right about a bug is not a fix.
 
 ### Fixed
+
+- Import graph collection now falls back to regex imports when the TypeScript parser returns no
+  tree, instead of silently dropping every edge from that file. The import graph implementation
+  is also split into focused language, resolution, collection, and metric modules behind the
+  existing `src/utils/import-graph.ts` facade. Ambiguous extensionless paths, imports escaping the
+  repository root, workspace-prefix collisions, and mismatched Kotlin packages no longer produce
+  incorrect graph edges; duplicate edges also retain their import metadata.
 - Cross-repo contract matching no longer collapses consumers from different repositories when
   generated clients share the same relative file path and line number.
 
