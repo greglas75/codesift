@@ -53,11 +53,13 @@ export async function nestScopeAudit(
   const providers = new Map<string, ProviderInfo>();
   const rawInjectEdges: Array<{ from: string; target: string }> = []; // consumer → injected token
 
-  const candidateFiles = index.files.filter((file) =>
-    (file.path.endsWith(".ts") || file.path.endsWith(".js"))
-    && !isNodeModulesPath(file.path)
-    && !/\.(?:spec|test)\.[cm]?[jt]s$/.test(file.path)
-  );
+  const candidateFiles = index.files.filter((file) => {
+    const normalizedPath = file.path.replace(/\\/g, "/");
+    return (normalizedPath.endsWith(".ts") || normalizedPath.endsWith(".js"))
+      && !isNodeModulesPath(normalizedPath)
+      && !/(?:^|\/)(?:test|tests|__tests__|__mocks__)(?:\/|$)/.test(normalizedPath)
+      && !/\.(?:(?:e2e|integration)[.-])?(?:spec|test)\.[cm]?[jt]s$/.test(normalizedPath);
+  });
   for (const file of candidateFiles) {
     if (providers.size >= maxProviders) { truncated = true; break; }
     const source = await readNestSource(index, file.path, errors);
@@ -113,14 +115,9 @@ export async function nestScopeAudit(
   const injectedBy = new Map<string, Set<string>>();
   for (const edge of rawInjectEdges) {
     const targets = keysByName.get(edge.target);
-    let target = targets?.length === 1 ? targets[0] : undefined;
-    if (!target && targets && targets.length > 1) {
-      const sourceFile = providers.get(edge.from)?.file;
-      const sameFileTargets = targets.filter((key) => providers.get(key)?.file === sourceFile);
-      if (sameFileTargets.length === 1) target = sameFileTargets[0];
-    }
+    const target = targets?.length === 1 ? targets[0] : undefined;
     if (!target) {
-      graphIncomplete = true;
+      if (targets && targets.length > 1) graphIncomplete = true;
       continue;
     }
     if (!injectedBy.has(target)) injectedBy.set(target, new Set());
