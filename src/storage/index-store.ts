@@ -5,129 +5,48 @@ import { createHash } from "node:crypto";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
 import {
-  isSqliteAvailable,
   loadIndexSqlite,
   saveIndexSqlite,
   saveIncrementalSqlite,
   removeFileFromIndexSqlite,
   getFileEntrySqlite,
   getDataVersion,
-  importLegacyIndexIfEmpty,
   classifyStorageError,
   IndexStorageError,
   loadIndexSummarySqlite,
   type IndexSummary,
 } from "./sqlite-index-store.js";
-import { indexFootprintBytes } from "./index-footprint.js";
-import { indexCacheMemBudgetBytes } from "../config.js";
-
-/** Bounded by entry count, not bytes: a summary holds no symbols, so it cannot dominate the heap
- *  the way a materialised index can. */
-const MAX_CACHED_SUMMARIES = 16;
-const summaryCache = new Map<string, { summary: IndexSummary; dataVersion: number }>();
-
-function copySummary(summary: IndexSummary): IndexSummary {
-  const out: IndexSummary = { ...summary, files: [...summary.files] };
-  if (summary.workspaces !== undefined) out.workspaces = [...summary.workspaces];
-  return out;
-}
-
-export function resetSummaryCacheForTesting(): void {
-  summaryCache.clear();
-}
+import {
+  cacheLoadedIndex,
+  cacheLoadedSummary,
+  getCachedIndex,
+  getCachedSummary,
+  invalidateIndexCache,
+} from "./index-cache.js";
+import {
+  ensureSqliteMigrated as migrateLegacyIndex,
+  resolveIndexBackend,
+  sqlitePathFor,
+} from "./index-migration.js";
+export {
+  getIndexCacheBytesForTesting,
+  getIndexCacheSizeForTesting,
+  resetIndexCacheForTesting,
+  resetSummaryCacheForTesting,
+} from "./index-cache.js";
+export {
+  type IndexBackend,
+  resetIndexBackendForTesting,
+  resetMigrationCacheForTesting,
+  resolveIndexBackend,
+  sqlitePathFor,
+} from "./index-migration.js";
 
 /** Serialize concurrent writes to the same index path. */
 const writeLocks = new Map<string, Promise<void>>();
 
-// ---------------------------------------------------------------------------
-// Backend selection (ADR-003)
-// ---------------------------------------------------------------------------
-
-export type IndexBackend = "json" | "sqlite";
-
-/**
- * Which on-disk format to use.
- *
- * `CODESIFT_INDEX_BACKEND=json` pins the legacy path (the documented rollback);
- * `=sqlite` demands the new one and fails loudly if `node:sqlite` is missing, so a CI run
- * cannot quietly exercise the wrong backend. Unset auto-detects, which is what keeps the
- * `engines: >=20` floor honest: Node 20 has no `node:sqlite` and simply stays on JSON.
- *
- * Read from the environment here rather than `config.ts` because the choice must be
- * resolvable from the short-lived `codesift postindex-file` hook process too, which never
- * builds a full config.
- */
-let backendPromise: Promise<IndexBackend> | undefined;
-
-export async function resolveIndexBackend(): Promise<IndexBackend> {
-  backendPromise ??= computeIndexBackend();
-  return backendPromise;
-}
-
-async function computeIndexBackend(): Promise<IndexBackend> {
-  const explicit = process.env["CODESIFT_INDEX_BACKEND"];
-  if (explicit === "json") return "json";
-  if (explicit === "sqlite") {
-    if (!(await isSqliteAvailable())) {
-      throw new Error(
-        "CODESIFT_INDEX_BACKEND=sqlite but node:sqlite is unavailable (requires Node >= 22.5)",
-      );
-    }
-    return "sqlite";
-  }
-  return (await isSqliteAvailable()) ? "sqlite" : "json";
-}
-
-export function resetIndexBackendForTesting(): void {
-  backendPromise = undefined;
-}
-
-/** `<hash>.index.json` -> `<hash>.index.db`, so both formats sit side by side and the JSON
- *  stays available as the rollback artifact. */
-export function sqlitePathFor(indexPath: string): string {
-  return indexPath.endsWith(".json")
-    ? `${indexPath.slice(0, -".json".length)}.db`
-    : `${indexPath}.db`;
-}
-
-/** Guards one-time JSON->SQLite migration per index path. */
-const migrations = new Map<string, Promise<void>>();
-
-/**
- * Bring an existing JSON index across on first touch.
- *
- * Deliberately non-destructive: the source `.json` is left in place. Deleting it would make
- * `CODESIFT_INDEX_BACKEND=json` a one-way door, and the whole point of shipping a rollback
- * switch is that it still has something to roll back to.
- */
 async function ensureSqliteMigrated(indexPath: string, dbPath: string): Promise<void> {
-  const inFlight = migrations.get(dbPath);
-  if (inFlight) return inFlight;
-
-  const run = (async () => {
-    if ((await loadIndexSqlite(dbPath)) !== null) return; // already migrated
-    const legacy = await loadJsonIndex(indexPath);
-    // importLegacyIndexIfEmpty re-checks emptiness under the write lock, so a second
-    // process that raced us here imports nothing instead of overwriting our rows.
-    if (legacy) await importLegacyIndexIfEmpty(dbPath, legacy);
-  })();
-
-  migrations.set(dbPath, run);
-  try {
-    await run;
-  } catch (err) {
-    // A failed migration is retried, not remembered as done — and we do NOT re-read the same
-    // failing database to decide that. Probing it again inside a `finally` would hit an
-    // already-struggling store a second time AND, if that probe throws too, JS try/finally
-    // semantics would replace the original error with the second one.
-    migrations.delete(dbPath);
-    throw err;
-  }
-  migrations.set(dbPath, Promise.resolve());
-}
-
-export function resetMigrationCacheForTesting(): void {
-  migrations.clear();
+  await migrateLegacyIndex(indexPath, dbPath, loadJsonIndex);
 }
 
 /**
@@ -194,114 +113,6 @@ export async function getFileEntry(
 }
 
 /**
- * Materialised-index cache, keyed by db path and validated against SQLite's `data_version`.
- *
- * Rebuilding 32k symbol objects out of rows is measurably *slower* than one big
- * `JSON.parse` (267 ms vs 91 ms on a 4k-file index), so without this the migration would
- * trade a faster write path for a slower read path — and reads happen on every tool call.
- *
- * A cache was impossible under JSON: the `codesift postindex-file` hook writes the same
- * index from its own process, and a plain file offers no way to notice. `PRAGMA
- * data_version` changes whenever *another* connection commits, which is exactly that
- * missing signal. It does NOT move for our own writes, so those invalidate explicitly
- * below — that asymmetry is a property of SQLite, not an oversight.
- *
- * Cache hits return a shallow COPY, never the stored object. The "callers only read" invariant
- * does not hold — `loadIndex` is public and at least one caller reassigns `files` on the
- * result — and a mutation of a shared cached index is invisible to `data_version`, so it
- * would silently poison every later reader in the process.
- */
-interface CachedIndex {
-  index: CodeIndex;
-  dataVersion: number;
-}
-
-/**
- * Bounded, LRU by insertion order. A materialised index is the largest object this process
- * holds — the JSON equivalent is 262 MB on tgm-survey-platform — and `codesift serve` is a
- * long-lived daemon that touches many repos. An unbounded map here would have been the one
- * cache in this codebase without a ceiling, next to an embedding cache that is explicitly
- * RAM-budgeted (`CODESIFT_MAX_EMBEDDING_MEM_MB`); that asymmetry is how the OOM reports
- * documented in CLAUDE.md started.
- */
-// `|| 3` would be wrong here: an operator setting 0 to minimise memory would get 3, because
-// 0 is falsy. Only a non-numeric value should fall back.
-const MAX_CACHED_INDEXES = (() => {
-  const raw = process.env["CODESIFT_MAX_CACHED_INDEXES"];
-  const parsed = raw === undefined ? 3 : Number(raw);
-  return Math.max(1, Number.isNaN(parsed) ? 3 : parsed);
-})();
-const indexCache = new Map<string, CachedIndex>();
-
-function cachedBytes(): number {
-  let total = 0;
-  for (const entry of indexCache.values()) total += indexFootprintBytes(entry.index);
-  return total;
-}
-
-function cacheIndex(dbPath: string, entry: CachedIndex): void {
-  // Re-insert to move to the most-recent end of Map iteration order.
-  indexCache.delete(dbPath);
-  indexCache.set(dbPath, entry);
-
-  const budget = indexCacheMemBudgetBytes();
-  // Evict oldest-first on EITHER bound. The count cap alone let three repos of any size sit
-  // resident, and index sizes span two orders of magnitude — the measured tgm-survey-platform
-  // index is 411 MB against a few MB for a small repo, so "three indexes" was a ceiling only in
-  // name. The byte bound is the real one; the count cap stays as a cheap upper limit on entries.
-  //
-  // The running total is decremented per eviction rather than re-summed in the loop condition.
-  // `MAX_CACHED_INDEXES` has a floor but no ceiling (`CODESIFT_MAX_CACHED_INDEXES` is operator
-  // input), and re-summing would make each insert O(n²) in exactly the many-repo daemon this
-  // budget was written for.
-  let total = cachedBytes();
-  while (indexCache.size > 1 && (indexCache.size > MAX_CACHED_INDEXES || total > budget)) {
-    const oldest = indexCache.entries().next();
-    if (oldest.done) break;
-    const [key, entry] = oldest.value;
-    total -= indexFootprintBytes(entry.index);
-    indexCache.delete(key);
-  }
-  // `size > 1` above deliberately keeps the entry just inserted even when it alone exceeds the
-  // budget. Evicting it would mean re-reading the same index on the very next call and evicting
-  // it again — an unbounded reload loop that costs far more than the memory it reclaims. A repo
-  // bigger than the whole budget is a reason to raise CODESIFT_MAX_INDEX_CACHE_MB, not to stop
-  // caching it.
-}
-
-/**
- * Detach the two arrays callers actually touch.
- *
- * A bare `{...index}` only stops a caller REASSIGNING `files`/`symbols`; an in-place
- * `push`/`sort`/`splice` would still hit the array the cache holds — and `data_version`
- * cannot see an in-memory mutation, so the corruption would survive every later hit. The
- * elements stay shared (symbols are treated as immutable records); this copies the two
- * array containers, which is the boundary that was actually being crossed.
- */
-function copyIndex(index: CodeIndex): CodeIndex {
-  return { ...index, files: [...index.files], symbols: [...index.symbols] };
-}
-
-function invalidateIndexCache(dbPath: string): void {
-  indexCache.delete(dbPath);
-  // Our own writes do not move `data_version`, so the summary must be dropped explicitly too —
-  // otherwise a save would leave `index_status` reporting the pre-write counts indefinitely.
-  summaryCache.delete(dbPath);
-}
-
-export function resetIndexCacheForTesting(): void {
-  indexCache.clear();
-}
-
-export function getIndexCacheSizeForTesting(): number {
-  return indexCache.size;
-}
-
-export function getIndexCacheBytesForTesting(): number {
-  return cachedBytes();
-}
-
-/**
  * Read an index's files and metadata WITHOUT constructing its symbols (ADR-004 stage 2).
  *
  * On the SQLite backend this skips the object graph entirely. On JSON there is nothing to skip —
@@ -319,24 +130,12 @@ export async function loadIndexSummary(indexPath: string): Promise<IndexSummary 
     // behind it. A summary is small (3 MB against 349 MB on the measured index), so this is not
     // budgeted against `CODESIFT_MAX_INDEX_CACHE_MB`; it is bounded by entry count instead.
     const dataVersion = await getDataVersion(dbPath);
-    const cached = summaryCache.get(dbPath);
-    if (cached && cached.dataVersion === dataVersion) {
-      summaryCache.delete(dbPath);
-      summaryCache.set(dbPath, cached); // move to the recent end (LRU, as in cacheIndex)
-      return copySummary(cached.summary);
-    }
+    const cached = getCachedSummary(dbPath, dataVersion);
+    if (cached !== null) return cached;
 
     const summary = await loadIndexSummarySqlite(dbPath);
     if (summary === null) return null;
-    summaryCache.set(dbPath, { summary, dataVersion });
-    while (summaryCache.size > MAX_CACHED_SUMMARIES) {
-      const oldest = summaryCache.keys().next();
-      if (oldest.done) break;
-      summaryCache.delete(oldest.value);
-    }
-    // Copy on the miss path too, for the same reason `readIndex` does: handing back the stored
-    // object lets the first caller mutate the entry every later reader is about to be given.
-    return copySummary(summary);
+    return cacheLoadedSummary(dbPath, summary, dataVersion);
   }
   warnIfRollbackIsStale(indexPath);
   const index = await loadJsonIndex(indexPath);
@@ -378,22 +177,12 @@ async function readIndex(indexPath: string): Promise<CodeIndex | null> {
     await ensureSqliteMigrated(indexPath, dbPath);
 
     const dataVersion = await getDataVersion(dbPath);
-    const cached = indexCache.get(dbPath);
-    if (cached && cached.dataVersion === dataVersion) {
-      // Re-insert on HIT too, or the eviction order is FIFO-by-first-load rather than LRU:
-      // the hottest repo would be evicted the moment an (N+1)th repo is touched, while a
-      // repo read once and never again outlives it. That thrashes exactly the working set
-      // the cache exists to keep warm.
-      cacheIndex(dbPath, cached);
-      return copyIndex(cached.index);
-    }
+    const cached = getCachedIndex(dbPath, dataVersion);
+    if (cached !== null) return cached;
 
     const index = await loadIndexSqlite(dbPath);
     if (!index) return null;
-    cacheIndex(dbPath, { index, dataVersion });
-    // Copy on the miss path too: returning the freshly-cached object itself would let the
-    // very first caller mutate the entry every later reader is about to be handed.
-    return copyIndex(index);
+    return cacheLoadedIndex(dbPath, index, dataVersion);
   }
   warnIfRollbackIsStale(indexPath);
   return loadJsonIndex(indexPath);
