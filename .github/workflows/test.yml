@@ -70,5 +70,36 @@ jobs:
       # vitest forces CODESIFT_DISABLE_LOCAL_EMBEDDINGS=true in vitest.config.ts
       # (onnxruntime crashes in vitest's VM), so no ~100MB embedding model is
       # fetched — BM25 + tree-sitter symbol paths are exercised.
+      # Bound the suite IN the step, not only via job-level `timeout-minutes`.
+      # A job-level timeout CANCELS the job, and a cancelled run reports
+      # conclusion=cancelled — visually identical to the concurrency
+      # cancel-in-progress above. That made a hard, reproducible hang look like
+      # routine cancellation noise: every `test` run from 2026-08-02 to
+      # 2026-08-04 sat on this 20-minute ceiling (measured job wall-clock
+      # 20m15s / 20m16s / 20m21s on runs 30952083762 / 30931994622 /
+      # 30917683856) and every one of them is filed as "cancelled", so nothing
+      # ever went red. Last genuinely green run was 30527580133 (2026-07-30),
+      # where the same step finished in 2m54s and 3m21s.
+      #
+      # `testTimeout: 15000` in vitest.config.ts does NOT cover this — the stall
+      # is at the pool/teardown level (output goes silent after the last file
+      # completes and no test is ever reported as failing), which per-test
+      # timeouts cannot bound. Only a wall-clock guard catches it.
+      #
+      # Exit 1 on 124/137: a hanging test suite is a real failure, not an
+      # advisory finding. Every other status is passed through unchanged so
+      # ordinary test failures keep their existing meaning.
       - name: Test
-        run: npm test
+        run: |
+          set +e
+          timeout -k 30s 15m npm test
+          rc=$?
+          set -e
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "### Test suite timed out" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`npm test\` did not finish within 15m and was killed." >> "$GITHUB_STEP_SUMMARY"
+            echo "This is a hang, not a slow suite — the job-level ceiling is 20m." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          exit "$rc"

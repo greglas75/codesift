@@ -21,9 +21,22 @@ on:
     tags:
       - 'v*'
 
+# Serialize publishes. Two tag pushes a few hours apart produced two publish
+# jobs for the same package running CONCURRENTLY for 2h47m (runs 30764086526
+# and 30771240657, 2026-08-02) because each was stuck for its full 6h. Never
+# cancel-in-progress here: killing a publish mid-upload is worse than queuing.
+concurrency:
+  group: release-${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Backstop ABOVE the in-step ceiling below. Without any timeout this job
+    # inherits GitHub's hard 6h cap: five consecutive runs (30588161669,
+    # 30669964374, 30764086526, 30771240657, 30833981938) each burned exactly
+    # 21615s — 30 hours of runner wall-clock — before being killed.
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write   # OIDC credential for npm trusted publishing
@@ -68,5 +81,31 @@ jobs:
           fi
 
       # prepublishOnly runs `npm run build && npm test` — the same gate as a
-      # local publish, so CI cannot ship an untested build.
-      - run: npm publish
+      # local publish, so CI cannot ship an untested build. That also means
+      # this single step inherits the test suite's hang: all five recent
+      # releases wedged HERE, not in the registry upload (step 8 of runs
+      # 30588161669 / 30669964374 / 30764086526 / 30771240657 / 30833981938
+      # each ran ~6h before the platform killed it).
+      #
+      # Bound it IN the step so a wedge reports conclusion=failure with a
+      # reason, instead of conclusion=cancelled with none. Killing here is
+      # safe: the wedge is in prepublishOnly (build+test), long before any
+      # bytes reach the registry, and the registry PUT itself is atomic —
+      # there is no partial-publish state to land in.
+      #
+      # 20m in-step < 30m job backstop, so the in-step guard always wins and
+      # the job-level ceiling only covers a wedged runner/agent.
+      - name: Publish to npm
+        run: |
+          set +e
+          timeout -k 30s 20m npm publish
+          rc=$?
+          set -e
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "### Publish timed out" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`npm publish\` did not finish within 20m and was killed." >> "$GITHUB_STEP_SUMMARY"
+            echo "prepublishOnly (\`npm run build && npm test\`) is the usual culprit — check the \`test\` workflow first." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          exit "$rc"
