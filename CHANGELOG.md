@@ -2,22 +2,64 @@
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-10
+
+Eleven modules split behind stable facades, plus the fixes that surfaced while doing it. No new MCP
+tools and no API change — every facade keeps its import path and its exported surface, verified per
+branch by comparing the export set before and after.
+
+### Added
+
+- **A linked worktree's index is now COPIED from its parent instead of parsed.** A worktree differs
+  from the checkout it came from by a handful of files — measured on a 14,405-file tree: **eleven**,
+  0.08% — so parsing it to discover that was the entire cost of indexing, paid to learn almost
+  nothing. `index_folder` on an unindexed worktree takes a consistent `VACUUM INTO` snapshot of the
+  parent's database, rewrites every symbol id prefix, repoints its metadata, and then catches up
+  only what actually differs: committed divergence, uncommitted work, untracked files and deletions.
+  Measured end to end on a real worktree: **4.3 seconds against over ten minutes**, after which zero
+  of its 237,900 symbol ids still named the parent. Every refusal (parent not indexed, unreachable
+  commit, too many differences) falls back to the full walk with a stated reason — slow and correct
+  beats fast and wrong.
+
 ### Fixed
 
-- Storage: index APIs now reject SQLite database and sidecar paths (`.db`, `-wal`, `-shm`,
-  `-journal`, case-insensitively) instead of silently deriving a second `.db` path; cache and
-  migration state were also split from `index-store.ts` behind its existing public facade.
-- PHP symbol extraction now keeps semicolon-namespace parents, emits every field in multi-property
-  declarations with its own source range, preserves stacked attribute order, and deduplicates
-  PHPDoc members using PHP's field/method naming rules.
-- Import graph collection now falls back to regex imports when the TypeScript parser returns no
-  tree, instead of silently dropping every edge from that file. The import graph implementation
-  is also split into focused language, resolution, collection, and metric modules behind the
-  existing `src/utils/import-graph.ts` facade.
-- TypeScript constant resolution now bounds recursive namespace/expression traversal, supports
-  literal bracket keys, reports unsupported destructured defaults explicitly, and releases
-  temporary and cached tree-sitter trees without evicting an active parse tree. The public
-  `resolveTypeScriptConstantValue` facade and import path are unchanged.
+- **Passing a `.db`, `-wal` or `-shm` path where an index path was expected is now rejected**
+  instead of silently creating an empty `<hash>.index.db.db` and then reading the real database as
+  one UTF-8 string, which fails at V8's ~512 MiB ceiling and reports the database as unreadable.
+- **Import graph:** a file whose TypeScript parse returns no tree now falls back to regex imports
+  rather than silently dropping every edge from it. Workspace aliases expand fully, and packages
+  without a root export are rejected rather than half-resolved.
+- **TypeScript constant resolution** bounds recursive namespace/expression traversal, supports
+  literal bracket keys, reports unsupported destructured defaults explicitly, and releases temporary
+  parse trees without evicting an active one.
+- **Python constant resolution** no longer claims a lossy literal was resolved.
+- **Cross-repo contract matching** no longer collapses consumers from different repositories when
+  generated clients happen to share a relative path and line number.
+- **Route tracing** correctly handles repeated Express routes, nested Ktor prefixes, separated
+  NestJS decorators, Yii2 rule verbs, escaped Mermaid labels and Django class-based views.
+- **PHP extraction** keeps semicolon-namespace parents and emits every field in a multi-property
+  declaration.
+- **NestJS** scope audits stay on application providers and report ambiguous edges instead of
+  guessing.
+- **`prune`** reports `indeterminate_databases` — the ones it could not classify and therefore kept.
+  Protecting them silently is the difference between "nothing unexpected was deleted" and "files are
+  accumulating that nobody can account for"; only the second is actionable, and only if it is said.
+- **The rules stopped telling agents not to index the worktree they are working in.** Two loud rules
+  ("NEVER `index_folder` if already indexed") applied by their own wording, because `index_status`
+  does report an indexed, healthy repo — the PARENT checkout. Agents read that, fell back to `rg`,
+  and called a re-index disallowed. Both rules now carry the worktree exception, in all four rule
+  variants and in `src/instructions.ts`, which is sent over MCP to every session regardless of which
+  rules file is installed locally.
+
+### Changed
+
+- Eleven modules now sit behind stable facades: taint analysis, Python and TypeScript constant
+  resolution, cross-repo contracts, route tools, CLI commands, NestJS extensions, the import graph,
+  the PHP extractor, index storage and symbol tools. Import paths and exported names are unchanged.
+- Chunk publication is coherent under failure: chunks and their embeddings are published together
+  through a manifest, so a failed second write cannot leave a half-updated generation resident.
+- Embedding cache invalidation is generation-aware everywhere, so a load already in flight cannot
+  republish a map that was just dropped.
 
 ## [0.14.1] — 2026-08-10
 
@@ -29,19 +71,6 @@ docstring promising "no parsing is repeated" over code that re-parsed the whole 
 that is right about a bug is not a fix.
 
 ### Fixed
-
-- Import graph collection now falls back to regex imports when the TypeScript parser returns no
-  tree, instead of silently dropping every edge from that file. The import graph implementation
-  is also split into focused language, resolution, collection, and metric modules behind the
-  existing `src/utils/import-graph.ts` facade. Ambiguous extensionless paths, imports escaping the
-  repository root, workspace-prefix collisions, and mismatched Kotlin packages no longer produce
-  incorrect graph edges; duplicate edges also retain their import metadata.
-- Cross-repo contract matching no longer collapses consumers from different repositories when
-  generated clients share the same relative file path and line number.
-
-- Route tracing now keeps framework-specific discovery behind the stable `route-tools` facade
-  and correctly handles repeated Express routes, nested Ktor prefixes, separated NestJS
-  decorators, Yii2 rule verbs, escaped Mermaid labels, and Django class-based views.
 
 - **Repositories over ~100k symbols could never be embedded — not once.** `batchEmbed` copied its
   work queue with `toEmbed.push(...stillToEmbed)`, spreading one argument per symbol onto the call
@@ -126,6 +155,7 @@ that is right about a bug is not a fix.
 
 - **`prune` trusted a registry that had lost track of an index.** It now asks each index database who
   it is: a repository still present on disk can no longer be deleted because a JSON file forgot it.
+
 - **Telemetry: `N/A` is neither a verdict nor a skip.** zuvo's `append-retro` had no `N/A` in its
   blind-audit enum, so a skill with no blind-audit step could not answer truthfully — 108 of 164
   recorded verdicts (66%) came from skills that have no such step. zuvo v1.6.60 added `N/A`, but
