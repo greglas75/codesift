@@ -6,6 +6,9 @@ const DEFAULT_WORKSPACE_ENTRIES = [
   "index.ts", "index.tsx", "index.js",
 ] as const;
 const WORKSPACE_SOURCE_EXTENSION = /\.(astro|ts|tsx|js|jsx|mjs|cjs)$/;
+const RUNTIME_EXPORT_CONDITIONS = [
+  "import", "default", "require", "node",
+] as const;
 
 interface ParsedPackageJson {
   main?: string;
@@ -35,8 +38,9 @@ function pickConditionalEntry(root: unknown): string | null {
   if (typeof root === "string") return root;
   if (!root || typeof root !== "object") return null;
   const conditional = root as Record<string, unknown>;
-  for (const key of ["import", "default", "require"] as const) {
-    if (typeof conditional[key] === "string") return conditional[key];
+  for (const key of RUNTIME_EXPORT_CONDITIONS) {
+    const entry = pickConditionalEntry(conditional[key]);
+    if (entry) return entry;
   }
   return null;
 }
@@ -45,10 +49,16 @@ function pickEntry(pkg: ParsedPackageJson | null): string | null {
   if (!pkg) return null;
   if (typeof pkg.source === "string") return pkg.source;
   if (typeof pkg.exports === "string") return pkg.exports;
+  if (pkg.exports && typeof pkg.exports === "object") {
+    const exportsMap = pkg.exports as Record<string, unknown>;
+    const rootExport = exportsMap["."]
+      ?? (Object.keys(exportsMap).some((key) => key.startsWith(".")) ? null : exportsMap);
+    const exportedEntry = pickConditionalEntry(rootExport);
+    if (exportedEntry) return exportedEntry;
+  }
   if (typeof pkg.module === "string") return pkg.module;
   if (typeof pkg.main === "string") return pkg.main;
-  if (!pkg.exports || typeof pkg.exports !== "object") return null;
-  return pickConditionalEntry((pkg.exports as Record<string, unknown>)["."]);
+  return null;
 }
 
 export function resolveWorkspaceEntry(

@@ -107,6 +107,65 @@ describe("resolveWorkspaceEntry", () => {
       "packages/pkg/src/public.ts",
     );
   });
+
+  it("prefers object exports over legacy module and main entries", async () => {
+    const root = await workspaceRoot({
+      exports: { ".": { import: "./src/public.ts" } },
+      module: "./dist/module.js",
+      main: "./dist/main.js",
+    });
+    const files = new Set([
+      "packages/pkg/src/public.ts",
+      "packages/pkg/dist/module.js",
+      "packages/pkg/dist/main.js",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("supports flat conditional exports shorthand", async () => {
+    const root = await workspaceRoot({
+      exports: { import: "./src/public.ts", require: "./dist/public.cjs" },
+    });
+    const files = new Set(["packages/pkg/src/public.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/public.ts",
+    );
+  });
+
+  it("unwraps nested conditional exports", async () => {
+    const root = await workspaceRoot({
+      exports: { ".": { node: { import: "./src/node.ts" } } },
+    });
+    const files = new Set(["packages/pkg/src/node.ts"]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/node.ts",
+    );
+  });
+
+  it("does not select a types condition as the runtime entry", async () => {
+    const root = await workspaceRoot({
+      exports: {
+        ".": {
+          types: "./types/index.d.ts",
+          node: "./src/node.ts",
+        },
+      },
+    });
+    const files = new Set([
+      "packages/pkg/types/index.d.ts",
+      "packages/pkg/src/node.ts",
+    ]);
+
+    expect(resolveWorkspaceEntry(root, "packages/pkg", files, new Map())).toBe(
+      "packages/pkg/src/node.ts",
+    );
+  });
+
 });
 
 describe("relativeWorkspaceRoot", () => {
