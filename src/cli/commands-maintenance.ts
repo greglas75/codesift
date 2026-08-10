@@ -101,6 +101,10 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   // lost track of it. Re-registering also means the next lookup finds it.
   const rescued: string[] = [];
   const rescuedNames = new Set<string>();
+  // Databases prune could not classify — kept, but SAID so. Protecting them silently is the
+  // difference between "prune deleted nothing unexpected" and "prune is quietly accumulating
+  // files nobody can account for"; only the second is actionable, and only if it is reported.
+  const indeterminate: string[] = [];
   const protectedNames = new Set<string>();
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
@@ -163,7 +167,10 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       const code = (error as NodeJS.ErrnoException).code;
       // Only definite absence makes the database garbage. Any other I/O or
       // permission failure is inconclusive, so preserve this hash.
-      if (code !== "ENOENT" && code !== "ENOTDIR") live.add(m[1]);
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        live.add(m[1]);
+        indeterminate.push(name);
+      }
     } finally {
       try { db?.close(); } catch { /* already closed */ }
     }
@@ -255,6 +262,8 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   }
 
   output({
+    indeterminate_databases: indeterminate.length,
+    indeterminate_examples: indeterminate.slice(0, 5),
     rescued_repos: rescued.length,
     rescued_examples: rescued.slice(0, 5),
     stale_repos: stale.length,

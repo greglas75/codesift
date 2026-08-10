@@ -18,14 +18,7 @@
  *
  * Usage:  node scripts/repair-registry.mjs [--apply]     (default: dry run)
  */
-import {
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  readdirSync,
-  copyFileSync,
-  renameSync,
-} from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -45,18 +38,16 @@ for (const [name, meta] of Object.entries(repos)) {
 
 /** Read a database's own idea of who it is. Authoritative — it was written by the indexer. */
 function describeDb(file) {
-  let db;
   try {
-    db = new DatabaseSync(`file:${file}?mode=ro`, { open: true });
+    const db = new DatabaseSync(`file:${file}?mode=ro`, { open: true });
     const meta = Object.fromEntries(db.prepare("SELECT key, value FROM meta").all().map((r) => [r.key, r.value]));
     const symbols = db.prepare("SELECT COUNT(*) AS n FROM symbols").get()?.n ?? 0;
     const files = db.prepare("SELECT COUNT(*) AS n FROM files").get()?.n ?? 0;
+    db.close();
     if (!meta["repo"] || !meta["root"]) return null;
     return { repo: meta["repo"], root: meta["root"], symbols, files, updated_at: Number(meta["updated_at"] ?? 0) };
   } catch {
     return null; // not a codesift index, or unreadable — never a reason to guess
-  } finally {
-    try { db?.close(); } catch { /* already closed */ }
   }
 }
 
@@ -94,17 +85,29 @@ if (!APPLY) {
   process.exit(0);
 }
 
+const deadNames = new Set(deadRoots.map((entry) => entry.name));
+const candidatesByRepo = new Map();
+for (const orphan of orphans) {
+  const candidates = candidatesByRepo.get(orphan.repo) ?? [];
+  candidates.push(orphan);
+  candidatesByRepo.set(orphan.repo, candidates);
+}
+
+// A healthy registry owner must never be displaced by a detached database
+// carrying the same legacy name. When the existing owner is dead or absent,
+// repair only a single unambiguous candidate; filesystem iteration order is
+// not a sound way to choose between two live checkouts.
+const repairs = [];
+for (const [repo, candidates] of candidatesByRepo) {
+  if ((repos[repo] && !deadNames.has(repo)) || candidates.length !== 1) continue;
+  repairs.push(candidates[0]);
+}
+
 const backup = `${REGISTRY}.bak-${Date.now()}`;
 copyFileSync(REGISTRY, backup);
 
 for (const d of deadRoots) delete repos[d.name];
-let registered = 0;
-const rankedOrphans = [...orphans].sort((a, b) =>
-  b.updated_at - a.updated_at || b.symbols - a.symbols || a.file.localeCompare(b.file));
-for (const o of rankedOrphans) {
-  // A live entry wins over an orphan with the same logical name. Replacing it
-  // would merely move the orphan problem to the healthy index we displaced.
-  if (repos[o.repo]) continue;
+for (const o of repairs) {
   repos[o.repo] = {
     name: o.repo,
     root: o.root,
@@ -117,13 +120,10 @@ for (const o of rankedOrphans) {
     file_count: o.files,
     updated_at: o.updated_at || Date.now(),
   };
-  registered++;
 }
 registry.repos = repos;
 registry.updated_at = Date.now();
-const tmp = `${REGISTRY}.tmp-${process.pid}-${Date.now()}`;
-writeFileSync(tmp, JSON.stringify(registry), "utf-8");
-renameSync(tmp, REGISTRY);
+writeFileSync(REGISTRY, JSON.stringify(registry), "utf-8");
 
 console.log(`\nbackup: ${backup}`);
-console.log(`removed ${deadRoots.length}, re-registered ${registered}, now ${Object.keys(repos).length} entries`);
+console.log(`removed ${deadRoots.length}, re-registered ${repairs.length}, now ${Object.keys(repos).length} entries`);

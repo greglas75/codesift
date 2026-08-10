@@ -347,8 +347,10 @@ per-repo format gets the 5.3× with none of the above.
 ### Option C: Fixed-width float32 records, per repo, no shared dependency ← **CHOSEN**
 
 **Architecture:** `<hash>.embeddings.f32` — header (magic, version, model, dimensions, count,
-checksum), an id table, then `count × dimensions × 4` bytes of contiguous float32 at a fixed
-stride. Written tmp + `rename`, the path `saveEmbeddings` already uses.
+whole-file checksum), an id table, then `count × dimensions × 4` bytes of contiguous float32 at a
+fixed stride. Written tmp + fsync + `rename`, extending the path `saveEmbeddings` already uses. The
+checksum covers the header metadata, id table and vector payload; a mismatch invalidates the whole
+file because there is no per-record checksum.
 
 | dimension | assessment |
 |---|---|
@@ -506,11 +508,14 @@ un-embedded symbols would fit the budget if embedded.
 
 **Positive**
 
-- Disk drops 5.3× on every live byte, round trip verified bit-exact — no quality change, by
-  construction. On the 5.77 GB that is currently reachable that is ~4.7 GB; on the 2,226,275
-  symbols not yet embedded it is the difference between 36.4 GB and 6.8 GB.
-- First load per process drops from 45.4–96.7 µs/vector to a proxy-measured 7.4 µs — 3–10 s off the
-  first semantic question of each agent session on the larger repos.
+- The new encoding is 5.3× smaller per live vector, round trip verified bit-exact — no quality
+  change, by construction. On the 5.77 GB that is currently reachable that is ~4.7 GB of eventual
+  savings; on the 2,226,275 symbols not yet embedded it is the difference between 36.4 GB and
+  6.8 GB. During rollback retention both formats coexist, so migrated data temporarily occupies
+  about 1.19× the ndjson-only size; savings are realised only after explicit legacy cleanup.
+- First load per process is expected to drop from 45.4–96.7 µs/vector toward the proxy-measured
+  7.4 µs — potentially 3–10 s off the first semantic question on larger repos. A direct per-repo
+  reader benchmark is a Stage 2 ship gate, not a result claimed by this ADR.
 - Blast radius is unchanged and stays partitioned per repo: 437,226 vectors worst case, not the
   whole corpus.
 - Migration re-reads; it does not re-embed. The 27.6 h figure stays hypothetical.
@@ -518,8 +523,8 @@ un-embedded symbols would fit the budget if embedded.
 
 **Negative**
 
-- A hand-rolled binary format is ours to version, validate and debug. **Rejecting D is where this
-  ADR is most exposed**, and it is rejected without a direct measurement.
+- A hand-rolled binary format is ours to version, validate and debug. **Deferring D is where this
+  ADR is most exposed**, and it is deferred without a direct measurement.
 - Fixed-width binary turns a corrupt byte from "one skipped line" into "one silently wrong vector".
   The header checksum is a mitigation, not a cure — it detects the file, not the record.
 - Two on-disk formats coexist through the migration, and the ndjson reader stays for rollback.
@@ -538,12 +543,16 @@ un-embedded symbols would fit the budget if embedded.
 
 ## Rollback
 
-`CODESIFT_EMBEDDING_FORMAT=ndjson|f32`, mirroring `CODESIFT_INDEX_BACKEND` from ADR-003. Unset
-auto-detects by file extension; `=ndjson` forces the legacy reader; `=f32` forces the new one and
-**fails loudly** rather than silently falling back, so CI cannot test the wrong path — the same
-rule ADR-003 adopted, and the direct lesson of a format whose every failure mode to date has been
-a silent `null`.
+`CODESIFT_EMBEDDING_FORMAT=ndjson|f32`, mirroring `CODESIFT_INDEX_BACKEND` from ADR-003. `=ndjson`
+forces the legacy reader. `=f32` forces the new reader and **fails loudly** on a missing, truncated
+or checksum-invalid file, so CI cannot test the wrong path. When unset and both files exist, the
+reader uses `.f32` only after its header, length and whole-file checksum validate; otherwise it logs
+the failure and falls back to `.ndjson`. This precedence is deterministic during partial migration.
 
-Migration **never deletes** the source `.ndjson`, exactly as ADR-003 retains `<hash>.json`.
-Reverting is: set the env var, restart. It costs disk during the transition, which is the correct
-price for a rollback that cannot cost 27.6 h of model time.
+Migration writes `.f32.tmp`, flushes and fsyncs it, validates it with the production reader, then
+atomically renames it. A missing or invalid final file is simply resumable from the retained source.
+Migration itself **never deletes** `.ndjson`, exactly as ADR-003 retains `<hash>.json`; this means
+temporary dual storage is an explicit rollback cost, not an immediate disk saving. After a
+checksum-validated `.f32` has survived an operator-defined retention window and a recoverable backup
+exists, a separate opt-in cleanup may remove its `.ndjson`. Until then reverting is: set the env var
+and restart, without paying the 27.6 h re-embedding cost.

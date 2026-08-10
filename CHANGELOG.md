@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Storage: index APIs now reject SQLite database and sidecar paths (`.db`, `-wal`, `-shm`,
+  `-journal`, case-insensitively) instead of silently deriving a second `.db` path; cache and
+  migration state were also split from `index-store.ts` behind its existing public facade.
 - PHP symbol extraction now keeps semicolon-namespace parents, emits every field in multi-property
   declarations with its own source range, preserves stacked attribute order, and deduplicates
   PHPDoc members using PHP's field/method naming rules.
