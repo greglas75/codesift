@@ -45,6 +45,22 @@ export interface Level1Retro {
   median_files_modified: number;
   blind_audit_ran: number;
   adversarial_ran: number;
+  /**
+   * Gate outcomes that are NOT a verdict and NOT a skip: the skill has no such
+   * step at all.
+   *
+   * Without these the correction that produced them is unreadable at the far end.
+   * `gateRan` stopped counting `N/A` as a verdict, which is right, but if only the
+   * `_ran` counters ship then a population of skills that never had a blind audit
+   * looks identical to one that has a blind audit and skips it — the metric falls
+   * and the reason is unrecoverable. 108 of 164 recorded verdicts came from skills
+   * with no such step, so this is most of the signal, not an edge case.
+   *
+   * It reveals strictly less than `_ran` does: that a SKILL has no gate is a
+   * property of the skill, and which skill ran is already sent.
+   */
+  blind_audit_na: number;
+  adversarial_na: number;
 }
 
 export interface Level1ToolMetric {
@@ -111,6 +127,8 @@ function pickRetro(r: RetroAggregate): Level1Retro {
     median_files_modified: r.median_files_modified,
     blind_audit_ran: r.blind_audit_ran,
     adversarial_ran: r.adversarial_ran,
+    blind_audit_na: r.blind_audit_na,
+    adversarial_na: r.adversarial_na,
   };
 }
 
