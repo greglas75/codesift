@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { CodeSymbol } from "../../src/types.js";
+import { getParser } from "../../src/parser/parser-manager.js";
 import { resolveConstantValue } from "../../src/tools/constant-resolution-tools.js";
 import { resolveTypeScriptConstantValue } from "../../src/tools/typescript-constants-tools.js";
 import { disposeTypeScriptFileContexts } from "../../src/tools/typescript-constants/file-context.js";
@@ -202,6 +203,37 @@ export function fetch(url = DEFAULT_URL, retries = CONFIG.retries, enabled = fal
     expect(deleteTree).toHaveBeenCalledOnce();
   });
 
+  it("resolves default parameters from captured arrow-function source", async () => {
+    const parser = await getParser("typescript");
+    if (!parser) throw new Error("TypeScript parser unavailable in test");
+    const symbol = {
+      id: "repo:src/api.ts:fetch:1",
+      repo: "repo",
+      name: "fetch",
+      kind: "function",
+      file: "src/api.ts",
+      start_line: 1,
+      end_line: 1,
+      source: "export const fetch = (retries = 3) => retries",
+    } satisfies CodeSymbol;
+    const state = { parser } as unknown as ResolutionState;
+
+    const result = await resolveFunctionDefaults(symbol, state);
+
+    expect(result).toMatchObject({
+      language: "typescript",
+      resolved: true,
+      default_parameters: [{
+        name: "retries",
+        resolved: true,
+        value_kind: "integer",
+        value: 3,
+        confidence: "high",
+        alias_chain: [],
+      }],
+    });
+  });
+
   it("releases cached syntax trees when a resolution run completes", () => {
     const deleteTree = vi.fn();
     const state = {
@@ -275,6 +307,20 @@ export const C = b.B
     expect(result.matches[0]).toMatchObject({
       resolved: false,
       reason: "Max resolution depth (1) exceeded",
+    });
+  });
+
+  it("allows a direct binding at the exact max_depth boundary", async () => {
+    const repo = await writeFixture({
+      "src/direct.ts": "export const DIRECT = 1\n",
+    });
+
+    const result = await resolveTypeScriptConstantValue(repo, "DIRECT", { max_depth: 0 });
+
+    expect(result.matches[0]).toMatchObject({
+      resolved: true,
+      value_kind: "integer",
+      value: 1,
     });
   });
 });
