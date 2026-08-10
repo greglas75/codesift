@@ -99,7 +99,7 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
       ? findStaticSlash(trimmed, 2)
       : leadingInterpolation
         ? findStaticSlash(trimmed, 0)
-        : 0;
+        : findStaticSlash(trimmed, 0);
 
   if (firstSlashIdx === -1) {
     // No static path segment at all
@@ -127,7 +127,7 @@ function extractUrlPrefix(rawUrlContent: string): { url_prefix: string; partial:
   // The result is partial when:
   // - there was a leading interpolation (firstSlashIdx > 0 means content before the slash)
   // - or the prefix ends at an interpolation (hitInterp)
-  return { url_prefix: prefix, partial: leadingInterpolation || Boolean(scheme) || protocolRelative || hitInterp };
+  return { url_prefix: prefix, partial: leadingInterpolation || hitInterp };
 }
 
 /**
@@ -149,6 +149,15 @@ function sniffFetchMethodFromWindow(window: string): string {
     while (/\s/.test(window[index] ?? "")) index++;
     return index;
   };
+  const readMethodValue = (colon: number): string | null => {
+    if (window[colon] !== ":") return null;
+    const valueStart = skipWhitespace(colon + 1);
+    const quote = window[valueStart];
+    if (quote !== "'" && quote !== '"' && quote !== "`") return null;
+    const valueEnd = skipQuoted(valueStart);
+    const value = window.slice(valueStart + 1, valueEnd - 1);
+    return /^[A-Za-z]+$/.test(value) ? value.toUpperCase() : null;
+  };
 
   for (let index = 0; index < window.length;) {
     const char = window[index]!;
@@ -164,7 +173,12 @@ function sniffFetchMethodFromWindow(window: string): string {
       continue;
     }
     if (char === "'" || char === '"' || char === "`") {
-      index = skipQuoted(index);
+      const keyEnd = skipQuoted(index);
+      if (window.slice(index + 1, keyEnd - 1) === "method") {
+        const method = readMethodValue(skipWhitespace(keyEnd));
+        if (method) return method;
+      }
+      index = keyEnd;
       continue;
     }
     if (window.startsWith("method", index)) {
@@ -172,13 +186,8 @@ function sniffFetchMethodFromWindow(window: string): string {
       const after = window[index + 6] ?? "";
       if (!/[A-Za-z0-9_$]/.test(before) && !/[A-Za-z0-9_$]/.test(after)) {
         const colon = skipWhitespace(index + 6);
-        const valueStart = skipWhitespace(colon + 1);
-        const quote = window[valueStart];
-        if (window[colon] === ":" && (quote === "'" || quote === '"')) {
-          const remainder = window.slice(valueStart + 1);
-          const value = remainder.match(/^([A-Za-z]+)/);
-          if (value && remainder[value[1]!.length] === quote) return value[1]!.toUpperCase();
-        }
+        const method = readMethodValue(colon);
+        if (method) return method;
       }
     }
     index++;
@@ -228,7 +237,7 @@ function findFetchCallEnd(source: string, start: number): number {
       return index;
     }
   }
-  return source.length;
+  return start;
 }
 
 /**

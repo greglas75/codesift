@@ -806,7 +806,22 @@ describe("extractOutboundCalls — bounded fetch options", () => {
   it("extracts the path after a dynamic host in an absolute template URL", () => {
     const calls = extractOutboundCalls("fetch(`https://${host}/api/users`)", "f.ts");
 
-    expect(calls[0]).toMatchObject({ url_prefix: "/api/users", partial: true });
+    expect(calls[0]).toMatchObject({ url_prefix: "/api/users", partial: false });
+  });
+
+  it("keeps the path exact when only an absolute URL query is dynamic", () => {
+    const calls = extractOutboundCalls(
+      "fetch(`https://api.example.com/users?filter=${value}`)",
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ url_prefix: "/users", partial: false });
+  });
+
+  it("starts a relative interpolated prefix at its first path slash", () => {
+    const calls = extractOutboundCalls("fetch(`v1/api/${version}/users`)", "f.ts");
+
+    expect(calls[0]).toMatchObject({ url_prefix: "/api/", partial: true });
   });
 
   it("ignores method-shaped text in fetch options", () => {
@@ -825,6 +840,21 @@ describe("extractOutboundCalls — bounded fetch options", () => {
     );
 
     expect(calls[0]).toMatchObject({ method: "GET" });
+  });
+
+  it("recognizes a quoted fetch method property", () => {
+    const calls = extractOutboundCalls(`fetch("/users", { "method": "POST" })`, "f.ts");
+
+    expect(calls[0]).toMatchObject({ method: "POST" });
+  });
+
+  it("defaults an unterminated fetch to GET instead of scanning later calls", () => {
+    const calls = extractOutboundCalls(
+      `fetch("/broken", { headers: {}\nfetch("/later", { method: "POST" })`,
+      "f.ts",
+    );
+
+    expect(calls[0]).toMatchObject({ url_prefix: "/broken", method: "GET" });
   });
 });
 
