@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 
@@ -12,7 +12,14 @@ const prismaAstEsm = fileURLToPath(
 const [nodeMajor = 0, nodeMinor = 0] = process.versions.node.split(".").map(Number);
 // `node:sqlite` arrived behind --experimental-sqlite in 22.5 and became
 // available without the flag in 22.13.
-const supportsNativeSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 13);
+const sqliteExperimentalFlag = [
+  ...process.execArgv,
+  ...(process.env["NODE_OPTIONS"] ?? "").split(/\s+/),
+].includes("--experimental-sqlite");
+const supportsNativeSqlite =
+  nodeMajor > 22 ||
+  (nodeMajor === 22 && nodeMinor >= 13) ||
+  (nodeMajor === 22 && nodeMinor >= 5 && sqliteExperimentalFlag);
 const nativeSqliteTests = [
   "tests/cli/prune-rescue-collision.test.ts",
   "tests/storage/index-backend-migration.test.ts",
@@ -104,7 +111,9 @@ export default defineConfig({
           // `node:sqlite` is unavailable before 22.13. Keep the compatibility
           // lane useful by running the rest of the suite there. Omit `exclude`
           // entirely on newer runtimes so Vitest retains its default exclusions.
-          ...(supportsNativeSqlite ? {} : { exclude: nativeSqliteTests }),
+          ...(supportsNativeSqlite
+            ? {}
+            : { exclude: [...configDefaults.exclude, ...nativeSqliteTests] }),
           environment: "node",
           // `forks`, not `vmForks`. Same isolation for this suite, about half
           // the wall clock (~80s -> ~45s), and the prisma-ast/chevrotain tests
