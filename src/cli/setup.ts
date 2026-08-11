@@ -15,12 +15,13 @@ import {
   ensureCodesiftDefaultToolsApprovalApprove,
 } from "./setup/codex.js";
 import { setupCursor } from "./setup/cursor.js";
+import { setupKimi } from "./setup/kimi.js";
 import { setupAntigravity, setupGemini, setupGeminiHooks } from "./setup/gemini.js";
 import { buildJsonServerEntry, daemonHttpUrl } from "./setup/mcp.js";
 import { installGlobalClaudeMd, installRules } from "./setup/rules.js";
 import type { InstallRulesResult, SetupOptions, SetupResult } from "./setup/types.js";
 
-export const SUPPORTED_PLATFORMS = ["codex", "claude", "cursor", "gemini", "antigravity"] as const;
+export const SUPPORTED_PLATFORMS = ["codex", "claude", "cursor", "gemini", "antigravity", "kimi"] as const;
 export type Platform = (typeof SUPPORTED_PLATFORMS)[number];
 export type { InstallRulesResult, SetupOptions, SetupResult } from "./setup/types.js";
 
@@ -43,6 +44,7 @@ const PLATFORM_HANDLERS: Record<
   codex: setupCodex,
   claude: setupClaude,
   cursor: setupCursor,
+  kimi: setupKimi,
   gemini: setupGemini,
   antigravity: setupAntigravity,
 };
