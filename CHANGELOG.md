@@ -2,6 +2,64 @@
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-08-12
+
+### Fixed
+
+- **Local embeddings no longer disappear during a successful install.** On linux/x64
+  `onnxruntime-node`'s install step looks for `nvcc`, **assumes CUDA 12** when it finds none, and
+  downloads a multi-hundred-MB GPU build from GitHub releases. When that download fails, npm drops
+  it together with the optional `@huggingface/transformers` — and **exits 0**. The user is left with
+  a clean install, no GPU, no local embeddings, and nothing pointing at the cause until a semantic
+  query fails much later. Measured on a Linux x64 host: 238 installed packages → 207, `Error: socket
+  hang up`; one run lost the package with no prompting at all.
+
+  The postinstall now detects this and repairs it: it reinstalls the package with
+  `--onnxruntime-node-install-cuda=skip`, so the GPU download is not attempted again, and reports
+  the result. npm gives a package no way to configure a transitive dependency's install script up
+  front — each script is spawned from npm's own environment, and ours runs after — so repairing
+  afterwards is the only lever that exists from inside the package. It runs only in the failure
+  case, and every path exits 0: a diagnostic that can fail `npm install` is worse than the problem
+  it reports. Success is judged by importing the package in a fresh process, never by npm's exit
+  code, because npm exits 0 exactly when it drops a failed optional package. Where the repair
+  cannot run, the message names the cause, the one-line fix, and the blast radius — semantic search
+  alone; search, symbols and analysis are unaffected. Unaffected platforms stay silent: macOS,
+  Windows and linux/arm64 never attempt the download.
+
+- **An optional dependency stopped being a mandatory build dependency.** `tsc` resolved the
+  `@huggingface/transformers` specifier in `reranker.ts` and `semantic.ts`, so the package being
+  absent failed the *build* — even though both call sites already treat it as optional at runtime
+  (each import sits in a `try`, is cast to `any`, and falls back). It contributed no type
+  information; the only thing a statically-resolvable specifier bought was TS2307. Consequence: no
+  dependency or security bump could be validated in CI at all, because any lockfile edit forces a
+  fresh install that can land without the package.
+
+- **`find_references` stopped reporting its busiest path as empty.** `extractResultChunks` matched
+  `references` only as an array, but the batch path returns `Record<name, Reference[]>`, so it fell
+  through to `0`. That did not read as an unrecognised shape — it read as "the tool found nothing",
+  and `empty_result_rate` derives from this number and ships in the telemetry payload. 922 of 1,216
+  successful calls logged zero while carrying a **median of 2,076 result tokens**, against 232 for
+  the calls counted as non-empty: the bucket labelled *found nothing* was ten times the size of the
+  other. Rows written before this release keep the artifact.
+
+- **Reranker and local-embedding messages no longer advise repeating the step that just failed.**
+  Both said "Install @huggingface/transformers" on every platform; on linux/x64 a plain install
+  re-runs the same postinstall and drops the package again.
+
+### Security
+
+- **js-yaml 4.3.0 → 4.3.1** (CVE-2026-59870, high): quadratic CPU consumption in `!!omap`
+  resolution. Transitive and runtime-scoped, so it shipped to users. Satisfies the existing range —
+  lockfile only.
+
+### Documentation
+
+- **How to read the error telemetry.** Rows are keyed by day and installs report months of history,
+  so summing without slicing keeps a *closed* defect reading as live forever: an all-time sum said
+  `find_and_show` was failing at 14.1% (one narrower cut read 69.7%) when it had been at 0/100 since
+  the case-insensitive repo-key fix in July. Slice by `codesift_ver` **and** `day`; a defect is live
+  only on the current version within the last ~14 days.
+
 ## [0.15.1] — 2026-08-10
 
 ### Fixed
