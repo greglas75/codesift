@@ -312,6 +312,80 @@ its own: a GUI app launched before `launchctl setenv` never sees it, which is
 why 1,109 of 1,370 calls on 2026-07-30 were still tagged `Mac` despite the
 LaunchAgent being in place since 16 July.
 
+## Reading the error telemetry — slice by version AND day, or you chase closed bugs
+
+Per-tool rows are keyed by `day`, and installs report historical days going back months. Summing
+them without slicing makes a **fixed** defect read as a live error rate forever. Measured
+2026-08-12 while investigating `find_and_show`:
+
+| slice | find_and_show error rate |
+|---|---|
+| all days, all versions | 14.1% (292/2067) — and one narrower cut read 69.7% |
+| by version | v0.9.10 20.8% · v0.10.1 11.1% · **v0.10.2+ 0/49** |
+| by day-of-data | Apr 0/8 · May 0/8 · Jun 0/15 · **Jul 292/2033** · Aug 0/3 |
+
+Every error in the corpus predates `974f92c` (2026-07-16), which made `getBM25Index` resolve repo
+names case-insensitively. Local `usage.jsonl` agrees: 73/606 before, **0/100 after**;
+`get_context_bundle` 14/149 → 0/36. The tell that it was a name-resolution fault and not a broken
+tool: under the very same repo string (`local/Rewards-API`), `get_file_outline` was 431/431 green
+while the three BM25-backed tools were 0/84 — code-index tools resolved the name, the BM25 getter
+did not. **A defect is live only if it appears on the current version within the last ~14 days.**
+
+Three things the log cannot tell you, all of which cost a full investigation:
+
+- **`error: true` is a boolean.** `usage-tracker.ts:419` says "resultText is the error message", and
+  it is — but only its *length* is used (`result_tokens`). The text never reaches the entry
+  (line 450), so the error CLASS is unrecoverable after the fact.
+- **`repo` on an errored call is not the repo that failed.** `resolveToolRepoArgs` injects a
+  CWD-derived `repo` into every tool not in `TOOLS_WITHOUT_REPO` — including `index_file`, whose
+  handler takes only `path` and ignores it. So "210 `index_file` errors in tgm-survey-platform"
+  means *sessions whose cwd was that repo*, not *files of that repo*.
+- **`args_summary` omits the argument that failed.** For `index_file` it carries `repo` and not
+  `path`.
+
+What is left to diagnose with: `elapsed_ms` (a ~2–3 ms failure is a fast pre-flight throw; a slow
+one is a crash after the index loaded), the day/version slice, and reproducing the call.
+
+### `index_file` fast-throw surface (the current top live error, 8.8% / 289 calls / 5 installs)
+
+Three ways it fails in ~3 ms, indistinguishable in the log:
+1. `No indexed repo contains "<abs>"` — the path is outside every registered root. The PostToolUse
+   hook fires on **every** Write/Edit, including scratchpads and `~/.claude`, so this is expected
+   traffic, not a fault.
+2. **Unguarded `stat` (`file-indexer.ts:79`)** — a missing path escapes as a raw
+   `ENOENT: no such file or directory, stat '<abs>'`. Verified by direct call 2026-08-12.
+3. `Failed to parse "<rel>"` — `parseOneFile` wraps its whole body in `try` and returns `null` on
+   any throw, so unrelated faults surface under one message. Unsupported file types are NOT this:
+   `biome.json` indexes fine (`symbol_count: 0, skipped`).
+
+Deletion is the gap worth noting: `handleFileDelete` lives in the **watcher** only. `index_file` —
+the path agents are told to use, and the one the CLI hook (`codesift postindex-file`, a fresh
+process with no watcher) takes — has no deletion branch, so a removed file throws ENOENT instead of
+being pruned from the index.
+
+### The git-diff family fails on an unregistered worktree path (live, ~11%)
+
+`resolveExplicitRepoInput` (`storage/registry.ts`) resolves an absolute `repo` to **any registered
+repo that is an ancestor of it**, longest root winning. An unregistered worktree therefore binds to
+its parent checkout, and `diffOutline`/`changedSymbols`/`impactAnalysis`/`reviewDiff` all run
+`runGitDiff(index.root, …)` — i.e. `git` executes in the parent, where a worktree-branch ref does
+not resolve. Post-`974f92c` rates, local, split by whether `repo` was a path or a registry name:
+
+| tool | path-as-repo | name-as-repo |
+|---|---|---|
+| `changed_symbols` | 10.1% (15/149) | 3.9% |
+| `diff_outline` | 11.3% (17/150) | 2.4% |
+| `impact_analysis` | 11.3% (25/221) | 5.8% |
+| `review_diff` | 11.3% (22/195) | 3.1% |
+
+All four landing within 1.2 points of each other is the signature of one shared resolver, not four
+bugs. **Absolute paths are not the problem in general** — across all tools they error at 1.5%
+(132/8805), *below* registry names at 2.0%; the fault is specific to ancestor-binding plus git.
+For index-reading tools this is the familiar H19 (a confidently wrong answer about someone else's
+tree); for the git tools it is a hard `Git diff failed: …` that never names the real cause.
+`trace_call_chain` is the opposite shape — 15.8% on names vs 9.3% on paths, consistent with
+"symbol not in index" rather than a resolution fault — so do not fold it into this cluster.
+
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.
 - **Stdio server exits on client disconnect (`server.ts`)**: the MCP stdio server exits on transport-close / stdin-EOF / SIGTERM. Before this, a dead Claude/Codex left the server orphaned under launchd forever, holding 1–4 GB each — the root cause of "codesift is killing my machine" (one box had 51 procs / 30 GB / 202% CPU). The HTTP daemon (`codesift serve`) is unaffected (stdin handlers are stdio-only).
