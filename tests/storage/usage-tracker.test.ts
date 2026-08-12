@@ -97,4 +97,30 @@ describe("extractResultChunks", () => {
     expect(extractResultChunks({ results: [1, 2] })).toBe(2);
     expect(extractResultChunks({ matches: [] })).toBe(0);
   });
+
+  // find_references' batch path keys `references` by symbol name instead of returning an array.
+  // The Array.isArray branch missed that shape and the whole call fell through to 0, so the
+  // busiest path of a high-traffic tool logged "found nothing" on every call — and
+  // empty_result_rate, which is derived from this number and shipped in the L1 payload, carried
+  // the fiction outward. Counting zero for a result that is merely shaped differently is worse
+  // than not measuring it, because nothing about the number says it is unmeasured.
+  it("counts find_references' batch shape (references keyed by symbol name)", () => {
+    expect(
+      extractResultChunks({
+        references: { alpha: [1, 2, 3], beta: [4] },
+        scan_coverage: { status: "unknown" },
+      }),
+    ).toBe(4);
+  });
+
+  it("still reports 0 when a batch scan genuinely found nothing", () => {
+    // The distinction the old code destroyed: a real miss and an unrecognised shape must not
+    // produce the same number.
+    expect(extractResultChunks({ references: {}, scan_coverage: { status: "complete" } })).toBe(0);
+    expect(extractResultChunks({ references: { alpha: [], beta: [] } })).toBe(0);
+  });
+
+  it("keeps the array shape working for the single-symbol path", () => {
+    expect(extractResultChunks({ references: [1, 2, 3] })).toBe(3);
+  });
 });

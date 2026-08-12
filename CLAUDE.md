@@ -346,6 +346,14 @@ Three things the log cannot tell you, all of which cost a full investigation:
 What is left to diagnose with: `elapsed_ms` (a ~2–3 ms failure is a fast pre-flight throw; a slow
 one is a crash after the index loaded), the day/version slice, and reproducing the call.
 
+**`empty_result_rate` before 2026-08-12 is wrong for `find_references`** — do not read historical
+rows for it. It derives from `result_chunks === 0`, and `extractResultChunks` matched
+`references` only as an ARRAY while the batch path returns `Record<name, Reference[]>`, so every
+batch call logged 0. The tell that this was a shape miss and not a real miss: the "empty" calls
+carried a median of 2,076 result tokens against 232 for the "non-empty" ones — the bucket labelled
+*found nothing* was ten times the size of the other. Fixed in `extractResultChunks`; entries
+already written keep the artifact.
+
 ### `index_file` fast-throw surface (the current top live error, 8.8% / 289 calls / 5 installs)
 
 Three ways it fails in ~3 ms, indistinguishable in the log:

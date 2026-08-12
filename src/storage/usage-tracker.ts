@@ -310,6 +310,21 @@ export function extractResultChunks(data: unknown): number {
     if (Array.isArray(obj["files"])) return obj["files"].length;
     if (Array.isArray(obj["matches"])) return obj["matches"].length;
     if (Array.isArray(obj["references"])) return obj["references"].length;
+    // find_references' BATCH path returns `references` as a Record<name, Reference[]>, not an
+    // array — so the Array.isArray branch above missed it and every batch call fell through to
+    // `return 0`. That did not read as "the extractor missed a shape", it read as "the tool
+    // found nothing": 922 of 1,216 successful calls logged result_chunks=0 while carrying a
+    // MEDIAN of 2,076 result tokens, against 232 for the calls counted as non-empty. The
+    // derived empty_result_rate — which ships in the L1 telemetry payload — therefore reported
+    // ~76% misses for the tool's busiest path, all of them fictional.
+    const refs = obj["references"];
+    if (typeof refs === "object" && refs !== null) {
+      let total = 0;
+      for (const value of Object.values(refs as Record<string, unknown>)) {
+        if (Array.isArray(value)) total += value.length;
+      }
+      return total;
+    }
     if (Array.isArray(obj["repos"])) return obj["repos"].length;
 
     // single item results
