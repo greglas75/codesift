@@ -35,3 +35,24 @@ export async function importTransformers(): Promise<any> {
   const spec: string = SPECIFIER;
   return await import(spec);
 }
+
+/**
+ * How to actually get the package back, phrased for the platform the caller is on.
+ *
+ * On linux/x64 "just install @huggingface/transformers" is advice to repeat the step that already
+ * failed: the plain install re-runs onnxruntime-node's postinstall, re-attempts the same CUDA
+ * download, and drops the package again. The flag is the part that changes the outcome, so it is
+ * the part the message has to carry.
+ */
+export function localEmbeddingRemedy(
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string {
+  if (platform === "linux" && arch === "x64") {
+    return "Reinstall with `npm install -g codesift-mcp --onnxruntime-node-install-cuda=skip`"
+      + " (a plain install retries the CUDA download that removed it), or set"
+      + " CODESIFT_VOYAGE_API_KEY / CODESIFT_OPENAI_API_KEY to use a remote provider.";
+  }
+  return "Install @huggingface/transformers, or set CODESIFT_VOYAGE_API_KEY /"
+    + " CODESIFT_OPENAI_API_KEY to use a remote provider.";
+}

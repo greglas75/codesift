@@ -1,5 +1,5 @@
 import type { CodeSymbol, SearchResult } from "../types.js";
-import { importTransformers } from "./optional-transformers.js";
+import { importTransformers, localEmbeddingRemedy } from "./optional-transformers.js";
 import { StaticEmbeddingProvider } from "./static-embedding-provider.js";
 
 const MAX_SYMBOL_SOURCE_CHARS = 200;
@@ -536,7 +536,7 @@ async function loadLocalPipeline(model: string): Promise<FeatureExtractor | null
     if (!localLoadWarned) {
       localLoadWarned = true;
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[codesift] Local embedding model ${model} unavailable: ${message}. Install @huggingface/transformers or set CODESIFT_VOYAGE_API_KEY/CODESIFT_OPENAI_API_KEY.`);
+      console.error(`[codesift] Local embedding model ${model} unavailable: ${message}. ${localEmbeddingRemedy()}`);
     }
     return null;
   }
