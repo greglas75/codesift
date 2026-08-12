@@ -24,6 +24,13 @@
 const SPECIFIER = "@huggingface/transformers";
 
 /**
+ * The package name, for callers that need to name it WITHOUT writing it in a position `tsc` would
+ * resolve (a subprocess probe, an error message). Exporting it keeps the guard in
+ * tests/search/optional-transformers.test.ts strict: no other module has to spell the literal.
+ */
+export const TRANSFORMERS_SPECIFIER = SPECIFIER;
+
+/**
  * Import the optional transformers package. Throws when it is not installed — callers already
  * handle that, and turning it into `null` here would only move the crash to the first property
  * access.

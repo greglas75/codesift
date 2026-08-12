@@ -8,7 +8,7 @@
 // download is actually attempted, and it names the flag — because on linux/x64 the obvious advice
 // ("install the package") is advice to repeat the step that just failed.
 import { describe, it, expect } from "vitest";
-import { embeddingInstallNotice } from "../../src/install-check.js";
+import { embeddingInstallNotice, repairArgs, repairLocalEmbeddings } from "../../src/install-check.js";
 import { localEmbeddingRemedy } from "../../src/search/optional-transformers.js";
 
 describe("embeddingInstallNotice", () => {
@@ -61,5 +61,49 @@ describe("localEmbeddingRemedy", () => {
     for (const [p, a] of [["linux", "x64"], ["darwin", "arm64"]] as const) {
       expect(localEmbeddingRemedy(p, a)).toContain("CODESIFT_VOYAGE_API_KEY");
     }
+  });
+});
+
+describe("repairLocalEmbeddings", () => {
+  it("asks npm for the package with the flag that changes the outcome", () => {
+    const args = repairArgs("^3.0.0");
+    expect(args).toContain("--onnxruntime-node-install-cuda=skip");
+    expect(args).toContain("@huggingface/transformers@^3.0.0");
+    expect(args).toContain("--no-save");
+  });
+
+  it("reports success only when the package is importable afterwards", async () => {
+    // npm exits 0 when it DROPS a failed optional package — that is the very behaviour that put us
+    // here. Trusting the exit code would let the repair claim success on the exact failure it
+    // exists to undo, so the verdict comes from resolving the module, not from npm.
+    const repaired = await repairLocalEmbeddings({
+      run: async () => 0,
+      resolved: async () => false,
+      packageRoot: "/tmp",
+      version: "*",
+    });
+    expect(repaired).toBe(false);
+  });
+
+  it("reports success when the package resolves after the retry", async () => {
+    const repaired = await repairLocalEmbeddings({
+      run: async () => 0,
+      resolved: async () => true,
+      packageRoot: "/tmp",
+      version: "*",
+    });
+    expect(repaired).toBe(true);
+  });
+
+  it("treats a spawn failure as unrepaired rather than throwing into the install", async () => {
+    // Anything thrown here would surface as a failed `npm install -g codesift-mcp`. A diagnostic
+    // that can break the install is worse than the problem it reports.
+    const repaired = await repairLocalEmbeddings({
+      run: async () => { throw new Error("npm not on PATH"); },
+      resolved: async () => true,   // even so: no claim of success without a real attempt
+      packageRoot: "/tmp",
+      version: "*",
+    });
+    expect(repaired).toBe(false);
   });
 });

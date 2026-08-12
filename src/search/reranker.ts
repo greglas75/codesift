@@ -1,5 +1,5 @@
 import type { SearchResult, CodeChunk } from "../types.js";
-import { importTransformers } from "./optional-transformers.js";
+import { importTransformers, localEmbeddingRemedy } from "./optional-transformers.js";
 
 const DEFAULT_RERANK_TOP_N = 50;
 const DEFAULT_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2";
@@ -72,7 +72,7 @@ export async function rerankResults(
     if (!loadWarned) {
       loadWarned = true;
       console.error(
-        "[codesift] Cross-encoder reranking unavailable. Install @huggingface/transformers for improved search quality.",
+        `[codesift] Cross-encoder reranking unavailable (search quality only). ${localEmbeddingRemedy()}`,
       );
     }
     return results;
@@ -117,7 +117,7 @@ export async function rerankChunkIds(
     if (!loadWarned) {
       loadWarned = true;
       console.error(
-        "[codesift] Cross-encoder reranking unavailable. Install @huggingface/transformers for improved search quality.",
+        `[codesift] Cross-encoder reranking unavailable (search quality only). ${localEmbeddingRemedy()}`,
       );
     }
     return chunkIds;
