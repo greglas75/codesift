@@ -1,4 +1,5 @@
 import type { SearchResult, CodeChunk } from "../types.js";
+import { importTransformers } from "./optional-transformers.js";
 
 const DEFAULT_RERANK_TOP_N = 50;
 const DEFAULT_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2";
@@ -17,8 +18,8 @@ async function loadPipeline(model?: string): Promise<RerankerFn | null> {
   if (failedModels.has(modelName)) return null;
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const transformers = await import("@huggingface/transformers") as any;
+    // Optional dependency — see importTransformers for why the specifier is not static.
+    const transformers = await importTransformers();
     const pipelineFn = transformers.pipeline ?? transformers.default?.pipeline;
     if (!pipelineFn) { failedModels.add(modelName); return null; }
 

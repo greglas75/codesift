@@ -1,4 +1,5 @@
 import type { CodeSymbol, SearchResult } from "../types.js";
+import { importTransformers } from "./optional-transformers.js";
 import { StaticEmbeddingProvider } from "./static-embedding-provider.js";
 
 const MAX_SYMBOL_SOURCE_CHARS = 200;
@@ -497,8 +498,8 @@ async function loadLocalPipeline(model: string): Promise<FeatureExtractor | null
       firstLoadAnnounced = true;
       console.error(`[codesift] Loading local embedding model ${model} (first-run download ~140MB, cached after).`);
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const transformers = await import("@huggingface/transformers") as any;
+    // Optional dependency — see importTransformers for why the specifier is not static.
+    const transformers = await importTransformers();
     const pipelineFn = transformers.pipeline ?? transformers.default?.pipeline;
     if (!pipelineFn) { failedLocalModels.add(model); return null; }
 
