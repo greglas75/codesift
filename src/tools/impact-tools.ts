@@ -5,6 +5,7 @@ import { buildGitDiffArgs } from "../utils/git-validation.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, CodeIndex, AffectedTest, RiskScore, ImpactResult } from "../types.js";
 import type { AdjacencyIndex } from "./graph-tools.js";
+import { assertGitTreeMatches } from "./git-tree-guard.js";
 
 const DEFAULT_IMPACT_DEPTH = 2;
 const MAX_AFFECTED_SYMBOLS = 20;
@@ -139,6 +140,7 @@ export async function impactAnalysis(
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
+  assertGitTreeMatches(repo, index.root);
 
   // Support both legacy (depth: number, until: string) and new (options: ImpactOptions) signatures
   let maxDepth: number;

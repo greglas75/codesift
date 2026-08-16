@@ -15,6 +15,7 @@ import { calculateScore, determineVerdict } from "./scoring.js";
 import { withTimeout } from "./timeout.js";
 import type { TimeoutSentinel } from "./timeout.js";
 import type { CheckResult, ReviewDiffOptions, ReviewDiffResult, ReviewFinding, ReviewMetadata } from "./types.js";
+import { assertGitTreeMatches } from "../git-tree-guard.js";
 
 interface DiffReviewState {
   changedFiles: string[];
@@ -93,6 +94,18 @@ async function prepareReview(
     return {
       status: "early",
       result: failReviewResult(repo, since, startTime, `Repository not found: ${repo}`),
+    };
+  }
+
+  // Same guard as the other git-range tools, but reported in this one's own shape: review_diff
+  // answers with a result object rather than throwing, and turning a wrong-tree answer into an
+  // exception here would change its contract for every caller.
+  try {
+    assertGitTreeMatches(repo, index.root);
+  } catch (err) {
+    return {
+      status: "early",
+      result: failReviewResult(repo, since, startTime, err instanceof Error ? err.message : String(err)),
     };
   }
 

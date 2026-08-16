@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
 import { buildGitDiffArgs } from "../utils/git-validation.js";
 import type { CodeSymbol } from "../types.js";
+import { assertGitTreeMatches } from "./git-tree-guard.js";
 
 export interface DiffOutlineResult {
   added: CodeSymbol[];
@@ -128,6 +129,7 @@ export async function diffOutline(
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
+  assertGitTreeMatches(repo, index.root);
 
   const untilRef = until ?? "HEAD";
   const diffOutput = runGitDiff(index.root, since, untilRef, false);
@@ -179,6 +181,7 @@ export async function changedSymbols(
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
+  assertGitTreeMatches(repo, index.root);
 
   const untilRef = until ?? "HEAD";
   const output = runGitDiff(index.root, since, untilRef, true);
