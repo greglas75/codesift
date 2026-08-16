@@ -189,6 +189,7 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
   let retroSinceOffset = 0;
   let retroNextOffset = 0;
   let retroCursorReset = false;
+  let retroSavedOffset = 0;   // hoisted: the reset notice below needs it outside the level-1 branch
   if (level === "full") {
     // Level 2 (opt-in): raw entries, batched. Full detail — query/paths included. Retros do not
     // ride this level, so no tool usage genuinely means nothing to send.
@@ -203,6 +204,7 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
     // `entries.length === 0 -> empty` return fired first, so those machines reported NOTHING and
     // read as "zuvo is not installed here".
     const savedOffset = readTs(retroWatermarkPath());
+    retroSavedOffset = savedOffset;
     const savedIdentity = retroLogIdentity(savedOffset);
     if (savedIdentity !== null && readText(retroIdentityPath()) === savedIdentity) {
       retroSinceOffset = savedOffset;
@@ -249,6 +251,30 @@ async function flushTelemetryOnce(now: number): Promise<FlushResult> {
   // Advance the retro cursor independently, and only forward. Guarded so a flush that carried
   // no retros (or a level that does not carry them) cannot move it — moving it on an empty scan
   // would re-create the original bug in a new place.
+  // A cursor reset means retros.log was REWRITTEN under us — rotated, restored, or truncated. The
+  // rescan-from-0 above already handles it correctly, but until now it happened in complete
+  // silence: `retroCursorReset` only chose between two write functions and was never reported.
+  // On 2026-08-15 a machine's retros.log went 143486 -> 70167 bytes and lost ten days of history;
+  // this code did exactly the right thing with what remained, and nobody learned that anything had
+  // happened for four days. Detection without a signal is not detection.
+  //
+  // The two cases are not equally bad and must not read the same. Any rewrite is worth a line;
+  // a file now SHORTER than the offset we had already consumed is positive evidence that local
+  // history is gone, and the collector is then the only copy of what came before.
+  if (retroCursorReset) {
+    if (retroNextOffset < retroSavedOffset) {
+      console.error(
+        `[codesift] telemetry: retros.log SHRANK — ${retroSavedOffset} bytes had already been consumed, ` +
+        `the file now ends at ${retroNextOffset}. Local retro history was lost; what was uploaded ` +
+        `before the rewrite survives only on the collector.`,
+      );
+    } else {
+      console.error(
+        `[codesift] telemetry: retro cursor reset — retros.log was rewritten under the uploader ` +
+        `(saved offset ${retroSavedOffset}); rescanned from 0 to ${retroNextOffset}.`,
+      );
+    }
+  }
   if (retroNextOffset > retroSinceOffset) {
     const offsetPersisted = retroCursorReset
       ? writeText(retroWatermarkPath(), String(retroNextOffset))
