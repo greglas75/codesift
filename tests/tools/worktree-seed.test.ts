@@ -17,6 +17,7 @@ import { DatabaseSync } from "node:sqlite";
 import { seedWorktreeIndexFromParent } from "../../src/tools/index-tools/worktree-seed.js";
 import { resetConfigCache } from "../../src/config.js";
 import { getRepoName } from "../../src/storage/registry.js";
+import { canonicalPath } from "../../src/utils/worktree.js";
 
 let dataDir: string;
 let parentRoot: string;
@@ -221,4 +222,79 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
     expect(existsSync(`${join(dataDir, "bbbbbbbbbbbb.index.db")}.seeding.${process.pid}`)).toBe(false);
   });
+});
+
+/**
+ * A subdirectory of a linked worktree used to become its own repo, named after the basename:
+ * `local/src`, `local/apps`, `local/lib`. Two consequences, both measured on this repo:
+ *
+ *  - the name collides across every checkout on the machine, and each call adds a registry entry
+ *    that outlives the tree (the accumulation that once left 1,585 of 1,895 entries pointing at
+ *    directories that no longer exist);
+ *  - the parent lookup keys off the WORKTREE ROOT, so a subdirectory missed the seed entirely and
+ *    fell through to a full parse — 12.0s against 2.0s for the same content.
+ *
+ * Redirecting beats refusing: the caller wanted their tree indexed, and the worktree root is a
+ * superset of the subdirectory, so nothing they asked for is lost.
+ */
+describe("indexing a subdirectory of a linked worktree", () => {
+  it("resolves to the worktree root, not a basename-named repo", async () => {
+    const { indexFolder } = await import("../../src/tools/index-tools/folder-indexer.js");
+
+    const base = mkdtempSync(join(tmpdir(), "cs-subdir-"));
+    const parent = join(base, "proj");
+    mkdirSync(join(parent, "src"), { recursive: true });
+    writeFileSync(join(parent, "src", "a.ts"), "export function alpha(): void {}\n");
+    git(["init", "-q", "-b", "main"], base);
+    git(["init", "-q", "-b", "main"], parent);
+    git(["config", "user.email", "t@t"], parent);
+    git(["config", "user.name", "t"], parent);
+    git(["add", "-A"], parent);
+    git(["commit", "-qm", "init"], parent);
+
+    const wt = join(base, "wt");
+    git(["worktree", "add", "-q", "-b", "task", wt], parent);
+
+    try {
+      const result = await indexFolder(join(wt, "src"), { watch: false });
+
+      // The name is the worktree's, so it groups under the parent and cannot collide with any
+      // other repo's `src/`.
+      expect(result.repo).toBe(getRepoName(wt));
+      expect(result.repo).not.toMatch(/\/src$/);
+      // Indexed the tree, not the subdirectory. Compared CANONICALLY: findWorkingTree resolves
+      // symlinks, and on macOS the temp dir lives under /var -> /private/var, so the raw strings
+      // differ while naming the same directory — the same trap the seed itself documents.
+      expect(canonicalPath(result.root)).toBe(canonicalPath(wt));
+      // Never silent: the caller asked for a different directory than the one indexed.
+      expect(canonicalPath((result as { redirected_from?: string }).redirected_from ?? "")).toBe(
+        canonicalPath(join(wt, "src")),
+      );
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("leaves a subdirectory of an ORDINARY checkout alone", async () => {
+    // Someone indexing `~/DEV/monorepo/packages/foo` may mean exactly that. Widening it to the
+    // whole monorepo would be a surprise, not a fix — the redirect is for linked worktrees only.
+    const { indexFolder } = await import("../../src/tools/index-tools/folder-indexer.js");
+
+    const base = mkdtempSync(join(tmpdir(), "cs-plain-"));
+    mkdirSync(join(base, "packages", "foo"), { recursive: true });
+    writeFileSync(join(base, "packages", "foo", "b.ts"), "export function beta(): void {}\n");
+    git(["init", "-q", "-b", "main"], base);
+    git(["config", "user.email", "t@t"], base);
+    git(["config", "user.name", "t"], base);
+    git(["add", "-A"], base);
+    git(["commit", "-qm", "init"], base);
+
+    try {
+      const result = await indexFolder(join(base, "packages", "foo"), { watch: false });
+      expect(result.root).toBe(join(base, "packages", "foo"));
+      expect((result as { redirected_from?: string }).redirected_from).toBeUndefined();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

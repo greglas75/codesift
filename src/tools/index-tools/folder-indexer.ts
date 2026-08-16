@@ -16,6 +16,7 @@ import {
 import { buildBM25Index } from "../../search/bm25.js";
 import { loadConfig } from "../../config.js";
 import { walkDirectory } from "../../utils/walk.js";
+import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
 import { HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../../storage/hash-snapshot.js";
 import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../../types.js";
 import { activeWatchers, bm25Indexes, codeIndexes, lastFullIndexAt } from "./state.js";
@@ -107,6 +108,35 @@ export function resetIndexFolderRedundancyForTesting(): void {
   lastFullIndexAt.clear();
 }
 
+
+/**
+ * A subdirectory of a LINKED WORKTREE is indexed as the worktree itself.
+ *
+ * Passing `<worktree>/apps` used to produce a separate repo named after the basename —
+ * `local/apps`, `local/src`, `local/lib` — which collides across every repo on the machine and
+ * accumulates registry entries that outlive the tree. It also missed the seed entirely: the parent
+ * lookup keys off the worktree root, so a subdirectory fell through to a full parse (measured on
+ * this repo: 12.0s for `<wt>/src` against 2.9s for the seeded worktree root).
+ *
+ * Redirecting is strictly better than refusing: the caller wanted their tree indexed, and the
+ * worktree root is a superset of the subdirectory, so nothing they asked for is lost. The result
+ * carries `redirected_from` so this is never silent.
+ *
+ * ONLY for linked worktrees. A subdirectory of an ordinary checkout is left alone — someone
+ * indexing `~/DEV/monorepo/packages/foo` may well mean exactly that, and widening it to the whole
+ * monorepo would be a surprise, not a fix.
+ */
+function worktreeRootFor(requested: string): string {
+  try {
+    const tree = findWorkingTree(requested);
+    if (!tree?.linked) return requested;
+    if (canonicalPath(tree.root) === canonicalPath(requested)) return requested;
+    return tree.root;
+  } catch {
+    return requested;   // never let path probing break indexing
+  }
+}
+
 export async function indexFolder(
   folderPath: string,
   options?: {
@@ -130,7 +160,9 @@ export async function indexFolder(
     throw new Error("folderPath is required and must be a non-empty string");
   }
 
-  const rootPath = resolve(folderPath);
+  const requestedPath = resolve(folderPath);
+  const rootPath = worktreeRootFor(requestedPath);
+  const redirected = rootPath !== requestedPath;
   const repoName = getRepoName(rootPath);
 
   // Short-circuit: if a watcher is already keeping the index for this root
@@ -199,6 +231,7 @@ export async function indexFolder(
             duration_ms: Date.now() - startTime,
             reason: `seeded from ${seed.parent_repo}`,
             ...(seed.parent_repo !== undefined ? { seeded_from: seed.parent_repo } : {}),
+            ...(redirected ? { redirected_from: requestedPath } : {}),
             files_reparsed: caught.updated ?? 0,
           };
         }
@@ -567,6 +600,9 @@ export async function indexFolder(
   return {
     repo: repoName,
     root: rootPath,
+    // Present on every path that indexes, not only the seeded one — the caller asked for a
+    // different directory than the one that got indexed, and that must never be silent.
+    ...(redirected ? { redirected_from: requestedPath } : {}),
     file_count: mergedEntries.length,
     symbol_count: mergedSymbols.length,
     duration_ms: Date.now() - startTime,
