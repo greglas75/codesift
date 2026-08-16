@@ -197,7 +197,7 @@ describe("first-run notice covers what the payload can carry", () => {
     const src = noticeSource();
     const notice = src.slice(src.indexOf("[codesift] Anonymous usage stats"));
     // One term per DIMENSION the rollup can reveal — not one per field name.
-    for (const term of ["skill", "friction", "gate", "effort"]) {
+    for (const term of ["skill", "friction", "gate", "effort", "failure category"]) {
       expect(notice.toLowerCase()).toContain(term);
     }
   });

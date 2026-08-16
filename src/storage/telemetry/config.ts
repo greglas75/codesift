@@ -119,7 +119,9 @@ export function maybePrintFirstRunNotice(): void {
       // different CATEGORY of data, not more of the same, which is why it gets
       // its own clause rather than being folded into "usage stats".
       "[codesift] Anonymous usage stats are ON (tool names, latencies, error/empty rates,\n" +
-      "  bucketed env). If zuvo is installed, also anonymous per-skill rollups: which skill\n" +
+      "  the failure category when a call fails — a fixed label such as repo-not-indexed or\n" +
+      "  timeout, never the error message — and bucketed env).\n" +
+      "  If zuvo is installed, also anonymous per-skill rollups: which skill\n" +
       "  ran, friction category, whether the audit/adversarial gates produced a verdict, were\n" +
       "  skipped, or do not exist for that skill, and median effort — NO queries, paths,\n" +
       "  repo names, branches, commit\n" +

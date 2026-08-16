@@ -6,6 +6,7 @@
 import { TELEMETRY_SCHEMA_VERSION } from "./config.js";
 import type { EnvProfile } from "./env-profile.js";
 import type { ToolAggregate, HintEmission, PlanTurnFunnel } from "./aggregator.js";
+import type { ErrorClass } from "../usage-tracker.js";
 import type { RetroAggregate } from "./retro-aggregator.js";
 
 export interface Level1Payload {
@@ -73,6 +74,14 @@ export interface Level1ToolMetric {
   error_rate: number;
   empty_result_rate: number;
   cache_hit_rate: number;
+  /**
+   * Counts per coarse failure class. Omitted when the bucket had no errors — absent means
+   * "nothing failed"; `{}` would mean "things failed and we could not say what".
+   *
+   * A closed enumeration, never the error message: the message carries absolute paths, repo names
+   * and symbol names, and the first-run notice promises none of those leave the machine.
+   */
+  error_classes?: Partial<Record<ErrorClass, number>>;
 }
 
 export interface Level1HintEmission {
@@ -90,6 +99,7 @@ export interface Level1PlanTurn {
 
 /** Explicitly pick ONLY allowlisted fields from an aggregate. */
 function pickToolMetric(a: ToolAggregate): Level1ToolMetric {
+  const picked = pickErrorClasses(a.error_classes);
   return {
     tool: a.tool,
     day: a.day,
@@ -100,8 +110,39 @@ function pickToolMetric(a: ToolAggregate): Level1ToolMetric {
     error_rate: a.error_rate,
     empty_result_rate: a.empty_result_rate,
     cache_hit_rate: a.cache_hit_rate,
+    // Re-picked key by key rather than passed through: this function is the second, deliberate
+    // allowlist, and it is the reason adding the field to the aggregate alone did NOT ship it.
+    // Verified by running `codesift telemetry show` after patching only the aggregator — the
+    // payload still omitted it.
+    // Gate on what SURVIVES the filter, not on what arrived. Gating on the input emitted
+    // `error_classes: {}` whenever every key was rejected — and an empty object is a different
+    // claim from an absent key ("things failed, cause unknown" vs "nothing failed").
+    ...(picked ? { error_classes: picked } : {}),
   };
 }
+
+/**
+ * Copy only known classes, and only positive integer counts. Returns null when nothing survives,
+ * so the caller can OMIT the key rather than ship an empty object.
+ */
+function pickErrorClasses(
+  src: Partial<Record<ErrorClass, number>> | undefined,
+): Partial<Record<ErrorClass, number>> | null {
+  if (!src) return null;
+  const out: Partial<Record<ErrorClass, number>> = {};
+  for (const key of Object.keys(src) as ErrorClass[]) {
+    if (!LEVEL1_ERROR_CLASSES.has(key)) continue;
+    const n = src[key];
+    if (typeof n === "number" && Number.isInteger(n) && n > 0) out[key] = n;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** The closed set this layer will emit. A class the aggregate invents never reaches the wire. */
+const LEVEL1_ERROR_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>([
+  "repo_not_indexed", "path_outside_repos", "file_missing", "parse_failed", "symbol_not_found",
+  "ambiguous_symbol_id", "git_failed", "plan_not_found", "timeout", "invalid_args", "other",
+]);
 
 function pickHint(h: HintEmission): Level1HintEmission {
   return { day: h.day, hint_code: h.hint_code, emitted: h.emitted, applied: h.applied };

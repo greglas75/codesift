@@ -2,7 +2,7 @@
 // We send aggregates, never raw events (spec §3) — smaller payload, less leak
 // surface. Only reads fields that already exist on UsageEntry.
 import { readFile } from "node:fs/promises";
-import type { UsageEntry } from "../usage-tracker.js";
+import type { ErrorClass, UsageEntry } from "../usage-tracker.js";
 import { getUsagePath } from "../usage-tracker.js";
 
 export interface ToolAggregate {
@@ -15,6 +15,18 @@ export interface ToolAggregate {
   error_rate: number; // 0..1 over EXECUTED calls
   empty_result_rate: number; // 0..1 over executed calls (result_chunks === 0)
   cache_hit_rate: number; // 0..1 fraction served from the response cache
+  /**
+   * Counts per coarse failure CLASS, e.g. `{ repo_not_indexed: 6 }`. Omitted entirely when the
+   * bucket had no errors — absent means "nothing failed", `{}` would mean "things failed and we
+   * could not say what", and those are different claims.
+   *
+   * `error_rate` alone says a tool failed and nothing else, which is not enough to act on from
+   * another machine: measured on an external Windows install, `scratchpad_list` sat at 8/8
+   * failures for five days and the cause could only be GUESSED from reading the source. This is
+   * a closed enumeration of causes — never the message, which carries absolute paths, repo names
+   * and symbol names.
+   */
+  error_classes?: Partial<Record<ErrorClass, number>>;
 }
 
 export interface HintEmission {
@@ -43,6 +55,12 @@ function percentile(sortedAsc: number[], p: number): number {
 
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
+/** The closed set the payload may carry. Anything else becomes "other". */
+const KNOWN_ERROR_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>([
+  "repo_not_indexed", "path_outside_repos", "file_missing", "parse_failed", "symbol_not_found",
+  "ambiguous_symbol_id", "git_failed", "plan_not_found", "timeout", "invalid_args", "other",
+]);
+
 interface Bucket {
   tool: string;
   day: string;
@@ -51,6 +69,7 @@ interface Bucket {
   empties: number;
   executed: number; // calls that actually ran (not cache-served)
   cacheHits: number;
+  errorClasses: Map<ErrorClass, number>;
 }
 
 /**
@@ -70,7 +89,7 @@ export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
     const key = `${e.tool}\0${day}`;
     let b = buckets.get(key);
     if (!b) {
-      b = { tool: e.tool, day, latencies: [], errors: 0, empties: 0, executed: 0, cacheHits: 0 };
+      b = { tool: e.tool, day, latencies: [], errors: 0, empties: 0, executed: 0, cacheHits: 0, errorClasses: new Map() };
       buckets.set(key, b);
     }
     if (e.cache_hit === true) {
@@ -81,7 +100,17 @@ export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
     if (typeof e.elapsed_ms === "number" && Number.isFinite(e.elapsed_ms)) {
       b.latencies.push(e.elapsed_ms);
     }
-    if (e.error === true) b.errors++;
+    if (e.error === true) {
+      b.errors++;
+      // usage.jsonl is a plain file that anything can append to, and entries written by another
+      // version may carry a class this build does not know. Anything not in the closed set
+      // collapses to "other" rather than travelling verbatim — the same rule the retro rollup
+      // uses, and the reason a format change cannot turn this field into free text.
+      const cls: ErrorClass = KNOWN_ERROR_CLASSES.has(e.error_class as ErrorClass)
+        ? (e.error_class as ErrorClass)
+        : "other";
+      b.errorClasses.set(cls, (b.errorClasses.get(cls) ?? 0) + 1);
+    }
     if (e.result_chunks === 0) b.empties++;
   }
 
@@ -99,6 +128,9 @@ export function aggregateToolMetrics(entries: UsageEntry[]): ToolAggregate[] {
       error_rate: b.executed ? round3(b.errors / b.executed) : 0,
       empty_result_rate: b.executed ? round3(b.empties / b.executed) : 0,
       cache_hit_rate: total ? round3(b.cacheHits / total) : 0,
+      ...(b.errorClasses.size > 0
+        ? { error_classes: Object.fromEntries([...b.errorClasses].sort()) as Partial<Record<ErrorClass, number>> }
+        : {}),
     });
   }
   // Deterministic order (day desc, then tool) — stable payloads, easier diffing.
