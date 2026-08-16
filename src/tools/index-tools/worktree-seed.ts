@@ -219,6 +219,9 @@ export interface CatchUpResult {
   caught_up: boolean;
   reason?: string;
   updated?: number;
+  /** Files the catch-up could not index — a crashing parser worker looks exactly like a binary
+   *  file here, and only the caller can tell that a just-edited source file going missing matters. */
+  failed?: string[];
   removed?: number;
   changed_total?: number;
   head?: string;
@@ -303,13 +306,18 @@ export async function catchUpSeededWorktree(
   const meta = await readRepo(config.registryPath, repoName);
 
   let updated = 0;
+  const failed: string[] = [];
   for (const rel of changed) {
     try {
       await indexFile(join(worktreeRoot, rel));
       updated++;
     } catch {
-      // Unparseable, binary, filtered by the walker's rules, or deleted between the diff and now.
-      // Not an error: the file simply has no place in the index.
+      // Usually benign — binary, filtered by the walker's rules, or deleted between the diff and
+      // now. But a crashing parser worker lands here too, and THAT means a file the caller just
+      // edited is missing from the index while the result still reports success. Swallowing both
+      // identically is what made that indistinguishable, so the count travels back and the caller
+      // decides what it means.
+      failed.push(rel);
     }
   }
 
@@ -331,5 +339,8 @@ export async function catchUpSeededWorktree(
     updated_at: Date.now(),
   });
 
-  return { caught_up: true, updated, removed: removedCount, changed_total: total, head };
+  return {
+    caught_up: true, updated, removed: removedCount, changed_total: total, head,
+    ...(failed.length > 0 ? { failed } : {}),
+  };
 }

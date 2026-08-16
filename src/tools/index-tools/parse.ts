@@ -122,9 +122,23 @@ export async function parseFiles(
   files: string[],
   repoRoot: string,
   repoName: string,
-): Promise<{ symbols: CodeSymbol[]; fileEntries: FileEntry[]; shas: Record<string, string> }> {
+): Promise<{
+  symbols: CodeSymbol[];
+  fileEntries: FileEntry[];
+  shas: Record<string, string>;
+  /**
+   * Files that produced no result. Previously these were dropped in silence: `parseOneFile`
+   * returns null on ANY throw and the loop below simply skipped falsy results, so a file that
+   * failed to parse vanished from the index with nothing in the response to say so. The only
+   * trace was a `console.warn`, which under MCP goes to the server's stderr — invisible to the
+   * agent that asked. Observed here when a crashing parser worker made a file's symbols
+   * disappear and the index reported success.
+   */
+  failed: string[];
+}> {
   const allSymbols: CodeSymbol[] = [];
   const fileEntries: FileEntry[] = [];
+  const failed: string[] = [];
   // CRITICAL-1: sha1 of the exact parsed source, keyed by relPath. Carried out
   // of parseOneFile so the snapshot never re-reads (and never races) the file.
   const shas: Record<string, string> = {};
@@ -135,16 +149,21 @@ export async function parseFiles(
       batch.map((filePath) => parseOneFile(filePath, repoRoot, repoName)),
     );
 
-    for (const result of results) {
+    for (let j = 0; j < results.length; j++) {
+      const result = results[j];
       if (result) {
         allSymbols.push(...result.symbols);
         fileEntries.push(result.entry);
         shas[result.entry.path] = result.sha1;
+      } else {
+        // Pair the null back to its path — the result carries none, which is why the old loop
+        // could not have reported this even if it had wanted to.
+        failed.push(relative(repoRoot, batch[j] as string));
       }
     }
   }
 
-  return { symbols: allSymbols, fileEntries, shas };
+  return { symbols: allSymbols, fileEntries, shas, failed };
 }
 
 // ---------------------------------------------------------------------------

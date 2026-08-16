@@ -233,6 +233,11 @@ export async function indexFolder(
             ...(seed.parent_repo !== undefined ? { seeded_from: seed.parent_repo } : {}),
             ...(redirected ? { redirected_from: requestedPath } : {}),
             files_reparsed: caught.updated ?? 0,
+            // Same reasoning as the walk path: a file that failed to index is absent, and absence
+            // reads as "nothing to see here". Reported so a missing symbol has a cause.
+            ...(caught.failed && caught.failed.length > 0
+              ? { reparse_failures: caught.failed.length, reparse_failed_sample: caught.failed.slice(0, 10) }
+              : {}),
           };
         }
         // The seed is on disk but cannot be trusted to be a near-match (unreachable commit, or too
@@ -416,7 +421,7 @@ export async function indexFolder(
   }
 
   // Parse only changed/new files
-  const { symbols: parsedSymbols, fileEntries: parsedEntries, shas: parsedShas } = await parseFiles(filesToParse, rootPath, repoName);
+  const { symbols: parsedSymbols, fileEntries: parsedEntries, shas: parsedShas, failed: parseFailed } = await parseFiles(filesToParse, rootPath, repoName);
   const symbols = [...keptSymbols, ...parsedSymbols];
   const fileEntries = [...keptEntries, ...parsedEntries];
 
@@ -600,6 +605,16 @@ export async function indexFolder(
   return {
     repo: repoName,
     root: rootPath,
+    // Files the walk could not parse. A file that fails to parse is simply ABSENT from the index,
+    // and absence is indistinguishable from "this file has no symbols" — so without this the
+    // caller is told the index is complete when it is not. The sample is capped because the
+    // number matters more than the list once it is large.
+    ...(parseFailed.length > 0
+      ? {
+          parse_failures: parseFailed.length,
+          parse_failed_sample: parseFailed.slice(0, 10),
+        }
+      : {}),
     // Present on every path that indexes, not only the seeded one — the caller asked for a
     // different directory than the one that got indexed, and that must never be silent.
     ...(redirected ? { redirected_from: requestedPath } : {}),
