@@ -1,4 +1,4 @@
-import { buildArgsSummary, extractResultChunks } from "../../src/storage/usage-tracker.js";
+import { buildArgsSummary, extractResultChunks, classifyError } from "../../src/storage/usage-tracker.js";
 
 describe("buildArgsSummary", () => {
   describe("search_text field schema", () => {
@@ -122,5 +122,42 @@ describe("extractResultChunks", () => {
 
   it("keeps the array shape working for the single-symbol path", () => {
     expect(extractResultChunks({ references: [1, 2, 3] })).toBe(3);
+  });
+});
+
+// `error: true` said a call failed and nothing else, so every past investigation had to
+// reconstruct the cause from `repo`, `args_summary` and `elapsed_ms` — none of which name it. The
+// class is stored; the MESSAGE is not, because it carries absolute paths, repo names and symbol
+// names, and this file sits next to a telemetry uploader.
+describe("classifyError", () => {
+  it.each([
+    ["ENOENT: no such file or directory, stat '/a/b.ts'", "file_missing"],
+    ['No indexed repo contains "/tmp/x.ts". Run index_folder first.', "path_outside_repos"],
+    ['Plan "plan_7" not found', "plan_not_found"],
+    ['Symbol "useThing" not found in repository "local/x"', "symbol_not_found"],
+    ['Repository "local/x" not found. Index it first with index_folder.', "repo_not_indexed"],
+    ["Git diff failed: unknown revision or path not in the working tree", "git_failed"],
+    ['Failed to parse "src/a.ts"', "parse_failed"],
+    ["The operation was aborted due to timeout", "timeout"],
+    ["symbol_name or symbol_names is required", "invalid_args"],
+    ["something nobody has seen before", "other"],
+  ])("classifies %j", (message, expected) => {
+    expect(classifyError(message)).toBe(expected);
+  });
+
+  it("keeps the specific 'not found' faults apart from the generic one", () => {
+    // Three different failures all say "not found" and each needs a different fix: index the repo,
+    // index a different root, or stop asking for a symbol that is not there. Collapsing them is
+    // how the log became undiagnosable in the first place.
+    expect(classifyError('Symbol "x" not found in repository "r"')).toBe("symbol_not_found");
+    expect(classifyError('Plan "p" not found')).toBe("plan_not_found");
+    expect(classifyError('Repository "r" not found. Run index_folder first.')).toBe("repo_not_indexed");
+  });
+
+  it("never returns the message itself", () => {
+    const secretish = 'Failed to parse "/Users/someone/private/thing.ts"';
+    const cls = classifyError(secretish);
+    expect(secretish).not.toContain(cls);
+    expect(cls).toBe("parse_failed");
   });
 });

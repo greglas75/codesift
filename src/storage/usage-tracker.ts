@@ -145,6 +145,49 @@ const MACHINE = machineId();
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Coarse failure classes. Deliberately few and deliberately about the CAUSE, not the tool: the
+ * point is to answer "what kind of thing went wrong" from the log alone, which `error: true`
+ * never could.
+ */
+export type ErrorClass =
+  | "repo_not_indexed"      // the repo name/path resolved to nothing indexed
+  | "path_outside_repos"    // an absolute path under no registered root (index_file's common case)
+  | "file_missing"          // ENOENT — deleted or renamed between edit and index
+  | "parse_failed"
+  | "symbol_not_found"
+  | "ambiguous_symbol_id"
+  | "git_failed"            // git refused the ref/range — the worktree-vs-parent fault lives here
+  | "plan_not_found"        // in-memory coordinator state, gone after a restart
+  | "timeout"
+  | "invalid_args"
+  | "other";
+
+/**
+ * Map an error message to a class WITHOUT retaining the message.
+ *
+ * Ordered most-specific first: several of these messages overlap ("not found" appears in three
+ * different faults that need different fixes), so a looser rule placed earlier would swallow the
+ * precise ones and reintroduce exactly the ambiguity this exists to remove.
+ */
+export function classifyError(message: string): ErrorClass {
+  const m = message;
+  if (/^ENOENT|no such file or directory/i.test(m)) return "file_missing";
+  if (/No indexed repo contains/i.test(m)) return "path_outside_repos";
+  if (/Plan "[^"]*" not found/i.test(m)) return "plan_not_found";
+  if (/Symbol "[^"]*" not found/i.test(m)) return "symbol_not_found";
+  if (/ambiguous/i.test(m) && /id|symbol/i.test(m)) return "ambiguous_symbol_id";
+  if (/Git .*failed|bad revision|unknown revision|not a git repository/i.test(m)) return "git_failed";
+  if (/Failed to parse/i.test(m)) return "parse_failed";
+  // Checked AFTER the specific "not found"s above, because this is the loose one.
+  if (/Repository .*not found|not indexed|Run index_folder|Index it first/i.test(m)) {
+    return "repo_not_indexed";
+  }
+  if (/timed? ?out|ETIMEDOUT|aborted due to timeout/i.test(m)) return "timeout";
+  if (/is required|Invalid |must be |Expected /i.test(m)) return "invalid_args";
+  return "other";
+}
+
 export interface UsageEntry {
   ts: number;
   /**
@@ -170,6 +213,16 @@ export interface UsageEntry {
   result_tokens_sent?: number;
   /** True when the handler threw — the logged result is the error message. */
   error?: boolean;
+  /**
+   * Coarse CLASS of that failure. The message itself is deliberately NOT stored: it carries
+   * absolute paths, repo names and symbol names. The class carries none of that and is the one
+   * thing that made every past error investigation expensive — `error: true` says a call failed
+   * and nothing else, so diagnosing one meant reconstructing the cause from `repo`,
+   * `args_summary` and `elapsed_ms`, none of which name it. Local file only: the L1 telemetry
+   * payload is built by naming each field explicitly in `telemetry/aggregator.ts`, so this cannot
+   * reach the collector without a deliberate change there (and to the first-run notice).
+   */
+  error_class?: ErrorClass;
   /** True when served from the response cache — excluded from latency/error/empty
    *  aggregation, counted only toward cache_hit_rate. */
   cache_hit?: boolean;
@@ -462,7 +515,7 @@ export function trackToolCall(
     host: HOST,
     machine: MACHINE,
     ...(sentTokens !== undefined && sentTokens !== resultTokens ? { result_tokens_sent: sentTokens } : {}),
-    ...(extra?.error ? { error: true } : {}),
+    ...(extra?.error ? { error: true, error_class: classifyError(resultText) } : {}),
     ...(extra?.cacheHit ? { cache_hit: true } : {}),
     ...(extra?.hintsEmitted && extra.hintsEmitted.length ? { hints_emitted: extra.hintsEmitted } : {}),
     ...(recommended.length ? { recommended_tools: recommended } : {}),
