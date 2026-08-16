@@ -49,6 +49,11 @@ export interface ScanSecretsResult {
   scan_coverage: "none" | "partial" | "full";
   files_failed?: number;
   partial_failure?: boolean;
+  /** Set when the cap hid findings. Absent means `findings` is everything that matched. */
+  truncated?: boolean;
+  /** How many matched in total, when more matched than were returned. */
+  total_findings?: number;
+  hint?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,8 +140,13 @@ export async function scanSecrets(
     }
   }
 
-  // Cap results
-  if (allFindings.length > maxResults) {
+  // Cap results — and SAY SO. Truncating in silence made "findings: 200" read as "there are 200",
+  // which for a security tool is the one misreading that matters: a repo with 500 leaked keys
+  // reported the same number as a repo with exactly 200, and nothing in the response distinguished
+  // them. The default cap is 200, so any repo at or above it looked identical.
+  const totalFindings = allFindings.length;
+  const truncated = totalFindings > maxResults;
+  if (truncated) {
     allFindings = allFindings.slice(0, maxResults);
   }
 
@@ -149,6 +159,15 @@ export async function scanSecrets(
 
   return {
     findings: allFindings,
+    ...(truncated
+      ? {
+          truncated: true,
+          total_findings: totalFindings,
+          hint:
+            `Showing ${maxResults} of ${totalFindings} findings. Raise max_results, or narrow the `
+            + "scan with file_pattern / severity / min_confidence — the rest are NOT clean.",
+        }
+      : {}),
     files_scanned: filesScanned,
     files_with_secrets: filesWithSecrets.size,
     scan_coverage: scanCoverage,
