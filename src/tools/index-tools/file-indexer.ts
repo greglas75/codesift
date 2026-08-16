@@ -45,6 +45,8 @@ export async function indexFile(filePath: string): Promise<{
   duration_ms: number;
   skipped?: boolean;
   secrets_warning?: string;
+  /** The file no longer exists and its symbols were pruned from the index. */
+  removed?: boolean;
 }> {
   const absPath = resolve(filePath);
   const config = loadConfig();
@@ -74,9 +76,34 @@ export async function indexFile(filePath: string): Promise<{
     }
   }
 
-  // In-process short-circuit: mtime, then content hash. Both avoid loading
-  // the on-disk index entirely (the expensive part on large repos).
-  const st = await stat(absPath);
+  // A file that is GONE is a normal outcome here, not a fault: agents are told to call index_file
+  // after editing, and deleting or renaming a file is editing. Unguarded, `stat` escaped as a raw
+  // `ENOENT: no such file or directory, stat '<abs>'` — a Node-level string that names neither the
+  // repo nor what to do, and one of the three indistinguishable ~3ms failures behind index_file's
+  // 8.8% error rate.
+  //
+  // Worse, the index kept the deleted file's symbols. `handleFileDelete` lives in the WATCHER only,
+  // and the CLI hook (`codesift postindex-file`) is a fresh process with no watcher — so the path
+  // agents are actually told to use had no deletion branch at all, and stale symbols outlived the
+  // files they came from.
+  let st: Awaited<ReturnType<typeof stat>>;
+  try {
+    st = await stat(absPath);
+  } catch (err: unknown) {
+    if ((err as { code?: string }).code !== "ENOENT") throw err;
+    const { removeFileFromIndex } = await import("../../storage/index-store.js");
+    await removeFileFromIndex(matchingRepo.index_path, relPath);
+    lastIndexedState.delete(absPath);
+    bm25Indexes.delete(matchingRepo.name);
+    codeIndexes.delete(matchingRepo.name);
+    return {
+      repo: matchingRepo.name,
+      file: relPath,
+      symbol_count: 0,
+      duration_ms: Date.now() - startTime,
+      removed: true,
+    };
+  }
   const mem = lastIndexedState.get(absPath);
   if (mem && Math.round(st.mtimeMs) === mem.mtimeMs) {
     return {
