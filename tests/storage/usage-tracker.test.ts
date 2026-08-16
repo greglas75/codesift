@@ -161,3 +161,18 @@ describe("classifyError", () => {
     expect(cls).toBe("parse_failed");
   });
 });
+
+// "210 index_file errors in tgm-survey-platform" meant *sessions whose cwd was that repo*, not
+// *files of that repo* — the handler takes only `path` and ignores the injected `repo`. Reading it
+// the obvious way sends the investigation at the wrong tree, and `args_summary` named neither the
+// file nor its repo.
+describe("index_file telemetry names the file, not the session's directory", () => {
+  it("summarises the path it was actually given", () => {
+    const s = buildArgsSummary("index_file", { path: "/repo/src/a.ts", repo: "local/elsewhere" });
+    expect(s["path"]).toBe("/repo/src/a.ts");
+  });
+
+  it("does not invent a path when none was passed", () => {
+    expect("path" in buildArgsSummary("index_file", {})).toBe(false);
+  });
+});

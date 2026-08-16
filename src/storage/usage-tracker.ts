@@ -303,7 +303,13 @@ export function buildArgsSummary(
   if (typeof args["repo"] === "string") summary["repo"] = args["repo"];
 
   // Special cases with non-trivial extraction
-  if (tool === "codebase_retrieval") {
+  if (tool === "index_file") {
+    // The argument that FAILS is the one worth logging. index_file takes only `path`, and the
+    // summary carried `repo` (injected, cwd-derived, ignored by the handler) and not `path` — so
+    // an errored row named neither the file nor its repo. Local file only: args_summary is not
+    // part of the anonymous payload.
+    if (typeof args["path"] === "string") summary["path"] = args["path"];
+  } else if (tool === "codebase_retrieval") {
     const queries = args["queries"];
     if (Array.isArray(queries)) {
       summary["query_count"] = queries.length;
@@ -348,6 +354,17 @@ export function buildArgsSummary(
  */
 /** Common "nothing found" markers in formatted string results. */
 const NO_RESULT_STRING_RX = /^\(?no (results|matches|symbols|references|files)/i;
+
+/** The repo this call was really about: the argument when given, otherwise the handler's answer. */
+function resolveLoggedRepo(args: Record<string, unknown>, resultData: unknown): string {
+  const fromArgs = args["repo"];
+  if (typeof fromArgs === "string" && fromArgs.length > 0) return fromArgs;
+  if (resultData && typeof resultData === "object") {
+    const fromResult = (resultData as { repo?: unknown }).repo;
+    if (typeof fromResult === "string" && fromResult.length > 0) return fromResult;
+  }
+  return "";
+}
 
 export function extractResultChunks(data: unknown): number {
   if (Array.isArray(data)) return data.length;
@@ -506,7 +523,11 @@ export function trackToolCall(
   const entry: UsageEntry = {
     ts: Date.now(),
     tool,
-    repo: typeof args["repo"] === "string" ? args["repo"] : "",
+    // Prefer the caller's repo; fall back to the one the handler actually resolved. Tools that
+    // take a PATH rather than a repo (index_file) know which repo it belonged to only after the
+    // fact, and an empty string there makes their rows ungroupable — while an injected,
+    // cwd-derived guess made them actively misleading.
+    repo: resolveLoggedRepo(args, resultData),
     args_summary: buildArgsSummary(tool, args),
     elapsed_ms: Math.round(elapsedMs),
     result_tokens: resultTokens,

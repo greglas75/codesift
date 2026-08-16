@@ -8,7 +8,12 @@ import { currentCwd, hasRequestContext } from "./request-context.js";
 // ---------------------------------------------------------------------------
 
 /** Tools that accept a `repo` param and should auto-resolve from CWD */
-const TOOLS_WITHOUT_REPO = new Set(["list_repos", "index_folder", "index_repo", "index_conversations", "discover_tools", "describe_tools", "search_conversations", "search_all_conversations", "get_session_snapshot", "get_session_context", "usage_stats", "usage_hotspots", "usage_trace_session", "retros_list", "retros_analyze", "memory_candidate_extract", "optimization_candidates", "pope_insights_push_candidates", "test_tool"]);
+// `index_file` takes only `path` and ignores any `repo` — but it was NOT on this list, so a
+// CWD-derived repo was injected into its args and then logged. "210 index_file errors in
+// tgm-survey-platform" therefore meant *sessions whose cwd was that repo*, not *files of that
+// repo*, and reading it the obvious way points the investigation at the wrong tree entirely.
+// The real repo is in the RESULT, and the tracker reads it from there now.
+const TOOLS_WITHOUT_REPO = new Set(["list_repos", "index_file", "index_folder", "index_repo", "index_conversations", "discover_tools", "describe_tools", "search_conversations", "search_all_conversations", "get_session_snapshot", "get_session_context", "usage_stats", "usage_hotspots", "usage_trace_session", "retros_list", "retros_analyze", "memory_candidate_extract", "optimization_candidates", "pope_insights_push_candidates", "test_tool"]);
 
 /**
  * Default registry location, honoring `CODESIFT_DATA_DIR` like every other
