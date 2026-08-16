@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.15.3] — 2026-08-16
+
+### Added
+
+- **Failures now record WHY, not just that they happened.** `error: true` said a call failed and
+  nothing else, so diagnosing one meant reconstructing the cause from `repo`, `args_summary` and
+  `elapsed_ms` — none of which name it, and two of which mislead (`repo` on an `index_file` error is
+  the session's working directory, not the file that failed; `args_summary` omits `path`). That cost
+  a full investigation three separate times. Entries and telemetry rows now carry a coarse failure
+  **class**: `repo_not_indexed`, `path_outside_repos`, `file_missing`, `parse_failed`,
+  `symbol_not_found`, `ambiguous_symbol_id`, `git_failed`, `plan_not_found`, `timeout`,
+  `invalid_args`, `other`.
+
+  The classes are ordered most-specific first, because several messages say "not found" for faults
+  needing different fixes — index this repo, index a different root, or stop asking for a symbol
+  that is not there. Collapsing them is how the log became undiagnosable in the first place.
+
+  **The error message itself is never stored**, locally or remotely: it carries absolute paths, repo
+  names and symbol names. What ships is a closed enumeration, filtered twice — the aggregate
+  collapses anything unrecognised to `other` (usage.jsonl is a plain file another version can append
+  to), and the payload builder then drops any class it does not know and any count that is not a
+  positive integer. The key is omitted when nothing failed, because an absent key means "nothing
+  failed" while `{}` would mean "things failed and we could not say what". The first-run notice names
+  the new dimension and states the message is excluded — a user who read "error/empty rates" did not
+  agree to a per-failure breakdown, so the notice is part of the change, not an afterthought.
+
 ## [0.15.2] — 2026-08-12
 
 ### Fixed
