@@ -195,7 +195,7 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
 **src/formatters-shortening.ts** — Compact/counts formatters for progressive cascade
 **src/instructions.ts** — CODESIFT_INSTRUCTIONS (~1.5K tok) sent via MCP instructions field
 **rules/** — Platform-specific rules (codesift.md, codesift.mdc, codex.md, gemini.md)
-**tests/** (355 files, 5112 tests, all passing) — Vitest with `exactOptionalPropertyTypes: true`
+**tests/** (431 files, 5859 tests — 5851 pass, 8 skipped; measured 2026-08-18) — Vitest with `exactOptionalPropertyTypes: true`
 
 ## Host compatibility — frozen tool lists (Codex)
 
@@ -217,6 +217,18 @@ against. `describe_tools(reveal=true)` returns `reveal_ineffective` + `reveal_no
 
 Handshake probe (spawn `dist/server.js`, initialize as a given client, read the first `tools/list`):
 claude-code 60 · unknown-client 60 · codex-mcp-client 181 · TypeScript-only project on codex 148.
+
+**Run that probe with `env -u CLAUDE_CODE_ENTRYPOINT` or it lies.** `oninitialized` computes
+`envPlatform !== "unknown" ? envPlatform : clientPlatform` (`server.ts:476`), so the ENV wins over
+`clientInfo`. A probe launched from inside a Claude Code session inherits `CLAUDE_CODE_ENTRYPOINT`,
+`detectPlatform()` returns `claude`, and `codex-mcp-client` answers **60** — the exact signature of
+"front-loading is broken", from a build where it works. Measured 2026-08-17: 60 with the variable
+present, 181 with `env -u`, on the same binary minutes apart. The stderr line names the platform it
+decided on (`[codesift] claude does not refresh…`), so read it before trusting a probe's count.
+Two more artifacts of probing by hand: piping stdout into `head` closes the pipe and the server
+reports `transport error … EPIPE` / `parent gone` — that is the harness, not a fault; and forced
+front-loading emits one `notifications/tools/list_changed` per revealed tool (179 of them), which
+trips `MaxListenersExceededWarning` on the socket.
 
 **These names are deliberately NOT in `CORE_TOOL_NAMES`.** Commit 3e1ec6c ("revert agent-visible
 changes that broke CodeSift adoption (>90% drop)") found that growing the default ListTools
@@ -300,6 +312,55 @@ never reused — so orphans accumulate forever: **100 files / 5.0 GB** in
 `cleanupOrphanTempFiles` (in `storage/_shared.ts`) sweeps siblings older than 1 h
 at the start of each save; the age guard is what keeps it from touching a
 concurrent writer's in-flight file.
+
+## Auditing the registry — three traps, all hit on 2026-08-17
+
+**`index_path` is an identifier, not a path that must exist.** It always carries the canonical
+`.index.json` name and `sqlitePathFor()` derives the `.db` from it, so on a SQLite-backed install the
+`.json` is normally absent. The "never deleted" note above covers indexes that were *migrated* from
+JSON; one born SQLite never had a `.json` to keep. Auditing by `existsSync(entry.index_path)`
+therefore reports **602 of 608 entries broken** on a completely healthy data dir. Verify with a live
+`index_status` before believing any registry audit.
+
+**`prune` is two-pass by design, and `--dry-run` cannot show the second pass.** Run 1 unregisters
+stale repos; their artifacts get "one full run of retention" (the guard is
+`live.has(hash) || staleHashes.has(hash)` in `commands-maintenance.ts`), so run 2 collects them.
+Because the registry is only rewritten `if (!dryRun && stale.length > 0)`, a dry-run never advances
+that state and reports only pre-existing orphans. Measured: dry-run `freed_gb: 2.1` / 9 files,
+against **17.08 GB / 374 files** on the real second pass — 65 GB → 46 GB overall. Read `stale_repos`
+in the dry-run output, not `freed_gb`, to predict the reclaim.
+
+**The `.db` file is the source of truth for registry membership, not the registry.** `prune` opens
+each database, reads `meta.repo` / `meta.root`, and if the root still exists it **re-registers** the
+entry (`rescued_repos`). Deleting a row from `registry.json` to drop a repo is therefore futile — it
+comes back on the next prune. Delete the artifacts (`<hash>.index.db`, `-wal`, `-shm`,
+`.snapshot.json`, embeddings/chunks) and the row stops returning. Confirm the target first with
+`sqlite3 <db> "select key,value from meta"`; a stray `local/tmp` rooted at `/private/tmp` had
+indexed 16,514 scratch files (617 MB) and looked like a real repo in the registry.
+
+## Operating the shared daemon
+
+The `codesift serve` daemon (launchd `com.codesift.daemon`, port 7077) can wedge: the port stays
+`LISTEN` and the process burns CPU, but the event loop never reaches `/health`, so it answers
+nothing. Every client then reports "still connecting" or `{"status":"timed_out","timeout_ms":90000}`
+per tool call. **A `timed_out` on a large repo is almost never a slow operation** — after a clean
+restart the same repos answered in 0–8 s against that same 90 s ceiling (translation-qa 0 s,
+ResearchShieldNew 8 s, tgm-survey-platform 2 s).
+
+Recovery: `launchctl unload` + `load` the plist. A plain `kill` is respawned by launchd but can come
+back wedged, repeated kills trip the respawn throttle (~36 s to reappear), and `kickstart -k` was not
+sufficient in the 2026-08-17 incident. `/health` answering is necessary but not sufficient — probe a
+real `tools/call` too. `CODESIFT_TOOL_TIMEOUT_MS` (clamped to 600 s by `MAX_TOOL_TIMEOUT_MS`) buys
+headroom but is not the fix.
+
+Dead ends from that incident, so nobody re-runs them: `pragma quick_check` was `ok`; stored
+`extractor_version` matched `EXTRACTOR_VERSIONS` exactly; `detectProjectLanguagesSync` on a
+166k-file / 20 GB tree took **66 ms**; `resolveRepoFromCwd` on it took **0 ms** and returned the
+right name; the tailnet ollama answered 200 in 0.65 s. The trigger was host memory pressure — 40
+sessions on `stdio` instead of the daemon held 6.75 GB and drove the box to load 56 with 1.7 GB free.
+Projects with no `codesift` entry in `~/.claude.json` inherit the **global** config, so a global
+`stdio` entry silently gives every such project its own server; per-project `http` entries carry
+`?cwd=`, which the daemon needs.
 
 ## Host identity
 
