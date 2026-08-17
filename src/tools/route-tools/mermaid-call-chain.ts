@@ -14,7 +14,14 @@ function nodeAlias(
   if (existing) return existing;
 
   const baseName = node.file.split("/").pop()?.replace(/\.\w+$/, "") ?? node.name;
-  const alias = `${baseName}_${node.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+  // Collapsing every non-alphanumeric to `_` made distinct participants share one alias:
+  // `user-service.ts:getAll` and `user.service.ts:getAll` both became `user_service_getAll`, so
+  // two nodes merged into one lifeline and the diagram silently misrepresented the call chain.
+  // A per-alias counter keeps them apart without changing the readable prefix.
+  const base = `${baseName}_${node.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+  const taken = new Set(aliases.values());
+  let alias = base;
+  for (let n = 2; taken.has(alias); n++) alias = `${base}_${n}`;
   aliases.set(key, alias);
   return alias;
 }

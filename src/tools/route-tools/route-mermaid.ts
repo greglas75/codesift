@@ -2,7 +2,13 @@ import { appendTracedCalls } from "./mermaid-call-chain.js";
 import type { RouteTraceResult } from "./types.js";
 
 function mermaidText(value: string): string {
-  return value.replace(/[\r\n]+/g, " ");
+  // Newlines were the only thing escaped, but Mermaid also breaks on quotes and bracket/brace
+  // characters — and route labels are full of them (`/users/{id}`, `[slug]`). A single such path
+  // corrupted the whole diagram, which fails as unparseable output rather than as a wrong label.
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .replace(/"/g, "'")
+    .replace(/[[\]{}()<>;#|]/g, "_");
 }
 
 function appendRequest(lines: string[], result: RouteTraceResult, method: string): void {

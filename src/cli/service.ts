@@ -188,6 +188,25 @@ ${argLines}
 `;
 }
 
+/**
+ * One `Environment=` assignment, quoted so the VALUE cannot become unit syntax.
+ *
+ * The token was interpolated raw while the macOS path went through `escapeXml`, so the two
+ * back-ends disagreed about whether a token is data. Unquoted, whitespace truncates the value; a
+ * newline ends the directive and everything after it is parsed as more unit configuration.
+ *
+ * A newline cannot be represented in a systemd environment value at all, so it is refused rather
+ * than mangled — silently dropping part of a credential is worse than failing to install.
+ */
+export function systemdEnv(key: string, value: string): string {
+  if (/[\r\n\0]/.test(value)) {
+    throw new Error(
+      `Refusing to write ${key}: the value contains a newline or NUL, which systemd cannot carry in an Environment= directive.`,
+    );
+  }
+  return `"${key}=${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+}
+
 /** Linux systemd *user* unit — same supervision contract as the LaunchAgent. */
 export function buildSystemdUnit(plan: ServicePlan): string {
   const exec = [plan.execPath, plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host]
@@ -206,7 +225,7 @@ RestartSec=10
 Environment=PATH=${SERVICE_PATH_ENTRIES.join(":")}
 Environment=CODESIFT_DATA_DIR=${plan.dataDir}${Object.entries(plan.env ?? {})
     .map(([k, v]) => `\nEnvironment=${k}=${v}`)
-    .join("")}${plan.token ? `\nEnvironment=CODESIFT_HTTP_TOKEN=${plan.token}` : ""}
+    .join("")}${plan.token ? `\nEnvironment=${systemdEnv("CODESIFT_HTTP_TOKEN", plan.token)}` : ""}
 StandardOutput=append:${plan.stdoutLog}
 StandardError=append:${plan.stderrLog}
 

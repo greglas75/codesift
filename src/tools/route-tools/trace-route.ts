@@ -57,11 +57,16 @@ export async function traceRoute(
   }
 
   const { callChain, calleeSymbols } = traceHandlerCalls(index, handlers);
+  // Handlers in one file (GET + POST) walk overlapping callee trees, so the same symbol arrived
+  // once per handler that reached it and findDbCalls — which does not dedupe either — emitted the
+  // same database call several times. Deduped by identity, not by name: two distinct symbols may
+  // share a name.
+  const uniqueCallees = [...new Map(calleeSymbols.map((s) => [`${s.file}:${s.name}:${s.start_line}`, s])).values()];
   const result: RouteTraceResult = {
     path,
     handlers,
     call_chain: callChain,
-    db_calls: findDbCalls(calleeSymbols),
+    db_calls: findDbCalls(uniqueCallees),
   };
   await enrichNextjsTrace(result, index, handlers, calleeSymbols);
 

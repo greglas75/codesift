@@ -57,18 +57,23 @@ async function findYii2HandlersFromConfig(
   index: CodeIndex,
   searchPath: string,
 ): Promise<RouteHandler[]> {
-  const [config] = await readIndexedFiles(index, (path) => /config\/web\.php$/.test(path));
-  if (!config) return [];
+  // `const [config] = ...` took the FIRST config/web.php and ignored the rest. A Yii2 application
+  // template has one per app (frontend, backend, console), so every route defined outside whichever
+  // file the walker happened to return first was invisible.
+  const configs = await readIndexedFiles(index, (path) => /config\/web\.php$/.test(path));
+  if (configs.length === 0) return [];
 
   const normalizedSearch = searchPath.replace(/^\/|\/$/g, "").toLowerCase();
   const pattern = /['"](?:(GET|POST|PUT|DELETE|PATCH)\s+)?([^'"]+)['"]\s*=>\s*['"]([^'"]+)['"]/g;
   const handlers: RouteHandler[] = [];
-  for (const match of config.source.matchAll(pattern)) {
-    const rulePath = match[2]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
-    if (!matchPath(rulePath, normalizedSearch)) continue;
+  for (const config of configs) {
+    for (const match of config.source.matchAll(pattern)) {
+      const rulePath = match[2]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
+      if (!matchPath(rulePath, normalizedSearch)) continue;
 
-    const handler = configRuleHandler(index, match[3]!, match[1]?.toUpperCase() ?? "GET");
-    if (handler) handlers.push(handler);
+      const handler = configRuleHandler(index, match[3]!, match[1]?.toUpperCase() ?? "GET");
+      if (handler) handlers.push(handler);
+    }
   }
   return handlers;
 }

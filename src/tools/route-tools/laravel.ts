@@ -55,7 +55,7 @@ function scanLaravelMethod(
   method: string,
 ): RouteHandler[] {
   const pattern = new RegExp(
-    `Route::${method}\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]\\s*,\\s*(?:\\[([\\w\\\\]+)::class\\s*,\\s*['"\`](\\w+)['"\`]\\]|['"\`](\\w+)@(\\w+)['"\`])`,
+    `Route::${method}\\s*\\(\\s*['"\`]([^'"\`]+)['"\`]\\s*,\\s*(?:\\[([\\w\\\\]+)::class\\s*,\\s*['"\`](\\w+)['"\`]\\]|['"\`]([\\w\\\\]+)@(\\w+)['"\`])`,
     "gi",
   );
   return [...source.matchAll(pattern)]
