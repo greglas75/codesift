@@ -56,7 +56,7 @@ function appendPathDecorators(
 ): void {
   const { handlers, index, filePath, source, controllerPrefix, searchPath } = context;
   const pattern = new RegExp(
-    `@${decorator}\\s*\\(\\s*['"\`]([^'"\`]*)['"\`]\\s*\\)\\s*(?:\\n\\s*@[^\\n]+)*\\n\\s*(?:async\\s+)?(\\w+)`,
+    `@${decorator}\\s*\\(\\s*['"\`]([^'"\`]*)['"\`]\\s*\\)\\s*(?:\\n\\s*@[^\\n]+)*\\n\\s*(?:(?:public|private|protected|static|readonly|override|async)\\s+)*(\\w+)`,
     "g",
   );
   for (const match of source.matchAll(pattern)) {
@@ -80,7 +80,7 @@ function appendEmptyDecorators(
 ): void {
   const { handlers, index, filePath, source, controllerPrefix, searchPath } = context;
   const pattern = new RegExp(
-    `@${decorator}\\s*\\(\\s*\\)\\s*(?:\\n\\s*@[^\\n]+)*\\n\\s*(?:async\\s+)?(\\w+)`,
+    `@${decorator}\\s*\\(\\s*\\)\\s*(?:\\n\\s*@[^\\n]+)*\\n\\s*(?:(?:public|private|protected|static|readonly|override|async)\\s+)*(\\w+)`,
     "g",
   );
   const fullPath = `/${controllerPrefix}`.replace(/\/+/g, "/") || "/";

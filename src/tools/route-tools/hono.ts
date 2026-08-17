@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { HonoAppModel, HonoRoute } from "../../parser/extractors/hono-model.js";
 import type { CodeIndex, CodeSymbol } from "../../types.js";
 import { stripSource } from "../graph-tools.js";
@@ -18,13 +18,23 @@ async function loadHonoModel(repo: string, entryFile: string): Promise<HonoAppMo
     const { honoCache } = await import("../../cache/hono-cache.js");
     const { HonoExtractor } = await import("../../parser/extractors/hono.js");
     return await honoCache.get(repo, entryFile, new HonoExtractor());
-  } catch {
+  } catch (err: unknown) {
+    // An extractor failure and "this repo has no Hono app" produced the same empty result, so a
+    // broken parse read as a project with no routes. Same shape as the swallowed parse failures in
+    // the indexer and the swallowed reads in file-sources.
+    console.error(
+      `[codesift] Hono model extraction failed for ${entryFile}: `
+      + `${err instanceof Error ? err.message : String(err)} — reporting no routes for this app.`,
+    );
     return null;
   }
 }
 
 function routeHandlerSymbol(repo: string, index: CodeIndex, route: HonoRoute): CodeSymbol {
-  const relativeFile = route.handler.file.replace(index.root + "/", "");
+  // `.replace(index.root + "/", "")` hardcoded the POSIX separator, so on win32 the prefix never
+  // matched, `relativeFile` stayed absolute, and the symbol lookup below missed every time —
+  // silently, as "no handler". Three of the installs reporting telemetry are win32.
+  const relativeFile = relative(index.root, route.handler.file);
   return index.symbols.find(
     (symbol) =>
       symbol.file === relativeFile &&

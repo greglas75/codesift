@@ -17,7 +17,10 @@ function syntheticHandler(file: string, name: string): CodeSymbol {
 
 function appHandlersForFile(index: CodeIndex, file: string): RouteHandler[] {
   const symbols = index.symbols.filter(
-    (symbol) => symbol.file === file && /^(GET|POST|PUT|DELETE|PATCH)$/.test(symbol.name),
+    // HEAD and OPTIONS are route exports like any other. Omitting them did not just lose the
+    // method — a file exporting only HEAD fell into the `symbols.length === 0` branch below and
+    // was reported as an un-methoded synthetic "route".
+    (symbol) => symbol.file === file && /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/.test(symbol.name),
   );
   if (symbols.length === 0) {
     return [{
@@ -42,9 +45,12 @@ export function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteH
   const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
 
   for (const file of index.files) {
-    const routeMatch = /app\/(.*?)\/route\.[jt]sx?$/.exec(file.path);
+    // `(.*?)/route.` required at least one segment between `app/` and the file, so the ROOT route
+    // `app/route.ts` — a real and common Next.js route for `/` — could never match. The segment
+    // group is now optional, and an absent group means the root path.
+    const routeMatch = /app\/(?:(.*)\/)?route\.[jt]sx?$/.exec(file.path);
     if (!routeMatch) continue;
-    const routePath = routeMatch[1]!.replace(/\([^)]+\)\/?/g, "");
+    const routePath = (routeMatch[1] ?? "").replace(/\([^)]+\)\/?/g, "");
     if (matchPath(routePath, normalizedSearch)) {
       handlers.push(...appHandlersForFile(index, file.path));
     }
