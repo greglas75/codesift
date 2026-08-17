@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { millisSinceLastActivity, releaseCachedIndexes } from "./tools/index-tools/state.js";
 import { loadConfig } from "./config.js";
 import {
   registerTools,
@@ -223,6 +224,43 @@ function bearerMatches(header: string | string[] | undefined, token: string): bo
   return timingSafeEqual(actual, expected);
 }
 
+
+/**
+ * Release materialised caches after a period with no tool calls.
+ *
+ * Cache eviction was budget-based only and ran on ACCESS, so a server that loaded an index and
+ * then went quiet held all of it for as long as the client stayed connected. Measured on this
+ * machine: 27 codesift processes holding 8.4 GB — 23 of them spawned by one client that keeps a
+ * server per session — ages around 1h50m, individual resident sets up to 2.6 GB, while swap sat at
+ * 17.6 of 18.4 GB. Nothing leaked; the caches were simply immortal, and the paging that caused is
+ * what makes tool calls miss their 90s budget and look like "codesift is down".
+ *
+ * Reloading is cheap next to holding: a cold load is seconds. The timer is `unref`'d so it never
+ * keeps a process alive on its own, and it does nothing while calls keep arriving.
+ *
+ * `CODESIFT_IDLE_RELEASE_MS=0` disables it.
+ */
+const DEFAULT_IDLE_RELEASE_MS = 10 * 60_000;
+
+export function startIdleCacheRelease(): NodeJS.Timeout | null {
+  const configured = Number(process.env["CODESIFT_IDLE_RELEASE_MS"] ?? DEFAULT_IDLE_RELEASE_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return null;
+
+  const timer = setInterval(() => {
+    if (millisSinceLastActivity() < configured) return;
+    const freed = releaseCachedIndexes();
+    if (freed.indexes || freed.bm25 || freed.embeddings) {
+      console.error(
+        `[codesift] idle ${Math.round(millisSinceLastActivity() / 1000)}s — released `
+        + `${freed.indexes} index(es), ${freed.bm25} BM25, ${freed.embeddings} embedding cache(s). `
+        + "They reload on the next call.",
+      );
+    }
+  }, Math.min(configured, 60_000));
+  timer.unref();
+  return timer;
+}
+
 export async function startHttpServer(
   opts: { port?: number; host?: string; token?: string } = {},
 ): Promise<HttpServerHandle> {
@@ -407,6 +445,7 @@ async function main(): Promise<void> {
   process.stdin.on("end", () => shutdownOnParentGone("stdin end"));
   process.stdin.on("close", () => shutdownOnParentGone("stdin close"));
 
+  startIdleCacheRelease();
   const transport = new StdioServerTransport();
   // Diagnostic transport hooks. Primary fix for "-32000: Connection closed" is
   // event-loop yielding inside heavy tools (perf-tools, hotspot-tools, project-tools);

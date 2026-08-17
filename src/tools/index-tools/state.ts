@@ -68,3 +68,54 @@ export function invalidateEmbeddingCaches(repoName: string): void {
   invalidateEmbeddingCache(repoName);
   invalidateEmbeddingCache(chunkCacheKey(repoName));
 }
+
+// ---------------------------------------------------------------------------
+// Idle release
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop every materialised cache this process is holding.
+ *
+ * Eviction was budget-based ONLY, and budget eviction runs on ACCESS — so a server that loaded an
+ * index and then went quiet held all of it forever. Measured on this Mac: 27 codesift processes
+ * holding 8.4 GB, 23 of them spawned by one client that keeps a server per session alive; ages
+ * ~1h50m, individual resident sets up to 2.6 GB, while swap sat at 17.6 of 18.4 GB. Nothing was
+ * leaking — the caches were simply immortal.
+ *
+ * Cheap to undo: the next call reloads from disk (a cold load is seconds, and the SQLite backend
+ * made warm loads ~17800x faster than the JSON one it replaced). Holding gigabytes for hours
+ * against a possible future query is the worse trade on a machine running many sessions at once.
+ *
+ * Watchers are deliberately NOT stopped: they are cheap, and dropping them would silently stop
+ * incremental updates for a repo the client still has open.
+ */
+export function releaseCachedIndexes(): { indexes: number; bm25: number; embeddings: number } {
+  const released = {
+    indexes: codeIndexes.size,
+    bm25: bm25Indexes.size,
+    embeddings: embeddingCaches.size,
+  };
+  codeIndexes.clear();
+  bm25Indexes.clear();
+  // Bump generations so an in-flight load cannot publish into the cache we just cleared.
+  for (const key of embeddingCaches.keys()) invalidateEmbeddingCache(key);
+  embeddingCaches.clear();
+  embeddingCacheSources.clear();
+  return released;
+}
+
+let lastActivityAt = Date.now();
+
+/** Called on every tool invocation — the only signal that this process is still in use. */
+export function markToolActivity(): void {
+  lastActivityAt = Date.now();
+}
+
+export function millisSinceLastActivity(): number {
+  return Date.now() - lastActivityAt;
+}
+
+/** Test seam: pretend the process has been idle for `ms`. */
+export function _setLastActivityForTests(ms: number): void {
+  lastActivityAt = Date.now() - ms;
+}

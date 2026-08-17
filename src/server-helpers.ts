@@ -3,6 +3,7 @@ import { recordToolCall as recordSessionCall, recordCacheHit, getCallCount, getS
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { markToolActivity } from "./tools/index-tools/state.js";
 import { resolveToolRepoArgs } from "./server-helpers/repo-resolution.js";
 import { buildResponseHint, resetHintState, trackSequentialCalls } from "./server-helpers/response-hints.js";
 export { loadRegistrySync, isAncestorOrEqual, resolveRepoFromCwd, canonicalizeRepoName, _resetRegistryCacheForTests } from "./server-helpers/repo-resolution.js";
@@ -239,6 +240,9 @@ export function wrapTool<T>(
   // in-session index_file).
   const bypassCache = opts?.bypassCache === true;
   return () => {
+    // The only signal this process is still in use. Without it an idle server cannot tell
+    // "nobody has called me in an hour" from "I am busy", and the caches stay resident forever.
+    markToolActivity();
     resolveToolRepoArgs(toolName, args);
     const cacheKey = getCacheKey(toolName, args);
 
