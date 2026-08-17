@@ -10,19 +10,48 @@ import { loadSqliteCtor } from "./sqlite/runtime.js";
  * Load the multi-repo registry from disk.
  * Returns an empty registry if the file doesn't exist or is invalid.
  */
+/**
+ * Load the repo registry.
+ *
+ * The old body was one `try { ... } catch { return emptyRegistry(); }`, which turned EVERY failure
+ * into "no repos are indexed". EACCES on the registry file, EMFILE under load, a transient I/O
+ * error — all of them made every repo on the machine look unindexed, so tools answered
+ * `Repository ... not found. Run index_folder first.` and an agent that believed them re-indexed
+ * the world. The data was fine the whole time; only the read had failed.
+ *
+ * Split three ways, mirroring `loadGroupRegistry` (whose header calls this out as CRITICAL-1):
+ *   ENOENT            → empty registry, the legitimate first run
+ *   invalid structure → empty registry, but say so on stderr
+ *   any other error   → THROW, so a read failure can never be mistaken for an empty machine
+ */
 export async function loadRegistry(registryPath: string): Promise<Registry> {
+  let raw: string;
   try {
-    const raw = await readFile(registryPath, "utf-8");
-    const parsed: unknown = JSON.parse(raw);
+    raw = await readFile(registryPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return emptyRegistry();
+    throw err;
+  }
 
-    if (isValidRegistry(parsed)) {
-      return parsed;
-    }
-
-    return emptyRegistry();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
   } catch {
+    // Corrupt JSON is NOT an empty machine either, but it is also not recoverable here. Returning
+    // empty keeps the process usable; the warning is what stops it reading as "nothing indexed".
+    console.error(
+      `[codesift] registry at ${registryPath} is not valid JSON — treating as empty. `
+      + "Indexed repos will not be found until it is repaired or re-created.",
+    );
     return emptyRegistry();
   }
+
+  if (isValidRegistry(parsed)) return parsed;
+
+  console.error(
+    `[codesift] registry at ${registryPath} has an unexpected shape — treating as empty.`,
+  );
+  return emptyRegistry();
 }
 
 /**
