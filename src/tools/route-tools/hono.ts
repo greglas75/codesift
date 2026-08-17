@@ -6,10 +6,16 @@ import { matchPath } from "../route-shared.js";
 import type { RouteHandler } from "./types.js";
 
 function resolveHonoEntryFile(index: CodeIndex): string | null {
-  const entrySymbol = index.symbols.find(
+  // `.find()` took whichever app the index happened to list first, so a fixture or a sub-app in a
+  // test file could shadow the real one. Still a heuristic — but a test file is never the routed
+  // application, and that is the case this actually hit.
+  const candidates = index.symbols.filter(
     (symbol) => symbol.source &&
       /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(symbol.source),
   );
+  const entrySymbol = candidates.find((s) => !/(^|\/)(tests?|__tests__)\//.test(s.file)
+      && !/\.(test|spec)\.[jt]sx?$/.test(s.file))
+    ?? candidates[0];
   return entrySymbol ? join(index.root, entrySymbol.file) : null;
 }
 

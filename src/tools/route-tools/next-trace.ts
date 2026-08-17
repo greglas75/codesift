@@ -22,10 +22,22 @@ async function findServerActions(
     const callerIndex = callChain.findIndex(
       (node) => node.file === symbol.file && node.name === symbol.name,
     );
+    // `callChain[callerIndex - 1]` treated a FLATTENED depth-first list as if adjacency meant
+    // "calls". For the first child of a sibling subtree the previous element is that sibling's
+    // deepest descendant, so `called_from` named a function that never calls this one. The parent
+    // is the nearest PRECEDING entry one level shallower.
+    const node = callerIndex >= 0 ? callChain[callerIndex] : undefined;
+    let calledFrom: string | undefined;
+    if (node && callerIndex > 0) {
+      for (let i = callerIndex - 1; i >= 0; i--) {
+        const candidate = callChain[i];
+        if (candidate && candidate.depth === node.depth - 1) { calledFrom = candidate.name; break; }
+      }
+    }
     actions.push({
       name: symbol.name,
       file: symbol.file,
-      called_from: callerIndex > 0 ? callChain[callerIndex - 1]?.name : undefined,
+      called_from: calledFrom,
     });
   }
   return actions;

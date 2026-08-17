@@ -36,8 +36,12 @@ function traceHandlerCalls(index: CodeIndex, handlers: RouteHandler[]): TraceAcc
         symbol.name === handler.symbol.name &&
         symbol.start_line === handler.symbol.start_line,
     );
-    if (!fullSymbol) continue;
-    appendCallTree(buildCallTree(fullSymbol, adjacency, "callees", 3), 0, accumulator);
+    // Synthetic handlers (framework files with no extracted symbol) carry start_line 1 and never
+    // match a real symbol, so this used to `continue` — the route came back with an EMPTY call
+    // chain and nothing saying why. Falling back to the handler's own symbol keeps the handler
+    // itself in the chain; it simply has no callees to walk.
+    const startSymbol = fullSymbol ?? handler.symbol;
+    appendCallTree(buildCallTree(startSymbol, adjacency, "callees", 3), 0, accumulator);
   }
   return accumulator;
 }

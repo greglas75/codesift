@@ -65,7 +65,10 @@ function scanSpringFile(
 ): RouteHandler[] {
   if (!/@(?:RestController|Controller)\b/.test(source)) return [];
 
-  const classPrefix = /@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']*)["']/
+  // `.exec(source)` took the FIRST @RequestMapping anywhere in the file. A method-level mapping
+  // declared above the class annotation therefore became the prefix for every route in it. Anchor
+  // on the one that actually precedes the class declaration.
+  const classPrefix = /@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']*)["'][\s\S]{0,400}?\bclass\b/
     .exec(source)?.[1] ?? "";
   const context = { index, file, source, classPrefix, searchPath };
   return MAPPINGS.flatMap((mapping) => scanMapping(context, mapping));
