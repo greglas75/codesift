@@ -61,6 +61,29 @@ export function getCachedParse(
 }
 
 /**
+ * Release a tree's WASM memory.
+ *
+ * `web-tree-sitter` trees live in the WASM heap; dropping the JS reference frees NOTHING. Evicting
+ * with `cache.delete(key)` alone therefore leaked every tree it ever evicted, and the heap filled
+ * until `parser.parse()` began throwing `memory access out of bounds` — after which EVERY parse
+ * failed, including three-line config files, and the import graph silently fell back to regex.
+ *
+ * Measured on this machine 2026-08-18: 7,224 occurrences in one daemon log, 284 of the last 500
+ * lines — a degradation running continuously with nothing in any tool result to show for it. The
+ * Hono extractors already called `tree.delete()`; this cache never did.
+ *
+ * Guarded: a double-free or a tree already released by its owner must not take the process down
+ * over a cache housekeeping detail.
+ */
+function freeTree(tree: TSTree | undefined): void {
+  try {
+    (tree as unknown as { delete?: () => void } | undefined)?.delete?.();
+  } catch {
+    /* already freed, or a stub tree in tests */
+  }
+}
+
+/**
  * Store a parse tree in the cache. Evicts least-recently-accessed
  * entries if the cache exceeds MAX_ENTRIES.
  */
@@ -86,7 +109,11 @@ export function setCachedParse(
         oldestKey = k;
       }
     }
-    if (oldestKey) cache.delete(oldestKey);
+    if (oldestKey) {
+      const evicted = cache.get(oldestKey);
+      cache.delete(oldestKey);
+      freeTree(evicted?.tree);
+    }
   }
 
   cache.set(key, {
@@ -101,6 +128,7 @@ export function setCachedParse(
  * Reset the cache and stats. Primarily for tests.
  */
 export function resetParseCache(): void {
+  for (const entry of cache.values()) freeTree(entry.tree);
   cache.clear();
   hits = 0;
   misses = 0;
