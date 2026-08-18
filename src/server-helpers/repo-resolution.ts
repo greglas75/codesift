@@ -1,7 +1,8 @@
 import { readFileSync, statSync } from "node:fs";
-import { join, basename, isAbsolute, resolve, sep } from "node:path";
+import { join, isAbsolute, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { findWorkingTree, canonicalPath } from "../utils/worktree.js";
+import { getRepoName } from "../storage/registry.js";
 import { currentCwd, hasRequestContext } from "./request-context.js";
 // ---------------------------------------------------------------------------
 // Auto-resolve repo from CWD — eliminates mandatory list_repos on session start
@@ -107,7 +108,21 @@ export function resolveRepoFromCwd(cwd: string, registryPath: string = defaultRe
 
   const candidates = usable.filter((r) => isAncestorOrEqual(r.root, cwd));
   if (candidates.length === 0) {
-    return `local/${basename(cwd)}`;
+    // `local/${basename(cwd)}` invented a name without checking that a repo of that name describes
+    // THIS directory — and a name that merely looks right is worse than no name at all. Codex names
+    // each of its worktrees after the repo, so `~/.codex/worktrees/284e/tgm-survey-platform`
+    // produced `local/tgm-survey-platform`, which is a REAL and completely different checkout.
+    //
+    // Measured 2026-08-18: eight sessions working in such worktrees had scan_secrets, find_clones
+    // and nest_audit answering from the MAIN tree without a word, while every index_file in the
+    // same sessions failed 43/43 — because THAT resolver matches by root prefix and correctly
+    // found nothing. Two resolvers, two answers, and the silent one was the wrong one.
+    //
+    // getRepoName is the same function index_folder registers under, so an unindexed worktree now
+    // reports a name that does not exist (`local/repo@worktree`) and the tools say so, instead of
+    // describing somebody else's files. For a plain directory it yields the same
+    // `local/<basename>` as before, so nothing else changes.
+    return getRepoName(cwd);
   }
   candidates.sort((a, b) => b.root.length - a.root.length);
   return candidates[0]!.name;
