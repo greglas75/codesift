@@ -2,7 +2,7 @@ import { getCachedParse, setCachedParse } from "../../parser/parse-cache.js";
 import { getParser } from "../../parser/parser-manager.js";
 import { resolvePhpNamespace } from "../../tools/php-tools.js";
 import type { CodeIndex } from "../../types.js";
-import { extractPythonImports } from "../python-imports.js";
+import { extractPythonImports, extractPythonImportsByRegex } from "../python-imports.js";
 import { resolvePythonImport } from "../python-import-resolver.js";
 import { extractPhpUseStatements } from "./language-imports.js";
 import type { AddImportEdge, PythonImportContext } from "./types.js";
@@ -30,20 +30,24 @@ export async function collectPhpEdges(
   }
 }
 
+/**
+ * Returns whether the AST path handled the file. On `false` the caller runs the regex fallback —
+ * previously there was none, so a parser failure deleted every import edge in the file silently.
+ */
 export async function collectPythonEdges(
   filePath: string,
   source: string,
   context: PythonImportContext,
   addEdge: AddImportEdge,
-): Promise<void> {
-  if (context.disabled || !filePath.endsWith(".py")) return;
+): Promise<{ astHandled: boolean }> {
+  if (context.disabled || !filePath.endsWith(".py")) return { astHandled: true };
   try {
     const parser = await getParser("python");
-    if (!parser) return;
+    if (!parser) return { astHandled: false };
     let tree = getCachedParse("python", source);
     if (!tree) {
       tree = parser.parse(source);
-      if (!tree) return;
+      if (!tree) return { astHandled: false };
       setCachedParse("python", source, tree);
     }
     for (const imported of extractPythonImports(tree)) {
@@ -60,8 +64,33 @@ export async function collectPythonEdges(
         });
       }
     }
+    return { astHandled: true };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[import-graph] python extraction failed for ${filePath}: ${message}`);
+    console.warn(
+      `[import-graph] python extraction failed for ${filePath}: ${message} — falling back to regex`,
+    );
+    return { astHandled: false };
+  }
+}
+
+/** Regex-derived Python edges, resolved through the SAME resolver the AST path uses. */
+export function collectPythonRegexEdges(
+  filePath: string,
+  source: string,
+  context: PythonImportContext,
+  addEdge: AddImportEdge,
+): void {
+  if (context.disabled || !filePath.endsWith(".py")) return;
+  for (const imported of extractPythonImportsByRegex(source)) {
+    const targetFile = resolvePythonImport(
+      { module: imported.module, level: imported.level },
+      filePath,
+      context.indexedFiles,
+      context.srcLayout,
+    );
+    if (targetFile) {
+      addEdge(filePath, targetFile, { type_only: imported.is_type_only, star_import: imported.is_star });
+    }
   }
 }

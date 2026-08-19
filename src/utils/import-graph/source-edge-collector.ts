@@ -1,7 +1,7 @@
 import type { CodeIndex } from "../../types.js";
 import { extractKotlinImports, resolveKotlinImport } from "./language-imports.js";
 import { resolveImportPath } from "./path-map.js";
-import { collectPhpEdges, collectPythonEdges } from "./python-php-edge-collectors.js";
+import { collectPhpEdges, collectPythonEdges, collectPythonRegexEdges } from "./python-php-edge-collectors.js";
 import { extractBareImports, extractImports } from "./source-imports.js";
 import type { AddImportEdge, PythonImportContext } from "./types.js";
 import { collectTypeScriptEdges } from "./typescript-edge-collector.js";
@@ -72,5 +72,10 @@ export async function collectSourceEdges(
   collectWorkspaceEdges(filePath, source, context.workspaceResolver, context.addEdge);
   collectKotlinEdges(filePath, source, context.kotlinFilesByBasename, context.addEdge);
   await collectPhpEdges(context.index, filePath, source, context.normalizedPaths, context.addEdge);
-  await collectPythonEdges(filePath, source, context.python, context.addEdge);
+  // Python had no fallback at all: a parser failure deleted every import edge in the file and said
+  // so only on stderr. TypeScript above has had this shape since it was written.
+  const python = await collectPythonEdges(filePath, source, context.python, context.addEdge);
+  if (!python.astHandled) {
+    collectPythonRegexEdges(filePath, source, context.python, context.addEdge);
+  }
 }

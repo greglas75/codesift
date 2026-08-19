@@ -150,3 +150,59 @@ function countRelativeDots(relImport: TSNode): number {
   }
   return dots;
 }
+
+/**
+ * Regex fallback for when the tree-sitter parse is unavailable.
+ *
+ * The AST path is strictly better and stays the default — it cannot be fooled by an import written
+ * inside a docstring, and it knows which imports sit under `if TYPE_CHECKING:`. This exists because
+ * the alternative on a parser failure was **nothing at all**: `collectPythonEdges` logged a warning
+ * and returned, so every import edge in that file vanished from the graph with no signal. Measured
+ * on this machine 2026-08-19: 30 such failures, all `memory access out of bounds` from an exhausted
+ * WASM heap, across a reporting module and its test suite — files whose edges simply stopped
+ * existing for `find_circular_deps`, `detect_communities`, `impact_analysis` and `check_boundaries`.
+ *
+ * TypeScript already had this shape of fallback; Python did not.
+ *
+ * Known and accepted limits, since a fallback that pretends to be the AST is worse than one that
+ * admits what it is: an `import` inside a triple-quoted string is matched here and would not be by
+ * the AST, and `is_type_only` is always false because block structure is not tracked. Both make the
+ * graph slightly too CONNECTED, which is the safer direction — a missing edge hides a cycle, a
+ * spurious one merely adds noise a human can see.
+ */
+export function extractPythonImportsByRegex(source: string): PythonImportRef[] {
+  const imports: PythonImportRef[] = [];
+
+  for (const rawLine of source.split("\n")) {
+    const line = rawLine.replace(/#.*$/, "").trim();
+    if (line.length === 0) continue;
+
+    // `from .`, `from ..pkg.mod`, `from pkg import a, b` / `import *`
+    const fromMatch = /^from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\s+(.+)$/.exec(line);
+    if (fromMatch) {
+      const dots = fromMatch[1] ?? "";
+      const targets = fromMatch[3] ?? "";
+      imports.push({
+        module: fromMatch[2] ?? "",
+        level: dots.length,
+        is_type_only: false,
+        is_star: targets.trim().startsWith("*"),
+        raw: line,
+      });
+      continue;
+    }
+
+    // `import a.b.c`, `import a as x, b.c as y`
+    const importMatch = /^import\s+(.+)$/.exec(line);
+    if (importMatch) {
+      for (const part of (importMatch[1] ?? "").split(",")) {
+        const name = /^([A-Za-z_][\w.]*)/.exec(part.trim())?.[1];
+        if (name) {
+          imports.push({ module: name, level: 0, is_type_only: false, is_star: false, raw: line });
+        }
+      }
+    }
+  }
+
+  return imports;
+}
