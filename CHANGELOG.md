@@ -2,6 +2,95 @@
 
 ## [Unreleased]
 
+## [0.15.4] — 2026-08-20
+
+Eighteen commits, almost all of them defects that produced a plausible-looking
+wrong answer rather than an error. That is the theme: every fix below closes a
+path where something failed and the failure was delivered as ordinary output.
+
+### Fixed
+
+- **Hooks were inert on nearly every repo since the SQLite migration.** Each hook
+  opens with `if (!isCurrentRepoIndexed() || …) process.exit(0)`, and that check
+  looked for the registry entry's `index_path` on disk. `index_path` is an
+  IDENTIFIER, not a file: it always carries the canonical `.index.json` name and
+  the SQLite path is derived from it, so a repo born on that backend never has
+  the `.json`. Measured here: of **581 registry entries the `.json` existed for
+  6**; the other 575 had their `.db` and nothing else. `precheck-read`,
+  `precheck-bash` and the session check therefore exited 0 in silence almost
+  everywhere. The MCP tools themselves were unaffected — what was lost was the
+  automatic redirection toward them. Surfaced by an independent benchmark that
+  measured effect rather than reading code, which is why two days of code review
+  had not found it.
+
+- **A worktree could be handed the name of an unrelated repo.**
+  `resolveRepoFromCwd` fell back to `local/${basename(cwd)}` without checking
+  that a repo of that name describes that directory. Codex names each of its
+  worktrees after the repo, so `~/.codex/worktrees/284e/tgm-survey-platform`
+  resolved to `local/tgm-survey-platform` — a real, different checkout. Eight
+  sessions had `scan_secrets`, `find_clones` and `nest_audit` answering from the
+  MAIN tree without a word, while every `index_file` in those sessions failed
+  (43/43, median 1 ms) because that resolver matches by root prefix and correctly
+  found nothing. The failures were the honest half.
+
+- **An unreadable registry no longer reads as an empty machine.** `loadRegistry`
+  caught everything and returned an empty registry, so EACCES or EMFILE made
+  every repo look unindexed and sent agents off to re-index the world. Now split
+  three ways — ENOENT is a first run, a bad shape says so, anything else throws.
+
+- **`scan_secrets` says when it hid findings.** It capped at 200 and reported
+  only `findings.length`, so "we found 200" read as "there are 200". This repo
+  returns **200 of 29,371** at low confidence.
+
+- **Deleted files are pruned instead of throwing raw ENOENT**, and the deletion
+  branch now exists on the path agents actually use — it previously lived only in
+  the watcher, so removed files kept their symbols in the index.
+
+- **Files that fail to parse are reported** rather than silently dropped from the
+  index, on both the walk and the seeded-worktree paths.
+
+- **A git range about a tree the caller did not name is refused.** An absolute
+  `repo` binds to any registered ANCESTOR, so an unregistered worktree became its
+  parent: `diff_outline("<worktree>", "HEAD~1", "HEAD")` returned the PARENT's
+  diff and looked plausible. All four git tools now check first.
+
+- **Sixteen route-discovery defects**, each verified against the code before
+  being touched: the root App Router route `app/route.ts` was unreachable by
+  construction; `HEAD`/`OPTIONS` were not recognised; `@Get() public getUsers()`
+  produced a handler named `public`; a hardcoded `/` broke path stripping on
+  Windows; Yii2 scanned only the first `config/web.php`; Laravel could not resolve
+  namespaced string controllers; Spring took the first `@RequestMapping` in the
+  file as the class prefix; `called_from` named a sibling's descendant rather than
+  the caller; two distinct nodes could collapse into one Mermaid participant.
+
+- **Python import edges survive a parser failure.** `collectPythonEdges` returned
+  `void`, so a failure deleted every import edge in the file with no way to tell
+  the caller. TypeScript has had a regex fallback since it was written; Python now
+  has one, resolved through the same resolver.
+
+- **`index_file` telemetry names the file, not the session's directory.**
+
+### Added
+
+- **Idle cache release.** Eviction was budget-based and ran on ACCESS, so a
+  server that loaded an index and went quiet held it for as long as its client
+  stayed connected. Measured here: 27 processes holding 8.4 GB, ages ~1h50m,
+  individual resident sets to 2.6 GB. Caches are now dropped after
+  `CODESIFT_IDLE_RELEASE_MS` (default 10 min) and reload on the next call.
+
+- **`error_class` on usage entries and in the anonymous payload** — a closed
+  enumeration of eleven causes, never the message. The first-run notice names the
+  new dimension and states the message is excluded.
+
+- **Parse trees are freed on cache eviction.** `web-tree-sitter` trees live in
+  the WASM heap and `cache.delete(key)` does not release them. **No causal claim
+  is made** about the `memory access out of bounds` failures seen in the daemon
+  log: two reproductions on the pre-fix build — 15,058 files, then 41,580
+  file-indexings in one process — produced zero errors. Those failures coincided
+  with the machine at 17.6 of 18.4 GB of swap. This is a leak fixed on its own
+  merits, not a diagnosis confirmed.
+
+
 ## [0.15.3] — 2026-08-16
 
 ### Added
