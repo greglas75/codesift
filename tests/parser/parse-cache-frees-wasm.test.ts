@@ -1,10 +1,14 @@
 // `web-tree-sitter` trees live in the WASM heap; dropping the JS reference frees nothing. The LRU
-// evicted with `cache.delete(key)` alone, so every evicted tree leaked WASM memory until
-// `parser.parse()` began throwing `memory access out of bounds` — after which EVERY parse failed,
-// including three-line config files, and the import graph fell back to regex.
+// evicted with `cache.delete(key)` alone, so every evicted tree leaked WASM memory. That is a fact
+// about the code — and the Hono extractors already called `tree.delete()` where this cache did not.
 //
-// Measured on this machine 2026-08-18: 7,224 occurrences in one daemon log, 284 of the last 500
-// lines. A degradation running continuously with nothing in any tool result to show for it.
+// What these tests do NOT claim is causation for the 7,224 `memory access out of bounds` failures
+// in the daemon log on 2026-08-18. Two reproductions on the PRE-FIX build came back clean: one repo
+// of 15,058 files, then 5 repos x 3 rounds = 41,580 file-indexings in a single process. Zero errors
+// both times. Those failures coincided with the machine at 17.6 of 18.4 GB of swap while jetsam was
+// killing system daemons, and WASM throws the same error when the heap cannot grow.
+//
+// So this is a leak fixed on its own merits, not a diagnosis confirmed.
 import { describe, it, expect, beforeEach } from "vitest";
 import { getCachedParse, setCachedParse, resetParseCache } from "../../src/parser/parse-cache.js";
 

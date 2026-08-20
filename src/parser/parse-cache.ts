@@ -64,13 +64,20 @@ export function getCachedParse(
  * Release a tree's WASM memory.
  *
  * `web-tree-sitter` trees live in the WASM heap; dropping the JS reference frees NOTHING. Evicting
- * with `cache.delete(key)` alone therefore leaked every tree it ever evicted, and the heap filled
- * until `parser.parse()` began throwing `memory access out of bounds` — after which EVERY parse
- * failed, including three-line config files, and the import graph silently fell back to regex.
+ * with `cache.delete(key)` alone therefore leaked every tree it ever evicted. That much is a fact
+ * about the code, and the Hono extractors already called `tree.delete()` where this cache did not.
  *
- * Measured on this machine 2026-08-18: 7,224 occurrences in one daemon log, 284 of the last 500
- * lines — a degradation running continuously with nothing in any tool result to show for it. The
- * Hono extractors already called `tree.delete()`; this cache never did.
+ * What is NOT established — and an earlier version of this comment claimed it was — is that the
+ * leak caused the 7,224 `memory access out of bounds` failures seen in the daemon log on
+ * 2026-08-18. Two attempts to reproduce it from the leak alone both came back clean: one repo of
+ * 15,058 files, then 5 repos x 3 rounds = 41,580 file-indexings in a single process, both on the
+ * pre-fix build, zero errors either time. Those production failures coincided with the machine
+ * sitting at 17.6 of 18.4 GB of swap while jetsam was killing system daemons, and WASM also throws
+ * this error when the heap simply cannot grow. Memory exhaustion is the likelier cause; the leak
+ * would have made it arrive sooner, not on its own.
+ *
+ * The fix stays because releasing memory you allocated is correct regardless of which symptom it
+ * explains. The causal claim does not stay, because it was not measured.
  *
  * Guarded: a double-free or a tree already released by its owner must not take the process down
  * over a cache housekeeping detail.
