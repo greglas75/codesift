@@ -85,6 +85,32 @@ export function isCodesiftServerRunning(): boolean {
   }
 }
 
+/**
+ * Does an index actually exist for this registry entry?
+ *
+ * `index_path` is an IDENTIFIER, not a path that must exist: it always carries the canonical
+ * `.index.json` name, and `sqlitePathFor()` derives the `.db` from it. Since the SQLite migration a
+ * repo born on that backend never has the `.json` at all — so `existsSync(index_path)` answers
+ * "not indexed" for a perfectly healthy repo.
+ *
+ * That is not theoretical. Measured on this machine: of 581 registry entries the `.json` existed
+ * for SIX; the other 575 had their `.db` and nothing else, `local/codesift` among them. Every hook
+ * gated on this — precheck-read, precheck-bash, the session check — therefore exited 0 in silence
+ * on essentially every repo, which is exactly the "CodeSift never fires" that a benchmark reported
+ * and blamed on the repos being unindexed. They were indexed. The check was looking for the wrong
+ * file.
+ *
+ * CLAUDE.md already warns about this trap for anyone AUDITING the registry. The production path
+ * was doing it.
+ */
+function indexArtifactExists(indexPath: string): boolean {
+  if (existsSync(indexPath)) return true;
+  const sqlitePath = indexPath.endsWith(".json")
+    ? `${indexPath.slice(0, -".json".length)}.db`
+    : `${indexPath}.db`;
+  return existsSync(sqlitePath);
+}
+
 export function isCurrentRepoIndexed(): boolean {
   try {
     const raw = readFileSync(getRegistryPath(), "utf-8");
@@ -99,7 +125,7 @@ export function isCurrentRepoIndexed(): boolean {
       const meta = repo as { root?: unknown; index_path?: unknown };
       if (typeof meta.root !== "string" || typeof meta.index_path !== "string") continue;
       if (!isCwdInsideRepo(cwd, meta.root)) continue;
-      if (existsSync(meta.index_path)) return true;
+      if (indexArtifactExists(meta.index_path)) return true;
     }
   } catch {
     // Hooks should never block normal shell use if registry inspection fails.
