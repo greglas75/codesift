@@ -493,7 +493,7 @@ This command is designed to be installed as a Claude Code PreToolUse hook via:
 
 Env vars:
   HOOK_TOOL_INPUT                 JSON with tool_input.file_path (set by Claude Code)
-  CODESIFT_READ_HOOK_MIN_LINES    Override line threshold (default: 200)`,
+  CODESIFT_READ_HOOK_MIN_LINES    Override line threshold (default: 600)`,
 
   "precheck-bash": `codesift precheck-bash
 

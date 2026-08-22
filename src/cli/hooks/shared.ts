@@ -24,7 +24,13 @@ export const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".svelte",
 ]);
 
-export const DEFAULT_MIN_LINES = 200;
+// Matched to DEFAULT_MAX_BYTES (20 KB), the OTHER gate on the same decision. At the measured
+// median of 34 bytes/line for real TypeScript, 20 KB is ~570 lines — so 600 makes the two agree.
+// At 200 they disagreed by 10x: the line gate fired on 203 of 642 files in this repo (32%) while
+// the byte gate fired on 21 (3%), so the line gate alone decided almost every redirect. A 200-line
+// file costs ~5 K tokens to read whole; replacing that with a search plus a bounded read costs
+// more, which is the trade an external benchmark measured as +26% cost at no quality gain.
+export const DEFAULT_MIN_LINES = 600;
 
 function getRegistryPath(): string {
   return join(process.env["CODESIFT_DATA_DIR"] ?? join(homedir(), ".codesift"), "registry.json");

@@ -37,12 +37,18 @@ function readRedirectReason(filePath: string, lineCount: number | null, sizeByte
   const quotedRelPath = JSON.stringify(relPath);
   const sizeReason = sizeBytes !== null ? ` and ${sizeBytes} bytes` : "";
   const fileStats = lineCount === null ? `is ${sizeBytes} bytes` : `has ${lineCount} lines${sizeReason}`;
+  // The bounded read leads, and says outright that it needs no preceding search. When it was
+  // listed LAST, after three CodeSift suggestions, it read as the fallback after a search — so an
+  // agent that already knew the location still searched first and then read, turning one operation
+  // into two. An external benchmark measured reads per trial going UP (4.0 -> 5.0) under this hook,
+  // which is the opposite of what redirecting reads is supposed to do.
   return (
-    `File ${quotedRelPath} ${fileStats}. Use CodeSift tools instead:\n` +
-    `  get_file_outline(repo, ${quotedRelPath}) for structure\n` +
-    `  search_text(repo, "query", file_pattern=${quotedRelPath}) for specific content\n` +
-    `  get_symbol(repo, "symbol_id") for a specific function\n` +
-    `  To EDIT this file: Read a bounded range (pass offset+limit) — bounded reads are always allowed.`
+    `File ${quotedRelPath} ${fileStats} — too large to read whole.\n` +
+    `  Already know where you need to be? Read a bounded range (pass offset+limit) — always allowed, and it needs NO search first.\n` +
+    `  Otherwise, use CodeSift tools to locate it:\n` +
+    `    search_text(repo, "query", file_pattern=${quotedRelPath}) for specific content\n` +
+    `    get_file_outline(repo, ${quotedRelPath}) for structure\n` +
+    `    get_symbol(repo, "symbol_id") for a specific function`
   );
 }
 

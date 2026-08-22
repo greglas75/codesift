@@ -106,7 +106,7 @@ describe("handlePrecheckRead", () => {
 
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "big.ts");
-    writeFileSync(filePath, "line\n".repeat(500));
+    writeFileSync(filePath, "line\n".repeat(800));
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Read",
       tool_input: { file_path: filePath },
@@ -123,7 +123,7 @@ describe("handlePrecheckRead", () => {
   it("exits 2 for large .ts file", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "big.ts");
-    writeFileSync(filePath, "line\n".repeat(250));
+    writeFileSync(filePath, "line\n".repeat(800));
 
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Read",
@@ -134,6 +134,45 @@ describe("handlePrecheckRead", () => {
 
     // Impl now uses Claude Code's hookSpecificOutput.permissionDecision="deny"
     // (exit 0 + JSON to stdout) instead of the legacy exit-2 contract.
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).toContain('"permissionDecision":"deny"');
+    const reason = (JSON.parse(stdoutOutput) as {
+      hookSpecificOutput: { permissionDecisionReason: string };
+    }).hookSpecificOutput.permissionDecisionReason;
+    expect(reason).toContain("NO search first");
+    expect(reason.indexOf("Read a bounded range")).toBeLessThan(reason.indexOf("search_text"));
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("allows a 599-line file at the default threshold", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
+    const filePath = join(tmpDir, "below-threshold.ts");
+    writeFileSync(filePath, Array.from({ length: 599 }, () => "line").join("\n"));
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
+    expect(exitCode).toBe(0);
+    expect(stdoutOutput).not.toContain('"permissionDecision":"deny"');
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it("redirects a 600-line file at the default threshold", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
+    const filePath = join(tmpDir, "at-threshold.ts");
+    writeFileSync(filePath, Array.from({ length: 600 }, () => "line").join("\n"));
+
+    process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+    });
+
+    await handlePrecheckRead();
+
     expect(exitCode).toBe(0);
     expect(stdoutOutput).toContain('"permissionDecision":"deny"');
     rmSync(tmpDir, { recursive: true });
@@ -158,7 +197,7 @@ describe("handlePrecheckRead", () => {
   it("exits 0 for non-code extension", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "data.json");
-    writeFileSync(filePath, "line\n".repeat(500));
+    writeFileSync(filePath, "line\n".repeat(800));
 
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
       tool_name: "Read",
@@ -210,10 +249,10 @@ describe("handlePrecheckRead", () => {
     rmSync(tmpDir, { recursive: true });
   });
 
-  it("uses default 200 for invalid CODESIFT_READ_HOOK_MIN_LINES", async () => {
+  it("uses default 600 for invalid CODESIFT_READ_HOOK_MIN_LINES", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "hook-test-"));
     const filePath = join(tmpDir, "medium.ts");
-    writeFileSync(filePath, "line\n".repeat(150)); // 150 lines < 200 default
+    writeFileSync(filePath, "line\n".repeat(150)); // 150 lines < 600 default
 
     process.env["CODESIFT_READ_HOOK_MIN_LINES"] = "abc";
     process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
@@ -223,7 +262,7 @@ describe("handlePrecheckRead", () => {
 
     await handlePrecheckRead();
 
-    expect(exitCode).toBe(0); // 150 < 200 default → allowed
+    expect(exitCode).toBe(0); // 150 < 600 default → allowed
     expect(stdoutOutput).not.toContain('"permissionDecision":"deny"');
     rmSync(tmpDir, { recursive: true });
   });
@@ -573,7 +612,7 @@ describe("handlePrecheckRead", () => {
     const srcDir = join(tmpDir, "src");
     mkdirSync(srcDir, { recursive: true });
     const filePath = join(srcDir, "big.ts");
-    writeFileSync(filePath, "line\n".repeat(250)); // large — triggers redirect
+    writeFileSync(filePath, "line\n".repeat(800)); // large — triggers redirect
 
     const wikiDir = join(tmpDir, ".codesift", "wiki");
     mkdirSync(wikiDir, { recursive: true });
