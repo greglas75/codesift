@@ -1,12 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { registerShortener, wrapTool } from "./server-helpers.js";
+import { setHintToolVisibility } from "./server-helpers/response-hints.js";
 import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/language-detect.js";
 import type { HookPlatform } from "./cli/platform.js";
 import { setRegisterToolRuntime, zBool } from "./register-tool-groups/shared.js";
 import { detectAutoLoadToolsCached } from "./register-tools/autoload.js";
 import { describeTools, discoverTools, getToolDefinitions, isFrozenToolListHost, resolveVisibleToolNames, setFrozenToolListHost } from "./register-tools/discovery.js";
-import { enableToolByName, reapplyRevealedTools, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
+import { enableToolByName, getRegisteredToolNames, reapplyRevealedTools, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
 
@@ -238,4 +239,12 @@ export function registerTools(
   // call; under the HTTP daemon, which builds a server per request, it is what keeps a revealed
   // tool callable on the request AFTER the one that revealed it.
   reapplyRevealedTools();
+
+  // Tell the hint builder what the agent can actually call. Must run AFTER reapplyRevealedTools:
+  // a tool revealed on an earlier request of the HTTP daemon is callable on this one, and a hint
+  // naming it is therefore good advice — computing this before the reapply would suppress it.
+  setHintToolVisibility(
+    new Set(getToolDefinitions().map((t) => t.name)),
+    getRegisteredToolNames(),
+  );
 }

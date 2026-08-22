@@ -115,6 +115,54 @@ function worktreeMismatchNote(args: Record<string, unknown>): string | null {
  * Build optimization hints based on response data + call patterns.
  * Returns compact hint codes (decoded in CLAUDE.md).
  */
+
+// ---------------------------------------------------------------------------
+// Hint reachability — a hint naming a tool the agent cannot call is worse than no hint
+// ---------------------------------------------------------------------------
+
+/**
+ * Which tools this process actually registered, and the full catalog to recognise names by.
+ *
+ * Hints name tools: `codebase_retrieval(queries=[…])`, `search_symbols(…)`, `trace_route(…)`. That
+ * is only useful advice while the named tool is reachable. It is NOT always reachable — the surface
+ * varies by host (frozen-list platforms), by project language gating, and by an explicit
+ * CODESIFT_VISIBLE_TOOLS restriction. Observed in a benchmark run whose surface was cut to nine
+ * tools: the server told the agent to batch three searches into `codebase_retrieval`, which was not
+ * among the nine. The agent cannot act on that, and the cheapest thing it can do about it — a
+ * ToolSearch to go find the tool — costs a turn to learn the advice was unusable.
+ *
+ * Injected rather than imported: register-tools already depends on server-helpers, so importing the
+ * registry here would close a cycle. Null means "nobody told us", and then nothing is filtered —
+ * the pre-existing behaviour, which is right for any caller that never wires this up.
+ */
+let knownToolNames: ReadonlySet<string> | null = null;
+let callableToolNames: ReadonlySet<string> | null = null;
+
+export function setHintToolVisibility(
+  known: ReadonlySet<string> | null,
+  callable: ReadonlySet<string> | null,
+): void {
+  knownToolNames = known;
+  callableToolNames = callable;
+}
+
+/**
+ * A hint survives unless it names a catalog tool that this process did not register.
+ *
+ * Matches bare identifiers, not just `name(` — hints name tools both ways, and the first version of
+ * this filter only caught the call form. `⚡H2(3,codebase_retrieval)` names the tool after a comma
+ * and sailed straight through while `⚡H12(…) batch them: codebase_retrieval(queries=…)` was caught,
+ * so the same unreachable tool was suppressed in one hint and advertised in the next.
+ */
+function hintIsActionable(hint: string): boolean {
+  if (!knownToolNames || !callableToolNames) return true;
+  for (const m of hint.matchAll(/[a-z][a-z0-9_]{2,}/g)) {
+    const name = m[0] as string;
+    if (knownToolNames.has(name) && !callableToolNames.has(name)) return false;
+  }
+  return true;
+}
+
 export function buildResponseHint(toolName: string, args: Record<string, unknown>, data: unknown): string | null {
   const hints: string[] = [];
 
@@ -281,7 +329,8 @@ export function buildResponseHint(toolName: string, args: Record<string, unknown
     }
   }
 
-  return hints.length > 0 ? hints.join(" ") : null;
+  const actionable = hints.filter(hintIsActionable);
+  return actionable.length > 0 ? actionable.join(" ") : null;
 }
 
 export function resetHintState(): void {

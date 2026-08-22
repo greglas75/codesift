@@ -47,6 +47,17 @@ export function getToolHandle(name: string) {
   return toolHandles.get(name);
 }
 
+/**
+ * The names this process actually registered — i.e. what the agent can call right now.
+ *
+ * Distinct from CORE_TOOL_NAMES (what the default surface would be) and from the catalog (what
+ * exists at all): language gating, frozen-list front-loading, describe_tools reveals and an
+ * explicit CODESIFT_VISIBLE_TOOLS restriction all move this set at runtime.
+ */
+export function getRegisteredToolNames(): ReadonlySet<string> {
+  return new Set(toolHandles.keys());
+}
+
 interface RegistrationContext {
   server: Pick<McpServer, "registerTool">;
   languages: ProjectLanguages;
