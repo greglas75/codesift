@@ -5,7 +5,7 @@ import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/langu
 import type { HookPlatform } from "./cli/platform.js";
 import { setRegisterToolRuntime, zBool } from "./register-tool-groups/shared.js";
 import { detectAutoLoadToolsCached } from "./register-tools/autoload.js";
-import { CORE_TOOL_NAMES, describeTools, discoverTools, getToolDefinitions, isFrozenToolListHost, setFrozenToolListHost } from "./register-tools/discovery.js";
+import { describeTools, discoverTools, getToolDefinitions, isFrozenToolListHost, resolveVisibleToolNames, setFrozenToolListHost } from "./register-tools/discovery.js";
 import { enableToolByName, reapplyRevealedTools, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
 import { formatComplexityCompact, formatComplexityCounts, formatClonesCompact, formatClonesCounts, formatHotspotsCompact, formatHotspotsCounts, formatTraceRouteCompact, formatTraceRouteCounts } from "./formatters-shortening.js";
 import { formatNextjsRouteMapCompact, formatNextjsRouteMapCounts, formatNextjsMetadataAuditCompact, formatNextjsMetadataAuditCounts, formatFrameworkAuditCompact, formatFrameworkAuditCounts } from "./formatters-shortening.js";
@@ -131,8 +131,9 @@ export function registerTools(
   // Register either the full catalog or only core tools. In deferred mode the
   // remaining tools are registered lazily via describe_tools(reveal=true),
   // plan_turn auto-reveal, or framework auto-load.
+  const visibleToolNames = resolveVisibleToolNames();
   for (const tool of getToolDefinitions()) {
-    if (deferNonCore && !CORE_TOOL_NAMES.has(tool.name)) {
+    if (deferNonCore && !visibleToolNames.has(tool.name)) {
       continue;
     }
     registerToolDefinition(server, tool, languages);

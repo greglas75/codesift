@@ -13,7 +13,7 @@ import { autoDiscoverConversations } from "./tools/conversation-tools.js";
 import { autoIndexCurrentRepo } from "./tools/index-tools.js";
 import { maybePrintFirstRunNotice } from "./storage/telemetry/config.js";
 import { startTelemetryTimer } from "./storage/telemetry/uploader.js";
-import { CODESIFT_INSTRUCTIONS } from "./instructions.js";
+import { resolveInstructions } from "./instructions.js";
 import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 import { createRequire } from "node:module";
@@ -104,7 +104,7 @@ loadConfig();
 export function createCodesiftServer(): McpServer {
   const s = new McpServer(
     { name: "codesift-mcp", version: PKG_VERSION },
-    { instructions: CODESIFT_INSTRUCTIONS }
+    { instructions: resolveInstructions() }
   );
   registerTools(s, { deferNonCore: true });
   return s;

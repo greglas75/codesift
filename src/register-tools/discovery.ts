@@ -15,6 +15,33 @@ export const ALWAYS_VISIBLE_TOOL_NAMES = [
 ] as const;
 
 /** Tools visible in ListTools — core (high usage) + direct-use (agents call without discovery) */
+/**
+ * The visible tool surface, overridable for measurement.
+ *
+ * Every name here costs prompt tokens in EVERY turn of EVERY session, whether or not the model
+ * calls the tool: on a deferring host the names and descriptions sit in the prompt while only the
+ * parameter schemas load on demand. Measured on this build: 60 names + descriptions = 2802 tokens,
+ * against 8527 tokens of parameter schemas that stay out until something asks for them.
+ *
+ * That is worth a knob because the surface is priced per session and used per task. In a 35-session
+ * SWE-bench-style run, 20 sessions called exactly ONE codesift tool, 7 called two, and 1 called
+ * four — `search_text` alone covered 27 of 35. Every one of those paid for all 60.
+ *
+ * Unset (the default) means CORE_TOOL_NAMES, byte-identical to before — commit 3e1ec6c showed that
+ * changing the default surface moves adoption sharply, so the default is not something to tune from
+ * a benchmark.
+ */
+export function resolveVisibleToolNames(): ReadonlySet<string> {
+  const raw = process.env["CODESIFT_VISIBLE_TOOLS"];
+  if (!raw) return CORE_TOOL_NAMES;
+  const names = raw
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean);
+  // An env var that is set but parses to nothing is a typo, not a request for a zero-tool server.
+  return names.length > 0 ? new Set(names) : CORE_TOOL_NAMES;
+}
+
 export const CORE_TOOL_NAMES = new Set([
   ...ALWAYS_VISIBLE_TOOL_NAMES,
   // --- Additional high-usage/direct-use tools ---

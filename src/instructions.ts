@@ -77,3 +77,35 @@ TOOL MAPPING (quick ref)
     affected_workspaces(since="HEAD~1") | workspace_boundaries(rules=[{from_workspace, cannot_import_workspaces}])
   Workspace scoping: framework_audit / nextjs_route_map / analyze_hono_app / nest_audit / astro_audit accept workspace=<name|path>
 `;
+
+/**
+ * A short instructions field, for measuring what the long one buys.
+ *
+ * The MCP `instructions` field is sent once per session but lives in the prompt for every turn of
+ * it, so its cost is paid ~48 times in a typical task. CODESIFT_INSTRUCTIONS measured 1663 tokens
+ * against the ~800 its own header sets as the target — it doubled without anyone re-measuring.
+ *
+ * What is kept here is what changes behaviour: use these tools instead of grep/find, the repo
+ * resolves itself, and plan_turn is the way to reach everything unlisted. What is dropped is
+ * reference material the model can fetch on demand — the full catalog, the framework auto-load
+ * table, the monorepo section — none of which alters a decision until the moment it is needed,
+ * and all of which is reachable through discover_tools/plan_turn at that moment.
+ *
+ * Opt in with CODESIFT_BRIEF_INSTRUCTIONS=1. Default is unchanged.
+ */
+export const CODESIFT_INSTRUCTIONS_BRIEF = `CodeSift — code intelligence over an indexed repo.
+
+PREFER these over Grep/Glob/Bash(grep|find|rg) and over reading a whole file:
+  search_text(query, file_pattern=) — text/regex search, returns file:line with context
+  search_symbols(query, kind=) — find a function/class/type by name
+  get_file_outline(path) — structure of one file without reading it
+  get_file_tree(name_pattern=) — find files
+
+The repo argument resolves from the working directory — do not call list_repos.
+
+plan_turn(query="<your task>") ranks tools, symbols and files for a task and reveals whatever else
+is needed; it is the entry point for anything not listed above.`;
+
+export function resolveInstructions(): string {
+  return process.env["CODESIFT_BRIEF_INSTRUCTIONS"] === "1" ? CODESIFT_INSTRUCTIONS_BRIEF : CODESIFT_INSTRUCTIONS;
+}
