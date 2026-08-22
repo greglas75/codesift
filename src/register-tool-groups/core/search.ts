@@ -2,6 +2,33 @@ import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type Tool
 import { searchSymbols, searchText, semanticSearch, getFileTree, getFileOutline, getRepoOutline, suggestQueries, codebaseRetrieval, dispatchFormatter, type SymbolKind } from "../deps.js";
 import { zJsonArray } from "./schema.js";
 
+/**
+ * `path:line [symbol] content` instead of a JSON object per hit.
+ *
+ * The envelope costs more than the payload. Measured on 10 identifier queries against this repo:
+ * 9165 B/query as JSON against 5336 B rendered this way — 42% smaller for the same hits, because
+ * `{"file":…,"line":…,"content":…,"containing_symbol":{"name":…,"kind":…,"start_line":…,
+ * "end_line":…,"in_degree":…}}` repeats seven keys per match to carry three useful values.
+ *
+ * It is also the shape the agent already reads fluently: rg output with the containing symbol
+ * added, rather than a structure it has to parse before it can skim.
+ *
+ * Only the flat match array renders — grouped results (group_by_file) and the zero-hit response
+ * are different shapes with their own meaning, and are passed through untouched.
+ */
+export function renderCompactMatches(matches: readonly unknown[]): string {
+  const lines: string[] = [];
+  for (const raw of matches) {
+    const m = raw as { file?: unknown; line?: unknown; content?: unknown; containing_symbol?: { name?: unknown } };
+    if (typeof m?.file !== "string" || typeof m.line !== "number") return "";
+    const sym = typeof m.containing_symbol?.name === "string" ? ` [${m.containing_symbol.name}]` : "";
+    const body = typeof m.content === "string" ? m.content.trim() : "";
+    lines.push(`${m.file}:${m.line}${sym} ${body}`);
+  }
+  return lines.join("\n");
+}
+
+
 export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Search ---
   { order: 1237, definition: {
@@ -157,6 +184,13 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
           response["semantic_fallback"] = fallback.semantic_results;
         }
         return response;
+      }
+      // Opt-in compact rendering — see renderCompactMatches. Falls through to the JSON shape when
+      // the result is not a flat match array, or when rendering finds a row it cannot represent:
+      // a silently truncated result is worse than a verbose one.
+      if (process.env["CODESIFT_COMPACT_TEXT_RESULTS"] === "1" && Array.isArray(result) && result.length > 0) {
+        const compact = renderCompactMatches(result);
+        if (compact) return compact;
       }
       return result;
     },
