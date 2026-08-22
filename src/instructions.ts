@@ -103,6 +103,11 @@ PREFER these over Grep/Glob/Bash(grep|find|rg) and over reading a whole file:
 
 The repo argument resolves from the working directory — do not call list_repos.
 
+ONE call beats a sequence. To understand a symbol — where it is defined AND everywhere it is used —
+call find_and_show(query="<name>", include_refs=true) once, instead of grep-for-definition, then
+grep-for-uses, then read the file. Measured on this pattern: 67% fewer tool calls and 43% fewer
+bytes returned, for the same information.
+
 plan_turn(query="<your task>") ranks tools, symbols and files for a task and reveals whatever else
 is needed; it is the entry point for anything not listed above.`;
 
