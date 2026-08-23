@@ -57,17 +57,41 @@ export const CORE_INDEX_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     category: "indexing",
     searchHint: "list indexed repositories repos available",
     outputSchema: OutputSchemas.repoList,
-    description: "List indexed repos. Only needed for multi-repo discovery — single-repo tools auto-resolve from CWD. Set compact=false for full metadata.",
+    description: "List indexed CODE repos. Only needed for multi-repo discovery — single-repo tools auto-resolve from CWD. Conversation indexes are excluded unless include_conversations=true. Set compact=false for full metadata.",
     schema: lazySchema(() => ({
       compact: zBool().describe("true=names only (default), false=full metadata"),
       name_contains: z.string().optional().describe("Filter repos by name substring (case-insensitive). E.g. 'tgm' matches 'local/tgm-panel'"),
+      include_conversations: zBool().describe("Include conversation indexes (conversations/*), which search_conversations uses. Default false — they are not searchable as code."),
     })),
-    handler: (args) => {
+    handler: async (args) => {
       const opts: { compact?: boolean; name_contains?: string } = {
         compact: (args.compact as boolean | undefined) ?? true,
       };
       if (args.name_contains) opts.name_contains = args.name_contains as string;
-      return listAllRepos(opts);
+      const all = await listAllRepos(opts);
+      if (args.include_conversations === true) return all;
+
+      // The registry holds two namespaces. `conversations/<project>` entries belong to
+      // search_conversations and cannot be searched as code, but they dominate the list: measured
+      // on a real registry, 418 of 590 entries (71%) were conversation indexes and they carried
+      // 86% of the bytes — 34,447 B of 40,196. An agent asking "which repos can I search" paid
+      // ~11,000 tokens to receive ~550 tokens of answer.
+      //
+      // Excluded by default rather than removed: the count is reported so the omission is visible,
+      // and include_conversations=true returns the full list unchanged.
+      const isConversation = (name: string) => name.startsWith("conversations/");
+      if (Array.isArray(all)) {
+        const kept = (all as unknown[]).filter((r) =>
+          typeof r === "string"
+            ? !isConversation(r)
+            : !isConversation(String((r as { name?: unknown }).name ?? "")),
+        );
+        const hidden = all.length - kept.length;
+        if (hidden === 0) return kept;
+        return { repos: kept, conversation_indexes_hidden: hidden,
+          hint: `${hidden} conversation index(es) omitted — pass include_conversations=true to list them, or use search_conversations.` };
+      }
+      return all;
     },
   } },
   { order: 1214, definition: {
