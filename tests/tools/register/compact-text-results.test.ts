@@ -43,3 +43,43 @@ describe("renderCompactMatches", () => {
     expect(renderCompactMatches(hits).length).toBeLessThan(JSON.stringify(hits).length / 2);
   });
 });
+
+describe("renderCompactMatches — context lines", () => {
+  const withCtx = {
+    file: "src/a.ts",
+    line: 12,
+    content: "  const x = 1;",
+    context_before: ["function f() {", "  // setup"],
+    context_after: ["  return x;", "}"],
+  };
+
+  // 25.1% of real search_text calls pass context_lines. The first version of this renderer emitted
+  // only `content`, so a quarter of all searches would have silently lost the lines they asked for —
+  // measured 5576 B with context becoming 1990 B without, and nothing in the output said so.
+  it("renders the requested context instead of discarding it", () => {
+    const out = renderCompactMatches([withCtx]);
+    expect(out).toContain("function f() {");
+    expect(out).toContain("return x;");
+  });
+
+  it("numbers the context lines around the match and marks the hit", () => {
+    expect(renderCompactMatches([withCtx]).split("\n")).toEqual([
+      "src/a.ts:12",
+      "  10 | function f() {",
+      "  11 |   // setup",
+      "> 12 | const x = 1;",
+      "  13 |   return x;",
+      "  14 | }",
+    ]);
+  });
+
+  it("keeps the one-line form when no context was requested", () => {
+    const { context_before: _b, context_after: _a, ...bare } = withCtx;
+    expect(renderCompactMatches([bare])).toBe("src/a.ts:12 const x = 1;");
+  });
+
+  it("is still smaller than the JSON it replaces, with context included", () => {
+    const hits = Array.from({ length: 5 }, (_, i) => ({ ...withCtx, line: 12 + i * 10 }));
+    expect(renderCompactMatches(hits).length).toBeLessThan(JSON.stringify(hits).length);
+  });
+});

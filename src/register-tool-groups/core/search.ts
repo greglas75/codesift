@@ -19,11 +19,32 @@ import { zJsonArray } from "./schema.js";
 export function renderCompactMatches(matches: readonly unknown[]): string {
   const lines: string[] = [];
   for (const raw of matches) {
-    const m = raw as { file?: unknown; line?: unknown; content?: unknown; containing_symbol?: { name?: unknown } };
+    const m = raw as {
+      file?: unknown; line?: unknown; content?: unknown;
+      containing_symbol?: { name?: unknown };
+      context_before?: unknown; context_after?: unknown;
+    };
     if (typeof m?.file !== "string" || typeof m.line !== "number") return "";
+    const file: string = m.file;
+    const line: number = m.line;
     const sym = typeof m.containing_symbol?.name === "string" ? ` [${m.containing_symbol.name}]` : "";
     const body = typeof m.content === "string" ? m.content.trim() : "";
-    lines.push(`${m.file}:${m.line}${sym} ${body}`);
+
+    // context_lines was REQUESTED by the caller — 25% of real search_text calls pass it. Rendering
+    // only `content` here dropped it silently: measured 5576 B with context becoming 1990 B without,
+    // and the agent had no way to know the lines it asked for were gone. Cheaper output that answers
+    // a different question is not an optimisation.
+    const before = Array.isArray(m.context_before) ? (m.context_before as unknown[]) : [];
+    const after = Array.isArray(m.context_after) ? (m.context_after as unknown[]) : [];
+    if (before.length === 0 && after.length === 0) {
+      lines.push(`${file}:${line}${sym} ${body}`);
+      continue;
+    }
+    lines.push(`${file}:${line}${sym}`);
+    const start = line - before.length;
+    before.forEach((c, i) => lines.push(`  ${start + i} | ${String(c)}`));
+    lines.push(`> ${line} | ${body}`);
+    after.forEach((c, i) => lines.push(`  ${line + 1 + i} | ${String(c)}`));
   }
   return lines.join("\n");
 }
