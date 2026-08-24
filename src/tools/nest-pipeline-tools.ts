@@ -84,8 +84,12 @@ export async function nestRequestPipeline(
   //   → global filters → controller filters → method filters
   const steps: NestPipelineStep[] = [];
 
+  // The effective chain is the hoisted global layers followed by the route's own. They stopped
+  // being repeated per route (see NestGuardChainResult.global_chain) — the wire format shrank,
+  // the execution order this function reconstructs did not.
+  const effectiveChain = [...(chainResult.global_chain ?? []), ...matchingRoute.chain];
   const byLayerAndType = (layer: string, type: string) =>
-    matchingRoute.chain.filter((c) => c.layer === layer && c.type === type);
+    effectiveChain.filter((c) => c.layer === layer && c.type === type);
 
   // 1. Middleware layer (runs first in NestJS request pipeline)
   for (const c of byLayerAndType("middleware", "guard")) {

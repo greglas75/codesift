@@ -639,18 +639,30 @@ export class UsersController {
     // Should find 2 routes
     expect(result.routes.length).toBe(2);
 
-    // Admin route has global + controller + method guards
+    // Global layers are emitted ONCE rather than repeated in every route — a global guard applies
+    // to all routes by construction, so restating it per route said the same thing N times.
+    // Measured on a real NestJS repo: 3 unique global layers repeated 90 times across 31 routes,
+    // 10,560 B where 352 B carries the same fact. The EFFECTIVE chain for a route is global_chain
+    // followed by the route's own, and all three layers must still be discoverable that way.
+    expect(result.global_chain?.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
+
     const adminRoute = result.routes.find((r) => r.route === "/users/admin");
     expect(adminRoute).toBeDefined();
-    expect(adminRoute!.chain.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
+    // …and not duplicated back into the route.
+    expect(adminRoute!.chain.some((c) => c.layer === "global")).toBe(false);
+    const adminEffective = [...(result.global_chain ?? []), ...adminRoute!.chain];
+    expect(adminEffective.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
     expect(adminRoute!.chain.some((c) => c.layer === "controller" && c.name === "AuthGuard")).toBe(true);
     expect(adminRoute!.chain.some((c) => c.layer === "method" && c.name === "RolesGuard")).toBe(true);
     expect(adminRoute!.chain.some((c) => c.layer === "method" && c.type === "interceptor" && c.name === "LoggingInterceptor")).toBe(true);
 
-    // Public route has global + controller guards only (no method-level)
+    // Public route: controller guard only, no method-level. The global guard reaches it through
+    // global_chain — which is the point: one statement covering both routes, not one per route.
     const publicRoute = result.routes.find((r) => r.route === "/users/public");
     expect(publicRoute).toBeDefined();
-    expect(publicRoute!.chain.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
+    expect(publicRoute!.chain.some((c) => c.layer === "global")).toBe(false);
+    const publicEffective = [...(result.global_chain ?? []), ...publicRoute!.chain];
+    expect(publicEffective.some((c) => c.layer === "global" && c.name === "ThrottlerGuard")).toBe(true);
     expect(publicRoute!.chain.some((c) => c.layer === "controller" && c.name === "AuthGuard")).toBe(true);
     expect(publicRoute!.chain.filter((c) => c.layer === "method")).toEqual([]);
   });
