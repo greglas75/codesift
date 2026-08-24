@@ -1,4 +1,9 @@
 export interface ReviewDiffOptions {
+  /**
+   * Ceiling for the preparation phase (git range, changed files, changed symbols) — everything
+   * before the checks, which have their own per-check budget. Unbounded before this existed.
+   */
+  prepare_timeout_ms?: number;
   repo: string;
   since?: string;
   /** End ref — defaults to "HEAD". Use "WORKING" for uncommitted changes. */

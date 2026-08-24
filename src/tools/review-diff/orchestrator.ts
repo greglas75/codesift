@@ -6,6 +6,7 @@ import type { CodeIndex } from "../../types.js";
 import {
   ALL_CHECKS,
   DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_PREPARE_TIMEOUT_MS,
   DEFAULT_MAX_FILES,
   HEAD_TILDE_PATTERN,
   type CheckName,
@@ -44,15 +45,36 @@ export async function reviewDiff(
   const until = opts.until;
   const maxFiles = opts.max_files ?? DEFAULT_MAX_FILES;
   const checkTimeoutMs = opts.check_timeout_ms ?? DEFAULT_CHECK_TIMEOUT_MS;
+  const prepareTimeoutMs = opts.prepare_timeout_ms ?? DEFAULT_PREPARE_TIMEOUT_MS;
 
-  const prepared = await prepareReview(
-    repo,
-    opts,
-    since,
-    until,
-    maxFiles,
-    startTime,
+  // Asymmetry, not a measurement: the checks are individually bounded
+  // (DEFAULT_CHECK_TIMEOUT_MS, run in parallel) while the preparation before them — resolving the
+  // git range, filtering changed files, computing changed symbols — had no ceiling at all. Worst
+  // case was therefore "unbounded + 30s" inside a tool whose client-facing timeout is 90s.
+  //
+  // That ceiling is not a safe backstop: it answers `timed_out` and leaves the work running, which
+  // is the pathology behind RequestContext.abortSignal (scan_secrets measured at 5.1 hours against
+  // a 90-second budget). An unbounded phase under it is exactly how a call becomes an orphan.
+  //
+  // No hang is claimed here. review_diff on this repo at `since: HEAD~5` completes in ~2.5s; what
+  // telemetry shows is a p90 of 47.8s across 824 real calls, i.e. a long tail that this phase can
+  // extend without limit on a larger range. A bounded prep turns that tail into a reported partial:
+  // the agent learns the range is too large and can narrow it, rather than waiting out the ceiling.
+  const preparedOrTimeout = await withTimeout(
+    prepareReview(repo, opts, since, until, maxFiles, startTime),
+    prepareTimeoutMs,
   );
+  if (preparedOrTimeout.status === "timeout") {
+    return failReviewResult(
+      repo,
+      since,
+      startTime,
+      `preparation exceeded ${prepareTimeoutMs}ms (resolving the diff and its changed symbols) — ` +
+        "narrow the range (a smaller `since`), scope it with `file_pattern`, or raise " +
+        "`prepare_timeout_ms`. No checks ran.",
+    );
+  }
+  const prepared = preparedOrTimeout;
   if (prepared.status === "early") return prepared.result;
 
   const enabledChecks = resolveEnabledChecks(opts.checks);
