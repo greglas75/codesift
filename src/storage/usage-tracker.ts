@@ -321,6 +321,15 @@ export function buildArgsSummary(
   } else if (tool === "get_symbols") {
     const ids = args["symbol_ids"];
     if (Array.isArray(ids)) summary["symbol_count"] = ids.length;
+  } else if (tool === "find_references") {
+    // symbol_names (the batch form) was never recorded: the generic pass-through only copies
+    // scalars, so a batch call logged `repo` alone. 1,120 of 3,005 calls (37%) had exactly that
+    // shape — the argument that decides the response size was the one field the row did not name.
+    // Batch also formats differently (a JSON blob rather than the per-file text), so the two cases
+    // have to be distinguishable to be compared at all.
+    const many = args["symbol_names"];
+    if (Array.isArray(many)) summary["symbol_count"] = many.length;
+    if (typeof args["max_refs"] === "number") summary["max_refs"] = args["max_refs"];
   } else if (tool === "describe_tools") {
     // Capture which tool schemas were requested — previously logged as {} , which
     // hid repeat-fetch volume (920 calls / 1.8M tokens with no visibility into
