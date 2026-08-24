@@ -321,6 +321,17 @@ export function buildArgsSummary(
   } else if (tool === "get_symbols") {
     const ids = args["symbol_ids"];
     if (Array.isArray(ids)) summary["symbol_count"] = ids.length;
+  } else if (tool === "nest_audit" || tool === "python_audit" || tool === "framework_audit" || tool === "astro_audit" || tool === "php_project_audit" || tool === "dependency_audit" || tool === "audit_scan") {
+    // Compound audits default `checks` to "all". nest_audit runs 11 sub-audits that way and costs
+    // a 5,634-token median; 460 of its 754 real calls passed nothing but `repo`, so the field that
+    // decides how much work is done — and how large the answer is — never reached the log. Whether
+    // that is a deliberate "audit everything" or an agent not knowing it can narrow is exactly the
+    // question the rows could not answer.
+    const checks = args["checks"];
+    if (typeof checks === "string") summary["checks"] = checks.slice(0, 120);
+    else if (Array.isArray(checks)) summary["checks"] = checks.filter((c) => typeof c === "string").slice(0, 20).join(",");
+    else summary["checks"] = "(all)";
+    if (typeof args["workspace"] === "string") summary["workspace"] = args["workspace"];
   } else if (tool === "find_references") {
     // symbol_names (the batch form) was never recorded: the generic pass-through only copies
     // scalars, so a batch call logged `repo` alone. 1,120 of 3,005 calls (37%) had exactly that

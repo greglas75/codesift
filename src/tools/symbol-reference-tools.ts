@@ -244,6 +244,27 @@ async function findReferencesWithRipgrep(
  * Find references to a symbol name across indexed files.
  * Matches whole words only using word-boundary regex.
  */
+
+/**
+ * Is this reference only a mention inside a comment?
+ *
+ * find_references matches text, so a symbol named in a comment or a docblock comes back beside its
+ * real callers. Measured over 8 symbols in this repo: 45 of 314 references (14%) were comment
+ * mentions, and for one heavily-documented symbol 21 of 50 (42%).
+ *
+ * Tokens are the smaller half of the problem. The result is capped at max_refs (50 by default), so
+ * comment mentions CONSUME THE CAP — an agent asking who calls a symbol can be shown 21 prose
+ * mentions and 29 callers, with the rest silently past the limit. Filtering first means the cap
+ * spends itself on code.
+ *
+ * Line-anchored on purpose. `foo(); // see wrapTool` starts with code and stays; only a line whose
+ * first non-space characters open a comment is dropped. A `/* … *\/` body without leading stars is
+ * therefore kept — a false negative, which is the safe direction for a filter that removes.
+ */
+export function isCommentOnlyReference(context: string): boolean {
+  return /^\s*(\/\/|\/\*|\*|#)/.test(context);
+}
+
 export async function findReferences(
   repo: string,
   symbolName: string,

@@ -2,6 +2,8 @@ import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type Tool
 import { getSymbol, getSymbols, findAndShow, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, findReferences, findReferencesBatch, traceCallChain, impactAnalysis, traceRoute, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, dispatchFormatter, type Direction } from "../deps.js";
 import { zJsonArray } from "./schema.js";
 import type { SymbolIdAmbiguity } from "../../tools/symbol-tools.js";
+// Direct import, not a lazyExport: a pure predicate with no heavy dependencies of its own.
+import { isCommentOnlyReference } from "../../tools/symbol-reference-tools.js";
 
 // Token diet (2026-07-10 tool-runtime-opt plan, Task 4): find_references' default
 // result cap. Telemetry showed find_references as the #2 token sink (605 calls /
@@ -213,6 +215,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         .describe("Array of symbol names for batch search (reads each file once). Can be JSON string."),
       file_pattern: z.string().optional().describe("Glob pattern to filter files"),
       max_refs: zNum().describe("Maximum number of references to return, per symbol (default 50). Negative/fractional values are clamped to a whole number ≥ 0."),
+      include_comments: zBool().describe("Include matches that are only mentions inside comments. Default false — they consume the max_refs budget that real callers would fill."),
     })),
     handler: async (args) => {
       const maxRefs = normalizeMaxRefs(args.max_refs);
@@ -255,13 +258,21 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (typeof args.symbol_name !== "string" || args.symbol_name.trim().length === 0) {
         throw new Error("symbol_name or symbol_names is required");
       }
-      const refs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
+      const allRefs = await findReferences(args.repo as string, args.symbol_name as string, args.file_pattern as string | undefined);
+      // Drop comment mentions BEFORE the cap, not after: they consume max_refs slots that real
+      // callers would otherwise fill. See isCommentOnlyReference for the measurement.
+      const includeComments = args.include_comments === true;
+      const refs = includeComments ? allRefs : allRefs.filter((r) => !isCommentOnlyReference(r.context));
+      const commentsHidden = allRefs.length - refs.length;
       const truncated = refs.length > maxRefs;
       const shown = truncated ? refs.slice(0, maxRefs) : refs;
       const output = await formatRefsCompact(shown);
       const overflow = truncated ? `\n… +${refs.length - maxRefs} more (pass max_refs to see more)` : "";
+      const commentNote = commentsHidden > 0
+        ? `\n(${commentsHidden} comment mention(s) omitted — include_comments=true to show)`
+        : "";
       const hint = await checkTextStubHint(args.repo as string, "find_references", refs.length === 0);
-      return (hint ? hint + output : output) + overflow;
+      return (hint ? hint + output : output) + overflow + commentNote;
     },
   } },
   { order: 1589, definition: {
