@@ -2,6 +2,14 @@ import { z, zBool, zNum, lazySchema, type ToolDefinitionEntry } from "../shared.
 import { detectCommunities, assembleContext, getKnowledgeMap, diffOutline, changedSymbols, generateClaudeMd, dispatchFormatter } from "../deps.js";
 import { zJsonArray } from "./schema.js";
 
+/**
+ * Files, not symbols: one file's symbols belong together, so truncating mid-file would hand back a
+ * partial picture of a file while claiming to list its changed symbols. 100 files is already a very
+ * large review surface — the real median is a handful.
+ */
+const DEFAULT_CHANGED_FILES_LIMIT = 100;
+
+
 export const CORE_META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   { order: 1902, definition: {
     name: "detect_communities",
@@ -169,12 +177,29 @@ export const CORE_META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       since: z.string().describe("Git ref to compare from"),
       until: z.string().optional().describe("Git ref to compare to (defaults to HEAD)"),
       include_diff: zBool().describe("Include unified diff per changed file (truncated to 500 chars)"),
+      max_files: zNum().describe("Maximum number of changed FILES to return (default 100). The overflow count is always reported."),
     })),
     handler: async (args) => {
       const opts: { include_diff?: boolean } = {};
       if (args.include_diff === true) opts.include_diff = true;
       const result = await changedSymbols(args.repo as string, args.since as string, args.until as string | undefined, opts);
-      return dispatchFormatter("changed_symbols", result);
+
+      // The per-file diff was capped at 500 chars; the number of FILES was not capped at all.
+      // Telemetry: a 308-token median against a 71,854-token maximum — a range wide enough and the
+      // answer is larger than any context window, which is not a useful answer at any size.
+      //
+      // Capped at the tool boundary, not inside changedSymbols(): review-diff's orchestrator and
+      // the CLI both call that function and need the complete list to do their own work.
+      const rawMax = args.max_files;
+      const maxFiles = typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
+        ? Math.floor(rawMax)
+        : DEFAULT_CHANGED_FILES_LIMIT;
+      const overflow = result.length - maxFiles;
+      const shown = overflow > 0 ? result.slice(0, maxFiles) : result;
+      const output = dispatchFormatter("changed_symbols", shown);
+      return overflow > 0
+        ? `${output}\n… +${overflow} more changed file(s) (pass max_files to see more, or narrow the range)`
+        : output;
     },
   } },
   // --- Generation ---
