@@ -99,15 +99,23 @@ export function formatFileTree(data: CompactFileEntry[] | FileTreeNode[] | { ent
 
 interface OutlineEntry { id: string; name: string; kind: SymbolKind; start_line: number; end_line: number; signature?: string; parent?: string }
 
-export function formatFileOutline(data: { symbols: OutlineEntry[]; truncated?: boolean; total_symbols?: number }): string {
+export function formatFileOutline(data: { symbols: OutlineEntry[]; truncated?: boolean; total_symbols?: number; locals_hidden?: number }): string {
   if (data.symbols.length === 0) return "(no symbols)";
   const lines = data.symbols.map((s) => {
     const sig = s.signature ? ` ${s.signature}` : "";
     const parent = s.parent ? ` [${s.parent}]` : "";
-    return `${String(s.start_line).padStart(4)}:${String(s.end_line).padStart(4)} ${s.kind} ${s.name}${sig}${parent}`;
+    // `14:  14` for a one-line symbol says the same thing twice. Most entries in a real outline are
+    // single-line (34 of 45 on src/register-tools.ts), so the repeat was ~8% of the response on the
+    // second most-called tool in telemetry — 8,004 calls, 4.6M tokens.
+    const span = s.end_line > s.start_line
+      ? `${String(s.start_line).padStart(4)}-${s.end_line}`
+      : String(s.start_line).padStart(4);
+    return `${span} ${s.kind} ${s.name}${sig}${parent}`;
   });
   let result = lines.join("\n");
   if (data.truncated) result += `\n\n(truncated: showing ${data.symbols.length}/${data.total_symbols} symbols)`;
+  // Say what was left out. Without this the filter is indistinguishable from the symbol not existing.
+  if (data.locals_hidden) result += `\n(${data.locals_hidden} local variable(s) inside functions omitted — include_locals=true to show)`;
   return result;
 }
 

@@ -258,7 +258,7 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     category: "outline",
     searchHint: "file outline symbols functions classes exports single file",
     outputSchema: OutputSchemas.fileOutline,
-    description: "Get the symbol outline of a single file (functions, classes, exports)",
+    description: "Get the symbol outline of a single file (functions, classes, exports). Variables declared inside functions are omitted — pass include_locals=true for them.",
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       // `file_path` is the canonical name, but agents reliably guess `path` or
@@ -268,13 +268,14 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       file_path: z.string().optional().describe("Relative file path within the repository"),
       path: z.string().optional().describe("Alias for file_path"),
       file: z.string().optional().describe("Alias for file_path"),
+      include_locals: zBool().describe("Include variables declared inside functions. Default false — they are 52% of symbols and say nothing about the file's structure."),
     })),
     handler: async (args) => {
       const filePath = (args.file_path ?? args.path ?? args.file) as string | undefined;
       if (!filePath) {
         return "get_file_outline requires a file path: get_file_outline(file_path=\"src/api.ts\").";
       }
-      const result = await getFileOutline(args.repo as string, filePath);
+      const result = await getFileOutline(args.repo as string, filePath, { includeLocals: args.include_locals === true });
       const output = dispatchFormatter("get_file_outline", result);
       const isEmpty = !result || (Array.isArray(result) && result.length === 0);
       const hint = await checkTextStubHint(args.repo as string, "get_file_outline", isEmpty);
