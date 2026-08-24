@@ -95,10 +95,26 @@ const SYMBOL_TOOLS = new Set(["get_symbol", "get_symbols", "get_context_bundle",
 /** Tools whose cache NEVER expires within a session (repo list doesn't change mid-session) */
 const SESSION_PERMANENT_TOOLS = new Set(["list_repos"]);
 
+/**
+ * Tools whose repeat is governed by their own delivery tracking, not by this cache.
+ *
+ * A cache hit returns the FULL text, so it saves compute and latency and exactly zero tokens — the
+ * agent's context receives the whole payload a second time. For describe_tools that is the entire
+ * cost: measured over August, 2,254 of 8,908 requested schema names (25%) were re-requested inside
+ * one session, ~420K tokens re-delivering text the agent already had.
+ *
+ * It also cannot see the common case. This cache keys on the exact argument set, while the repeats
+ * are partial — a call for nine tool names of which five were already delivered is a cache MISS and
+ * a full re-send. describeTools tracks delivery per NAME, so it catches those; letting the cache
+ * answer first would hide them from it.
+ */
+const DELIVERY_TRACKED_TOOLS = new Set(["describe_tools"]);
+
 function getCached(key: string): string | null {
   const entry = responseCache.get(key);
   if (!entry) return null;
   const toolName = key.split("\0")[0] ?? "";
+  if (DELIVERY_TRACKED_TOOLS.has(toolName)) return null;
 
   // Session-permanent tools never expire (repo list doesn't change mid-session)
   if (SESSION_PERMANENT_TOOLS.has(toolName)) return entry.text;

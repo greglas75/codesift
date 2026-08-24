@@ -25,7 +25,7 @@ export {
   extractToolParams,
   getToolDefinition,
   getToolDefinitions,
-  resetDescribeToolsCacheForTesting,
+  resetDescribeToolsCacheForTesting, resetDeliveredSchemasForTesting,
 } from "./register-tools/discovery.js";
 export { enableFrameworkToolBundle, enableToolByName, getToolHandle } from "./register-tools/runtime.js";
 
@@ -160,14 +160,15 @@ export function registerTools(
   const describeHandle = server.registerTool(
     "describe_tools",
     {
-      description: "Get full schema for specific tools by name. Use after discover_tools to see params before calling.",
+      description: "Get full schema for specific tools by name. Use after discover_tools to see params before calling. A schema already returned earlier in the same session comes back as a pointer, not a repeat — pass force=true if the context no longer holds it.",
       inputSchema: {
         names: z.union([z.array(z.string()), zStringArrayJson()]).describe("Tool names to describe"),
         reveal: zBool().describe("If true, enable tools in ListTools so the LLM can call them"),
+        force: zBool().describe("Return the full schema even if it was already returned in this session (use after a compaction)"),
       },
     },
     async (args) => wrapTool("describe_tools", args as Record<string, unknown>, async () => {
-      const result = describeTools(args.names as string[]);
+      const result = describeTools(args.names as string[], { force: args.force === true });
       if (args.reveal !== true) return result;
 
       const revealed: string[] = [];

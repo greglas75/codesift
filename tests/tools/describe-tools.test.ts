@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { describeTools, getToolDefinitions, registerTools, getToolHandle, resetDescribeToolsCacheForTesting, setFrozenToolListHostForTesting } from "../../src/register-tools.js";
+import { describeTools, getToolDefinitions, registerTools, getToolHandle, resetDescribeToolsCacheForTesting, resetDeliveredSchemasForTesting, setFrozenToolListHostForTesting } from "../../src/register-tools.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -101,22 +101,32 @@ describe("describeTools", () => {
   });
 
   describe("cache", () => {
-    it("returns same result reference for repeated identical name sets", () => {
+    // These two used to assert identity of the whole result, which proved the second call did not
+    // recompute. That guarantee still holds but has moved: the result object is now built per call
+    // (a repeat returns a POINTER rather than the schema — see describe-tools-dedupe.test.ts),
+    // while the expensive part, extractToolParams, is cached per tool name. Asserting on the params
+    // reference keeps the original intent — "no recomputation on a repeat" — under the new shape.
+    it("does not recompute params for a name it has already described", () => {
       resetDescribeToolsCacheForTesting();
+      resetDeliveredSchemasForTesting();
       const a = describeTools(["search_text"]);
-      const b = describeTools(["search_text"]);
-      expect(b).toBe(a); // identity equality — second call returned cached object
+      const b = describeTools(["search_text"], { force: true });
+      expect(b.tools[0].params).toBe(a.tools[0].params); // same array — served from the per-name cache
     });
 
-    it("treats different orderings of the same name set as a cache hit", () => {
+    it("caches params per name, so ordering of the request cannot matter", () => {
       resetDescribeToolsCacheForTesting();
+      resetDeliveredSchemasForTesting();
       const a = describeTools(["search_text", "find_dead_code"]);
-      const b = describeTools(["find_dead_code", "search_text"]);
-      expect(b).toBe(a);
+      const b = describeTools(["find_dead_code", "search_text"], { force: true });
+      const byName = (r: typeof a) => Object.fromEntries(r.tools.map((t) => [t.name, t.params]));
+      expect(byName(b)["search_text"]).toBe(byName(a)["search_text"]);
+      expect(byName(b)["find_dead_code"]).toBe(byName(a)["find_dead_code"]);
     });
 
     it("does not collide across different name sets", () => {
       resetDescribeToolsCacheForTesting();
+      resetDeliveredSchemasForTesting();
       const a = describeTools(["search_text"]);
       const b = describeTools(["find_dead_code"]);
       expect(b).not.toBe(a);

@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TOOL_DEFINITIONS } from "../register-tool-groups/index.js";
 import type { ToolCategory, ToolDefinition } from "../register-tool-groups/shared.js";
+import { getSessionState } from "../storage/session-state.js";
+import { hasRequestContext } from "../server-helpers/request-context.js";
 
 /** Usage-critical tools that must never require discover_tools/describe_tools. */
 export const ALWAYS_VISIBLE_TOOL_NAMES = [
@@ -267,11 +269,54 @@ export function resetDescribeToolsCacheForTesting(): void {
  * Return full param details for a specific list of tool names.
  * Unknown names are collected in not_found.
  */
-export function describeTools(names: string[]): DescribeToolsResult {
+/**
+ * Schemas already handed to a given session.
+ *
+ * `describeToolsCache` above caches the COMPUTATION, so a repeat costs no CPU and exactly as many
+ * tokens as the first fetch. Measured over August: of 8,908 schema names requested, 2,254 (25%)
+ * were re-fetched inside the SAME session — ~420K tokens re-delivering text the agent already had.
+ * The repeat list is mostly core tools (scan_secrets 101x, search_patterns 97x, audit_scan 94x).
+ *
+ * Keyed by session, not process: the HTTP daemon serves many sessions from one process, and a
+ * process-wide set would tell session B that session A's schema had already been delivered.
+ */
+const deliveredSchemas = new Map<string, Set<string>>();
+const MAX_TRACKED_SESSIONS = 200;
+
+function deliveredFor(sessionId: string): Set<string> {
+  let set = deliveredSchemas.get(sessionId);
+  if (!set) {
+    // Bounded so a long-lived daemon cannot accumulate a set per session forever. Insertion order
+    // is oldest-first, so the first key is the least recently created.
+    if (deliveredSchemas.size >= MAX_TRACKED_SESSIONS) {
+      const oldest = deliveredSchemas.keys().next().value;
+      if (oldest !== undefined) deliveredSchemas.delete(oldest);
+    }
+    set = new Set();
+    deliveredSchemas.set(sessionId, set);
+  }
+  return set;
+}
+
+/** Test seam — the dedupe is session state, and tests need it to start empty. */
+export function resetDeliveredSchemasForTesting(): void {
+  deliveredSchemas.clear();
+}
+
+export function describeTools(names: string[], opts?: { force?: boolean }): DescribeToolsResult {
   const capped = names.slice(0, 100); // CQ6 cap
-  const cacheKey = [...capped].sort().join("\u0000");
-  const cached = describeToolsCache.get(cacheKey);
-  if (cached) return cached;
+  const force = opts?.force === true;
+
+  // stdio only, deliberately. `SESSION_ID` is a per-PROCESS constant, so under the shared HTTP
+  // daemon — one process serving every client on the machine — every session shares it, and the
+  // dedupe would tell session B that session A's schema had already been delivered. That is a
+  // pointer to text the agent never received. On stdio the client spawns one server per window,
+  // so process and session coincide and the claim is true.
+  //
+  // Recovering the saving for the daemon needs a real per-session key on RequestContext; `cwd` is
+  // not one, because two windows open on the same repo share it.
+  const perSession = !hasRequestContext();
+  const delivered = perSession ? deliveredFor(getSessionState().sessionId) : null;
 
   const tools: DescribeToolsResult["tools"] = [];
   const not_found: string[] = [];
@@ -282,18 +327,36 @@ export function describeTools(names: string[]): DescribeToolsResult {
       not_found.push(name);
       continue;
     }
+    // A repeat returns a pointer, not the schema — but says so, and says how to override. Context
+    // can be compacted away between the two calls, so silently withholding would leave the agent
+    // with no schema and no way to ask for one.
+    if (!force && delivered?.has(def.name)) {
+      tools.push({
+        name: def.name,
+        category: def.category ?? "uncategorized",
+        description: "[schema already returned earlier in this session — pass force=true to repeat it]",
+        is_core: CORE_TOOL_NAMES.has(def.name),
+        params: [],
+      });
+      continue;
+    }
+    delivered?.add(def.name);
+    const cacheKey = `\u0001${def.name}`;
+    let params = describeToolsCache.get(cacheKey)?.tools?.[0]?.params;
+    if (!params) {
+      params = extractToolParams(def);
+      describeToolsCache.set(cacheKey, { tools: [{ name: def.name, category: def.category ?? "uncategorized", description: def.description, is_core: CORE_TOOL_NAMES.has(def.name), params }], not_found: [] });
+    }
     tools.push({
       name: def.name,
       category: def.category ?? "uncategorized",
       description: def.description,
       is_core: CORE_TOOL_NAMES.has(def.name),
-      params: extractToolParams(def),
+      params,
     });
   }
 
-  const result = { tools, not_found };
-  describeToolsCache.set(cacheKey, result);
-  return result;
+  return { tools, not_found };
 }
 
 /**
