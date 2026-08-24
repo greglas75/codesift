@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderCompactMatches } from "../../../src/register-tool-groups/core/search.js";
 
@@ -81,5 +82,26 @@ describe("renderCompactMatches — context lines", () => {
   it("is still smaller than the JSON it replaces, with context included", () => {
     const hits = Array.from({ length: 5 }, (_, i) => ({ ...withCtx, line: 12 + i * 10 }));
     expect(renderCompactMatches(hits).length).toBeLessThan(JSON.stringify(hits).length);
+  });
+});
+
+describe("compact rendering is the default", () => {
+  const KNOB = "CODESIFT_COMPACT_TEXT_RESULTS";
+  const src = readFileSync(
+    new URL("../../../src/register-tool-groups/core/search.ts", import.meta.url),
+    "utf-8",
+  );
+
+  // search_text is 22.9% of all tokens in real telemetry (15.6M of 68M), and the JSON envelope is
+  // 42% of what it ships. The default is the whole saving; an opt-in one is worth nothing, because
+  // nobody sets it. Pinned as source rather than behaviour because the branch reads process.env at
+  // call time and a test that mutates it races the rest of the suite.
+  it("ships enabled — the knob only turns it OFF", () => {
+    expect(src).toContain(`process.env["${KNOB}"] !== "0"`);
+    expect(src).not.toContain(`process.env["${KNOB}"] === "1"`);
+  });
+
+  it("keeps an escape hatch documented next to the branch", () => {
+    expect(src).toMatch(new RegExp(`${KNOB}=0`));
   });
 });

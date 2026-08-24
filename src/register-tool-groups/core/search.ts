@@ -206,10 +206,17 @@ export const CORE_SEARCH_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         }
         return response;
       }
-      // Opt-in compact rendering — see renderCompactMatches. Falls through to the JSON shape when
-      // the result is not a flat match array, or when rendering finds a row it cannot represent:
-      // a silently truncated result is worse than a verbose one.
-      if (process.env["CODESIFT_COMPACT_TEXT_RESULTS"] === "1" && Array.isArray(result) && result.length > 0) {
+      // Compact by default — see renderCompactMatches. search_text is the single largest token
+      // line in real telemetry (15.6M of 68M, 22.9%), and the JSON envelope is 42% of what it
+      // ships: 9,167 B/query becomes 5,346 B for the same hits, 5,576 -> 3,983 B when context_lines
+      // was requested. Nothing consumes this text programmatically — the internal callers
+      // (codebase_retrieval, the SQL tools, the CLI) call searchText() directly and never see the
+      // handler's rendering — and the tool declares no outputSchema, so there is no shape contract
+      // to break. Set CODESIFT_COMPACT_TEXT_RESULTS=0 to get the JSON back.
+      //
+      // Falls through to JSON when the result is not a flat match array, or when rendering finds a
+      // row it cannot represent: a silently truncated result is worse than a verbose one.
+      if (process.env["CODESIFT_COMPACT_TEXT_RESULTS"] !== "0" && Array.isArray(result) && result.length > 0) {
         const compact = renderCompactMatches(result);
         if (compact) return compact;
       }
