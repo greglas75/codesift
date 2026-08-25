@@ -13,7 +13,24 @@ export interface TestImpactResult {
   affected_tests: Array<{ test_file: string; confidence: number; reasons: string[] }>;
   suggested_command: string;
   changed_files: string[];
+  /** How many tests matched before the cap — present only when the list was cut. */
+  total_affected?: number;
 }
+
+/**
+ * Ceiling on the returned test list.
+ *
+ * Nothing bounded it: telemetry over 33 calls shows a 3,150-token median against a **272,637-token
+ * maximum** — by far the largest single response in the corpus, and past any context window.
+ *
+ * The cap also fixes the suggested command rather than only shortening it. That command inlines
+ * every path (measured: 8,140 B for 207 tests at `since: HEAD~30`), so at a few thousand tests it
+ * would exceed ARG_MAX and fail to run — a command that cannot be executed is not a suggestion.
+ *
+ * Safe to cut here because the list is already sorted by confidence descending, so the cap keeps
+ * the tests most likely to matter and drops the weakest matches.
+ */
+const DEFAULT_MAX_AFFECTED_TESTS = 100;
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -70,7 +87,7 @@ export function matchTestFile(prodFile: string, testFiles: string[]): string | n
 
 export async function testImpactAnalysis(
   repo: string,
-  options?: { since?: string; until?: string },
+  options?: { since?: string; until?: string; max_tests?: number },
 ): Promise<TestImpactResult> {
   const index = await getCodeIndex(repo);
   if (!index) {
@@ -163,13 +180,22 @@ export async function testImpactAnalysis(
   // Sort by confidence descending
   affectedTests.sort((a, b) => b.confidence - a.confidence);
 
-  // 7. Detect test runner
-  const suggested_command = buildSuggestedCommand(index.root, affectedTests.map((t) => t.test_file));
+  const rawMax = options?.max_tests;
+  const maxTests = typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
+    ? Math.floor(rawMax)
+    : DEFAULT_MAX_AFFECTED_TESTS;
+  const totalAffected = affectedTests.length;
+  const shownTests = totalAffected > maxTests ? affectedTests.slice(0, maxTests) : affectedTests;
+
+  // Built from the SHOWN set, not the full one: a command naming tests the caller was not given is
+  // both larger and less honest than one naming the tests it was.
+  const suggested_command = buildSuggestedCommand(index.root, shownTests.map((t) => t.test_file));
 
   return {
-    affected_tests: affectedTests,
+    affected_tests: shownTests,
     suggested_command,
     changed_files: result.changed_files,
+    ...(totalAffected > maxTests ? { total_affected: totalAffected } : {}),
   };
 }
 

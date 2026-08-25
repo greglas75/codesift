@@ -360,13 +360,18 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       since: z.string().optional().describe("Git ref to compare from (default: HEAD~1)"),
       until: z.string().optional().describe("Git ref to compare to (default: HEAD)"),
+      max_tests: zNum().describe("Maximum number of affected tests to return (default 100, highest confidence first). The overflow count is always reported."),
     })),
     handler: async (args) => {
       const opts: Parameters<typeof testImpactAnalysis>[1] = {};
       if (args.since != null) opts!.since = args.since as string;
       if (args.until != null) opts!.until = args.until as string;
+      if (typeof args.max_tests === "number") opts!.max_tests = args.max_tests;
       const result = await testImpactAnalysis(args.repo as string, opts);
-      const parts = [`test_impact: ${result.affected_tests.length} tests affected | ${result.changed_files.length} files changed`];
+      const shownOfTotal = result.total_affected
+        ? `${result.affected_tests.length} of ${result.total_affected}`
+        : String(result.affected_tests.length);
+      const parts = [`test_impact: ${shownOfTotal} tests affected | ${result.changed_files.length} files changed`];
       if (result.suggested_command) parts.push(`\nRun: ${result.suggested_command}`);
       if (result.affected_tests.length > 0) {
         parts.push("\n─── Affected Tests ───");
@@ -375,6 +380,9 @@ export const ANALYSIS_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         }
       } else {
         parts.push("\nNo affected tests found.");
+      }
+      if (result.total_affected) {
+        parts.push(`\n… +${result.total_affected - result.affected_tests.length} lower-confidence test(s) omitted (pass max_tests to see more). The command above runs the tests shown.`);
       }
       return parts.join("\n");
     },
