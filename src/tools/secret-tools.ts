@@ -9,6 +9,7 @@
  */
 
 import { join } from "node:path";
+import { currentAbortSignal } from "../server-helpers/request-context.js";
 import picomatch from "picomatch";
 import { getCodeIndex } from "./index-tools.js";
 import {
@@ -53,8 +54,18 @@ export interface ScanSecretsResult {
   truncated?: boolean;
   /** How many matched in total, when more matched than were returned. */
   total_findings?: number;
+  /** Set when the walk did not finish: the remaining files were never looked at. */
+  stopped_early?: "aborted" | "budget";
   hint?: string;
 }
+
+/**
+ * Wall-clock ceiling for the file walk.
+ *
+ * 60s sits inside the 90s client-facing tool timeout, so the scan reports a partial result itself
+ * rather than being cut off by a timeout that does not actually stop it.
+ */
+const SCAN_BUDGET_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Main handler
@@ -95,11 +106,24 @@ export async function scanSecrets(
   let allFindings: SecretFinding[] = [];
   let filesScanned = 0;
   let filesFailed = 0;
+  // The scan walked every indexed file with no ceiling and no abort check. Measured on this repo:
+  // 27.9 seconds and 10,533 findings, of which 200 were kept — telemetry puts the p90 at 23.4s.
+  //
+  // The tool-level timeout above it is not a stop: it answers `timed_out` and lets the loop run on,
+  // which is how this tool reached 5.1 HOURS against a 90-second budget (see
+  // RequestContext.abortSignal). For a secret scanner that is worse than slow — the abandoned scan
+  // competes for the same disk as the narrower retry the agent issues after giving up.
+  const abortSignal = currentAbortSignal();
+  const scanDeadline = Date.now() + SCAN_BUDGET_MS;
+  let stoppedEarly: "aborted" | "budget" | null = null;
   const filesWithSecrets = new Set<string>();
 
   const fileMatcher = filePattern ? picomatch(filePattern) : null;
 
   for (const file of index.files) {
+    if (abortSignal?.aborted) { stoppedEarly = "aborted"; break; }
+    if (Date.now() > scanDeadline) { stoppedEarly = "budget"; break; }
+
     // Skip if file pattern doesn't match
     if (fileMatcher && !fileMatcher(file.path)) continue;
 
@@ -156,6 +180,10 @@ export async function scanSecrets(
   if (repoCache && repoCache.size > 0) {
     scanCoverage = repoCache.size >= index.files.length ? "full" : "partial";
   }
+  // A scan that stopped early is NOT full, whatever the cache says. "No secrets found" from a scan
+  // that never reached the rest of the repo is a false all-clear, which is the one wrong answer a
+  // secret scanner must never give.
+  if (stoppedEarly) scanCoverage = filesScanned > 0 ? "partial" : "none";
 
   return {
     findings: allFindings,
@@ -166,6 +194,17 @@ export async function scanSecrets(
           hint:
             `Showing ${maxResults} of ${totalFindings} findings. Raise max_results, or narrow the `
             + "scan with file_pattern / severity / min_confidence — the rest are NOT clean.",
+        }
+      : {}),
+    ...(stoppedEarly
+      ? {
+          stopped_early: stoppedEarly,
+          hint:
+            stoppedEarly === "aborted"
+              ? `Scan ABORTED after ${filesScanned} of ${index.files.length} files (client timed out). `
+                + "The unscanned files are NOT known to be clean — narrow with file_pattern and re-run."
+              : `Scan stopped at the ${SCAN_BUDGET_MS}ms budget after ${filesScanned} of ${index.files.length} files. `
+                + "The unscanned files are NOT known to be clean — narrow with file_pattern, or raise scan_budget_ms.",
         }
       : {}),
     files_scanned: filesScanned,
