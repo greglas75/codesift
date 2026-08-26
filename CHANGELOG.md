@@ -2,6 +2,96 @@
 
 ## [Unreleased]
 
+## [0.15.5] — 2026-08-25
+
+Seventeen commits, driven by 84,878 real tool calls from 55 days of
+`usage.jsonl` rather than by reading code. Measured end to end by building
+v0.15.4 in a second worktree and running both binaries against the same
+repository with identical arguments: **145,934 -> 84,084 bytes on a mixed
+realistic workload (-42%)**, 40,537 -> 23,357 tokens.
+
+One shape accounts for nearly every finding: **the tool answered a different
+question than the one asked.** 86% of `list_repos` was conversation indexes,
+which cannot be searched as code. 52% of a file outline was local variables
+inside function bodies. 14% of references were mentions in prose — and because
+results are capped, those mentions pushed real callers out of the answer, which
+made it a correctness bug and not only a cost one. `nest_audit` restated the
+same global guard 90 times across 31 routes.
+
+Everything hides rather than drops: each response carries the count of what was
+omitted and the name of the switch that brings it back
+(`include_conversations`, `include_locals`, `include_comments`, `max_files`,
+`max_tests`, `force`, `CODESIFT_COMPACT_TEXT_RESULTS=0`). A silent filter would
+trade a token problem for a worse one — an agent concluding a symbol does not
+exist.
+
+### Changed
+
+- **`search_text` renders compactly by default** — the biggest single line in
+  the corpus (15.6M raw tokens, 22.9%). The JSON envelope repeated seven keys per
+  hit to carry three values: 9,167 -> 5,346 B per query. `context_lines`, which
+  25.1% of real calls pass, is preserved as numbered lines. Opt out with
+  `CODESIFT_COMPACT_TEXT_RESULTS=0`.
+- **`list_repos` excludes conversation indexes** — 418 of 590 registry entries
+  carrying 86% of the bytes. 11,150 -> 1,643 tokens (-85%).
+- **`get_file_outline` omits locals declared inside functions**, and stops
+  printing a one-line symbol's line number twice. 1,672 -> 1,275 B (-24%).
+  Methods are nested too and are kept: only variable/constant are dropped.
+- **`describe_tools` returns a pointer for a schema already sent this session** —
+  25% of 8,908 requested names were repeats, ~420K tokens re-delivering text the
+  agent had. 1,615 -> 438 tokens on a repeat. stdio only: `SESSION_ID` is
+  per-process, so under the shared daemon the claim would be false.
+- **`nest_audit` states the global guard chain once** instead of per route.
+  50,248 -> 39,981 B (-20%).
+- **`find_references` drops comment-only mentions before the cap**, so the 50
+  slots spend themselves on code.
+- **Hints no longer name tools this process never registered** — unfollowable
+  advice costs a turn to discover it is unusable.
+- **The read hook's line threshold is 200 -> 600.** The two gates on the same
+  decision disagreed 10x: lines caught 203 of 642 files (32%), bytes caught 21
+  (3%). At the measured 34 bytes/line, 20 KB is ~570 lines.
+
+### Fixed
+
+- **`scan_secrets` stops when the caller stops waiting.** It walked every file
+  with no ceiling and never checked the abort signal — 27.9s and 10,533 findings
+  here, p90 23.4s in telemetry. The tool timeout above it does not stop the loop;
+  it answers `timed_out` and lets it run, which is how this tool reached 5.1
+  hours against a 90-second budget. Coverage is now forced to `partial` after an
+  early stop: a false all-clear is the one answer a secret scanner must never
+  give.
+- **`test_impact_analysis` is bounded** — 3,150-token median against a 272,637
+  maximum, the largest response in the corpus. Also a correctness fix:
+  `suggested_command` inlines every path, so at a few thousand tests it exceeds
+  ARG_MAX and cannot run.
+- **`changed_symbols` caps the file list**, which had no bound at all (308-token
+  median, 71,854 maximum). By file, not by symbol — one file's symbols belong
+  together.
+- **`review_diff` bounds its preparation phase.** The checks were individually
+  bounded and everything before them was not.
+- **Compact rendering was silently dropping `context_lines`** — caught before it
+  became the default, which would have quietly shortened a quarter of all
+  searches.
+
+### Telemetry
+
+`args_summary` was not recording the argument that decides the response size —
+three separate instances: `symbol_names` for `find_references`, `checks` for the
+seven compound audit tools, and previously `names` for `describe_tools`. An
+optimisation cannot be aimed at a cost the log does not show.
+
+### Not changed, and why
+
+`search_symbols` (3.04M tokens) is left alone: 85% of that comes from calls
+passing `include_source: true`, which explicitly ask for the code. `get_file_tree`
+already emits 48 bytes per file against 40-character paths. `impact_analysis`,
+`audit_scan`, `analyze_complexity` and `analyze_renders` are already capped.
+
+Worth recording separately: three independent hint mechanisms turned out to be
+inert. `detail_level` was passed in **0 of 3,563** `search_symbols` calls despite
+the H6 hint; the `find_and_show` pattern was ignored in 104 of 104 benchmark
+sessions. Every saving here is therefore in a default or a format, not in advice.
+
 ## [0.15.4] — 2026-08-20
 
 Eighteen commits, almost all of them defects that produced a plausible-looking
