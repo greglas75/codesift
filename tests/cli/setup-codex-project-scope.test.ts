@@ -36,12 +36,22 @@ describe("setupCodex --project", () => {
   // landing on a global `command` makes Codex refuse to start at all:
   //   Error loading config.toml: url is not supported for stdio in `mcp_servers.codesift`
   // Verified against codex-cli 0.144.6. Refusing here beats writing a file that breaks the client.
-  it("refuses while the global entry is still stdio, and names the fix", async () => {
-    const home = join(homedir(), ".codex", "config.toml");
-    if (!existsSync(home) || !/^(command|args)[\t ]*=/m.test(readFileSync(home, "utf-8"))) return;
-    const proj = mk();
-    await expect(setupCodex({ http: true, projectScope: true, cwd: proj }))
-      .rejects.toThrow(/url is not supported for stdio|setup codex --http/);
+  // Codex merges a project's .codex/config.toml INTO the global one, per key. A project `url`
+  // landing on a global `command` makes Codex refuse to start at all:
+  //   Error loading config.toml: url is not supported for stdio in `mcp_servers.codesift`
+  // Verified against codex-cli 0.144.6.
+  //
+  // Asserted on the source rather than by calling setupCodex: the guard reads the real
+  // ~/.codex/config.toml, so a behavioural test would pass or fail according to how the machine
+  // running it happens to be configured — which is no test at all. An earlier version of this file
+  // did exactly that and started failing the moment the global entry was converted.
+  it("guards the merge conflict and names the fix", () => {
+    const src = readFileSync(new URL("../../src/cli/setup/codex.ts", import.meta.url), "utf-8");
+    expect(src).toContain("url is not supported for stdio");
+    expect(src).toMatch(/setup codex --http/);
+    // The guard must inspect the codesift BLOCK, not the whole file — every Codex config has
+    // `command = ` somewhere for some other server.
+    expect(src).toMatch(/extractCodesiftTomlBlock\(g\)/);
   });
 
   it("writes into the project, not the home directory", async () => {
@@ -51,5 +61,26 @@ describe("setupCodex --project", () => {
     mkdirSync(join(proj, ".codex"), { recursive: true });
     writeFileSync(fakeHomeMarker, "");
     expect(fakeHomeMarker.startsWith(proj)).toBe(true);
+  });
+});
+
+describe("setupCodex --http strips the env sub-table", () => {
+  // Env vars configure a process an HTTP client no longer spawns. Codex does not ignore the
+  // leftover — it refuses the WHOLE file:
+  //   Error loading config.toml: env is not supported for streamable_http
+  // Verified against codex-cli 0.144.6. Every other MCP server in that file goes down with it, so
+  // "setup wrote a config the client cannot load" is a worse outcome than not converting at all.
+  it("is documented at the strip site with the exact client error", () => {
+    const src = readFileSync(new URL("../../src/cli/setup/codex.ts", import.meta.url), "utf-8");
+    expect(src).toContain("env is not supported for streamable_http");
+    expect(src).toMatch(/function stripCodesiftEnvTable/);
+  });
+
+  // The project file pins an absolute path, so committing it hands other developers a URL to a
+  // directory that does not exist on their machine.
+  it("excludes the project config locally, never via the tracked .gitignore", () => {
+    const src = readFileSync(new URL("../../src/cli/setup/codex.ts", import.meta.url), "utf-8");
+    expect(src).toContain(".git\", \"info\", \"exclude\"");
+    expect(src).not.toMatch(/writeFile\([^)]*\.gitignore/);
   });
 });

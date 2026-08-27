@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
@@ -177,6 +177,58 @@ function normalizeCodesiftTomlServerEntry(
   };
 }
 
+
+/**
+ * Remove `[mcp_servers.codesift.env]` when the entry is HTTP.
+ *
+ * Env vars configure a process this client no longer spawns — under HTTP the daemon carries its
+ * own environment. Codex does not ignore the leftover, it refuses the whole file:
+ *
+ *     Error loading config.toml: env is not supported for streamable_http
+ *
+ * Verified against codex-cli 0.144.6. Leaving it behind means `setup --http` writes a config the
+ * client cannot load at all, which is worse than not converting: every MCP server in the file goes
+ * down with it, not just codesift.
+ */
+function stripCodesiftEnvTable(content: string): { content: string; changed: boolean } {
+  const header = "[mcp_servers.codesift.env]";
+  const start = content.indexOf(header);
+  if (start === -1) return { content, changed: false };
+  const after = start + header.length;
+  const nextTable = content.slice(after).search(/\n\[[^\]]+\]/);
+  const end = nextTable === -1 ? content.length : after + nextTable;
+  const before = content.slice(0, start).replace(/\n+$/, "\n");
+  return { content: before + content.slice(end).replace(/^\n+/, "\n"), changed: true };
+}
+
+
+/**
+ * Keep a project-scoped config out of the repository's history.
+ *
+ * The file pins an ABSOLUTE path (`?cwd=/Users/someone/DEV/thing`), so committing it hands every
+ * other developer a URL pointing at a directory that does not exist on their machine. Left
+ * untracked and unignored it also shows up in `git status` forever, which is how it eventually gets
+ * committed by accident.
+ *
+ * Written to `.git/info/exclude`, never to `.gitignore`: the exclusion is a fact about THIS
+ * checkout, and editing a tracked file to accommodate a local tool is a change the repo's owners
+ * did not ask for. Best-effort — a failure here must not fail the setup.
+ */
+async function excludeProjectConfigLocally(projectRoot: string): Promise<boolean> {
+  try {
+    const excludePath = join(projectRoot, ".git", "info", "exclude");
+    if (!existsSync(join(projectRoot, ".git"))) return false;
+    const current = existsSync(excludePath) ? await readFile(excludePath, "utf-8") : "";
+    if (/^\.codex\/?$/m.test(current)) return false;
+    await ensureDir(join(projectRoot, ".git", "info"));
+    const sep = current.length === 0 || current.endsWith("\n") ? "" : "\n";
+    await writeFile(excludePath, `${current}${sep}# codesift: per-project MCP config pins an absolute path\n.codex/\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   // Codex merges a project's .codex/config.toml INTO the global one rather than replacing it, and
   // the merge is per key. So a project entry carrying `url` lands on a global entry that already
@@ -209,6 +261,10 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   }
   await ensureDir(configDir);
 
+  // Runs on every path, not only on creation: a config written before this existed is exactly the
+  // one still sitting unignored in someone's `git status`.
+  if (projectScope) await excludeProjectConfigLocally(projectRoot);
+
   if (!existsSync(configPath)) {
     await writeSecretFile(configPath, getCodexTomlBlock(options).trimStart());
     return { platform: "codex", config_path: configPath, status: "created" };
@@ -216,7 +272,12 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
 
   const original = await readFile(configPath, "utf-8");
   const { content: cleaned, removed } = stripCodesiftToolApprovalOverrides(original);
-  const normalizedEntry = normalizeCodesiftTomlServerEntry(cleaned, options);
+  // Strip the env sub-table BEFORE normalising: an HTTP entry that keeps it makes Codex refuse the
+  // entire config file, taking every other MCP server down with it.
+  const envStripped = options?.http === true
+    ? stripCodesiftEnvTable(cleaned)
+    : { content: cleaned, changed: false };
+  const normalizedEntry = normalizeCodesiftTomlServerEntry(envStripped.content, options);
   const normalized = ensureCodesiftDefaultToolsApprovalApprove(normalizedEntry.content);
   const required = ensureCodesiftRequired(normalized.content);
   const content = required.content;
@@ -226,7 +287,7 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
       : {};
 
   if (content.includes("[mcp_servers.codesift]")) {
-    if (removed > 0 || normalized.changed || normalizedEntry.changed || required.changed) {
+    if (removed > 0 || envStripped.changed || normalized.changed || normalizedEntry.changed || required.changed) {
       await writeSecretFile(configPath, content);
       return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
     }
