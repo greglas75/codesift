@@ -1,9 +1,8 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { daemonHttpUrl } from "../../src/cli/setup/mcp.js";
-import { setupCodex } from "../../src/cli/setup/codex.js";
 
 const dirs: string[] = [];
 const mk = () => { const d = mkdtempSync(join(tmpdir(), "codex-scope-")); dirs.push(d); return d; };
