@@ -337,10 +337,14 @@ describe("setup", () => {
     });
 
     it("pins the project directory into the URL", async () => {
-      // The daemon is one process for every client, started in `/`, and Claude
-      // Code answers `roots/list` with -32601 Method not found — so the config
-      // is the only thing that can say where this client works. Without it,
-      // every auto-resolved call returns `Repository "local/" not found`.
+      // The daemon is one process for every client, started in `/`, so the config
+      // is the only thing that can say where this client works. Without it, every
+      // auto-resolved call returns `Repository "local/" not found`.
+      //
+      // (This comment used to add that Claude Code answers `roots/list` with
+      // -32601. It does not — see the correction in setup/mcp.ts. The reason the
+      // daemon cannot use roots at all is that it serves statelessly, which
+      // leaves no session for a server->client round trip.)
       const result = await setup("claude", { http: true, cwd: "/proj/beta" });
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       const url = new URL(content.mcpServers.codesift.url);
@@ -352,6 +356,44 @@ describe("setup", () => {
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       const url = new URL(content.mcpServers.codesift.url);
       expect(url.searchParams.get("cwd")).toBe(process.cwd());
+    });
+
+    it("gives a global-config client a workspace VARIABLE instead of a dead bare URL", async () => {
+      // Cursor keeps MCP config in ONE global file. A bare daemon URL would leave
+      // every window resolving the daemon's own cwd (`/` under launchd), so the
+      // client that most needs the daemon could not use it. Probed against Cursor
+      // 1.0 (2026-08-27): it expands `${workspaceFolder}`.
+      const result = await setup("cursor", { http: true, cwd: null });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.url).toBe(
+        "http://127.0.0.1:7077/mcp?cwd=${workspaceFolder}",
+      );
+    });
+
+    it("leaves the placeholder UNENCODED — an encoded one is never expanded", async () => {
+      // `searchParams.set` would write `%24%7BworkspaceFolder%7D`. The client
+      // substitutes by matching the literal text in its config, so an encoded
+      // placeholder silently survives into the request and every project points
+      // at the same non-directory.
+      const result = await setup("cursor", { http: true, cwd: null });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.url).toContain("${workspaceFolder}");
+      expect(content.mcpServers.codesift.url).not.toContain("%24%7B");
+    });
+
+    it("still pins a real directory when one is asked for", async () => {
+      // --project overrides the variable: an explicit directory wins.
+      const result = await setup("cursor", { http: true, cwd: "/proj/delta" });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(new URL(content.mcpServers.codesift.url).searchParams.get("cwd")).toBe("/proj/delta");
+    });
+
+    it("does not hand the variable to a client that was never measured to expand it", async () => {
+      // An unexpanded placeholder reaches the daemon as text and resolves to
+      // nothing, so this opts in per client rather than by default.
+      const result = await setup("gemini", { http: true, cwd: null });
+      const content = JSON.parse(await readFile(result.config_path, "utf-8"));
+      expect(content.mcpServers.codesift.url).toBe("http://127.0.0.1:7077/mcp");
     });
 
     it("honors a custom --port in the URL", async () => {

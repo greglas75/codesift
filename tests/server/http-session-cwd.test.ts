@@ -3,8 +3,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { pathToFileURL } from "node:url";
+import { homedir, tmpdir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 
-import { startHttpServer } from "../../src/server.js";
+import { startHttpServer, cwdFromUrl } from "../../src/server.js";
 import {
   runWithRequestContext,
   currentCwd,
@@ -245,5 +248,56 @@ describe("a daemon that was never told where the client works", () => {
     // normally rather than throwing.
     expect(() => resolveToolRepoArgs("search_text", args)).not.toThrow();
     expect(typeof args["repo"]).toBe("string");
+  });
+});
+
+/**
+ * A GLOBAL client entry can serve every project only if the client expands a
+ * workspace variable into the URL. Cursor does — measured with an MCP probe on
+ * 2026-08-27 — but the two shapes it produces both used to degrade into "no cwd"
+ * without a word, which is the whole reason a globally-configured client could
+ * not use the daemon.
+ */
+describe("cwdFromUrl — what a VS Code-derived client actually sends", () => {
+  let dir: string | null = null;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  it("accepts a plain absolute directory", () => {
+    dir = mkdtempSync(join(tmpdir(), "codesift-cwd-"));
+    expect(cwdFromUrl(`/mcp?cwd=${encodeURIComponent(dir)}`)).toBe(dir);
+  });
+
+  it("expands a leading ~, which is what Cursor's ${workspaceFolder} expands to", () => {
+    // Cursor returns `~/DEV/thing`, NOT an absolute path. `pathResolve` would
+    // expand `~` against the daemon's own cwd (`/` under launchd) and produce
+    // `/~/DEV/thing`, so the directory silently vanished.
+    dir = mkdtempSync(join(homedir(), ".codesift-cwd-test-"));
+    const tilde = `~/${relative(homedir(), dir)}`;
+    expect(cwdFromUrl(`/mcp?cwd=${encodeURIComponent(tilde)}`)).toBe(dir);
+  });
+
+  it("refuses an unexpanded ${workspaceFolder} rather than treating it as a path", () => {
+    // A Cursor window with no folder open leaves the placeholder verbatim.
+    expect(cwdFromUrl("/mcp?cwd=" + encodeURIComponent("${workspaceFolder}"))).toBeUndefined();
+    expect(cwdFromUrl("/mcp?cwd=" + encodeURIComponent("~/x/${workspaceFolder}"))).toBeUndefined();
+  });
+
+  it("refuses a relative path — resolving it against the daemon's / is meaningless", () => {
+    expect(cwdFromUrl("/mcp?cwd=" + encodeURIComponent("DEV/codesift-mcp"))).toBeUndefined();
+    expect(cwdFromUrl("/mcp?cwd=" + encodeURIComponent("./here"))).toBeUndefined();
+  });
+
+  it("refuses a file, a missing path, and a missing parameter", () => {
+    dir = mkdtempSync(join(tmpdir(), "codesift-cwd-"));
+    const file = join(dir, "f.txt");
+    writeFileSync(file, "x");
+    expect(cwdFromUrl(`/mcp?cwd=${encodeURIComponent(file)}`)).toBeUndefined();
+    expect(cwdFromUrl(`/mcp?cwd=${encodeURIComponent(join(dir, "nope"))}`)).toBeUndefined();
+    expect(cwdFromUrl("/mcp")).toBeUndefined();
+    expect(cwdFromUrl("/mcp?cwd=")).toBeUndefined();
   });
 });

@@ -6,6 +6,28 @@ import { hasCodesiftHook, loadHooksSection, type HookEntry } from "./hooks.js";
 import { setupJsonPlatform } from "./mcp.js";
 
 const GEMINI_CONFIG = { configDirName: ".gemini", configFileName: "settings.json" };
+
+/**
+ * Antigravity deliberately carries NO `workspaceVar` — it must stay on stdio.
+ *
+ * Probed against `antigravity-client v1.0.0` (2026-08-27), and every part of this
+ * was measured, because each one on its own would have justified converting it:
+ *
+ *   - It expands NO variable syntax. `${workspaceFolder}`, `${workspaceRoot}`,
+ *     `${cwd}`, `${env:PWD}`, `$PWD`, `${PWD}` and `${projectRoot}` all arrived
+ *     at the server verbatim. A global HTTP entry would therefore send an
+ *     unexpandable placeholder from every project.
+ *   - It declares `roots` with `listChanged: true` and then answers `roots/list`
+ *     with `[]`, even with a project open. Declaring the capability is not
+ *     evidence of using it — and the daemon serves statelessly anyway, so it
+ *     could not ask.
+ *   - Its stdio child gets the PROJECT directory as its cwd, so repo
+ *     auto-resolution already works. Cursor's, by contrast, gets `$HOME`.
+ *
+ * Net: converting Antigravity to the daemon would REPLACE a working directory
+ * with none. That is a regression dressed as a consolidation, so it is written
+ * down here rather than left to be rediscovered.
+ */
 const ANTIGRAVITY_CONFIG = {
   configDirName: ".gemini/antigravity",
   configFileName: "mcp_config.json",

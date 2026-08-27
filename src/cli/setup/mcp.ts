@@ -11,6 +11,20 @@ import { ensureDir, readJsonFile, writeJsonFile } from "./fs.js";
 export interface JsonPlatformConfig {
   configDirName: string;
   configFileName: string;
+  /**
+   * Variable this client expands into the URL, for clients whose MCP config is
+   * GLOBAL ONLY.
+   *
+   * Such a client cannot otherwise use the shared daemon: one URL carries one
+   * directory, so a single global entry cannot describe two projects, and the
+   * client falls back to a stdio process per window (measured: 36 of them under
+   * Codex). A variable moves the per-project half into the client, so one entry
+   * serves every project.
+   *
+   * Set it ONLY for a client measured to expand it — an unexpanded placeholder
+   * reaches the daemon as text and every project resolves to nothing.
+   */
+  workspaceVar?: string;
 }
 
 const DEFAULT_DAEMON_PORT = 7077;
@@ -89,8 +103,32 @@ export function daemonHttpUrl(
   // for a client whose per-project configs merge into it: the global entry carries the transport,
   // each project's config carries its own ?cwd= and overrides. `undefined` still means "pin the
   // current directory", which is what every existing caller wants.
-  if (cwd !== null) url.searchParams.set("cwd", cwd ?? process.cwd());
+  if (cwd === null) return url.toString();
+
+  const value = cwd ?? process.cwd();
+  if (isClientPlaceholder(value)) {
+    // MUST stay literal. `searchParams.set` percent-encodes it to
+    // `%24%7BworkspaceFolder%7D`, and the client substitutes by matching the
+    // TEXT `${workspaceFolder}` in its config — so an encoded placeholder is
+    // never expanded and every project would report the same dead directory.
+    return `${url.toString()}?cwd=${value}`;
+  }
+  url.searchParams.set("cwd", value);
   return url.toString();
+}
+
+/**
+ * A variable the CLIENT expands, not a path we resolve.
+ *
+ * This is what lets a client with only a GLOBAL MCP config use the shared daemon:
+ * one entry, and each window fills in its own directory. Verified against Cursor
+ * 1.0 with an MCP probe (2026-08-27) — it expands `${workspaceFolder}`, though to
+ * a TILDE path rather than an absolute one, which is why the daemon expands `~`.
+ * A window with no folder open leaves the placeholder verbatim; the daemon
+ * rejects that shape rather than inventing a directory from it.
+ */
+export function isClientPlaceholder(value: string): boolean {
+  return value.startsWith("${") && value.endsWith("}");
 }
 
 /**
@@ -191,7 +229,14 @@ export async function setupJsonPlatform(
 ): Promise<SetupResult> {
   const configDir = join(homedir(), config.configDirName);
   const configPath = join(configDir, config.configFileName);
-  const entry = buildJsonServerEntry(options);
+  // A GLOBAL http entry (cwd === null) on a client that expands a workspace
+  // variable should carry that variable rather than nothing: a bare URL leaves
+  // the daemon resolving its own cwd, which under launchd is `/`.
+  const effective =
+    options?.http && options.cwd === null && config.workspaceVar
+      ? { ...options, cwd: config.workspaceVar }
+      : options;
+  const entry = buildJsonServerEntry(effective);
 
   await ensureDir(configDir);
 

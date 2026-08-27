@@ -18,7 +18,8 @@ import { setupHooksForPlatform } from "./cli/setup.js";
 import { detectPlatform, detectPlatformFromClientInfo, type HookPlatform } from "./cli/platform.js";
 import { createRequire } from "node:module";
 import { timingSafeEqual } from "node:crypto";
-import { resolve as pathResolve } from "node:path";
+import { resolve as pathResolve, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
 import { statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHost } from "./utils/loopback.js";
@@ -188,8 +189,45 @@ function codeReplacedUnderUs(): boolean {
  * nothing. Not a security boundary (the daemon is loopback-only and already
  * serves every indexed repo to any local caller) but it keeps a typo from
  * silently resolving every repo to garbage.
+ *
+ * Two shapes come from VS Code-derived clients writing `?cwd=${workspaceFolder}`,
+ * which is what lets ONE GLOBAL entry serve every project on a client that has no
+ * per-project MCP config. Both were measured against Cursor 1.0 (probe, 2026-08-27):
+ *
+ *   - `~/DEV/thing` — Cursor expands the variable to a TILDE path, not an absolute
+ *     one. `pathResolve` expands `~` against the process cwd, which for a
+ *     launchd-started daemon is `/`, producing `/~/DEV/thing`; that fails `statSync`
+ *     and the directory silently vanished. Expanding it here is what makes the
+ *     single-entry configuration work at all.
+ *   - `${workspaceFolder}` verbatim — a window with NO folder open leaves the
+ *     placeholder unexpanded. It must not become a directory name.
+ *
+ * A rejected value is announced once. The whole reason this cost a full
+ * investigation is that an unusable cwd degraded into "no cwd" without a word,
+ * and the symptom surfaced far away as `Repository "local/" not found`.
  */
-function cwdFromUrl(rawUrl: string): string | undefined {
+const warnedCwdValues = new Set<string>();
+const MAX_WARNED_CWD_VALUES = 32;
+
+function warnUnusableCwd(value: string, why: string): void {
+  // Bounded: the value comes from a URL, so an unbounded set is a memory leak a
+  // client could drive. Past the cap we stay quiet rather than grow.
+  if (warnedCwdValues.has(value) || warnedCwdValues.size >= MAX_WARNED_CWD_VALUES) return;
+  warnedCwdValues.add(value);
+  console.error(
+    `[codesift] ignoring ?cwd=${value} — ${why}. Repo auto-resolution will fail for this ` +
+      `client; pass an absolute path, or an explicit repo argument.`,
+  );
+}
+
+/** Expand a leading `~`. `~user` is left alone — it cannot be resolved reliably. */
+function expandTilde(value: string): string {
+  if (value === "~") return homedir();
+  if (value.startsWith("~/")) return join(homedir(), value.slice(2));
+  return value;
+}
+
+export function cwdFromUrl(rawUrl: string): string | undefined {
   const q = rawUrl.indexOf("?");
   if (q < 0) return undefined;
   let value: string | null;
@@ -199,10 +237,28 @@ function cwdFromUrl(rawUrl: string): string | undefined {
     return undefined;
   }
   if (!value) return undefined;
+
+  // An unexpanded client-side placeholder, not a path.
+  if (value.includes("${")) {
+    warnUnusableCwd(value, "the client did not expand this variable (window with no folder open?)");
+    return undefined;
+  }
+
+  const expanded = expandTilde(value);
+  if (!isAbsolute(expanded)) {
+    // Resolving a relative path against the daemon's cwd (`/` under launchd) is
+    // meaningless and would silently name the wrong directory.
+    warnUnusableCwd(value, "not an absolute path");
+    return undefined;
+  }
+
   try {
-    const resolved = pathResolve(value);
-    return statSync(resolved).isDirectory() ? resolved : undefined;
+    const resolved = pathResolve(expanded);
+    if (statSync(resolved).isDirectory()) return resolved;
+    warnUnusableCwd(value, "not a directory");
+    return undefined;
   } catch {
+    warnUnusableCwd(value, "no such directory");
     return undefined;
   }
 }

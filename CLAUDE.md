@@ -371,6 +371,48 @@ Three things about Codex, each verified by probe against **codex-cli 0.144.6**, 
   `{"roots":[]}`. Implementing it server-side was the obvious fix and would have been hours in the
   void; the probe took minutes.
 
+### Cursor and Antigravity are opposites — probe each client, never generalise (2026-08-27)
+
+Both keep MCP config in ONE global file, so both looked like the Codex case. They are not the same,
+and the difference decides the transport. Measured with an MCP probe that logs `initialize` and
+issues `roots/list`:
+
+| | Cursor 1.0 (`cursor-vscode`) | Antigravity (`antigravity-client v1.0.0`) |
+|---|---|---|
+| expands `${workspaceFolder}` | **yes** — but to a TILDE path (`~/DEV/x`) | **no**, and neither `${workspaceRoot}`, `${cwd}`, `${env:PWD}`, `$PWD`, `${PWD}`, `${projectRoot}` |
+| declares `roots` | yes | yes, `listChanged: true` |
+| answers `roots/list` | real workspace path | **`[]`**, with a project open |
+| cwd of its stdio child | **`$HOME`** | the project directory |
+| verdict | **daemon**, one global entry with the variable | **stdio** — converting it would be a regression |
+
+Three things worth carrying to the next client:
+
+- **A variable in the URL is what lets a global-config client use the daemon at all.** One entry,
+  and each window fills in its own directory — no per-project files. `JsonPlatformConfig.workspaceVar`
+  holds it, and it must be set only for a client measured to expand it.
+- **The placeholder must reach the config UNENCODED.** `searchParams.set` writes
+  `%24%7BworkspaceFolder%7D`, and the client substitutes by matching literal text — so an encoded
+  placeholder is never expanded and every project silently resolves to the same non-directory.
+  `daemonHttpUrl` special-cases it; `isClientPlaceholder` is the test.
+- **Declaring `roots` is not evidence of answering it**, and the daemon cannot use roots regardless:
+  it serves statelessly (`legacy: "stateless"`), so there is no session for a server→client round
+  trip. The note in `request-context.ts` saying roots "is what would close that gap" predates that
+  and is wrong on its own terms — `tests/server/http-session-cwd.test.ts` asserts the daemon never asks.
+
+Cursor also exposed a fault that predates the daemon: it spawns stdio servers with cwd `$HOME`, so
+repo auto-resolution under Cursor was resolving the home directory, not the project — wrong answers
+rather than errors, for as long as Cursor has been configured.
+
+**`cwd` values that are not absolute paths now say so.** `~/…` is expanded (Cursor sends it),
+an unexpanded `${…}` and a relative path are refused, and each rejection is announced once on
+stderr. Previously every one of these degraded silently to "no cwd", surfacing far away as
+`Repository "local/" not found`.
+
+**Antigravity has THREE config paths and `setup antigravity` writes only one.** `agy mcp list` reads
+`~/.gemini/config/mcp_config.json`; setup writes `~/.gemini/antigravity/mcp_config.json`;
+`~/.gemini/settings.json` is the gemini-cli file and holds a different server set entirely. Verify
+with `agy mcp list` — not by reading the file setup wrote.
+
 `codesift setup codex --http --project` writes the project file and excludes it via
 `.git/info/exclude` — never `.gitignore`, because the file pins an absolute path and would break for
 every other developer, and editing a tracked file for a local tool is a change nobody asked for.
