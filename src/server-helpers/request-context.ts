@@ -11,10 +11,25 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * answered `Repository "local/" not found`, because `resolveRepoFromCwd("/")`
  * matches nothing and falls back to `local/` + basename("/") = "".
  *
- * So the CWD has to travel with the request rather than with the process. The
- * daemon asks each client for its MCP roots once per session and runs that
- * session's requests inside this context; stdio callers get an empty store and
- * fall through to `process.cwd()`, exactly as before.
+ * So the CWD has to travel with the request rather than with the process. It
+ * travels in the URL: `setup <client> --http` writes `?cwd=<abs path>` and the
+ * daemon runs that session's requests inside this context. stdio callers get an
+ * empty store and fall through to `process.cwd()`, exactly as before.
+ *
+ * NOT from MCP roots. This comment used to say the daemon asks each client for
+ * its roots once per session; nothing implements that — `roots/list` appears
+ * nowhere in the server. The claim cost a reader a full investigation before the
+ * grep came back empty, which is why it is called out rather than quietly
+ * deleted.
+ *
+ * The consequence is structural and worth stating here, because it decides how
+ * many processes a machine runs: an HTTP entry is inherently PER-PROJECT, since
+ * one URL carries one directory. A client that keeps ONE GLOBAL MCP config
+ * therefore cannot use the shared daemon at all and falls back to stdio — one
+ * process per session. Measured on this machine: Claude Code, which stores MCP
+ * config per project, had 114 projects on the daemon; Codex, which has only
+ * ~/.codex/config.toml, had 36 stdio processes. Implementing `roots/list` is
+ * what would close that gap.
  *
  * AsyncLocalStorage rather than a parameter thread because the consumers sit
  * deep under `wrapTool` — repo resolution, hint generation — and every one of
