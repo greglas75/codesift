@@ -338,6 +338,48 @@ comes back on the next prune. Delete the artifacts (`<hash>.index.db`, `-wal`, `
 `sqlite3 <db> "select key,value from meta"`; a stray `local/tmp` rooted at `/private/tmp` had
 indexed 16,514 scratch files (617 MB) and looked like a real repo in the registry.
 
+## Which clients can actually use the shared daemon (2026-08-27)
+
+The daemon learns the caller's directory from `?cwd=` in the URL and from nothing else — there is
+no `roots/list` anywhere in the server, whatever `request-context.ts` used to claim. **One URL
+carries one directory, so an HTTP entry is inherently PER-PROJECT.** A client whose MCP config is a
+single global file therefore cannot use the daemon at all and falls back to a stdio server per
+session. Measured while diagnosing timeouts at load 45: Claude Code (per-project config in
+`~/.claude.json`) had 114 projects on the daemon; Codex (only `~/.codex/config.toml`) had **36 stdio
+processes**, and closing Codex dropped the machine-wide count from 40+ to 4 — which is how the
+attribution was settled.
+
+**The Codex approval-guard LaunchAgent silently reverts every attempt to fix this.**
+`com.codesift.codex-approval-guard` has `WatchPaths: ~/.codex/config.toml` and runs
+`codesift setup codex --no-rules --no-hooks`. Without `--http` that rewrites the entry back to
+stdio, so it watches the file it rewrites: any conversion is undone in ~7 seconds, with nothing in
+any log. It exists to hold `default_tools_approval_mode`, not the transport — add `--http` to its
+`ProgramArguments` rather than unloading it.
+
+Three things about Codex, each verified by probe against **codex-cli 0.144.6**, not by reading:
+
+- **It reads `<project>/.codex/config.toml`** and MERGES it into the global file, per key. A server
+  defined only in the project file loads and completes its handshake.
+- **A project `url` cannot override a global `command`.** The merge produces a hybrid and Codex
+  refuses to start: `Error loading config.toml: url is not supported for stdio`. The global entry
+  has to be HTTP first — a bare `http://127.0.0.1:7077/mcp` with no `?cwd=`, which each project's
+  config then overrides. That is what `daemonHttpUrl(port, null)` is for.
+- **`env` on an HTTP entry breaks the WHOLE file**: `env is not supported for streamable_http`.
+  Every other MCP server in that config goes down with codesift, so a conversion that leaves
+  `[mcp_servers.codesift.env]` behind is worse than no conversion. `setup --http` strips it.
+- **Roots would not help.** Codex declares no `roots` capability and answers `roots/list` with
+  `{"roots":[]}`. Implementing it server-side was the obvious fix and would have been hours in the
+  void; the probe took minutes.
+
+`codesift setup codex --http --project` writes the project file and excludes it via
+`.git/info/exclude` — never `.gitignore`, because the file pins an absolute path and would break for
+every other developer, and editing a tracked file for a local tool is a change nobody asked for.
+
+**`npm i -g .` leaves the running daemon stale.** It replaces the files the daemon started from, and
+`/health` then reports `status: "stale"` with `lazily imported modules will fail until it restarts`.
+Restart it (`launchctl unload` + `load`) BEFORE any client reconnects, and use `--ignore-scripts`:
+`postinstall` runs `setup all`, which writes the **stdio** entry and undoes the conversion.
+
 ## Operating the shared daemon
 
 The `codesift serve` daemon (launchd `com.codesift.daemon`, port 7077) can wedge: the port stays
@@ -527,6 +569,16 @@ rt --repeat 20 <cmd>   # run it 20x in ONE job and report the failure RATE
 these docs name directly — `rt` composes with them, it does not replace them.
 Off the tailnet `rt` transparently runs the same command locally, so it is
 always safe to reach for.
+
+**A green `rt` exit is not a green suite — read the output, not the status.** Off the tailnet (or
+when the tunnel is degraded while `tailscale status` still says `active`) `rt` REFUSES and prints
+`do NOT run this suite locally`, and the wrapper can still exit 0. That is the same failure this
+codebase hunts inside its own tools: a plausible result delivered where a verdict should be. A run
+that produced no `Tests N passed` summary line executed nothing — do not release, do not commit on
+it. Retry once (the refusal is often a transient tunnel), then investigate.
+
+The same rule applies to `npm run lint`: read its result before committing, not after. A commit
+landed on this repo with unused imports because the lint exit code was never looked at.
 
 Farm config for this repo lives in `.tf.json`. Tool source of truth:
 `~/DEV/i9-farma` (edit there, then `./install.sh` — never edit `~/bin/rt`
