@@ -178,8 +178,35 @@ function normalizeCodesiftTomlServerEntry(
 }
 
 export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
-  const configDir = join(homedir(), ".codex");
+  // Codex merges a project's .codex/config.toml INTO the global one rather than replacing it, and
+  // the merge is per key. So a project entry carrying `url` lands on a global entry that already
+  // carries `command`, and Codex refuses the result outright:
+  //
+  //     Error loading config.toml: url is not supported for stdio in `mcp_servers.codesift`
+  //
+  // Verified against codex-cli 0.144.6. The consequence is that a project-scoped HTTP entry cannot
+  // coexist with a global STDIO one — the global entry has to be HTTP too (a bare daemon URL with
+  // no ?cwd=, which each project then overrides with its own).
+  const projectScope = options?.projectScope === true;
+  const projectRoot = options?.cwd ?? process.cwd();
+  const configDir = projectScope ? join(projectRoot, ".codex") : join(homedir(), ".codex");
   const configPath = join(configDir, "config.toml");
+  if (projectScope) {
+    const globalToml = join(homedir(), ".codex", "config.toml");
+    if (existsSync(globalToml)) {
+      const g = await readFile(globalToml, "utf-8");
+      const block = extractCodesiftTomlBlock(g);
+      if (block && /^(command|args)[\t ]*=/m.test(block.block)) {
+        throw new Error(
+          "The global ~/.codex/config.toml still defines mcp_servers.codesift as stdio "
+          + "(`command = ...`). Codex MERGES the project config into it, so this project's `url` "
+          + "would produce `url is not supported for stdio` and Codex would refuse to start. "
+          + "Convert the global entry first: `codesift setup codex --http` (no --project), which "
+          + "writes a bare daemon URL that each project's config then overrides.",
+        );
+      }
+    }
+  }
   await ensureDir(configDir);
 
   if (!existsSync(configPath)) {

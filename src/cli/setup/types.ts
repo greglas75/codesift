@@ -24,7 +24,17 @@ export interface SetupOptions {
    * Project directory to pin into the daemon URL. Defaults to the CWD.
    * An HTTP entry is per-project by construction — see `daemonHttpUrl`.
    */
-  cwd?: string;
+  cwd?: string | null;
+  /**
+   * Write the client config into the PROJECT rather than the user's home.
+   *
+   * Only meaningful with `http`, and it is what makes the shared daemon usable at all for a client
+   * whose MCP config is otherwise global. One URL carries one directory, so a single global entry
+   * cannot describe two projects — measured consequence on this machine: Claude Code, which stores
+   * MCP config per project, had 114 projects on the daemon while Codex, which has only
+   * ~/.codex/config.toml, ran 36 stdio processes.
+   */
+  projectScope?: boolean;
   /**
    * Daemon host. Defaults to 127.0.0.1 (a local daemon). Point it at a shared
    * instance to have several machines served by one process — the reason

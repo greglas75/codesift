@@ -102,8 +102,19 @@ async function handleSetup(args: string[], flags: Flags): Promise<void> {
   const daemonScheme: "http" | "https" | undefined =
     rawScheme === "https" ? "https" : rawScheme === "http" ? "http" : undefined;
   const insecureTransport = getBoolFlag(flags, "insecure-transport") ?? false;
+  // --project writes the client config into THIS project instead of the user's home, and pins this
+  // directory into the URL. It exists because a client whose MCP config is global cannot use the
+  // shared daemon at all: one URL carries one directory, so one global entry cannot describe two
+  // projects, and the client falls back to a stdio process per session.
+  //
+  // Without --project, `--http` writes the GLOBAL entry as a bare daemon URL (no ?cwd=), which is
+  // the transport half; each project's own config then supplies the directory half by overriding
+  // the same key. A global entry that pinned one directory would be actively wrong for every other
+  // project on the machine.
+  const projectScope = getBoolFlag(flags, "project") ?? false;
   const options = {
     hooks, rules, force, gitHooks, http,
+    ...(projectScope ? { projectScope: true, cwd: process.cwd() } : http ? { cwd: null } : {}),
     ...(port !== undefined ? { port } : {}),
     ...(daemonHost ? { host: daemonHost } : {}),
     ...(daemonToken ? { token: daemonToken } : {}),

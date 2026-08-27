@@ -65,7 +65,7 @@ const MCP_SERVER_ENTRY = resolveMcpServerEntry();
 
 export function daemonHttpUrl(
   port?: number,
-  cwd?: string,
+  cwd?: string | null,
   host?: string,
   scheme?: "http" | "https",
 ): string {
@@ -85,7 +85,11 @@ export function daemonHttpUrl(
   const url = new URL(
     `${scheme ?? "http"}://${authorityHost}:${port ?? DEFAULT_DAEMON_PORT}/mcp`,
   );
-  url.searchParams.set("cwd", cwd ?? process.cwd());
+  // `null` means DELIBERATELY no cwd — a bare daemon URL. That is the shape a GLOBAL entry needs
+  // for a client whose per-project configs merge into it: the global entry carries the transport,
+  // each project's config carries its own ?cwd= and overrides. `undefined` still means "pin the
+  // current directory", which is what every existing caller wants.
+  if (cwd !== null) url.searchParams.set("cwd", cwd ?? process.cwd());
   return url.toString();
 }
 
