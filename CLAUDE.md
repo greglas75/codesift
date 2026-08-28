@@ -422,6 +422,43 @@ every other developer, and editing a tracked file for a local tool is a change n
 Restart it (`launchctl unload` + `load`) BEFORE any client reconnects, and use `--ignore-scripts`:
 `postinstall` runs `setup all`, which writes the **stdio** entry and undoes the conversion.
 
+## The daemon OOMs and launchd restarts it into the same wall (2026-08-28)
+
+Symptom from the outside: "CodeSift is down and won't come back." It is not down — it is
+**crash-looping**. The process answers, balloons, dies with `FatalProcessOutOfMemory` (SIGABRT,
+`Abort trap: 6`), launchd's `KeepAlive` starts it again, and it repeats. Measured: RSS 508 MB → 4.69 GB
+in one minute, `/health` failing 6 of 20 probes at 10 s each, **14 node crash reports in 24 h**.
+
+**The cause was V8's DEFAULT heap limit — 4288 MB on a 128 GB machine.** Nothing set one. That is
+far too little for what this process is: one long-lived server for every project on the box,
+materialising whole indexes (a 240k-symbol index is ~349 MB resident, and construction is
+synchronous — which is also why `/health` stops answering for 10 s at a time) plus two RAM-scaled
+caches. `resolveDaemonHeapMb` now writes `--max-old-space-size` into both the LaunchAgent and the
+systemd unit, scaled (RAM/8, floor 2048, cap 8192) and overridable with `CODESIFT_DAEMON_HEAP_MB`.
+The flag must precede the script path or node treats it as a CLI argument and ignores it silently.
+
+**The loop is what does the damage, not the single crash.** An OOM discards ALL in-flight work, so a
+mass re-index — 29 repos rebuilding hash snapshots, seen in `daemon.err.log` — never reaches the end,
+and the next process starts it over. Raising the ceiling is what lets that pass finish once.
+
+A bigger number is not the long-term answer. If the daemon starts reaching 8 GB too, that is the
+ADR-004 stage-2 work (query the DB instead of materialising indexes), not another bump.
+
+**Diagnosing this class of fault — what actually told us something:**
+
+- `ps -o state` → `U` (uninterruptible) or `R`, and RSS over time. A process that is *gone* between
+  two checks has crashed and been respawned; `launchctl list` showing a live pid proves nothing
+  about continuity. Compare the PID across checks.
+- `~/Library/Logs/DiagnosticReports/node-*.ips` — the crash report names the reason outright
+  (`node::OOMErrorHandler` in the triggered thread). This was the only artifact that gave a cause
+  rather than a symptom; everything before it was inference.
+- `/health` alone is not enough and is not stable under load: it answered instantly in one probe and
+  timed out in the next. Sample it repeatedly and count, and follow with a real `tools/call`.
+- The `embed batch … stalled … retrying as N+N` lines in `daemon.err.log` look like a retry storm but
+  are **not** — `embedBatchWithStallRetry` splits sequentially and is depth-bounded. They are a
+  symptom of load, not a cause of it. Checking the remote endpoint (tailnet ollama answered HTTP 200
+  in 0.73 s) ruled that out early.
+
 ## Operating the shared daemon
 
 The `codesift serve` daemon (launchd `com.codesift.daemon`, port 7077) can wedge: the port stays

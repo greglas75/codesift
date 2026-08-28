@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  resolveDaemonHeapMb,
   buildServicePlan,
   buildLaunchAgentPlist,
   buildSystemdUnit,
@@ -232,5 +233,67 @@ describe("service — status", () => {
     expect(s.running).toBe(true);
     expect(s.pid).toBe(process.pid);
     expect(s.port).toBe(7077);
+  });
+});
+
+/**
+ * The daemon ran on V8's DEFAULT heap limit — 4288 MB on a 128 GB machine — while
+ * being one long-lived server for every project, materialising whole indexes. It
+ * reached 4.69 GB, died with `FatalProcessOutOfMemory`, and launchd restarted it
+ * into the same wall: 14 node crash reports in 24 h (2026-08-28).
+ *
+ * The loop is what does the damage. An OOM discards all in-flight work, so a mass
+ * re-index never reaches the end and the next process repeats it.
+ */
+describe("service — daemon heap ceiling", () => {
+  const GB = 1024 ** 3;
+
+  it("scales with machine RAM instead of taking V8's default", () => {
+    expect(resolveDaemonHeapMb(32 * GB, {})).toBe(4096);
+    expect(resolveDaemonHeapMb(128 * GB, {})).toBe(16384);
+  });
+
+  it("caps, because a ceiling is the only guard between a leak and the machine", () => {
+    expect(resolveDaemonHeapMb(512 * GB, {})).toBe(24576);
+    expect(resolveDaemonHeapMb(1024 * GB, {})).toBe(24576);
+  });
+
+  it("keeps a floor so a small machine still gets a usable daemon", () => {
+    expect(resolveDaemonHeapMb(4 * GB, {})).toBe(2048);
+    expect(resolveDaemonHeapMb(8 * GB, {})).toBe(2048);
+  });
+
+  it("honours an explicit override, and ignores a nonsensical one", () => {
+    expect(resolveDaemonHeapMb(128 * GB, { CODESIFT_DAEMON_HEAP_MB: "3000" } as NodeJS.ProcessEnv)).toBe(3000);
+    // Too small to run on, and unparseable — both fall back to the scaled value
+    // rather than producing a daemon that cannot start.
+    expect(resolveDaemonHeapMb(128 * GB, { CODESIFT_DAEMON_HEAP_MB: "64" } as NodeJS.ProcessEnv)).toBe(16384);
+    expect(resolveDaemonHeapMb(128 * GB, { CODESIFT_DAEMON_HEAP_MB: "abc" } as NodeJS.ProcessEnv)).toBe(16384);
+  });
+
+  it("puts the flag BEFORE the script path in both unit formats", async () => {
+    // node reads options only ahead of the script; placed after, it becomes an
+    // argument to the CLI and is silently ignored — an unchanged limit under a
+    // plist that reads as correct.
+    const home = await mkdtemp(join(tmpdir(), "codesift-heap-"));
+    const dataDir = join(home, ".codesift");
+    try {
+      const plist = buildLaunchAgentPlist(
+        buildServicePlan({ dataDir, home, os: "darwin", ...PLAN_OPTS }),
+      );
+      const args = [...plist.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
+      const flag = args.findIndex((a) => a?.startsWith("--max-old-space-size="));
+      const script = args.findIndex((a) => a?.endsWith("cli.js"));
+      expect(flag).toBeGreaterThan(-1);
+      expect(script).toBeGreaterThan(-1);
+      expect(flag).toBeLessThan(script);
+
+      const unit = buildSystemdUnit(buildServicePlan({ dataDir, home, os: "linux", ...PLAN_OPTS }));
+      const exec = unit.split("\n").find((l) => l.startsWith("ExecStart=")) ?? "";
+      expect(exec.indexOf("--max-old-space-size=")).toBeGreaterThan(-1);
+      expect(exec.indexOf("--max-old-space-size=")).toBeLessThan(exec.indexOf("cli.js"));
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

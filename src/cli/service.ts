@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, existsSync, unlinkSync } from "node:fs";
-import { homedir, platform } from "node:os";
+import { homedir, platform, totalmem } from "node:os";
 import { join, dirname } from "node:path";
 import { isLoopbackHost } from "../utils/loopback.js";
 import { writeOwnerOnlyFileSync } from "./owner-only-file.js";
@@ -145,8 +145,53 @@ export function buildServicePlan(opts: {
  * killing the process alone just makes launchd start it again, which is the
  * whole point.
  */
+/**
+ * Heap ceiling for the daemon, in MB.
+ *
+ * The daemon ran with V8's DEFAULT limit, which is derived from the machine but
+ * tops out around 4 GB — on a 128 GB box it was 4288 MB. That is not enough for
+ * what this process actually is: one long-lived server for every project on the
+ * machine, materialising whole indexes (a 240k-symbol index is ~349 MB resident)
+ * and holding two RAM-scaled caches on top. It reached 4.69 GB and died with
+ * `FatalProcessOutOfMemory`, launchd restarted it, and it did it again — 14 node
+ * crash reports in 24 h on 2026-08-28.
+ *
+ * The crash loop is the damaging part, not the single crash: an OOM discards ALL
+ * in-flight work, so a mass re-index (29 repos rebuilding hash snapshots) never
+ * reaches the end, and the next process starts the same work over. Raising the
+ * ceiling is what lets that pass finish once.
+ *
+ * Scaled, not fixed, and CAPPED: a ceiling is also the only thing standing
+ * between a genuine leak and the whole machine, so it stays well below total RAM.
+ * The cap was 8192 for one afternoon and that was too conservative — a 128 GB
+ * workstation running dozens of agents got the same ceiling as a 64 GB one, while
+ * the crash it had to prevent happened at 4.7 GB. RAM/8 with a 24 GB cap gives
+ * this machine 16 GB: comfortably past the observed peak, still an eighth of the
+ * box, and still a bound rather than a blank cheque.
+ * `CODESIFT_DAEMON_HEAP_MB` overrides for a machine that needs something else.
+ *
+ * NOTE this is a ceiling, not a diagnosis. It does not prove the growth is
+ * legitimate; it buys the room the observed workload needs and turns a crash loop
+ * into a slow pass. If the daemon starts reaching THIS limit too, the answer is
+ * the ADR-004 stage-2 work (query the DB instead of materialising indexes), not a
+ * bigger number here.
+ */
+export function resolveDaemonHeapMb(totalRamBytes: number, env: NodeJS.ProcessEnv = process.env): number {
+  const override = Number(env["CODESIFT_DAEMON_HEAP_MB"]);
+  if (Number.isFinite(override) && override >= 512) return Math.floor(override);
+  const ramMb = totalRamBytes / (1024 * 1024);
+  return Math.min(24576, Math.max(2048, Math.floor(ramMb / 8)));
+}
+
 export function buildLaunchAgentPlist(plan: ServicePlan): string {
-  const args = [plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host];
+  // Node options must precede the script path, or node treats them as script args
+  // and they are silently ignored — the failure mode being an unchanged limit and
+  // a plist that looks correct.
+  const heapMb = resolveDaemonHeapMb(totalmem());
+  const args = [
+    `--max-old-space-size=${heapMb}`,
+    plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host,
+  ];
   const argLines = [plan.execPath, ...args]
     .map((a) => `    <string>${escapeXml(a)}</string>`)
     .join("\n");
@@ -209,7 +254,14 @@ export function systemdEnv(key: string, value: string): string {
 
 /** Linux systemd *user* unit — same supervision contract as the LaunchAgent. */
 export function buildSystemdUnit(plan: ServicePlan): string {
-  const exec = [plan.execPath, plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host]
+  // Same heap ceiling as the LaunchAgent, and for the same reason — see
+  // resolveDaemonHeapMb. A Linux host runs the identical workload, so leaving it
+  // on V8's default here would just move the crash loop to the other platform.
+  const exec = [
+    plan.execPath,
+    `--max-old-space-size=${resolveDaemonHeapMb(totalmem())}`,
+    plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host,
+  ]
     .map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a))
     .join(" ");
   return `[Unit]
