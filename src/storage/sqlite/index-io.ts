@@ -7,6 +7,7 @@ import {
   readMetaValue,
   rollbackQuietly,
   writeMetaValue,
+  maybeCheckpointWal,
 } from "./connection.js";
 import { rethrowOperational } from "./errors.js";
 import { readMetaExtras } from "./meta.js";
@@ -60,6 +61,9 @@ export async function saveIndexSqlite(
       db.prepare("DELETE FROM meta WHERE key = ?").run("lossy_v1_migration");
     }
     db.exec("COMMIT");
+    // AFTER the commit, never inside the transaction: a checkpoint cannot run in one, and it must
+    // not be able to fail a write that already succeeded.
+    maybeCheckpointWal(db, dbPath);
   } catch (err) {
     rollbackQuietly(db);
     // Classified here, not left raw. `saveIndex`/`saveIncremental` have no classifying boundary of

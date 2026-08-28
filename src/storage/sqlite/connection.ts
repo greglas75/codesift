@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { IndexStorageError, rethrowOperational } from "./errors.js";
@@ -92,6 +93,17 @@ async function openUncachedIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     db = new Ctor(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA busy_timeout = 5000");
+    // Explicit, not left to the default. SQLite's automatic checkpoint is PASSIVE and runs at
+    // COMMIT — and a PASSIVE checkpoint cannot copy past the oldest live reader snapshot. This
+    // process holds exactly such a snapshot for a long time: `openReadConnection` below wraps a
+    // PAGED read that yields to the event loop between pages. In a daemon serving many repos there
+    // is nearly always one open, so the automatic checkpoint was starved indefinitely and the WAL
+    // grew without bound — measured 2026-08-28 at **16.26 GB across 713 files**, largest single WAL
+    // 1998 MB against 27 GB of databases. Every read replayed it, which is why cold loads took
+    // minutes and the daemon sat in uninterruptible I/O. Lowering the threshold alone would NOT
+    // have fixed it (a starved checkpoint is starved at any threshold); `maybeCheckpointWal` is the
+    // part that actually bounds the file.
+    db.exec("PRAGMA wal_autocheckpoint = 2000");
     db.exec("PRAGMA foreign_keys = ON");
     db.exec(SCHEMA_SQL);
   } catch (err) {
@@ -174,12 +186,59 @@ async function openUncachedIndexDb(dbPath: string): Promise<DatabaseSyncType> {
   return db;
 }
 
+/**
+ * WAL size past which a write triggers an explicit checkpoint.
+ *
+ * A bound on a file that otherwise had none. Small enough that replaying it is cheap, large enough
+ * that a busy repo is not checkpointing on every save.
+ */
+export const WAL_CHECKPOINT_THRESHOLD_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Checkpoint when the WAL has grown past the threshold.
+ *
+ * TRUNCATE rather than PASSIVE: PASSIVE is what the automatic checkpoint already does, and being
+ * starved by a live reader is precisely the failure this exists to correct. TRUNCATE also returns
+ * the file to zero bytes rather than leaving a large one the next reader still has to map.
+ *
+ * Best-effort by design. If a reader IS mid-snapshot the checkpoint cannot complete, SQLite answers
+ * BUSY, and the next write tries again — a failure here must never fail a write that has already
+ * committed. An occasional miss is harmless precisely because it retries; before this, the
+ * checkpoint never ran at all.
+ */
+export function maybeCheckpointWal(
+  db: DatabaseSyncType,
+  dbPath: string,
+  // A seam for tests, which cannot cheaply grow a 64 MB WAL. Production never passes it.
+  thresholdBytes: number = WAL_CHECKPOINT_THRESHOLD_BYTES,
+): void {
+  if (dbPath === ":memory:") return;
+  let walBytes: number;
+  try {
+    walBytes = statSync(`${dbPath}-wal`).size;
+  } catch {
+    return; // no WAL yet, or it vanished under us — nothing to bound
+  }
+  if (walBytes < thresholdBytes) return;
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    /* BUSY under a live reader — the next write tries again */
+  }
+}
+
 /** Close one cached connection (tests, and the shutdown path). */
 export function closeIndexDb(dbPath: string): void {
   const db = connections.get(dbPath);
   if (!db) return;
   connections.delete(dbPath);
   try {
+    // Close is the one moment this process is provably done reading through THIS handle, so it is
+    // the checkpoint most likely to succeed. Unconditional rather than threshold-gated: leaving a
+    // WAL behind on close is how an idle repo keeps one forever.
+    if (dbPath !== ":memory:") {
+      try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* another connection is reading */ }
+    }
     db.close();
   } catch {
     /* already closed — nothing to protect here */
