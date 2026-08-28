@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
+import { runGit } from "./git-exec.js";
 import { buildAdjacencyIndex, stripSource } from "./graph-tools.js";
 import { buildGitDiffArgs } from "../utils/git-validation.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
@@ -97,18 +97,17 @@ function buildFileDependencyGraph(
 /**
  * Run git diff to find changed files between two refs.
  */
-function getChangedFiles(repoRoot: string, since: string, until: string): string[] {
+async function getChangedFiles(
+  repoRoot: string, since: string, until: string,
+): Promise<string[]> {
   // buildGitDiffArgs validates refs and translates the WORKING/STAGED pseudo-refs
   // (uncommitted diffs) — a bare `${since}..${until}` fails git for those.
   const args = buildGitDiffArgs(since, until, true);
 
   try {
-    // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern
-    const output = execFileSync("git", args, {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      timeout: 10_000,
-    });
+    // SEC-002: array form, never a shell string — the injection guard survives the move to the
+    // async runGit (which blocks nothing; see git-exec.ts for why that mattered).
+    const output = await runGit(args, { cwd: repoRoot, timeout: 10_000 });
     return output
       .split("\n")
       .map((line) => line.trim())
@@ -156,7 +155,7 @@ export async function impactAnalysis(
     includeSource = false;
   }
 
-  const changedFiles = getChangedFiles(index.root, since, untilRef);
+  const changedFiles = await getChangedFiles(index.root, since, untilRef);
 
   // Find all symbols in changed files — use Set for O(1) lookup (CQ17 fix)
   const changedFileSet = new Set(changedFiles);

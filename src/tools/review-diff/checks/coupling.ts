@@ -2,7 +2,7 @@ import { computeCoChangePairs } from "../../coupling-tools.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 const MIN_JACCARD = 0.5;
-type CoChangePair = ReturnType<typeof computeCoChangePairs>["pairs"][number];
+type CoChangePair = Awaited<ReturnType<typeof computeCoChangePairs>>["pairs"][number];
 
 /**
  * Coupling gaps check: uses shared computeCoChangePairs from coupling-tools.ts,
@@ -15,7 +15,7 @@ export async function checkCouplingGaps(
   const start = Date.now();
 
   try {
-    const { pairs } = computeCoChangePairs(repoRoot, {
+    const { pairs } = await computeCoChangePairs(repoRoot, {
       since_days: 180,
       min_support: 3,
     });

@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
+import { runGit } from "./git-exec.js";
 import { collectImportEdges } from "../utils/import-graph.js";
 
 // ---------------------------------------------------------------------------
@@ -161,14 +161,14 @@ const DEFAULT_SINCE_DAYS = 180;
 const DEFAULT_MIN_SUPPORT = 3;
 const DEFAULT_MAX_FILES_PER_COMMIT = 50;
 
-export function computeCoChangePairs(
+export async function computeCoChangePairs(
   repoRoot: string,
   options?: {
     since_days?: number;
     min_support?: number;
     max_files_per_commit?: number;
   },
-): { pairs: CoChangePair[]; total_commits: number } {
+): Promise<{ pairs: CoChangePair[]; total_commits: number }> {
   const sinceDays = options?.since_days ?? DEFAULT_SINCE_DAYS;
   const minSupport = options?.min_support ?? DEFAULT_MIN_SUPPORT;
   const maxFilesPerCommit = options?.max_files_per_commit ?? DEFAULT_MAX_FILES_PER_COMMIT;
@@ -178,8 +178,7 @@ export function computeCoChangePairs(
   // timeout: 30s (was 15s) — large repos need more time to walk history.
   let raw: string;
   try {
-    raw = execFileSync(
-      "git",
+    raw = await runGit(
       [
         "log",
         "--name-only",
@@ -188,12 +187,7 @@ export function computeCoChangePairs(
         `--since=${sinceDays} days ago`,
         "--pretty=format:COMMIT %H",
       ],
-      {
-        cwd: repoRoot,
-        encoding: "utf-8",
-        timeout: 30000,
-        maxBuffer: 256 * 1024 * 1024, // 256MB
-      },
+      { cwd: repoRoot, timeout: 30000, maxBuffer: 256 * 1024 * 1024 },
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -298,7 +292,7 @@ export async function coChangeAnalysis(
 
   const coChangeOpts: Parameters<typeof computeCoChangePairs>[1] = { since_days: sinceDays };
   if (options?.min_support != null) coChangeOpts!.min_support = options.min_support;
-  const { pairs: allPairs, total_commits } = computeCoChangePairs(index.root, coChangeOpts);
+  const { pairs: allPairs, total_commits } = await computeCoChangePairs(index.root, coChangeOpts);
 
   // Filter by jaccard threshold and focus path
   let filtered = allPairs.filter((p) => p.jaccard >= minJaccard);

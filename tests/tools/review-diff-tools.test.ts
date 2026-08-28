@@ -13,7 +13,12 @@ vi.mock("../../src/tools/hotspot-tools.js", () => ({ analyzeHotspots: vi.fn() })
 vi.mock("../../src/tools/complexity-tools.js", () => ({ analyzeComplexity: vi.fn() }));
 vi.mock("../../src/tools/index-tools.js", () => ({ getCodeIndex: vi.fn() }));
 vi.mock("../../src/utils/git-validation.js", () => ({ validateGitRef: vi.fn() }));
-vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
+// execFile as well as execFileSync: git-exec.ts calls promisify(execFile) at module load, and a
+// mock missing it makes the whole file fail to import rather than fail a test.
+vi.mock("node:child_process", () => ({ execFileSync: vi.fn(), execFile: vi.fn() }));
+
+// The coupling check reaches git through the async helper now, not execFileSync.
+vi.mock("../../src/tools/git-exec.js", () => ({ runGit: vi.fn() }));
 
 import {
   findingTier,
@@ -43,6 +48,7 @@ import { searchPatterns, listPatterns } from "../../src/tools/pattern-tools.js";
 import { analyzeHotspots } from "../../src/tools/hotspot-tools.js";
 import { analyzeComplexity } from "../../src/tools/complexity-tools.js";
 import { execFileSync } from "node:child_process";
+import { runGit } from "../../src/tools/git-exec.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -342,8 +348,9 @@ describe("reviewDiff orchestrator", () => {
         above_threshold: 0,
       },
     });
-    // Coupling check uses execFileSync for git log — return empty log (no coupling findings)
+    // Coupling check reaches git through runGit — empty log means no coupling findings
     mockedExecFileSyncOrch.mockReturnValue("");
+    vi.mocked(runGit).mockResolvedValue("");
   });
 
   // 1. Happy path
@@ -1148,7 +1155,9 @@ describe("check adapters — bug-patterns, hotspots, complexity", () => {
 // ---------------------------------------------------------------------------
 
 describe("checkCouplingGaps", () => {
-  const mockedExecFileSync = vi.mocked(execFileSync);
+  // Coupling reaches git through the async helper now — a synchronous spawn froze the whole
+  // shared daemon, so the production path no longer uses execFileSync at all.
+  const mockedRunGit = vi.mocked(runGit);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1165,7 +1174,7 @@ describe("checkCouplingGaps", () => {
       "COMMIT sha5\nsrc/a.ts\nsrc/b.ts\n" +
       "COMMIT sha6\nsrc/a.ts";
 
-    mockedExecFileSync.mockReturnValue(gitLog);
+    mockedRunGit.mockResolvedValue(gitLog);
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
 
@@ -1192,7 +1201,7 @@ describe("checkCouplingGaps", () => {
       commits.push(`COMMIT sha${i}\nsrc/b.ts`);
     }
 
-    mockedExecFileSync.mockReturnValue(commits.join("\n"));
+    mockedRunGit.mockResolvedValue(commits.join("\n"));
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
 
@@ -1207,7 +1216,7 @@ describe("checkCouplingGaps", () => {
       "COMMIT sha1\nsrc/a.ts\nsrc/b.ts\n" +
       "COMMIT sha2\nsrc/a.ts\nsrc/b.ts";
 
-    mockedExecFileSync.mockReturnValue(gitLog);
+    mockedRunGit.mockResolvedValue(gitLog);
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
 
@@ -1221,7 +1230,7 @@ describe("checkCouplingGaps", () => {
     const bulkFiles = Array.from({ length: 51 }, (_, i) => `src/file${i}.ts`).join("\n");
     const gitLog = `COMMIT bulksha\n${bulkFiles}`;
 
-    mockedExecFileSync.mockReturnValue(gitLog);
+    mockedRunGit.mockResolvedValue(gitLog);
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/file0.ts"]);
 
@@ -1231,7 +1240,7 @@ describe("checkCouplingGaps", () => {
   });
 
   it("returns pass with 0 findings on empty git log", async () => {
-    mockedExecFileSync.mockReturnValue("");
+    mockedRunGit.mockResolvedValue("");
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
 
@@ -1249,7 +1258,7 @@ describe("checkCouplingGaps", () => {
       "COMMIT sha4\nsrc/a.ts\nsrc/b.ts\n" +
       "COMMIT sha5\nsrc/a.ts\nsrc/b.ts";
 
-    mockedExecFileSync.mockReturnValue(gitLog);
+    mockedRunGit.mockResolvedValue(gitLog);
 
     // Both files in diff → no "missing partner" finding
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts", "src/b.ts"]);
@@ -1259,10 +1268,8 @@ describe("checkCouplingGaps", () => {
     expect(result.status).toBe("pass");
   });
 
-  it("returns error status when execFileSync throws", async () => {
-    mockedExecFileSync.mockImplementation(() => {
-      throw new Error("git log failed");
-    });
+  it("returns error status when git fails", async () => {
+    mockedRunGit.mockRejectedValue(new Error("git log failed"));
 
     const result = await checkCouplingGaps("/tmp/test-repo", ["src/a.ts"]);
 
@@ -1276,7 +1283,6 @@ describe("checkCouplingGaps", () => {
 // ---------------------------------------------------------------------------
 // Check adapter — breaking changes (export diff between refs)
 // ---------------------------------------------------------------------------
-
 describe("checkBreakingChanges", () => {
   const mockedExecFileSync = vi.mocked(execFileSync);
 

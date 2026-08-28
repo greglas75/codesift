@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { getCodeIndex } from "./index-tools.js";
+import { runGit } from "./git-exec.js";
 import { buildGitDiffArgs } from "../utils/git-validation.js";
 import type { CodeSymbol } from "../types.js";
 import { assertGitTreeMatches } from "./git-tree-guard.js";
@@ -97,18 +97,16 @@ function symbolOverlapsHunks(symbol: CodeSymbol, hunks: DiffHunk[]): boolean {
 /**
  * Run git diff and return the raw output.
  */
-function runGitDiff(repoRoot: string, since: string, until: string, nameOnly: boolean): string {
-  // SEC-002: Use execFileSync (array form) to prevent shell injection — R-1 pattern.
+async function runGitDiff(
+  repoRoot: string, since: string, until: string, nameOnly: boolean,
+): Promise<string> {
+  // SEC-002: array form, never a shell string — the injection guard survives the move to the
+  // async runGit (which blocks nothing; see git-exec.ts for why that mattered).
   // buildGitDiffArgs validates refs and translates the WORKING/STAGED pseudo-refs
   // (uncommitted diffs) that a bare `${since}..${until}` would feed git as unknown revisions.
   const args = buildGitDiffArgs(since, until, nameOnly);
   try {
-    return execFileSync("git", args, {
-      cwd: repoRoot,
-      encoding: "utf-8",
-      timeout: 10_000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    return await runGit(args, { cwd: repoRoot, timeout: 10_000, maxBuffer: 10 * 1024 * 1024 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Git diff failed: ${message}`);
@@ -132,7 +130,7 @@ export async function diffOutline(
   assertGitTreeMatches(repo, index.root);
 
   const untilRef = until ?? "HEAD";
-  const diffOutput = runGitDiff(index.root, since, untilRef, false);
+  const diffOutput = await runGitDiff(index.root, since, untilRef, false);
   const { hunks, newFiles, deletedFiles } = parseDiffHunks(diffOutput);
 
   const newFileSet = new Set(newFiles);
@@ -184,7 +182,7 @@ export async function changedSymbols(
   assertGitTreeMatches(repo, index.root);
 
   const untilRef = until ?? "HEAD";
-  const output = runGitDiff(index.root, since, untilRef, true);
+  const output = await runGitDiff(index.root, since, untilRef, true);
 
   const changedFiles = output
     .split("\n")
@@ -217,9 +215,10 @@ export async function changedSymbols(
   if (options?.include_diff) {
     for (const entry of result) {
       try {
-        const raw = execFileSync("git", [
-          "diff", `${since}..${untilRef}`, "--", entry.file,
-        ], { cwd: index.root, maxBuffer: 50_000 }).toString("utf-8");
+        const raw = await runGit(
+          ["diff", `${since}..${untilRef}`, "--", entry.file],
+          { cwd: index.root, timeout: 10_000, maxBuffer: 50_000 },
+        );
         entry.diff = raw.length > MAX_DIFF_CHARS
           ? raw.slice(0, MAX_DIFF_CHARS) + "\n... (truncated)"
           : raw;

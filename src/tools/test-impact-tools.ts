@@ -135,7 +135,7 @@ export async function testImpactAnalysis(
   // 5. Get co-change pairs for jaccard scores
   let coChangePairs: Array<{ file_a: string; file_b: string; jaccard: number }> = [];
   try {
-    const coChangeResult = computeCoChangePairs(index.root, {
+    const coChangeResult = await computeCoChangePairs(index.root, {
       since_days: 90,
       min_support: 2,
     });

@@ -12,14 +12,17 @@ vi.mock("../../src/utils/import-graph.js", () => ({
   collectImportEdges: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(),
+// Mock the git helper, not node:child_process. The production code no longer spawns
+// synchronously — a sync spawn froze the whole shared daemon — so mocking the module boundary
+// keeps the test about "what git returned" rather than about how the child was started.
+vi.mock("../../src/tools/git-exec.js", () => ({
+  runGit: vi.fn(),
 }));
 
 import { fanInFanOut, coChangeAnalysis } from "../../src/tools/coupling-tools.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { collectImportEdges, type ImportEdge } from "../../src/utils/import-graph.js";
-import { execFileSync } from "node:child_process";
+import { runGit } from "../../src/tools/git-exec.js";
 import type { CodeIndex, FileEntry } from "../../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -60,7 +63,7 @@ function makeFakeIndex(overrides: Partial<CodeIndex> = {}): CodeIndex {
 
 const mockGetCodeIndex = vi.mocked(getCodeIndex);
 const mockCollectImportEdges = vi.mocked(collectImportEdges);
-const mockExecFileSync = vi.mocked(execFileSync);
+const mockRunGit = vi.mocked(runGit);
 
 // ---------------------------------------------------------------------------
 // fanInFanOut
@@ -318,7 +321,7 @@ describe("coChangeAnalysis", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetCodeIndex.mockResolvedValue(makeCoChangeIndex());
-    mockExecFileSync.mockReturnValue(gitLogOutput as unknown as Buffer);
+    mockRunGit.mockResolvedValue(gitLogOutput);
   });
 
   it("returns correct co-change pairs with Jaccard values", async () => {
@@ -433,7 +436,7 @@ describe("coChangeAnalysis", () => {
       "",
       "lib/x.ts\nlib/y.ts",
     ].join("\n");
-    mockExecFileSync.mockReturnValue(mixed as unknown as Buffer);
+    mockRunGit.mockResolvedValue(mixed);
 
     const result = await coChangeAnalysis("test", {
       min_support: 1,
@@ -483,7 +486,7 @@ describe("coChangeAnalysis", () => {
     ].join("\n");
 
     mockGetCodeIndex.mockResolvedValue(makeCoChangeIndex());
-    mockExecFileSync.mockReturnValue(gitLog as unknown as Buffer);
+    mockRunGit.mockResolvedValue(gitLog);
 
     const result = await coChangeAnalysis("test", { min_support: 1, min_jaccard: 0 });
 

@@ -130,7 +130,7 @@ describe("testImpactAnalysis", () => {
     const fakeIndex = makeFakeIndex();
     vi.mocked(getCodeIndex).mockResolvedValue(fakeIndex);
     vi.mocked(impactAnalysis).mockResolvedValue(makeFakeImpactResult());
-    vi.mocked(computeCoChangePairs).mockReturnValue({
+    vi.mocked(computeCoChangePairs).mockResolvedValue({
       pairs: [],
       total_commits: 10,
     });
@@ -157,7 +157,7 @@ describe("testImpactAnalysis", () => {
     const fakeIndex = makeFakeIndex();
     vi.mocked(getCodeIndex).mockResolvedValue(fakeIndex);
     vi.mocked(impactAnalysis).mockResolvedValue(makeFakeImpactResult());
-    vi.mocked(computeCoChangePairs).mockReturnValue({
+    vi.mocked(computeCoChangePairs).mockResolvedValue({
       pairs: [],
       total_commits: 10,
     });
