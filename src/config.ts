@@ -44,6 +44,31 @@ export function localEmbeddingsDisabled(): boolean {
 }
 
 /**
+ * Cache budget in MB, scaled to total RAM.
+ *
+ * The tiers used to STOP at 1024 MB for anything above 32 GB, so a 33 GB laptop
+ * and a 128 GB workstation running a hundred projects got the identical budget.
+ * On the big machine that is the latency bug, not a memory saving: indexes are
+ * ~350 MB each, three fit, everything else is evicted, and the next call into an
+ * evicted repo pays a COLD load. Measured 2026-08-28 — a first call into
+ * QuotasMobi (2685 files / 51k symbols) took **70.4 s**, while Claude Code gives
+ * up at 30 s. The client reports "failed to connect"; nothing is broken, the
+ * answer simply arrives after nobody is listening.
+ *
+ * Small machines keep their exact previous values — the floors below 32 GB are
+ * unchanged deliberately, because there the budget really is protecting RAM. Above
+ * that it scales with the machine, and the `max(1024, …)` keeps the old value as a
+ * floor so no configuration gets smaller than before.
+ */
+function scaledCacheBudgetMb(divisor: number, cap: number): number {
+  const total = totalmem();
+  if (total <= 16 * GIB) return 256;
+  if (total <= 32 * GIB) return 512;
+  const totalMb = total / (1024 * 1024);
+  return Math.min(cap, Math.max(1024, Math.floor(totalMb / divisor)));
+}
+
+/**
  * Resident embedding-CACHE RAM budget in bytes. Explicit
  * `CODESIFT_MAX_EMBEDDING_MEM_MB` wins; otherwise scale to total RAM so a 16 GB
  * machine doesn't hold a full 1 GB of embedding vectors on top of everything
@@ -54,11 +79,9 @@ export function embeddingMemBudgetBytes(): number {
   const raw = process.env["CODESIFT_MAX_EMBEDDING_MEM_MB"];
   const n = raw ? parseInt(raw, 10) : NaN;
   if (!Number.isNaN(n) && n > 0) return n * 1024 * 1024;
-  const total = totalmem();
   // Inclusive boundaries: a 16 GB machine reports ~16·GiB, and it must get the
   // small budget, not the next tier up.
-  const mb = total <= 16 * GIB ? 256 : total <= 32 * GIB ? 512 : 1024;
-  return mb * 1024 * 1024;
+  return scaledCacheBudgetMb(64, 4096) * 1024 * 1024;
 }
 
 /**
@@ -77,9 +100,9 @@ export function indexCacheMemBudgetBytes(): number {
   const raw = process.env["CODESIFT_MAX_INDEX_CACHE_MB"];
   const n = raw ? parseInt(raw, 10) : NaN;
   if (!Number.isNaN(n) && n > 0) return n * 1024 * 1024;
-  const total = totalmem();
-  const mb = total <= 16 * GIB ? 256 : total <= 32 * GIB ? 512 : 1024;
-  return mb * 1024 * 1024;
+  // A larger share than embeddings: this is the cache whose miss costs a cold
+  // index load, i.e. the one a client can time out on.
+  return scaledCacheBudgetMb(32, 8192) * 1024 * 1024;
 }
 
 export interface Config {
