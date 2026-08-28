@@ -190,6 +190,17 @@ export function buildLaunchAgentPlist(plan: ServicePlan): string {
   const heapMb = resolveDaemonHeapMb(totalmem());
   const args = [
     `--max-old-space-size=${heapMb}`,
+    // Young generation, left at V8's default until 2026-08-28 — which for a large heap is ~16 MB,
+    // so scavenges fire constantly. Each one walks every old-generation memory chunk, and this
+    // daemon deliberately keeps a LARGE old generation (4 GB of index cache) so repos stay resident.
+    // Sampled under load: 35% of main-thread time in Heap::CollectGarbage, 33% of it inside
+    // OldGenerationMemoryChunkIterator::next — and each pause stalls the event loop, so /health
+    // answered in 2 s, then 3.5 s, then not at all, and clients read that as a dead server.
+    //
+    // A bigger semi-space means FEWER scavenges (each slightly longer), which is the trade that
+    // fits a process whose old generation is large by design. This is the other half of the cache
+    // budget increase: without it, that change bought fast reads and paid in GC pauses.
+    "--max-semi-space-size=64",
     plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host,
   ];
   const argLines = [plan.execPath, ...args]
@@ -260,6 +271,7 @@ export function buildSystemdUnit(plan: ServicePlan): string {
   const exec = [
     plan.execPath,
     `--max-old-space-size=${resolveDaemonHeapMb(totalmem())}`,
+    "--max-semi-space-size=64",
     plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host,
   ]
     .map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a))

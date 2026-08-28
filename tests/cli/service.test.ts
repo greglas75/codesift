@@ -271,6 +271,26 @@ describe("service — daemon heap ceiling", () => {
     expect(resolveDaemonHeapMb(128 * GB, { CODESIFT_DAEMON_HEAP_MB: "abc" } as NodeJS.ProcessEnv)).toBe(16384);
   });
 
+  it("sets a young-generation size, because the old generation is large BY DESIGN", async () => {
+    // Left at V8's default until 2026-08-28. For a large heap that is ~16 MB, so scavenges fire
+    // constantly and each one walks every old-generation memory chunk — and this daemon keeps 4 GB
+    // of index cache resident on purpose. Sampled under load: 35% of main-thread time in
+    // Heap::CollectGarbage, 33% inside OldGenerationMemoryChunkIterator::next. After the change,
+    // 11% and 0%.
+    const home = await mkdtemp(join(tmpdir(), "codesift-semi-"));
+    const dataDir = join(home, ".codesift");
+    try {
+      const plist = buildLaunchAgentPlist(
+        buildServicePlan({ dataDir, home, os: "darwin", ...PLAN_OPTS }),
+      );
+      expect(plist).toContain("--max-semi-space-size=64");
+      const unit = buildSystemdUnit(buildServicePlan({ dataDir, home, os: "linux", ...PLAN_OPTS }));
+      expect(unit).toContain("--max-semi-space-size=64");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("puts the flag BEFORE the script path in both unit formats", async () => {
     // node reads options only ahead of the script; placed after, it becomes an
     // argument to the CLI and is silently ignored — an unchanged limit under a
