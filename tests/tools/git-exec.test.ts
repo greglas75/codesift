@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { runGit } from "../../src/tools/git-exec.js";
+import { runGit, describeGitTimeout } from "../../src/tools/git-exec.js";
 
 /**
  * Every git call on a tool request path used execFileSync, which stops the whole process until the
@@ -62,5 +62,25 @@ describe("runGit — git without blocking the event loop", () => {
         runGit(["log", "--pretty=format:%H %s"], { cwd: dir, timeout: 10_000, maxBuffer: 1 }),
       ).rejects.toThrow(/maxBuffer|ENOBUFS/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("says a timeout is a timeout, not a git failure", () => {
+    // These arrive identically from execFile — "Command failed: git …", and with empty stderr when
+    // git wrote nothing. Measured 2026-08-30: review_diff reported a git failure for a command that
+    // succeeds from a shell in 0.1 s; it had run out of time on a loaded machine. The two need
+    // different responses — raise the ceiling versus fix the refs — so they must not read the same.
+    //
+    // Classification tested directly rather than by racing a real 1 ms timeout: that version passed
+    // alone and failed in the full suite, which makes it a coin toss rather than a contract.
+    const opts = { cwd: "/repo", timeout: 10_000 };
+    const killed = describeGitTimeout({ killed: true, signal: "SIGTERM" }, ["diff"], opts);
+    expect(killed).toMatch(/ran out of time/);
+    expect(killed).toContain("10000 ms");
+    expect(killed).toContain("/repo");
+  });
+
+  it("leaves a genuine git failure alone", () => {
+    // Non-zero exit with no kill: that IS a git failure and must keep git's own message.
+    expect(describeGitTimeout({ code: 128 }, ["diff"], { cwd: "/repo", timeout: 10_000 })).toBeNull();
+    expect(describeGitTimeout(new Error("boom"), ["diff"], { cwd: "/repo", timeout: 10_000 })).toBeNull();
   });
 });

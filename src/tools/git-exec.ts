@@ -35,11 +35,49 @@ export interface RunGitOptions {
  * "history too large" from "git failed", and one of them degrades gracefully on exactly that.
  */
 export async function runGit(args: string[], options: RunGitOptions): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd: options.cwd,
-    encoding: "utf-8",
-    timeout: options.timeout,
-    ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
-  });
-  return stdout;
+  try {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: options.cwd,
+      encoding: "utf-8",
+      timeout: options.timeout,
+      ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
+    });
+    return stdout;
+  } catch (err: unknown) {
+    // A KILLED child and a FAILING git look identical from the caller's side: both arrive as
+    // "Command failed: git …" and, when git wrote nothing to stderr, with no further detail.
+    // Measured 2026-08-30: `review_diff` reported `Git diff failed: Command failed: git diff
+    // --name-only HEAD~1..HEAD` on a repository where that exact command succeeds from a shell in
+    // 0.1 s — it had simply exceeded its ceiling on a loaded machine, and the message sent me
+    // looking for a git fault that did not exist.
+    //
+    // Timeouts and failures need different responses (raise the ceiling / narrow the range, versus
+    // fix the refs), so they must not read the same.
+    const timedOut = describeGitTimeout(err, args, options);
+    if (timedOut) throw new Error(timedOut);
+    throw err;
+  }
+}
+
+/**
+ * Was this a killed child rather than a failing git — and if so, say so.
+ *
+ * Separated from `runGit` so the classification can be tested without racing a real timeout: a test
+ * that sets `timeout: 1` and hopes the child is still alive passes alone and fails under load,
+ * which makes it a coin toss rather than a contract.
+ *
+ * Returns the message to throw, or null when this was a genuine git failure.
+ */
+export function describeGitTimeout(
+  err: unknown,
+  args: string[],
+  options: RunGitOptions,
+): string | null {
+  const killed = (err as { killed?: boolean } | null)?.killed === true;
+  const signal = (err as { signal?: string | null } | null)?.signal;
+  if (!killed && signal !== "SIGTERM") return null;
+  return (
+    `git ${args[0] ?? ""} exceeded its ${options.timeout} ms limit in ${options.cwd}` +
+    `${signal ? ` (killed by ${signal})` : ""} — the command did not fail, it ran out of time`
+  );
 }
