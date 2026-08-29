@@ -85,6 +85,14 @@ function collectExportedSymbols(
 const MAX_SCAN_FILES = 5000;
 
 /**
+ * Files tokenised per turn before the event loop gets one.
+ *
+ * Files rather than tokens: the inner loop is one file's content and is short; the outer one is the
+ * whole repository. 200 keeps a turn near a frame's worth of work on the largest files here.
+ */
+const FILES_PER_TURN = 200;
+
+/**
  * Resolve a relative import path against a source file's directory. Handles
  * the standard TS/Node extensions plus barrel-style `index` resolution.
  * Returns the candidate file path that exists in `allFiles`, or null.
@@ -139,11 +147,14 @@ function resolveRelativeImport(
  * (named or star). Callers treat any candidate whose defining file lands in
  * this set as live.
  */
-function collectReExportedFiles(
+async function collectReExportedFiles(
   fileContents: Map<string, string>,
   allFiles: Set<string>,
-): Set<string> {
+): Promise<Set<string>> {
   const reExported = new Set<string>();
+  // Second full pass over every file's text, and it blocked for the same reason the token index
+  // did. Both together left find_dead_code stopping the event loop for roughly half its runtime.
+  let sinceYield = 0;
   // Matches:  export * from "./x";   export { A, B } from "./x";   export type { T } from "./x";
   // Anchor dropped (`^\s*` removed) so block-comment-prefixed exports
   // (`/** doc */ export { Y } from "./x"`) and continuation-line exports
@@ -155,6 +166,10 @@ function collectReExportedFiles(
     while ((m = RE.exec(content)) !== null) {
       const target = resolveRelativeImport(filePath, m[1]!, allFiles);
       if (target) reExported.add(target);
+    }
+    if (++sinceYield >= FILES_PER_TURN) {
+      sinceYield = 0;
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   return reExported;
@@ -216,7 +231,7 @@ export async function findDeadCode(
   // Build set of files that are forwarded via re-exports (barrel chains).
   // Symbols defined in such files are reachable even without textual mention.
   const allFilePaths = new Set(fileContents.keys());
-  const reExportedFiles = collectReExportedFiles(fileContents, allFilePaths);
+  const reExportedFiles = await collectReExportedFiles(fileContents, allFilePaths);
 
   // Reference index, built in ONE pass over file contents. Previously this scan
   // was O(exportedSymbols x files): a `\b<name>\b` regex over every file's full
@@ -228,13 +243,24 @@ export async function findDeadCode(
   // regex. Per token we only need "is it mentioned outside its defining file",
   // so we keep the first file that mentioned it plus a multi-file flag — O(1)
   // memory per unique token instead of a file set, and O(1) lookup per symbol.
+  //
+  // Yielding every FILES_PER_TURN files, for the same reason the index write and the BM25 build do:
+  // this is one long synchronous burst in a process that answers every client on the machine.
+  // Measured 2026-08-30 on ResearchShieldNew: find_dead_code ran 6.7 s and a 20 ms timer fired only
+  // 155 times out of 334 — the loop was stopped for roughly half of it. The work does not get
+  // faster; the daemon stays answerable while it happens.
   const tokenIndex = new Map<string, { first: string; multi: boolean }>();
+  let sinceYield = 0;
   for (const [filePath, content] of fileContents) {
     for (const token of new Set(content.split(/[^A-Za-z0-9_]+/))) {
       if (!token) continue;
       const entry = tokenIndex.get(token);
       if (!entry) tokenIndex.set(token, { first: filePath, multi: false });
       else if (!entry.multi && entry.first !== filePath) entry.multi = true;
+    }
+    if (++sinceYield >= FILES_PER_TURN) {
+      sinceYield = 0;
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
 
