@@ -1,4 +1,5 @@
 import type { CodeSymbol, SearchResult } from "../types.js";
+import { withEmbedSlot } from "./embed-gate.js";
 import { importTransformers, localEmbeddingRemedy } from "./optional-transformers.js";
 import { StaticEmbeddingProvider } from "./static-embedding-provider.js";
 
@@ -309,12 +310,14 @@ export class OllamaProvider implements EmbeddingProvider {
     // /api/embeddings once per text — 90K sequential HTTP round-trips for a big
     // repo, which throws away most of the GPU speedup Ollama gives on Apple
     // Silicon. /api/embed embeds the whole array in one request.
-    const response = await fetch(`${this.baseUrl}/api/embed`, {
+    // Through the gate: the remote serves a fixed number at a time, and firing more than that at it
+    // turns queueing into timeouts, and timeouts into retries that queue again. See embed-gate.ts.
+    const response = await withEmbedSlot(() => fetch(`${this.baseUrl}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: this.model, input: capped }),
       signal: AbortSignal.timeout(embeddingTimeoutMs(capped)),
-    });
+    }));
 
     if (!response.ok) {
       // SEC-004: log raw body to stderr only — do not forward to the MCP client.
