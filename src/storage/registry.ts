@@ -254,12 +254,24 @@ export async function registerRepo(
   registryPath: string,
   meta: RepoMeta,
 ): Promise<void> {
-  return withRegistryLock(registryPath, async () => {
+  await withRegistryLock(registryPath, async () => {
     const registry = await loadRegistry(registryPath);
     registry.repos[meta.name] = meta;
     registry.updated_at = Date.now();
     await saveRegistryUnderLock(registryPath, registry);
   });
+
+  // A repository CodeSift has just indexed is exactly one a Codex session is about to ask about —
+  // and Codex, whose MCP config is a single global file, cannot tell the daemon which directory it
+  // is working in without a per-project file. Written here so it needs no ceremony; MAIN CHECKOUTS
+  // ONLY, and never over an existing file. Imported lazily so `storage` does not depend on `cli`,
+  // and swallowed entirely: registration must succeed whether or not a client can be configured.
+  try {
+    const { ensureCodexProjectConfig } = await import("../cli/setup/codex-project-auto.js");
+    await ensureCodexProjectConfig(meta.root);
+  } catch {
+    /* a client config is a convenience; the repo is registered either way */
+  }
 }
 
 /**
