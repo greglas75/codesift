@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { loadIndex, getIndexPath } from "../storage/index-store.js";
-import { buildBM25Index, searchBM25, applyCutoff, type BM25Index } from "../search/bm25.js";
+import { buildBM25IndexYielding, searchBM25, applyCutoff, type BM25Index } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import {
   getConversationBM25Index,
@@ -83,7 +83,7 @@ async function loadConversationIndex(rootPath: string): Promise<{
     try {
       codeIndex = await loadIndex(indexPath);
       if (codeIndex && codeIndex.symbols.length > 0) {
-        bm25 = buildBM25Index(codeIndex.symbols);
+        bm25 = await buildBM25IndexYielding(codeIndex.symbols);
         setConversationBM25Index(repoName, bm25);
       }
     } catch {

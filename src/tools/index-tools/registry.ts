@@ -30,7 +30,7 @@ import {
 import { getChunkPath, getChunkEmbeddingPath } from "../../storage/chunk-store.js";
 import { getGraphPath } from "../../storage/graph-store.js";
 import { getSnapshotPath } from "../../storage/hash-snapshot.js";
-import { buildBM25Index } from "../../search/bm25.js";
+import { buildBM25IndexYielding } from "../../search/bm25.js";
 import type { BM25Index } from "../../search/bm25.js";
 import { loadConfig, localEmbeddingsDisabled, embeddingMemBudgetBytes } from "../../config.js";
 import { ensureIndexFresh } from "./file-indexer.js";
@@ -124,7 +124,7 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   const index = await loadIndex(meta.index_path);
   if (!index) return null;
 
-  const bm25 = buildBM25Index(index.symbols);
+  const bm25 = await buildBM25IndexYielding(index.symbols);
   bm25Indexes.set(resolvedName, bm25);
   return bm25;
 }

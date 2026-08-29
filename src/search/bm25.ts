@@ -104,51 +104,83 @@ function countTermFrequencies(tokens: string[]): Map<string, number> {
   return tf;
 }
 
-export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
-  const fieldNames: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
+/**
+ * Symbols ingested per turn before the event loop gets one.
+ *
+ * Building this index is the single longest synchronous burst in the process. Measured on the
+ * largest real index here (372,949 symbols, 20,132 files): **19.5 seconds during which a 20 ms
+ * timer fired ZERO times**. In the shared daemon that is 19.5 seconds where nothing is answered —
+ * not another client's search, not `/health` — and it is the largest single contributor to what
+ * users reported as "CodeSift is down".
+ *
+ * The split matters for where to yield: 18.3 s of that is the tokenise-and-map loop below, and only
+ * 1.2 s the import-centrality pass after it. So the ingest loop is what yields.
+ */
+/** Module scope now that ingestion is extracted — it was a local of the old single function. */
+const fieldNames: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
 
-  const fields: Record<FieldName, Map<string, Map<string, number>>> = {
-    name: new Map(),
-    signature: new Map(),
-    docstring: new Map(),
-    body: new Map(),
-    comments: new Map(),
+const SYMBOLS_PER_TURN = 2000;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Mutable state the ingest loop fills; shared by the sync and yielding builders. */
+interface BM25Accumulator {
+  fields: Record<FieldName, Map<string, Map<string, number>>>;
+  totalFieldLengths: Record<FieldName, number>;
+  symbolMap: Map<string, CodeSymbol>;
+  fieldLengths: Map<string, Record<FieldName, number>>;
+}
+
+function newAccumulator(): BM25Accumulator {
+  return {
+    fields: {
+      name: new Map(), signature: new Map(), docstring: new Map(),
+      body: new Map(), comments: new Map(),
+    },
+    totalFieldLengths: { name: 0, signature: 0, docstring: 0, body: 0, comments: 0 },
+    symbolMap: new Map(),
+    fieldLengths: new Map(),
+  };
+}
+
+/** One symbol into the inverted index. Extracted so both builders run byte-identical work. */
+function ingestSymbol(acc: BM25Accumulator, symbol: CodeSymbol): void {
+  acc.symbolMap.set(symbol.id, symbol);
+  const fieldTokens = getFieldTokens(symbol);
+  const lengths: Record<FieldName, number> = {
+    name: 0, signature: 0, docstring: 0, body: 0, comments: 0,
   };
 
-  const totalFieldLengths: Record<FieldName, number> = {
-    name: 0,
-    signature: 0,
-    docstring: 0,
-    body: 0,
-    comments: 0,
-  };
+  for (const field of fieldNames) {
+    const tokens = fieldTokens[field];
+    acc.totalFieldLengths[field] += tokens.length;
+    lengths[field] = tokens.length;
 
-  const symbolMap = new Map<string, CodeSymbol>();
-  const fieldLengths = new Map<string, Record<FieldName, number>>();
-
-  for (const symbol of symbols) {
-    symbolMap.set(symbol.id, symbol);
-    const fieldTokens = getFieldTokens(symbol);
-    const lengths: Record<FieldName, number> = { name: 0, signature: 0, docstring: 0, body: 0, comments: 0 };
-
-    for (const field of fieldNames) {
-      const tokens = fieldTokens[field];
-      totalFieldLengths[field] += tokens.length;
-      lengths[field] = tokens.length;
-
-      const tf = countTermFrequencies(tokens);
-      for (const [token, freq] of tf) {
-        let postings = fields[field].get(token);
-        if (!postings) {
-          postings = new Map();
-          fields[field].set(token, postings);
-        }
-        postings.set(symbol.id, freq);
+    const tf = countTermFrequencies(tokens);
+    for (const [token, freq] of tf) {
+      let postings = acc.fields[field].get(token);
+      if (!postings) {
+        postings = new Map();
+        acc.fields[field].set(token, postings);
       }
+      postings.set(symbol.id, freq);
     }
-    fieldLengths.set(symbol.id, lengths);
   }
+  acc.fieldLengths.set(symbol.id, lengths);
+}
 
+/**
+ * Averages plus import centrality — 1.2 s of the 19.5 on the largest index, so it stays synchronous.
+ *
+ * The inner `for (const file of allFiles)` is a linear scan per import match, i.e. O(imports x files).
+ * At 6% of the build it was not worth changing while fixing the blocking, but it is the obvious next
+ * thing if this pass ever grows.
+ */
+function finishBuild(acc: BM25Accumulator, symbols: CodeSymbol[]): BM25Index {
+
+  const { fields, totalFieldLengths, symbolMap, fieldLengths } = acc;
   const docCount = symbols.length;
   const avgFieldLengths: Record<FieldName, number> = {
     name: docCount > 0 ? totalFieldLengths.name / docCount : 0,
@@ -188,6 +220,32 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
   }
 
   return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality, fieldLengths };
+}
+
+/**
+ * Synchronous build. Correct, and fine for small inputs — the tool-ranker index is ~150 entries.
+ * Do NOT use it on a repository index inside the daemon: see buildBM25IndexYielding.
+ */
+export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
+  const acc = newAccumulator();
+  for (const symbol of symbols) ingestSymbol(acc, symbol);
+  return finishBuild(acc, symbols);
+}
+
+/**
+ * Same index, built without monopolising the event loop.
+ *
+ * Identical work and identical output — it simply hands the loop a turn every SYMBOLS_PER_TURN
+ * symbols, so other clients keep getting answers while a large repository is indexed.
+ */
+export async function buildBM25IndexYielding(symbols: CodeSymbol[]): Promise<BM25Index> {
+  const acc = newAccumulator();
+  let sinceYield = 0;
+  for (const symbol of symbols) {
+    ingestSymbol(acc, symbol);
+    if (++sinceYield >= SYMBOLS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
+  }
+  return finishBuild(acc, symbols);
 }
 
 export function searchBM25(

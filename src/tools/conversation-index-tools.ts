@@ -3,7 +3,7 @@ import { join, relative, basename } from "node:path";
 import { extractConversationSymbols } from "../parser/symbol-extractor.js";
 import { saveIndex, getIndexPath } from "../storage/index-store.js";
 import { registerRepo } from "../storage/registry.js";
-import { buildBM25Index } from "../search/bm25.js";
+import { buildBM25IndexYielding } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { embedSymbols } from "./index-tools.js";
 import { setConversationBM25Index } from "./conversation-cache.js";
@@ -119,7 +119,7 @@ async function persistConversationIndex(
   options?: { embed?: boolean },
 ): Promise<void> {
   const config = loadConfig();
-  const bm25 = buildBM25Index(scan.symbols);
+  const bm25 = await buildBM25IndexYielding(scan.symbols);
   setConversationBM25Index(repoName, bm25);
   const codeIndex: CodeIndex = {
     repo: repoName,

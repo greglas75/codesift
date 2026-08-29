@@ -13,7 +13,7 @@ import {
   getRepoName,
   updateRepoMeta,
 } from "../../storage/registry.js";
-import { buildBM25Index } from "../../search/bm25.js";
+import { buildBM25IndexYielding } from "../../search/bm25.js";
 import { loadConfig } from "../../config.js";
 import { walkDirectory } from "../../utils/walk.js";
 import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
@@ -468,7 +468,7 @@ export async function indexFolder(
   // Build and cache BM25 index from the FINAL (possibly merged) symbol set.
   // Built here (not before the guard) so a rejected_partial early-return leaves
   // the previous in-memory BM25 index intact rather than swapping in a partial.
-  const bm25 = buildBM25Index(mergedSymbols);
+  const bm25 = await buildBM25IndexYielding(mergedSymbols);
   bm25Indexes.set(repoName, bm25);
 
   // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges

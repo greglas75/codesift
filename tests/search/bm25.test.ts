@@ -1,4 +1,4 @@
-import { buildBM25Index, searchBM25, tokenizeText, applyCutoff } from "../../src/search/bm25.js";
+import { buildBM25Index, buildBM25IndexYielding, searchBM25, tokenizeText, applyCutoff } from "../../src/search/bm25.js";
 import type { CodeSymbol, SearchResult } from "../../src/types.js";
 
 function makeSymbol(overrides: Partial<CodeSymbol> & { id: string; name: string }): CodeSymbol {
@@ -169,4 +169,58 @@ describe("applyCutoff", () => {
   it("handles empty array", () => {
     expect(applyCutoff([])).toEqual([]);
   });
+});
+
+/**
+ * Building this index was the single longest synchronous burst in the process. Measured on the
+ * largest real index here (372,949 symbols, 20,132 files): 19.5 seconds during which a 20 ms timer
+ * fired ZERO times — no other client got an answer in that window, `/health` included. 18.3 s of it
+ * was the tokenise-and-map loop, 1.2 s the import-centrality pass, which is why only the first
+ * yields.
+ */
+describe("buildBM25IndexYielding", () => {
+  function manySymbols(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `local/t:src/f${i % 40}.ts:s${i}:${i}`,
+      name: `handleRequest${i}`,
+      kind: "function",
+      file: `src/f${i % 40}.ts`,
+      start_line: i,
+      end_line: i + 5,
+      source: `function handleRequest${i}(input: string) { return parse(input) + ${i}; }`,
+    }));
+  }
+
+  it("produces the same index as the synchronous builder", async () => {
+    // Identical work, identical output — the only difference is who gets the CPU meanwhile.
+    const symbols = manySymbols(300) as never;
+    const sync = buildBM25Index(symbols);
+    const async_ = await buildBM25IndexYielding(symbols);
+
+    expect(async_.docCount).toBe(sync.docCount);
+    expect(async_.symbols.size).toBe(sync.symbols.size);
+    expect(async_.avgFieldLengths).toEqual(sync.avgFieldLengths);
+    expect([...async_.fields.name.keys()].sort()).toEqual([...sync.fields.name.keys()].sort());
+    expect([...async_.centrality.entries()].sort()).toEqual([...sync.centrality.entries()].sort());
+  });
+
+  it("lets timers fire while it builds", async () => {
+    // The property that was missing. Before this it was exactly 0, however long the build took.
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 5);
+    try {
+      await buildBM25IndexYielding(manySymbols(9000) as never);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("handles an empty input and a tail shorter than one batch", async () => {
+    expect((await buildBM25IndexYielding([])).docCount).toBe(0);
+    // 2500 is not a multiple of the 2000-symbol batch, so the remainder after the last yield counts.
+    const idx = await buildBM25IndexYielding(manySymbols(2500) as never);
+    expect(idx.docCount).toBe(2500);
+    expect(idx.symbols.size).toBe(2500);
+  }, 60_000);
 });
