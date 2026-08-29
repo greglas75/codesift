@@ -1,3 +1,5 @@
+import { existsSync as existsSyncRef } from "node:fs";
+
 /**
  * Exit when the process that spawned us goes away.
  *
@@ -62,4 +64,49 @@ export function exitWhenOrphaned(options: OrphanGuardOptions = {}): () => void {
       process.off(sig, stopOnSignal);
     }
   };
+}
+
+/** How often to check the source tree. Same reasoning as PARENT_POLL_MS: free, and bounds the leak. */
+export const ROOT_POLL_MS = 10_000;
+
+export interface RootGuardOptions {
+  pollMs?: number;
+  /** Injected so a test can observe the decision instead of dying. */
+  onGone?: (rootPath: string) => void;
+  /** Injected for tests; production uses node:fs existsSync. */
+  exists?: (path: string) => boolean;
+}
+
+/**
+ * Exit when the tree being indexed disappears underneath us.
+ *
+ * The orphan guard above cannot catch this. Measured 2026-08-29: an agent created a worktree,
+ * `codesift index .` started, the worktree was then removed — and embedding ran for **1 hour 10
+ * minutes at 813% CPU and 4.9 GB**, producing a 365 MB index of a directory that no longer existed.
+ * Its parent was alive the whole time, so the ppid check had nothing to report; the parent was
+ * simply working on nothing.
+ *
+ * Deliberately checks only the ROOT, not individual files. A file vanishing mid-run is ordinary —
+ * a build, a branch switch, a formatter. The root vanishing means the work has no subject left.
+ */
+export function exitWhenRootGone(
+  rootPath: string,
+  options: RootGuardOptions = {},
+): () => void {
+  const exists = options.exists ?? existsSyncRef;
+  const onGone =
+    options.onGone ??
+    ((root: string): void => {
+      process.stderr.write(
+        `[codesift] ${root} no longer exists — stopping rather than embedding a tree that is gone\n`,
+      );
+      process.exit(0);
+    });
+
+  const timer = setInterval(() => {
+    if (exists(rootPath)) return;
+    onGone(rootPath);
+  }, options.pollMs ?? ROOT_POLL_MS);
+  timer.unref();
+  return () => clearInterval(timer);
 }

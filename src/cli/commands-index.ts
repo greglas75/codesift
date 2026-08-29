@@ -74,6 +74,16 @@ async function runEmbeddingChild(repoName: string, rootPath: string): Promise<vo
 
 async function handleIndex(args: string[], flags: Flags): Promise<void> {
   const path = requireArg(args, 0, "path");
+
+  // `embed-child` has guarded itself against a dead parent for a while; THIS process, the one that
+  // spawns it, did not. Measured 2026-08-29: an agent's shell died, this command was reparented to
+  // launchd and kept running, so the child's ppid check saw a live parent and never fired — the
+  // pair burned 813% CPU and 4.9 GB for 1 h 10 min on a worktree that had already been deleted.
+  // Guarding the parent is what makes the child's guard reachable.
+  const { exitWhenOrphaned, exitWhenRootGone } = await import("./orphan-guard.js");
+  exitWhenOrphaned();
+  exitWhenRootGone(path);
+
   const { indexFolder } = await import("../tools/index-tools.js");
 
   // Keep onnxruntime out of THIS process; the embedding runs in a child below.

@@ -22,12 +22,15 @@ import { loadConfig } from "../config.js";
 import { embedSymbols, embedChunks } from "../tools/index-tools/parse.js";
 
 import { EMBED_CHILD_OK_MARKER } from "./embed-child-marker.js";
-import { exitWhenOrphaned } from "./orphan-guard.js";
+import { exitWhenOrphaned, exitWhenRootGone } from "./orphan-guard.js";
 
 async function main(): Promise<void> {
   // A detached worker that outlives its parent has no consumer for its work.
   exitWhenOrphaned();
   const [indexPath, repoName, rootPath] = process.argv.slice(2);
+  // The ppid guard cannot catch a tree that disappears while its parent keeps working: measured
+  // 2026-08-29, that ran 1 h 10 min at 813% CPU on a worktree deleted minutes after the start.
+  if (rootPath) exitWhenRootGone(rootPath);
   if (!indexPath || !repoName || !rootPath) {
     process.stderr.write("embed-child: expected <indexPath> <repoName> <rootPath>\n");
     process.exitCode = 2;

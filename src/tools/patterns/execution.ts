@@ -332,12 +332,32 @@ async function scanFileEntry(
     : match;
 }
 
-function scanIndexedSymbols(context: PatternSearchContext): void {
+/**
+ * Symbols scanned per turn before the event loop gets one.
+ *
+ * The file loop next to this one has always yielded — it awaits a read per file. This one never
+ * did: a regex per symbol over the whole index with nothing in between. Measured on the daemon,
+ * `search_patterns("empty-catch")` against a 372k-symbol repo took 18.2 s and left a 5.2 SECOND
+ * window in which `/health` went unanswered, i.e. every other client on the machine was waiting.
+ *
+ * Same value and same reasoning as the index write and the BM25 build: enough work per turn that
+ * the yields cost nothing measurable, short enough that no single turn is felt.
+ */
+const SYMBOLS_PER_TURN = 500;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function scanIndexedSymbols(context: PatternSearchContext): Promise<void> {
+  let sinceYield = 0;
   for (const sym of context.index.symbols) {
     if (!hasMatchCapacity(context)) return;
 
     const match = scanSymbolEntry(context, sym);
     if (match) context.matches.push(match);
+
+    if (++sinceYield >= SYMBOLS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
   }
 }
 
