@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { runGit } from "../git-exec.js";
-import { join, resolve, relative, basename } from "node:path";
+import { join, resolve, relative, basename, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../../storage/registry.js";
 import { getFileEntry, saveIncremental } from "../../storage/index-store.js";
 import { loadConfig } from "../../config.js";
+import { currentCwd, hasRequestContext } from "../../server-helpers/request-context.js";
 import { scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
 import { indexFolder } from "./folder-indexer.js";
@@ -48,7 +49,12 @@ export async function indexFile(filePath: string): Promise<{
   /** The file no longer exists and its symbols were pruned from the index. */
   removed?: boolean;
 }> {
-  const absPath = resolve(filePath);
+  // A relative path is resolved against THIS REQUEST's directory, not the process's. Under stdio the
+  // two are the same; under the shared daemon the process runs from `/` (launchd), so `resolve()`
+  // alone turned `apps/api/x.ts` into `/apps/api/x.ts` and every such call failed. Measured
+  // 2026-08-30: 20 of 36 calls in one 15-minute window, all of them the PostToolUse hook reporting
+  // an edit, all lost.
+  const absPath = isAbsolute(filePath) ? resolve(filePath) : resolve(currentCwd(), filePath);
   const config = loadConfig();
   const repos = await listRegistryRepos(config.registryPath);
 
@@ -58,6 +64,19 @@ export async function indexFile(filePath: string): Promise<{
     .sort((a, b) => b.root.length - a.root.length)[0];
 
   if (!matchingRepo) {
+    // Name the real cause when there was one. `No indexed repo contains "/apps/api/x.ts"` is true
+    // and useless: the leading slash IS the diagnosis, and nobody reads it that way.
+    //
+    // Deliberately NOT guessed at: this same relative path exists under the main checkout and
+    // fifteen worktrees of it, so picking one would index the wrong tree — the exact confusion the
+    // `?cwd=` mechanism exists to prevent.
+    if (!isAbsolute(filePath) && !hasRequestContext()) {
+      throw new Error(
+        `Cannot resolve relative path "${filePath}": this connection carries no working directory, ` +
+          `so it resolved to "${absPath}". Add ?cwd=<abs path> to the MCP server URL ` +
+          `(\`codesift setup <client> --http\` writes it), or pass an absolute path.`,
+      );
+    }
     throw new Error(`No indexed repo contains "${absPath}". Run index_folder first.`);
   }
 
