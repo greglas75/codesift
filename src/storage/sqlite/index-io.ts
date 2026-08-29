@@ -56,7 +56,7 @@ export async function saveIndexSqlite(
 
   db.exec("BEGIN");
   try {
-    writeIndexRows(db, index);
+    await writeIndexRows(db, index);
     if (opts?.sourceComplete === true) {
       db.prepare("DELETE FROM meta WHERE key = ?").run("lossy_v1_migration");
     }
@@ -91,15 +91,62 @@ export async function wasLossilyMigrated(dbPath: string): Promise<boolean> {
  * as "no index" — so a write killed midway rolls back and the db reads as empty rather than
  * as a partially-populated index that later looks complete.
  */
-function writeIndexRows(db: DatabaseSyncType, index: CodeIndex): void {
+/**
+ * Rows written per turn before the event loop gets a chance to run.
+ *
+ * `node:sqlite` is entirely synchronous — every `.run()` blocks the thread — and this loop used to
+ * hold it for the WHOLE index. Measured on the largest real index here (372,949 symbols, a 732 MB
+ * database): **3.2 seconds of uninterrupted main thread** per full save. In a shared daemon that is
+ * 3.2 seconds during which no other client gets an answer, `/health` included; sampling a stalled
+ * daemon put 41% of main-thread time inside `StatementSync::Run`.
+ *
+ * Yielding does not make the write faster — the work is the same. It makes the SERVER responsive
+ * while the work happens, which is the actual complaint. Measured on that index, longest stall the
+ * event loop saw during a full save:
+ *
+ *     no yielding   the loop never ran at all (0 timer ticks in 3.8 s)
+ *     every 5000    42 ms
+ *     every  500    22 ms
+ *     every  250    22 ms
+ *
+ * 500 and 250 are indistinguishable on responsiveness, and total time between them differed by 30%
+ * across runs on identical work — i.e. noise, not signal, so it did not decide anything. 500 buys
+ * the same 22 ms at half the yields.
+ *
+ * Note the first row is not "0 ms of stall": the timer never fired, so there was nothing to
+ * measure. That is the worst case, not the best.
+ *
+ * Tuning the database instead was tried and rejected on measurement: `cache_size = 64 MB` plus
+ * `synchronous = NORMAL` bought 3% on that same index. The cost is the row count, not the pager.
+ */
+const ROWS_PER_TURN = 500;
+
+/** Hand the event loop a turn. `setImmediate` runs after I/O callbacks, so pending requests progress. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function writeIndexRows(db: DatabaseSyncType, index: CodeIndex): Promise<void> {
   db.exec("DELETE FROM symbols");
   db.exec("DELETE FROM files");
 
+  // The transaction stays OPEN across these yields, which is safe only because writes to one index
+  // are serialised (see the per-path write lock in index-json-mutations.ts and the mutex in
+  // saveIndexSqlite): a second BEGIN on this shared connection would otherwise fail with
+  // "cannot start a transaction within a transaction". Readers are unaffected — they use a private
+  // connection whose WAL snapshot is fixed at BEGIN.
   const insSym = db.prepare(INSERT_SYMBOL_SQL);
-  for (const sym of index.symbols) insSym.run(...(symbolToRow(sym) as never[]));
+  let sinceYield = 0;
+  for (const sym of index.symbols) {
+    insSym.run(...(symbolToRow(sym) as never[]));
+    if (++sinceYield >= ROWS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
+  }
 
   const insFile = db.prepare(INSERT_FILE_SQL);
-  for (const file of index.files) insFile.run(...(fileEntryToRow(file) as never[]));
+  for (const file of index.files) {
+    insFile.run(...(fileEntryToRow(file) as never[]));
+    if (++sinceYield >= ROWS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
+  }
 
   writeMetaValue(db, "repo", index.repo);
   writeMetaValue(db, "root", index.root);
@@ -135,7 +182,10 @@ export async function importLegacyIndexIfEmpty(
       db.exec("ROLLBACK");
       return false; // another process got there first
     }
-    writeIndexRows(db, index);
+    // Yields inside BEGIN IMMEDIATE hold the cross-process write lock a little longer, which is
+    // acceptable here: this runs once per index, when migrating a legacy JSON file, and the guard
+    // it implements is exactly about not letting a second process write meanwhile.
+    await writeIndexRows(db, index);
     db.exec("COMMIT");
     return true;
   } catch (err) {
