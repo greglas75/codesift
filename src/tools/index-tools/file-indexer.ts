@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
+import { runGit } from "../git-exec.js";
 import { join, resolve, relative, basename } from "node:path";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
 import {
@@ -226,11 +226,13 @@ export async function ensureIndexFresh(repoName: string): Promise<{
   const meta = await getRepo(config.registryPath, repoName);
   if (!meta) return { status: "skipped" };
 
+  // Asynchronous, and this is the call site where it matters most: `ensureIndexFresh` runs from
+  // `getCodeIndex`, i.e. on the path of EVERY repo-scoped tool. As `execFileSync` it stopped the
+  // whole shared daemon for as long as git took — up to 5 s here and 10 s for the diff below —
+  // once per repo per freshness interval, for every client on the machine.
   let currentCommit: string;
   try {
-    currentCommit = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: meta.root, encoding: "utf-8", timeout: 5000,
-    }).trim();
+    currentCommit = (await runGit(["rev-parse", "HEAD"], { cwd: meta.root, timeout: 5000 })).trim();
   } catch {
     freshnessChecked.set(repoName, Date.now());
     return { status: "skipped" };
@@ -245,12 +247,10 @@ export async function ensureIndexFresh(repoName: string): Promise<{
   let changedFiles: string[] = [];
   if (meta.last_git_commit) {
     try {
-      const diff = execFileSync("git", [
+      const diff = await runGit([
         "diff", "--name-only", "--diff-filter=ACMR",
         `${meta.last_git_commit}..${currentCommit}`,
-      ], {
-        cwd: meta.root, encoding: "utf-8", timeout: 10_000,
-      });
+      ], { cwd: meta.root, timeout: 10_000 });
       changedFiles = diff.trim().split("\n").filter(Boolean);
     } catch {
       // Stored commit gone (rebase/squash) — will do full incremental

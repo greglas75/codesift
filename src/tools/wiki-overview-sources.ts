@@ -90,9 +90,12 @@ function matchTomlKey(section: string, key: string): string | null {
  *  missing git binary / non-repo / permission errors. */
 export function isShallowClone(root: string): boolean {
   try {
+    // A ceiling, because this had none: it runs in the shared daemon, where a hung git blocks every
+    // client on the machine rather than only this caller.
     const out = execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
       cwd: root,
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
     });
     return out.toString().trim() === "true";
   } catch {

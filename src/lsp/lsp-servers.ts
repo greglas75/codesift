@@ -61,7 +61,10 @@ export function isLspAvailable(config: LspServerConfig): boolean {
   if (cached !== undefined) return cached;
 
   try {
-    execFileSync("which", [config.command], { stdio: "ignore" });
+    // A timeout, because a hung `which` had nothing to stop it: this runs synchronously in the
+    // shared daemon, so one wedged lookup would block every client indefinitely. 2 s is far more
+    // than a PATH search needs and far less than anyone would wait.
+    execFileSync("which", [config.command], { stdio: "ignore", timeout: 2_000 });
     availabilityCache.set(config.command, true);
     return true;
   } catch {

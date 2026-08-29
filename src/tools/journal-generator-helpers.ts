@@ -76,8 +76,10 @@ function resolveSinceCutoff(since: string, cwd: string): number {
   const direct = Date.parse(since);
   if (!Number.isNaN(direct)) return direct;
   try {
+    // `git log` over a large history with no ceiling blocked the shared daemon for as long as it
+    // took, and this call had none at all. 10 s matches the other git reads in this codebase.
     const raw = execFileSync("git", ["log", "-1", "--format=%aI", "--since", since],
-      { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }).trim();
     const parsed = Date.parse(raw);
     if (!Number.isNaN(parsed)) return parsed;
   } catch { /* fall through */ }
