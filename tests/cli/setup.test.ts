@@ -331,7 +331,7 @@ describe("setup", () => {
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift).toEqual({
         type: "http",
-        url: "http://127.0.0.1:7077/mcp?cwd=%2Fproj%2Falpha",
+        url: "http://127.0.0.1:7077/mcp?client=claude&cwd=%2Fproj%2Falpha",
       });
       expect(content.mcpServers.codesift.command).toBeUndefined();
     });
@@ -366,7 +366,7 @@ describe("setup", () => {
       const result = await setup("cursor", { http: true, cwd: null });
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift.url).toBe(
-        "http://127.0.0.1:7077/mcp?cwd=${workspaceFolder}",
+        "http://127.0.0.1:7077/mcp?client=cursor&cwd=${workspaceFolder}",
       );
     });
 
@@ -393,7 +393,8 @@ describe("setup", () => {
       // nothing, so this opts in per client rather than by default.
       const result = await setup("gemini", { http: true, cwd: null });
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
-      expect(content.mcpServers.codesift.url).toBe("http://127.0.0.1:7077/mcp");
+      // `client=` is still written: it is what lets the daemon give THIS client its own tool list.
+      expect(content.mcpServers.codesift.url).toBe("http://127.0.0.1:7077/mcp?client=gemini");
     });
 
     it("honors a custom --port in the URL", async () => {
@@ -465,7 +466,9 @@ describe("setup", () => {
       const result = await setup("codex", { http: true });
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain("[mcp_servers.codesift]");
-      expect(content).toMatch(/url = "http:\/\/127\.0\.0\.1:7077\/mcp\?cwd=/);
+      // `client=codex` comes first: it is what tells the daemon this host freezes its tool list,
+      // so the whole reveal-dependent surface must be offered up front rather than on request.
+      expect(content).toMatch(/url = "http:\/\/127\.0\.0\.1:7077\/mcp\?client=codex/);
       expect(content).not.toContain("command =");
     });
   });

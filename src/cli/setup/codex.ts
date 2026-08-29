@@ -94,7 +94,12 @@ function getCodexServerEntryLines(options?: SetupOptions): string {
   if (options?.http) {
     // Same guard as the JSON path: a token on a plaintext non-loopback URL is refused.
     assertTokenTransportIsSafe(options);
-    const lines = ["url = " + jsonString(daemonHttpUrl(options.port, options.cwd, options.host, options.scheme))];
+    // `client=codex` is what lets the daemon front-load for THIS client without changing the list
+    // every other client sees — Codex freezes its tool list at session start, so a tool not offered
+    // up front is unreachable for the whole session.
+    const lines = ["url = " + jsonString(
+      daemonHttpUrl(options.port, options.cwd, options.host, options.scheme, options.client ?? "codex"),
+    )];
     if (options.token) {
       lines.push("[mcp_servers.codesift.http_headers]");
       lines.push("Authorization = " + jsonString(`Bearer ${options.token}`));

@@ -41,6 +41,19 @@ export interface RequestContext {
   /** Directory the calling client is working in. */
   cwd: string;
   /**
+   * Which client is asking, from `?client=` in the URL.
+   *
+   * Needed because clients disagree about what a good tool list is, and one daemon answers all of
+   * them. Codex freezes its list at session start, so anything not offered up front is unreachable
+   * for the whole session; Claude Code refreshes on demand and measurably STOPS USING CodeSift when
+   * handed the full list (3e1ec6c, adoption down >90%). A single shared answer cannot satisfy both.
+   *
+   * It travels in the URL for the same reason `cwd` does: stateless serving has no session to have
+   * learned it, and the `initialized` notification lands on an instance that never saw `initialize`
+   * — measured, it arrives with an empty clientInfo.
+   */
+  client?: string;
+  /**
    * Aborted when the client-facing timeout fires.
    *
    * `withTimeout` used to answer `timed_out` and leave the handler running:
@@ -70,6 +83,11 @@ export function runWithRequestContext<T>(ctx: RequestContext, fn: () => T): T {
  */
 export function currentCwd(): string {
   return storage.getStore()?.cwd ?? process.cwd();
+}
+
+/** Which client this request belongs to, when its URL said so. */
+export function currentClient(): string | undefined {
+  return storage.getStore()?.client;
 }
 
 /**

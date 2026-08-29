@@ -78,11 +78,16 @@ export function setFrozenToolListHostForTesting(value: boolean): void {
  *
  * Idempotent.
  */
-export function frontLoadHiddenToolsForFrozenHost(): string[] {
+export function frontLoadHiddenToolsForFrozenHost(options?: { remember?: boolean }): string[] {
+  // `remember: false` is what the HTTP daemon passes. There, one process answers every client on
+  // the machine, so recording the front-load at process scope would give Claude Code the full list
+  // as a side effect of a Codex session existing — the exact regression 3e1ec6c reverted. On stdio
+  // the process IS the session, so remembering costs nothing and stays the default.
+  const remember = options?.remember ?? true;
   setFrozenToolListHost(true);
   const enabled: string[] = [];
   for (const definition of getToolDefinitions()) {
-    if (enableToolByName(definition.name)) enabled.push(definition.name);
+    if (enableToolByName(definition.name, remember)) enabled.push(definition.name);
   }
   return enabled;
 }

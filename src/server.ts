@@ -227,6 +227,26 @@ function expandTilde(value: string): string {
   return value;
 }
 
+/**
+ * Which client this connection belongs to, from `?client=` in the URL.
+ *
+ * Written by `codesift setup <platform> --http`. It travels in the URL for the same reason `cwd`
+ * does: stateless serving has no session, and the `initialized` notification arrives on an instance
+ * that never handled `initialize`, so its clientInfo is empty — measured, not assumed.
+ */
+export function clientFromUrl(rawUrl: string): string | undefined {
+  const q = rawUrl.indexOf("?");
+  if (q < 0) return undefined;
+  try {
+    const value = new URLSearchParams(rawUrl.slice(q + 1)).get("client");
+    // Bounded and alphanumeric: this selects a code path, so it is not a place for free text.
+    if (!value || !/^[a-z][a-z0-9-]{0,31}$/i.test(value)) return undefined;
+    return value.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 export function cwdFromUrl(rawUrl: string): string | undefined {
   const q = rawUrl.indexOf("?");
   if (q < 0) return undefined;
@@ -369,7 +389,38 @@ export async function startHttpServer(
    * makes more than one process — or a remote host — possible at all without a
    * shared session store.
    */
-  const handler = createMcpHandler(() => createCodesiftServer(), { legacy: "stateless" });
+  const envPlatformForHttp = detectPlatform();
+  /** Set by the HTTP handler just before delegating, read by the server factory. */
+  let clientForNextServer: string | undefined;
+
+  /**
+   * One daemon, clients that want different lists.
+   *
+   * Codex freezes its tool list at session start, so a tool not offered up front is unreachable for
+   * the whole session — measured 2026-08-29, a Codex client on the daemon saw 90 tools where the
+   * same build over stdio gives it 181, and `find_dead_code` did not exist as far as it was
+   * concerned. Claude Code is the opposite: it refreshes on demand and STOPS USING CodeSift when
+   * handed everything (3e1ec6c, adoption down >90%).
+   *
+   * So the decision is made per REQUEST, from `?client=`, and the front-load is deliberately not
+   * remembered at process scope — otherwise one Codex session would hand every Claude Code session
+   * the full list too.
+   */
+  const handler = createMcpHandler(() => {
+    const s = createCodesiftServer();
+    // NOT from the async context: the handler builds this server outside the request's
+    // AsyncLocalStorage scope — measured, `currentClient()` is undefined here even when the URL
+    // carried one. The value is stashed by the HTTP handler immediately before it delegates, on the
+    // same tick, which is the only moment both are in scope.
+    const client = clientForNextServer;
+    const platform = envPlatformForHttp !== "unknown"
+      ? envPlatformForHttp
+      : detectPlatformFromClientInfo(client ?? "");
+    if (client && shouldFrontLoadHiddenTools(platform)) {
+      frontLoadHiddenToolsForFrozenHost({ remember: false });
+    }
+    return s;
+  }, { legacy: "stateless" });
   const nodeHandler = toNodeHandler(handler);
 
   let inFlight = 0;
@@ -412,6 +463,9 @@ export async function startHttpServer(
         // The caller's directory, pinned per request. Statelessness makes this
         // the natural carrier: there is no session to have learned it once.
         const cwd = cwdFromUrl(url);
+        // Stashed for the server factory, which runs outside this request's async context —
+        // measured: currentClient() is undefined there even when the URL carried one.
+        clientForNextServer = clientFromUrl(url);
         inFlight++;
         try {
           await (cwd

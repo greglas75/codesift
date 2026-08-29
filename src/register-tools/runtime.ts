@@ -593,7 +593,7 @@ function ensureToolRegistered(name: string) {
   return registerToolDefinition(context.server, tool, context.languages);
 }
 
-export function enableToolByName(name: string): boolean {
+export function enableToolByName(name: string, remember = true): boolean {
   const handle = ensureToolRegistered(name);
   if (!handle) return false;
   const context = registrationContext;
@@ -604,7 +604,13 @@ export function enableToolByName(name: string): boolean {
   handle.enabled = true;
   // Remember at process scope so the next server instance (the HTTP daemon builds one per request)
   // starts with this tool already callable.
-  revealedToolNames.add(name);
+  //
+  // `remember: false` exists for ONE caller: front-loading a frozen-list host. That enables the
+  // entire surface, and the daemon serves every client on the machine from one process — so
+  // recording it here would hand Claude Code the full list too. Growing that list is the change
+  // 3e1ec6c reverted after adoption fell by more than 90%, i.e. remembering a front-load trades one
+  // client's outage for another's. A front-load is a property of the REQUEST, not of the process.
+  if (remember) revealedToolNames.add(name);
   return true;
 }
 

@@ -36,6 +36,14 @@ export interface SetupOptions {
    */
   projectScope?: boolean;
   /**
+   * Which client this entry is for — written into the daemon URL as `?client=`.
+   *
+   * One daemon serves every client on the machine, and they need different tool lists: a
+   * frozen-list host must be handed everything up front, while Claude Code stops using CodeSift
+   * when it is. Without this the daemon cannot tell them apart.
+   */
+  client?: string;
+  /**
    * Daemon host. Defaults to 127.0.0.1 (a local daemon). Point it at a shared
    * instance to have several machines served by one process — the reason
    * stateless serving exists.

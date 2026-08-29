@@ -82,6 +82,17 @@ export function daemonHttpUrl(
   cwd?: string | null,
   host?: string,
   scheme?: "http" | "https",
+  /**
+   * Which client this entry belongs to, e.g. `codex`.
+   *
+   * The daemon answers one process for every client on the machine, and clients disagree about what
+   * a good tool list is: Codex freezes its list at session start (anything not offered up front is
+   * unreachable for the session), while Claude Code refreshes on demand and measurably stops using
+   * CodeSift when handed everything (3e1ec6c, adoption down >90%). The identity has to travel in the
+   * URL for the same reason `cwd` does — stateless serving has no session, and the `initialized`
+   * notification arrives on an instance that never saw `initialize`, so its clientInfo is empty.
+   */
+  client?: string,
 ): string {
   // Host is a parameter, not a constant. It was hardcoded to 127.0.0.1, which
   // silently made `setup --http` a local-only feature: a SHARED daemon — the
@@ -103,6 +114,8 @@ export function daemonHttpUrl(
   // for a client whose per-project configs merge into it: the global entry carries the transport,
   // each project's config carries its own ?cwd= and overrides. `undefined` still means "pin the
   // current directory", which is what every existing caller wants.
+  if (client) url.searchParams.set("client", client);
+
   if (cwd === null) return url.toString();
 
   const value = cwd ?? process.cwd();
@@ -111,7 +124,8 @@ export function daemonHttpUrl(
     // `%24%7BworkspaceFolder%7D`, and the client substitutes by matching the
     // TEXT `${workspaceFolder}` in its config — so an encoded placeholder is
     // never expanded and every project would report the same dead directory.
-    return `${url.toString()}?cwd=${value}`;
+    // Keep whatever is already on the URL (`client=`) and append the literal placeholder.
+    return url.search ? `${url.toString()}&cwd=${value}` : `${url.toString()}?cwd=${value}`;
   }
   url.searchParams.set("cwd", value);
   return url.toString();
@@ -163,7 +177,8 @@ export function buildJsonServerEntry(options?: SetupOptions): Record<string, unk
     assertTokenTransportIsSafe(options);
     const entry: Record<string, unknown> = {
       type: "http",
-      url: daemonHttpUrl(options.port, options.cwd, options.host, options.scheme),
+      // The platform name is what the daemon reads back as `?client=`.
+      url: daemonHttpUrl(options.port, options.cwd, options.host, options.scheme, options.client),
     };
     if (options.token) entry["headers"] = { Authorization: `Bearer ${options.token}` };
     return entry;
@@ -232,10 +247,15 @@ export async function setupJsonPlatform(
   // A GLOBAL http entry (cwd === null) on a client that expands a workspace
   // variable should carry that variable rather than nothing: a bare URL leaves
   // the daemon resolving its own cwd, which under launchd is `/`.
+  // The platform name doubles as the client identity in the URL, so the daemon can hand this client
+  // the list it needs without changing what every other client sees.
+  const withClient = options?.http && options.client === undefined
+    ? { ...options, client: platform }
+    : options;
   const effective =
-    options?.http && options.cwd === null && config.workspaceVar
-      ? { ...options, cwd: config.workspaceVar }
-      : options;
+    withClient?.http && withClient.cwd === null && config.workspaceVar
+      ? { ...withClient, cwd: config.workspaceVar }
+      : withClient;
   const entry = buildJsonServerEntry(effective);
 
   await ensureDir(configDir);
