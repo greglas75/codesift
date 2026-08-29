@@ -161,9 +161,16 @@ function normalizeCodesiftTomlServerEntry(
   const argsCarryPackage = /^args[\t ]*=.*codesift-mcp/m.test(block);
   const hasLegacyNpx = hasNpxCommand && !argsCarryPackage;
 
+  // An HTTP entry written before per-client tool lists existed carries no `client=`, and without it
+  // the daemon cannot tell a frozen-list host from any other — Codex silently gets the small core
+  // list and its reveal-dependent tools are unreachable for the whole session. Equivalence used to
+  // be "is it HTTP at all", so `setup --http` reported `already configured` and left every existing
+  // install on the broken shape, `--force` included.
+  const httpMissingClient = hasHttp && !/^url[\t ]*=[\t ]*"[^"]*[?&]client=/m.test(block);
+
   const shouldRewrite =
     desiredHttp !== hasHttp ||
-    (desiredHttp ? hasStdio : hasHttp || hasLegacyNpx || hasDistServer);
+    (desiredHttp ? hasStdio || httpMissingClient : hasHttp || hasLegacyNpx || hasDistServer);
   if (!shouldRewrite) return { content, changed: false };
 
   const withoutEntry = block.replace(/^(command|args|url)[\t ]*=.*(?:\r?\n)?/gm, "");

@@ -23,6 +23,7 @@ import { setupCodex } from "./codex.js";
 export type CodexProjectConfigOutcome =
   | "written"
   | "already-present"
+  | "upgraded"
   | "skipped-linked-worktree"
   | "skipped-codex-not-http"
   | "skipped-no-codex"
@@ -83,7 +84,24 @@ export async function ensureCodexProjectConfig(
   const tree = findWorkingTree(root);
   if (!tree || tree.linked) return "skipped-linked-worktree";
 
-  if (existsSync(join(root, ".codex", "config.toml"))) return "already-present";
+  // An existing file is left alone — someone wrote it on purpose — EXCEPT when it predates
+  // per-client tool lists. Codex merges the project file into the global one per key, so a project
+  // `url` without `client=` OVERRIDES the global one that has it, and this project silently loses
+  // the front-loaded surface the global entry was fixed to provide.
+  const projectToml = join(root, ".codex", "config.toml");
+  if (existsSync(projectToml)) {
+    let existing = "";
+    try { existing = await readFile(projectToml, "utf-8"); } catch { return "already-present"; }
+    if (!/^\s*url\s*=\s*"[^"]*[?&]client=/m.test(existing)) {
+      try {
+        await setupCodex({ http: true, projectScope: true, cwd: root, hooks: false, rules: false });
+        return "upgraded";
+      } catch {
+        return "failed";
+      }
+    }
+    return "already-present";
+  }
   if (!existsSync(join(home, ".codex"))) return "skipped-no-codex";
   if (!(await globalCodexEntryIsHttp(home))) return "skipped-codex-not-http";
 

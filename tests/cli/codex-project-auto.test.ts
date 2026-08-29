@@ -84,13 +84,37 @@ describe("ensureCodexProjectConfig", () => {
     expect(await ensureCodexProjectConfig(repo, { home, env: {} })).toBe("skipped-codex-not-http");
   });
 
-  it("never overwrites a file that is already there", async () => {
+  it("upgrades a project file written before per-client tool lists", async () => {
+    // Codex merges the project file into the global one per key, so a project `url` WITHOUT
+    // `client=` overrides the global one that has it — and this project silently loses the
+    // front-loaded surface. Leaving it alone would be the polite wrong answer.
     home = makeHome("http"); repo = makeMainCheckout();
     mkdirSync(join(repo, ".codex"), { recursive: true });
-    writeFileSync(join(repo, ".codex", "config.toml"), "# hand written\n");
+    writeFileSync(join(repo, ".codex", "config.toml"),
+      '[mcp_servers.codesift]\nurl = "http://127.0.0.1:7077/mcp?cwd=%2Fx"\n');
+
+    expect(await ensureCodexProjectConfig(repo, { home, env: {} })).toBe("upgraded");
+    expect(readFileSync(join(repo, ".codex", "config.toml"), "utf-8")).toContain("client=codex");
+  });
+
+  it("leaves a project file that already carries client= alone", async () => {
+    home = makeHome("http"); repo = makeMainCheckout();
+    mkdirSync(join(repo, ".codex"), { recursive: true });
+    const good = '[mcp_servers.codesift]\nurl = "http://127.0.0.1:7077/mcp?client=codex&cwd=%2Fx"\n';
+    writeFileSync(join(repo, ".codex", "config.toml"), good);
 
     expect(await ensureCodexProjectConfig(repo, { home, env: {} })).toBe("already-present");
-    expect(readFileSync(join(repo, ".codex", "config.toml"), "utf-8")).toBe("# hand written\n");
+    expect(readFileSync(join(repo, ".codex", "config.toml"), "utf-8")).toBe(good);
+  });
+
+  it("never overwrites a hand-written file that is already current", async () => {
+    home = makeHome("http"); repo = makeMainCheckout();
+    mkdirSync(join(repo, ".codex"), { recursive: true });
+    writeFileSync(join(repo, ".codex", "config.toml"),
+      '# hand written\nurl = "http://127.0.0.1:7077/mcp?client=codex"\n');
+
+    expect(await ensureCodexProjectConfig(repo, { home, env: {} })).toBe("already-present");
+    expect(readFileSync(join(repo, ".codex", "config.toml"), "utf-8")).toContain("# hand written");
   });
 
   it("can be turned off", async () => {
