@@ -209,6 +209,50 @@ describe("seedWorktreeIndexFromParent", () => {
     }
   });
 
+  it("refuses a worktree that has been DELETED, without copying anything first", async () => {
+    // Measured 2026-08-30 on the live daemon: three worktrees of tgm-survey-platform were each
+    // copied for 42 SECONDS (15,422 files, 243,870 symbols) and the result thrown away, because the
+    // catch-up check ran afterwards. All three had been created by an agent and deleted while
+    // indexing was running. The caller then fell back to a FULL index — which is what blew through
+    // an agent's 120 s ceiling. The check has to happen before the copy, not after it.
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
+    registry({
+      [PARENT_NAME]: {
+        name: PARENT_NAME, root: parentRoot,
+        index_path: join(dataDir, `${PARENT_HASH}.index.json`),
+        last_git_commit: git(["rev-parse", "HEAD"], parentRoot).trim(),
+      },
+    });
+    rmSync(worktreeRoot, { recursive: true, force: true });
+
+    const result = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+
+    expect(result.seeded).toBe(false);
+    // The wording is the point: "not a git checkout" sent a reader looking for a git fault that did
+    // not exist. A vanished tree and a broken checkout need different answers.
+    expect(result.reason).toContain("gone");
+    expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
+  });
+
+  it("refuses a tree git cannot answer for, before copying", async () => {
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
+    registry({
+      [PARENT_NAME]: {
+        name: PARENT_NAME, root: parentRoot,
+        index_path: join(dataDir, `${PARENT_HASH}.index.json`),
+        last_git_commit: git(["rev-parse", "HEAD"], parentRoot).trim(),
+      },
+    });
+    // Break the gitdir link the worktree needs for `git rev-parse` to answer, keeping the directory
+    // itself in place — this is the "not a git checkout" case, distinct from a vanished tree.
+    writeFileSync(join(worktreeRoot, ".git"), "gitdir: /nowhere/that/exists\n");
+
+    const result = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+
+    expect(result.seeded).toBe(false);
+    expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
+  });
+
   it("leaves no half-copied database when the parent index is empty", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), []);
     registry({

@@ -29,8 +29,8 @@
  * borrowed from a different question. It also excludes deletions by design (`--diff-filter=ACMR`)
  * and never looks at untracked files, both of which matter far more here than in its own use.
  */
+import { runGit } from "../git-exec.js";
 import { existsSync, statSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { rename, unlink } from "node:fs/promises";
 import { getRepo, registerRepo, getRepoName } from "../../storage/registry.js";
@@ -69,6 +69,16 @@ export async function seedWorktreeIndexFromParent(
 ): Promise<SeedResult> {
   const started = Date.now();
 
+  // FIRST, and cheapest. A tree that is gone is reported as gone rather than as "not a linked
+  // worktree": measured 2026-08-30, three worktrees of tgm-survey-platform were each copied for
+  // **42 seconds** (15,422 files, 243,870 symbols) and the result thrown away, because the check
+  // that would have refused them ran AFTER the copy. All three had been created by an agent and
+  // deleted while indexing ran, and the message that came back sent a reader looking for a git
+  // fault that did not exist. A vanished tree and a broken checkout need different answers.
+  if (!existsSync(worktreeRoot)) {
+    return { seeded: false, reason: `worktree is gone (${worktreeRoot})` };
+  }
+
   const tree = findWorkingTree(worktreeRoot);
   if (!tree?.linked || !tree.mainRoot) {
     return { seeded: false, reason: "not a linked worktree" };
@@ -106,6 +116,14 @@ export async function seedWorktreeIndexFromParent(
   const { isSqliteAvailable } = await import("../../storage/sqlite/runtime.js");
   if (!(await isSqliteAvailable())) {
     return { seeded: false, reason: "node:sqlite unavailable (Node < 22.5)" };
+  }
+
+
+  // The last check before the expensive part. A seed is only worth copying if
+  // `catchUpSeededWorktree` can then bring it to this tree's HEAD, and that needs a working
+  // `git rev-parse` here. Asking afterwards is what made those 42-second copies pure waste.
+  if ((await runGit(["rev-parse", "HEAD"], { cwd: worktreeRoot, timeout: 5_000 }).catch(() => null)) === null) {
+    return { seeded: false, reason: "not a git checkout — nothing to catch the seed up to" };
   }
 
   // Write to a temp sibling and rename, so an interrupted seed never leaves a half-copied database
@@ -227,12 +245,14 @@ export interface CatchUpResult {
   head?: string;
 }
 
-function git(args: string[], cwd: string): string | null {
-  try {
-    return execFileSync("git", args, { cwd, encoding: "utf-8", timeout: 15_000 });
-  } catch {
-    return null;
-  }
+/**
+ * git, without stopping the shared daemon.
+ *
+ * `execFileSync` froze the whole process for as long as the child ran — up to 15 s per call, three
+ * calls per catch-up — and one process answers every client on this machine. See git-exec.ts.
+ */
+async function git(args: string[], cwd: string): Promise<string | null> {
+  return runGit(args, { cwd, timeout: 15_000 }).catch(() => null);
 }
 
 /**
@@ -252,7 +272,7 @@ export async function catchUpSeededWorktree(
   repoName: string,
   fromCommit: string | null,
 ): Promise<CatchUpResult> {
-  const head = git(["rev-parse", "HEAD"], worktreeRoot)?.trim();
+  const head = (await git(["rev-parse", "HEAD"], worktreeRoot))?.trim();
   if (!head) return { caught_up: false, reason: "not a git checkout" };
   if (!fromCommit) return { caught_up: false, reason: "parent index records no commit" };
 
@@ -260,7 +280,7 @@ export async function catchUpSeededWorktree(
   const removed = new Set<string>();
 
   if (fromCommit !== head) {
-    const diff = git(["diff", "--name-status", `${fromCommit}..${head}`], worktreeRoot);
+    const diff = await git(["diff", "--name-status", `${fromCommit}..${head}`], worktreeRoot);
     if (diff === null) {
       // The parent's commit is unreachable from here — a rebase, a squash, or a worktree on an
       // unrelated branch. Nothing can be diffed against it, so the seed cannot be trusted to be a
@@ -280,7 +300,7 @@ export async function catchUpSeededWorktree(
   }
 
   // Working tree on top of HEAD: modified, staged, and untracked alike.
-  const status = git(["status", "--porcelain", "--untracked-files=all"], worktreeRoot);
+  const status = await git(["status", "--porcelain", "--untracked-files=all"], worktreeRoot);
   if (status !== null) {
     for (const line of status.split("\n")) {
       if (line.length < 4) continue;
