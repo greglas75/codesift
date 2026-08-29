@@ -125,7 +125,7 @@ function writeWatermark(ts: number): boolean {
 /** Baked default collector — anonymous ingest needs NO token (the endpoint is
  *  open + validated + rate-limited). Full/fleet sets CODESIFT_TELEMETRY_TOKEN.
  *  Both are env-overridable. */
-const DEFAULT_TELEMETRY_URL = "https://coding.tgmedit.com";
+const DEFAULT_TELEMETRY_URL = "http://100.103.91.24:5599";
 
 function endpoint(): { url: string; token: string } {
   const url = (process.env["CODESIFT_TELEMETRY_URL"] ?? DEFAULT_TELEMETRY_URL).replace(/\/$/, "");
