@@ -1,8 +1,8 @@
 import type { CodeIndex } from "../types.js";
 import {
   importLegacyIndexIfEmpty,
+  indexDbIsPopulated,
   isSqliteAvailable,
-  loadIndexSqlite,
 } from "./sqlite-index-store.js";
 
 export type IndexBackend = "json" | "sqlite";
@@ -78,7 +78,11 @@ export async function ensureSqliteMigrated(
   if (inFlight) return inFlight;
 
   const run = (async () => {
-    if ((await loadIndexSqlite(dbPath)) !== null) return;
+    // An EXISTENCE check, not a load. This used to call `loadIndexSqlite(dbPath)` and discard the
+    // result, so every cold entry to a repository materialised the whole index twice — once to
+    // answer "is it empty", once for real. Measured on the largest index here, that is ~349 MB of
+    // objects built and thrown away, plus the GC pressure the allocation storm creates.
+    if (await indexDbIsPopulated(dbPath)) return;
     const legacy = await loadLegacyIndex(indexPath);
     // The importer re-checks emptiness under its write lock, so racing processes cannot
     // overwrite rows imported by the winner.

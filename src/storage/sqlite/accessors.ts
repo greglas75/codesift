@@ -223,3 +223,24 @@ export async function getDataVersion(dbPath: string): Promise<number> {
     return row.data_version;
   });
 }
+
+/**
+ * Does this database already hold an index?
+ *
+ * Exists to replace a FULL materialisation used as an emptiness test. `ensureSqliteMigrated` called
+ * `loadIndexSqlite(dbPath)` and threw the result away, so every cold entry to a repository built the
+ * whole object graph TWICE — once to answer "is it empty", once for real. On the largest index here
+ * that is ~349 MB of objects allocated and discarded, and the allocation storm lands on the
+ * incremental marking GC, which is a second cost on top of the first.
+ *
+ * The semantics are copied exactly, not approximated: `loadIndexSqlite` returns null when `repo` or
+ * `root` is missing from meta and for no other reason, so those two keys ARE the test.
+ *
+ * `openIndexDb` is kept because the old call depended on it for side effects — it creates the schema
+ * and runs the v1->v2 migration. Dropping it here would move that work to whoever touched the
+ * database next, which is exactly the kind of quiet reordering this codebase has been bitten by.
+ */
+export async function indexDbIsPopulated(dbPath: string): Promise<boolean> {
+  const db = await openIndexDb(dbPath);
+  return readMetaValue(db, "repo") !== undefined && readMetaValue(db, "root") !== undefined;
+}

@@ -65,4 +65,5 @@ export {
   loadIndexSummarySqlite,
   removeFileFromIndexSqlite,
   saveIncrementalSqlite,
+  indexDbIsPopulated,
 } from "./sqlite/accessors.js";
