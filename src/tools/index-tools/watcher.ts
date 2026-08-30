@@ -4,6 +4,7 @@ import { startWatcher, stopWatcher } from "../../storage/watcher.js";
 import { loadConfig } from "../../config.js";
 import { onFileChanged as scanOnChanged, onFileDeleted as scanOnDeleted, scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
+import { updateBM25ForFile } from "../../search/bm25.js";
 import { activeWatchers, bm25Indexes, codeIndexes, invalidateEmbeddingCaches } from "./state.js";
 
 const DEFAULT_MAX_WATCHERS = 8;
@@ -129,8 +130,11 @@ async function handleFileChange(
     }
   }
 
-  // Invalidate caches — lazy rebuild on next query via getBM25Index()
-  bm25Indexes.delete(repoName);
+  // Swap this file's symbols in place rather than dropping the index — see updateBM25ForFile.
+  const cachedBm25 = bm25Indexes.get(repoName);
+  if (cachedBm25) {
+    updateBM25ForFile(cachedBm25, relativeFile, result.symbols);
+  }
   codeIndexes.delete(repoName);
   invalidateEmbeddingCaches(repoName);
 }
@@ -147,8 +151,12 @@ async function handleFileDelete(
 ): Promise<void> {
   await removeFileFromIndex(indexPath, relativeFile);
 
-  // Invalidate caches — lazy rebuild on next query via getBM25Index()
-  bm25Indexes.delete(repoName);
+  // A deletion is the same swap with nothing to put back: drop the file's symbols, keep the rest
+  // of the index. Dropping the whole index here would make `rm` as expensive as a reindex.
+  const cachedBm25 = bm25Indexes.get(repoName);
+  if (cachedBm25) {
+    updateBM25ForFile(cachedBm25, relativeFile, []);
+  }
   codeIndexes.delete(repoName);
   invalidateEmbeddingCaches(repoName);
   scanOnDeleted(repoName, relativeFile);

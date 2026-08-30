@@ -30,6 +30,12 @@ export interface BM25Index {
   centrality: Map<string, number>;
   /** Pre-computed per-document field lengths (avoids O(n*m) recomputation per search) */
   fieldLengths: Map<string, Record<FieldName, number>>;
+  /**
+   * Running per-field token totals. `avgFieldLengths` is derived from these, and keeping the
+   * numerator lets one file's symbols be swapped without rescanning every document. Deriving it
+   * back as `avg * docCount` would work on paper and accumulate float error in practice.
+   */
+  totalFieldLengths: Record<FieldName, number>;
 }
 
 /**
@@ -219,7 +225,85 @@ function finishBuild(acc: BM25Accumulator, symbols: CodeSymbol[]): BM25Index {
     centrality.set(file, Math.log2(1 + count));
   }
 
-  return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality, fieldLengths };
+  return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality, fieldLengths, totalFieldLengths };
+}
+
+function recomputeAverages(index: BM25Index): void {
+  const n = index.docCount;
+  for (const field of fieldNames) {
+    index.avgFieldLengths[field] = n > 0 ? index.totalFieldLengths[field] / n : 0;
+  }
+}
+
+/**
+ * Undo one symbol's contribution to the inverted index.
+ *
+ * No reverse token map is needed: the tokens a symbol contributed are a pure function of the
+ * symbol, and the symbol itself is still in `index.symbols`. Re-deriving them is exact and costs
+ * one `getFieldTokens` call, against a reverse map that would have to be kept correct forever.
+ *
+ * Field lengths come from the STORED record rather than the re-derived tokens, so the running
+ * totals stay symmetric with what ingest actually added even if tokenisation ever changes under a
+ * long-lived index.
+ */
+function removeSymbolFromIndex(index: BM25Index, symbol: CodeSymbol): void {
+  const fieldTokens = getFieldTokens(symbol);
+  const stored = index.fieldLengths.get(symbol.id);
+
+  for (const field of fieldNames) {
+    const tokens = fieldTokens[field];
+    index.totalFieldLengths[field] -= stored ? stored[field] : tokens.length;
+
+    const postings = index.fields[field];
+    for (const token of new Set(tokens)) {
+      const forToken = postings.get(token);
+      if (!forToken) continue;
+      forToken.delete(symbol.id);
+      // A token nobody carries any more must go, or the vocabulary grows without bound across a
+      // long-lived daemon and every idf denominator drifts.
+      if (forToken.size === 0) postings.delete(token);
+    }
+  }
+
+  index.symbols.delete(symbol.id);
+  index.fieldLengths.delete(symbol.id);
+  index.docCount--;
+}
+
+/**
+ * Swap one file's symbols in place, instead of throwing the whole index away.
+ *
+ * Editing a single file used to delete the repository's entire BM25 index, and the next search
+ * rebuilt it from scratch — measured 6.8 s on a 372k-symbol repository, against 952 `index_file`
+ * calls in a week. The agent loop is edit-then-search, so that rebuild was being paid constantly.
+ *
+ * `centrality` is deliberately NOT recomputed. It is an O(imports x files) scan over every symbol
+ * in the repository — the thing this function exists to avoid — and it is a ranking bonus derived
+ * from a substring heuristic, not a correctness input. One file's imports moving leaves it
+ * marginally stale until the next full build; a 6.8 s pause would not.
+ */
+export function updateBM25ForFile(index: BM25Index, file: string, symbols: CodeSymbol[]): void {
+  // Select by the STORED symbol's file, never by parsing the incoming ids: ids are
+  // `repo:file:name:line` and are documented as non-unique, so an incoming id can collide with a
+  // symbol that lives in a different file. Matching on the stored record cannot touch it.
+  const stale: CodeSymbol[] = [];
+  for (const existing of index.symbols.values()) {
+    if (existing.file === file) stale.push(existing);
+  }
+  for (const symbol of stale) removeSymbolFromIndex(index, symbol);
+
+  const acc: BM25Accumulator = {
+    fields: index.fields,
+    totalFieldLengths: index.totalFieldLengths,
+    symbolMap: index.symbols,
+    fieldLengths: index.fieldLengths,
+  };
+  for (const symbol of symbols) {
+    ingestSymbol(acc, symbol);
+    index.docCount++;
+  }
+
+  recomputeAverages(index);
 }
 
 /**

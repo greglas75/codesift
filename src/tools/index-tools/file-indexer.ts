@@ -14,6 +14,7 @@ import { currentCwd, hasRequestContext } from "../../server-helpers/request-cont
 import { scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
 import { indexFolder } from "./folder-indexer.js";
+import { updateBM25ForFile } from "../../search/bm25.js";
 import { bm25Indexes, codeIndexes, invalidateEmbeddingCaches } from "./state.js";
 
 /**
@@ -200,8 +201,16 @@ export async function indexFile(filePath: string): Promise<{
     }
   }
 
-  // Invalidate caches — lazy rebuild on next query via getBM25Index()
-  bm25Indexes.delete(matchingRepo.name);
+  // One file changed, so swap that file's symbols in the BM25 index instead of dropping it.
+  // Dropping it was cheap to write and expensive to run: the next search rebuilt the whole index
+  // (6.8 s on a 372k-symbol repository here), and this runs after EVERY agent edit — 952 times in
+  // a week — against an agent loop that is edit-then-search. `relPath` is the same
+  // `relative(root, absPath)` that parseOneFile stores on each symbol, so the two agree by
+  // construction.
+  const cachedBm25 = bm25Indexes.get(matchingRepo.name);
+  if (cachedBm25) {
+    updateBM25ForFile(cachedBm25, relPath, result.symbols);
+  }
   codeIndexes.delete(matchingRepo.name);
   invalidateEmbeddingCaches(matchingRepo.name);
 
