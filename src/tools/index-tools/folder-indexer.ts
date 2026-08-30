@@ -216,7 +216,12 @@ export async function indexFolder(
           `(${seed.files} files, ${seed.symbols} symbols) — bringing it to this tree's HEAD…`,
         );
         const { catchUpSeededWorktree } = await import("./worktree-seed.js");
-        const caught = await catchUpSeededWorktree(rootPath, repoName, seed.seeded_at_commit ?? null);
+        const caught = await catchUpSeededWorktree(
+          rootPath,
+          repoName,
+          seed.seeded_at_commit ?? null,
+          seed.files,
+        );
         if (caught.caught_up) {
           const summary = await loadIndexSummary(indexPath);
           console.error(

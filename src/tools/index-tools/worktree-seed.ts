@@ -230,8 +230,38 @@ export function parentIndexBytes(parentDbPath: string): number {
  * correct. Here it is weighed against parsing 14,226 files from scratch — measured: delegating a
  * 65-file catch-up to that 50-file threshold turned a seed that took milliseconds into a ten-minute
  * full index, which is the entire feature undone by a constant borrowed from a different question.
+ *
+ * ---------------------------------------------------------------------------
+ * And then the same mistake was made here, one level up (2026-08-30)
+ * ---------------------------------------------------------------------------
+ *
+ * A flat 3000 was chosen against the measurement above: parent 14,891 files, worktree 14,405,
+ * eleven different. That holds only while the PARENT index is fresh. In practice it trails the
+ * branch by a couple of days, so a worktree cut from `develop` differs from it by ~4,100 files —
+ * and the seed was declined every single time. Measured over the live logs: `seeded from` 0,
+ * `seed not usable` 28. The feature had never once run.
+ *
+ * The two costs, measured rather than assumed:
+ *
+ *   full index of one tgm-survey-platform worktree   6,412 s (107 min) / 15,422 files = 416 ms per file
+ *   catch-up, per changed file (index_file p90)                                        283 ms per file
+ *
+ * The catch-up path is CHEAPER per file than the walk it replaces — the full index also embeds —
+ * so there is no crossover anywhere near a quarter of the tree. The ceiling is now a fraction of
+ * the seeded tree, which is the quantity the comparison is actually against; the old constant
+ * survives as a floor so small repositories, where a full index is quick anyway, behave as before.
+ *
+ * The fraction is deliberately conservative rather than absent: a worktree that really has diverged
+ * across most of its files is a case where a clean walk is the more predictable answer, and keeping
+ * an escape hatch costs nothing when the observed case sits at 27%.
  */
-const MAX_CATCHUP_FILES = 3000;
+const MAX_CATCHUP_FILES_FLOOR = 3000;
+const MAX_CATCHUP_TREE_FRACTION = 0.6;
+
+export function catchUpCeiling(seededFileCount: number | undefined): number {
+  if (seededFileCount === undefined || seededFileCount <= 0) return MAX_CATCHUP_FILES_FLOOR;
+  return Math.max(MAX_CATCHUP_FILES_FLOOR, Math.round(seededFileCount * MAX_CATCHUP_TREE_FRACTION));
+}
 
 export interface CatchUpResult {
   caught_up: boolean;
@@ -271,6 +301,9 @@ export async function catchUpSeededWorktree(
   worktreeRoot: string,
   repoName: string,
   fromCommit: string | null,
+  /** Files the seed copied in. The ceiling is a fraction of this; omitting it falls back to the
+   *  flat floor, which is what a caller that cannot know the size should get. */
+  seededFileCount?: number,
 ): Promise<CatchUpResult> {
   const head = (await git(["rev-parse", "HEAD"], worktreeRoot))?.trim();
   if (!head) return { caught_up: false, reason: "not a git checkout" };
@@ -315,8 +348,9 @@ export async function catchUpSeededWorktree(
   for (const path of removed) changed.delete(path);
 
   const total = changed.size + removed.size;
-  if (total > MAX_CATCHUP_FILES) {
-    return { caught_up: false, reason: `${total} files differ (> ${MAX_CATCHUP_FILES})`, changed_total: total };
+  const ceiling = catchUpCeiling(seededFileCount);
+  if (total > ceiling) {
+    return { caught_up: false, reason: `${total} files differ (> ${ceiling})`, changed_total: total };
   }
 
   const { indexFile } = await import("./file-indexer.js");
