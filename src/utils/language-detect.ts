@@ -133,7 +133,55 @@ function allDetected(found: ProjectLanguages): boolean {
  * Synchronous variant for use during server startup where top-level await
  * isn't convenient. Uses readdirSync. Caps at MAX_FILES_SCANNED.
  */
+/**
+ * Detected languages, per project root.
+ *
+ * The scan below is a synchronous recursive readdir bounded at MAX_FILES_SCANNED. It has one
+ * caller — registerTools — and in the shared HTTP daemon a server is constructed PER REQUEST, so
+ * an uncached scan ran on every single MCP call, `initialize` included. Warm that is tens of
+ * milliseconds; on a directory the OS has never read it is seconds. Measured on a first connect to
+ * an untouched tgm-survey-platform worktree: 8.7 s, 21.7 s and 51.9 s on three attempts, against
+ * 0.1 s for the listTools that follows it — and a client whose initialize outlives its own timeout
+ * spends its entire session with no CodeSift tools at all, which is what agents were reporting.
+ *
+ * A repository gains or loses a LANGUAGE very rarely, and the consequence of noticing late is a
+ * tool surface that stays as it was for a few more minutes. That is not the same kind of staleness
+ * as a wrong search result, so time is the right invalidator here.
+ */
+interface LanguageCacheEntry {
+  value: ProjectLanguages;
+  at: number;
+}
+
+const LANGUAGE_CACHE_TTL_MS = 10 * 60 * 1000;
+/** Bounded because this machine has 858 registered repositories and the daemon outlives all of
+ *  them; an unbounded map keyed by path is a slow leak, not a cache. */
+const LANGUAGE_CACHE_MAX_ENTRIES = 256;
+const languageCache = new Map<string, LanguageCacheEntry>();
+
+/** Exported for tests: the cache is keyed by path and would otherwise leak between cases. */
+export function resetLanguageDetectionCache(): void {
+  languageCache.clear();
+}
+
 export function detectProjectLanguagesSync(root: string): ProjectLanguages {
+  const cached = languageCache.get(root);
+  if (cached && Date.now() - cached.at < LANGUAGE_CACHE_TTL_MS) {
+    // Re-insert so the eviction below drops genuinely cold roots rather than merely old ones.
+    languageCache.delete(root);
+    languageCache.set(root, cached);
+    return cached.value;
+  }
+  const detected = detectProjectLanguagesUncached(root);
+  languageCache.set(root, { value: detected, at: Date.now() });
+  if (languageCache.size > LANGUAGE_CACHE_MAX_ENTRIES) {
+    const oldest = languageCache.keys().next();
+    if (!oldest.done) languageCache.delete(oldest.value);
+  }
+  return detected;
+}
+
+function detectProjectLanguagesUncached(root: string): ProjectLanguages {
   const found: ProjectLanguages = {
     python: false,
     php: false,
