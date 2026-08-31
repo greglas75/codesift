@@ -15,6 +15,7 @@ import { scanFileForSecrets } from "../secret-scan-shared.js";
 import { parseOneFile } from "./parse.js";
 import { indexFolder } from "./folder-indexer.js";
 import { updateBM25ForFile } from "../../search/bm25.js";
+import { IGNORE_DIRS } from "../../utils/walk/filters.js";
 import { bm25Indexes, codeIndexes, invalidateEmbeddingCaches } from "./state.js";
 
 /**
@@ -36,6 +37,34 @@ export function clearLastIndexedStateForTesting(): void {
 }
 
 /**
+ * The directory that makes this path one the walker would never have visited, or null.
+ *
+ * There are two doors into an index and only one of them had a filter. `walkDirectory` refuses
+ * `node_modules`, `vendor`, `dist` and every dot-directory; `indexFile` refused nothing, and the
+ * PostToolUse hook calls it after EVERY agent edit. So anything an agent touched went in, including
+ * files under directories the walk deliberately declines to enter.
+ *
+ * Measured on the live indexes: 3,067 files across 33 repositories under `.claude/worktrees/`,
+ * 1,911 of them in ResearchShieldNew alone — real parsed source (218 symbols in the largest) from
+ * throwaway per-agent checkouts that no longer exist on disk. They produced 29,000 lines of
+ * `failed to read indexed file` in a single day's log and stayed searchable long after deletion.
+ *
+ * Mirroring the walker rather than blocklisting `.claude` is the point: the rule is "the two doors
+ * agree", so node_modules and vendor stop leaking in by the same route, and a future exclusion
+ * needs adding in one place instead of two.
+ */
+function walkerExcludedSegment(relPath: string): string | null {
+  const segments = relPath.split(/[\\/]/);
+  // The last segment is the file. A dot-FILE is fine — `.eslintrc.json` is indexable; it is
+  // dot-DIRECTORIES the walker declines to descend into.
+  for (const segment of segments.slice(0, -1)) {
+    if (!segment || segment === ".") continue;
+    if (IGNORE_DIRS.has(segment) || segment.startsWith(".")) return segment;
+  }
+  return null;
+}
+
+/**
  * Re-index a single file instantly. Finds the repo by matching the file
  * path against indexed repo roots. Updates symbols, BM25 index, and
  * invalidates embedding cache — no full repo walk needed.
@@ -49,6 +78,8 @@ export async function indexFile(filePath: string): Promise<{
   secrets_warning?: string;
   /** The file no longer exists and its symbols were pruned from the index. */
   removed?: boolean;
+  /** The walker would never have indexed this path; the directory that decided it. */
+  excluded_by?: string;
 }> {
   // A relative path is resolved against THIS REQUEST's directory, not the process's. Under stdio the
   // two are the same; under the shared daemon the process runs from `/` (launchd), so `resolve()`
@@ -83,6 +114,27 @@ export async function indexFile(filePath: string): Promise<{
 
   const startTime = Date.now();
   const relPath = relative(matchingRepo.root, absPath);
+
+  // Refuse what the walk would have refused — and prune it if a previous run let it in. Purely
+  // refusing would leave the 3,067 already-indexed files searchable forever, since the throwaway
+  // checkouts they came from are deleted and nothing will ever touch them again; pruning on the
+  // way past means the index heals itself wherever an agent is still working.
+  const excludedBy = walkerExcludedSegment(relPath);
+  if (excludedBy !== null) {
+    const { removeFileFromIndex } = await import("../../storage/index-store.js");
+    await removeFileFromIndex(matchingRepo.index_path, relPath).catch(() => {});
+    const bm25 = bm25Indexes.get(matchingRepo.name);
+    if (bm25) updateBM25ForFile(bm25, relPath, []);
+    lastIndexedState.delete(absPath);
+    return {
+      repo: matchingRepo.name,
+      file: relPath,
+      symbol_count: 0,
+      duration_ms: Date.now() - startTime,
+      skipped: true,
+      excluded_by: excludedBy,
+    };
+  }
 
   // If the changed file is a TS/JS config that drives path resolution, drop
   // caches so incremental indexing picks up new `paths` / `extends`.
