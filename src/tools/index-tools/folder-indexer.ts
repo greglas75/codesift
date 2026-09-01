@@ -19,7 +19,7 @@ import { walkDirectory } from "../../utils/walk.js";
 import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
 import { HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../../storage/hash-snapshot.js";
 import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../../types.js";
-import { activeWatchers, bm25Indexes, codeIndexes, lastFullIndexAt } from "./state.js";
+import { activeWatchers, codeIndexes, lastFullIndexAt, rememberBM25Index } from "./state.js";
 import { parseFiles, propagateDirtySignatures, embedSymbols, embedChunks } from "./parse.js";
 import { drainLegacyHashQueue, loadIndexSnapshot, saveIndexSnapshot, sha1OfFile } from "./snapshots.js";
 import { setupWatcher } from "./watcher.js";
@@ -474,7 +474,7 @@ export async function indexFolder(
   // Built here (not before the guard) so a rejected_partial early-return leaves
   // the previous in-memory BM25 index intact rather than swapping in a partial.
   const bm25 = await buildBM25IndexYielding(mergedSymbols);
-  bm25Indexes.set(repoName, bm25);
+  rememberBM25Index(repoName, bm25);
 
   // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges
   // and other downstream consumers see the populated `workspaces` field.

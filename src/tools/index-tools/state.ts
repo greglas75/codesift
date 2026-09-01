@@ -1,9 +1,95 @@
 import type { FSWatcher } from "../../storage/watcher.js";
 import type { BM25Index } from "../../search/bm25.js";
 import type { CodeIndex } from "../../types.js";
+import { totalmem as osTotalmem } from "node:os";
 
 export const activeWatchers = new Map<string, FSWatcher>();
 export const bm25Indexes = new Map<string, BM25Index>();
+
+/**
+ * Bytes a BM25 index occupies, from its own token totals.
+ *
+ * Measured with a heapUsed delta around a real build: 352,125 symbols / 12,882,846 tokens cost
+ * 399 MB, i.e. 32.5 B per token — the postings maps dominate, so tokens are the quantity to price
+ * by, not symbols. Rounded UP to 40, on the same reasoning as the index footprint: over-reporting
+ * evicts something that would have fitted, under-reporting silently breaks the budget.
+ */
+function bm25FootprintBytes(index: BM25Index): number {
+  let tokens = 0;
+  for (const field of Object.keys(index.totalFieldLengths) as (keyof typeof index.totalFieldLengths)[]) {
+    tokens += index.totalFieldLengths[field];
+  }
+  return tokens * 40;
+}
+
+/**
+ * Keep the BM25 cache inside a budget, evicting least-recently-used first.
+ *
+ * This cache had NO bound of any kind — no LRU, no budget, no entry cap — while every neighbour has
+ * one (`CODESIFT_MAX_INDEX_CACHE_MB` for indexes, `CODESIFT_MAX_EMBEDDING_MEM_MB` for embeddings, a
+ * watcher cap, an LRU parse cache). It survived because eviction happened by ACCIDENT: every
+ * `index_file` deleted its repo's entry, and the PostToolUse hook fires on every agent edit, so the
+ * map was constantly being emptied by the thing that looked like cache invalidation.
+ *
+ * 69a49cd made those edits update the index in place instead of dropping it — a 595x win on the
+ * edit path, and it removed the only thing keeping this map small. The daemon then climbed to the
+ * 16 GB heap ceiling and crash-looped: 15.1 GB, 16.0 GB, restart, repeat, with clients that
+ * happened to initialize during a restart window getting no tools at all for their whole session.
+ *
+ * At ~400 MB for a large repository, the budget holds two or three. That is the point: a repo
+ * evicted here is rebuilt on next use, which now costs one build rather than one per edit.
+ */
+export function rememberBM25Index(repoName: string, index: BM25Index): void {
+  bm25Indexes.delete(repoName);
+  bm25Indexes.set(repoName, index);
+  evictBM25OverBudget(repoName);
+}
+
+/** Mark an entry as most-recently-used, so eviction drops cold repos rather than merely old ones. */
+export function touchBM25Index(repoName: string): void {
+  const existing = bm25Indexes.get(repoName);
+  if (!existing) return;
+  bm25Indexes.delete(repoName);
+  bm25Indexes.set(repoName, existing);
+}
+
+function evictBM25OverBudget(pinned: string): void {
+  const budget = maxBM25CacheBytes();
+  let total = 0;
+  for (const index of bm25Indexes.values()) total += bm25FootprintBytes(index);
+  if (total <= budget) return;
+
+  for (const [name, index] of bm25Indexes) {
+    if (total <= budget) break;
+    // Never evict the repo being served, even when it alone exceeds the budget — otherwise every
+    // call into a large repository would rebuild and immediately discard its own index.
+    if (name === pinned) continue;
+    total -= bm25FootprintBytes(index);
+    bm25Indexes.delete(name);
+  }
+}
+
+function maxBM25CacheBytes(): number {
+  const raw = process.env["CODESIFT_MAX_BM25_CACHE_MB"];
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed * 1024 * 1024;
+  }
+  // Same RAM tiers as the index and embedding budgets, so the three agree about what a machine
+  // this size is willing to hold resident.
+  const totalGb = totalSystemMemoryBytes() / 1024 ** 3;
+  const mb = totalGb <= 16 ? 256 : totalGb <= 32 ? 512 : 1024;
+  return mb * 1024 * 1024;
+}
+
+function totalSystemMemoryBytes(): number {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return osTotalmem();
+  } catch {
+    return 8 * 1024 ** 3;
+  }
+}
 export const codeIndexes = new Map<string, CodeIndex>();
 export const embeddingCaches = new Map<string, Map<string, Float32Array>>();
 export const embeddingCacheGenerations = new Map<string, number>();

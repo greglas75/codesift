@@ -45,8 +45,7 @@ import {
   cacheEmbeddingIfGenerationCurrent,
   invalidateEmbeddingCache,
   chunkCacheKey,
-  invalidateEmbeddingCaches,
-} from "./state.js";
+  invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index } from "./state.js";
 import type { CodeIndex, RepoMeta } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
 
@@ -119,13 +118,16 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   await ensureIndexFresh(resolvedName);
 
   const cached = bm25Indexes.get(resolvedName);
-  if (cached) return cached;
+  if (cached) {
+    touchBM25Index(resolvedName);
+    return cached;
+  }
 
   const index = await loadIndex(meta.index_path);
   if (!index) return null;
 
   const bm25 = await buildBM25IndexYielding(index.symbols);
-  bm25Indexes.set(resolvedName, bm25);
+  rememberBM25Index(resolvedName, bm25);
   return bm25;
 }
 
