@@ -1,44 +1,48 @@
 // How many differing files are still worth catching up on, rather than re-walking the tree.
 //
-// This is a pure decision, and it is the whole of the 2026-08-30 fix: a flat ceiling of 3000 was
-// measured against a FRESH parent index (parent 14,891 files, worktree 14,405, eleven different).
-// Real parent indexes trail the branch by a couple of days, so worktrees cut from `develop`
-// differed by ~4,100 files and the seed was declined every time — `seeded from` 0 against
-// `seed not usable` 28 in the live logs. The feature had never run once.
+// This constant has now been wrong in BOTH directions, and the second time was a regression I
+// shipped, so the cases below are the measurements rather than a rule of thumb.
+//
+// Too low (2026-08-30): a flat 3000 measured against a FRESH parent index. Real parent indexes
+// trail the branch, worktrees differed by ~4,100 files, and the seed was declined every time —
+// `seeded from` 0 against `seed not usable` 28.
+//
+// Too high (2026-08-31): raising it to 60% of the tree, on a per-file cost taken from `index_file`
+// p90 (283 ms). That distribution is dominated by calls that SHORT-CIRCUIT on an unchanged file.
+// The catch-ups the raised ceiling then allowed measured 1.6-7.0 s per changed file:
+//   3,778 files -> 9,489 s (158 min) · 778 -> 5,483 s · 772 -> 4,496 s · 356 -> 575 s
+// against 416 ms per file for the full walk it replaces. On the 3,778-file case the "optimisation"
+// took 158 minutes where the full index takes 107.
 import { describe, it, expect } from "vitest";
 import { catchUpCeiling } from "../../src/tools/index-tools/worktree-seed.js";
 
 describe("catchUpCeiling", () => {
-  it("accepts the case that was being refused in production", () => {
-    // The measured shape: a 15,422-file parent index, worktrees differing by 4,034-4,106 files.
-    // Full index of one such worktree took 6,412 s; the catch-up path costs less PER FILE than the
-    // walk it replaces (283 ms vs 416 ms), so refusing here bought nothing and cost 107 minutes.
-    const ceiling = catchUpCeiling(15422);
-    expect(ceiling).toBeGreaterThan(4106);
+  it("refuses the catch-ups that measured slower than the walk they replaced", () => {
+    // tgm-survey-platform: 15,478 files in the seed, 3,778 changed, 158 minutes.
+    expect(catchUpCeiling(15478)).toBeLessThan(3778);
+    // rs_admin: 1,055 files, 778 changed, 91 minutes. The old 3000 "floor" admitted the whole tree.
+    expect(catchUpCeiling(1055)).toBeLessThan(778);
   });
 
-  it("keeps the old flat ceiling as a floor for small trees", () => {
-    // Below ~5,000 files a full index is quick, so nothing needs to change there; the floor is what
-    // stops the fraction from making a small repo MORE eager than it used to be.
-    expect(catchUpCeiling(100)).toBe(3000);
-    expect(catchUpCeiling(4000)).toBe(3000);
+  it("still accepts a catch-up that is a small fraction of the tree", () => {
+    // The case the seed exists for: a worktree a few hundred files off a 15k-file parent.
+    expect(catchUpCeiling(15478)).toBeGreaterThan(1000);
+    expect(catchUpCeiling(1055)).toBeGreaterThan(50);
+  });
+
+  it("keeps a floor so a tiny repository is not forced into a walk for a handful of changes", () => {
+    expect(catchUpCeiling(100)).toBe(100);
+    expect(catchUpCeiling(300)).toBe(100);
   });
 
   it("falls back to the floor when the tree size is unknown", () => {
-    // A caller that cannot say how big the seed was must not get an unbounded ceiling by omission —
-    // absence of a number is not evidence that the number is large.
-    expect(catchUpCeiling(undefined)).toBe(3000);
-    expect(catchUpCeiling(0)).toBe(3000);
-  });
-
-  it("still leaves an escape hatch for a genuinely diverged worktree", () => {
-    // A worktree whose files have nearly all changed is a case where a clean walk is the more
-    // predictable answer. The observed case sits at 27% of the tree, so keeping this costs nothing.
-    const files = 15422;
-    expect(catchUpCeiling(files)).toBeLessThan(files);
+    // Absence of a number is not evidence that the number is large, and the failure this constant
+    // has twice produced is an unbounded catch-up, not an unnecessary walk.
+    expect(catchUpCeiling(undefined)).toBe(100);
+    expect(catchUpCeiling(0)).toBe(100);
   });
 
   it("scales with the tree rather than staying flat", () => {
-    expect(catchUpCeiling(50_000)).toBeGreaterThan(catchUpCeiling(15_422));
+    expect(catchUpCeiling(50_000)).toBeGreaterThan(catchUpCeiling(15_478));
   });
 });

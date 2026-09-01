@@ -241,22 +241,43 @@ export function parentIndexBytes(parentDbPath: string): number {
  * and the seed was declined every single time. Measured over the live logs: `seeded from` 0,
  * `seed not usable` 28. The feature had never once run.
  *
- * The two costs, measured rather than assumed:
+ * ---------------------------------------------------------------------------
+ * Third correction, and this one was a REGRESSION I shipped (2026-09-01)
+ * ---------------------------------------------------------------------------
  *
- *   full index of one tgm-survey-platform worktree   6,412 s (107 min) / 15,422 files = 416 ms per file
- *   catch-up, per changed file (index_file p90)                                        283 ms per file
+ * The fix above raised the ceiling to 60% of the tree on the strength of this comparison:
  *
- * The catch-up path is CHEAPER per file than the walk it replaces — the full index also embeds —
- * so there is no crossover anywhere near a quarter of the tree. The ceiling is now a fraction of
- * the seeded tree, which is the quantity the comparison is actually against; the old constant
- * survives as a floor so small repositories, where a full index is quick anyway, behave as before.
+ *   full index, one tgm-survey-platform worktree   6,412 s / 15,422 files = 416 ms per file
+ *   catch-up, per changed file (index_file p90)                             283 ms per file
  *
- * The fraction is deliberately conservative rather than absent: a worktree that really has diverged
- * across most of its files is a case where a clean walk is the more predictable answer, and keeping
- * an escape hatch costs nothing when the observed case sits at 27%.
+ * The second number was wrong, and wrong in the way telemetry medians usually are: `index_file`'s
+ * distribution is dominated by calls that SHORT-CIRCUIT on an unchanged file (14 ms median). For a
+ * file that actually has to be read, parsed and saved, the real cost is far higher. Measured from
+ * the catch-ups the raised ceiling then allowed to run:
+ *
+ *   3,778 changed files   9,489 s (158 min)   2.5 s per file
+ *     778 changed files   5,483 s ( 91 min)   7.0 s per file
+ *     772 changed files   4,496 s ( 75 min)   5.8 s per file
+ *     356 changed files     575 s ( 10 min)   1.6 s per file
+ *
+ * So the catch-up is 4-17x MORE expensive per file than the walk it replaces, not cheaper. It is
+ * sequential — one stat, read, hash, parse and DB write per file — against a walk that parses eight
+ * at a time and writes once. On the 3,778-file case the "optimisation" took 158 minutes where the
+ * full index it replaced takes 107.
+ *
+ * Crossover, from those two per-file costs: catching up N files beats re-walking a tree of T when
+ * N * ~4s < T * 0.416s, i.e. below roughly a TENTH of the tree. The ceiling is that tenth.
+ *
+ * The floor goes with it. 3000 was never a floor in any real sense — on a 1,055-file repository it
+ * admitted the entire tree, which is how rs_admin came to spend 91 minutes catching up 778 of its
+ * 1,055 files. A floor exists so a tiny repository is not forced into a walk for a handful of
+ * changes; 100 does that and nothing more.
+ *
+ * The asymmetry is the reason to err low: refusing costs a predictable full index, while accepting
+ * costs a catch-up with no ceiling on how long it runs.
  */
-const MAX_CATCHUP_FILES_FLOOR = 3000;
-const MAX_CATCHUP_TREE_FRACTION = 0.6;
+const MAX_CATCHUP_FILES_FLOOR = 100;
+const MAX_CATCHUP_TREE_FRACTION = 0.1;
 
 export function catchUpCeiling(seededFileCount: number | undefined): number {
   if (seededFileCount === undefined || seededFileCount <= 0) return MAX_CATCHUP_FILES_FLOOR;
