@@ -606,6 +606,91 @@ present**, because an absent field is indistinguishable from "nobody checked". W
 tool output is **prefixed** with an `AMBIGUOUS ID —` banner naming the candidates: the handlers
 return text, so a signal that lives only in the typed result informs nothing.
 
+## Two regressions shipped in one session, and the single mistake behind both (2026-08-30 → 09-01)
+
+Both were performance fixes, both measured, both wrong in the same way: **a number was taken from
+where it was easy to get rather than from the condition it would run in.** Neither was caught by
+tests or review; both surfaced when agents started failing, hours later.
+
+**Ceiling raised on a median that describes the wrong calls** (`3094f02`, reverted by `39948eb`).
+The worktree catch-up ceiling went to 60% of the tree on this comparison:
+
+    full index, one tgm-survey-platform worktree   6,412 s / 15,422 files = 416 ms per file
+    catch-up, per changed file (index_file p90)                             283 ms per file
+
+`index_file`'s distribution is dominated by calls that SHORT-CIRCUIT on an unchanged file — 14 ms
+median — so its p90 describes almost anything except a file being read, parsed and written. Real
+cost, measured from the catch-ups the raised ceiling then allowed: **1.6–7.0 s per file**
+(3,778 files → 9,489 s; 778 → 5,483 s; 356 → 575 s). The "optimisation" took 158 minutes where the
+full index takes 107, and agents hit their own 120 s cap and fell back to grep.
+*Before using a percentile from `usage.jsonl`, ask what the fast half of that distribution IS.*
+
+**An accidental eviction removed without noticing it was the only one** (`69a49cd`, fixed by
+`5981eb0`). Making an edit update the BM25 index in place instead of dropping it is a 595x win on
+the edit path — and `bm25Indexes` had no LRU, no budget and no entry cap, while every neighbouring
+cache has one. It stayed small only because every `index_file` deleted its repo's entry and the
+PostToolUse hook fires on every agent edit. Removing that turned a latent leak into an OOM
+crash-loop: 15.1 GB → 16.0 GB → restart → repeat, and a client whose `initialize` lands in a restart
+window gets no tools for its entire session.
+*When deleting an invalidation, check what else was depending on it as a side effect.*
+
+The crash-loop is invisible between crashes — the daemon answers, RSS looks ordinary, uptime resets
+quietly. It was found by a watchdog logging RSS and handshake every 15 minutes, not by any test.
+
+## `node:sqlite` is synchronous, so page size is the daemon's latency floor (2026-09-02)
+
+There is no async class in `node:sqlite` — `DatabaseSync` and `StatementSync` are the whole module
+(verified on Node 24.18.0: no export, class or method returns a Promise). SQLite is an in-process
+library reading a local file, so a sync API is *faster* while the page cache is warm. It stops being
+faster when the disk is the slow part, and then a read is a blocking syscall holding the daemon's
+only thread.
+
+`readTablePaged` yields between pages and sizes each page by TIME (50 ms budget, feedback loop).
+Its floor was **500 rows**, which is a row count — the one unit that comment says a page must not be
+sized by. The floor held while pages were slow for CPU reasons (GC, allocation: ~1 order of
+magnitude) and failed when the disk was: measured with 21 concurrent `npm ci`, **50,835 IOPS at
+~6.9 KB each**, daemon in state `U`, `initialize` at 40 s. Against a disk 100x slower the loop wanted
+a page 100x smaller and the floor refused. Now 50 (per-ROW yielding was separately measured to take
+minutes, so a floor must exist), and the first page starts at the floor instead of 4,000 — it is the
+one page nothing has measured yet.
+
+**`ps -o state=` is the diagnostic that separates these.** `U` (uninterruptible) means blocked in
+kernel I/O: low CPU, no stack from `sample` (0 frames), `/health` silent. `R` with high CPU is a
+different fault entirely. Three separate incidents this week looked identical from the client side —
+"CODESIFT UNAVAILABLE" — and were CPU starvation, an OOM crash-loop, and disk saturation.
+
+## Retention runs itself now — and `prune --dry-run` cannot show you what it will reclaim
+
+Nothing reclaimed the index of a deleted worktree. `prune` was a command a person types; no timer,
+no cron, nothing in the daemon called it. Measured 2026-09-02: **267 orphaned entries holding
+58.7 GB**, `~/.codesift` at 98 GB and growing ~2 GB/day. Every worktree gets its own index by
+design, and a workflow that creates ten at a time and deletes them leaves ten behind each round.
+
+The daemon now schedules a sweep once a day in a DETACHED CHILD (`src/cli/auto-prune.ts`).
+Not in-process: `handlePrune` reaches `die()` on each of its safety guards, and `die` ends the
+process — inside the daemon a refused prune would be a dead server for every client. Off with
+`CODESIFT_AUTO_PRUNE=0`. Only the daemon schedules it; a stdio server per session would run it N
+times over.
+
+**Read `stale_repos`, never `freed_gb`, from a dry run.** Prune is two-pass by construction — pass
+one unregisters, pass two collects — so a dry run can only ever see the first. Measured here:
+predicted 0.48 GB, actual 0.48 GB then **58.26 GB**. 98 GB → 43 GB.
+
+## This machine: what has already been ruled out (2026-09-02)
+
+Three separate times this week the daemon was blamed for something the host was doing. Each was
+measured; do not re-litigate them without new evidence, and do not recommend the first two.
+
+| suspected | measured |
+|---|---|
+| Bitdefender scanning `node_modules` | **already excluded.** Burns ~136% CPU *at idle*; writing 4,000 files inside vs outside `~/DEV` moved it +5.1% and −3.5% — noise, and one of them negative |
+| Spotlight indexing `~/DEV` | **already excluded.** A probe file created in `~/DEV` is not found by `mdfind` at all; `~/DEV`, `~/DEV2`, `Caches` are in the privacy list |
+| the machine | **the real constraint.** 21 concurrent `npm ci` → 50,835 IOPS at ~6.9 KB; 45 processes in state `U`, the daemon among them. Also seen: load 235 on 18 cores, agents themselves at 255% CPU |
+
+The daemon cannot fix a saturated host. What it CAN do is stay reachable through one — which is what
+the page floor above is for: individual queries stay slow, but `initialize` answers and the session
+gets its tools instead of running blind.
+
 ## Linting — Biome (`npm run lint`)
 
 `npm run lint` is `biome lint . && tsc --noEmit`; `npm run lint:fix` applies the safe fixes. Config
