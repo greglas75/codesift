@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { runGit } from "../git-exec.js";
-import { join, resolve, relative, basename, isAbsolute } from "node:path";
+import { join, resolve, relative, basename, isAbsolute, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
 import {
@@ -34,6 +34,29 @@ const lastIndexedState = new Map<string, { mtimeMs: number; contentHash: string;
 /** Test hook — clear the in-process last-indexed state. */
 export function clearLastIndexedStateForTesting(): void {
   lastIndexedState.clear();
+}
+
+/**
+ * The nearest ancestor that is a git checkout, or null if there is none.
+ *
+ * `.git` is a directory in a normal checkout and a FILE in a linked worktree or a submodule, so the
+ * test is existence, not `isDirectory` — the worktree case is precisely the one this needs to catch.
+ */
+async function findEnclosingCheckout(absPath: string): Promise<string | null> {
+  let dir = dirname(absPath);
+  // Bounded: a pathological symlink loop must not turn a missing repo into an infinite walk.
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      await stat(join(dir, ".git"));
+      return dir;
+    } catch {
+      // not here — keep climbing
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return null;
 }
 
 /**
@@ -80,12 +103,15 @@ export async function indexFile(filePath: string): Promise<{
   removed?: boolean;
   /** The walker would never have indexed this path; the directory that decided it. */
   excluded_by?: string;
+  /** The path is in no git checkout at all, so there was nothing to index and nothing is wrong. */
+  outside_indexed_repos?: boolean;
 }> {
   // A relative path is resolved against THIS REQUEST's directory, not the process's. Under stdio the
   // two are the same; under the shared daemon the process runs from `/` (launchd), so `resolve()`
   // alone turned `apps/api/x.ts` into `/apps/api/x.ts` and every such call failed. Measured
   // 2026-08-30: 20 of 36 calls in one 15-minute window, all of them the PostToolUse hook reporting
   // an edit, all lost.
+  const fallbackStart = Date.now();
   const absPath = isAbsolute(filePath) ? resolve(filePath) : resolve(currentCwd(), filePath);
   const config = loadConfig();
   const repos = await listRegistryRepos(config.registryPath);
@@ -109,7 +135,35 @@ export async function indexFile(filePath: string): Promise<{
           `(\`codesift setup <client> --http\` writes it), or pass an absolute path.`,
       );
     }
-    throw new Error(`No indexed repo contains "${absPath}". Run index_folder first.`);
+    // Two very different situations reached this one throw, and lumping them together is what made
+    // index_file the noisiest tool in the telemetry: 147 errors in 801 calls over three days, 18.4%,
+    // every one of them with an empty `repo` field.
+    //
+    // The PostToolUse hook fires after EVERY Write/Edit an agent makes — scratchpad files, notes
+    // under ~/.claude, anything in /tmp. Those are not in a repository and never should be, so
+    // reporting a tool FAILURE for them is simply wrong: nothing was asked for and nothing is
+    // broken. It also trains agents to distrust a tool that is working.
+    //
+    // A file inside a real git checkout that nobody has indexed is the opposite case. There the
+    // index is silently going stale under an agent that thinks it is being kept current, which is
+    // the H19 failure in miniature — so that one stays an error, and now names the exact call.
+    const checkoutRoot = await findEnclosingCheckout(absPath);
+    if (checkoutRoot === null) {
+      return {
+        repo: "",
+        file: absPath,
+        symbol_count: 0,
+        duration_ms: Date.now() - fallbackStart,
+        skipped: true,
+        outside_indexed_repos: true,
+      };
+    }
+    throw new Error(
+      `"${absPath}" is inside the git checkout "${checkoutRoot}", which is not indexed. ` +
+        `Run index_folder(path="${checkoutRoot}") once — for a linked worktree that is a FIRST ` +
+        `index, not a re-index, and until it runs every edit here is lost and searches answer ` +
+        `from the parent checkout instead.`,
+    );
   }
 
   const startTime = Date.now();

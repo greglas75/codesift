@@ -66,11 +66,16 @@ describe("index_file on a deleted file", () => {
     expect(index?.symbols.some((s) => s.name === "keeper")).toBe(true);
   }, 60_000);
 
-  it("still refuses a path that belongs to no indexed repo", async () => {
-    // Unchanged behaviour, and deliberately so: a path outside every registered root is a
-    // different problem from a deleted file, and collapsing them would hide it.
-    await expect(indexFile(join(tmpdir(), "nowhere-at-all-xyz.ts"))).rejects.toThrow(
-      /No indexed repo contains/,
-    );
+  it("reports nothing-to-do, not a failure, for a path in no git checkout", async () => {
+    // This assertion used to expect a rejection, and the change is deliberate. The PostToolUse hook
+    // calls index_file after EVERY agent edit — scratchpads, notes under ~/.claude, anything in
+    // /tmp — and none of those belong in a repository. Calling that a tool failure produced 147
+    // errors in 801 calls (18.4%) and taught agents to distrust a tool that was working.
+    //
+    // It stays distinct from a deleted file, which is what this suite is about: `removed` means a
+    // known file went away, `outside_indexed_repos` means there was never anything to track.
+    const result = await indexFile(join(tmpdir(), "nowhere-at-all-xyz.ts"));
+    expect(result.outside_indexed_repos).toBe(true);
+    expect(result.removed).toBeUndefined();
   }, 60_000);
 });

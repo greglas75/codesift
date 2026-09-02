@@ -38,17 +38,19 @@ describe("index_file and relative paths", () => {
     mkdirSync(join(dir, "src"), { recursive: true });
     writeFileSync(join(dir, "src", "a.ts"), "export const a = 1;\n");
 
-    // Not indexed, so it still refuses — but on the REPO, having resolved the path correctly.
-    // The distinction is the whole point: the daemon now knows which tree the caller meant.
+    // The claim here is about RESOLUTION, and the rejection was only ever how it was observed. A
+    // temp dir is in no git checkout, so index_file now reports "nothing to do" rather than a tool
+    // failure — and the resolved path it echoes back proves the same thing more directly.
     await runWithRequestContext({ cwd: dir }, async () => {
-      await expect(indexFile("src/a.ts")).rejects.toThrow(/No indexed repo contains/);
-      await expect(indexFile("src/a.ts")).rejects.toThrow(new RegExp(dir!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      const result = await indexFile("src/a.ts");
+      expect(result.outside_indexed_repos).toBe(true);
+      expect(result.file).toBe(join(dir!, "src", "a.ts"));
     });
   });
 
   it("leaves an absolute path alone", async () => {
-    await expect(indexFile("/nowhere/that/exists/x.ts")).rejects.toThrow(
-      /No indexed repo contains "\/nowhere\/that\/exists\/x\.ts"/,
-    );
+    const result = await indexFile("/nowhere/that/exists/x.ts");
+    expect(result.file).toBe("/nowhere/that/exists/x.ts");
+    expect(result.outside_indexed_repos).toBe(true);
   });
 });
