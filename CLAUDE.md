@@ -629,16 +629,20 @@ explanation placed between the directive and the code silently disables the supp
 reports `suppressions/unused`). One was a real test defect: a "detects Yii2 from composer.json" test
 that imported `detectStack`, never called it, and grepped the source for a string literal instead.
 
-## Tests run on the i9 farm — use `rt`, not a local runner
+## Tests run on the test farm — use `rt`, not a local runner
 
-This repo is wired to the shared test farm (burst-i9, 24 cores). The Mac runs
-20-30 agent worktrees at once, so a local suite fights every other agent for the
-same cores. `rt` wraps whatever you were going to run and executes it there,
-streaming the log back.
+This repo is wired to the shared test farm: primary host **waw-tf**
+(`100.88.49.119`, EPYC 9455, 96 threads, 125 GB), overflow shield-tf /
+staging-tf / translation-tf. **`burst-i9` and `burst-epyc` were switched off on
+2026-09-02 — do not probe `100.69.215.9`, never set `TF_HOST=i9-tf` (`rt` refuses
+it by name), and an "offline" i9 in `tailscale status` is not an outage.** The
+Mac runs 20-30 agent worktrees at once, so a local suite fights every other
+agent for the same cores. `rt` wraps whatever you were going to run and executes
+it on the farm, streaming the log back; the broker picks the host.
 
 ```sh
-rt                     # this repo's test command (from .tf.json), on i9
-rt <any command>       # lint / build / typecheck / a single spec, on i9
+rt                     # this repo's test command (from .tf.json), on the farm
+rt <any command>       # lint / build / typecheck / a single spec, on the farm
 rt -q                  # same, but only farm lines, failures and totals
 rt --flaky             # per-test history: is this red a flake or a regression?
 rt --repeat 20 <cmd>   # run it 20x in ONE job and report the failure RATE
@@ -646,19 +650,9 @@ rt --repeat 20 <cmd>   # run it 20x in ONE job and report the failure RATE
 
 **This applies to every test/lint/build command in this repo**, including ones
 these docs name directly — `rt` composes with them, it does not replace them.
-Off the tailnet `rt` transparently runs the same command locally, so it is
-always safe to reach for.
-
-**A green `rt` exit is not a green suite — read the output, not the status.** Off the tailnet (or
-when the tunnel is degraded while `tailscale status` still says `active`) `rt` REFUSES and prints
-`do NOT run this suite locally`, and the wrapper can still exit 0. That is the same failure this
-codebase hunts inside its own tools: a plausible result delivered where a verdict should be. A run
-that produced no `Tests N passed` summary line executed nothing — do not release, do not commit on
-it. Retry once (the refusal is often a transient tunnel), then investigate.
-
-The same rule applies to `npm run lint`: read its result before committing, not after. A commit
-landed on this repo with unused imports because the lint exit code was never looked at.
+Off the tailnet `rt` **refuses (exit 21)** — nothing runs on the laptop;
+`RT_LOCAL_OK=1` is an explicit human override, not something an agent sets.
 
 Farm config for this repo lives in `.tf.json`. Tool source of truth:
 `~/DEV/i9-farma` (edit there, then `./install.sh` — never edit `~/bin/rt`
-or the deployed copies on i9).
+or the deployed copies on the farm hosts).
