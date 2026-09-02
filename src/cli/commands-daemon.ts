@@ -3,6 +3,9 @@ import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import type { Flags } from "./args.js";
 import type { HttpServerHandle } from "../server.js";
 import { getFlag, getNumFlag, output, die } from "./args.js";
+import { scheduleAutoPrune } from "./auto-prune.js";
+import { loadConfig } from "../config.js";
+import { fileURLToPath } from "node:url";
 
 /** Default daemon port — clients point here via `setup --http`. */
 export const DEFAULT_DAEMON_PORT = 7077;
@@ -141,6 +144,13 @@ async function handleServe(_args: string[], flags: Flags): Promise<void> {
     { status: "serving", url: handle.url, port: handle.port, pid: process.pid },
     flags,
   );
+
+  // Reclaim indexes whose repository is gone. Only the daemon does this — it is the one
+  // long-lived process per machine, so a stdio server per session would run it N times over.
+  scheduleAutoPrune({
+    dataDir: loadConfig().dataDir,
+    cliEntry: fileURLToPath(new URL("../cli.js", import.meta.url)),
+  });
   const shutdown = (): void => {
     void handle.close().then(() => process.exit(0));
   };
