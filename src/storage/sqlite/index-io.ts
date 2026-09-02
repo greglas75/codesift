@@ -239,8 +239,46 @@ export async function importLegacyIndexIfEmpty(
  * turning a linear read into a quadratic one exactly on the biggest indexes this exists for.
  */
 const PAGE_TARGET_MS = 50;
-const PAGE_MIN_ROWS = 500;
+/**
+ * The floor was 500 — and 500 is a ROW COUNT, which is the one thing the paragraph above says a page
+ * must not be sized by.
+ *
+ * It held while pages were slow for CPU reasons (GC, allocation), because those vary by maybe an
+ * order of magnitude. It does not hold when the DISK is the slow part. Measured 2026-09-02 with 21
+ * concurrent `npm ci` on this machine: 50,835 IOPS at ~6.9 KB each, the daemon sitting in state `U`
+ * (uninterruptible kernel I/O), `initialize` taking 40 s, and clients giving up and running the rest
+ * of their session with no CodeSift tools at all.
+ *
+ * `node:sqlite` is synchronous by design — DatabaseSync and StatementSync are the entire module,
+ * there is no async class to switch to — so a page is a blocking syscall for as long as the disk
+ * takes. The feedback loop is the right mechanism and was simply not allowed to go low enough:
+ * against a disk 100x slower it wanted a page 100x smaller and could not have one.
+ *
+ * 50 keeps the bulk fetch meaningful — per-ROW yielding was measured to turn the same load into
+ * minutes — while giving the loop an order of magnitude more room to shrink.
+ */
+const PAGE_MIN_ROWS = 50;
 const PAGE_MAX_ROWS = 20_000;
+/**
+ * The FIRST page is the one nothing has measured yet, so it is the one that can block longest. At
+ * 4,000 rows it was a bet that the disk is fast, taken before any evidence — and on a saturated disk
+ * that is a multi-second stall in front of every other client's request, the handshake included.
+ *
+ * Starting at the floor costs two or three extra pages on a fast disk (the loop multiplies back up
+ * to 20,000 within a page or two) and bounds the worst case on a slow one.
+ */
+const PAGE_FIRST_ROWS = PAGE_MIN_ROWS;
+
+/**
+ * Row count for the next page, aimed at the time budget. Extracted so the adaptation can be tested
+ * directly: a disk-bound stall is not reproducible in a unit test, but the decision it forces is.
+ */
+export function nextPageRows(currentRows: number, elapsedMs: number): number {
+  return Math.max(
+    PAGE_MIN_ROWS,
+    Math.min(PAGE_MAX_ROWS, Math.round(currentRows * (PAGE_TARGET_MS / Math.max(elapsedMs, 1)))),
+  );
+}
 
 async function readTablePaged<T, R>(
   db: DatabaseSyncType,
@@ -252,7 +290,7 @@ async function readTablePaged<T, R>(
   );
   const out: R[] = [];
   let cursor = 0;
-  let rows = 4_000;
+  let rows = PAGE_FIRST_ROWS;
   for (;;) {
     const started = Date.now();
     const page = stmt.all(cursor, rows) as unknown as Array<T & { _rid: number }>;
@@ -266,8 +304,7 @@ async function readTablePaged<T, R>(
     // under a daemon already holding several indexes, because allocating a few thousand
     // objects there lands in incremental marking. A fixed row count is therefore tuned for
     // one heap and wrong for the other; a fixed time budget holds in both.
-    rows = Math.max(PAGE_MIN_ROWS, Math.min(PAGE_MAX_ROWS,
-      Math.round(rows * (PAGE_TARGET_MS / Math.max(elapsed, 1)))));
+    rows = nextPageRows(rows, elapsed);
     await new Promise<void>((r) => setImmediate(r));
   }
 }
