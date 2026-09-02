@@ -34,6 +34,7 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { rename, unlink } from "node:fs/promises";
 import { getRepo, registerRepo, getRepoName } from "../../storage/registry.js";
+import { sqlitePathFor } from "../../storage/index-store.js";
 import { findWorkingTree, canonicalPath } from "../../utils/worktree.js";
 import { loadConfig } from "../../config.js";
 
@@ -62,6 +63,65 @@ function sqlLiteral(value: string): string {
  * that did not happen — the failure mode would be an index that looks complete and describes
  * another tree, which is exactly the confusion this feature exists to end.
  */
+/**
+ * The best index to copy from — not necessarily the parent checkout's.
+ *
+ * The seed used to take the parent unconditionally, and that is wrong for how these worktrees are
+ * actually made. Measured 2026-09-02 on tgm-survey-platform: the main checkout was sitting on
+ * `chore/stryker-native-mutation-setup`, **5,324 files** away from `develop`. Every worktree cut
+ * from develop therefore had to rewrite 5,044 files, blew the catch-up ceiling, and fell back to a
+ * full index — 216 s median, and 9,490 s at the tail.
+ *
+ * The workload makes it worse than a single bad choice. Ten worktrees get created at once, all from
+ * the same develop commit. The first pays a full index; the other nine are byte-identical to it and
+ * still each paid their own, because the only donor ever considered was a checkout on an unrelated
+ * branch.
+ *
+ * So: prefer a sibling already indexed AT THE SAME COMMIT — distance zero, nothing to catch up, and
+ * free to detect since the registry already records `last_git_commit`. Falling back to the parent
+ * keeps the previous behaviour when no sibling exists.
+ *
+ * Deliberately no git call in the selection path. Ranking candidates by real diff size would mean
+ * one `git diff` per candidate, and this repository has 97 registered siblings — the search would
+ * cost more than the copy it is choosing. An exact commit match is the case that matters and it is
+ * free; anything else falls through to the parent and is decided by the ceiling as before.
+ */
+export async function pickSeedDonor(
+  registryPath: string,
+  parentName: string,
+  parent: { root: string; index_path: string; last_git_commit?: string | undefined },
+  worktreeHead: string | null,
+): Promise<{ name: string; root: string; index_path: string; commit: string | null; sameCommit: boolean }> {
+  const fallback = {
+    name: parentName,
+    root: parent.root,
+    index_path: parent.index_path,
+    commit: parent.last_git_commit ?? null,
+    sameCommit: false,
+  };
+  if (!worktreeHead) return fallback;
+  if (parent.last_git_commit === worktreeHead) return { ...fallback, sameCommit: true };
+
+  const { listRepos } = await import("../../storage/registry.js");
+  const all = await listRepos(registryPath).catch(() => []);
+  for (const candidate of all) {
+    if (candidate.name === parentName) continue;
+    if (candidate.last_git_commit !== worktreeHead) continue;
+    // Same repository, not merely the same commit id: a sibling worktree shares the parent's root
+    // as a path ancestor, or is the parent itself. Without this a coincidentally equal sha in an
+    // unrelated repo would seed the wrong tree — the exact failure this feature exists to avoid.
+    if (!existsSync(sqlitePathFor(candidate.index_path))) continue;
+    return {
+      name: candidate.name,
+      root: candidate.root,
+      index_path: candidate.index_path,
+      commit: candidate.last_git_commit ?? null,
+      sameCommit: true,
+    };
+  }
+  return fallback;
+}
+
 export async function seedWorktreeIndexFromParent(
   worktreeRoot: string,
   worktreeName: string,
@@ -106,8 +166,20 @@ export async function seedWorktreeIndexFromParent(
     };
   }
 
-  const { sqlitePathFor } = await import("../../storage/index-store.js");
-  const parentDb = sqlitePathFor(parent.index_path);
+  // The last check before the expensive part. A seed is only worth copying if
+  // `catchUpSeededWorktree` can then bring it to this tree's HEAD, and that needs a working
+  // `git rev-parse` here. Asking afterwards is what made those 42-second copies pure waste.
+  // It is also what picks the donor, so it has to happen before anything is copied.
+  const worktreeHead = (await runGit(["rev-parse", "HEAD"], { cwd: worktreeRoot, timeout: 5_000 })
+    .then((out) => out.trim())
+    .catch(() => null));
+  if (worktreeHead === null) {
+    return { seeded: false, reason: "not a git checkout — nothing to catch the seed up to" };
+  }
+
+  const donor = await pickSeedDonor(config.registryPath, parentName, parent, worktreeHead);
+
+  const parentDb = sqlitePathFor(donor.index_path);
   const targetDb = sqlitePathFor(worktreeIndexPath);
   if (!existsSync(parentDb)) {
     return { seeded: false, reason: "parent index is not in the SQLite backend" };
@@ -116,14 +188,6 @@ export async function seedWorktreeIndexFromParent(
   const { isSqliteAvailable } = await import("../../storage/sqlite/runtime.js");
   if (!(await isSqliteAvailable())) {
     return { seeded: false, reason: "node:sqlite unavailable (Node < 22.5)" };
-  }
-
-
-  // The last check before the expensive part. A seed is only worth copying if
-  // `catchUpSeededWorktree` can then bring it to this tree's HEAD, and that needs a working
-  // `git rev-parse` here. Asking afterwards is what made those 42-second copies pure waste.
-  if ((await runGit(["rev-parse", "HEAD"], { cwd: worktreeRoot, timeout: 5_000 }).catch(() => null)) === null) {
-    return { seeded: false, reason: "not a git checkout — nothing to catch the seed up to" };
   }
 
   // Write to a temp sibling and rename, so an interrupted seed never leaves a half-copied database
@@ -155,7 +219,7 @@ export async function seedWorktreeIndexFromParent(
       // Safe as a bulk UPDATE because v2 dropped the PRIMARY KEY on `symbols.id` — ids are not
       // unique (TypeScript's type and value namespaces put two on one line), so there is no
       // conflict to resolve.
-      const oldPrefix = `${parent.name}:`;
+      const oldPrefix = `${donor.name}:`;
       const newPrefix = `${worktreeName}:`;
       copy.exec("BEGIN IMMEDIATE");
       copy.prepare("UPDATE symbols SET id = ? || substr(id, ?)").run(newPrefix, oldPrefix.length + 1);
@@ -193,16 +257,16 @@ export async function seedWorktreeIndexFromParent(
       index_path: worktreeIndexPath,
       file_count: files,
       symbol_count: symbols,
-      last_git_commit: parent.last_git_commit ?? null,
+      last_git_commit: donor.commit,
       indexed_at: Date.now(),
     } as never);
 
     return {
       seeded: true,
-      parent_repo: parent.name,
+      parent_repo: donor.name,
       files,
       symbols,
-      seeded_at_commit: parent.last_git_commit ?? null,
+      seeded_at_commit: donor.commit,
       elapsed_ms: Date.now() - started,
     };
   } catch (err: unknown) {
