@@ -14,6 +14,7 @@ import {
   type IndexSummary,
 } from "../../storage/sqlite-index-store.js";
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
+import { assessOverload, DaemonOverloadedError } from "./overload-guard.js";
 import {
   getRepo,
   listRepos as listRegistryRepos,
@@ -153,6 +154,14 @@ export async function getCodeIndex(
 
   const cached = codeIndexes.get(resolvedName);
   if (cached) return cached;
+
+  // Only a COLD load is gated: a resident index costs nothing and is returned above. See
+  // overload-guard.ts for why refusing fast beats blocking — the caller's 120 s timeout turns one
+  // slow read into a session with no CodeSift tools at all.
+  const overload = assessOverload();
+  if (overload.refuse) {
+    throw new DaemonOverloadedError(resolvedName, overload.reason ?? "overloaded");
+  }
 
   const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
   if (!result) return null;
