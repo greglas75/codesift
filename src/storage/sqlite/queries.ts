@@ -151,7 +151,9 @@ export async function findSymbolsSqlite(
 export async function streamSymbolsSqlite(
   dbPath: string,
   query: SymbolQuery,
-  onBatch: (batch: CodeSymbol[]) => void | Promise<void>,
+  /** Return `false` to stop early — for callers with a wall-clock budget, which must be able to
+   *  abandon a scan without reading the rest of the table. */
+  onBatch: (batch: CodeSymbol[]) => void | boolean | Promise<void | boolean>,
 ): Promise<void> {
   const reader = await openReadConnection(dbPath);
   try {
@@ -192,7 +194,7 @@ export async function streamSymbolsSqlite(
             await onBatch(batch.slice(0, batch.length - (seen - query.limit)));
             break;
           }
-          await onBatch(batch);
+          if ((await onBatch(batch)) === false) break;
           rows = nextPageRows(rows, Date.now() - started);
           await new Promise<void>((resolve) => setImmediate(resolve));
         }

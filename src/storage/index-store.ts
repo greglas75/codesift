@@ -177,7 +177,7 @@ export async function findSymbols(
 export async function streamSymbols(
   indexPath: string,
   query: SymbolQuery,
-  onBatch: (batch: CodeSymbol[]) => void | Promise<void>,
+  onBatch: (batch: CodeSymbol[]) => void | boolean | Promise<void | boolean>,
 ): Promise<void> {
   assertCanonicalIndexPath(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {

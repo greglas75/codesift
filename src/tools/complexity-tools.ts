@@ -1,4 +1,5 @@
-import { getCodeIndex } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
@@ -216,7 +217,10 @@ export async function analyzeComplexity(
     include_tests?: boolean | undefined;
   },
 ): Promise<ComplexityResult> {
-  const index = await getCodeIndex(repo);
+  // The summary gives the file list; symbols arrive in pages rather than all at once. This tool
+  // reads `source` on every symbol it scores, so it cannot avoid the bytes — but it folds and
+  // discards, so it never needed all 352,166 objects resident to do it.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
@@ -236,8 +240,14 @@ export async function analyzeComplexity(
       .map((f) => f.path),
   );
 
-  // Filter to analyzable symbols
-  const symbols = index.symbols.filter((s) => {
+  const results: ComplexityInfo[] = [];
+
+  const scanStart = Date.now();
+  let scanned = 0;
+  let analyzable = 0;
+  let truncated = false;
+
+  const isAnalyzable = (s: CodeSymbol): boolean => {
     if (!ANALYZABLE_KINDS.has(s.kind)) return false;
     // Skip SQL files — cyclomatic complexity is meaningless for DDL
     if (sqlFiles.has(s.file)) return false;
@@ -245,20 +255,19 @@ export async function analyzeComplexity(
     if (!includeTests && isTestFile(s.file)) return false;
     if (filePattern && !s.file.includes(filePattern)) return false;
     return true;
-  });
+  };
 
-  const results: ComplexityInfo[] = [];
-
-  const scanStart = Date.now();
-  let scanned = 0;
-  let truncated = false;
-  for (const sym of symbols) {
-    // Cooperative time budget — checked every 512 symbols so the check itself is
-    // negligible. Stops a pathological huge-repo scan from hanging the agent.
-    if ((scanned++ & 0x1ff) === 0 && Date.now() - scanStart > COMPLEXITY_WALL_CLOCK_MS) {
-      truncated = true;
-      break;
-    }
+  await streamRepoSymbols(repo, { withSource: true }, (batch: CodeSymbol[]) => {
+    for (const sym of batch) {
+      if (!isAnalyzable(sym)) continue;
+      // Cooperative time budget — checked every 512 symbols so the check itself is
+      // negligible. Stops a pathological huge-repo scan from hanging the agent.
+      if ((scanned++ & 0x1ff) === 0 && Date.now() - scanStart > COMPLEXITY_WALL_CLOCK_MS) {
+        truncated = true;
+        // `false` stops the stream: without it the budget would expire and the reader would keep
+        // paging the rest of the table for results nobody will look at.
+        return false;
+      }
     const source = sym.source!;
     const language = fileLanguage.get(sym.file);
     const lines = source.split("\n").length;
@@ -291,8 +300,11 @@ export async function analyzeComplexity(
       }
 
       results.push(info);
+      }
+      analyzable++;
     }
-  }
+    return undefined;
+  });
 
   // Sort by complexity descending
   results.sort((a, b) => b.cyclomatic_complexity - a.cyclomatic_complexity);
@@ -320,7 +332,16 @@ export async function analyzeComplexity(
       max_nesting: maxNesting,
       above_threshold: aboveThreshold,
       ...(truncated
-        ? { truncated: true, analyzed_symbols: scanned - 1, total_symbols: symbols.length }
+        ? {
+            truncated: true,
+            analyzed_symbols: scanned - 1,
+            // Not `total_symbols`. That was the length of a fully-materialised, fully-filtered
+            // array, so it was known even when the scan stopped early. Streaming cannot know it
+            // after a break without reading the rest of the table — the very cost this avoids —
+            // and reporting the count seen so far under the old name would be a smaller number
+            // wearing the old meaning.
+            total_symbols_at_least: analyzable,
+          }
         : {}),
     },
   };

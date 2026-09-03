@@ -16,7 +16,7 @@ import {
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import { assessOverload, DaemonOverloadedError } from "./overload-guard.js";
 import { loadBM25Index, saveBM25Index } from "../../search/bm25-store.js";
-import { findSymbols } from "../../storage/index-store.js";
+import { findSymbols, streamSymbols } from "../../storage/index-store.js";
 import type { SymbolQuery } from "../../storage/sqlite/queries.js";
 import { withIndexLoadSlot } from "./load-gate.js";
 import {
@@ -280,6 +280,39 @@ export async function findRepoSymbols(
   if (cached) return filterCachedSymbols(cached.symbols, query);
 
   return findSymbols(meta.index_path, query);
+}
+
+/**
+ * Fold over matching symbols in pages, for the tools that must see every symbol but never need
+ * them all resident — regex scanners, complexity scorers, adjacency builders.
+ *
+ * Returning `false` from `onBatch` stops the scan, which the wall-clock-budgeted tools need: without
+ * it a scorer that has run out of time keeps paging the rest of the table for results nobody reads.
+ */
+export async function streamRepoSymbols(
+  repoName: string,
+  query: SymbolQuery,
+  onBatch: (batch: CodeSymbol[]) => void | boolean | Promise<void | boolean>,
+  options?: { skipFreshness?: boolean },
+): Promise<void> {
+  const config = loadConfig();
+  const resolved = await resolveRegisteredRepoMeta(config.registryPath, repoName);
+  if (!resolved) return;
+  const { resolvedName, meta } = resolved;
+
+  if (!options?.skipFreshness) {
+    await ensureIndexFresh(resolvedName);
+  }
+
+  // An already-resident index is folded directly: paging it back out of the database would be
+  // strictly more work than walking what is already in memory.
+  const cached = codeIndexes.get(resolvedName);
+  if (cached) {
+    await onBatch(filterCachedSymbols(cached.symbols, query));
+    return;
+  }
+
+  return streamSymbols(meta.index_path, query, onBatch);
 }
 
 /**
