@@ -67,3 +67,11 @@ export {
   saveIncrementalSqlite,
   indexDbIsPopulated,
 } from "./sqlite/accessors.js";
+// Narrow reads for ADR-004 stage 2. Listed explicitly, like everything else here: adding an export
+// to a submodule should be a decision about this facade, not a side effect of writing a helper.
+export {
+  findSymbolsSqlite,
+  streamSymbolsSqlite,
+  getIndexMetaSqlite,
+} from "./sqlite/queries.js";
+export type { SymbolQuery, IndexMeta } from "./sqlite/queries.js";

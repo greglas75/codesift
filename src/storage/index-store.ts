@@ -5,6 +5,13 @@ import { createHash } from "node:crypto";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
 import { atomicWriteFile } from "./_shared.js";
 import {
+  findSymbolsSqlite,
+  getIndexMetaSqlite,
+  streamSymbolsSqlite,
+  type IndexMeta,
+  type SymbolQuery,
+} from "./sqlite/queries.js";
+import {
   loadIndexSqlite,
   saveIndexSqlite,
   saveIncrementalSqlite,
@@ -130,6 +137,117 @@ export async function getFileEntry(
   }
   const index = await loadJsonIndex(indexPath);
   return index?.files.find((f) => f.path === filePath);
+}
+
+/**
+ * Symbols matching a predicate, without constructing the rest of the index.
+ *
+ * The narrow read the tool layer has never had. Of the 159 call sites that materialise a whole
+ * `CodeIndex`, 31% need nothing more than this or `getIndexMeta` — a keyed lookup or a metadata
+ * field — and pay 349 MB and ~10 s for it on the largest repo here. Measured against that:
+ * `WHERE name = ?` 9 ms, `WHERE file = ?` 10 ms, `WHERE kind = ?` 32 ms.
+ *
+ * The JSON backend keeps the old cost — there is no way to read one record out of a blob — so this
+ * is parity there, not a speedup. It exists so a caller is written once against the narrow shape
+ * instead of branching on the backend, exactly as `getFileEntry` above.
+ */
+export async function findSymbols(
+  indexPath: string,
+  query: SymbolQuery,
+): Promise<CodeSymbol[]> {
+  assertCanonicalIndexPath(indexPath);
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return findSymbolsSqlite(dbPath, query);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  if (index === null) return [];
+  return applySymbolQuery(index.symbols, query);
+}
+
+/**
+ * Fold over matching symbols in pages instead of holding them all.
+ *
+ * For the callers that genuinely have to see every symbol — regex scanners, adjacency builders,
+ * vocabulary collectors — but never need them resident at once. They fold and discard, so the
+ * array was never the requirement; it was only how the data arrived.
+ */
+export async function streamSymbols(
+  indexPath: string,
+  query: SymbolQuery,
+  onBatch: (batch: CodeSymbol[]) => void | Promise<void>,
+): Promise<void> {
+  assertCanonicalIndexPath(indexPath);
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return streamSymbolsSqlite(dbPath, query, onBatch);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  if (index === null) return;
+  // One batch on JSON: the whole document is already parsed, so paging it would add ceremony
+  // without removing a single byte from memory. Parity, not a speedup — same contract as above.
+  await onBatch(applySymbolQuery(index.symbols, query));
+}
+
+/**
+ * Root, repo and counts, with no symbol construction at all.
+ *
+ * 26 of the 159 call sites read only `index.root` or `index.repo`, and two materialise the whole
+ * index purely to check that it exists.
+ */
+export async function getIndexMeta(indexPath: string): Promise<IndexMeta | null> {
+  assertCanonicalIndexPath(indexPath);
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return getIndexMetaSqlite(dbPath);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  if (index === null) return null;
+  return {
+    repo: index.repo,
+    root: index.root,
+    updatedAt: index.updated_at ?? index.created_at ?? 0,
+    symbolCount: index.symbols.length,
+    fileCount: index.files.length,
+  };
+}
+
+/**
+ * The JSON backend's equivalent of the WHERE clause.
+ *
+ * Kept beside the SQL rather than in the query module so the two shapes are read together: any
+ * predicate added to `SymbolQuery` has to be answered here as well, or the JSON backend silently
+ * ignores it and returns MORE rows than asked for — a filter that fails open.
+ *
+ * `withSource: false` deletes the key rather than setting it to undefined, matching what the SQL
+ * projection produces. A symbol carrying `source: undefined` is indistinguishable from one whose
+ * source is genuinely absent, and callers would read that as a fact about the code.
+ */
+function applySymbolQuery(symbols: CodeSymbol[], query: SymbolQuery): CodeSymbol[] {
+  const ids = query.ids === undefined ? null : new Set(query.ids);
+  const out: CodeSymbol[] = [];
+  for (const symbol of symbols) {
+    if (query.limit !== undefined && out.length >= query.limit) break;
+    if (query.file !== undefined && symbol.file !== query.file) continue;
+    if (query.name !== undefined && symbol.name !== query.name) continue;
+    if (query.namePrefix !== undefined && !symbol.name.startsWith(query.namePrefix)) continue;
+    if (query.kind !== undefined && symbol.kind !== query.kind) continue;
+    if (query.parent !== undefined && symbol.parent !== query.parent) continue;
+    if (ids !== null && !ids.has(symbol.id)) continue;
+    if (query.withSource) {
+      out.push(symbol);
+    } else {
+      const { source: _dropped, ...rest } = symbol;
+      out.push(rest as CodeSymbol);
+    }
+  }
+  return out;
 }
 
 /**
