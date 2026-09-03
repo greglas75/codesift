@@ -16,6 +16,7 @@ import {
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import { assessOverload, DaemonOverloadedError } from "./overload-guard.js";
 import { loadBM25Index, saveBM25Index } from "../../search/bm25-store.js";
+import { withIndexLoadSlot } from "./load-gate.js";
 import {
   getRepo,
   listRepos as listRegistryRepos,
@@ -177,7 +178,16 @@ export async function getCodeIndex(
     throw new DaemonOverloadedError(resolvedName, overload.reason ?? "overloaded");
   }
 
-  const result = await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS });
+  const gated = await withIndexLoadSlot(async () => {
+    // Re-checked AFTER the wait, not before it. While this call queued, another may have loaded the
+    // same repo — without this the gate would only STAGGER ten sessions touching one repo into ten
+    // identical 349 MB allocations instead of preventing nine of them.
+    const nowCached = codeIndexes.get(resolvedName);
+    if (nowCached) return { cached: nowCached };
+    return { fresh: await loadIndexOrStale(meta.index_path, { ...EXTRACTOR_VERSIONS }) };
+  });
+  if ("cached" in gated) return gated.cached;
+  const result = gated.fresh;
   if (!result) return null;
   if (result.status === "unreadable") {
     // Deliberately NOT `return null`. Null here means "this repo has no index", and every tool
