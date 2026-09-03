@@ -116,6 +116,7 @@ export const ARTIFACT_SUFFIXES = [
   "chunks.ndjson",
   "chunk-embeddings.ndjson",
   "bm25.json",
+  "bm25.ndjson",
   "graph.json",
   "snapshot.json",
 ] as const;
