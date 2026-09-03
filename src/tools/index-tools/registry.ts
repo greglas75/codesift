@@ -106,6 +106,12 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Below this, rebuilding is cheaper than the disk it would cost. 1 s is roughly where a repo is
+ * large enough that a restart is noticeable to whoever is waiting on the first search.
+ */
+const BM25_PERSIST_MIN_BUILD_MS = 1_000;
+
 export async function getBM25Index(repoName: string): Promise<BM25Index | null> {
   // Resolve through the case-insensitive registry resolver (mirrors
   // getCodeIndex) so `local/Rewards-API` finds `local/rewards-api` and the
@@ -139,11 +145,21 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
     return restored;
   }
 
+  const buildStarted = Date.now();
   const bm25 = await buildBM25IndexYielding(index.symbols);
+  const buildMs = Date.now() - buildStarted;
   rememberBM25Index(resolvedName, bm25);
-  // Not awaited: the caller has a working index in memory, and making the first search wait on a
-  // cache write would spend the very seconds this exists to save.
-  void saveBM25Index(meta.index_path, bm25, index).catch(() => {});
+
+  // Persist only when the rebuild actually cost something. The sidecar is not small — measured
+  // 112.5 MB for a 28k-symbol repo, more than twice its index database, and this machine has 865
+  // registered repos on the disk that is the real bottleneck. Gating on the MEASURED build time
+  // rather than a symbol count keeps the trade honest: the thing being bought back is exactly that
+  // duration, and a repo whose index rebuilds in 200 ms is not worth a hundred megabytes.
+  if (buildMs >= BM25_PERSIST_MIN_BUILD_MS) {
+    // Not awaited: the caller has a working index in memory, and making the first search wait on a
+    // cache write would spend the very seconds this exists to save.
+    void saveBM25Index(meta.index_path, bm25, index).catch(() => {});
+  }
   return bm25;
 }
 
