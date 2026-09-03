@@ -21,6 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import { resolve as pathResolve, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { statSync } from "node:fs";
+import { readVitals, classifyVitals, startVitals } from "./server-helpers/health-vitals.js";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHost } from "./utils/loopback.js";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
@@ -446,7 +447,20 @@ export async function startHttpServer(
                       "the files this daemon started from were replaced (rebuild); lazily imported modules will fail until it restarts",
                     remedy: "launchctl kickstart -k gui/$(id -u)/com.codesift.daemon",
                   }
-                : { status: "ok", sessions: inFlight, version: PKG_VERSION },
+                : (() => {
+                    // Liveness was never the question — the daemon was alive through all three
+                    // incidents. `busy` keeps the 200 on purpose: slow is not down, and a session
+                    // told "down" stops using tools it could still have used.
+                    const vitals = readVitals();
+                    const { status, reasons } = classifyVitals(vitals);
+                    return {
+                      status,
+                      sessions: inFlight,
+                      version: PKG_VERSION,
+                      vitals,
+                      ...(reasons.length > 0 ? { reasons } : {}),
+                    };
+                  })(),
             ),
           );
           return;
@@ -490,6 +504,7 @@ export async function startHttpServer(
     })();
   });
 
+  startVitals();
   await new Promise<void>((resolve) => httpServer.listen(opts.port ?? 0, host, resolve));
   const addr = httpServer.address();
   const port = typeof addr === "object" && addr ? addr.port : (opts.port ?? 0);
