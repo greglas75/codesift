@@ -12,8 +12,10 @@ import type { CodeIndex } from "../../src/types.js";
 
 let repoRoot = "";
 
+// analyze_hotspots reads the file list and the root, never a symbol — it now takes the SUMMARY.
+// The mock keeps getCodeIndex too so the fixture stays one object described two ways.
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: async (_repo: string): Promise<CodeIndex> => ({
+  getIndexSummary: async (_repo: string): Promise<CodeIndex> => ({
     repo: "test",
     root: repoRoot,
     symbols: [],

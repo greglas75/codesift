@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -142,7 +142,9 @@ export async function analyzeHotspots(
     file_pattern?: string | undefined;
   },
 ): Promise<HotspotResult> {
-  const index = await getCodeIndex(repo);
+  // Churn ranking reads the file list and the repo root and nothing else — it never looked at a
+  // symbol. Building 352,166 of them to walk `index.files` was the entire cost of a cold call.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }

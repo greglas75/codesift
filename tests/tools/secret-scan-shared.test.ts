@@ -172,7 +172,7 @@ describe("enrichWithSymbolContext", () => {
 
 describe("scanFileForSecrets", () => {
   it("returns an empty result for a clean file and caches it", async () => {
-    const result = await scanFileForSecrets("/tmp/test/src/clean.ts", "src/clean.ts", "test", []);
+    const result = await scanFileForSecrets("/tmp/test/src/clean.ts", "src/clean.ts", "test", () => []);
 
     expect(result).toEqual([]);
     expect(mockScan).toHaveBeenCalledWith('const API_KEY = "sk-proj-abcdef1234567890";');
@@ -194,7 +194,7 @@ describe("scanFileForSecrets", () => {
       },
     ]);
 
-    const result = await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", []);
+    const result = await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", () => []);
 
     expect(result).toEqual([
       {
@@ -224,7 +224,7 @@ describe("scanFileForSecrets", () => {
       },
     ]);
 
-    const result = await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", []);
+    const result = await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", () => []);
 
     expect(result).toEqual([]);
     expect(getSecretCache().get("test")?.get("src/config.ts")?.findings).toEqual([]);
@@ -235,7 +235,7 @@ describe("scanFileForSecrets", () => {
     binaryBuffer[10] = 0;
     mockReadFile.mockResolvedValueOnce(binaryBuffer);
 
-    expect(await scanFileForSecrets("/tmp/test/bin.dat", "bin.dat", "test", [])).toEqual([]);
+    expect(await scanFileForSecrets("/tmp/test/bin.dat", "bin.dat", "test", () => [])).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
 
     resetSecretCache();
@@ -243,7 +243,7 @@ describe("scanFileForSecrets", () => {
     mockStat.mockResolvedValue({ mtimeMs: 1000 });
     mockReadFile.mockResolvedValue(Buffer.alloc(500 * 1024 + 1, "a"));
 
-    expect(await scanFileForSecrets("/tmp/test/src/large.ts", "src/large.ts", "test", [])).toEqual([]);
+    expect(await scanFileForSecrets("/tmp/test/src/large.ts", "src/large.ts", "test", () => [])).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
     expect(getSecretCache().get("test")?.get("src/large.ts")).toEqual({
       mtime_ms: 1000,
@@ -256,8 +256,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/audits/artifacts/report.ts",
       "audits/artifacts/report.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
     expect(mockReadFile).not.toHaveBeenCalled();
@@ -276,15 +275,15 @@ describe("scanFileForSecrets", () => {
       },
     ]);
 
-    await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", []);
+    await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", () => []);
 
     mockScan.mockClear();
-    expect(await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", [])).toHaveLength(1);
+    expect(await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", () => [])).toHaveLength(1);
     expect(mockReadFile).toHaveBeenCalledTimes(1);
 
     mockStat.mockResolvedValue({ mtimeMs: 2000 });
     mockScan.mockReturnValue([]);
-    expect(await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", [])).toEqual([]);
+    expect(await scanFileForSecrets("/tmp/test/src/config.ts", "src/config.ts", "test", () => [])).toEqual([]);
     expect(mockReadFile).toHaveBeenCalledTimes(2);
   });
 
@@ -304,8 +303,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.test.ts",
       "src/config.test.ts",
       "test",
-      [],
-    );
+      () => []);
     expect(testResult[0]!.confidence).toBe("low");
 
     resetSecretCache();
@@ -329,8 +327,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/docs/guide.md",
       "docs/guide.md",
       "test",
-      [makeSymbol({ name: "loadDocs", file: "docs/guide.md", start_line: 2, end_line: 2 })],
-    );
+      () => [makeSymbol({ name: "loadDocs", file: "docs/guide.md", start_line: 2, end_line: 2 })]);
 
     expect(docResult[0]!.line).toBe(2);
     expect(docResult[0]!.confidence).toBe("low");
@@ -344,13 +341,13 @@ describe("scanFileForSecrets", () => {
 
 describe("secret cache watcher hooks", () => {
   it("removes changed and deleted files from the cache", async () => {
-    await scanFileForSecrets("/tmp/test/src/file.ts", "src/file.ts", "test", []);
+    await scanFileForSecrets("/tmp/test/src/file.ts", "src/file.ts", "test", () => []);
     expect(getSecretCache().get("test")?.has("src/file.ts")).toBe(true);
 
     onFileChanged("test", "src/file.ts");
     expect(getSecretCache().get("test")?.has("src/file.ts")).toBe(false);
 
-    await scanFileForSecrets("/tmp/test/src/file.ts", "src/file.ts", "test", []);
+    await scanFileForSecrets("/tmp/test/src/file.ts", "src/file.ts", "test", () => []);
     onFileDeleted("test", "src/file.ts");
     expect(getSecretCache().get("test")?.has("src/file.ts")).toBe(false);
   });

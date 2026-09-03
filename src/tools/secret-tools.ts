@@ -11,7 +11,7 @@
 import { join } from "node:path";
 import { currentAbortSignal } from "../server-helpers/request-context.js";
 import picomatch from "picomatch";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import {
   getSecretCache,
   isMissingFileError,
@@ -85,7 +85,10 @@ export async function scanSecrets(
     max_results?: number | undefined;
   },
 ): Promise<ScanSecretsResult> {
-  const index = await getCodeIndex(repo);
+  // The summary, not the index: this scan needs the file LIST and the root, and used to build
+  // 352,166 symbol objects to get them. Symbols are now fetched per file, and only for files that
+  // actually contain a candidate secret — see collectSecretFindings.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
@@ -139,7 +142,7 @@ export async function scanSecrets(
         absPath,
         file.path,
         repo,
-        index.symbols,
+        () => findRepoSymbols(repo, { file: file.path, withSource: false }, { skipFreshness: true }),
       );
       filesScanned++;
 

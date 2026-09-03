@@ -28,8 +28,24 @@ vi.mock("node:fs/promises", () => ({
 
 const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
 
+// scan_secrets reads the SUMMARY (files + root) and fetches a file's symbols only when that file
+// actually contains a candidate secret — it no longer materialises the whole index. The mock
+// therefore projects the same fixture into both shapes, so a test that asserts on findings is
+// asserting on the tool, not on the mock's idea of an index.
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
+  getIndexSummary: async (...args: unknown[]) => {
+    const index = await mockGetCodeIndex(args[0] as string);
+    if (!index) return null;
+    const { symbols: _symbols, ...summary } = index as Record<string, unknown>;
+    return { ...summary, symbol_count: 0, file_count: (index as { files?: unknown[] }).files?.length ?? 0 };
+  },
+  findRepoSymbols: async (...args: unknown[]) => {
+    const index = await mockGetCodeIndex(args[0] as string);
+    const query = args[1] as { file?: string } | undefined;
+    const symbols = ((index as { symbols?: Array<{ file: string }> } | null)?.symbols) ?? [];
+    return query?.file === undefined ? symbols : symbols.filter((s) => s.file === query.file);
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -474,8 +490,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/clean.ts",
       "src/clean.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
   });
@@ -496,8 +511,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.ts",
       "src/config.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toHaveLength(1);
     expect(result[0]!.rule).toBe("openai");
@@ -527,8 +541,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.ts",
       "src/config.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toHaveLength(0);
   });
@@ -542,8 +555,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/binary.bin",
       "binary.bin",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
@@ -566,8 +578,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.ts",
       "src/config.ts",
       "test",
-      [],
-    );
+      () => []);
 
     // Second call — should use cache
     mockScan.mockClear();
@@ -575,8 +586,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.ts",
       "src/config.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toHaveLength(1);
     expect(mockReadFile).toHaveBeenCalledTimes(1); // Only the first call read the file
@@ -599,8 +609,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.ts",
       "src/config.ts",
       "test",
-      [],
-    );
+      () => []);
 
     // Change mtime
     mockStat.mockResolvedValue({ mtimeMs: 2000 });
@@ -610,8 +619,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.ts",
       "src/config.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toHaveLength(0);
     expect(mockReadFile).toHaveBeenCalledTimes(2);
@@ -633,8 +641,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/config.test.ts",
       "src/config.test.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toHaveLength(1);
     expect(result[0]!.confidence).toBe("low");
@@ -645,8 +652,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/package-lock.json",
       "package-lock.json",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
@@ -657,8 +663,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/dist/bundle.min.js",
       "dist/bundle.min.js",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
@@ -669,8 +674,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/audits/artifacts/report.ts",
       "audits/artifacts/report.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
     expect(mockReadFile).not.toHaveBeenCalled();
@@ -688,8 +692,7 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/src/large.ts",
       "src/large.ts",
       "test",
-      [],
-    );
+      () => []);
 
     expect(result).toEqual([]);
     expect(mockScan).not.toHaveBeenCalled();
@@ -718,15 +721,14 @@ describe("scanFileForSecrets", () => {
       "/tmp/test/docs/guide.md",
       "docs/guide.md",
       "test",
-      [
+      () => [
         makeSymbol({
           name: "loadDocs",
           file: "docs/guide.md",
           start_line: 2,
           end_line: 2,
         }),
-      ],
-    );
+      ]);
 
     expect(result).toHaveLength(1);
     expect(result[0]!.line).toBe(2);
@@ -979,8 +981,7 @@ describe("watcher hooks", () => {
       "/tmp/test/src/file.ts",
       "src/file.ts",
       "test-repo",
-      [],
-    );
+      () => []);
 
     const cache = getSecretCache();
     expect(cache.get("test-repo")?.has("src/file.ts")).toBe(true);
@@ -999,8 +1000,7 @@ describe("watcher hooks", () => {
       "/tmp/test/src/file.ts",
       "src/file.ts",
       "test-repo",
-      [],
-    );
+      () => []);
 
     const cache = getSecretCache();
     expect(cache.get("test-repo")?.has("src/file.ts")).toBe(true);

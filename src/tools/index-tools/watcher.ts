@@ -123,7 +123,7 @@ async function handleFileChange(
 
   if (loadConfig().secretScanEnabled) {
     try {
-      await scanFileForSecrets(fullPath, relativeFile, repoName, result.symbols);
+      await scanFileForSecrets(fullPath, relativeFile, repoName, () => result.symbols);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[codesift] Secret scan failed for ${relativeFile}: ${message}`);

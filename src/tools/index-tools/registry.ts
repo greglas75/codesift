@@ -16,6 +16,8 @@ import {
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import { assessOverload, DaemonOverloadedError } from "./overload-guard.js";
 import { loadBM25Index, saveBM25Index } from "../../search/bm25-store.js";
+import { findSymbols } from "../../storage/index-store.js";
+import type { SymbolQuery } from "../../storage/sqlite/queries.js";
 import { withIndexLoadSlot } from "./load-gate.js";
 import {
   getRepo,
@@ -49,7 +51,7 @@ import {
   invalidateEmbeddingCache,
   chunkCacheKey,
   invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index } from "./state.js";
-import type { CodeIndex, RepoMeta } from "../../types.js";
+import type { CodeIndex, RepoMeta, CodeSymbol } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
 
 export interface RepoSummary {
@@ -250,6 +252,67 @@ export async function getCodeIndex(
  * Returns `IndexSummary`, which has no `symbols` field at all rather than an empty one: a caller
  * that needs symbols must fail to compile, not read an empty array as "this repo has none".
  */
+/**
+ * Symbols matching a predicate, without materialising the index.
+ *
+ * The tool-layer face of `findSymbols` (ADR-004 stage 2), resolving the repo name the same way
+ * `getCodeIndex` and `getIndexSummary` do so a caller never has to reach into the registry.
+ *
+ * An already-resident index answers from memory: going back to the database would be slower than
+ * filtering what is already being held, and it keeps the two paths returning the same objects.
+ * The reasoning about cache validity is `getIndexSummary`'s, unchanged.
+ */
+export async function findRepoSymbols(
+  repoName: string,
+  query: SymbolQuery,
+  options?: { skipFreshness?: boolean },
+): Promise<CodeSymbol[]> {
+  const config = loadConfig();
+  const resolved = await resolveRegisteredRepoMeta(config.registryPath, repoName);
+  if (!resolved) return [];
+  const { resolvedName, meta } = resolved;
+
+  if (!options?.skipFreshness) {
+    await ensureIndexFresh(resolvedName);
+  }
+
+  const cached = codeIndexes.get(resolvedName);
+  if (cached) return filterCachedSymbols(cached.symbols, query);
+
+  return findSymbols(meta.index_path, query);
+}
+
+/**
+ * The in-memory equivalent of the SQL predicate, for when the index is already resident.
+ *
+ * Kept beside its caller rather than shared with the storage layer's JSON branch: they answer the
+ * same question over different inputs, and a shared helper would have to be exported from storage
+ * into tools purely to be reused, which is how a "narrow read" acquires a dependency on the wide
+ * one. Both are asserted against the SQL by the backend-parity tests.
+ */
+function filterCachedSymbols(symbols: CodeSymbol[], query: SymbolQuery): CodeSymbol[] {
+  const ids = query.ids === undefined ? null : new Set(query.ids);
+  const out: CodeSymbol[] = [];
+  for (const symbol of symbols) {
+    if (query.limit !== undefined && out.length >= query.limit) break;
+    if (query.file !== undefined && symbol.file !== query.file) continue;
+    if (query.name !== undefined && symbol.name !== query.name) continue;
+    if (query.namePrefix !== undefined && !symbol.name.startsWith(query.namePrefix)) continue;
+    if (query.kind !== undefined && symbol.kind !== query.kind) continue;
+    if (query.parent !== undefined && symbol.parent !== query.parent) continue;
+    if (ids !== null && !ids.has(symbol.id)) continue;
+    if (query.withSource) {
+      out.push(symbol);
+    } else {
+      // Same contract as the SQL projection: the key is ABSENT, not undefined. A symbol carrying
+      // `source: undefined` reads as one whose source is genuinely empty.
+      const { source: _dropped, ...rest } = symbol;
+      out.push(rest as CodeSymbol);
+    }
+  }
+  return out;
+}
+
 export async function getIndexSummary(
   repoName: string,
   options?: { skipFreshness?: boolean },

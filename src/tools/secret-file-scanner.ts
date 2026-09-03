@@ -49,7 +49,8 @@ export async function scanFileForSecrets(
   filePath: string,
   relPath: string,
   repo: string,
-  symbols: CodeSymbol[],
+  /** Called only if the file actually contains a candidate secret — see collectSecretFindings. */
+  resolveSymbols: () => CodeSymbol[] | Promise<CodeSymbol[]>,
 ): Promise<SecretFinding[]> {
   const allCaches = getSecretCache();
   const repoCache = allCaches.get(repo) ?? new Map<string, SecretCacheEntry>();
@@ -66,6 +67,6 @@ export async function scanFileForSecrets(
     repoCache,
     relPath,
     fileStat.mtimeMs,
-    collectSecretFindings(buffer.toString("utf-8"), relPath, symbols),
+    await collectSecretFindings(buffer.toString("utf-8"), relPath, resolveSymbols),
   );
 }

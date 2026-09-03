@@ -78,14 +78,27 @@ export function enrichWithSymbolContext(
   return enriched;
 }
 
-export function collectSecretFindings(
+/**
+ * `resolveSymbols` is a callback, not an array, because symbols are only needed to ATTRIBUTE a
+ * finding to the symbol containing it — and almost no file contains a secret.
+ *
+ * Passing the array meant the caller had to have every symbol in the repository resident before
+ * scanning the first file: 352,166 objects and 349 MB on the largest index here, to answer a
+ * question that, for the overwhelming majority of files, is never asked. Now the lookup happens
+ * once per file that actually matched, and not at all otherwise.
+ */
+export async function collectSecretFindings(
   content: string,
   relPath: string,
-  symbols: CodeSymbol[],
-): SecretFinding[] {
+  resolveSymbols: () => CodeSymbol[] | Promise<CodeSymbol[]>,
+): Promise<SecretFinding[]> {
   const lines = content.split("\n");
   const contextType = classifyContext(relPath);
-  return scan(content).flatMap((secret) => {
+  const raw = scan(content);
+  // The early return is the whole optimisation: no secret, no symbol lookup.
+  if (raw.length === 0) return [];
+  const symbols = await resolveSymbols();
+  return raw.flatMap((secret) => {
     const line = offsetToLine(content, secret.start);
     if (isAllowlisted(lines, line)) return [];
     const confidence = contextType === "test" || contextType === "doc"

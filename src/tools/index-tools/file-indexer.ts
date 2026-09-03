@@ -303,7 +303,7 @@ export async function indexFile(filePath: string): Promise<{
   if (config.secretScanEnabled) {
     try {
       secretFindingsCount = (
-        await scanFileForSecrets(absPath, relPath, matchingRepo.name, result.symbols)
+        await scanFileForSecrets(absPath, relPath, matchingRepo.name, () => result.symbols)
       ).length;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
