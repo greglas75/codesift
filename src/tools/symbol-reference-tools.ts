@@ -9,7 +9,7 @@ import {
   isNoisePath,
   MAX_CONTEXT_LENGTH,
   MAX_REFERENCES,
-  requireCodeIndex,
+  requireIndexSummary,
   wordBoundaryPattern,
 } from "./symbol-tool-internals.js";
 
@@ -51,7 +51,7 @@ export async function findReferencesBatch(
   filePattern?: string,
   sink?: ReferenceScanSink,
 ): Promise<Record<string, Reference[]>> {
-  const index = await requireCodeIndex(repo);
+  const index = await requireIndexSummary(repo);
   const uniqueNames = [...new Set(symbolNames)];
   const patterns = uniqueNames.map((name) => ({
     name,
@@ -278,14 +278,14 @@ export async function findReferences(
 
   // Use ripgrep when available (10x+ faster than Node.js file walk)
   if (!filePattern && hasRipgrep()) {
-    const index = await requireCodeIndex(repo);
+    const index = await requireIndexSummary(repo);
     const result = await findReferencesWithRipgrep(index.root, symbolName, MAX_REFERENCES, filePattern);
     if (result !== null) return result;
     // Any rg failure other than its explicit no-match exit falls through to the index-backed scan.
   }
 
   // Node.js fallback
-  const index = await requireCodeIndex(repo);
+  const index = await requireIndexSummary(repo);
   const pattern = wordBoundaryPattern(symbolName);
   const searchStart = Date.now();
 
