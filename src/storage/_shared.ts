@@ -20,12 +20,21 @@ export async function cleanupOrphanTempFiles(
   minAgeMs = 60 * 60 * 1000,
 ): Promise<number> {
   const dir = dirname(targetPath);
-  const prefix = `${basename(targetPath)}.tmp.`;
+  const base = basename(targetPath);
+  // TWO shapes, not one. `atomicWriteFile` writes `<target>.tmp.<ts>`; `chunk-store` writes
+  // `<target>.generation.<pid>.<uuid>`. Only the first was ever swept, so the second accumulated
+  // untouched — measured 2026-09-05: 164 files, 19.6 GB, across 26 process ids of which 24 were
+  // long dead. They are invisible to `prune` too until the pattern above learns the tail.
+  const prefixes = [`${base}.tmp.`, `${base}.generation.`];
   let removed = 0;
   try {
     const cutoff = Date.now() - minAgeMs;
     for (const entry of await readdir(dir)) {
-      if (!entry.startsWith(prefix)) continue;
+      if (!prefixes.some((prefix) => entry.startsWith(prefix))) continue;
+      // A generation file whose WRITER IS STILL RUNNING is an in-flight write, not an orphan. The
+      // age guard alone would eventually delete one: a large embedding batch can outlive the hour,
+      // and deleting it mid-write turns a slow save into a corrupt one.
+      if (writerIsAlive(entry)) continue;
       const full = join(dir, entry);
       try {
         const info = await stat(full);
@@ -36,6 +45,27 @@ export async function cleanupOrphanTempFiles(
     }
   } catch { /* unreadable dir — nothing to clean */ }
   return removed;
+}
+
+/**
+ * True when a `.generation.<pid>.<uuid>` name belongs to a process that still exists.
+ *
+ * `kill(pid, 0)` sends no signal; it only asks whether the id is addressable. EPERM means the
+ * process exists and belongs to someone else — still alive, so still hands off. Anything else, and
+ * any name without a parsable pid, is treated as dead: this runs beside an age guard, and the cost
+ * of being wrong in that direction is one orphan surviving another hour.
+ */
+function writerIsAlive(entry: string): boolean {
+  const match = /\.generation\.(\d+)\./.exec(entry);
+  if (!match) return false;
+  const pid = Number(match[1]);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 /**
@@ -128,5 +158,10 @@ export const ARTIFACT_SUFFIXES = [
  */
 export function artifactPattern(): RegExp {
   const suffixes = ARTIFACT_SUFFIXES.map((s) => s.replace(/[.\\+*?[^\]$(){}=!<>|:#-]/g, "\\$&"));
-  return new RegExp(`^([0-9a-f]{8,})\\.(?:${suffixes.join("|")})(?:\\.tmp\\..*)?$`);
+  // The abandoned-write tails are BOTH shapes. `.tmp.<ts>` comes from `atomicWriteFile`;
+  // `.generation.<pid>.<uuid>` comes from `chunk-store`, and prune could not see it — measured
+  // 2026-09-05, 164 such files holding 19.6 GB that neither cleanup path could reach.
+  return new RegExp(
+    `^([0-9a-f]{8,})\\.(?:${suffixes.join("|")})(?:\\.tmp\\..*|\\.generation\\..*)?$`,
+  );
 }
