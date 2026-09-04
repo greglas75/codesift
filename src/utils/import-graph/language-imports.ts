@@ -1,4 +1,5 @@
-import type { CodeIndex } from "../../types.js";
+import type { ImportGraphIndex } from "./types.js";
+
 
 const PHP_USE_SINGLE_PATTERN = /^\s*use\s+(\w+(?:\\\w+)+)(?:\s+as\s+\w+)?\s*;/gm;
 const PHP_USE_GROUP_PATTERN = /^\s*use\s+(\w+(?:\\\w+)*)\\\{([^}]+)\}\s*;/gm;
@@ -70,7 +71,7 @@ export function resolveKotlinImport(
   return matches.length === 1 ? matches[0]! : null;
 }
 
-export function buildKotlinFilesByBasename(index: CodeIndex): Map<string, string[]> {
+export function buildKotlinFilesByBasename(index: ImportGraphIndex): Map<string, string[]> {
   const filesByBasename = new Map<string, string[]>();
   for (const file of index.files) {
     if (!/\.kts?$/.test(file.path)) continue;

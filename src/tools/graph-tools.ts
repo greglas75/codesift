@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getCodeIndex, getIndexSummary } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { REACT_STDLIB_HOOKS } from "./react-tools.js";
 import type { CodeSymbol, Direction, CallNode } from "../types.js";
@@ -489,7 +489,10 @@ export async function findCircularDeps(
   options?: { max_cycles?: number; file_pattern?: string },
 ): Promise<CircularDepsResult> {
   const { collectImportEdges } = await import("../utils/import-graph.js");
-  const index = await getCodeIndex(repo);
+  // The SUMMARY: cycle detection is a graph over file paths, and this function never reads a
+  // symbol. The other entry points in this file DO (trace_call_chain, impact analysis), which is
+  // why the conversion is per-function rather than per-file.
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found`);
 
   const edges = await collectImportEdges(index);

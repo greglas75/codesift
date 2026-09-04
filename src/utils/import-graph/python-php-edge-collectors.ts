@@ -1,14 +1,14 @@
 import { getCachedParse, setCachedParse } from "../../parser/parse-cache.js";
 import { getParser } from "../../parser/parser-manager.js";
 import { resolvePhpNamespace } from "../../tools/php-tools.js";
-import type { CodeIndex } from "../../types.js";
+
 import { extractPythonImports, extractPythonImportsByRegex } from "../python-imports.js";
 import { resolvePythonImport } from "../python-import-resolver.js";
 import { extractPhpUseStatements } from "./language-imports.js";
-import type { AddImportEdge, PythonImportContext } from "./types.js";
+import type { AddImportEdge, PythonImportContext, ImportGraphIndex } from "./types.js";
 
 export async function collectPhpEdges(
-  index: CodeIndex,
+  index: ImportGraphIndex,
   filePath: string,
   source: string,
   normalizedPaths: Map<string, string>,

@@ -1,15 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CodeIndex } from "../../types.js";
+
 import { detectSrcLayout } from "../python-import-resolver.js";
 import { createEdgeAccumulator, type EdgeAccumulator } from "./edge-accumulator.js";
 import { buildKotlinFilesByBasename } from "./language-imports.js";
 import { buildNormalizedPathMap } from "./path-map.js";
 import { collectSourceEdges, type SourceEdgeContext } from "./source-edge-collector.js";
-import type { ImportEdge, PythonImportContext } from "./types.js";
+import type { ImportEdge, PythonImportContext, ImportGraphIndex } from "./types.js";
 import { buildWorkspaceAliasResolver } from "./workspace-alias.js";
 
-function buildPythonContext(index: CodeIndex): PythonImportContext {
+function buildPythonContext(index: ImportGraphIndex): PythonImportContext {
   const indexedFiles = new Set(
     index.files.filter((file) => file.path.endsWith(".py")).map((file) => file.path),
   );
@@ -24,7 +24,7 @@ interface CollectionContext extends SourceEdgeContext {
   accumulator: EdgeAccumulator;
 }
 
-function buildSourceContext(index: CodeIndex): CollectionContext {
+function buildSourceContext(index: ImportGraphIndex): CollectionContext {
   const accumulator = createEdgeAccumulator();
   return {
     index,
@@ -39,7 +39,7 @@ function buildSourceContext(index: CodeIndex): CollectionContext {
 
 /** Collect all import edges between files in the index. */
 export async function collectImportEdges(
-  index: CodeIndex,
+  index: ImportGraphIndex,
   fileFilter?: Set<string>,
 ): Promise<ImportEdge[]> {
   const context = buildSourceContext(index);

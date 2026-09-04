@@ -1,4 +1,5 @@
-import type { CodeIndex, Workspace } from "../../types.js";
+import type { ImportGraphIndex } from "./types.js";
+import type {Workspace} from "../../types.js";
 import { buildNormalizedPathMap } from "./path-map.js";
 import { relativeWorkspaceRoot, resolveWorkspaceEntry } from "./workspace-entry.js";
 
@@ -58,7 +59,7 @@ function resolveWorkspaceSubpath(
 function resolveTsconfigPath(
   importPath: string,
   importerFile: string,
-  index: CodeIndex,
+  index: ImportGraphIndex,
   workspacesByPath: Array<{ rel: string; workspace: Workspace }>,
   lookup: WorkspaceLookup,
 ): string | null {
@@ -81,7 +82,7 @@ function resolveTsconfigPath(
   return null;
 }
 
-export function buildWorkspaceAliasResolver(index: CodeIndex): WorkspaceAliasResolver {
+export function buildWorkspaceAliasResolver(index: ImportGraphIndex): WorkspaceAliasResolver {
   if (!index.workspaces || index.workspaces.length === 0) return NULL_RESOLVER;
   const lookup = {
     fileSet: new Set(index.files.map((file) => file.path)),

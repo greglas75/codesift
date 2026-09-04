@@ -1,7 +1,7 @@
 /**
  * Louvain community detection — discover code clusters from the import graph.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { collectImportEdges } from "../utils/import-graph.js";
 import type { ImportEdge } from "../utils/import-graph.js";
 
@@ -280,7 +280,7 @@ export async function detectCommunities(
   resolution?: number,
   outputFormat?: "json" | "mermaid",
 ): Promise<CommunityResult | { mermaid: string }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   // Filter files by focus; cap without focus to prevent 66K tok responses

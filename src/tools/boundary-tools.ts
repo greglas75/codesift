@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { collectImportEdges } from "../utils/import-graph.js";
 
 export interface BoundaryRule {
@@ -40,7 +40,7 @@ export async function checkBoundaries(
     return { violations: [], edges_checked: 0, rules_applied: 0, passed: true };
   }
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);
 
   const edges = await collectImportEdges(index);

@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { runGit } from "./git-exec.js";
 import { collectImportEdges } from "../utils/import-graph.js";
 
@@ -55,7 +55,7 @@ export async function fanInFanOut(
     min_fan_out?: number;
   },
 ): Promise<FanInFanOutResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
@@ -280,7 +280,7 @@ export async function coChangeAnalysis(
     top_n?: number;
   },
 ): Promise<CoChangeResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }

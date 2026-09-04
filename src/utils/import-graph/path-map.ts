@@ -1,4 +1,5 @@
-import type { CodeIndex } from "../../types.js";
+import type { ImportGraphIndex } from "./types.js";
+
 
 const RELATIVE_IMPORT_EXTENSION = /\.(astro|ts|tsx|js|jsx|mjs|cjs|php)$/;
 const INDEXED_SOURCE_EXTENSION = /\.(astro|ts|tsx|js|jsx|mjs|cjs|php|kt|kts|py)$/;
@@ -31,7 +32,7 @@ export function resolveImportPath(importerFile: string, importPath: string): str
 }
 
 /** Build normalized path map for matching imports to indexed files. */
-export function buildNormalizedPathMap(index: CodeIndex): Map<string, string> {
+export function buildNormalizedPathMap(index: ImportGraphIndex): Map<string, string> {
   const normalizedPaths = new Map<string, string>();
   const ambiguousPaths = new Set<string>();
 

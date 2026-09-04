@@ -10,9 +10,25 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // communities mocks detectCommunities() itself).
 // ---------------------------------------------------------------------------
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// detect_communities builds a graph over file paths and never reads a symbol, so it now takes the
+// SUMMARY. The mock derives that from the same fixture rather than being stubbed separately — two
+// stubs of one fixture drift, and the drift shows up as a test asserting on the mock.
+vi.mock("../../src/tools/index-tools.js", () => {
+  const getCodeIndex = vi.fn();
+  return {
+    getCodeIndex,
+    getIndexSummary: async (...args: unknown[]) => {
+      const index = await (getCodeIndex as (r: unknown) => Promise<unknown>)(args[0]);
+      if (!index) return null;
+      const { symbols: _symbols, ...summary } = index as Record<string, unknown>;
+      return {
+        ...summary,
+        symbol_count: ((index as { symbols?: unknown[] }).symbols ?? []).length,
+        file_count: ((index as { files?: unknown[] }).files ?? []).length,
+      };
+    },
+  };
+});
 
 vi.mock("../../src/utils/import-graph.js", () => ({
   collectImportEdges: vi.fn(),

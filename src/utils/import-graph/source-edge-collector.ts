@@ -1,14 +1,14 @@
-import type { CodeIndex } from "../../types.js";
+
 import { extractKotlinImports, resolveKotlinImport } from "./language-imports.js";
 import { resolveImportPath } from "./path-map.js";
 import { collectPhpEdges, collectPythonEdges, collectPythonRegexEdges } from "./python-php-edge-collectors.js";
 import { extractBareImports, extractImports } from "./source-imports.js";
-import type { AddImportEdge, PythonImportContext } from "./types.js";
+import type { AddImportEdge, PythonImportContext, ImportGraphIndex } from "./types.js";
 import { collectTypeScriptEdges } from "./typescript-edge-collector.js";
 import { NULL_RESOLVER, type WorkspaceAliasResolver } from "./workspace-alias.js";
 
 export interface SourceEdgeContext {
-  index: CodeIndex;
+  index: ImportGraphIndex;
   normalizedPaths: Map<string, string>;
   kotlinFilesByBasename: Map<string, string[]>;
   workspaceResolver: WorkspaceAliasResolver;

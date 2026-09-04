@@ -1,11 +1,11 @@
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getCachedParse, setCachedParse } from "../../parser/parse-cache.js";
 import { getParser } from "../../parser/parser-manager.js";
-import type { CodeIndex } from "../../types.js";
+
 import { extractTypeScriptImports } from "../ts-imports.js";
 import { resolveTsAliasedImport } from "../tsconfig-paths.js";
 import { resolveImportPath } from "./path-map.js";
-import type { AddImportEdge } from "./types.js";
+import type { AddImportEdge, ImportGraphIndex } from "./types.js";
 
 export interface TsCollectionOutcome {
   astHandled: boolean;
@@ -22,7 +22,7 @@ function resolveRelativeImport(
 }
 
 function resolveAliasedImport(
-  index: CodeIndex,
+  index: ImportGraphIndex,
   importerFile: string,
   importPath: string,
   normalizedPaths: Map<string, string>,
@@ -39,7 +39,7 @@ function resolveAliasedImport(
 }
 
 export async function collectTypeScriptEdges(
-  index: CodeIndex,
+  index: ImportGraphIndex,
   filePath: string,
   source: string,
   normalizedPaths: Map<string, string>,
