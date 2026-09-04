@@ -1,7 +1,8 @@
+import type { CodeSymbol } from "../../types.js";
 /** Generic indexed pattern execution engine. */
 import { readFile, realpath } from "node:fs/promises";
 import { relative, resolve, sep, win32 } from "node:path";
-import { getCodeIndex } from "../index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "../index-tools.js";
 import { BUILTIN_PATTERNS } from "./catalog.js";
 import { stripCommentsAndStrings } from "../../utils/source-stripper.js";
 import { isTestFileStrict as isTestFile } from "../../utils/test-file.js";
@@ -45,9 +46,9 @@ function shouldKeepPostFilterMatch(
   }
 }
 
-type CodeIndex = NonNullable<Awaited<ReturnType<typeof getCodeIndex>>>;
-type IndexedSymbol = CodeIndex["symbols"][number];
-type IndexedFileEntry = CodeIndex["files"][number];
+type IndexSummary = NonNullable<Awaited<ReturnType<typeof getIndexSummary>>>;
+type IndexedSymbol = CodeSymbol;
+type IndexedFileEntry = IndexSummary["files"][number];
 
 interface SearchPatternOptions {
   file_pattern?: string | undefined;
@@ -73,7 +74,15 @@ interface PatternExecutionConfig {
 }
 
 interface PatternSearchContext {
-  index: CodeIndex;
+  /**
+   * The SUMMARY, not the index. The file strategy needs paths and the root; the symbol strategy
+   * streams instead of holding an array, so nothing here has to carry 352,166 objects to scan for a
+   * regex — which is what `index.symbols` on this context used to mean.
+   */
+  index: IndexSummary;
+  /** Needed because the symbol strategy resolves its own pages rather than reading them off the
+   *  context. */
+  repo: string;
   config: PatternExecutionConfig;
   settings: SearchPatternSettings;
   matches: PatternMatch[];
@@ -233,7 +242,7 @@ function shouldScanFile(fileEntry: IndexedFileEntry, context: PatternSearchConte
   return FILE_SCAN_FILTERS.every((filter) => filter(fileEntry, context));
 }
 
-async function readIndexedFile(index: CodeIndex, fileEntry: IndexedFileEntry): Promise<string | undefined> {
+async function readIndexedFile(index: IndexSummary, fileEntry: IndexedFileEntry): Promise<string | undefined> {
   const filePath = resolveIndexedFilePath(index.root, fileEntry.path);
   if (!filePath) {
     console.warn(`[search_patterns] skipped indexed path outside repository root: ${fileEntry.path}`);
@@ -343,22 +352,18 @@ async function scanFileEntry(
  * Same value and same reasoning as the index write and the BM25 build: enough work per turn that
  * the yields cost nothing measurable, short enough that no single turn is felt.
  */
-const SYMBOLS_PER_TURN = 500;
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 async function scanIndexedSymbols(context: PatternSearchContext): Promise<void> {
-  let sinceYield = 0;
-  for (const sym of context.index.symbols) {
-    if (!hasMatchCapacity(context)) return;
-
-    const match = scanSymbolEntry(context, sym);
-    if (match) context.matches.push(match);
-
-    if (++sinceYield >= SYMBOLS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
-  }
+  // Streamed, and the pages yield between themselves — so the manual counter this loop used to
+  // keep is gone with the array it was protecting. Patterns match on `source`, so it is requested
+  // explicitly; that is the whole reason this strategy is the expensive one.
+  await streamRepoSymbols(context.repo, { withSource: true }, (batch) => {
+    for (const sym of batch) {
+      if (!hasMatchCapacity(context)) return false;
+      const match = scanSymbolEntry(context, sym);
+      if (match) context.matches.push(match);
+    }
+    return undefined;
+  });
 }
 
 async function scanIndexedFiles(context: PatternSearchContext): Promise<void> {
@@ -392,13 +397,14 @@ export async function searchPatterns(
   pattern: string,
   options?: SearchPatternOptions,
 ): Promise<PatternResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
   const context: PatternSearchContext = {
     index,
+    repo,
     config: resolvePatternConfig(pattern),
     settings: normalizeSearchPatternOptions(options),
     matches: [],
