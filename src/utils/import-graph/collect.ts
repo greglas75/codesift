@@ -37,6 +37,13 @@ function buildSourceContext(index: ImportGraphIndex): CollectionContext {
   };
 }
 
+/**
+ * How many files to read at once. Enough to keep the disk busy, far below the descriptor limit —
+ * an EMFILE is a harder failure than a slow scan, and this runs against repositories of 15,000+
+ * files.
+ */
+const READ_BATCH = 32;
+
 /** Collect all import edges between files in the index. */
 export async function collectImportEdges(
   index: ImportGraphIndex,
@@ -47,14 +54,29 @@ export async function collectImportEdges(
     ? index.files.filter((file) => fileFilter.has(file.path))
     : index.files;
 
-  for (const file of files) {
-    let source: string;
-    try {
-      source = await readFile(join(index.root, file.path), "utf-8");
-    } catch {
-      continue;
+  // Read in parallel batches, process IN ORDER.
+  //
+  // The reads were sequential — one `await readFile` per file, 15,422 of them on
+  // tgm-survey-platform — so nothing was computing for most of the scan; it was waiting for one
+  // disk read at a time.
+  //
+  // Batched rather than one `Promise.all` over the whole list: 15,422 concurrent opens would trade
+  // this for EMFILE, and a descriptor limit is a harder failure than a slow scan.
+  //
+  // Processing stays strictly in file order even though the reads no longer are.
+  // `collectSourceEdges` appends to a shared accumulator, so out-of-order processing would reorder
+  // the edge list — equivalent as a graph, different as a response, and every caller diffing
+  // results across versions would see a change that is not one.
+  for (let i = 0; i < files.length; i += READ_BATCH) {
+    const batch = files.slice(i, i + READ_BATCH);
+    const sources = await Promise.all(
+      batch.map((file) => readFile(join(index.root, file.path), "utf-8").catch(() => null)),
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const source = sources[j];
+      if (source === null || source === undefined) continue;
+      await collectSourceEdges(batch[j]!.path, source, context);
     }
-    await collectSourceEdges(file.path, source, context);
   }
   return context.accumulator.edges;
 }
