@@ -27,7 +27,9 @@ export interface CommunityResult {
  * Louvain method for community detection on an undirected weighted graph.
  * Returns mapping: node → community ID.
  */
-function louvain(
+/** Exported for tests: the scale property below is the whole point of the change and cannot be
+ *  observed through `detectCommunities` without building a repository-sized fixture on disk. */
+export function louvain(
   nodes: string[],
   adj: Map<string, Map<string, number>>,
   resolution: number,
@@ -58,6 +60,26 @@ function louvain(
     degree.set(node, d);
   }
 
+  /**
+   * Running sum of node degrees per community — the `sigma_tot` of the canonical algorithm.
+   *
+   * Both places that need it used to recompute it by scanning the ENTIRE community map: once per
+   * node for the current community, and again per node PER NEIGHBOURING COMMUNITY for each
+   * candidate. That is O(N^2 * k) per pass, and there are up to twenty passes. On
+   * tgm-survey-platform the focused graph is 12,498 nodes and 36,338 edges, and detect_communities
+   * did not finish inside 300 s — the graph itself builds in 18.5 s, so effectively all of it was
+   * this rescan.
+   *
+   * Maintained incrementally instead: a move subtracts the node's degree from one community and
+   * adds it to the other. Same numbers, same decisions, same output — only without recomputing a
+   * total that changes by exactly one node's degree.
+   */
+  const communityDegree = new Map<number, number>();
+  for (const node of nodes) {
+    const c = community.get(node)!;
+    communityDegree.set(c, (communityDegree.get(c) ?? 0) + (degree.get(node) ?? 0));
+  }
+
   // Phase 1: Local moves
   const MAX_PASSES = 20;
   for (let pass = 0; pass < MAX_PASSES; pass++) {
@@ -78,11 +100,8 @@ function louvain(
         commWeights.set(nc, (commWeights.get(nc) ?? 0) + w);
       }
 
-      // Sum of degrees in current community (excluding this node)
-      let sigmaCurrentWithout = 0;
-      for (const [n, c] of community) {
-        if (c === currentComm && n !== node) sigmaCurrentWithout += degree.get(n) ?? 0;
-      }
+      // Sum of degrees in the current community, excluding this node — read, not rescanned.
+      const sigmaCurrentWithout = (communityDegree.get(currentComm) ?? 0) - ki;
 
       const weightToCurrentComm = commWeights.get(currentComm) ?? 0;
       const removeCost = weightToCurrentComm - resolution * ki * sigmaCurrentWithout / (2 * totalWeight);
@@ -93,10 +112,7 @@ function louvain(
       for (const [targetComm, weightToTarget] of commWeights) {
         if (targetComm === currentComm) continue;
 
-        let sigmaTarget = 0;
-        for (const [n, c] of community) {
-          if (c === targetComm) sigmaTarget += degree.get(n) ?? 0;
-        }
+        const sigmaTarget = communityDegree.get(targetComm) ?? 0;
 
         const gain = (weightToTarget - resolution * ki * sigmaTarget / (2 * totalWeight)) - removeCost;
         if (gain > bestGain) {
@@ -106,6 +122,10 @@ function louvain(
       }
 
       if (bestComm !== currentComm) {
+        // The running totals move with the node. Forgetting either half here is the one way this
+        // optimisation can change results rather than just timing.
+        communityDegree.set(currentComm, (communityDegree.get(currentComm) ?? 0) - ki);
+        communityDegree.set(bestComm, (communityDegree.get(bestComm) ?? 0) + ki);
         community.set(node, bestComm);
         improved = true;
       }
