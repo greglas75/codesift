@@ -185,8 +185,15 @@ export function formatTraceRouteCounts(raw: unknown): string {
 const MAX_HOTSPOTS_COMPACT = 15;
 
 export function formatHotspotsCompact(raw: unknown): string {
-  const data = raw as { hotspots: HotspotEntry[]; period: string };
-  if (data.hotspots.length === 0) return `(no hotspots found, period: ${data.period})`;
+  const data = raw as { hotspots: HotspotEntry[]; period: string; note?: string };
+  if (data.hotspots.length === 0) {
+    // Same reasoning as the full formatter: the note is the difference between "this repository
+    // has no hotspots" and "I could not compute them", and the compact path is the one a large
+    // repository is most likely to take — which is exactly where the git call fails.
+    return data.note
+      ? `(no hotspots found, period: ${data.period}) — ${data.note}`
+      : `(no hotspots found, period: ${data.period})`;
+  }
   const capped = data.hotspots.slice(0, MAX_HOTSPOTS_COMPACT);
   const rows = capped.map((h) => [
     String(h.hotspot_score),

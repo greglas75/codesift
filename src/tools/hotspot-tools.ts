@@ -40,6 +40,27 @@ export interface HotspotResult {
  * git invocation failed or produced empty output — caller should surface it
  * rather than treating empty as "no hotspots."
  */
+/**
+ * How long `git log --numstat` may take, scaled to the window it is asked for.
+ *
+ * It was a flat 30 s, and that is not enough for the repositories this is most useful on. Measured
+ * on tgm-survey-platform (11,167 commits in 180 days): the command takes 13.0 s and produces 4.9 MB
+ * when the machine is quiet, and exceeds 30 s when it is not. On failure `getGitChurn` returns an
+ * empty map — so the tool reported "no hotspots found" for a repository with six months of dense
+ * history. The daemon log holds 138 of those failures.
+ *
+ * Scaled rather than raised to one bigger constant: the cost is proportional to the window, and a
+ * ceiling generous enough for a year would be an absurd wait on a two-week query. The cap exists
+ * because past some point the honest answer is that this window is too large for this repository.
+ */
+export function gitLogTimeoutMsForTesting(sinceDays: number): number {
+  return gitLogTimeoutMs(sinceDays);
+}
+
+function gitLogTimeoutMs(sinceDays: number): number {
+  return Math.min(180_000, Math.max(30_000, sinceDays * 600));
+}
+
 async function getGitChurn(
   repoRoot: string,
   sinceDays: number,
@@ -54,7 +75,7 @@ async function getGitChurn(
     const result = await execFileAsync("git", args, {
       cwd: repoRoot,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: gitLogTimeoutMs(sinceDays),
       maxBuffer: 50 * 1024 * 1024, // 50MB — --numstat on 2k+ commit repos
     });
     output = result.stdout;

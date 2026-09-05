@@ -209,8 +209,17 @@ export function formatClones(data: { clones: ClonePair[]; scanned_symbols: numbe
 
 interface HotspotEntry { file: string; commits: number; lines_changed: number; symbol_count: number; hotspot_score: number }
 
-export function formatHotspots(data: { hotspots: HotspotEntry[]; period: string }): string {
-  if (data.hotspots.length === 0) return `(no hotspots found, period: ${data.period})`;
+export function formatHotspots(
+  data: { hotspots: HotspotEntry[]; period: string; note?: string },
+): string {
+  if (data.hotspots.length === 0) {
+    // The note is the difference between "this repository has no hotspots" and "I could not
+    // compute them". Dropping it turned a failed git call into a confident finding — and the tool
+    // builds the note precisely so that cannot happen.
+    return data.note
+      ? `(no hotspots found, period: ${data.period}) — ${data.note}`
+      : `(no hotspots found, period: ${data.period})`;
+  }
   const rows = data.hotspots.map((h) => [
     String(h.hotspot_score),
     String(h.commits),
