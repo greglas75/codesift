@@ -18,6 +18,13 @@ export interface ImportGraphIndex {
   root: string;
   files: FileEntry[];
   workspaces?: Workspace[] | undefined;
+  /**
+   * Where this repo's artifacts live, so the parsed-imports cache can sit beside them.
+   *
+   * Optional: a caller that constructs an index by hand (tests, fixtures) simply gets no cache
+   * rather than a cache in an unexpected place.
+   */
+  indexPath?: string | undefined;
 }
 
 export interface ImportEdge {

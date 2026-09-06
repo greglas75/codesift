@@ -20,6 +20,13 @@ import type { FileEntry, Workspace } from "../../types.js";
  * `symbol_count` is counted in SQL rather than derived from an array, so it stays a real count.
  */
 export interface IndexSummary {
+  /**
+   * Where this repo's artifacts live. Set by the tool-layer accessor, which knows it from the
+   * registry; absent when a summary is built directly from a database path. Consumers that cache
+   * something alongside the index (the parsed-imports cache) need it, and everything else ignores
+   * it.
+   */
+  indexPath?: string | undefined;
   repo: string;
   root: string;
   files: FileEntry[];

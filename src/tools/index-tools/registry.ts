@@ -369,7 +369,11 @@ export async function getIndexSummary(
   // so there is no window in which a cached index becomes stale. Two independent reviewers read
   // this shortcut as a missing check, which is why it is spelled out rather than left implicit.
   const cached = codeIndexes.get(resolvedName);
-  if (cached) return summariseIndex(cached);
+  // `indexPath` travels with the summary so consumers that cache something alongside the index —
+  // the parsed-imports cache — can find the right place without reaching into the registry
+  // themselves. Both return paths carry it, or the cache would be active on one and silently off
+  // on the other depending on whether the index happened to be resident.
+  if (cached) return { ...summariseIndex(cached), indexPath: meta.index_path };
 
   try {
     const summary = await loadIndexSummary(meta.index_path);
@@ -397,7 +401,7 @@ export async function getIndexSummary(
       );
       return null;
     }
-    return summary;
+    return { ...summary, indexPath: meta.index_path };
   } catch (err) {
     const code = classifyStorageError(err);
     if (code === null) throw err;
