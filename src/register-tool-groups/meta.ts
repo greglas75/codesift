@@ -471,6 +471,31 @@ export const META_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       if (result.text_stub_languages) {
         parts.push(`text_stub (no parser): ${result.text_stub_languages.join(", ")}`);
       }
+      // Which commit this index describes, and whether the tree has moved since. `indexed=true`
+      // plus a timestamp cannot distinguish an index built minutes ago on a DIFFERENT commit from
+      // one built yesterday on this one, and an agent asking exactly that question got no answer.
+      const commit = result.commit;
+      if (commit) {
+        const short = (sha: string | undefined): string => (sha ? sha.slice(0, 12) : "unknown");
+        if (commit.matches === true) {
+          parts.push(`commit: ${short(commit.indexed)} — matches HEAD`);
+        } else if (commit.matches === false) {
+          const changed = commit.files_changed === undefined
+            ? ""
+            : ` (${commit.files_changed} file(s) differ)`;
+          parts.push(
+            `commit: index at ${short(commit.indexed)}, HEAD at ${short(commit.head)}${changed}`
+            + ` — re-run index_folder to cover the difference`,
+          );
+        } else {
+          // "Unknown" is reported, never silently rendered as agreement: the distinction between
+          // "same commit" and "could not be established" is the reason to print this at all.
+          parts.push(
+            `commit: index at ${short(commit.indexed)}, HEAD ${short(commit.head)}`
+            + ` — could not compare`,
+          );
+        }
+      }
       return parts.join("\n");
     },
   } },

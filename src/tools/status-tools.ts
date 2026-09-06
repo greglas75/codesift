@@ -2,6 +2,7 @@ import { getIndexSummary } from "./index-tools.js";
 import { loadConfig } from "../config.js";
 import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { loadIndexOrStale } from "../storage/index-store.js";
+import { runGit } from "./git-exec.js";
 import { isIndexStorageError } from "../storage/sqlite-index-store.js";
 import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 
@@ -16,6 +17,26 @@ export interface IndexStatusResult {
   language_breakdown?: Record<string, number>;
   text_stub_languages?: string[];
   last_indexed?: string; // ISO date
+  /**
+   * Which commit the index actually describes, and which one the working tree is on.
+   *
+   * `indexed: true` plus a timestamp was the whole answer, and it is not enough to act on: an agent
+   * could not tell an index built minutes ago on a DIFFERENT commit from one built yesterday on
+   * this one. Measured on tgm-survey-platform 2026-09-06 — index at c58a7218ab8c, tree at
+   * 113242d54 — and the tool reported `indexed=true` with a timestamp and nothing else, so an agent
+   * that asked precisely this question got no answer and fell back to reading files by hand.
+   *
+   * `matches` is the field to branch on. Absent commits mean "could not be established" and must
+   * NOT be read as agreement — the difference between "same commit" and "unknown" is the whole
+   * point of reporting it.
+   */
+  commit?: {
+    indexed?: string;
+    head?: string;
+    matches?: boolean;
+    /** Files that differ between the two, when both are known and they differ. */
+    files_changed?: number;
+  };
   /** When the index file exists but its extractor_version drifted from the
    *  current bundled set. Distinct from "no index file at all" — agents need
    *  this signal to know that re-running index_folder will fix it, instead of
@@ -65,6 +86,47 @@ const TEXT_STUB_LANGUAGES = new Set([
   "kotlin", "swift", "dart", "scala", "groovy",
   "elixir", "lua", "zig", "nim", "gradle", "sbt",
 ]);
+
+/**
+ * The two commits an agent needs to decide whether to trust the index.
+ *
+ * The indexed commit lives in the REGISTRY, not in the index database — `meta` carries
+ * created_at, extractor_version, repo, root, schema_version, updated_at and workspaces, and 119 of
+ * 122 local repositories here have the SHA only in the registry. So it has to be passed in rather
+ * than read back off the summary.
+ *
+ * Every git call is bounded and every failure degrades to an omitted field. A status tool that
+ * throws because git is slow is worse than one that says less: it is called on the path of nearly
+ * every session, 876 times in six hours in this machine's telemetry.
+ */
+async function describeIndexedCommit(
+  root: string,
+  indexedCommit: string | undefined,
+): Promise<NonNullable<IndexStatusResult["commit"]> | null> {
+  const head = await runGit(["rev-parse", "HEAD"], { cwd: root, timeout: 5_000 })
+    .then((out) => out.trim())
+    .catch(() => null);
+  if (head === null && indexedCommit === undefined) return null;
+
+  const commit: NonNullable<IndexStatusResult["commit"]> = {};
+  if (indexedCommit !== undefined) commit.indexed = indexedCommit;
+  if (head !== null) commit.head = head;
+  if (indexedCommit === undefined || head === null) return commit;
+
+  commit.matches = indexedCommit === head;
+  if (!commit.matches) {
+    // Counted, because "different commit" and "different commit by 4,000 files" call for different
+    // decisions, and the agent cannot work that out from two hashes.
+    const diff = await runGit(["diff", "--name-only", `${indexedCommit}..${head}`], {
+      cwd: root,
+      timeout: 15_000,
+    }).catch(() => null);
+    if (diff !== null) {
+      commit.files_changed = diff.split("\n").filter((line) => line.trim() !== "").length;
+    }
+  }
+  return commit;
+}
 
 export async function indexStatus(repo: string): Promise<IndexStatusResult> {
   // Status check should NOT block on freshness — telemetry showed p99=43s
@@ -120,6 +182,12 @@ export async function indexStatus(repo: string): Promise<IndexStatusResult> {
     language_breakdown: languageBreakdown,
     last_indexed: new Date(index.updated_at).toISOString(),
   };
+
+  // The indexed commit lives in the REGISTRY, not in the index database: `meta` carries no
+  // last_git_commit, and 119 of 122 local repositories here have the SHA only in the registry.
+  const registered = await resolveRegisteredRepoMeta(loadConfig().registryPath, repo).catch(() => null);
+  const commit = await describeIndexedCommit(index.root, registered?.meta.last_git_commit);
+  if (commit !== undefined && commit !== null) result.commit = commit;
   if (stubLangs.size > 0) result.text_stub_languages = [...stubLangs].sort();
   if (index.lossy_migration === true) {
     result.lossy_migration = {
