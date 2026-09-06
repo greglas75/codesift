@@ -5,7 +5,7 @@ import { getParser } from "../../parser/parser-manager.js";
 import { extractTypeScriptImports } from "../ts-imports.js";
 import { resolveTsAliasedImport } from "../tsconfig-paths.js";
 import { resolveImportPath } from "./path-map.js";
-import type { AddImportEdge, ImportGraphIndex } from "./types.js";
+import type { AddImportEdge, ImportEdgeExtras, ImportGraphIndex } from "./types.js";
 
 export interface TsCollectionOutcome {
   astHandled: boolean;
@@ -65,7 +65,10 @@ export async function collectTypeScriptEdges(
       const resolved = imported.path.startsWith(".")
         ? resolveRelativeImport(filePath, imported.path, normalizedPaths)
         : resolveAliasedImport(index, filePath, imported.path, normalizedPaths);
-      if (resolved) addEdge(filePath, resolved, { type_only: imported.is_type_only });
+      if (!resolved) continue;
+      const extras: ImportEdgeExtras = { type_only: imported.is_type_only };
+      if (imported.kind === "mock") extras.mock = true;
+      addEdge(filePath, resolved, extras);
     }
     return { astHandled: true };
   } catch (error: unknown) {

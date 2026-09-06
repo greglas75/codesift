@@ -18,6 +18,20 @@
  *   - per-specifier `export { type X, Y } from "y"` → runtime if any runtime export (same rule as imports)
  *   - `export * from "y"` → runtime; `export type * from "y"` → type_only:true
  *   - `import x = require("y")` → runtime edge to `y` (handled via `import_require_clause`)
+ *   - `await import("y")` / `import("y").then(…)` → runtime edge (`kind: "dynamic"`)
+ *   - `typeof import("y")` → type-only: the specifier sits in a type position and never loads
+ *   - `require("y")` called as a function → runtime edge (`kind: "require"`)
+ *   - `vi.mock("y")` / `jest.mock("y")` → `kind: "mock"`, which the caller tags on the edge
+ *
+ * The four above were invisible until 2026-09-06. This AST walker is authoritative for `.ts`/`.tsx`
+ * and knew only `import_statement`/`export_statement`; the regex collector that does catch
+ * `import()` and `require()` is a FALLBACK and runs only when the parser fails. Measured on
+ * tgm-survey-platform: 576 dynamic imports and 1,708 mocks resolved to an indexed file and produced
+ * no edge — ~6% of the graph, concentrated in exactly the lazily-loaded modules and the tests
+ * `impact_analysis` exists to name.
+ *
+ * `import(someVariable)` is skipped: the specifier is not knowable statically, and a guess is worse
+ * than the gap.
  *
  * Limitation: `import { type X } from "m"` is modeled type-only when all named bindings are
  * `type`-only; with `verbatimModuleSyntax`, TS may still emit a runtime module dependency —
@@ -28,6 +42,8 @@ import type { Node as TSNode, Tree as TSTree } from "web-tree-sitter";
 export interface TsImportEdge {
   /** raw specifier text from the import source (relative or bare/aliased) */
   path: string;
+  /** How the dependency is expressed. `mock` is not an import; see `ImportEdge.mock`. */
+  kind: "static" | "dynamic" | "require" | "mock";
   /** true when statement-level `import type` / `export type`, all per-specifier `type` bindings in a named clause, or `export type *`; see file header for edge cases */
   is_type_only: boolean;
   /** imported/re-exported names (for future use; empty for side-effect imports) */
@@ -142,6 +158,47 @@ function walkExportClause(clause: TSNode): {
   return { specifiers, anyRuntimeSpecifier };
 }
 
+/** Callees whose first string argument the test runner resolves as a module path. */
+const MOCK_CALLEES = new Set([
+  "vi.mock", "vi.doMock", "vi.unmock", "vi.doUnmock", "vi.importActual", "vi.importMock",
+  "jest.mock", "jest.doMock", "jest.unmock", "jest.requireActual", "jest.requireMock",
+]);
+
+/** The first argument, when it is a plain string literal; otherwise undefined. */
+function stringArgument(call: TSNode): string | undefined {
+  const first = call.childForFieldName("arguments")?.namedChildren[0];
+  if (!first || first.type !== "string") return undefined;
+  return first.text.replace(/^['"`]|['"`]$/g, "");
+}
+
+/** Record a `call_expression` that names a module: `import()`, `require()`, or a runner mock. */
+function collectCallEdge(node: TSNode, edges: TsImportEdge[]): void {
+  const fn = node.childForFieldName("function");
+  if (!fn) return;
+  if (fn.type === "import") {
+    const path = stringArgument(node);
+    // `typeof import("y")` is a type query — the module is named, never loaded.
+    if (path) {
+      edges.push({
+        path,
+        kind: "dynamic",
+        is_type_only: node.parent?.type === "type_query",
+        specifiers: [],
+      });
+    }
+    return;
+  }
+  if (fn.type === "identifier" && fn.text === "require") {
+    const path = stringArgument(node);
+    if (path) edges.push({ path, kind: "require", is_type_only: false, specifiers: [] });
+    return;
+  }
+  if (fn.type === "member_expression" && MOCK_CALLEES.has(fn.text)) {
+    const path = stringArgument(node);
+    if (path) edges.push({ path, kind: "mock", is_type_only: false, specifiers: [] });
+  }
+}
+
 /** Walk the tree and return all import + re-export edges. */
 export function extractTypeScriptImports(tree: TSTree): TsImportEdge[] {
   const edges: TsImportEdge[] = [];
@@ -158,6 +215,7 @@ export function extractTypeScriptImports(tree: TSTree): TsImportEdge[] {
         const id = requireClause.namedChildren.find((c) => c.type === "identifier");
         edges.push({
           path,
+          kind: "static",
           is_type_only: false,
           specifiers: id ? [id.text] : [],
         });
@@ -170,14 +228,14 @@ export function extractTypeScriptImports(tree: TSTree): TsImportEdge[] {
       const importClause = node.namedChildren.find((c) => c.type === "import_clause");
       if (!importClause) {
         // side-effect import: `import "x"`
-        edges.push({ path, is_type_only: stmtTypeOnly, specifiers: [] });
+        edges.push({ path, kind: "static", is_type_only: stmtTypeOnly, specifiers: [] });
         return;
       }
       const { specifiers, anyRuntimeSpecifier } = walkImportClause(importClause);
       // Edge is type_only only when statement-level `type` modifier is present
       // OR when every named specifier is per-specifier-typed (no runtime member).
       const is_type_only = stmtTypeOnly || !anyRuntimeSpecifier;
-      edges.push({ path, is_type_only, specifiers });
+      edges.push({ path, kind: "static", is_type_only, specifiers });
       return;
     }
 
@@ -211,8 +269,14 @@ export function extractTypeScriptImports(tree: TSTree): TsImportEdge[] {
       const is_type_only =
         stmtTypeOnly ||
         (sawNamedExportClause && !anyRuntimeExportSpecifier);
-      edges.push({ path, is_type_only, specifiers });
+      edges.push({ path, kind: "static", is_type_only, specifiers });
       return;
+    }
+
+    if (node.type === "call_expression") {
+      collectCallEdge(node, edges);
+      // Deliberately falls through to the recursion below: `import("./a").then(…)` puts the real
+      // call inside a `member_expression`, so returning here would drop it.
     }
 
     // Recurse into children for top-level scan (most imports are at root, but

@@ -21,6 +21,8 @@ export function createEdgeAccumulator(): EdgeAccumulator {
         existing.type_only = false;
       }
       if (extras?.star_import) existing.star_import = true;
+      // A pair reached by both a mock and a real import is a real import.
+      if (!extras?.mock && existing.mock) delete existing.mock;
       if (upgradedToRuntime && !extras?.raw) {
         delete existing.raw;
       } else if (
@@ -37,6 +39,7 @@ export function createEdgeAccumulator(): EdgeAccumulator {
     if (extras?.type_only) edge.type_only = true;
     if (extras?.star_import) edge.star_import = true;
     if (extras?.raw) edge.raw = extras.raw;
+    if (extras?.mock) edge.mock = true;
     let targets = edgesBySource.get(from);
     if (!targets) {
       targets = new Map();

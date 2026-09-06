@@ -20,7 +20,7 @@ import type { ImportEdgeExtras } from "./types.js";
  */
 
 /** Bump on any format change: a mismatch rebuilds rather than misreads. */
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 
 export interface CachedEdgeCall {
   to: string;

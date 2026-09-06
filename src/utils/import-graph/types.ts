@@ -33,9 +33,17 @@ export interface ImportEdge {
   type_only?: boolean;
   star_import?: boolean;
   raw?: string;
+  /**
+   * The only thing tying these two files together is `vi.mock("./x")` / `jest.mock("./x")`.
+   *
+   * It is a real dependency — the runner resolves that specifier, and moving or renaming the target
+   * breaks the test — but it is not an import, so a consumer that means "what does this module
+   * load" can drop it. Cleared the moment the same pair also appears as a genuine import.
+   */
+  mock?: boolean;
 }
 
-export type ImportEdgeExtras = Pick<ImportEdge, "type_only" | "star_import" | "raw">;
+export type ImportEdgeExtras = Pick<ImportEdge, "type_only" | "star_import" | "raw" | "mock">;
 
 export type AddImportEdge = (
   from: string,

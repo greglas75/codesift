@@ -122,3 +122,71 @@ describe("extractTypeScriptImports", () => {
     expect(edges).toHaveLength(0);
   });
 });
+
+// Dependencies that no `import` statement declares.
+//
+// The AST walker is authoritative for .ts/.tsx — the regex collector that catches `import()` and
+// `require()` runs only when the parser fails — so anything missing here is missing from the graph
+// entirely. Measured on tgm-survey-platform before this: 576 dynamic imports and 1,708 mocks
+// resolved to an indexed file and produced no edge.
+describe("extractTypeScriptImports — calls that name a module", () => {
+  let parser: Parser;
+
+  beforeAll(async () => {
+    const p = await getParser("typescript");
+    if (!p) throw new Error("typescript parser unavailable");
+    parser = p;
+  });
+
+  const extract = (src: string) => extractTypeScriptImports(parser.parse(src));
+
+  it("records `await import(\"./y\")` as a runtime dependency", () => {
+    const edges = extract(`async function f() { const m = await import("./y"); return m; }`);
+    expect(edges).toEqual([
+      { path: "./y", kind: "dynamic", is_type_only: false, specifiers: [] },
+    ]);
+  });
+
+  it("records the import inside `import(\"./y\").then(…)`", () => {
+    // The outer call_expression's function is a member_expression; returning at the outer node
+    // would drop the real one nested inside it.
+    expect(extract(`import("./y").then((m) => m);`)).toEqual([
+      { path: "./y", kind: "dynamic", is_type_only: false, specifiers: [] },
+    ]);
+  });
+
+  it("treats `typeof import(\"./y\")` as type-only — the module is named, never loaded", () => {
+    expect(extract(`type M = typeof import("./y");`)[0]).toMatchObject({
+      path: "./y",
+      kind: "dynamic",
+      is_type_only: true,
+    });
+  });
+
+  it("records a `require(\"./y\")` call", () => {
+    expect(extract(`const y = require("./y");`)).toEqual([
+      { path: "./y", kind: "require", is_type_only: false, specifiers: [] },
+    ]);
+  });
+
+  it("records vi.mock and jest.mock as `mock`, not as imports", () => {
+    const edges = extract(`vi.mock("./a", () => ({})); jest.mock("./b");`);
+    expect(edges.map((e) => [e.path, e.kind])).toEqual([
+      ["./a", "mock"],
+      ["./b", "mock"],
+    ]);
+  });
+
+  it("skips a specifier it cannot know: `import(someVariable)`", () => {
+    // A guess here would be worse than the gap — it would attach the edge to whichever file
+    // happened to match, and nothing downstream could tell that apart from a real import.
+    expect(extract(`async function f(p: string) { await import(p); }`)).toEqual([]);
+    expect(extract('await import(`./${name}`);')).toEqual([]);
+  });
+
+  it("still labels ordinary imports `static`", () => {
+    expect(extract(`import { X } from "./y";`)[0]?.kind).toBe("static");
+    expect(extract(`export { X } from "./y";`)[0]?.kind).toBe("static");
+    expect(extract(`import x = require("./y");`)[0]?.kind).toBe("static");
+  });
+});

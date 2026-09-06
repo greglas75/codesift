@@ -583,6 +583,36 @@ tree); for the git tools it is a hard `Git diff failed: …` that never names th
 - `CODESIFT_MAX_INDEX_CACHE_MB` (**ADR-004**) — resident index-**cache** budget, same RAM-scaled tiers as the embedding budget. Replaces a bound on entry COUNT (`CODESIFT_MAX_CACHED_INDEXES`, kept as a secondary cap), which priced a 349 MB index and a 2 MB one identically — "at most three indexes" permitted ~1 GB of long-lived heap. Footprint is tallied by the SQLite loader as it walks the rows (one addition per row, no extra query); other backends fall back to constants calibrated from a `heapUsed` delta on the real 240k-symbol index. Both constants are rounded **up** — over-reporting costs a re-read, under-reporting silently breaks the budget (measured overshoot 9.4%). The most recently loaded index is never evicted, even if it alone exceeds the budget, or every call would re-read and re-evict it.
 - **Load *time* is a separate, unfixed problem** (ADR-004 stage 2). Measured on the 240k-symbol index: 349 MB resident, of which `source` is 185 MB (45%) — but omitting `source` makes the load only 2% faster, because the cost is constructing 240k objects, not attaching strings. Fixing it means tools querying the DB for the rows they need instead of materialising the index: **348 call sites in 150 files**. Do NOT "fix" it by omitting `source` by default (hands `undefined` to ~60 files that read it, indistinguishable from a symbol with no source) or by a lazy getter (`JSON.stringify` skips prototype getters — source would vanish from serialised responses; own accessors on 240k objects force dictionary mode).
 
+## The import graph knew only `import` statements (2026-09-06)
+
+`extractTypeScriptImports` walked `import_statement` and `export_statement` and nothing else, and it
+is **authoritative** for `.ts`/`.tsx` — the regex collector in `source-imports.ts` that *does* match
+`import()` and `require()` is a FALLBACK, reached only when the parser throws. So on every file that
+parsed, four kinds of real dependency produced no edge: `await import("./x")`, `import("./x").then`,
+a `require("./x")` call, and `vi.mock`/`jest.mock`.
+
+Measured on tgm-survey-platform: **576 dynamic imports and 1,708 mocks** resolved to an indexed file
+and had no edge — 37,835 edges before, 39,872 after. It concentrates in exactly the wrong places: a
+lazily-loaded module looks unreachable, and a test that only mocks its subject never appears in
+`impact_analysis`'s `affected_tests`.
+
+Three decisions worth keeping:
+
+- **`typeof import("y")` is type-only.** The specifier sits in a type query; the module is named and
+  never loaded. Detected by `node.parent?.type === "type_query"`, not by regex.
+- **`import(someVariable)` and `` import(`./${x}`) `` are skipped.** A guess would attach the edge to
+  whichever file happened to match, and nothing downstream could tell that apart from a real import.
+- **A mock is an edge, but carries `mock: true`** (`ImportEdge.mock`, cleared as soon as the same
+  pair also appears as a genuine import). It is a real dependency — the runner resolves the path,
+  and renaming the target breaks the test — but a consumer meaning "what does this module load" can
+  drop it. `find_dead_code` does not read this graph, so mock edges cannot resurrect dead code; and
+  measured on both repos, mock edges introduce **zero** new cycles (176→176, 68→68), because they
+  only ever run test→production.
+
+The `.js`/`.jsx` path still goes through the regex collector, which catches `import()`/`require()`
+but not mocks. `FORMAT_VERSION` in `edge-cache.ts` is bumped to 2 so existing caches rebuild rather
+than replay the old, smaller call list.
+
 ## Symbol ids are not unique — both lookup paths refuse a collision
 
 A symbol id is `repo:file:name:line`, which does **not** identify one symbol: TypeScript's separate
