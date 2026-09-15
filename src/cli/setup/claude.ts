@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
 import { ensureDir, readJsonFile, writeJsonFile } from "./fs.js";
-import { ensureHookEntry, hasCodesiftHook, loadHooksSection, type HookEntry, type HooksSection } from "./hooks.js";
+import { ensureHookEntry, hasCodesiftHook, loadHooksSection, saveHooksSection, type HookEntry, type HooksSection } from "./hooks.js";
 import { setupJsonPlatform } from "./mcp.js";
 
 const CLAUDE_CONFIG = { configDirName: ".claude", configFileName: "settings.json" };
@@ -115,7 +115,7 @@ export async function setupClaudeHooks(): Promise<void> {
   const configDir = join(homedir(), ".claude");
   const settingsPath = join(configDir, "settings.json");
   await ensureDir(configDir);
-  const { root, hooks } = await loadHooksSection(settingsPath);
+  const { root, hooks, original } = await loadHooksSection(settingsPath);
 
   for (const [event, entries] of Object.entries(CLAUDE_HOOKS)) {
     for (const entry of entries) {
@@ -125,6 +125,6 @@ export async function setupClaudeHooks(): Promise<void> {
 
   upgradeStdinHookCommands(hooks);
   removeRetiredClaudeHooks(hooks);
-  await writeJsonFile(settingsPath, root);
+  await saveHooksSection(settingsPath, root, original);
   await migrateLegacyClaudeHooks(configDir);
 }

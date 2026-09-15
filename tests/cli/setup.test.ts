@@ -868,6 +868,39 @@ describe("setup", () => {
       expect(post.some((h) => h.matcher === "mcp__codesift__.*")).toBe(false);
     });
 
+    it("keeps foreign settings and leaves an already-configured file untouched", async () => {
+      // Hooks are auto-installed on EVERY MCP server start; with ~20 sessions a rewrite per
+      // start raced other writers and corrupted settings.json. A no-op start must not write.
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      const settingsPath = join(claudeDir, "settings.json");
+      await writeFile(settingsPath, JSON.stringify({ theme: "light", enabledPlugins: { "x@y": true } }), "utf-8");
+
+      await setupClaudeHooks();
+      const configured = JSON.parse(await readFile(settingsPath, "utf-8"));
+      expect(configured.theme).toBe("light");
+      expect(configured.enabledPlugins).toEqual({ "x@y": true });
+      expect(JSON.stringify(configured.hooks)).toContain("codesift precheck-read --stdin");
+
+      // Compact formatting a CodeSift write would never produce: any rewrite shows up.
+      const compact = JSON.stringify(configured);
+      await writeFile(settingsPath, compact, "utf-8");
+      await setupClaudeHooks();
+      expect(await readFile(settingsPath, "utf-8")).toBe(compact);
+    });
+
+    it("refuses an existing but empty settings.json instead of rebuilding it", async () => {
+      // An empty file here is almost always one caught mid-write by another process;
+      // treating it as {} is what replaced a full config with a hooks-only one.
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      const settingsPath = join(claudeDir, "settings.json");
+      await writeFile(settingsPath, "", "utf-8");
+
+      await expect(setupClaudeHooks()).rejects.toThrow(/exists but is empty/);
+      expect(await readFile(settingsPath, "utf-8")).toBe("");
+    });
+
     it("setup('claude') without hooks flag does NOT write hook entries", async () => {
       await setup("claude");
 

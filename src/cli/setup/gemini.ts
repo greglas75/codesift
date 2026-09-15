@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
-import { ensureDir, writeJsonFile } from "./fs.js";
-import { hasCodesiftHook, loadHooksSection, type HookEntry } from "./hooks.js";
+import { ensureDir } from "./fs.js";
+import { hasCodesiftHook, loadHooksSection, saveHooksSection, type HookEntry } from "./hooks.js";
 import { setupJsonPlatform } from "./mcp.js";
 
 const GEMINI_CONFIG = { configDirName: ".gemini", configFileName: "settings.json" };
@@ -60,7 +60,7 @@ export async function setupGeminiHooks(): Promise<void> {
   const configDir = join(homedir(), ".gemini");
   const settingsPath = join(configDir, "settings.json");
   await ensureDir(configDir);
-  const { root, hooks } = await loadHooksSection(settingsPath);
+  const { root, hooks, original } = await loadHooksSection(settingsPath);
 
   for (const [eventName, hookEntry] of Object.entries(GEMINI_HOOKS)) {
     if (!Array.isArray(hooks[eventName])) {
@@ -71,5 +71,5 @@ export async function setupGeminiHooks(): Promise<void> {
     }
   }
 
-  await writeJsonFile(settingsPath, root);
+  await saveHooksSection(settingsPath, root, original);
 }

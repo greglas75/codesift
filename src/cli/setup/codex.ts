@@ -3,9 +3,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
-import { ensureDir, writeJsonFile, writeSecretFile } from "./fs.js";
+import { ensureDir, writeSecretFile } from "./fs.js";
 import { daemonHttpUrl, resolveMcpServerEntry, assertTokenTransportIsSafe } from "./mcp.js";
-import { hasCodesiftHook, loadHooksSection } from "./hooks.js";
+import { hasCodesiftHook, loadHooksSection, saveHooksSection } from "./hooks.js";
 
 export function stripCodesiftToolApprovalOverrides(
   content: string,
@@ -314,7 +314,7 @@ export async function setupCodexHooks(): Promise<void> {
   const configDir = process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
   const hooksPath = join(configDir, "hooks.json");
   await ensureDir(configDir);
-  const { root, hooks } = await loadHooksSection(hooksPath);
+  const { root, hooks, original } = await loadHooksSection(hooksPath);
 
   for (const event of Object.keys(hooks)) {
     const entries = hooks[event];
@@ -324,5 +324,5 @@ export async function setupCodexHooks(): Promise<void> {
     else hooks[event] = kept;
   }
 
-  await writeJsonFile(hooksPath, root);
+  await saveHooksSection(hooksPath, root, original);
 }

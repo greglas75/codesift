@@ -12,7 +12,11 @@ export async function ensureDir(dir: string): Promise<void> {
 }
 
 export async function readJsonFile(path: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(path, "utf-8");
+  return parseJsonObject(await readFile(path, "utf-8"), path);
+}
+
+/** Parse config text already read from `path`; empty text counts as `{}`. */
+export function parseJsonObject(raw: string, path: string): Record<string, unknown> {
   if (raw.trim() === "") {
     return {};
   }

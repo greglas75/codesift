@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
-import { statSync, writeFileSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, statSync, symlinkSync, writeFileSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir, platform } from "node:os";
@@ -213,6 +213,46 @@ describe("token at rest", () => {
     } finally {
       execFileSync("chflags", ["nouchg", p]);
     }
+  });
+});
+
+describe("owner-only writes are atomic", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "codesift-atomic-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("replaces the file by rename instead of truncating it in place", async () => {
+    // In place, a concurrent reader could see an empty file and a shorter write could land
+    // over the start of a longer one — the ~/.claude/settings.json corruption (a valid
+    // object followed by an old tail). A rename swaps in a new inode, all or nothing.
+    const p = join(dir, "settings.json");
+    writeFileSync(p, JSON.stringify({ long: "x".repeat(500) }), { mode: 0o600 });
+    const before = statSync(p).ino;
+
+    await writeJsonFile(p, { short: 1 });
+
+    expect(statSync(p).ino).not.toBe(before);
+    expect(JSON.parse(readFileSync(p, "utf-8"))).toEqual({ short: 1 });
+    expect(readdirSync(dir)).toEqual(["settings.json"]); // no temp file left behind
+  });
+
+  it("writes through a symlink rather than replacing the link", async () => {
+    const real = join(dir, "real.json");
+    const link = join(dir, "link.json");
+    writeFileSync(real, "{}", { mode: 0o600 });
+    symlinkSync(real, link);
+
+    await writeJsonFile(link, { a: 1 });
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf-8"))).toEqual({ a: 1 });
+    expect((statSync(real).mode & 0o777).toString(8)).toBe("600");
   });
 });
 

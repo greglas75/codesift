@@ -1,5 +1,6 @@
-import { existsSync, chmodSync, statSync, writeFileSync } from "node:fs";
-import { chmod, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { existsSync, chmodSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmod, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 
 /**
  * Writing a file that may embed a CodeSift daemon bearer token, restricted to
@@ -108,16 +109,46 @@ function restrictSync(path: string): void {
  * pre-write restrict is what keeps that promise for a file that already exists:
  * by the time the new content lands, the mode is already correct or we never
  * got here.
+ *
+ * The content goes to a sibling temp file that is renamed over the target, so no
+ * reader ever sees a truncated or half-written file. Writing in place (open with
+ * O_TRUNC, then write) corrupted ~/.claude/settings.json daily on a machine running
+ * ~20 Claude Code sessions: every MCP server start rewrites it, one process read the
+ * file inside another's truncate-then-write window, took the empty file for `{}`, and
+ * its shorter hooks-only JSON landed over the start of the longer one — a valid
+ * object followed by the old tail. A symlinked target is resolved first so the
+ * rename replaces the file it points at rather than the link.
  */
 export async function writeOwnerOnlyFile(path: string, content: string): Promise<void> {
-  await restrict(path);
-  await writeFile(path, content, { encoding: "utf-8", mode: OWNER_ONLY_MODE });
-  await restrict(path);
+  const target = existsSync(path) ? await realpath(path) : path;
+  await restrict(target);
+  const tmp = tempSibling(target);
+  try {
+    await writeFile(tmp, content, { encoding: "utf-8", mode: OWNER_ONLY_MODE, flag: "wx" });
+    await rename(tmp, target);
+  } catch (err) {
+    await rm(tmp, { force: true });
+    throw err;
+  }
+  await restrict(target);
 }
 
 /** Synchronous twin, for install paths that are sync end to end. */
 export function writeOwnerOnlyFileSync(path: string, content: string): void {
-  restrictSync(path);
-  writeFileSync(path, content, { encoding: "utf-8", mode: OWNER_ONLY_MODE });
-  restrictSync(path);
+  const target = existsSync(path) ? realpathSync(path) : path;
+  restrictSync(target);
+  const tmp = tempSibling(target);
+  try {
+    writeFileSync(tmp, content, { encoding: "utf-8", mode: OWNER_ONLY_MODE, flag: "wx" });
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  restrictSync(target);
+}
+
+/** Same directory as the target, so the rename stays on one filesystem and is atomic. */
+function tempSibling(target: string): string {
+  return `${target}.codesift-tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
 }
