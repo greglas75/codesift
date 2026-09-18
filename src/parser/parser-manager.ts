@@ -37,13 +37,19 @@ const EXTENSION_MAP: Record<string, string> = {
   ".toml": "config",
   ".ini": "config",
   ".properties": "config",
+  // Kotlin is FULLY parsed: tree-sitter-kotlin.wasm ships in src/parser/languages/
+  // and extractors/kotlin.ts is a real extractor (classes incl. data/sealed/enum,
+  // objects + companions, properties, extension + suspend functions, Kotest DSL,
+  // KMP expect/actual, annotations). It sat under the "unparsed" heading below for
+  // long enough that agents read the heading and skipped CodeSift on Kotlin repos.
+  // `.gradle.kts` is routed to the gradle-kts extractor by detectLanguage, not here.
+  ".kt": "kotlin",       // Kotlin
+  ".kts": "kotlin",      // Kotlin script
   // --- Unparsed source languages ---
   // These extensions are indexed (file appears in get_file_tree, search_text,
   // scan_secrets) but no symbol extraction happens — tree-sitter grammars
   // are not shipped yet. Add a real extractor in src/parser/extractors/
   // and a .wasm grammar in src/parser/languages/ to enable symbol support.
-  ".kt": "kotlin",       // Kotlin
-  ".kts": "kotlin",      // Kotlin script
   ".swift": "text_stub", // Swift
   ".dart": "text_stub",  // Dart/Flutter
   ".scala": "text_stub", // Scala

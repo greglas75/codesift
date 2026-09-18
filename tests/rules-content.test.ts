@@ -9,7 +9,10 @@ describe("rules/ directory content", () => {
     const content = readFileSync(join(rulesDir, "codesift.md"), "utf-8");
     expect(content).toMatch(/^<!-- codesift-rules v/);
     expect(content.length).toBeGreaterThan(500);
-    expect(content.length).toBeLessThan(18000);
+    // 19000 (2026-09-18, from 18000 with 464 chars of headroom left): the language-coverage and
+    // stale-index sections. This file is loaded into every session in every project, so the cap is
+    // deliberate and rises by the size of what was added, not to a round number that buys silence.
+    expect(content.length).toBeLessThan(19000);
   });
 
   it("contains all required sections", () => {

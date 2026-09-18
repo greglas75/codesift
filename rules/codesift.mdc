@@ -217,6 +217,25 @@ The server appends hint codes to responses to guide tool usage. Act on them imme
 | `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context before compaction |
 | `H19` | Answer comes from a DIFFERENT git working tree than your CWD | Results describe other files — `index_folder(path=<your worktree>)` |
 
+## Language coverage — verify with `index_status`, never assume
+
+- **Full symbols**: TS/TSX, JS, Python, Go, Rust, **Kotlin** (`.kt`/`.kts`/`.gradle.kts`), PHP.
+  Kotlin is NOT a stub — it also has ~10 dedicated tools (Compose, Room, Hilt, Flow, KMP, Kotest).
+  Generic extractor: Java, Ruby, CSS. Custom/regex: Astro, Prisma, Markdown, SQL.
+- **`text_stub` = no symbols**: swift, dart, scala, clojure, elixir, lua, zig, nim, `.gradle`, sbt,
+  html, config. Those files ARE indexed — `search_text`, `get_file_tree`, `scan_secrets` work on
+  them; only `search_symbols` and the graph tools do not.
+
+## A stale index means reindex — never "skip CodeSift"
+
+`commit.matches=false` / `files_changed=N` from `index_status` is an instruction to run
+`index_folder(path=<root>)` ONCE, not evidence that the server is unusable. Falling back to
+`grep`/`find` pays more on every later question and gives up the call graph, references and
+complexity entirely. Same answer in a linked worktree: index it, do not fall back.
+
+`analyze_complexity` is regex over symbol source in EVERY language — a ranking signal, not a
+quality gate, and not a per-language caveat.
+
 ## ALWAYS
 
 - Use `semantic_search` or `codebase_retrieval(type:"semantic")` for conceptual questions

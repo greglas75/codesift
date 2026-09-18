@@ -7,11 +7,16 @@ describe("CODESIFT_INSTRUCTIONS", () => {
     expect(CODESIFT_INSTRUCTIONS.length).toBeGreaterThan(100);
   });
 
-  it("is under 6000 chars (~1500 tokens)", () => {
+  it("is under 6800 chars (~1700 tokens)", () => {
     // Budget grew to 6000 as more framework aliases were added (React,
     // Astro, Next.js, Hono Phase 2 tool shortcuts). Still well within
     // the MCP instructions envelope.
-    expect(CODESIFT_INSTRUCTIONS.length).toBeLessThan(6000);
+    //
+    // 6800 (2026-09-18): the language-coverage and stale-index lines. They cost ~140 tokens in
+    // every session, and they are here rather than only in rules/ because the two mistakes they
+    // prevent — "Kotlin is only a stub" and "the index is old, so skip CodeSift" — end with an
+    // agent abandoning the server for grep for a whole session. That is the larger bill.
+    expect(CODESIFT_INSTRUCTIONS.length).toBeLessThan(6800);
   });
 
   it("contains tool discovery flow", () => {

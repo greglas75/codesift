@@ -34,6 +34,14 @@ ALWAYS: repo auto-resolves, skip list_repos. file_pattern when scoped. get_symbo
   for 2+. Batch 3+ into codebase_retrieval. token_budget to cap. index_file after edits.
   trace_route for endpoints. codebase_retrieval(type:semantic) for conceptual queries.
 
+LANGUAGES: full symbols incl. KOTLIN (.kt/.kts/.gradle.kts) + TS/TSX/JS/Python/Go/Rust/PHP;
+  generic for Java/Ruby/CSS. text_stub = NO symbols, but search_text/get_file_tree/scan_secrets
+  still work: swift, dart, scala, clojure, elixir, lua, zig, nim, .gradle, sbt, html, config.
+  Verify with index_status, never assume. analyze_complexity is regex in EVERY language.
+
+STALE INDEX → index_folder(path=<root>) ONCE. commit.matches=false or files_changed=N is an
+  instruction to reindex, NEVER a reason to skip CodeSift and fall back to grep/find.
+
 NEVER: index_folder if already indexed — EXCEPT in a linked git worktree, where the
   repo reported as indexed is the PARENT checkout, not your tree: index_folder(path=<cwd>)
   once, and treat H19 or a file count that does not match your tree as the signal.
