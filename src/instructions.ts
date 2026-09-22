@@ -119,6 +119,40 @@ bytes returned, for the same information.
 plan_turn(query="<your task>") ranks tools, symbols and files for a task and reveals whatever else
 is needed; it is the entry point for anything not listed above.`;
 
+/**
+ * The DEFAULT `instructions` field — must fit the host's cap.
+ *
+ * Claude Code 2.1.280 truncates MCP server instructions at 2,048 characters
+ * (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`). CODESIFT_INSTRUCTIONS is ~6.5K, so every session got
+ * its first third — the catalog preamble — and lost ALWAYS/NEVER, the stale-index rule and the hint
+ * legend: exactly the lines that stop an agent from abandoning the server for grep. Shipping a field
+ * the host cuts is worse than shipping a short one, because nobody chose what survives the cut.
+ *
+ * This one keeps the rules that change a decision and points at `initial_instructions` for the full
+ * manual, which is a tool result and therefore not subject to the cap.
+ * CODESIFT_FULL_INSTRUCTIONS=1 restores the long field for a host known not to truncate it.
+ */
+export const CODESIFT_INSTRUCTIONS_SERVER = `CodeSift — code intelligence over an indexed repo (symbols, call graph, BM25+semantic search, framework analyzers).
+
+PREFER these over Grep/Glob/Bash(grep|find|rg) and over reading whole files:
+  search_text(query, file_pattern=) · search_symbols(query, kind=, include_source=true)
+  get_file_outline(path) · get_file_tree(name_pattern=) · find_references · trace_call_chain
+  impact_analysis(since=) for blast radius · codebase_retrieval(queries=[…], token_budget=) to batch 3+
+
+ONE call beats a sequence: find_and_show(query="<name>", include_refs=true) returns definition + usages.
+plan_turn(query="<task>") ranks tools/symbols/files and reveals hidden tools — the entry point for anything not listed.
+initial_instructions() returns the full manual (tool mapping, hint codes H1–H19, framework tools).
+
+ALWAYS: repo resolves from CWD — never call list_repos. Pass file_pattern when scope is known. index_file after edits.
+STALE INDEX (commit.matches=false, files_changed=N) → index_folder(path=<root>) once. Never a reason to fall back to grep.
+WORKTREE: in a linked git worktree the "indexed" repo is the PARENT checkout — index_folder(path=<cwd>) once. H19 in a response means the same.
+Hint codes (H1…) in responses are instructions: act on them.`;
+
+/** Hard cap the default field must stay under (Claude Code's default MCP instructions cap). */
+export const HOST_INSTRUCTIONS_CHAR_CAP = 2048;
+
 export function resolveInstructions(): string {
-  return process.env["CODESIFT_BRIEF_INSTRUCTIONS"] === "1" ? CODESIFT_INSTRUCTIONS_BRIEF : CODESIFT_INSTRUCTIONS;
+  if (process.env["CODESIFT_BRIEF_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS_BRIEF;
+  if (process.env["CODESIFT_FULL_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS;
+  return CODESIFT_INSTRUCTIONS_SERVER;
 }

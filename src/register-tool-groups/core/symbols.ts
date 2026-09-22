@@ -1,9 +1,11 @@
 import { z, zBool, zNum, lazySchema, OutputSchemas, checkTextStubHint, type ToolDefinitionEntry } from "../shared.js";
-import { getSymbol, getSymbols, findAndShow, getContextBundle, formatRefsCompact, formatSymbolCompact, formatSymbolsCompact, formatBundleCompact, findReferences, findReferencesBatch, traceCallChain, impactAnalysis, traceRoute, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, dispatchFormatter, type Direction } from "../deps.js";
+import { getSymbol, getSymbols, findAndShow, getContextBundle, formatRefsCompact, formatSymbolCompact, formatBundleCompact, findReferences, findReferencesBatch, traceCallChain, impactAnalysis, traceRoute, goToDefinition, getTypeInfo, renameSymbol, getCallHierarchy, dispatchFormatter, type Direction } from "../deps.js";
 import { zJsonArray } from "./schema.js";
 import type { SymbolIdAmbiguity } from "../../tools/symbol-tools.js";
 // Direct import, not a lazyExport: a pure predicate with no heavy dependencies of its own.
 import { isCommentOnlyReference } from "../../tools/symbol-reference-tools.js";
+import { elideShownSource } from "../../server-helpers/shown-source.js";
+import type { CodeSymbol } from "../../types.js";
 
 // Token diet (2026-07-10 tool-runtime-opt plan, Task 4): find_references' default
 // result cap. Telemetry showed find_references as the #2 token sink (605 calls /
@@ -40,6 +42,20 @@ function formatIdAmbiguity(ambiguity: SymbolIdAmbiguity): string {
  * silently DROPS the last reference (and reports a nonsense `+${len+1} more`),
  * and a fractional cap prints `+7.5 more`. Clamp to a whole number ≥ 0.
  */
+/**
+ * Render a symbol, replacing a body already shown in this conversation with a one-line pointer.
+ * See server-helpers/shown-source.ts for when that is (and is not) done.
+ */
+async function renderSymbol(sym: CodeSymbol, force?: boolean): Promise<string> {
+  const { symbol, note } = elideShownSource(sym, force ? { force } : undefined);
+  const text = await formatSymbolCompact(symbol);
+  return note ? `${text}\n${note}` : text;
+}
+
+const FULL_SOURCE_DESCRIPTION =
+  "Resend source even if this exact body was already returned earlier in the conversation " +
+  "(default false: a repeat comes back as a one-line 'unchanged' pointer)";
+
 function normalizeMaxRefs(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_MAX_REFS;
   return Math.max(0, Math.floor(raw));
@@ -61,6 +77,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         "declaration line). A bare symbol name is also accepted when it is unique in the repo.",
       ),
       include_related: zBool().describe("Include children/related symbols (default: true)"),
+      full_source: zBool().describe(FULL_SOURCE_DESCRIPTION),
     })),
     handler: async (args) => {
       const opts: { include_related?: boolean } = {};
@@ -90,7 +107,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         const hint = await checkTextStubHint(args.repo as string, "get_symbol", true);
         return hint ?? `Symbol "${symbolId}" not found. Use search_symbols(query=...) to discover available IDs.`;
       }
-      let text = resolvedNote + await formatSymbolCompact(result.symbol);
+      let text = resolvedNote + await renderSymbol(result.symbol, args.full_source as boolean | undefined);
       if (result.related && result.related.length > 0) {
         text += "\n\n--- children ---\n" + result.related.map((s) => `${s.kind} ${s.name}${s.signature ? s.signature : ""} [${s.file}:${s.start_line}]`).join("\n");
       }
@@ -112,6 +129,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         "results rather than constructing them. Bare symbol names are accepted when unique. " +
         "Can be passed as a JSON string.",
       ),
+      full_source: zBool().describe(FULL_SOURCE_DESCRIPTION),
     })),
     handler: async (args) => {
       const ids = args.symbol_ids as string[];
@@ -139,7 +157,8 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
           syms = [...syms, ...await getSymbols(args.repo as string, retry)];
         }
       }
-      const output = await formatSymbolsCompact(syms);
+      const force = args.full_source as boolean | undefined;
+      const output = (await Promise.all(syms.map((sym) => renderSymbol(sym, force)))).join("\n\n");
       // Surface fuzzy suggestions for missing IDs (telemetry: 26% zero rate).
       let suggestions = "";
       if (syms.length < ids.length) {
@@ -176,7 +195,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     handler: async (args) => {
       const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
       if (!result) return null;
-      let text = formatIdAmbiguity(result.id_ambiguity) + (await formatSymbolCompact(result.symbol));
+      let text = formatIdAmbiguity(result.id_ambiguity) + (await renderSymbol(result.symbol));
       if (result.references) {
         text += `\n\n--- references ---\n${await formatRefsCompact(result.references)}`;
       }
@@ -195,7 +214,35 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     handler: async (args) => {
       const bundle = await getContextBundle(args.repo as string, args.symbol_name as string);
       if (!bundle) return null;
-      return formatIdAmbiguity(bundle.id_ambiguity) + (await formatBundleCompact(bundle));
+      const { symbol, note } = elideShownSource(bundle.symbol as CodeSymbol);
+      let text = await formatBundleCompact({ ...bundle, symbol });
+      // The symbol header is the bundle's first line; the pointer belongs directly under it.
+      if (note) text = text.replace(/^[^\n]*/, (header) => `${header}\n${note}`);
+      return formatIdAmbiguity(bundle.id_ambiguity) + text;
+    },
+  } },
+  { order: 1557, definition: {
+    name: "explore",
+    category: "search",
+    searchHint: "explore understand how works where defined callers callees one call overview symbol source",
+    description:
+      "One call for 'where is X and how does it connect': ranks symbols for the query, returns the top " +
+      "few with full source plus their direct callers/callees, and lists the other matches. Replaces " +
+      "search_symbols → get_symbol → find_references chains. Output is capped by token_budget (default 6000).",
+    schema: lazySchema(() => ({
+      repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
+      query: z.string().describe("Symbol name, identifier fragment or short description of what you are looking for"),
+      top: zNum().describe("How many top matches get full source + call graph (default 3, max 8)"),
+      token_budget: zNum().describe("Approximate output ceiling in tokens (default 6000)"),
+      file_pattern: z.string().optional().describe("Glob to restrict matches, e.g. 'src/**/*.ts'"),
+    })),
+    handler: async (args) => {
+      const { explore } = await import("../../tools/explore-tools.js");
+      return explore(args.repo as string, args.query as string, {
+        top: args.top as number | undefined,
+        token_budget: args.token_budget as number | undefined,
+        file_pattern: args.file_pattern as string | undefined,
+      });
     },
   } },
   // --- References & call graph ---

@@ -33,9 +33,17 @@ export const ALWAYS_VISIBLE_TOOL_NAMES = [
  * changing the default surface moves adoption sharply, so the default is not something to tune from
  * a benchmark.
  */
+/**
+ * The single-tool surface: `explore` for "where is X and how does it connect", `search_text` for
+ * literal strings the symbol index cannot answer, `index_file` so edits stay visible. codegraph v1.6
+ * ships one tool by default; this is that arm, selectable for an A/B against the core surface
+ * (CODESIFT_TOOL_SURFACE=single). An explicit CODESIFT_VISIBLE_TOOLS still wins.
+ */
+export const SINGLE_TOOL_SURFACE: ReadonlySet<string> = new Set(["explore", "search_text", "index_file"]);
+
 export function resolveVisibleToolNames(): ReadonlySet<string> {
   const raw = process.env["CODESIFT_VISIBLE_TOOLS"];
-  if (!raw) return CORE_TOOL_NAMES;
+  if (!raw) return process.env["CODESIFT_TOOL_SURFACE"] === "single" ? SINGLE_TOOL_SURFACE : CORE_TOOL_NAMES;
   const names = raw
     .split(",")
     .map((n) => n.trim())

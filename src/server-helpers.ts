@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { markToolActivity } from "./tools/index-tools/state.js";
 import { resolveToolRepoArgs } from "./server-helpers/repo-resolution.js";
 import { buildResponseHint, resetHintState, trackSequentialCalls } from "./server-helpers/response-hints.js";
+import { SHOWN_SOURCE_POINTER_MARK } from "./server-helpers/shown-source.js";
 export { loadRegistrySync, isAncestorOrEqual, resolveRepoFromCwd, canonicalizeRepoName, _resetRegistryCacheForTests } from "./server-helpers/repo-resolution.js";
 export { buildResponseHint, trackSequentialCalls } from "./server-helpers/response-hints.js";
 /** ~3.5 chars/token for compact JSON + text formatters. Matches retrieval-constants.ts (3). */
@@ -130,6 +131,8 @@ function getCached(key: string): string | null {
 }
 
 function setCache(key: string, text: string): void {
+  // A "shown earlier" pointer is true only at the moment it is issued (see shown-source.ts).
+  if (text.includes(SHOWN_SOURCE_POINTER_MARK)) return;
   if (responseCache.size >= CACHE_MAX_SIZE) {
     const oldest = responseCache.keys().next().value;
     if (oldest !== undefined) responseCache.delete(oldest);
@@ -179,6 +182,39 @@ function estimateSavings(toolName: string, resultTokens: number): { tokens: numb
   return { tokens: saved, cost: saved * OPUS_COST_PER_TOKEN };
 }
 
+/**
+ * The response ceiling, in tokens. CODESIFT_MAX_RESPONSE_TOKENS lowers (or raises) it for hosts with
+ * a smaller tool-result budget; unparseable or non-positive values keep the default.
+ */
+function resolveMaxResponseTokens(): number {
+  const raw = Number(process.env["CODESIFT_MAX_RESPONSE_TOKENS"]);
+  return Number.isFinite(raw) && raw >= 500 ? Math.floor(raw) : MAX_RESPONSE_TOKENS;
+}
+
+/**
+ * The longest prefix of `text` within `maxChars` that ends on a record boundary — a blank line
+ * (between blocks: a symbol, a file group) if one exists in the last quarter of the budget,
+ * otherwise a line end. A cut mid-line hands the agent half a path or half a signature, which reads
+ * as data rather than as a truncation.
+ */
+export function cutAtRecordBoundary(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const window = text.slice(0, maxChars);
+  const floor = Math.floor(maxChars * 0.75);
+  const block = window.lastIndexOf("\n\n");
+  if (block >= floor) return window.slice(0, block);
+  const line = window.lastIndexOf("\n");
+  if (line > 0) return window.slice(0, line);
+  return window;
+}
+
+function countLines(text: string): number {
+  if (text.length === 0) return 0;
+  let n = 1;
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
+  return n;
+}
+
 /** Persist oversized output to a temp file, return the file path. */
 function persistLargeOutput(text: string, toolName: string): string {
   const dir = join(tmpdir(), "codesift-output");
@@ -214,15 +250,22 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
     }
   }
 
-  // Hard cap: truncate oversized responses
-  const maxChars = MAX_RESPONSE_TOKENS * CHARS_PER_TOKEN;
+  // Hard cap: truncate oversized responses — at a record boundary, never losing the remainder.
+  const maxTokens = resolveMaxResponseTokens();
+  const maxChars = Math.floor(maxTokens * CHARS_PER_TOKEN);
   if (text.length > maxChars) {
     const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
-    const fullSizeInfo = persistedPath
-      ? `\n📄 Full output (${estimatedTokens.toLocaleString()} tokens) saved to: ${persistedPath}`
-      : "";
-    text = text.slice(0, maxChars) +
-      `\n\n⚠️ Response truncated: ${estimatedTokens.toLocaleString()} tokens exceeded ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit. Use file_pattern to narrow scope, or group_by_file=true for compact output.${fullSizeInfo}`;
+    // Everything cut must stay reachable. Persisting only above PERSIST_THRESHOLD_CHARS left a band
+    // (cap..200K chars) where the tail was simply gone and the notice could not say where it went.
+    persistedPath ??= persistLargeOutput(text, toolName);
+    const kept = cutAtRecordBoundary(text, maxChars);
+    const keptLines = countLines(kept);
+    const totalLines = countLines(text);
+    text = kept +
+      `\n\n⚠️ Response truncated: showing ${keptLines.toLocaleString()} of ${totalLines.toLocaleString()} lines ` +
+      `(~${estimatedTokens.toLocaleString()} tokens exceeded the ${maxTokens.toLocaleString()} token limit). ` +
+      `Narrow with file_pattern / token_budget, or group_by_file=true for compact output.` +
+      `\n📄 Full output saved to: ${persistedPath} — read line ${keptLines + 1} onward for the rest.`;
   }
 
   // Token savings estimate
