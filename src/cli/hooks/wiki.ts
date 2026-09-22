@@ -1,7 +1,9 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix as pathPosix, relative } from "node:path";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
 import { getCurrentGitCommit } from "../../utils/git-head.js";
+import { machineId, resolveHostTag } from "../../storage/usage-tracker.js";
+import { getCodesiftVersion } from "../../storage/telemetry/env-profile.js";
 
 export const WIKI_MANIFEST_REL = join(".codesift", "wiki", "wiki-manifest.json");
 const WIKI_SUMMARY_DEFAULT_MAX_CHARS = 2500;
@@ -64,6 +66,19 @@ export function findRepoRoot(filePath: string): string | null {
   return findRepoRootFromDir(dirname(filePath));
 }
 
+/**
+ * Append a hook-produced entry to the same `usage.jsonl` the MCP server writes, so wiki adoption is
+ * measurable next to tool calls.
+ *
+ * Identity comes from `resolveHostTag()` / `machineId()` and NOT from a local
+ * `CODESIFT_HOST_TAG ?? hostname()` — which is what this line used to be, and it made every hook
+ * entry disagree with every server entry from the same machine. A hook is spawned by the client, so
+ * it inherits no launchd environment: with the env var absent the old code fell straight through to
+ * `os.hostname()`, which on macOS follows DHCP. Measured 2026-09-16: 10 `wiki_overview_injected`
+ * rows tagged `Mac` against 3,186 server rows tagged `greg-m5` on ONE machine, with
+ * `<dataDir>/host-id` already holding `greg-m5` — the persisted id exists precisely so an env-less
+ * process can read it, and this writer was the one place that never did.
+ */
 export function logWikiEvent(tool: string, repo: string, args: Record<string, unknown>, resultTokens = 0, sessionId?: string | null): void {
   try {
     if (process.env.CODESIFT_WIKI_TELEMETRY === "0") return;
@@ -77,7 +92,9 @@ export function logWikiEvent(tool: string, repo: string, args: Record<string, un
       result_tokens: resultTokens,
       result_chunks: 0,
       session_id: sessionId ?? process.env["CLAUDE_SESSION_ID"] ?? "hook",
-      host: process.env["CODESIFT_HOST_TAG"] ?? hostname(),
+      host: resolveHostTag(),
+      machine: machineId(),
+      codesift_ver: getCodesiftVersion(),
     };
     mkdirSync(dataDir, { recursive: true });
     appendFileSync(join(dataDir, "usage.jsonl"), JSON.stringify(entry) + "\n");

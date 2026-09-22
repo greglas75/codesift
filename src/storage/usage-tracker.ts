@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
+import { getCodesiftVersion } from "./telemetry/env-profile.js";
 
 // ---------------------------------------------------------------------------
 // Session ID — unique per process lifetime
@@ -140,6 +141,8 @@ const HOST = resolveHostTag();
  * the right MACHINE, so its entries remain attributable.
  */
 const MACHINE = machineId();
+/** Read once from package.json (memoised in the helper); stamped on every entry. */
+const VERSION = getCodesiftVersion();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -207,6 +210,17 @@ export interface UsageEntry {
    * Lets stats split local vs remote once logs are merged. Absent in
    * pre-multi-host entries — readers treat those as the local host. */
   host?: string;
+  /**
+   * Version of codesift that produced the entry, e.g. "0.17.0".
+   *
+   * The COLLECTOR's per-tool rows have always carried this (via the env profile), and the standing
+   * rule for reading them is "slice by version AND day, or you chase closed bugs". The local log
+   * could not be sliced that way at all: measured 2026-09-16, 3,196 entries over 7 days, every one
+   * of them with no version. So the one corpus an owner reads directly — while debugging their own
+   * machine, where the fix is a `git log` away — was the one that could not tell a live defect from
+   * one fixed three releases ago. Absent in entries written before 0.17.1.
+   */
+  codesift_ver?: string;
   /** Estimated tokens actually sent after the progressive-shortening
    * cascade + response hints. Present only when it differs from
    * result_tokens — so cascade effectiveness is measurable. */
@@ -555,6 +569,7 @@ export function trackToolCall(
     session_id: SESSION_ID,
     host: HOST,
     machine: MACHINE,
+    codesift_ver: VERSION,
     ...(sentTokens !== undefined && sentTokens !== resultTokens ? { result_tokens_sent: sentTokens } : {}),
     ...(extra?.error ? { error: true, error_class: classifyError(resultText) } : {}),
     ...(extra?.cacheHit ? { cache_hit: true } : {}),

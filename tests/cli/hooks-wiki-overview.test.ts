@@ -70,8 +70,10 @@ describe("handleSessionStart — project overview injection", () => {
   let stdoutOutput: string;
   let tmpDir: string;
   let dataDir: string;
+  let savedHostTag: string | undefined;
 
   beforeEach(() => {
+    savedHostTag = process.env.CODESIFT_HOST_TAG;
     stdoutOutput = "";
     tmpDir = mkdtempSync(join(tmpdir(), "hook-overview-"));
     // Isolate telemetry writes so logWikiEvent never touches the real ~/.codesift.
@@ -92,6 +94,8 @@ describe("handleSessionStart — project overview injection", () => {
     try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* */ }
     delete process.env.CODESIFT_DATA_DIR;
     delete process.env.CODESIFT_WIKI_OVERVIEW;
+    if (savedHostTag === undefined) delete process.env.CODESIFT_HOST_TAG;
+    else process.env.CODESIFT_HOST_TAG = savedHostTag;
   });
 
   function usageEvents(): Array<Record<string, unknown>> {
@@ -146,6 +150,23 @@ describe("handleSessionStart — project overview injection", () => {
     await handleSessionStart();
     const ev = usageEvents().find((e) => e.tool === "wiki_overview_injected");
     expect(ev!.session_id).toBe("hook");
+  });
+
+  it("stamps the PERSISTED host id, not the volatile hostname (regression: hook rows tagged 'Mac')", async () => {
+    // A hook is spawned by the client, so it inherits no launchd environment — the env var this
+    // writer used to read is exactly the one that is missing here. That is why it fell through to
+    // os.hostname(), which on macOS follows DHCP, and why 10 hook rows disagreed with 3,186 server
+    // rows from the same machine. <dataDir>/host-id exists for this case.
+    delete process.env.CODESIFT_HOST_TAG;
+    writeFileSync(join(dataDir, "host-id"), "greg-m5", "utf-8");
+    writeManifest(tmpDir, V2_MANIFEST);
+    await handleSessionStart();
+    const ev = usageEvents().find((e) => e.tool === "wiki_overview_injected");
+    expect(ev!.host).toBe("greg-m5");
+    // Attributable and sliceable the same way a server-written row is.
+    expect(typeof ev!.machine).toBe("string");
+    expect((ev!.machine as string).length).toBeGreaterThan(0);
+    expect(ev!.codesift_ver).toMatch(/^\d+\.\d+\.\d+/);
   });
 
   it("logs NO telemetry when no overview is injected (v1 manifest)", async () => {

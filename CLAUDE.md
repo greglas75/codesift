@@ -550,6 +550,22 @@ tool: under the very same repo string (`local/Rewards-API`), `get_file_outline` 
 while the three BM25-backed tools were 0/84 — code-index tools resolved the name, the BM25 getter
 did not. **A defect is live only if it appears on the current version within the last ~14 days.**
 
+**The LOCAL log is sliceable by version only from 0.17.1 on.** Every entry now carries
+`codesift_ver` (`trackToolCall`, and the hook writer in `src/cli/hooks/wiki.ts`). Before that it
+carried none at all — measured 2026-09-16: 3,196 entries over 7 days, zero with a version — so the
+rule above could be applied to the collector's rows and not to the corpus an owner actually reads
+while debugging their own machine. Entries written earlier keep the gap; treat a missing
+`codesift_ver` as "≤ 0.17.0", not as "current".
+
+**Hook-written rows agreed with nothing until the same fix.** `logWikiEvent` built `host` from
+`CODESIFT_HOST_TAG ?? hostname()` — its own copy of the rule, and the one writer that never read
+`<dataDir>/host-id`. A hook is spawned by the client and inherits no launchd environment, so the env
+var is always absent there and it fell through to `os.hostname()`, which on macOS follows DHCP: 10
+`wiki_overview_injected` rows tagged `Mac` against 3,186 server rows tagged `greg-m5`, on one
+machine whose `host-id` already said `greg-m5`. It now calls `resolveHostTag()` / `machineId()` and
+stamps `machine` too. The persisted id exists exactly for the env-less process; a second copy of the
+host logic is how one stops reading it.
+
 Three things the log cannot tell you, all of which cost a full investigation:
 
 - **`error: true` is a boolean.** `usage-tracker.ts:419` says "resultText is the error message", and

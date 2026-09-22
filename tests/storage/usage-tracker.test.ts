@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildArgsSummary, extractResultChunks, classifyError } from "../../src/storage/usage-tracker.js";
 
 describe("buildArgsSummary", () => {
@@ -174,5 +177,39 @@ describe("index_file telemetry names the file, not the session's directory", () 
 
   it("does not invent a path when none was passed", () => {
     expect("path" in buildArgsSummary("index_file", {})).toBe(false);
+  });
+});
+
+// The local log carried no version at all — 3,196 entries over 7 days, every one of them
+// unsliceable by the dimension the standing rule for reading this telemetry requires ("slice by
+// version AND day, or you chase closed bugs"). Written entries must name the build that produced
+// them; the hook writer in src/cli/hooks/wiki.ts is covered by its own test.
+describe("written entries carry the producing version", () => {
+  it("stamps codesift_ver, host and machine on a tracked tool call", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "usage-ver-"));
+    const prevDataDir = process.env.CODESIFT_DATA_DIR;
+    process.env.CODESIFT_DATA_DIR = dir;
+    try {
+      // Fresh module instance so HOST/MACHINE/VERSION are captured against this data dir.
+      vi.resetModules();
+      const mod = await import("../../src/storage/usage-tracker.js");
+      mod.trackToolCall("search_text", { query: "x" }, "result", null, 12);
+      // trackToolCall is fire-and-forget; let the append settle.
+      await vi.waitFor(() => {
+        const raw = readFileSync(join(dir, "usage.jsonl"), "utf-8").trim();
+        expect(raw.length).toBeGreaterThan(0);
+      });
+      const entry = JSON.parse(
+        readFileSync(join(dir, "usage.jsonl"), "utf-8").trim().split("\n")[0]!,
+      ) as Record<string, unknown>;
+      expect(entry.tool).toBe("search_text");
+      expect(entry.codesift_ver).toMatch(/^\d+\.\d+\.\d+/);
+      expect(typeof entry.host).toBe("string");
+      expect(typeof entry.machine).toBe("string");
+    } finally {
+      if (prevDataDir === undefined) delete process.env.CODESIFT_DATA_DIR;
+      else process.env.CODESIFT_DATA_DIR = prevDataDir;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
