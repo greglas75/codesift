@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { UsageEntry } from "../storage/usage-tracker.js";
-import { getUsagePath } from "../storage/usage-tracker.js";
+import { getUsagePath, resolveHostTag } from "../storage/usage-tracker.js";
 
 export interface UsageFilters {
   since?: string;
@@ -478,7 +478,10 @@ export async function popeInsightsPushCandidates(options: {
     source: {
       sourceType: "codesift_analysis",
       sourcePath: getUsagePath(),
-      host: hostname(),
+      // resolveHostTag(), not os.hostname(): the same volatile name that split one Mac's stats
+      // four ways in usage.jsonl would split this machine's candidates on the insights server, and
+      // the receiver has no way to tell the four names apart. Reads the persisted <dataDir>/host-id.
+      host: resolveHostTag(),
       metadata: { zuvo_dir: zuvoDir(options.zuvo_dir) },
     },
     candidates: generated.candidates,

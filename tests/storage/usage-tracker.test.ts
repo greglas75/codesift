@@ -213,3 +213,31 @@ describe("written entries carry the producing version", () => {
     }
   });
 });
+
+// `empty_result_rate` derives from result_chunks === 0, so a shape the extractor does not know reads
+// as "the tool found nothing". Measured 2026-09-23 over 14 days: index_file 792 calls, index_folder
+// 570, describe_tools 144 — ALL of them logged 100% empty. index_* cannot be empty at all, and the
+// describe_tools rows carried a median of 1,760 result tokens. Same class as the find_references
+// batch miss already fixed above.
+describe("extractResultChunks — shapes that read as false empties", () => {
+  it("counts the tools described (describe_tools / discover_tools)", () => {
+    expect(extractResultChunks({ tools: [{ name: "find_dead_code" }, { name: "rename_symbol" }] })).toBe(2);
+  });
+
+  it("counts the files an index_folder walked", () => {
+    expect(extractResultChunks({ repo: "local/x", root: "/r", file_count: 1885, symbol_count: 31374 })).toBe(1885);
+  });
+
+  it("counts one indexed file as one item, not zero", () => {
+    expect(extractResultChunks({ repo: "local/x", file: "/r/src/a.ts", symbol_count: 12 })).toBe(1);
+  });
+
+  it("keeps counting a genuinely empty index_folder as 0 — the rate must stay usable", () => {
+    expect(extractResultChunks({ repo: "local/x", root: "/r", file_count: 0, symbol_count: 0 })).toBe(0);
+  });
+
+  it("does not disturb the search shapes it already handled", () => {
+    expect(extractResultChunks({ matches: [1, 2, 3] })).toBe(3);
+    expect(extractResultChunks({ symbols: [] })).toBe(0);
+  });
+});

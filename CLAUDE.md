@@ -17,6 +17,22 @@ TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
 | `H10` | 50+ tool calls this session | Call `get_session_snapshot` to preserve context |
 | `H19` | Answer comes from a DIFFERENT git working tree than your CWD | Results describe other files — `index_folder(path=<your worktree>)` |
 
+### H19 fires on a BARE name only, and once per repo per session (2026-09-23)
+
+The hint's premise is "you were handed a tree you did not ask for", and it used to fire whenever the
+resolved root differed from the CWD's tree — including when the caller had named the tree by its own
+suffixed registry name. Measured over 14 days: **2,721 firings, 2,678 of them (98.4%) on a
+`local/x@worktree` name**, none on a path, and `search_text` calls carrying H19 came back empty LESS
+often than calls without it (19.1% vs 23.8%) — the opposite of a wrong-tree answer. The advice was
+wrong too: `index_folder(path=<cwd>)` names the caller's tree, not the one it asked about.
+
+A `@` suffix now suppresses it (`callerNamedThisWorktree`), and the warning is emitted **once per
+repo per session** (`SessionState.h19EmittedFor`, capped at 200 names because the daemon outlives
+every session). One 26-hour session had collected **932 copies**, all after its own first
+`index_folder` — it was working across several trees of one repo on purpose. What still warns, and
+is the whole point: a **bare** name resolving to the main checkout while the CWD is a linked
+worktree, and an absolute path binding to a registered ancestor.
+
 ### Worktrees get their own registry name (2026-08-06)
 
 The registry is keyed by repo NAME, and all three name sources collapse a repo's worktrees onto one:
@@ -580,6 +596,13 @@ Three things the log cannot tell you, all of which cost a full investigation:
 
 What is left to diagnose with: `elapsed_ms` (a ~2–3 ms failure is a fast pre-flight throw; a slow
 one is a crash after the index loaded), the day/version slice, and reproducing the call.
+
+**`empty_result_rate` was also wrong for `index_file`, `index_folder` and `describe_tools` before
+2026-09-23** — 792 / 570 / 144 calls in a 14-day window, every one of them logged as empty. Same
+cause as the `find_references` miss below: `extractResultChunks` knew none of those shapes, and an
+unknown shape returns 0, which reads as *found nothing* rather than *nobody counted*. Indexing calls
+cannot be empty at all. `tools`, `file_count` and the single-file `{file, symbol_count}` shape are
+now counted; historical rows keep the artifact.
 
 **`empty_result_rate` before 2026-08-12 is wrong for `find_references`** — do not read historical
 rows for it. It derives from `result_chunks === 0`, and `extractResultChunks` matched

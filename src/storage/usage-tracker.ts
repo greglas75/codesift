@@ -430,6 +430,18 @@ export function extractResultChunks(data: unknown): number {
       return total;
     }
     if (Array.isArray(obj["repos"])) return obj["repos"].length;
+    // describe_tools / discover_tools / plan_turn answer under `tools`. Unhandled, they fell to
+    // `return 0` — 144 describe_tools calls in 14 days, ALL logged as empty while carrying a median
+    // of 1,760 result tokens. Same shape-miss as the find_references batch path above.
+    if (Array.isArray(obj["tools"])) return obj["tools"].length;
+
+    // Indexing results have no "result set", so the search-shaped keys above never match and every
+    // successful call logged 0 — 792 index_file and 570 index_folder calls in 14 days, a flat 100%
+    // "empty rate" for two tools that cannot be empty. Reading that as a miss rate is how a
+    // measurement artifact becomes a bug report. `file_count` is the item count for a folder;
+    // one file indexed is one item.
+    if (typeof obj["file_count"] === "number") return obj["file_count"];
+    if (typeof obj["file"] === "string" && typeof obj["symbol_count"] === "number") return 1;
 
     // single item results
     if (typeof obj["id"] === "string") return 1;

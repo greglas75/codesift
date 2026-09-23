@@ -3,6 +3,8 @@ import { currentCwd } from "./request-context.js";
 import { findWorkingTree, isAnswerFromWrongTree } from "../utils/worktree.js";
 import { getCallCount, getSessionState } from "../storage/session-state.js";
 const HIGH_CARDINALITY_THRESHOLD = 50;
+/** How many distinct repo names H19 remembers having warned about. See `worktreeMismatchNote`. */
+const H19_REPO_MEMORY_CAP = 200;
 const BATCHABLE_TOOLS = new Set(["search_text", "search_symbols", "find_references", "get_symbol"]);
 const SEQUENTIAL_HINT_THRESHOLD = 3;
 let lastToolName = "";
@@ -88,9 +90,40 @@ function isTestAntipatternQuery(query: string): boolean {
 
 
 /**
+ * True when the caller NAMED the tree it was answered from, rather than being handed it.
+ *
+ * `getRepoName` suffixes a LINKED worktree's registry name with `@<worktree>`, and a bare name
+ * never contains `@` — so the suffix is precisely the signal that the caller picked this tree on
+ * purpose. Resolution has already matched the string to that entry, so there is nothing to warn
+ * about: the answer describes the files that were asked for.
+ *
+ * This is what H19 was missing, and it dominated the hint. Measured on this machine over 14 days:
+ * 2,721 H19 firings, **2,678 of them (98.4%) on a repo named with the `@` suffix**, 0 on a path —
+ * and `search_text` calls carrying H19 came back EMPTY LESS often than calls without it (19.1% vs
+ * 23.8%), which is the opposite of what a wrong-tree answer looks like. The advice was wrong too:
+ * `index_folder(path=<cwd>)` addresses the caller's own tree, which is not the tree it asked about.
+ *
+ * The dangerous case is untouched, because it cannot carry a suffix: a BARE name resolving to the
+ * main checkout while the CWD is a linked worktree is exactly how an agent silently gets another
+ * checkout's files (ResearchShield: 4042 lines served for a file that was 1415 in the caller's own
+ * tree). An absolute path also keeps warning — it binds to any registered ancestor, which is the
+ * same hazard wearing different clothes.
+ */
+function callerNamedThisWorktree(repo: string, root: string): boolean {
+  if (!repo.includes("@")) return false;
+  return findWorkingTree(root)?.linked === true;
+}
+
+/**
  * Build the H19 note when the resolved repo is a different working tree than
  * the process CWD. Returns null in the ordinary case (same checkout), so this
  * costs nothing on the hot path beyond one stat walk.
+ *
+ * Emitted at most ONCE per repo per session. It used to ride every single call, which is how one
+ * 26-hour session collected 932 copies of it — all 932 after that session's first `index_folder`,
+ * because the session was deliberately working across several trees of one repo from one CWD. A
+ * banner that repeats 932 times has stopped being information and is teaching the agent to skip
+ * hints; the honest form is to say it once and then be quiet.
  *
  * Best-effort by design: any failure resolving git or registry state yields no
  * hint rather than a wrong one.
@@ -102,6 +135,15 @@ function worktreeMismatchNote(args: Record<string, unknown>): string | null {
     const cwd = currentCwd();
     const root = repoRootFor(repo);
     if (!root || !isAnswerFromWrongTree(cwd, root)) return null;
+    if (callerNamedThisWorktree(repo, root)) return null;
+
+    const state = getSessionState();
+    if (state.h19EmittedFor.has(repo)) return null;
+    // Bounded: this process outlives every session in the shared daemon, and an unbounded Set keyed
+    // by caller-supplied strings is a leak with a friendly face. At the cap the hint simply repeats
+    // again, which is the safe direction to fail.
+    if (state.h19EmittedFor.size < H19_REPO_MEMORY_CAP) state.h19EmittedFor.add(repo);
+
     const tree = findWorkingTree(cwd);
     const what = tree?.linked ? "a linked worktree" : "a different checkout";
     return `⚡H19 answering from "${repo}" (${root}) but your CWD is ${what} (${tree?.root ?? cwd}) `

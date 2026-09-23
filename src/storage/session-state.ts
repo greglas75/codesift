@@ -49,6 +49,13 @@ export interface SessionState {
   queries: QueryEntry[];
   negativeEvidence: NegativeEntry[];
   h10Emitted: boolean;
+  /**
+   * Repo names H19 has already warned about, so the hint is said once instead of on every call
+   * (one session collected 932 copies of it). Deliberately NOT part of the sidecar: if a restored
+   * session repeats the warning once, that is the harmless direction, and a Set has no JSON form
+   * worth inventing for it.
+   */
+  h19EmittedFor: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +72,7 @@ function createInitialState(): SessionState {
     queries: [],
     negativeEvidence: [],
     h10Emitted: false,
+    h19EmittedFor: new Set(),
   };
 }
 
@@ -461,6 +469,8 @@ export function deserializeState(raw: Record<string, unknown>): SessionState {
     queries: (raw["queries"] ?? []) as QueryEntry[],
     negativeEvidence: (raw["negativeEvidence"] ?? []) as NegativeEntry[],
     h10Emitted: Boolean(raw["h10Emitted"] ?? false),
+    // Not carried in the sidecar — see SessionState.h19EmittedFor.
+    h19EmittedFor: new Set(),
   };
 }
 
