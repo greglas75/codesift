@@ -7,11 +7,9 @@ import { markToolActivity } from "./tools/index-tools/state.js";
 import { resolveToolRepoArgs } from "./server-helpers/repo-resolution.js";
 import { buildResponseHint, resetHintState, trackSequentialCalls } from "./server-helpers/response-hints.js";
 import { SHOWN_SOURCE_POINTER_MARK } from "./server-helpers/shown-source.js";
+import { CHARS_PER_TOKEN, resolveMaxResponseTokens, responseBodyCharBudget } from "./server-helpers/response-budget.js";
 export { loadRegistrySync, isAncestorOrEqual, resolveRepoFromCwd, canonicalizeRepoName, _resetRegistryCacheForTests } from "./server-helpers/repo-resolution.js";
 export { buildResponseHint, trackSequentialCalls } from "./server-helpers/response-hints.js";
-/** ~3.5 chars/token for compact JSON + text formatters. Matches retrieval-constants.ts (3). */
-const CHARS_PER_TOKEN = 3.5;
-const MAX_RESPONSE_TOKENS = 30_000; // Hard cap — truncate any response above this
 const PERSIST_THRESHOLD_CHARS = 200_000; // ~50k tokens — persist full output to disk
 const COMPACT_THRESHOLD = 52_500;   // ~15K tokens at 3.5 chars/tok
 const COUNTS_THRESHOLD = 87_500;    // ~25K tokens
@@ -183,15 +181,6 @@ function estimateSavings(toolName: string, resultTokens: number): { tokens: numb
 }
 
 /**
- * The response ceiling, in tokens. CODESIFT_MAX_RESPONSE_TOKENS lowers (or raises) it for hosts with
- * a smaller tool-result budget; unparseable or non-positive values keep the default.
- */
-function resolveMaxResponseTokens(): number {
-  const raw = Number(process.env["CODESIFT_MAX_RESPONSE_TOKENS"]);
-  return Number.isFinite(raw) && raw >= 500 ? Math.floor(raw) : MAX_RESPONSE_TOKENS;
-}
-
-/**
  * The longest prefix of `text` within `maxChars` that ends on a record boundary — a blank line
  * (between blocks: a symbol, a file group) if one exists in the last quarter of the budget,
  * otherwise a line end. A cut mid-line hands the agent half a path or half a signature, which reads
@@ -252,7 +241,7 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
 
   // Hard cap: truncate oversized responses — at a record boundary, never losing the remainder.
   const maxTokens = resolveMaxResponseTokens();
-  const maxChars = Math.floor(maxTokens * CHARS_PER_TOKEN);
+  const maxChars = responseBodyCharBudget();
   if (text.length > maxChars) {
     const estimatedTokens = Math.round(text.length / CHARS_PER_TOKEN);
     // Everything cut must stay reachable. Persisting only above PERSIST_THRESHOLD_CHARS left a band
@@ -261,11 +250,15 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
     const kept = cutAtRecordBoundary(text, maxChars);
     const keptLines = countLines(kept);
     const totalLines = countLines(text);
+    // A line longer than the whole budget is hard-cut mid-line; the rest of THAT line is unread,
+    // so the pointer must name it, not the line after it.
+    const cutMidLine = text[kept.length] !== undefined && text[kept.length] !== "\n";
+    const resumeLine = cutMidLine ? keptLines : keptLines + 1;
     text = kept +
       `\n\n⚠️ Response truncated: showing ${keptLines.toLocaleString()} of ${totalLines.toLocaleString()} lines ` +
       `(~${estimatedTokens.toLocaleString()} tokens exceeded the ${maxTokens.toLocaleString()} token limit). ` +
       `Narrow with file_pattern / token_budget, or group_by_file=true for compact output.` +
-      `\n📄 Full output saved to: ${persistedPath} — read line ${keptLines + 1} onward for the rest.`;
+      `\n📄 Full output saved to: ${persistedPath} — read line ${resumeLine}${cutMidLine ? " (partially shown)" : ""} onward for the rest.`;
   }
 
   // Token savings estimate

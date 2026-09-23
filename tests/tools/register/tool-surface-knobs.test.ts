@@ -5,6 +5,7 @@ import {
   CODESIFT_INSTRUCTIONS,
   CODESIFT_INSTRUCTIONS_BRIEF,
   CODESIFT_INSTRUCTIONS_SERVER,
+  CODESIFT_INSTRUCTIONS_SINGLE,
   HOST_INSTRUCTIONS_CHAR_CAP,
   resolveInstructions,
 } from "../../../src/instructions.js";
@@ -124,6 +125,23 @@ describe("CODESIFT_TOOL_SURFACE=single", () => {
   // measure a smaller surface than intended.
   it("names only real tools", () => {
     for (const name of SINGLE_TOOL_SURFACE) expect(TOOL_DEFINITION_MAP.has(name)).toBe(true);
+  });
+
+  // The default field names a dozen tools this surface never registers.
+  it("sends instructions that name only the tools the surface has", () => {
+    process.env[SURFACE] = "single";
+    expect(resolveInstructions()).toBe(CODESIFT_INSTRUCTIONS_SINGLE);
+    expect(CODESIFT_INSTRUCTIONS_SINGLE.length).toBeLessThan(HOST_INSTRUCTIONS_CHAR_CAP);
+    for (const name of SINGLE_TOOL_SURFACE) expect(CODESIFT_INSTRUCTIONS_SINGLE).toContain(name);
+    for (const absent of ["search_symbols", "get_symbol(", "plan_turn", "find_and_show"]) {
+      expect(CODESIFT_INSTRUCTIONS_SINGLE).not.toContain(absent);
+    }
+  });
+
+  it("uses the default instructions when an explicit visible list overrides the surface", () => {
+    process.env[SURFACE] = "single";
+    process.env[VISIBLE] = "search_text";
+    expect(resolveInstructions()).toBe(CODESIFT_INSTRUCTIONS_SERVER);
   });
 
   // explore is reachable on demand but must not grow the default Claude Code list (3e1ec6c).

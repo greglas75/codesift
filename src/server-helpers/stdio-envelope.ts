@@ -40,12 +40,15 @@ export function envelopeClientName(message: unknown): string | undefined {
 /**
  * Wrap a transport so `observe` sees every inbound message before whoever owns the transport does,
  * and `onClosed` fires when the wire closes. `serveStdio` takes ownership of the transport's
- * callbacks, so observing has to happen one layer below it.
+ * callbacks, so observing has to happen one layer below it. `inner` must be a transport nobody else
+ * holds: its callbacks are replaced, not chained. `onStartFailed` exists because serveStdio
+ * swallows a rejected start — without it a dead transport is invisible.
  */
 export function observeInbound(
   inner: Transport,
   observe: (message: unknown) => void,
   onClosed: () => void,
+  hooks?: { onStartFailed?: (error: unknown) => void },
 ): Transport {
   const outer: Transport = {
     start: async () => {
@@ -59,10 +62,19 @@ export function observeInbound(
       };
       inner.onerror = (error) => outer.onerror?.(error);
       inner.onclose = () => {
-        outer.onclose?.();
-        onClosed();
+        // finally: a throwing owner handler must not cost us the shutdown path.
+        try {
+          outer.onclose?.();
+        } finally {
+          onClosed();
+        }
       };
-      await inner.start();
+      try {
+        await inner.start();
+      } catch (err) {
+        hooks?.onStartFailed?.(err);
+        throw err;
+      }
     },
     send: (message, options) => inner.send(message, options),
     close: () => inner.close(),

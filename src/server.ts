@@ -548,6 +548,109 @@ async function autoEnableFrameworkToolsFromPackageJson(cwd: string): Promise<voi
   }
 }
 
+/**
+ * Per-connection client handling for stdio: hook auto-install and the frozen-list front-load.
+ *
+ * `onClientIdentified` runs once, as soon as the client has named itself — in the `initialized`
+ * notification on a 2025-era connection, or on the first enveloped message of a 2026-07-28 one
+ * (which has no handshake; see stdio-envelope.ts). Either way it lands before the host's first
+ * tools/list is answered, which is the only window where enabling a tool still reaches a host
+ * that freezes its list.
+ */
+function createStdioClientHooks(): {
+  envPlatform: HookPlatform;
+  installHooks: (platform: HookPlatform, reason: string) => void;
+  onClientIdentified: (clientName: string) => void;
+} {
+  const envPlatform = detectPlatform();
+  let hooksInstalledFor: HookPlatform | null = null;
+  const installHooks = (platform: HookPlatform, reason: string): void => {
+    if (platform === "unknown" || hooksInstalledFor !== null) return;
+    hooksInstalledFor = platform;
+    setupHooksForPlatform(platform).catch((err: unknown) => {
+      console.error(`[codesift] hook auto-install failed (${reason}:${platform}):`, err);
+    });
+  };
+
+  let clientIdentified = false;
+  const onClientIdentified = (clientName: string): void => {
+    if (clientIdentified) return;
+    clientIdentified = true;
+    const clientPlatform = detectPlatformFromClientInfo(clientName);
+    const platform = envPlatform !== "unknown" ? envPlatform : clientPlatform;
+
+    // Front-load reveal-dependent tools for hosts that freeze their tool list
+    // at session start. See FROZEN_LIST_FALLBACK_TOOL_NAMES.
+    if (shouldFrontLoadHiddenTools(platform)) {
+      const enabled = frontLoadHiddenToolsForFrozenHost();
+      if (enabled.length > 0) {
+        console.error(
+          `[codesift] ${platform || "host"} does not refresh its tool list mid-session — ` +
+            `made ${enabled.length} reveal-dependent tools visible up front: ${enabled.join(", ")}`,
+        );
+      }
+    }
+
+    if (hooksInstalledFor !== null || envPlatform !== "unknown") return;
+    installHooks(clientPlatform === "unknown" ? "claude" : clientPlatform, clientName || "fallback");
+  };
+
+  return { envPlatform, installHooks, onClientIdentified };
+}
+
+/**
+ * Serve MCP over stdio through `serveStdio`, not `server.connect`: it owns the era decision. A bare
+ * connect() serves only the 2025-era handshake — a 2026-07-28 client's `server/discover` came back
+ * `Method not found`, so the client never received the server instructions either.
+ *
+ * The factory may run twice (a modern probe instance discarded in favour of a legacy one); the
+ * first call reuses the module-level server so the common path is unchanged, later calls build a
+ * fresh one. Front-loaded tools are remembered at process scope, so a fresh instance picks them up
+ * in registerTools.
+ */
+function startStdioTransport(startTs: number, onClientIdentified: (clientName: string) => void): void {
+  const wire = observeInbound(
+    new StdioServerTransport(),
+    (message) => {
+      const name = envelopeClientName(message);
+      if (name !== undefined) onClientIdentified(name);
+    },
+    () => {
+      console.error(`[codesift] transport closed at uptime=${Date.now() - startTs}ms`);
+      // The client disconnected — do NOT keep running as an orphan. Background
+      // timers (watcher/auto-index) would otherwise hold the event loop open and
+      // the process would linger under launchd forever. See shutdownOnParentGone.
+      shutdownOnParentGone("transport close");
+    },
+    {
+      // serveStdio swallows a failed transport start and returns no promise to await, so without
+      // this the process would log "started" and serve nothing. `await server.connect()` used to
+      // reach main()'s fatal-exit path; this restores that contract.
+      onStartFailed: (err) => {
+        console.error("Fatal error starting CodeSift MCP server:", err);
+        process.exit(1);
+      },
+    },
+  );
+
+  let usedModuleServer = false;
+  serveStdio(() => {
+    const instance = usedModuleServer ? createCodesiftServer() : server;
+    usedModuleServer = true;
+    instance.server.oninitialized = () => {
+      onClientIdentified(instance.server.getClientVersion()?.name ?? "");
+    };
+    return instance;
+  }, {
+    transport: wire,
+    // Diagnostic trace. Primary fix for "-32000: Connection closed" is event-loop yielding inside
+    // heavy tools; this leaves a stderr line if any residual transport fault occurs.
+    onerror: (err: Error) => {
+      console.error(`[codesift] transport error at uptime=${Date.now() - startTs}ms:`, err.message);
+    },
+  });
+}
+
 async function main(): Promise<void> {
   const startTs = Date.now();
 
@@ -575,82 +678,8 @@ async function main(): Promise<void> {
   startIdleCacheRelease();
   // Over stdio the process is one conversation, so "already shown" means shown to THIS agent.
   enableShownSourceLedger();
-  const onTransportClosed = (): void => {
-    console.error(`[codesift] transport closed at uptime=${Date.now() - startTs}ms`);
-    // The client disconnected — do NOT keep running as an orphan. Background
-    // timers (watcher/auto-index) would otherwise hold the event loop open and
-    // the process would linger under launchd forever. See shutdownOnParentGone.
-    shutdownOnParentGone("transport close");
-  };
-  const envPlatform = detectPlatform();
-  let hooksInstalledFor: HookPlatform | null = null;
-  const installHooks = (platform: HookPlatform, reason: string): void => {
-    if (platform === "unknown" || hooksInstalledFor !== null) return;
-    hooksInstalledFor = platform;
-    setupHooksForPlatform(platform).catch((err: unknown) => {
-      console.error(`[codesift] hook auto-install failed (${reason}:${platform}):`, err);
-    });
-  };
-
-  // Runs once per connection, as soon as the client has named itself: in the `initialized`
-  // notification on a 2025-era connection, or on the first enveloped message of a 2026-07-28 one
-  // (which has no handshake — see stdio-envelope.ts). Either way it lands before the host's first
-  // tools/list is answered, which is the only window where enabling a tool still reaches a host
-  // that freezes its list.
-  let clientIdentified = false;
-  const onClientIdentified = (clientName: string): void => {
-    if (clientIdentified) return;
-    clientIdentified = true;
-    const clientPlatform = detectPlatformFromClientInfo(clientName);
-    const platform = envPlatform !== "unknown" ? envPlatform : clientPlatform;
-
-    // Front-load reveal-dependent tools for hosts that freeze their tool list
-    // at session start. See FROZEN_LIST_FALLBACK_TOOL_NAMES.
-    if (shouldFrontLoadHiddenTools(platform)) {
-      const enabled = frontLoadHiddenToolsForFrozenHost();
-      if (enabled.length > 0) {
-        console.error(
-          `[codesift] ${platform || "host"} does not refresh its tool list mid-session — ` +
-            `made ${enabled.length} reveal-dependent tools visible up front: ${enabled.join(", ")}`,
-        );
-      }
-    }
-
-    if (hooksInstalledFor !== null || envPlatform !== "unknown") return;
-    installHooks(clientPlatform === "unknown" ? "claude" : clientPlatform, clientName || "fallback");
-  };
-
-  const wire = observeInbound(
-    new StdioServerTransport(),
-    (message) => {
-      const name = envelopeClientName(message);
-      if (name !== undefined) onClientIdentified(name);
-    },
-    onTransportClosed,
-  );
-
-  // serveStdio, not server.connect: it owns the era decision. A bare connect() serves only the
-  // 2025-era handshake — a 2026-07-28 client's `server/discover` came back `Method not found`, so
-  // the client never received the server instructions either. The factory may run twice (a modern
-  // probe instance discarded in favour of a legacy one); the first call reuses the module-level
-  // server so the common path is unchanged, later calls build a fresh one. Front-loaded tools are
-  // remembered at process scope, so a fresh instance picks them up in registerTools.
-  let usedModuleServer = false;
-  serveStdio(() => {
-    const instance = usedModuleServer ? createCodesiftServer() : server;
-    usedModuleServer = true;
-    instance.server.oninitialized = () => {
-      onClientIdentified(instance.server.getClientVersion()?.name ?? "");
-    };
-    return instance;
-  }, {
-    transport: wire,
-    // Diagnostic trace. Primary fix for "-32000: Connection closed" is event-loop yielding inside
-    // heavy tools; this leaves a stderr line if any residual transport fault occurs.
-    onerror: (err: Error) => {
-      console.error(`[codesift] transport error at uptime=${Date.now() - startTs}ms:`, err.message);
-    },
-  });
+  const client = createStdioClientHooks();
+  startStdioTransport(startTs, client.onClientIdentified);
   console.error("CodeSift MCP server started");
 
   // Telemetry: one-time consent notice (stderr) + background flush timer.
@@ -672,8 +701,8 @@ async function main(): Promise<void> {
   });
 
   // Auto-install hooks for the detected platform (idempotent)
-  if (envPlatform !== "unknown") {
-    installHooks(envPlatform, "env");
+  if (client.envPlatform !== "unknown") {
+    client.installHooks(client.envPlatform, "env");
   }
 }
 

@@ -801,6 +801,17 @@ entries also expire after 30 min. Pointer responses are never stored in the resp
 pointer replayed after a compaction would claim the agent holds code it lost. `full_source=true`
 forces a resend; `CODESIFT_DEDUP_SOURCE=0` turns it off.
 
+Three rules the review of 29b8025 added, each from a way the first version lied:
+- **Check and record are separate.** `elideShownSource` only checks; handlers call `commitDelivered`
+  after the whole reply is built, and it skips any block the response cap will cut. Recording at
+  check time marked bodies as shown that formatting then failed on, that `explore` clipped, or that
+  truncation dropped.
+- **SessionStart touches the marker too.** `/clear` keeps the stdio server — and its ledger — alive.
+- **The key is `file:name:line`, not the id.** get_symbol returns ids without the repo prefix,
+  search/explore with it. Note also that get_symbol/find_and_show render a declaration WITHOUT its
+  `export` keyword while get_symbols/explore include it, so those pairs hash differently and are
+  (correctly) resent — a pre-existing inconsistency, not a ledger bug.
+
 **The hard response cap cuts at a record boundary and always saves the rest.** Before, a response
 between the cap (105K chars) and the 200K persist threshold was cut mid-line and the tail was gone.
 Every truncation now persists the full output and says "showing N of M lines — read line N+1 onward".

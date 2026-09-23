@@ -4,7 +4,7 @@ import { zJsonArray } from "./schema.js";
 import type { SymbolIdAmbiguity } from "../../tools/symbol-tools.js";
 // Direct import, not a lazyExport: a pure predicate with no heavy dependencies of its own.
 import { isCommentOnlyReference } from "../../tools/symbol-reference-tools.js";
-import { elideShownSource } from "../../server-helpers/shown-source.js";
+import { commitDelivered, elideShownSource, type ShownSourceView } from "../../server-helpers/shown-source.js";
 import type { CodeSymbol } from "../../types.js";
 
 // Token diet (2026-07-10 tool-runtime-opt plan, Task 4): find_references' default
@@ -46,10 +46,13 @@ function formatIdAmbiguity(ambiguity: SymbolIdAmbiguity): string {
  * Render a symbol, replacing a body already shown in this conversation with a one-line pointer.
  * See server-helpers/shown-source.ts for when that is (and is not) done.
  */
-async function renderSymbol(sym: CodeSymbol, force?: boolean): Promise<string> {
-  const { symbol, note } = elideShownSource(sym, force ? { force } : undefined);
-  const text = await formatSymbolCompact(symbol);
-  return note ? `${text}\n${note}` : text;
+async function renderSymbol(
+  sym: CodeSymbol,
+  force?: boolean,
+): Promise<{ text: string; view: ShownSourceView<CodeSymbol> }> {
+  const view = elideShownSource(sym, force ? { force } : undefined);
+  const text = await formatSymbolCompact(view.symbol);
+  return { text: view.note ? `${text}\n${view.note}` : text, view };
 }
 
 const FULL_SOURCE_DESCRIPTION =
@@ -107,10 +110,13 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         const hint = await checkTextStubHint(args.repo as string, "get_symbol", true);
         return hint ?? `Symbol "${symbolId}" not found. Use search_symbols(query=...) to discover available IDs.`;
       }
-      let text = resolvedNote + await renderSymbol(result.symbol, args.full_source as boolean | undefined);
+      const rendered = await renderSymbol(result.symbol, args.full_source as boolean | undefined);
+      let text = resolvedNote + rendered.text;
       if (result.related && result.related.length > 0) {
         text += "\n\n--- children ---\n" + result.related.map((s) => `${s.kind} ${s.name}${s.signature ? s.signature : ""} [${s.file}:${s.start_line}]`).join("\n");
       }
+      // Recorded only now that the whole reply exists, and only if the cap will not cut it.
+      commitDelivered([{ view: rendered.view, chars: resolvedNote.length + rendered.text.length }]);
       return text;
     },
   } },
@@ -158,7 +164,10 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         }
       }
       const force = args.full_source as boolean | undefined;
-      const output = (await Promise.all(syms.map((sym) => renderSymbol(sym, force)))).join("\n\n");
+      // All checks happen before any commit, so a symbol listed twice in one call is sent in full
+      // both times instead of pointing at a copy "already shown" three lines up.
+      const rendered = await Promise.all(syms.map((sym) => renderSymbol(sym, force)));
+      const output = rendered.map((r) => r.text).join("\n\n");
       // Surface fuzzy suggestions for missing IDs (telemetry: 26% zero rate).
       let suggestions = "";
       if (syms.length < ids.length) {
@@ -179,6 +188,12 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         }
       }
       const hint = await checkTextStubHint(args.repo as string, "get_symbols", syms.length === 0);
+      // In response order, with each block's separator, so the budget walk matches what the cap
+      // will keep; blocks past it are not recorded as shown.
+      commitDelivered(rendered.map((r, i) => ({
+        view: r.view,
+        chars: r.text.length + (i === 0 ? (hint?.length ?? 0) : 2),
+      })));
       return (hint ? hint + output : output) + suggestions;
     },
   } },
@@ -191,14 +206,19 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       query: z.string().describe("Symbol name or query to search for"),
       include_refs: zBool().describe("Include locations that reference this symbol"),
+      full_source: zBool().describe(FULL_SOURCE_DESCRIPTION),
     })),
     handler: async (args) => {
       const result = await findAndShow(args.repo as string, args.query as string, args.include_refs as boolean | undefined);
       if (!result) return null;
-      let text = formatIdAmbiguity(result.id_ambiguity) + (await renderSymbol(result.symbol));
+      const rendered = await renderSymbol(result.symbol, args.full_source as boolean | undefined);
+      const prefix = formatIdAmbiguity(result.id_ambiguity);
+      let text = prefix + rendered.text;
       if (result.references) {
         text += `\n\n--- references ---\n${await formatRefsCompact(result.references)}`;
       }
+      // The references follow the body, so only the prefix and the body decide whether it survives.
+      commitDelivered([{ view: rendered.view, chars: prefix.length + rendered.text.length }]);
       return text;
     },
   } },
@@ -210,15 +230,18 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
     schema: lazySchema(() => ({
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
       symbol_name: z.string().describe("Symbol name to find"),
+      full_source: zBool().describe(FULL_SOURCE_DESCRIPTION),
     })),
     handler: async (args) => {
       const bundle = await getContextBundle(args.repo as string, args.symbol_name as string);
-      if (!bundle) return null;
-      const { symbol, note } = elideShownSource(bundle.symbol as CodeSymbol);
-      let text = await formatBundleCompact({ ...bundle, symbol });
+      if (!bundle?.symbol) return null;
+      const view = elideShownSource(bundle.symbol, args.full_source === true ? { force: true } : undefined);
+      let text = await formatBundleCompact({ ...bundle, symbol: view.symbol });
       // The symbol header is the bundle's first line; the pointer belongs directly under it.
-      if (note) text = text.replace(/^[^\n]*/, (header) => `${header}\n${note}`);
-      return formatIdAmbiguity(bundle.id_ambiguity) + text;
+      if (view.note) text = text.replace(/^[^\n]*/, (header) => `${header}\n${view.note}`);
+      const prefix = formatIdAmbiguity(bundle.id_ambiguity);
+      commitDelivered([{ view, chars: prefix.length + text.length }]);
+      return prefix + text;
     },
   } },
   { order: 1557, definition: {
@@ -235,6 +258,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       top: zNum().describe("How many top matches get full source + call graph (default 3, max 8)"),
       token_budget: zNum().describe("Approximate output ceiling in tokens (default 6000)"),
       file_pattern: z.string().optional().describe("Glob to restrict matches, e.g. 'src/**/*.ts'"),
+      full_source: zBool().describe(FULL_SOURCE_DESCRIPTION),
     })),
     handler: async (args) => {
       const { explore } = await import("../../tools/explore-tools.js");
@@ -242,6 +266,7 @@ export const CORE_SYMBOL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
         top: args.top as number | undefined,
         token_budget: args.token_budget as number | undefined,
         file_pattern: args.file_pattern as string | undefined,
+        full_source: args.full_source as boolean | undefined,
       });
     },
   } },

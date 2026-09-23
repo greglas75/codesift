@@ -40,6 +40,8 @@ export function checkoutCart(lines: number[]): string {
   return \`total: \${total}\`;
 }
 `);
+  const longBody = Array.from({ length: 80 }, (_, i) => `  const step${i} = ${i};`).join("\n");
+  await writeFile(join(root, "src", "long.ts"), `export function veryLongRoutine(): number {\n${longBody}\n  return 0;\n}\n`);
   await indexFolder(root);
 });
 
@@ -88,5 +90,22 @@ describe("explore", () => {
     expect(again).toContain("source unchanged");
     // The graph is not elided — it is cheap and may have changed meaning in context.
     expect(again).toMatch(/called by: checkoutCart/);
+  });
+
+  // A clipped body was not delivered whole; it must be sent again, never answered with a pointer.
+  it("does not record a clipped body as shown", async () => {
+    resetShownSourceLedgerForTesting(true);
+    const clipped = await explore(REPO, "veryLongRoutine", { top: 1, token_budget: 1 });
+    expect(clipped).toContain("more lines (budget)");
+    const again = await explore(REPO, "veryLongRoutine", { top: 1 });
+    expect(again).not.toContain("source unchanged");
+    expect(again).toContain("  const step79 = 79;");
+  });
+
+  it("resends on full_source=true", async () => {
+    resetShownSourceLedgerForTesting(true);
+    await explore(REPO, "computeInvoiceTotal", { top: 1 });
+    const again = await explore(REPO, "computeInvoiceTotal", { top: 1, full_source: true });
+    expect(again).toContain("return applyDiscount(sumLines(lines));");
   });
 });

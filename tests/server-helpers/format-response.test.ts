@@ -187,6 +187,23 @@ describe("hard response cap", () => {
     expect(result.content[0].text.length).toBeLessThan(5_000);
   });
 
+  // A line longer than the whole budget is hard-cut mid-line: the rest of THAT line is unread.
+  it("points at the partially shown line after a mid-line cut", async () => {
+    process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "1000";
+    const result = await wrapTool("test_tool_cap_midline", { repo: "local/test" }, async () => "q".repeat(20_000))();
+    expect(result.content[0].text).toContain("read line 1 (partially shown) onward");
+  });
+
+  it("keeps the whole reply, notice included, inside the ceiling", async () => {
+    process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "1000";
+    const result = await wrapTool("test_tool_cap_total", { repo: "local/test" }, async () => lines(200))();
+    const text = result.content[0].text;
+    const noticeAt = text.indexOf("⚠️ Response truncated");
+    expect(noticeAt).toBeGreaterThan(0);
+    expect(text.slice(noticeAt).length).toBeLessThan(600);
+    expect(noticeAt).toBeLessThanOrEqual(1000 * 3.5 - 600 + 2);
+  });
+
   it("ignores a nonsense ceiling", async () => {
     process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "-5";
     const result = await wrapTool("test_tool_cap_bad", { repo: "local/test" }, async () => lines(100))();

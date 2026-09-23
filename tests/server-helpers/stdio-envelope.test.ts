@@ -92,4 +92,24 @@ describe("observeInbound", () => {
     expect(inner.send).toHaveBeenCalledOnce();
     expect(inner.close).toHaveBeenCalledOnce();
   });
+
+  // serveStdio swallows a rejected start; without this hook a dead transport looks "started".
+  it("reports a failed start through onStartFailed and still rejects", async () => {
+    const inner = fakeTransport();
+    inner.start = async () => { throw new Error("stdin gone"); };
+    const failed = vi.fn();
+    const outer = observeInbound(inner, () => {}, () => {}, { onStartFailed: failed });
+    await expect(outer.start()).rejects.toThrow("stdin gone");
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it("runs onClosed even when the owner's close handler throws", async () => {
+    const inner = fakeTransport();
+    const onClosed = vi.fn();
+    const outer = observeInbound(inner, () => {}, onClosed);
+    outer.onclose = () => { throw new Error("owner broke"); };
+    await outer.start();
+    expect(() => inner.onclose?.()).toThrow("owner broke");
+    expect(onClosed).toHaveBeenCalledOnce();
+  });
 });

@@ -151,8 +151,26 @@ Hint codes (H1…) in responses are instructions: act on them.`;
 /** Hard cap the default field must stay under (Claude Code's default MCP instructions cap). */
 export const HOST_INSTRUCTIONS_CHAR_CAP = 2048;
 
+/**
+ * Instructions for CODESIFT_TOOL_SURFACE=single. The default field names a dozen tools that this
+ * surface does not register, so an agent on it would be told to call tools it cannot reach.
+ */
+export const CODESIFT_INSTRUCTIONS_SINGLE = `CodeSift — code intelligence over an indexed repo.
+
+explore(query) is the one call for "where is X and how does it connect": it returns the best-matching
+symbols with full source, their direct callers and callees, and the other matches as locations.
+Prefer it over Grep/Glob/Read for finding and understanding code. A repeat of unchanged source comes
+back as a one-line pointer; repeat the call with full_source=true only if you no longer have it.
+
+search_text(query, file_pattern=) is for literal strings, error messages and config values.
+index_file(path) after editing a file keeps answers current. The repo resolves from the working
+directory. A stale index is a reason to reindex, never to fall back to grep.`;
+
 export function resolveInstructions(): string {
   if (process.env["CODESIFT_BRIEF_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS_BRIEF;
+  if (process.env["CODESIFT_TOOL_SURFACE"] === "single" && !process.env["CODESIFT_VISIBLE_TOOLS"]) {
+    return CODESIFT_INSTRUCTIONS_SINGLE;
+  }
   if (process.env["CODESIFT_FULL_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS;
   return CODESIFT_INSTRUCTIONS_SERVER;
 }
