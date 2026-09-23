@@ -76,6 +76,18 @@ describe("shown-source dedup through the tool handlers", () => {
     expect(await call("get_symbols", { symbol_ids: ["smallOne"] })).toContain("return 42;");
   });
 
+  // get_context_bundle is the one handler that splices the pointer into a multi-section reply.
+  it("puts the pointer directly under the bundle's symbol header and keeps the other sections", async () => {
+    const first = await call("get_context_bundle", { symbol_name: "smallOne" });
+    expect(first).toContain("return 42;");
+    const repeat = await call("get_context_bundle", { symbol_name: "smallOne" });
+    const [header, pointer] = repeat.split("\n");
+    expect(header).toMatch(/^src\/small\.ts:1-3 function smallOne/);
+    expect(pointer).toContain("source unchanged");
+    expect(repeat).not.toContain("return 42;");
+    expect(await call("get_context_bundle", { symbol_name: "smallOne", full_source: true })).toContain("return 42;");
+  });
+
   // The cap is about to cut this body, so the agent will not receive it — recording it would earn
   // a later "unchanged" pointer for code the agent never saw.
   it("does not record a body the response cap will cut", async () => {
