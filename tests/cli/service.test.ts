@@ -66,6 +66,16 @@ describe("service — unit generation", () => {
     expect(plist).toMatch(/<key>ThrottleInterval<\/key>\s*<integer>\d+<\/integer>/);
   });
 
+  // Background drops the daemon to scheduler priority 4; under load it could not finish starting
+  // for minutes while every session waited on it.
+  it("runs at ordinary scheduler priority, not in the background band", () => {
+    const plist = buildLaunchAgentPlist(
+      buildServicePlan({ dataDir, home, os: "darwin", ...PLAN_OPTS }),
+    );
+    expect(plist).toMatch(/<key>ProcessType<\/key>\s*<string>Standard<\/string>/);
+    expect(plist).not.toContain("<string>Background</string>");
+  });
+
   it("gives systemd the same contract", () => {
     const unit = buildSystemdUnit(buildServicePlan({ dataDir, home, os: "linux", ...PLAN_OPTS }));
     expect(unit).toContain("Restart=always");

@@ -203,6 +203,12 @@ export function buildLaunchAgentPlist(plan: ServicePlan): string {
     "--max-semi-space-size=64",
     plan.cliPath, "serve", "--port", String(plan.port), "--host", plan.host,
   ];
+  // ProcessType is Standard, not Background. Background puts the process in the macOS background
+  // band (scheduler priority 4 against 31 for an ordinary process), which is invisible on an idle
+  // machine and fatal on a busy one: every agent session blocks on this daemon, and under load
+  // 100-160 a priority-4 process barely runs. Sampled 2026-09-24: a freshly restarted daemon sat
+  // 6+ minutes at 0% CPU still inside Node's own bootstrap (compiling builtins) — it had not
+  // executed a line of CodeSift yet — while every client reported "codesift unavailable".
   const argLines = [plan.execPath, ...args]
     .map((a) => `    <string>${escapeXml(a)}</string>`)
     .join("\n");
@@ -223,7 +229,7 @@ ${argLines}
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
