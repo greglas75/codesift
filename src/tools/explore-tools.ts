@@ -15,7 +15,7 @@
  * It composes existing, tested pieces; it adds no retrieval logic of its own.
  */
 import { searchSymbols } from "./search-tools.js";
-import { getSymbols } from "./symbol-lookup-tools.js";
+import { getSymbols, isAmbiguousSymbolIdError } from "./symbol-lookup-tools.js";
 import { callNeighbours } from "./graph-tools.js";
 import { commitDelivered, elideShownSource, type ShownSourceView } from "../server-helpers/shown-source.js";
 import { CHARS_PER_TOKEN } from "../server-helpers/response-budget.js";
@@ -110,12 +110,35 @@ function renderPrimary(
   return { block: lines.join("\n"), view, clipped };
 }
 
+/**
+ * getSymbols refuses a batch in which any id is ambiguous (ids are file:name:line, which collide in
+ * generated code). explore ranks BM25 hits rather than taking ids from the caller, so one colliding
+ * hit must not sink the answer: retry one id at a time and leave the ambiguous ones out — they are
+ * still listed under "other matches", because only resolved ids count as rendered.
+ */
+async function getSymbolsSkippingAmbiguous(repo: string, ids: string[]): Promise<CodeSymbol[]> {
+  try {
+    return await getSymbols(repo, ids);
+  } catch (err) {
+    if (!isAmbiguousSymbolIdError(err)) throw err;
+  }
+  const out: CodeSymbol[] = [];
+  for (const id of ids) {
+    try {
+      out.push(...await getSymbols(repo, [id]));
+    } catch (err) {
+      if (!isAmbiguousSymbolIdError(err)) throw err;
+    }
+  }
+  return out;
+}
+
 /** Rank, then resolve the top ids to full symbols — in rank order, keyed by the index's own ids. */
 async function resolvePrimary(
   repo: string,
   primaryIds: string[],
 ): Promise<{ resolvedIds: string[]; ordered: CodeSymbol[] }> {
-  const primary = await getSymbols(repo, primaryIds);
+  const primary = await getSymbolsSkippingAmbiguous(repo, primaryIds);
   // Search results carry the canonical `repo:file:name:line`; getSymbols returns the same symbols
   // with the repo prefix stripped. Compare in one form, or every lookup misses.
   const canon = (id: string): string => (id.startsWith(`${repo}:`) ? id.slice(repo.length + 1) : id);

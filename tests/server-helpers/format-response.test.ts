@@ -180,6 +180,11 @@ describe("hard response cap", () => {
     expect(readFileSync(saved as string, "utf-8")).toBe(big);
   });
 
+  it("does not count a trailing newline as an extra line", async () => {
+    const result = await wrapTool("test_tool_cap_trailing", { repo: "local/test" }, async () => `${lines(1_200)}\n`)();
+    expect(result.content[0].text).toMatch(/showing [\d,]+ of 1,200 lines/);
+  });
+
   it("honours CODESIFT_MAX_RESPONSE_TOKENS", async () => {
     process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "1000";
     const result = await wrapTool("test_tool_cap_env", { repo: "local/test" }, async () => lines(100))();

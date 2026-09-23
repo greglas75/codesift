@@ -199,7 +199,8 @@ export function cutAtRecordBoundary(text: string, maxChars: number): string {
 
 function countLines(text: string): number {
   if (text.length === 0) return 0;
-  let n = 1;
+  // A trailing newline ends the last line; it does not start another one.
+  let n = text.endsWith("\n") ? 0 : 1;
   for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
   return n;
 }
