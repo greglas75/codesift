@@ -23,6 +23,12 @@ export async function handleSessionStart(): Promise<void> {
       // not present
     }
 
+    // A new context (startup, /clear, resume) holds none of the source earlier tool calls returned,
+    // but `/clear` keeps the stdio server — and its shown-source ledger — alive. Reset it here, as
+    // PreCompact does, so nothing shown before this point is answered with an "unchanged" pointer.
+    const { touchCompactionMarker } = await import("../../server-helpers/shown-source.js");
+    touchCompactionMarker();
+
     let additionalContext =
       "CodeSift MCP is available (mcp__codesift__* tools). " +
       "Before searching code with built-in Grep/Glob/Read, prefer CodeSift tools: " +

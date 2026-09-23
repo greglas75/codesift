@@ -774,6 +774,55 @@ The daemon cannot fix a saturated host. What it CAN do is stay reachable through
 the page floor above is for: individual queries stay slow, but `initialize` answers and the session
 gets its tools instead of running blind.
 
+## Protocol and response-size changes from the 2026-09-22 competitive review
+
+**Server instructions must fit 2,048 characters.** Claude Code 2.1.280 truncates MCP server
+instructions (and tool descriptions) at 2,048 chars (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`). The
+full manual was 6,538 chars, so every session received the catalog preamble and lost ALWAYS/NEVER, the
+stale-index rule and the hint legend. The default field is now `CODESIFT_INSTRUCTIONS_SERVER`
+(`tests/tools/register/tool-surface-knobs.test.ts` fails above the cap); the full manual is served by
+the `initial_instructions` tool, which is a tool result and not capped. `CODESIFT_FULL_INSTRUCTIONS=1`
+restores the long field for a host known not to truncate.
+
+**stdio speaks MCP 2026-07-28 through `serveStdio`, not `server.connect`.** The 2026-07-28 revision
+removed `initialize`/`initialized`; a bare `connect()` served only the 2025 handshake. Measured on
+0.17.0 with a modern Codex opening: `server/discover` → `Method not found` (so no instructions either)
+and **60 tools instead of 181**, because front-loading hung off `oninitialized`, which never fires.
+`src/server-helpers/stdio-envelope.ts` reads the client name from the per-request `_meta` envelope at
+the wire, before dispatch — the same "before the first tools/list" window. Probe both eras with a
+hand-rolled client (no `initialize`; `_meta` carrying `io.modelcontextprotocol/protocolVersion` +
+`clientInfo`). The HTTP daemon was already stateless and reads `?client=`/`?cwd=` from the URL.
+
+**Source already shown is not sent again (stdio only).** `get_symbol`/`get_symbols`/`find_and_show`/
+`get_context_bundle`/`explore` answer an unchanged repeat with a one-line pointer
+(`server-helpers/shown-source.ts`). Off in the HTTP daemon (one process, many conversations). The
+PreCompact hook touches `<dataDir>/compaction.marker`, and anything shown before it counts as unseen;
+entries also expire after 30 min. Pointer responses are never stored in the response cache — a cached
+pointer replayed after a compaction would claim the agent holds code it lost. `full_source=true`
+forces a resend; `CODESIFT_DEDUP_SOURCE=0` turns it off.
+
+Three rules the review of 29b8025 added, each from a way the first version lied:
+- **Check and record are separate.** `elideShownSource` only checks; handlers call `commitDelivered`
+  after the whole reply is built, and it skips any block the response cap will cut. Recording at
+  check time marked bodies as shown that formatting then failed on, that `explore` clipped, or that
+  truncation dropped.
+- **SessionStart touches the marker too.** `/clear` keeps the stdio server — and its ledger — alive.
+- **The key is `file:name:line`, not the id.** get_symbol returns ids without the repo prefix,
+  search/explore with it. Note also that get_symbol/find_and_show render a declaration WITHOUT its
+  `export` keyword while get_symbols/explore include it, so those pairs hash differently and are
+  (correctly) resent — a pre-existing inconsistency, not a ledger bug.
+
+**The hard response cap cuts at a record boundary and always saves the rest.** Before, a response
+between the cap (105K chars) and the 200K persist threshold was cut mid-line and the tail was gone.
+Every truncation now persists the full output and says "showing N of M lines — read line N+1 onward".
+`CODESIFT_MAX_RESPONSE_TOKENS` sets the ceiling.
+
+**`explore` + `CODESIFT_TOOL_SURFACE=single`.** `explore` ranks symbols, returns the top few with
+source and direct callers/callees (adjacency cached per loaded index via `callNeighbours`), and lists
+the other matches. It is NOT in `CORE_TOOL_NAMES` (3e1ec6c: growing the default list cut adoption);
+`CODESIFT_TOOL_SURFACE=single` exposes `explore`+`search_text`+`index_file` for the A/B in
+`docs/specs/2026-09-23-three-arm-benchmark-plan.md`.
+
 ## Linting — Biome (`npm run lint`)
 
 `npm run lint` is `biome lint . && tsc --noEmit`; `npm run lint:fix` applies the safe fixes. Config

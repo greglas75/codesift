@@ -48,7 +48,7 @@ const EXPECTED_CORE_TOOL_NAMES = [
   "search_symbols", "ast_query", "semantic_search", "search_text",
   "get_file_tree", "get_file_outline", "get_repo_outline", "suggest_queries",
   "get_symbol", "get_symbols", "find_and_show", "get_context_bundle",
-  "find_references", "trace_call_chain", "impact_analysis", "trace_route",
+  "explore", "find_references", "trace_call_chain", "impact_analysis", "trace_route",
   "go_to_definition", "get_type_info", "rename_symbol", "get_call_hierarchy",
   "detect_communities", "find_circular_deps", "check_boundaries", "classify_roles",
   "assemble_context", "get_knowledge_map", "diff_outline", "changed_symbols",

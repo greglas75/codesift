@@ -5,6 +5,11 @@ import { parseHookInput, readRawInput } from "./input.js";
 
 export async function handlePrecompactSnapshot(): Promise<void> {
   try {
+    // First, before any early exit: compaction is about to drop old tool results, so source the
+    // server answered with a "shown earlier" pointer must be resent from now on.
+    const { touchCompactionMarker } = await import("../../server-helpers/shown-source.js");
+    touchCompactionMarker();
+
     const raw = readRawInput();
     if (!raw) {
       process.exit(0);

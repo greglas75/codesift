@@ -647,3 +647,43 @@ function canonicalCycleSignature(nodes: string[]): string {
 
 // Export shared utilities for impact-tools and testing
 export { buildAdjacencyIndex, extractCallSites, buildCallTree, stripSource, isTestFile, classifyRole };
+
+/**
+ * Adjacency per loaded symbol array. Building it scans the source of every symbol, which is the
+ * whole cost of trace_call_chain; `explore` asks for neighbours on every call, so it must not pay
+ * that per call. Keyed by the index's symbols array: a re-index replaces the array, so a stale
+ * entry becomes unreachable and is collected instead of being served.
+ */
+const neighbourAdjacency = new WeakMap<CodeSymbol[], AdjacencyIndex>();
+
+/** Direct callers and callees (depth 1, tests excluded) for each requested symbol id. */
+export async function callNeighbours(
+  repo: string,
+  symbolIds: readonly string[],
+  limit = 8,
+): Promise<Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>> {
+  const out = new Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>();
+  if (symbolIds.length === 0) return out;
+  const index = await getCodeIndex(repo);
+  if (!index) throw new Error(`Repository not found: ${repo}`);
+  let adjacency = neighbourAdjacency.get(index.symbols);
+  if (!adjacency) {
+    adjacency = buildAdjacencyIndex(index.symbols, true, false);
+    neighbourAdjacency.set(index.symbols, adjacency);
+  }
+  const dedupe = (list: CodeSymbol[]): CodeSymbol[] => {
+    const seen = new Set<string>();
+    return list.filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)));
+  };
+  for (const id of symbolIds) {
+    const callers = dedupe(adjacency.callers.get(id) ?? []);
+    const callees = dedupe(adjacency.callees.get(id) ?? []);
+    out.set(id, {
+      callers: callers.slice(0, limit).map(stripSource),
+      callees: callees.slice(0, limit).map(stripSource),
+      callersTotal: callers.length,
+      calleesTotal: callees.length,
+    });
+  }
+  return out;
+}

@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { wrapTool, resetSessionState, registerShortener, resetShorteningRegistry, resolveRepoFromCwd } from "../../src/server-helpers.js";
+import { readFileSync } from "node:fs";
+import { wrapTool, resetSessionState, registerShortener, resetShorteningRegistry, resolveRepoFromCwd, cutAtRecordBoundary } from "../../src/server-helpers.js";
+import { SHOWN_SOURCE_POINTER_MARK } from "../../src/server-helpers/shown-source.js";
 
 let tmpDir: string;
 
@@ -151,5 +153,99 @@ describe("progressive cascade", () => {
     const result = await wrapTool("unregistered_tool", { repo: "local/test" }, async () => bigStr)();
     expect(result.content[0].text).not.toContain("[compact]");
     // Should still work — just no cascade, pass through as-is (or hard truncate if > 105K)
+  });
+});
+
+describe("hard response cap", () => {
+  afterEach(() => {
+    delete process.env["CODESIFT_MAX_RESPONSE_TOKENS"];
+  });
+
+  const lines = (n: number, width = 99) => Array.from({ length: n }, (_, i) => `${String(i).padStart(6, "0")} ${"y".repeat(width)}`).join("\n");
+
+  // Between the cap and the old 200K persist threshold, the tail used to be dropped with nowhere to
+  // find it. Every truncation must now say how much was shown and where the rest is.
+  it("cuts on a line boundary, counts what it kept, and saves the whole output", async () => {
+    const big = lines(1_200); // ~126K chars: over the 105K cap, under the 200K persist threshold
+    const result = await wrapTool("test_tool_cap", { repo: "local/test" }, async () => big)();
+    const text = result.content[0].text;
+    const body = text.slice(0, text.indexOf("\n\n⚠️ Response truncated"));
+    const bodyLines = body.split("\n").filter((l) => /^\d{6} /.test(l));
+    for (const l of bodyLines) expect(l).toMatch(/^\d{6} y{99}$/);
+
+    const shown = text.match(/showing ([\d,]+) of ([\d,]+) lines/);
+    expect(shown?.[2]).toBe("1,200");
+    const saved = text.match(/Full output saved to: (\S+)/)?.[1];
+    expect(saved).toBeDefined();
+    expect(readFileSync(saved as string, "utf-8")).toBe(big);
+  });
+
+  it("does not count a trailing newline as an extra line", async () => {
+    const result = await wrapTool("test_tool_cap_trailing", { repo: "local/test" }, async () => `${lines(1_200)}\n`)();
+    expect(result.content[0].text).toMatch(/showing [\d,]+ of 1,200 lines/);
+  });
+
+  it("honours CODESIFT_MAX_RESPONSE_TOKENS", async () => {
+    process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "1000";
+    const result = await wrapTool("test_tool_cap_env", { repo: "local/test" }, async () => lines(100))();
+    expect(result.content[0].text).toContain("1,000 token limit");
+    expect(result.content[0].text.length).toBeLessThan(5_000);
+  });
+
+  // A line longer than the whole budget is hard-cut mid-line: the rest of THAT line is unread.
+  it("points at the partially shown line after a mid-line cut", async () => {
+    process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "1000";
+    const result = await wrapTool("test_tool_cap_midline", { repo: "local/test" }, async () => "q".repeat(20_000))();
+    expect(result.content[0].text).toContain("read line 1 (partially shown) onward");
+  });
+
+  it("keeps the whole reply, notice included, inside the ceiling", async () => {
+    process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "1000";
+    const result = await wrapTool("test_tool_cap_total", { repo: "local/test" }, async () => lines(200))();
+    const text = result.content[0].text;
+    const noticeAt = text.indexOf("⚠️ Response truncated");
+    expect(noticeAt).toBeGreaterThan(0);
+    expect(text.slice(noticeAt).length).toBeLessThan(600);
+    expect(noticeAt).toBeLessThanOrEqual(1000 * 3.5 - 600 + 2);
+  });
+
+  it("ignores a nonsense ceiling", async () => {
+    process.env["CODESIFT_MAX_RESPONSE_TOKENS"] = "-5";
+    const result = await wrapTool("test_tool_cap_bad", { repo: "local/test" }, async () => lines(100))();
+    expect(result.content[0].text).not.toContain("truncated");
+  });
+});
+
+describe("cutAtRecordBoundary", () => {
+  it("returns short text unchanged", () => {
+    expect(cutAtRecordBoundary("abc", 10)).toBe("abc");
+  });
+
+  it("prefers a block boundary near the end of the budget", () => {
+    const text = "a".repeat(80) + "\n\n" + "b".repeat(50);
+    expect(cutAtRecordBoundary(text, 100)).toBe("a".repeat(80));
+  });
+
+  it("falls back to a line end when the last block boundary is too early", () => {
+    const text = "a\n\n" + "b".repeat(60) + "\n" + "c".repeat(60);
+    expect(cutAtRecordBoundary(text, 100)).toBe("a\n\n" + "b".repeat(60));
+  });
+
+  it("hard-cuts a single line longer than the budget", () => {
+    expect(cutAtRecordBoundary("z".repeat(200), 100)).toBe("z".repeat(100));
+  });
+});
+
+describe("response cache and shown-source pointers", () => {
+  beforeEach(() => resetSessionState());
+
+  // A pointer is true only when issued; replaying it after a compaction would claim the agent
+  // holds code it no longer has.
+  it("never serves a cached pointer", async () => {
+    let calls = 0;
+    const fn = async () => { calls++; return `src/a.ts:1-9 function foo\n  ${SHOWN_SOURCE_POINTER_MARK}9 lines) — already shown]`; };
+    await wrapTool("get_symbol", { repo: "local/test", symbol_id: "x" }, fn)();
+    await wrapTool("get_symbol", { repo: "local/test", symbol_id: "x" }, fn)();
+    expect(calls).toBe(2);
   });
 });
