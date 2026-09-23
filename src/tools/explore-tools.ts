@@ -60,6 +60,14 @@ function clipSource(source: string, maxChars: number): { text: string; clipped: 
     kept.push(line);
     used += line.length + 1;
   }
+  // A first line longer than the whole room would otherwise leave an empty body above a "1 more
+  // lines" note — the header with nothing under it. Show its head instead.
+  if (kept.length === 0) {
+    return {
+      text: `${source.slice(0, maxChars)}\n  … line continues (budget) — raise token_budget, or top=1, for the full body`,
+      clipped: true,
+    };
+  }
   const dropped = lines.length - kept.length;
   return {
     text: `${kept.join("\n")}\n  … ${dropped} more lines (budget) — raise token_budget, or top=1, for the full body`,
@@ -117,7 +125,9 @@ async function resolvePrimary(
 }
 
 export async function explore(repo: string, query: string, options: ExploreOptions = {}): Promise<string> {
-  const top = Math.min(Math.max(1, Math.floor(options.top ?? DEFAULT_TOP)), MAX_TOP);
+  // Number.isFinite, not `??`: a NaN top clamps through Math.max/min to NaN and slices to nothing.
+  const rawTop = Number.isFinite(options.top) ? (options.top as number) : DEFAULT_TOP;
+  const top = Math.min(Math.max(1, Math.floor(rawTop)), MAX_TOP);
   const budgetTokens = options.token_budget && options.token_budget > 0 ? options.token_budget : DEFAULT_TOKEN_BUDGET;
   const budgetChars = Math.floor(budgetTokens * CHARS_PER_TOKEN);
 

@@ -42,6 +42,7 @@ export function checkoutCart(lines: number[]): string {
 `);
   const longBody = Array.from({ length: 80 }, (_, i) => `  const step${i} = ${i};`).join("\n");
   await writeFile(join(root, "src", "long.ts"), `export function veryLongRoutine(): number {\n${longBody}\n  return 0;\n}\n`);
+  await writeFile(join(root, "src", "wide.ts"), `export const oneLongLine = "${"w".repeat(1_000)}";\n`);
   await indexFolder(root);
 });
 
@@ -100,6 +101,17 @@ describe("explore", () => {
     const again = await explore(REPO, "veryLongRoutine", { top: 1 });
     expect(again).not.toContain("source unchanged");
     expect(again).toContain("  const step79 = 79;");
+  });
+
+  it("treats a non-numeric top as the default instead of returning no primaries", async () => {
+    const out = await explore(REPO, "computeInvoiceTotal", { top: Number.NaN });
+    expect(out).toMatch(/^src\/billing\.ts:1-3 function computeInvoiceTotal/);
+  });
+
+  it("shows the head of a single line longer than the budget instead of an empty body", async () => {
+    const out = await explore(REPO, "oneLongLine", { top: 1, token_budget: 1 });
+    expect(out).toContain("export const oneLongLine = ");
+    expect(out).toContain("line continues (budget)");
   });
 
   it("resends on full_source=true", async () => {

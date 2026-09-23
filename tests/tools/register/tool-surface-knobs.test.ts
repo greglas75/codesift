@@ -138,6 +138,12 @@ describe("CODESIFT_TOOL_SURFACE=single", () => {
     }
   });
 
+  it("wins over CODESIFT_BRIEF_INSTRUCTIONS, whose text names tools the surface lacks", () => {
+    process.env[SURFACE] = "single";
+    process.env[BRIEF] = "1";
+    expect(resolveInstructions()).toBe(CODESIFT_INSTRUCTIONS_SINGLE);
+  });
+
   it("uses the default instructions when an explicit visible list overrides the surface", () => {
     process.env[SURFACE] = "single";
     process.env[VISIBLE] = "search_text";

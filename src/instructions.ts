@@ -167,10 +167,11 @@ index_file(path) after editing a file keeps answers current. The repo resolves f
 directory. A stale index is a reason to reindex, never to fall back to grep.`;
 
 export function resolveInstructions(): string {
-  if (process.env["CODESIFT_BRIEF_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS_BRIEF;
+  // The surface decides first: brief and full both name tools the single surface does not register.
   if (process.env["CODESIFT_TOOL_SURFACE"] === "single" && !process.env["CODESIFT_VISIBLE_TOOLS"]) {
     return CODESIFT_INSTRUCTIONS_SINGLE;
   }
+  if (process.env["CODESIFT_BRIEF_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS_BRIEF;
   if (process.env["CODESIFT_FULL_INSTRUCTIONS"] === "1") return CODESIFT_INSTRUCTIONS;
   return CODESIFT_INSTRUCTIONS_SERVER;
 }

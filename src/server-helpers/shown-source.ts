@@ -191,6 +191,11 @@ export function elideShownSource<T extends SourceBearing>(
 /**
  * Commit the views whose rendered text lands inside the response budget, in response order.
  *
+ * The budget models the hard cap only. formatResponse's compact/counts cascade would rewrite a
+ * body away earlier, but it runs only for tools with a registered shortener, and none of the
+ * source-returning tools (get_symbol, get_symbols, find_and_show, get_context_bundle, explore) has
+ * one. Registering a shortener for any of them requires teaching this function about it first.
+ *
  * `chars` is the length of that view's rendered block. Blocks past the budget are the ones
  * formatResponse will cut, so they are not recorded — the agent will not have received them.
  * Call only after the full response text has been built successfully.
