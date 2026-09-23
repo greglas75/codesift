@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-23
+
+Acts on the 2026-09-22 competitive review. Nothing here is a feature a competitor merely has — each
+change answers something measured on this server. The review before release (three auditors, four
+cross-provider adversarial passes across eleven providers) found twelve defects in the first version
+of this work; all were fixed before merge.
+
+Covers everything since v0.17.0; 0.16.0 and 0.17.0 were tagged without a changelog section.
+
+### Added
+
+- **`explore` tool** — one call for "where is X and how does it connect": the best-matching symbols
+  with full source, their direct callers and callees, and the remaining matches as locations. Hidden
+  by default (growing the default list cut adoption before, 3e1ec6c).
+- **`CODESIFT_TOOL_SURFACE=single`** — exposes only `explore`, `search_text` and `index_file`, with
+  instructions that name only those. The arm for the planned three-arm benchmark
+  (`docs/specs/2026-09-23-three-arm-benchmark-plan.md`).
+- **`full_source=true`** on `get_symbol`, `get_symbols`, `find_and_show`, `get_context_bundle` and
+  `explore`.
+- **`CODESIFT_MAX_RESPONSE_TOKENS`** — the response ceiling, previously fixed at 30,000 tokens.
+
+### Changed
+
+- **The server instructions field is 1.3K characters, down from 6.5K.** Claude Code 2.1.280 cuts
+  MCP server instructions at 2,048 characters, so every session received the catalog preamble and
+  lost the ALWAYS/NEVER rules, the stale-index rule and the hint legend. The full manual is served
+  by `initial_instructions`; `CODESIFT_FULL_INSTRUCTIONS=1` restores the long field.
+- **stdio speaks MCP 2026-07-28**, through the SDK's `serveStdio`. Probed with a modern Codex
+  opening: `server/discover` answered `Method not found` (so no instructions reached the client),
+  and Codex saw **60 tools instead of 181**, because front-loading ran in the `initialized`
+  notification the new revision removed. The client is now identified from the per-request `_meta`
+  envelope. 2025-era clients are unchanged.
+- **Source already shown in the conversation is not sent again** (stdio only; the shared daemon
+  serves many conversations from one process and never does this). An unchanged repeat comes back
+  as a one-line pointer. A body counts as shown only after the reply is built and only if the
+  response cap will not cut it; the ledger resets on context compaction and on SessionStart (which
+  covers `/clear`) and after 30 minutes. `CODESIFT_DEDUP_SOURCE=0` turns it off.
+- **The response cap cuts at a record boundary and always saves the rest.** Responses between the
+  cap and the old 200K persist threshold used to be cut mid-line with the tail discarded. Every
+  truncation now writes the full output to a file and says which line to resume from.
+
+### Fixed
+
+- A failed stdio transport start logged "started" and served nothing; it now exits 1.
+- `setup` corrupted `~/.claude/settings.json` on every MCP server start (21faf2a).
+- Local `usage.jsonl` could not be sliced by version, and hook rows named the wrong host (3608aba).
+- Seven Dependabot alerts: js-yaml, sharp, hono, vitest (b55fb26).
+
 ## [0.15.5] — 2026-08-25
 
 Seventeen commits, driven by 84,878 real tool calls from 55 days of
