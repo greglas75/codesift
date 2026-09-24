@@ -514,6 +514,18 @@ ADR-004 stage-2 work (query the DB instead of materialising indexes), not anothe
 
 ## Operating the shared daemon
 
+**Start is traced — read the log before sampling the process (2026-09-24).** `startDaemon` prints one
+stderr line per stage, elapsed from PROCESS START: `config` → `lock acquired` → `server module
+imported` → `listening on <port>`. A hang is the line that never arrives after the last one printed,
+and the first line's own number is the cost of importing the CLI. This exists because a
+`launchctl load` left the process alive with **no listening socket for 9+ minutes** at load 155 while
+the log said nothing between launch and the first served request — locating it took `sample <pid>`
+and reading V8 frames, and the answer (ESM module evaluation, i.e. before `startDaemon` ran) is
+exactly the part a clock started inside `startDaemon` would have hidden. Off with
+`CODESIFT_DAEMON_BOOT_TRACE=0`. **A slow start is not necessarily a wedge:** that same process came
+up on its own and then served for 24 h — so check the trace before recycling the daemon, because
+`unload`/`load` restarts the import from zero.
+
 The `codesift serve` daemon (launchd `com.codesift.daemon`, port 7077) can wedge: the port stays
 `LISTEN` and the process burns CPU, but the event loop never reaches `/health`, so it answers
 nothing. Every client then reports "still connecting" or `{"status":"timed_out","timeout_ms":90000}`

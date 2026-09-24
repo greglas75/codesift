@@ -55,6 +55,32 @@ function readDaemonPid(pidPath: string): number | null {
 }
 
 /**
+ * Timestamped startup trace on stderr, one line per stage.
+ *
+ * The daemon used to print NOTHING between launch and its first served request, and a start that
+ * takes minutes is indistinguishable from one that will never finish: measured 2026-09-24, a fresh
+ * `launchctl load` left the process alive with **no listening socket for 9+ minutes** while the box
+ * sat at load 155, and the only way to learn where it was came from `sample <pid>` reading V8
+ * frames. A hang now names its stage by being the line that never arrives after the last one
+ * printed — which is also why the stages are logged on ENTRY-to-next rather than as one summary at
+ * the end. Default on: nobody sets a debug flag before the outage they did not expect.
+ *
+ * Elapsed is measured from PROCESS START (`process.uptime()`), not from entry to this function. Most
+ * of that 9-minute start was spent before `startDaemon` was even called — `sample` caught the main
+ * thread inside ESM module evaluation — so a clock that starts here would have reported a healthy
+ * few hundred milliseconds and hidden the entire delay. The first line's own number is therefore the
+ * measurement that matters: it is the cost of importing the CLI.
+ *
+ * Off with `CODESIFT_DAEMON_BOOT_TRACE=0`.
+ */
+function bootTracer(): (stage: string) => void {
+  return (stage: string): void => {
+    if (process.env["CODESIFT_DAEMON_BOOT_TRACE"] === "0") return;
+    console.error(`[codesift] boot +${Math.round(process.uptime() * 1000)}ms ${stage}`);
+  };
+}
+
+/**
  * Acquire the daemon lock and start the shared HTTP server.
  *
  * Refuses if another daemon holds the dedicated SQLite transaction lock. The
@@ -66,9 +92,11 @@ function readDaemonPid(pidPath: string): number | null {
 export async function startDaemon(
   opts: { dataDir?: string; port?: number; host?: string; token?: string } = {},
 ): Promise<DaemonHandle> {
+  const trace = bootTracer();
   const { loadConfig } = await import("../config.js");
   const dataDir = opts.dataDir ?? loadConfig().dataDir;
   const { pidPath, portPath } = daemonLockPaths(dataDir);
+  trace("config");
 
   mkdirSync(dataDir, { recursive: true });
   const { DatabaseSync } = await import("node:sqlite");
@@ -76,6 +104,7 @@ export async function startDaemon(
   try {
     lockDb.exec("PRAGMA busy_timeout = 0; CREATE TABLE IF NOT EXISTS daemon_lock (id INTEGER PRIMARY KEY);");
     lockDb.exec("BEGIN EXCLUSIVE");
+    trace("lock acquired");
   } catch (error) {
     try { lockDb.close(); } catch { /* preserve the lock error */ }
     const existing = readDaemonLock(dataDir);
@@ -100,11 +129,14 @@ export async function startDaemon(
     try { unlinkSync(portPath); } catch { /* stale or absent */ }
 
     const { startHttpServer } = await import("../server.js");
+    // The heavy one: this pulls the whole tool surface, every parser and the storage layer.
+    trace("server module imported");
     const httpOpts: { port?: number; host?: string; token?: string } = {};
     if (opts.port !== undefined) httpOpts.port = opts.port;
     if (opts.host !== undefined) httpOpts.host = opts.host;
     if (opts.token !== undefined) httpOpts.token = opts.token;
     handle = await startHttpServer(httpOpts);
+    trace(`listening on ${handle.port}`);
     writeFileSync(portPath, String(handle.port));
 
     const origClose = handle.close;
