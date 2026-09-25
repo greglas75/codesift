@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-09-25
+
+Four defects, all found by reading this install's own `~/.codesift/usage.jsonl` and daemon log rather
+than the code.
+
+### Fixed
+
+- **`H19` was a false alarm in 98.4% of its firings, and repeated on every call.** The hint means "you
+  were handed a working tree you did not ask for", but the condition was only "resolved root ≠ CWD's
+  tree". Over 14 days it fired 2,721 times — **2,678 of them on a repo the caller had named with the
+  `@<worktree>` suffix**, i.e. by the registry name that exists only because that tree is indexed
+  separately — and never once on a path. The answers were fine, measurably: `search_text` calls
+  carrying H19 came back empty *less* often than calls without it (19.1% vs 23.8%). The advice was
+  wrong too, since `index_folder(path=<cwd>)` names the caller's own tree rather than the one asked
+  about. A `@` suffix now suppresses it, and it is emitted once per repo per session (one 26-hour
+  session had collected 932 copies, all after its own first `index_folder`). What still warns is the
+  case that motivated the hint: a **bare** name resolving to the main checkout from inside a linked
+  worktree, and an absolute path binding to a registered ancestor.
+- **`empty_result_rate` reported 100% for three tools that cannot be empty.** `index_file` (792
+  calls), `index_folder` (570) and `describe_tools` (144) all logged `result_chunks: 0`, the
+  describe_tools rows while carrying a median of 1,760 result tokens. Same cause as the
+  `find_references` batch miss fixed in 0.11: `extractResultChunks` did not know the shape, and an
+  unknown shape returns 0 — which reads as *found nothing* instead of *nobody counted*.
+- **Entries carry `codesift_ver`, and hook-written rows carry the right host.** The local log had no
+  version at all (3,196 entries over 7 days), so the standing rule for reading this telemetry — slice
+  by version *and* day, or you chase closed bugs — could be applied to the collector's rows but not to
+  the corpus an owner reads while debugging their own machine. Separately, `logWikiEvent` built `host`
+  from `CODESIFT_HOST_TAG ?? hostname()`, its own copy of the rule and the one writer that never read
+  `<dataDir>/host-id`; a hook inherits no launchd environment, so it always fell through to
+  `os.hostname()`, which on macOS follows DHCP. `popeInsightsPushCandidates` had the same volatile
+  name in what it reports to the insights server.
+- **The daemon's start is traced.** A `launchctl load` left the process alive with no listening socket
+  for 9+ minutes under load, and the log said nothing between launch and the first served request;
+  locating it took `sample <pid>`. `startDaemon` now prints one stderr line per stage — `config`,
+  `lock acquired`, `server module imported`, `listening on <port>` — elapsed from process start, since
+  almost all of that delay happened before `startDaemon` ran. A hang is the line that never arrives.
+  Off with `CODESIFT_DAEMON_BOOT_TRACE=0`.
+- **The macOS LaunchAgent runs at ordinary priority** (`ProcessType: Standard`), not `Background`,
+  which throttled the daemon for minutes on a loaded box.
+
 ## [0.18.0] — 2026-09-23
 
 Acts on the 2026-09-22 competitive review. Nothing here is a feature a competitor merely has — each
