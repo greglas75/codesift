@@ -34,11 +34,19 @@ export async function cleanupOrphanTempFiles(
       // A generation file whose WRITER IS STILL RUNNING is an in-flight write, not an orphan. The
       // age guard alone would eventually delete one: a large embedding batch can outlive the hour,
       // and deleting it mid-write turns a slow save into a corrupt one.
-      if (writerIsAlive(entry)) continue;
+      //
+      // PIDS RECYCLE, so that protection has to expire. macOS wraps them at 99,999 and this machine
+      // churns agent processes fast enough to get there in days — after which an unrelated live
+      // process can pin a dead writer's temp file forever, which is the leak this function exists to
+      // close. Past `PID_TRUST_WINDOW_MS` a name that still matches something running is far more
+      // likely a reused number than a write that has been in flight for a day. The largest artifact
+      // on this install is 1.7 GB; nothing legitimate is still flushing after 24 hours.
       const full = join(dir, entry);
       try {
         const info = await stat(full);
         if (info.mtimeMs > cutoff) continue;
+        const age = Date.now() - info.mtimeMs;
+        if (age < PID_TRUST_WINDOW_MS && writerPidIsAlive(entry)) continue;
         await unlink(full);
         removed++;
       } catch { /* raced with another cleaner — fine */ }
@@ -48,18 +56,45 @@ export async function cleanupOrphanTempFiles(
 }
 
 /**
- * True when a `.generation.<pid>.<uuid>` name belongs to a process that still exists.
+ * Largest number in a temp name that can plausibly be a process id.
+ *
+ * `.tmp.<n>` is ambiguous: `bm25-store` and `edge-cache` put a PID there, `embedding-store` puts
+ * `Date.now()`. A timestamp read as a pid would be asked about — harmlessly, since `kill` answers
+ * ESRCH for it — but bounding the range says which shape is meant instead of relying on that
+ * accident. macOS caps pids at 99,999 and Linux's `pid_max` ceiling is 2^22.
+ */
+const MAX_PLAUSIBLE_PID = 4 * 1024 * 1024;
+
+/**
+ * How long a live pid in a temp name is trusted as an in-flight write.
+ *
+ * PIDS RECYCLE. macOS wraps them at 99,999 and this machine churns agent processes fast enough to
+ * get there in days, after which an unrelated live process pins a dead writer's temp file forever —
+ * the leak this function exists to close, reintroduced through its own safety guard. Past this
+ * window a matching pid is far more likely a reused number than a write still in flight: the largest
+ * artifact on this install is 1.7 GB, and nothing legitimate is still flushing after a day.
+ */
+export const PID_TRUST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True when a `.generation.<pid>.<uuid>` or `.tmp.<pid>` name belongs to a process that still exists.
  *
  * `kill(pid, 0)` sends no signal; it only asks whether the id is addressable. EPERM means the
  * process exists and belongs to someone else — still alive, so still hands off. Anything else, and
  * any name without a parsable pid, is treated as dead: this runs beside an age guard, and the cost
  * of being wrong in that direction is one orphan surviving another hour.
+ *
+ * The `.tmp.<pid>` arm is what makes it SAFE to sweep on behalf of the stream writers
+ * (`bm25-store`, `edge-cache`). Their temp file is the only shape here whose write can outlive the
+ * age guard: the largest bm25 artifact on this machine is 1.7 GB, and a daemon whose event loop is
+ * seconds late takes far longer than an hour to flush it. Without this, adding a sweep to those
+ * writers would turn a slow save into a deleted one.
  */
-function writerIsAlive(entry: string): boolean {
-  const match = /\.generation\.(\d+)\./.exec(entry);
+export function writerPidIsAlive(entry: string): boolean {
+  const match = /\.(?:generation|tmp)\.(\d+)(?:\.|$)/.exec(entry);
   if (!match) return false;
   const pid = Number(match[1]);
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (!Number.isInteger(pid) || pid <= 0 || pid > MAX_PLAUSIBLE_PID) return false;
   try {
     process.kill(pid, 0);
     return true;

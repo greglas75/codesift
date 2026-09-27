@@ -4,6 +4,7 @@
 // saveChunkEmbeddings was already fixed for. It now streams, so these cover the mechanism that
 // replaced the join: round-trip fidelity, no temp-file residue, replace-not-append semantics, and
 // text that would corrupt a line-oriented format if it were written naively.
+import { spawnSync } from "node:child_process";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
@@ -121,8 +122,12 @@ describe("saveChunks", () => {
     // name is only how the file is claimed. Backdating the mtime is therefore the
     // only way to age it, and the fresh file below is what stops the sweep from
     // eating a concurrent writer's in-flight temp.
-    const stale = `${path}.tmp.1`;
-    const fresh = `${path}.tmp.2`;
+    // The pids here are load-bearing now: a `.tmp.<pid>` naming a RUNNING process is an in-flight
+    // write and is kept regardless of age (up to PID_TRUST_WINDOW_MS). These were `1` and `2` when
+    // the number meant nothing — and pid 1 is launchd, so "stale" had named itself after a process
+    // that never exits.
+    const stale = `${path}.tmp.${spawnSync(process.execPath, ["-e", ""]).pid}`;
+    const fresh = `${path}.tmp.${process.pid}`;
     writeFileSync(stale, "half a write", "utf-8");
     writeFileSync(fresh, "another writer, right now", "utf-8");
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
@@ -130,7 +135,8 @@ describe("saveChunks", () => {
 
     await saveChunks(path, [chunk(1)]);
 
-    expect(readdirSync(dir).filter((f) => f.includes(".tmp."))).toEqual(["abc123.chunks.ndjson.tmp.2"]);
+    expect(readdirSync(dir).filter((f) => f.includes(".tmp.")))
+      .toEqual([`abc123.chunks.ndjson.tmp.${process.pid}`]);
   });
 
   it("streams a chunk count large enough to exercise backpressure", async () => {

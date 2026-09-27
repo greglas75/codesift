@@ -366,6 +366,56 @@ never reused — so orphans accumulate forever: **100 files / 5.0 GB** in
 at the start of each save; the age guard is what keeps it from touching a
 concurrent writer's in-flight file.
 
+### Three ways that sweep was unreachable, and the growth loop above it (2026-09-27)
+
+By 2026-09-27 the data dir was **141 GB** with **149 temp files holding 11.15 GB**, the oldest from
+31 July — a day after a `prune` that had run and reported success. Nothing about that was a missing
+mechanism; all three cleanup paths existed and each was blocked separately:
+
+- **`bm25-store` and `edge-cache` never called the sweeper.** They were the only large-artifact
+  writers that did not, and they held **6.93 of the 7.17 GB** of `.tmp.*`. They now call it.
+- **`writerPidIsAlive` parsed only `.generation.<pid>.`**, so those two writers' `.tmp.<pid>` shape
+  read as a dead writer. Adding a sweep without teaching it that shape would have deleted a LIVE
+  1.7 GB bm25 write: the hour guard is not enough when the daemon's event loop is 38 s late. The
+  trust is bounded by `PID_TRUST_WINDOW_MS` (24 h) because **pids recycle** — macOS wraps at 99,999,
+  and an unrelated live process would otherwise pin an abandoned write forever.
+- **`prune` skipped the tail before it could see it.** `artifactPattern()` grew `.tmp.*` /
+  `.generation.*` arms so these could be reclaimed, and the `live.has(hash)` check above the sweep
+  made those arms reachable only for a repo being de-registered in the same run. **1,507 of 1,511
+  registry roots were present**, so that was essentially every repo. A temp file is never live data —
+  readers open the target name, never the tail — so it is now judged by age and writer liveness, not
+  registry membership.
+
+**The shared embedding cache was a growth LOOP, not a leak.** The read side stops at
+`sharedCacheBudgetBytes()` (256 MB here) and `appendSharedCache` dedups against the map that read
+produced — so every key past the budget is invisible to every process that opens the file, and is
+appended again on the next pass. Measured:
+
+| `shared-embeddings.v2.bin` | |
+|---|---|
+| file | 12.97 GB · 3,309,550 records |
+| read window | 268 MB · 87,381 records — **2.6% of the file** |
+| never read | 12.70 GB · 3,222,169 records — 97.4% |
+| duplicates within the tail | 1,957,738 — **60.8%** |
+| duplicates overall | **59.2%** |
+
+v1's unconditional append was treated as a defect at 11.3% repeats; this was five times worse, and
+arrived by bounding the reader without bounding the writer. `compactIfUnreadableTailDominates`
+rewrites the file from the resident map once per process above `3 ×` budget. It cannot lose a usable
+vector: the budget is derived from RAM (or a pinned env var), so every process reads the SAME prefix
+and anything outside it was already unreachable. Live result: **12.97 GB → 270 MB**.
+
+**Write-ahead logs had no owner either.** SQLite truncates a `-wal` when the last connection closes
+cleanly, and this server's connections routinely do not — a stdio server exits on client disconnect,
+the daemon OOMs, `launchctl unload` is a signal. Measured: **1,488 logs holding 4.17 GB**, 682 of
+them above 64 KB. `prune` now checkpoints those (`wal_checkpointed` / `wal_reclaimed_gb`); a log
+whose database is held open elsewhere is left exactly as it was. 4.17 GB → 0.01 GB.
+
+**What was NOT the cause, so nobody re-runs it:** deleted worktrees. The obvious hypothesis was that
+most of the 1,535 indexes belonged to worktrees agents had removed — measured, **4** of 1,511
+registry roots were gone, holding 0.1 GB. The 94 GB in 153 worktree indexes is the cost of worktrees
+that still exist, which is a workflow question, not a retention bug. Data dir 141 GB → 111 GB.
+
 ## Auditing the registry — three traps, all hit on 2026-08-17
 
 **`index_path` is an identifier, not a path that must exist.** It always carries the canonical

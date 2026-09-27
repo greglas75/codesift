@@ -1,0 +1,158 @@
+// The read budget was added without bounding the write side, and that combination is a growth loop
+// rather than a slow leak: the reader stops at `sharedCacheBudgetBytes()`, `appendSharedCache` dedups
+// against the map that read produced, so every key past the budget is invisible to every process
+// that opens the file and gets appended again on the next pass.
+//
+// Measured on this install 2026-09-27, before compaction existed:
+//
+//   file                 12.97 GB, 3,309,550 records
+//   read window             268 MB,    87,381 records  — 2.6% of the file
+//   never read            12.70 GB, 3,222,169 records  — 97.4%
+//   duplicates in the tail            1,957,738 records — 60.8% of it
+//   duplicates overall                                   59.2% of the file
+//
+// v1's unconditional append was called a defect at 11.3% repeats. This was five times worse.
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+const DIM = 768;
+const VECTOR_BYTES = DIM * 4;
+
+let dir: string;
+let prevDataDir: string | undefined;
+let prevBudget: string | undefined;
+
+async function fresh() {
+  vi.resetModules();
+  return import("../../src/storage/shared-embedding-cache.js");
+}
+
+/** Write n distinct vectors through the real writer, so the file is exactly what production makes. */
+async function seed(n: number): Promise<string[]> {
+  const { appendSharedCache, contentKey, _resetSharedCacheForTests } = await fresh();
+  _resetSharedCacheForTests();
+  const keys: string[] = [];
+  const entries = [];
+  for (let i = 0; i < n; i++) {
+    const key = contentKey("m", DIM, `text-${i}`);
+    keys.push(key);
+    const vec = new Float32Array(DIM);
+    vec[0] = i;
+    entries.push({ key, vec });
+  }
+  appendSharedCache(entries);
+  return keys;
+}
+
+function cacheFile(): string {
+  return join(dir, "shared-embeddings.v2.bin");
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "codesift-compact-"));
+  prevDataDir = process.env["CODESIFT_DATA_DIR"];
+  prevBudget = process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
+  process.env["CODESIFT_DATA_DIR"] = dir;
+  vi.spyOn(console, "error").mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+  else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
+  if (prevBudget === undefined) delete process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
+  else process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = prevBudget;
+  rmSync(dir, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+describe("shared cache compaction", () => {
+  it("rewrites a file whose unreadable tail dominates it", async () => {
+    // 2,000 vectors is ~6.1 MB; a 1 MB budget reads ~341 of them, so 83% of the file is a tail no
+    // process can ever reach.
+    await seed(2000);
+    const before = statSync(cacheFile()).size;
+    expect(before).toBeGreaterThan(5 * 1024 * 1024);
+
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    const { loadSharedCache } = await fresh();
+    const map = await loadSharedCache();
+
+    const after = statSync(cacheFile()).size;
+    expect(after).toBeLessThan(before);
+    // What remains is exactly what the reader loaded — nothing usable was dropped, because anything
+    // past the budget was already unreachable by construction.
+    expect(after).toBeLessThanOrEqual(map.size * VECTOR_BYTES + map.size * 32);
+    expect(map.size).toBeGreaterThan(0);
+  });
+
+  it("the rewritten file reads back identically", async () => {
+    // A compaction that lost or corrupted the prefix would be far worse than a large file: the
+    // vectors it serves would still look plausible.
+    const keys = await seed(2000);
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    const first = await (await fresh()).loadSharedCache();
+    const kept = [...first.keys()];
+
+    const second = await (await fresh()).loadSharedCache();
+    expect(second.size).toBe(first.size);
+    for (const key of kept) {
+      expect(second.get(key)).toEqual(first.get(key));
+    }
+    // Indices are positional, so a shifted read would show up as a wrong leading float.
+    expect(second.get(keys[0]!)?.[0]).toBe(0);
+  });
+
+  it("does not blame a corrupt record for a deliberate budget stop", async () => {
+    // Both messages printed for one clean 12.97 GB file on 2026-09-27: the budget notice, and
+    // "stopped early at an unreadable record". The second names corruption as the cause of a limit,
+    // which sends the reader looking for a data-integrity problem that does not exist.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await seed(2000);
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    await (await fresh()).loadSharedCache();
+    const said = spy.mock.calls.flat().join(" ");
+    expect(said).toMatch(/budget/i);
+    expect(said).not.toMatch(/unreadable record/);
+  });
+
+  it("leaves a file alone while it still fits within the slack", async () => {
+    await seed(200);                                        // ~614 KB
+    const before = statSync(cacheFile()).size;
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";      // slack is 3 MB
+    await (await fresh()).loadSharedCache();
+    expect(statSync(cacheFile()).size).toBe(before);
+  });
+
+  it("does not delete the cache when the read was disabled", async () => {
+    // Budget 0 means "do not read", so the map is empty for a reason that has nothing to do with
+    // the file's contents. Rewriting from it would destroy a perfectly good cache.
+    await seed(2000);
+    const before = statSync(cacheFile()).size;
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "0";
+    const map = await (await fresh()).loadSharedCache();
+    expect(map.size).toBe(0);
+    expect(statSync(cacheFile()).size).toBe(before);
+  });
+
+  it("compacts at most once per process", async () => {
+    await seed(2000);
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    const mod = await fresh();
+    await mod.loadSharedCache();
+    const afterFirst = statSync(cacheFile()).size;
+    await mod.loadSharedCache();
+    expect(statSync(cacheFile()).size).toBe(afterFirst);
+  });
+
+  it("leaves no temp sibling behind", async () => {
+    // This writer's temp has no repository hash, so `artifactPattern()` cannot match it and `prune`
+    // could never reclaim one.
+    await seed(2000);
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    await (await fresh()).loadSharedCache();
+    expect(readdirSync(dir).filter((n) => n.includes(".tmp."))).toEqual([]);
+    expect(existsSync(cacheFile())).toBe(true);
+  });
+});

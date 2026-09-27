@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, appendFileSync, statSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, rename, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { homedir, totalmem } from "node:os";
 import { join } from "node:path";
+import { cleanupOrphanTempFiles } from "./_shared.js";
 
 /**
  * Embeddings keyed by CONTENT, shared across every repository.
@@ -271,7 +272,12 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
           p += total;
         }
         carry = p < data.length ? Buffer.from(data.subarray(p)) : Buffer.alloc(0);
-        if (carry.length > 0) skippedTail = true;
+        // A leftover carry means a record spans the slab boundary — EXCEPT when the budget stop just
+        // abandoned the rest of the slab on purpose. Conflating the two made every budget stop also
+        // report "stopped early at an unreadable record", which names a corrupt file as the cause of
+        // a deliberate limit. Observed on this install 2026-09-27: both messages printed for one
+        // clean 12.97 GB file.
+        if (carry.length > 0 && !stoppedAtBudget) skippedTail = true;
       }
     } catch {
       // Unreadable — behave as if empty.
@@ -303,7 +309,104 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 
   memory = map;
   loadedFrom = path;
+  if (budget > 0) await compactIfUnreadableTailDominates(path, map, budget);
   return map;
+}
+
+/**
+ * How far past the read budget the file may grow before it is rewritten.
+ *
+ * Above the budget the reader stops, so every further byte is written and never read again. Two
+ * budgets of slack keeps a single oversized append from triggering a rewrite, while bounding the
+ * dead tail to roughly the size of the live part.
+ */
+const COMPACT_ABOVE_BUDGETS = 3;
+
+/** Set once a process has rewritten the file, so a long-lived server compacts at most once. */
+let compacted = false;
+
+/**
+ * Rewrite the file to hold only the records the reader can actually use.
+ *
+ * The read side stops at `sharedCacheBudgetBytes()` and the write side dedups against the map that
+ * read produced — so a key beyond the budget is invisible to every process that opens the file, and
+ * gets appended again on the next pass. That is a growth loop, not a slow leak, and it is what the
+ * budget's own comment ("a partially loaded cache is still completely correct") did not account for.
+ *
+ * Measured on this machine 2026-09-27, before this existed:
+ *
+ *   file                 12.97 GB, 3,309,550 records
+ *   read window             268 MB,    87,381 records  — 2.6% of the file
+ *   never read            12.70 GB, 3,222,169 records  — 97.4%
+ *   duplicates in the tail            1,957,738 records — 60.8% of it
+ *   duplicates overall                                   59.2% of the file
+ *
+ * v1's unconditional append was called a defect at 11.3% repeats. This was five times worse, and
+ * arrived by adding a bound to the reader without bounding the writer.
+ *
+ * Compacting to the resident map cannot lose a usable vector: the budget is derived from RAM (or a
+ * pinned env var), so every process reads the SAME prefix, and anything outside it was already
+ * unreachable. The rewrite is the conservative direction — it turns bytes nothing could read into
+ * bytes nothing needs to store.
+ */
+async function compactIfUnreadableTailDominates(
+  path: string,
+  map: Map<string, Float32Array>,
+  budget: number,
+): Promise<void> {
+  // An empty map means the read found nothing — a missing file, an unreadable one, or a first run.
+  // Rewriting from it would delete a cache this process simply failed to open.
+  if (compacted || map.size === 0) return;
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return;
+  }
+  if (size <= budget * COMPACT_ABOVE_BUDGETS) return;
+  compacted = true;
+
+  // Its temp sibling has no repository hash, so `artifactPattern()` cannot match it and `prune`
+  // can never reclaim one — this writer has to sweep its own.
+  await cleanupOrphanTempFiles(path);
+  const temp = `${path}.tmp.${process.pid}`;
+  try {
+    const handle = await open(temp, "w");
+    try {
+      // Batched like `appendSharedCache`, for the same reason: one buffer per record is millions of
+      // syscalls, and one buffer for the whole map is the v1 allocation bug rebuilt.
+      let batch: Buffer[] = [];
+      let batchBytes = 0;
+      for (const [key, vec] of map) {
+        const rec = encodeRecord(key, vec);
+        if (rec === null) continue;
+        batch.push(rec);
+        batchBytes += rec.length;
+        if (batchBytes >= MAX_APPEND_BYTES) {
+          await handle.write(Buffer.concat(batch));
+          batch = [];
+          batchBytes = 0;
+        }
+      }
+      if (batch.length > 0) await handle.write(Buffer.concat(batch));
+    } finally {
+      await handle.close();
+    }
+    await rename(temp, path);
+    console.error(
+      `[codesift] shared embedding cache: rewrote ${(size / 1024 ** 3).toFixed(2)} GB as ` +
+        `${map.size} vectors — everything past the ` +
+        `${(budget / 1024 ** 2).toFixed(0)} MB read budget was unreachable and was being ` +
+        `re-appended on every pass.`,
+    );
+  } catch {
+    // A failed compaction leaves the original in place, which is correct and merely large.
+    try {
+      await unlink(temp);
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 function encodeRecord(key: string, vec: Float32Array): Buffer | null {

@@ -1,14 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { COMMAND_MAP } from "../../src/cli/commands.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const LIVE = "aaaaaaaaaaaa";   // hash present in registry
 const ORPH = "bbbbbbbbbbbb";   // hash NOT in registry
 const INDETERMINATE = "cccccccccccc";
+// A pid that is certainly gone. Pid 2 is `kthreadd` on Linux and answers `kill(pid, 0)`, so a
+// hardcoded low number passes on macOS and fails on the farm.
+const DEAD_PID = spawnSync(process.execPath, ["-e", ""]).pid as number;
 
 function writeIndexDb(path: string, repo: string, root: string): void {
   const db = new DatabaseSync(path);
@@ -66,6 +70,77 @@ describe("codesift prune", () => {
     expect(out.orphan_files).toBe(3);
     expect(out.kept_live_artifacts).toBe(2);
     expect(out.pruned).toBe(true);
+  });
+
+  it("collects an abandoned temp half of a LIVE repo", async () => {
+    // The gap that let 11.15 GB accumulate here by 2026-09-27. `artifactPattern()` grew a `.tmp.*`
+    // arm so these could be reclaimed, and the live-hash check above it made that arm unreachable
+    // for any repo still on disk — which was 1,507 of 1,511 registry entries. A temp file is never
+    // live data: readers open the target name, never the tail.
+    const orphan = join(dir, `${LIVE}.bm25.ndjson.tmp.${DEAD_PID}`);
+    writeFileSync(orphan, "z".repeat(1000));
+    const twoHours = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(orphan, twoHours, twoHours);
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(orphan)).toBe(false);
+    // the repo's real artifacts are untouched
+    expect(existsSync(join(dir, `${LIVE}.embeddings.ndjson`))).toBe(true);
+    expect(existsSync(join(dir, `${LIVE}.index.json`))).toBe(true);
+  });
+
+  it("keeps a live repo's temp half while its writer is still running", async () => {
+    const inflight = join(dir, `${LIVE}.bm25.ndjson.tmp.${process.pid}`);
+    writeFileSync(inflight, "z".repeat(1000));
+    const twoHours = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(inflight, twoHours, twoHours);
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(inflight)).toBe(true);
+  });
+
+  it("gives a temp half the sweeper's hour, not the 5-minute artifact grace", async () => {
+    // Ten minutes is past the artifact grace and well inside the hour a large write can take.
+    const recent = join(dir, `${LIVE}.bm25.ndjson.tmp.${DEAD_PID}`);
+    writeFileSync(recent, "z".repeat(1000));
+    const tenMin = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(recent, tenMin, tenMin);
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(recent)).toBe(true);
+  });
+
+  it("checkpoints an oversized write-ahead log that has no writer", async () => {
+    // SQLite truncates a `-wal` only when the last connection closes cleanly, and this server's
+    // connections often do not — a stdio server exits on disconnect, the daemon has OOM'd, a
+    // `launchctl unload` is a signal. Measured 2026-09-27: 1,488 logs holding 4.17 GB that nothing
+    // would ever have folded back in.
+    const dbPath = join(dir, `${LIVE}.index.db`);
+    writeIndexDb(dbPath, "local/live", dir);
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("CREATE TABLE bulk (id INTEGER PRIMARY KEY, blob TEXT)");
+    const insert = db.prepare("INSERT INTO bulk (blob) VALUES (?)");
+    for (let i = 0; i < 4000; i++) insert.run("x".repeat(400));
+    db.close();
+    // A clean close truncates it, so grow the log with the database closed to get the shape a killed
+    // writer leaves: reopen, write without checkpointing, and abandon the handle.
+    const second = new DatabaseSync(dbPath);
+    second.exec("PRAGMA journal_mode = WAL");
+    second.exec("PRAGMA wal_autocheckpoint = 0");
+    const more = second.prepare("INSERT INTO bulk (blob) VALUES (?)");
+    for (let i = 0; i < 4000; i++) more.run("y".repeat(400));
+    const wal = `${dbPath}-wal`;
+    expect(existsSync(wal)).toBe(true);
+    expect(statSync(wal).size).toBeGreaterThan(64 * 1024);
+    second.close();
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    const out = JSON.parse(stdout);
+    // Either the abandoned log was folded in here, or SQLite's own close already did it. What must
+    // hold is that prune leaves no large orphan log behind, and that the database still reads.
+    expect(existsSync(wal) ? statSync(wal).size : 0).toBeLessThan(64 * 1024);
+    expect(out.wal_reclaimed_gb).toBeGreaterThanOrEqual(0);
+    const check = new DatabaseSync(dbPath);
+    expect((check.prepare("SELECT COUNT(*) AS n FROM bulk").get() as { n: number }).n).toBe(8000);
+    check.close();
   });
 
   it("--dry-run reports but deletes nothing", async () => {

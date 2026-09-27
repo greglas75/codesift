@@ -247,13 +247,36 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       return true;
     }
   };
+  // An abandoned half of an interrupted write is garbage no matter WHOSE it is.
+  //
+  // `artifactPattern()` learned the `.tmp.*` / `.generation.*` tails so these could be reclaimed —
+  // and then the live-hash check below made that unreachable for any repo still on disk, which is
+  // essentially all of them (measured 2026-09-27: 1,507 of 1,511 registry roots present). So the
+  // tails were collected only for repos that were *also* being de-registered. Result on this
+  // machine: 149 temp files holding 11.15 GB, the oldest from 31 July, surviving a `prune` that had
+  // run the day before and reported success.
+  //
+  // A temp file is never live data by construction: readers open the target name, never the tail.
+  // The rules that decide are therefore the same two the in-process sweeper uses — an hour of age,
+  // and a writer that is no longer running — not registry membership.
+  const tempTail = /\.(?:tmp|generation)\./;
+  const orphanTempAgeMs = 60 * 60 * 1000;
+  const { writerPidIsAlive, PID_TRUST_WINDOW_MS: pidTrustWindowMs } = await import("../storage/_shared.js");
   let files = 0, bytes = 0, kept = 0;
   for (const name of readdirSync(dataDir)) {
     const m = re.exec(name);
     if (!m) continue;
+    const isTempTail = tempTail.test(name);
     // A stale entry removed during THIS run gets one full run of retention.
     // The next prune re-evaluates its database metadata before collecting it.
-    if (live.has(m[1]!) || staleHashes.has(m[1]!)) { kept++; continue; }
+    if (!isTempTail && (live.has(m[1]!) || staleHashes.has(m[1]!))) { kept++; continue; }
+    // Pid liveness is trusted only inside the sweeper's own window — see PID_TRUST_WINDOW_MS. A
+    // recycled pid must not pin an abandoned write forever; that is the leak, not the guard.
+    if (isTempTail) {
+      let mtimeMs = 0;
+      try { mtimeMs = statSync(join(dataDir, name)).mtimeMs; } catch { kept++; continue; }
+      if (Date.now() - mtimeMs < pidTrustWindowMs && writerPidIsAlive(name)) { kept++; continue; }
+    }
     const full = join(dataDir, name);
     try {
       const fileStat = statSync(full);
@@ -261,7 +284,12 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       // committed its registry entry. Delay collection for one run and also
       // re-read registry immediately before every destructive unlink.
       const ageMs = Date.now() - fileStat.mtimeMs;
-      if (ageMs < pruneGraceMs || registryProtectsHash(m[1]!)) {
+      // A temp tail gets the sweeper's hour rather than the 5-minute grace, and is NOT protected by
+      // its hash being registered — that protection is the whole reason these accumulated. The hour
+      // is what covers a write still in flight whose pid we could not read from the name.
+      if (isTempTail) {
+        if (ageMs < orphanTempAgeMs) { kept++; continue; }
+      } else if (ageMs < pruneGraceMs || registryProtectsHash(m[1]!)) {
         kept++;
         continue;
       }
@@ -292,7 +320,49 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     } catch { /* skip unreadable/already-gone */ }
   }
 
+  // Checkpoint write-ahead logs that no longer have a writer.
+  //
+  // SQLite truncates a `-wal` when the LAST connection closes cleanly. This server's connections
+  // frequently do not: a stdio server exits on client disconnect, the daemon has OOM'd, and a
+  // `launchctl unload` is a signal. Each of those leaves the log on disk, and nothing ever comes
+  // back to that database to fold it in — so it is derived data with no owner, which is exactly what
+  // this command is for. Measured 2026-09-27: 1,488 logs holding 4.17 GB, of which 682 were above
+  // 64 KB; checkpointing those brought the total to 0.01 GB.
+  //
+  // A live index is the normal case here, not an edge case, so this must never disturb one: opening
+  // a database that another process holds throws or the checkpoint is refused, and either way the
+  // log is left exactly as it was. Small logs are skipped rather than opened — a busy index will
+  // just rewrite its own, and the bytes are not worth the syscalls.
+  let walBefore = 0, walAfter = 0, walCheckpointed = 0;
+  if (!dryRun) {
+    const { DatabaseSync } = await import("node:sqlite");
+    for (const name of readdirSync(dataDir)) {
+      if (!name.endsWith(".index.db-wal")) continue;
+      const full = join(dataDir, name);
+      let size: number;
+      try {
+        size = statSync(full).size;
+      } catch {
+        continue;
+      }
+      walBefore += size;
+      if (size < 64 * 1024) { walAfter += size; continue; }
+      try {
+        const db = new DatabaseSync(join(dataDir, name.slice(0, -"-wal".length)));
+        try {
+          db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          walCheckpointed++;
+        } finally {
+          db.close();
+        }
+      } catch { /* held open elsewhere, or unreadable — leave the log alone */ }
+      try { walAfter += statSync(full).size; } catch { /* gone */ }
+    }
+  }
+
   output({
+    wal_checkpointed: walCheckpointed,
+    wal_reclaimed_gb: +((walBefore - walAfter) / 1e9).toFixed(2),
     indeterminate_databases: indeterminate.length,
     indeterminate_examples: indeterminate.slice(0, 5),
     rescued_repos: rescued.length,

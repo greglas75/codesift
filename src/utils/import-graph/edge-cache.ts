@@ -4,6 +4,7 @@ import { rename, unlink, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { FileEntry } from "../../types.js";
 import type { ImportEdgeExtras } from "./types.js";
+import { cleanupOrphanTempFiles } from "../../storage/_shared.js";
 
 /**
  * Remember what each file imported, so an unchanged file is never parsed again.
@@ -108,6 +109,10 @@ export async function saveEdgeCache(
   cache: EdgeCache,
 ): Promise<void> {
   const target = edgeCachePathFor(indexPath);
+  // Same reason as `saveBM25Index`: the `catch` below cannot run for a writer that was killed, so
+  // without this the temp half survives forever — `prune` skips it because the hash belongs to a
+  // live repo.
+  await cleanupOrphanTempFiles(target);
   // Temp + rename, like every other artifact here: a process killed mid-write must not leave a
   // truncated file that the next start would read as complete.
   const temp = `${target}.tmp.${process.pid}`;

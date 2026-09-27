@@ -3,6 +3,7 @@ import { rename, unlink, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { BM25Index } from "./bm25.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
+import { cleanupOrphanTempFiles } from "../storage/_shared.js";
 
 /**
  * Persist a BM25 index next to the code index it was built from.
@@ -73,6 +74,13 @@ export async function saveBM25Index(
   code: CodeIndex,
 ): Promise<void> {
   const target = bm25PathFor(indexPath);
+  // Reclaim temp halves left by a writer that was KILLED rather than failed — the `catch` below
+  // only runs when the write throws. This writer produces the largest orphans in the data dir by a
+  // wide margin: measured 2026-09-27, 13 abandoned `.bm25.ndjson.tmp.*` holding 6.93 GB of the
+  // 7.17 GB total, the oldest three weeks old. It was the only large-artifact writer that never
+  // swept, and `prune` cannot reach these either — its sweep skips any hash belonging to a LIVE
+  // repo, which is what every one of those 13 was.
+  await cleanupOrphanTempFiles(target);
   // Temp + rename, like every other artifact here: a process killed mid-write must not leave a
   // truncated file that the next start would read as a complete index.
   const temp = `${target}.tmp.${process.pid}`;
