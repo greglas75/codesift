@@ -74,6 +74,16 @@ export function getConversationBM25Index(repoName: string, freshAsOfMs = 0): BM2
   return index;
 }
 
+/**
+ * Whether an entry exists at all, without touching recency or freshness.
+ *
+ * Lets the caller pay for a freshness read ONLY when there is something to invalidate. Asking
+ * unconditionally put a `loadIndexSummary` in front of every repo on the pass where all of them miss.
+ */
+export function hasConversationBM25Index(repoName: string): boolean {
+  return bm25Indexes.has(repoName);
+}
+
 export function setConversationBM25Index(repoName: string, index: BM25Index, builtAtMs = Date.now()): void {
   bm25Indexes.delete(repoName);
   bm25Indexes.set(repoName, index);

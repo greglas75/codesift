@@ -1,9 +1,10 @@
 import { readdir, stat, readFile } from "node:fs/promises";
 import { join, relative, basename } from "node:path";
 import { extractConversationSymbols } from "../parser/symbol-extractor.js";
-import { saveIndex, getIndexPath } from "../storage/index-store.js";
+import { saveIndex, getIndexPath, loadIndex, loadIndexSummary } from "../storage/index-store.js";
 import { registerRepo } from "../storage/registry.js";
-import { buildBM25IndexYielding } from "../search/bm25.js";
+import { buildBM25IndexYielding, updateBM25ForFile } from "../search/bm25.js";
+import { loadBM25Index, saveBM25Index } from "../search/bm25-store.js";
 import { loadConfig } from "../config.js";
 import { embedSymbols } from "./index-tools.js";
 import { setConversationBM25Index } from "./conversation-cache.js";
@@ -32,6 +33,18 @@ export interface IndexConversationsResult {
   compacted_sessions: number;
   /** Wall-clock time for the entire operation (ms). */
   elapsed_ms: number;
+  /**
+   * True when nothing was re-read because every `.jsonl` matched its recorded mtime.
+   *
+   * Additive and optional so a caller that does not know about it still reads the counts. It exists
+   * because a skip cannot report `compacted_sessions` — that is not stored — and a silent 0 there
+   * would be indistinguishable from "scanned, found none".
+   */
+  /** True when only the changed sessions were re-extracted rather than the whole directory. */
+  incremental?: boolean;
+  /** How many sessions were re-extracted or dropped on an incremental pass. */
+  changed_sessions?: number;
+  unchanged?: boolean;
 }
 
 
@@ -56,6 +69,49 @@ export async function indexConversations(
   const repoName = `conversations/${basename(rootPath)}`;
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
+  // Nothing detected change, so every call did everything: read every .jsonl, re-extract every turn,
+  // rebuild the BM25 index. `autoDiscoverConversations` runs this on server start, and the largest
+  // conversation directory here is 160,626 turns / 72 MB of source whose BM25 build alone measures
+  // 35.8 s — paid on every spawn, for a directory that usually gained one session or nothing.
+  //
+  // It is also what made persisting the index pointless: `persistConversationIndex` stamps
+  // `updated_at: Date.now()`, so an unconditional rescan invalidated its own cache every time.
+  const unchanged = await conversationsUnchanged(rootPath, indexPath);
+  if (unchanged) {
+    return {
+      sessions_found: unchanged.sessions,
+      turns_indexed: unchanged.turns,
+      skipped_noise_records: 0,
+      compacted_sessions: 0,
+      elapsed_ms: Date.now() - startTime,
+      unchanged: true,
+    };
+  }
+
+  // Re-extract only the sessions that moved.
+  //
+  // The skip above covers a directory nothing touched, which is every project except the one being
+  // worked in. The ACTIVE project's directory changes on every turn, so for it the skip can never
+  // fire — and a full pass over the largest one here measures 156 s (211 sessions, 164,500 turns).
+  // `autoDiscoverConversations` runs on every server spawn, so that was paid per session, on one
+  // thread, in the process whose event loop is the bottleneck.
+  //
+  // A conversation log is append-only and sessions are independent files, which is the case
+  // `updateBM25ForFile` already exists for: swap the changed file's symbols in place rather than
+  // rebuilding the vocabulary for all 164,500 turns.
+  const incremental = await incrementalConversationUpdate(rootPath, repoName, indexPath, options);
+  if (incremental) {
+    return {
+      sessions_found: incremental.sessions,
+      turns_indexed: incremental.turns,
+      skipped_noise_records: 0,
+      compacted_sessions: 0,
+      elapsed_ms: Date.now() - startTime,
+      incremental: true,
+      changed_sessions: incremental.changed,
+    };
+  }
+
   const scan = await scanConversationFiles(rootPath, repoName);
   // Explicit call embeds by default; auto-discovery passes embed:false (see below).
   await persistConversationIndex(rootPath, repoName, indexPath, scan, { embed: options?.embed ?? true });
@@ -67,6 +123,187 @@ export async function indexConversations(
     compacted_sessions: scan.compacted,
     elapsed_ms: Date.now() - startTime,
   };
+}
+
+/**
+ * Counts from the stored index when the directory is byte-for-byte the same, otherwise null.
+ *
+ * Compares the SET of `.jsonl` files and each one's mtime against what the index recorded. A
+ * conversation log is append-only, so an appended turn moves the mtime; a new session adds a path;
+ * a deleted one removes it. Any of those, or a summary that cannot be read, means rescan — the
+ * conservative direction, since the cost of rescanning is time and the cost of skipping wrongly is
+ * a search that cannot see a conversation.
+ *
+ * `compacted_sessions` is not stored and cannot be recovered here, so a skip reports 0 for it rather
+ * than a number it would have to invent; `unchanged: true` in the result says which kind of answer
+ * this is.
+ */
+async function conversationsUnchanged(
+  rootPath: string,
+  indexPath: string,
+): Promise<{ sessions: number; turns: number } | null> {
+  let summary: Awaited<ReturnType<typeof loadIndexSummary>>;
+  try {
+    summary = await loadIndexSummary(indexPath);
+  } catch {
+    return null;
+  }
+  if (!summary || summary.files.length === 0) return null;
+
+  let entries: string[];
+  try {
+    entries = (await readdir(rootPath)).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return null;
+  }
+  if (entries.length !== summary.files.length) return null;
+
+  const recorded = new Map<string, number>();
+  for (const file of summary.files) {
+    const mtime = file.mtime_ms ?? 0;
+    // An index written before mtimes were recorded cannot be compared — rescan rather than guess.
+    if (mtime === 0) return null;
+    recorded.set(file.path, mtime);
+  }
+
+  let turns = 0;
+  for (const name of entries) {
+    const expected = recorded.get(name);
+    if (expected === undefined) return null;
+    try {
+      if ((await stat(join(rootPath, name))).mtimeMs !== expected) return null;
+    } catch {
+      return null;
+    }
+  }
+  for (const file of summary.files) turns += file.symbol_count;
+  return { sessions: summary.files.length, turns };
+}
+
+/**
+ * Swap the changed sessions into the stored index, or null when that cannot be done safely.
+ *
+ * Returns null — meaning "fall back to a full pass" — whenever anything is not certainly known: no
+ * stored index, an index written before mtimes were recorded, no persisted BM25 index to amend, or
+ * too much of the directory changed for amending to be cheaper than rebuilding. Falling back is
+ * always correct; amending on a wrong assumption produces an index that searches cleanly and is
+ * missing turns.
+ *
+ * Embeddings deliberately stay on the full path. They are opt-in, they are the expensive part when
+ * enabled, and an incremental embed needs its own per-symbol accounting rather than a file-level one.
+ */
+async function incrementalConversationUpdate(
+  rootPath: string,
+  repoName: string,
+  indexPath: string,
+  options?: { embed?: boolean },
+): Promise<{ sessions: number; turns: number; changed: number } | null> {
+  if (options?.embed) return null;
+
+  let stored: CodeIndex | null;
+  try {
+    stored = await loadIndex(indexPath);
+  } catch {
+    return null;
+  }
+  if (!stored || stored.files.length === 0 || stored.symbols.length === 0) return null;
+
+  let entries: string[];
+  try {
+    entries = (await readdir(rootPath)).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return null;
+  }
+
+  const recorded = new Map<string, FileEntry>();
+  for (const file of stored.files) {
+    if ((file.mtime_ms ?? 0) === 0) return null;
+    recorded.set(file.path, file);
+  }
+
+  const present = new Set(entries);
+  const removed = [...recorded.keys()].filter((path) => !present.has(path));
+  const changed: Array<{ path: string; mtimeMs: number }> = [];
+  for (const name of entries) {
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await stat(join(rootPath, name))).mtimeMs;
+    } catch {
+      return null;
+    }
+    if (recorded.get(name)?.mtime_ms !== mtimeMs) changed.push({ path: name, mtimeMs });
+  }
+  if (changed.length === 0 && removed.length === 0) return null; // the caller's skip already handled this
+
+  // Past half the directory, amending file by file stops being cheaper than one pass — and the full
+  // path also refreshes `compacted_sessions` and centrality, which this one does not.
+  if (changed.length + removed.length > Math.max(1, Math.floor(entries.length / 2))) return null;
+
+  const bm25 = await loadBM25Index(indexPath, stored);
+  if (!bm25) return null;
+
+  const symbolsByFile = new Map<string, CodeSymbol[]>();
+  for (const symbol of stored.symbols) {
+    const list = symbolsByFile.get(symbol.file);
+    if (list) list.push(symbol);
+    else symbolsByFile.set(symbol.file, [symbol]);
+  }
+
+  const files = new Map(recorded);
+  for (const path of removed) {
+    updateBM25ForFile(bm25, path, []);
+    symbolsByFile.delete(path);
+    files.delete(path);
+  }
+  for (const { path, mtimeMs } of changed) {
+    let source: string;
+    try {
+      source = await readFile(join(rootPath, path), "utf-8");
+    } catch {
+      return null;
+    }
+    const symbols = extractConversationSymbols(source, path, repoName);
+    updateBM25ForFile(bm25, path, symbols);
+    symbolsByFile.set(path, symbols);
+    files.set(path, {
+      path,
+      language: "conversation",
+      symbol_count: symbols.length,
+      last_modified: mtimeMs,
+      mtime_ms: mtimeMs,
+    });
+  }
+
+  const mergedSymbols: CodeSymbol[] = [];
+  for (const list of symbolsByFile.values()) mergedSymbols.push(...list);
+  const mergedFiles = [...files.values()];
+  const codeIndex: CodeIndex = {
+    repo: repoName,
+    root: rootPath,
+    symbols: mergedSymbols,
+    files: mergedFiles,
+    created_at: stored.created_at,
+    updated_at: Date.now(),
+    symbol_count: mergedSymbols.length,
+    file_count: mergedFiles.length,
+  };
+  await saveIndex(indexPath, codeIndex);
+  // The amended index describes the code index that was just written, so its header has to be
+  // stamped from THAT object — otherwise every search rejects it and rebuilds, which is the state
+  // this whole path exists to leave behind.
+  await saveBM25Index(indexPath, bm25, codeIndex);
+  setConversationBM25Index(repoName, bm25, codeIndex.updated_at);
+  const meta: RepoMeta = {
+    name: repoName,
+    root: rootPath,
+    index_path: indexPath,
+    symbol_count: codeIndex.symbol_count,
+    file_count: codeIndex.file_count,
+    updated_at: codeIndex.updated_at,
+  };
+  await registerRepo(loadConfig().registryPath, meta);
+
+  return { sessions: mergedFiles.length, turns: mergedSymbols.length, changed: changed.length + removed.length };
 }
 
 async function scanConversationFiles(rootPath: string, repoName: string): Promise<ConversationScan> {
@@ -83,7 +320,9 @@ async function scanConversationFiles(rootPath: string, repoName: string): Promis
 
     // Read and extract
     let source: string;
+    let mtimeMs = 0;
     try {
+      mtimeMs = (await stat(filePath)).mtimeMs;
       source = await readFile(filePath, "utf-8");
     } catch {
       continue;
@@ -104,7 +343,12 @@ async function scanConversationFiles(rootPath: string, repoName: string): Promis
       path: relPath,
       language: "conversation",
       symbol_count: symbols.length,
-      last_modified: Date.now(),
+      // The FILE's mtime, not the scan's clock. This was `Date.now()`, which records when the
+      // scanner ran and therefore cannot be compared against anything on disk — so a stored
+      // conversation index could never be shown to be current, and every scan was a full rescan.
+      // `mtime_ms` is the field the type already documents as "for incremental skip".
+      last_modified: mtimeMs,
+      mtime_ms: mtimeMs,
     };
     scan.files.push(entry);
   }
@@ -132,6 +376,12 @@ async function persistConversationIndex(
     file_count: scan.files.length,
   };
   await saveIndex(indexPath, codeIndex);
+  // Persist the BM25 index beside the code index, with the SAME `codeIndex` object that was just
+  // written — `saveBM25Index` stamps its header from it, and `loadBM25Index` refuses a header that
+  // disagrees. Writing it here rather than from the search path is what lets a search LOAD the index
+  // (4.3x to 20x faster than rebuilding, measured on this machine's three largest conversation
+  // directories) instead of tokenising the whole corpus again.
+  await saveBM25Index(indexPath, bm25, codeIndex);
 
   // Embedding conversations is OPT-IN. This used to fire unconditionally and
   // unawaited on every server start (autoDiscoverConversations → here), so each

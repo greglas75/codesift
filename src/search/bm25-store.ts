@@ -20,10 +20,43 @@ import { cleanupOrphanTempFiles } from "../storage/_shared.js";
  * `symbols` is deliberately NOT written. Every one of those objects is already in the code index
  * that gets loaded first, so persisting them would double the bytes on a disk that is, on this
  * machine, the actual bottleneck. They are reattached on load from that index.
+ *
+ * ---------------------------------------------------------------------------
+ * v2: symbol ids are interned. Why the format changed (measured 2026-09-27)
+ * ---------------------------------------------------------------------------
+ *
+ * v1 wrote the full symbol id — `repo:file:name:line`, averaging 121 characters — into every
+ * postings entry. A document appears once per token it contains, so each id was written many times:
+ * measured on a real 53 MB index, 398,712 postings pairs over 17,410 distinct ids, i.e. **22.9
+ * repeats each**, and **91% of the file was id strings**.
+ *
+ * That made the 13x claim above false in practice, which is what this comment used to promise. On
+ * the largest conversation index here (159,626 turns) v1 produced a **1,975 MB** file, and loading
+ * it was only **1.4x** faster than rebuilding from scratch — parsing two billion characters of
+ * repeated strings costs about what tokenising the corpus costs. The cache was not worth its disk:
+ * 47.78 GB of `.bm25.ndjson` across this machine's code repos.
+ *
+ * So the ids move into a table written before the postings, and postings reference them by index.
+ * The table is chunked because one JSON array of every id exceeds V8's maximum string length on a
+ * large repo — the same reason this file is line-delimited at all.
+ *
+ * A number where v1 had a string is the only wire change, and the reader accepts BOTH: an id absent
+ * from the table (which cannot happen for an index this writer produced, but would be a silent wrong
+ * answer if it did) is written as a string and read as one. The version bump is what migrates
+ * existing caches — `isStale` rejects a v1 header, the index rebuilds, and the rewrite is v2.
  */
 
 /** Bump on any format change: a mismatch rebuilds rather than misreads. */
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
+
+/**
+ * Symbol ids per `["s", …]` line.
+ *
+ * Bounded for the same reason the file is line-delimited: at 121 characters an id, one array of a
+ * large repo's 352,166 ids is 42 MB of JSON — comfortable, but the bound is what keeps a repo ten
+ * times larger from hitting the string ceiling instead of degrading.
+ */
+const ID_CHUNK = 20_000;
 
 type FieldName = "name" | "signature" | "docstring" | "body" | "comments";
 const FIELDS: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
@@ -64,6 +97,19 @@ function isStale(header: Header, code: CodeIndex): boolean {
   return header.indexUpdatedAt !== (code.updated_at ?? code.created_at ?? 0);
 }
 
+/**
+ * The format version this build writes, so `prune` can reclaim files no build can read.
+ *
+ * A format bump strands every existing file: `isStale` rejects the old header and the index rebuilds,
+ * but the bytes only go away when that repo is indexed again — and a repo nobody touches is never
+ * indexed again. Measured at the v1 -> v2 bump: 47.78 GB of `.bm25.ndjson` on this machine, all of it
+ * unreadable the moment the version changed. The shared embedding cache has the same hazard and the
+ * same answer (`currentSharedCacheFilename`).
+ */
+export function bm25FormatVersion(): number {
+  return FORMAT_VERSION;
+}
+
 export function bm25PathFor(indexPath: string): string {
   return indexPath.replace(/\.index\.json$/, "").replace(/\.index\.db$/, "") + ".bm25.ndjson";
 }
@@ -91,17 +137,30 @@ export async function saveBM25Index(
 
   try {
     await write(`${JSON.stringify(headerFor(index, code))}\n`);
+
+    // The id table goes out FIRST, because postings reference it by position and the reader is a
+    // single forward pass over the stream. `fieldLengths` is the authoritative document set: it has
+    // exactly one entry per indexed document, which is what a posting can refer to.
+    const idIndex = new Map<string, number>();
+    for (const id of index.fieldLengths.keys()) idIndex.set(id, idIndex.size);
+    const ids = [...idIndex.keys()];
+    for (let start = 0; start < ids.length; start += ID_CHUNK) {
+      await write(`${JSON.stringify(["s", start, ids.slice(start, start + ID_CHUNK)])}\n`);
+    }
+
     for (const field of FIELDS) {
       for (const [token, postings] of index.fields[field]) {
-        // Flat [id, tf, id, tf, …]: half the JSON of an array of pairs, and it rebuilds with one
-        // loop rather than a destructuring per entry.
+        // Flat [ref, tf, ref, tf, …]: half the JSON of an array of pairs, and it rebuilds with one
+        // loop rather than a destructuring per entry. `ref` is the id's index in the table above, or
+        // the id itself when it is not in it — see the v2 note in the file header.
         const flat: (string | number)[] = [];
-        for (const [id, tf] of postings) { flat.push(id); flat.push(tf); }
+        for (const [id, tf] of postings) { flat.push(idIndex.get(id) ?? id); flat.push(tf); }
         await write(`${JSON.stringify(["p", field, token, flat])}\n`);
       }
     }
     for (const [id, lengths] of index.fieldLengths) {
-      await write(`${JSON.stringify(["l", id, lengths.name, lengths.signature, lengths.docstring, lengths.body, lengths.comments])}\n`);
+      const ref = idIndex.get(id) ?? id;
+      await write(`${JSON.stringify(["l", ref, lengths.name, lengths.signature, lengths.docstring, lengths.body, lengths.comments])}\n`);
     }
     for (const [file, score] of index.centrality) {
       await write(`${JSON.stringify(["c", file, score])}\n`);
@@ -115,6 +174,20 @@ export async function saveBM25Index(
     await unlink(temp).catch(() => {});
     // Never fail a build over its cache. The caller has a working index in memory either way.
   }
+}
+
+/**
+ * A postings reference back to a symbol id.
+ *
+ * `null`, not a fallback, when a numeric reference has no entry in the table: that means the table
+ * was truncated or the chunk that held it was lost, and inventing an id there would produce an index
+ * that searches cleanly and returns the wrong symbol. The caller treats `null` the same as a corrupt
+ * file and rebuilds, which is always correct.
+ */
+function resolveId(ref: unknown, idTable: string[]): string | null {
+  if (typeof ref === "string") return ref;
+  if (typeof ref !== "number") return null;
+  return idTable[ref] ?? null;
 }
 
 export async function loadBM25Index(
@@ -134,6 +207,7 @@ export async function loadBM25Index(
   };
   const fieldLengths = new Map<string, Record<FieldName, number>>();
   const centrality = new Map<string, number>();
+  const idTable: string[] = [];
   let header: Header | null = null;
 
   try {
@@ -149,14 +223,27 @@ export async function loadBM25Index(
       }
       const row = JSON.parse(line) as unknown[];
       const kind = row[0];
-      if (kind === "p") {
+      if (kind === "s") {
+        // Chunks arrive in order and each states its own start, so a reordered or missing chunk
+        // leaves holes rather than shifting every id after it by one — a shift would attach the
+        // wrong symbol to every posting and still look like a valid index.
+        const start = row[1] as number;
+        const chunk = row[2] as string[];
+        for (let i = 0; i < chunk.length; i++) idTable[start + i] = chunk[i] as string;
+      } else if (kind === "p") {
         const field = row[1] as FieldName;
         const flat = row[3] as (string | number)[];
         const postings = new Map<string, number>();
-        for (let i = 0; i < flat.length; i += 2) postings.set(flat[i] as string, flat[i + 1] as number);
+        for (let i = 0; i < flat.length; i += 2) {
+          const id = resolveId(flat[i], idTable);
+          if (id === null) return null;
+          postings.set(id, flat[i + 1] as number);
+        }
         fields[field].set(row[2] as string, postings);
       } else if (kind === "l") {
-        fieldLengths.set(row[1] as string, {
+        const id = resolveId(row[1], idTable);
+        if (id === null) return null;
+        fieldLengths.set(id, {
           name: row[2] as number, signature: row[3] as number, docstring: row[4] as number,
           body: row[5] as number, comments: row[6] as number,
         });

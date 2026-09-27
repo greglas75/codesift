@@ -143,6 +143,37 @@ describe("codesift prune", () => {
     check.close();
   });
 
+  it("reclaims a BM25 cache written by a superseded format", async () => {
+    // A format bump strands every existing file: the loader rejects the old header and rebuilds, but
+    // the bytes only go away when that repo is indexed again — never, for a repo nobody touches.
+    // Measured at the v1 -> v2 bump: 47.78 GB on this machine, unreadable the moment it changed.
+    const stale = join(dir, `${LIVE}.bm25.ndjson`);
+    writeFileSync(stale, `${JSON.stringify({ v: 1, docCount: 1 })}\n${"x".repeat(2000)}\n`);
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    utimesSync(stale, old, old);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(stale)).toBe(false);
+    expect(JSON.parse(stdout).bm25_superseded_format).toBe(1);
+  });
+
+  it("keeps a BM25 cache in the current format, and one whose header it cannot read", async () => {
+    const { bm25FormatVersion } = await import("../../src/search/bm25-store.js");
+    const current = join(dir, `${LIVE}.bm25.ndjson`);
+    writeFileSync(current, `${JSON.stringify({ v: bm25FormatVersion(), docCount: 1 })}\ndata\n`);
+    const garbled = join(dir, `${ORPH.replace("b", "d")}.bm25.ndjson`);
+    // Not JSON at all: mid-write, or something this code does not understand. Neither is a reason to
+    // delete — and this hash is not in the registry, so only the header check can save it.
+    writeFileSync(garbled, "not json at all\n");
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    utimesSync(current, old, old);
+    utimesSync(garbled, old, old);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(current)).toBe(true);
+    expect(JSON.parse(stdout).bm25_superseded_format).toBe(0);
+  });
+
   it("--dry-run reports but deletes nothing", async () => {
     await COMMAND_MAP["prune"]!([], { json: true, "dry-run": true });
     expect(existsSync(join(dir, `${ORPH}.embeddings.ndjson`))).toBe(true);

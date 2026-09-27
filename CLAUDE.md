@@ -774,6 +774,69 @@ Unrelated, found while running the suite: `tests/tools/explore-tools.test.ts > d
 clipped body as shown` **fails 1 in 12 runs in isolation** (`rt --repeat 12`), with `explore` returning
 "No symbols match" — its fixture is sometimes not indexed yet when the test runs. Pre-existing.
 
+## Persisting the BM25 cache did not pay because 91% of the file was one repeated string (2026-09-27)
+
+The note above left `search_all_conversations` building 1,258 in-memory indexes per call and said
+persisting them (`saveBM25Index`) was the real fix. Measured, it was not — and the reason turned out
+to be the format, not the idea.
+
+**v1 wrote the full symbol id into every postings entry.** An id is `repo:file:name:line`, averaging
+**121 characters**, and a document appears once per token it contains. Measured on a real 53 MB index:
+398,712 postings pairs over 17,410 distinct ids — **22.9 repeats each, 91% of the file**. So on the
+largest conversation directory here (160,626 turns) v1 produced a **1,975 MB** file whose load was only
+**1.4x** faster than rebuilding from scratch. Parsing two billion characters of repeated strings costs
+about what tokenising the corpus costs. The 13x in the old comment was measured on something else.
+
+**v2 interns the ids** into a chunked table written before the postings, referenced by index. A number
+where v1 had a string is the whole wire change; the reader accepts both, and `isStale` rejecting a v1
+header is what migrates existing caches.
+
+| | v1 | v2 |
+|---|---:|---:|
+| largest conversation index (160,626 turns) | 1,975 MB | **165 MB** (8.4%) |
+| — load vs rebuild | 1.4x | **4.26x** |
+| next two conversation indexes | — | **20.3x**, **12.1x** |
+| a code repo (17,459 symbols) | 53 MB | **6 MB** (11.1%) |
+| all 538 non-empty conversation repos | ~3.5 GB projected | **0.29 GB actual** |
+
+**Persistence then needed change detection, or it made things worse.** `persistConversationIndex`
+stamped `updated_at: Date.now()` and nothing detected change, so every call re-read every `.jsonl`,
+re-extracted every turn, rebuilt the index — and invalidated its own cache. `FileEntry.last_modified`
+was set to `Date.now()`, i.e. when the scanner ran, so a stored index could never be shown current
+against anything on disk; `mtime_ms`, which the type documents as "for incremental skip", was never
+set. Both now hold the file's real mtime.
+
+Three levels, each measured on this machine:
+
+- **Unchanged directory → skipped entirely.** Covers every project except the one being worked in.
+- **Changed directory → only the changed sessions re-extracted**, with `updateBM25ForFile` amending the
+  loaded index instead of rebuilding the vocabulary. A 797-session directory: **71 s full pass → 21 s**
+  with 2 sessions changed. Falls back to a full pass when more than half the directory changed, when
+  there is no persisted index to amend, or when embeddings are requested.
+- **Search loads instead of building.** `search_all_conversations`, in a fresh process:
+
+| | original | bounded cache only | + v2 persistence |
+|---|---:|---:|---:|
+| first call | 53.7 s | 45.2 s | **16.6 s** |
+| second call | 0.6 s | 36.6 s | **13.6 s** |
+| retained after a GC | 2,784 MB | 338 MB | ~305 MB |
+
+Measured split of what remains, sequentially over all 1,259 repos: `loadIndex` 16.3 s,
+`loadBM25Index` 7.7 s, `searchBM25` **0.0 s**, and **0 persisted indexes rejected**. The search itself
+is free; materialising symbols is the floor, because the results are the turn text.
+
+**A format bump strands every existing file, so `prune` now reads each `.bm25.ndjson` header and
+collects the ones no build can read** (`bm25_superseded_format`). Without it a repo nobody indexes
+again keeps a dead file forever — 47.78 GB of v1 caches existed here the moment the version changed.
+Judged by the header alone; an unreadable or headerless first line is left alone, because that file is
+either mid-write or something this code does not understand. Live result: **47.96 GB freed, data dir
+121 GB → 76 GB.**
+
+**Still measured and not fixed:** an incremental pass rewrites the WHOLE index and the whole BM25 file
+for a two-session change — 3.09 s + 4.10 s of a 12.3 s pass. `saveIncremental` exists for the code path
+and is the next step. And the amended index does not refresh `compacted_sessions` or centrality, which
+is why the >50% fallback exists.
+
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.
 - **Stdio server exits on client disconnect (`server.ts`)**: the MCP stdio server exits on transport-close / stdin-EOF / SIGTERM. Before this, a dead Claude/Codex left the server orphaned under launchd forever, holding 1–4 GB each — the root cause of "codesift is killing my machine" (one box had 51 procs / 30 GB / 202% CPU). The HTTP daemon (`codesift serve`) is unaffected (stdin handlers are stdio-only).

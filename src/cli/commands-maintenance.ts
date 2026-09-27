@@ -299,6 +299,51 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     } catch { /* skip unreadable/already-gone */ }
   }
 
+  // Reclaim BM25 caches written by a format this build cannot read.
+  //
+  // These DO carry a repo hash, so the sweep above sees them — and skips them, because the hash is
+  // live. That is correct for a readable cache and wrong for one no build can read: a format bump
+  // makes every existing file garbage, and it is only overwritten when that repo is indexed again,
+  // which for a repo nobody touches is never. Measured at the v1 -> v2 bump: 47.78 GB on this machine.
+  //
+  // Judged by the file's OWN header, not by its age or its hash — that is the only thing that says
+  // which format it is. An unreadable or headerless first line is left alone: the file is then either
+  // mid-write or something this code does not understand, and neither is a reason to delete.
+  let bm25Superseded = 0;
+  if (!dryRun) {
+    const { bm25FormatVersion } = await import("../search/bm25-store.js");
+    const current = bm25FormatVersion();
+    const { open } = await import("node:fs/promises");
+    for (const name of readdirSync(dataDir)) {
+      if (!/^[0-9a-f]{8,}\.bm25\.ndjson$/.test(name)) continue;
+      const full = join(dataDir, name);
+      let version: number | undefined;
+      try {
+        const handle = await open(full, "r");
+        try {
+          // The header is the first line; 64 KiB is far more than it can be.
+          const buf = Buffer.allocUnsafe(64 * 1024);
+          const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+          const firstLine = buf.subarray(0, bytesRead).toString("utf-8").split("\n", 1)[0] ?? "";
+          version = (JSON.parse(firstLine) as { v?: number }).v;
+        } finally {
+          await handle.close();
+        }
+      } catch {
+        continue;
+      }
+      if (typeof version !== "number" || version >= current) continue;
+      try {
+        const fileStat = statSync(full);
+        if (Date.now() - fileStat.mtimeMs < pruneGraceMs) continue;
+        unlinkSync(full);
+        bytes += fileStat.size;
+        files++;
+        bm25Superseded++;
+      } catch { /* already gone */ }
+    }
+  }
+
   // Shared-cache versions have no repository hash prefix, so the artifact
   // sweep cannot discover superseded formats. Keep the current version and
   // reclaim only older derived cache files.
@@ -361,6 +406,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   }
 
   output({
+    bm25_superseded_format: bm25Superseded,
     wal_checkpointed: walCheckpointed,
     wal_reclaimed_gb: +((walBefore - walAfter) / 1e9).toFixed(2),
     indeterminate_databases: indeterminate.length,
