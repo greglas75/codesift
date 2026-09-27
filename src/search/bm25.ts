@@ -1,3 +1,4 @@
+import { totalmem } from "node:os";
 import { tokenizeIdentifier } from "../parser/symbol-utils.js";
 import { isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, SearchResult } from "../types.js";
@@ -310,6 +311,46 @@ export function updateBM25ForFile(index: BM25Index, file: string, symbols: CodeS
  * Synchronous build. Correct, and fine for small inputs — the tool-ranker index is ~150 entries.
  * Do NOT use it on a repository index inside the daemon: see buildBM25IndexYielding.
  */
+/**
+ * Bytes a BM25 index occupies, from its own token totals.
+ *
+ * Measured with a heapUsed delta around a real build: 352,125 symbols / 12,882,846 tokens cost
+ * 399 MB, i.e. 32.5 B per token — the postings maps dominate, so tokens are the quantity to price
+ * by, not symbols. Rounded UP to 40, on the same reasoning as the index footprint: over-reporting
+ * evicts something that would have fitted, under-reporting silently breaks the budget. Re-measured
+ * 2026-09-27 on a 344,179-symbol / 14,126,954-token index: estimate 565 MB against 498 MB actual,
+ * so it still errs by 12% in the safe direction.
+ *
+ * It lives here, beside the structure it prices, because there are TWO caches of BM25 indexes — the
+ * code one in `index-tools/state.ts` and the conversation one in `tools/conversation-cache.ts`. A
+ * copy of this per cache is how their budgets drift apart.
+ */
+export function bm25FootprintBytes(index: BM25Index): number {
+  let tokens = 0;
+  for (const field of Object.keys(index.totalFieldLengths) as (keyof typeof index.totalFieldLengths)[]) {
+    tokens += index.totalFieldLengths[field];
+  }
+  return tokens * 40;
+}
+
+/**
+ * Resident budget for one BM25 cache, in bytes.
+ *
+ * Same RAM tiers as the index and embedding budgets, so all of them agree about what a machine this
+ * size is willing to hold. `CODESIFT_MAX_BM25_CACHE_MB` overrides.
+ */
+export function bm25CacheBudgetBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["CODESIFT_MAX_BM25_CACHE_MB"];
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed * 1024 * 1024;
+  }
+  let totalGb = 8;
+  try { totalGb = totalmem() / 1024 ** 3; } catch { /* keep the floor */ }
+  const mb = totalGb <= 16 ? 256 : totalGb <= 32 ? 512 : 1024;
+  return mb * 1024 * 1024;
+}
+
 export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
   const acc = newAccumulator();
   for (const symbol of symbols) ingestSymbol(acc, symbol);

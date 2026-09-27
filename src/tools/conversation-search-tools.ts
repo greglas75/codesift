@@ -76,7 +76,18 @@ async function loadConversationIndex(rootPath: string): Promise<{
   const config = loadConfig();
   const indexPath = getIndexPath(config.dataDir, rootPath);
 
-  let bm25 = getConversationBM25Index(repoName);
+  // Ask the index when it last changed BEFORE trusting a cached build. Without this the first search
+  // in a process froze the answer for that process's life — 27 hours in the daemon, during which no
+  // conversation recorded since the first call could be found.
+  let indexUpdatedAt = 0;
+  try {
+    const { loadIndexSummary } = await import("../storage/index-store.js");
+    indexUpdatedAt = (await loadIndexSummary(indexPath))?.updated_at ?? 0;
+  } catch {
+    // Unknown freshness keeps whatever is cached — the conservative direction.
+  }
+
+  let bm25 = getConversationBM25Index(repoName, indexUpdatedAt);
   let codeIndex: CodeIndex | null = null;
 
   if (!bm25) {
@@ -84,7 +95,7 @@ async function loadConversationIndex(rootPath: string): Promise<{
       codeIndex = await loadIndex(indexPath);
       if (codeIndex && codeIndex.symbols.length > 0) {
         bm25 = await buildBM25IndexYielding(codeIndex.symbols);
-        setConversationBM25Index(repoName, bm25);
+        setConversationBM25Index(repoName, bm25, indexUpdatedAt || Date.now());
       }
     } catch {
       return null;
@@ -195,6 +206,19 @@ function fuseConversationResults(
  * Iterates over all `conversations/*` repos in the registry,
  * searches each, merges and re-ranks results.
  */
+/**
+ * Conversation repos searched at once.
+ *
+ * Four rather than the code path's two: a conversation index is far smaller than a repository index,
+ * and the work is dominated by per-repo setup rather than by one large allocation. The point is that
+ * the number is BOUNDED and does not grow with how many projects the machine has accumulated.
+ * `CODESIFT_CONVERSATION_SEARCH_CONCURRENCY` overrides.
+ */
+const CONVERSATION_SEARCH_CONCURRENCY = (() => {
+  const raw = Number(process.env["CODESIFT_CONVERSATION_SEARCH_CONCURRENCY"]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 4;
+})();
+
 export async function searchAllConversations(
   query: string,
   limit?: number,
@@ -222,21 +246,38 @@ export async function searchAllConversations(
     }
   }
 
-  const perRepo = await Promise.all(
-    conversationRepos.map(async (repo): Promise<ConversationSearchResult[]> => {
-      try {
-        const { results } = await searchConversations(
-          query,
-          repo.root,
-          limit ?? 10,
-          queryVec ? { queryVec } : {},
-        );
-        return results.map((r) => ({ ...r, project: repo.name }) as ConversationSearchResult);
-      } catch {
-        return []; // Skip repos that fail to load
+  // Bounded fan-out. This was one `Promise.all` over every conversation repo, written when the
+  // comment above said "~20+"; this install has 1,258, so a single call put 1,258 index loads and
+  // BM25 builds in flight at once, past the two-at-a-time gate that exists for exactly that on the
+  // code path. Measured: 53.7 s and 2,784 MB retained. A worker pool keeps the same total work and
+  // the same results while bounding what is resident at any instant.
+  const searchOne = async (repo: { name: string; root: string }): Promise<ConversationSearchResult[]> => {
+    try {
+      const { results } = await searchConversations(
+        query,
+        repo.root,
+        limit ?? 10,
+        queryVec ? { queryVec } : {},
+      );
+      return results.map((r) => ({ ...r, project: repo.name }) as ConversationSearchResult);
+    } catch {
+      return []; // Skip repos that fail to load
+    }
+  };
+  const perRepo: ConversationSearchResult[][] = new Array(conversationRepos.length);
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(CONVERSATION_SEARCH_CONCURRENCY, conversationRepos.length) },
+    async () => {
+      for (;;) {
+        const i = cursor++;
+        const repo = conversationRepos[i];
+        if (repo === undefined) return;
+        perRepo[i] = await searchOne(repo);
       }
-    }),
+    },
   );
+  await Promise.all(workers);
   const allResults: ConversationSearchResult[] = perRepo.flat();
 
   // Sort by score descending, take top limit

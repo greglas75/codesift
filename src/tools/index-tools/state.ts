@@ -1,26 +1,10 @@
 import type { FSWatcher } from "../../storage/watcher.js";
-import type { BM25Index } from "../../search/bm25.js";
+import { bm25CacheBudgetBytes, bm25FootprintBytes, type BM25Index } from "../../search/bm25.js";
 import type { CodeIndex } from "../../types.js";
-import { totalmem as osTotalmem } from "node:os";
+import { indexFootprintBytes } from "../../storage/index-footprint.js";
 
 export const activeWatchers = new Map<string, FSWatcher>();
 export const bm25Indexes = new Map<string, BM25Index>();
-
-/**
- * Bytes a BM25 index occupies, from its own token totals.
- *
- * Measured with a heapUsed delta around a real build: 352,125 symbols / 12,882,846 tokens cost
- * 399 MB, i.e. 32.5 B per token — the postings maps dominate, so tokens are the quantity to price
- * by, not symbols. Rounded UP to 40, on the same reasoning as the index footprint: over-reporting
- * evicts something that would have fitted, under-reporting silently breaks the budget.
- */
-function bm25FootprintBytes(index: BM25Index): number {
-  let tokens = 0;
-  for (const field of Object.keys(index.totalFieldLengths) as (keyof typeof index.totalFieldLengths)[]) {
-    tokens += index.totalFieldLengths[field];
-  }
-  return tokens * 40;
-}
 
 /**
  * Keep the BM25 cache inside a budget, evicting least-recently-used first.
@@ -54,7 +38,7 @@ export function touchBM25Index(repoName: string): void {
 }
 
 function evictBM25OverBudget(pinned: string): void {
-  const budget = maxBM25CacheBytes();
+  const budget = bm25CacheBudgetBytes();
   let total = 0;
   for (const index of bm25Indexes.values()) total += bm25FootprintBytes(index);
   if (total <= budget) return;
@@ -69,27 +53,7 @@ function evictBM25OverBudget(pinned: string): void {
   }
 }
 
-function maxBM25CacheBytes(): number {
-  const raw = process.env["CODESIFT_MAX_BM25_CACHE_MB"];
-  if (raw !== undefined) {
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed * 1024 * 1024;
-  }
-  // Same RAM tiers as the index and embedding budgets, so the three agree about what a machine
-  // this size is willing to hold resident.
-  const totalGb = totalSystemMemoryBytes() / 1024 ** 3;
-  const mb = totalGb <= 16 ? 256 : totalGb <= 32 ? 512 : 1024;
-  return mb * 1024 * 1024;
-}
 
-function totalSystemMemoryBytes(): number {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return osTotalmem();
-  } catch {
-    return 8 * 1024 ** 3;
-  }
-}
 export const codeIndexes = new Map<string, CodeIndex>();
 export const embeddingCaches = new Map<string, Map<string, Float32Array>>();
 export const embeddingCacheGenerations = new Map<string, number>();
@@ -175,6 +139,33 @@ export function invalidateEmbeddingCaches(repoName: string): void {
  * Watchers are deliberately NOT stopped: they are cheap, and dropping them would silently stop
  * incremental updates for a repo the client still has open.
  */
+/**
+ * Entry counts and each cache's OWN priced bytes, for the `/health` cache report.
+ *
+ * Reported together because they disagree, and the disagreement is the diagnostic: a count-bounded
+ * cache looks small while holding gigabytes, which is the defect ADR-004 fixed for the index cache
+ * and the one still latent wherever a count is the only bound.
+ */
+export function cacheEntryCounts(): {
+  indexes: number;
+  index_bytes: number;
+  bm25: number;
+  bm25_bytes: number;
+  embeddings: number;
+} {
+  let indexBytes = 0;
+  for (const index of codeIndexes.values()) indexBytes += indexFootprintBytes(index);
+  let bm25Bytes = 0;
+  for (const index of bm25Indexes.values()) bm25Bytes += bm25FootprintBytes(index);
+  return {
+    indexes: codeIndexes.size,
+    index_bytes: indexBytes,
+    bm25: bm25Indexes.size,
+    bm25_bytes: bm25Bytes,
+    embeddings: embeddingCaches.size,
+  };
+}
+
 export function releaseCachedIndexes(): { indexes: number; bm25: number; embeddings: number } {
   const released = {
     indexes: codeIndexes.size,

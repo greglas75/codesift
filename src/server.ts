@@ -437,6 +437,11 @@ export async function startHttpServer(
           // code, and this state means "every tool call from here will fail" — reporting it inside
           // a 200 body is how the previous version managed to look healthy while serving nothing.
           const stale = codeReplacedUnderUs();
+          // Who holds the heap, not just how much of it. `?caches=0` opts out for a probe that only
+          // wants liveness; the report walks the cached indexes to price them, which is cheap but not
+          // free on a process holding several hundred thousand symbols.
+          const { readCacheReport } = await import("./server-helpers/cache-report.js");
+          const caches = url.includes("caches=0") ? undefined : await readCacheReport();
           res.writeHead(stale ? 503 : 200, { "content-type": "application/json" });
           res.end(
             JSON.stringify(
@@ -460,6 +465,7 @@ export async function startHttpServer(
                       sessions: inFlight,
                       version: PKG_VERSION,
                       vitals,
+                      ...(caches ? { caches } : {}),
                       ...(reasons.length > 0 ? { reasons } : {}),
                     };
                   })(),

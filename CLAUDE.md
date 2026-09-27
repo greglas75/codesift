@@ -714,6 +714,66 @@ tree); for the git tools it is a hard `Git diff failed: …` that never names th
 `trace_call_chain` is the opposite shape — 15.8% on names vs 9.3% on paths, consistent with
 "symbol not in index" rather than a resolution fault — so do not fold it into this cluster.
 
+## The heap had a second BM25 cache with no bound at all (2026-09-27)
+
+The daemon reached **15,194 MB of a 16,384 MB heap** while every documented cache budget summed to
+about 3.3 GB. Attributing that took an afternoon, because `/health` reported heap TOTAL and nothing
+about who held it. Two things the investigation ruled out first, so nobody re-runs them:
+
+- **`bm25FootprintBytes` is accurate.** It was the obvious suspect (`tokens * 40`, a fitted constant).
+  Re-measured on a 344,179-symbol / 14,126,954-token index: estimate 565 MB against **498 MB actual**,
+  i.e. it over-reports by 12%, which is the safe direction its comment claims. `indexFootprintBytes`
+  likewise: 557 MB estimated, 534 MB measured. One large repo costs ~1.03 GB resident, both caches
+  together.
+- **`responseCache` is bounded at 200 entries**, ~42 MB at the hard response cap — not a factor. The
+  `load-gate` already caps concurrent index loads at 2, so concurrent cold loads were not it either.
+
+**The cause was `tools/conversation-cache.ts`** — the SECOND cache of BM25 indexes in the process,
+with no LRU, no budget, no entry cap, and none of the accidental eviction that used to keep its
+sibling small. Nothing had ever removed an entry. Its size is not bounded by what is on disk either,
+because the loader BUILDS from symbols: **3 of 1,258** conversation repos here have a `.bm25.ndjson`
+at all. What bounds it is how many repos get searched, and `searchAllConversations` searched every one
+in a single `Promise.all` — written when its own comment said "~20+".
+
+Measured, one `search_all_conversations` on this install:
+
+| | before | after |
+|---|---:|---:|
+| projects searched | 1,258 | 1,258 |
+| retained after an explicit GC | **2,784 MB** | **338 MB** |
+| peak heapUsed | 3,262 MB | 1,191 MB |
+| elapsed | 53.7 s | 45.2 s |
+| a second identical call | 0.6 s | 36.6 s |
+
+The 0.6 s repeat was the proof that all 2.78 GB was still referenced rather than merely allocated.
+Losing it is the correct trade: a bounded cache pays a rebuild, and the OOM crash-loop it fed cost
+every session on the daemon its tools. **Still a design problem, not fixed here:** the tool builds
+1,258 in-memory indexes per call either way, and persisting them (`saveBM25Index`) is what would make
+repeats cheap.
+
+Three decisions worth keeping:
+
+- **Pricing lives in `search/bm25.ts`** (`bm25FootprintBytes`, `bm25CacheBudgetBytes`), not in each
+  cache. Two caches of one structure with private copies of its price is how their budgets drift.
+- **The conversation cache gets a QUARTER of the BM25 tier.** Four full-tier budgets in one process
+  (indexes, code BM25, embeddings, conversations) is 4 GB of deliberate residency — correct individual
+  bounds that still reach the ceiling. A conversation index averages ~2.2 MB, so a quarter still holds
+  about a hundred.
+- **The memory bound was masking a correctness defect.** The lookup was `if (!bm25) build`, with no
+  revalidation — so the first search in a process fixed the answer for that process's life. On a daemon
+  up 27 hours, conversation search could not see a single conversation recorded since its first call.
+  Eviction happens to refresh, so bounding a cache hides a cache that never revalidates.
+
+**`/health` now reports `caches`** (entries + each cache's own priced bytes, `?caches=0` opts out), so
+the next such question is a curl rather than an investigation. **Do not read `heap_used_mb` minus that
+sum as unattributed retention** — `heapUsed` includes uncollected garbage: 103 s after a restart it was
+3,352 MB against 1,187 MB of priced caches while holding exactly one index. The report answers "which
+cache is growing and is its bound working", which needs a series of samples, not one.
+
+Unrelated, found while running the suite: `tests/tools/explore-tools.test.ts > does not record a
+clipped body as shown` **fails 1 in 12 runs in isolation** (`rt --repeat 12`), with `explore` returning
+"No symbols match" — its fixture is sometimes not indexed yet when the test runs. Pre-existing.
+
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.
 - **Stdio server exits on client disconnect (`server.ts`)**: the MCP stdio server exits on transport-close / stdin-EOF / SIGTERM. Before this, a dead Claude/Codex left the server orphaned under launchd forever, holding 1–4 GB each — the root cause of "codesift is killing my machine" (one box had 51 procs / 30 GB / 202% CPU). The HTTP daemon (`codesift serve`) is unaffected (stdin handlers are stdio-only).
