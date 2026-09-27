@@ -837,6 +837,66 @@ for a two-session change — 3.09 s + 4.10 s of a 12.3 s pass. `saveIncremental`
 and is the next step. And the amended index does not refresh `compacted_sessions` or centrality, which
 is why the >50% fallback exists.
 
+## The incremental pass rewrote the whole index, and its threshold rested on a vacuous reason (2026-09-27)
+
+Follow-up to the note above, which left the incremental conversation pass rewriting the whole index and
+the whole BM25 file for a two-session change, "3.09 s + 4.10 s of a 12.3 s pass". **Both of those
+numbers were taken while the machine was loaded.** Re-measured quiet, best of three, on the same
+15,838-symbol / 797-session index:
+
+| step | clean | loaded (what was reported) |
+|---|---:|---:|
+| `saveIndex` (whole index) | 1,494 ms | 3,090 ms |
+| **`saveIncremental` (one file)** | **0–1 ms** | — |
+| `saveBM25Index` (whole, 17 MB) | 752 ms | 4,100 ms |
+| `loadIndex` | 431 ms | 2,110 ms |
+| `loadBM25Index` | 373 ms | 1,880 ms |
+
+So the index half is not a design problem at all — `saveIncremental` already existed for the code path,
+writes one file's rows in a transaction, and is **~1,500x** cheaper than the rewrite it replaced.
+Deletions go through `removeFileFromIndex`, which also drops the `files[]` row that `saveIncremental`
+would leave behind. Live result on a 802-session directory: full pass 10.1 s, then **0.06 s / 0.04 s**.
+
+**Both writers stamp `updated_at` themselves**, so the BM25 header has to be written from the value the
+database ends up with, read back after the writes. Assuming a value there means every later search
+rejects the file and rebuilds — silently undoing the whole path, with nothing failing.
+
+### The 50% amend threshold was right, for a reason neither of the two originally given
+
+The comment justified it with "amending stops being cheaper" plus "the full path also refreshes
+`compacted_sessions` and centrality". Measured:
+
+- **centrality is vacuous here.** A conversation index has **zero** centrality entries — there is no
+  import graph in a chat log. Checked on two of them.
+- **`compacted_sessions` is now computed** from the merged symbols, one pass over data the function
+  already holds. It used to return 0, which is indistinguishable from "scanned, found none".
+- **the cost reason is real, and superlinear.** Amending K of 788 files against one clean 4,211 ms
+  build: 5% → 183 ms (22.96x), 25% → 200 ms (21.00x), **50% → 1,639 ms (2.57x)**, 75% → 14,037 ms
+  (**0.30x**), 100% → 22,888 ms (0.18x). Each amended file is a remove-then-add over the postings maps
+  every other file shares, so the churn compounds. The crossover is between 50% and 75%; the bound
+  stays at 50% because past it the penalty is not a few percent, it is 5x.
+
+**`turns_indexed` was over-counting on the fast paths.** A compacted session carries one
+`conversation_summary` symbol on top of its turns, so reporting the symbol count gave **15,894 against
+a scanned pass's 15,887**, with 7 compacted sessions — the discrepancy was exactly the compacted count.
+The incremental path now counts `conversation_turn` symbols and reports both numbers exactly. The
+`unchanged` skip still reports stored SYMBOLS, because the split is not stored per file and loading
+every symbol to recover it would cost more than the skip saves — so `unchanged: true` documents that,
+rather than silently differing from a scanned pass.
+
+**What is genuinely left:** the BM25 file is still rewritten whole (752 ms at 17 MB, ~9 s for the
+165 MB conversation index). Making that incremental needs a delta format whose reader removes a file's
+old contribution, and the removal cannot re-derive the old tokens — the old symbols are gone. So the
+delta would have to carry both what to subtract and what to add, in the one component where a subtle
+bug yields confident wrong search results rather than an error. It is also background work:
+`autoDiscoverConversations` is fire-and-forget, so nothing waits on it.
+
+Unrelated, measured while running the suite: `tests/tools/explore-tools.test.ts` (two cases) and
+`tests/tools/symbol-source-dedup.test.ts` fail **only under the full suite** — 10/10 green in isolation
+(`rt --repeat 10`), and two consecutive full runs disagreed with no code change between them. Both
+touch module-level shared state under 4 workers. Pre-existing, and the flake is in the harness rather
+than in what it tests.
+
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.
 - **Stdio server exits on client disconnect (`server.ts`)**: the MCP stdio server exits on transport-close / stdin-EOF / SIGTERM. Before this, a dead Claude/Codex left the server orphaned under launchd forever, holding 1–4 GB each — the root cause of "codesift is killing my machine" (one box had 51 procs / 30 GB / 202% CPU). The HTTP daemon (`codesift serve`) is unaffected (stdin handlers are stdio-only).

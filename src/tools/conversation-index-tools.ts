@@ -1,7 +1,9 @@
 import { readdir, stat, readFile } from "node:fs/promises";
 import { join, relative, basename } from "node:path";
 import { extractConversationSymbols } from "../parser/symbol-extractor.js";
-import { saveIndex, getIndexPath, loadIndex, loadIndexSummary } from "../storage/index-store.js";
+import {
+  saveIndex, getIndexPath, loadIndex, loadIndexSummary, saveIncremental, removeFileFromIndex,
+} from "../storage/index-store.js";
 import { registerRepo } from "../storage/registry.js";
 import { buildBM25IndexYielding, updateBM25ForFile } from "../search/bm25.js";
 import { loadBM25Index, saveBM25Index } from "../search/bm25-store.js";
@@ -105,7 +107,9 @@ export async function indexConversations(
       sessions_found: incremental.sessions,
       turns_indexed: incremental.turns,
       skipped_noise_records: 0,
-      compacted_sessions: 0,
+      // Recomputed from the merged symbols rather than reported as 0. It is one pass over symbols this
+      // function already holds, and a silent 0 is indistinguishable from "scanned, found none".
+      compacted_sessions: incremental.compacted,
       elapsed_ms: Date.now() - startTime,
       incremental: true,
       changed_sessions: incremental.changed,
@@ -166,7 +170,6 @@ async function conversationsUnchanged(
     recorded.set(file.path, mtime);
   }
 
-  let turns = 0;
   for (const name of entries) {
     const expected = recorded.get(name);
     if (expected === undefined) return null;
@@ -176,8 +179,13 @@ async function conversationsUnchanged(
       return null;
     }
   }
-  for (const file of summary.files) turns += file.symbol_count;
-  return { sessions: summary.files.length, turns };
+  // Indexed SYMBOLS, which is turns plus one `conversation_summary` per compacted session. The split
+  // is not stored per file, and loading every symbol to recover it would cost more than this whole
+  // skip saves — so the number is named honestly on `unchanged` rather than silently differing from a
+  // scanned pass by the compacted count.
+  let symbols = 0;
+  for (const file of summary.files) symbols += file.symbol_count;
+  return { sessions: summary.files.length, turns: symbols };
 }
 
 /**
@@ -192,12 +200,36 @@ async function conversationsUnchanged(
  * Embeddings deliberately stay on the full path. They are opt-in, they are the expensive part when
  * enabled, and an incremental embed needs its own per-symbol accounting rather than a file-level one.
  */
+/**
+ * Largest share of a conversation directory that is still worth amending file by file.
+ *
+ * Measured 2026-09-27 on a 15,838-symbol / 788-session index, amending against one clean
+ * `buildBM25Index` (4,211 ms):
+ *
+ *     5%   39 files    183 ms   amend wins  x22.96
+ *    25%  197 files    200 ms   amend wins  x21.00
+ *    50%  394 files  1,639 ms   amend wins   x2.57
+ *    75%  591 files 14,037 ms   REBUILD wins x0.30
+ *   100%  788 files 22,888 ms   REBUILD wins x0.18
+ *
+ * The crossover is between 50% and 75%, and the amend cost grows SUPERLINEARLY — each amended file is
+ * a remove-then-add over the postings maps every other file shares, so the churn compounds. That is
+ * why the bound is conservative rather than set at the crossover: past it the penalty is not a few
+ * percent, it is 5x.
+ *
+ * `centrality` is NOT a reason for this bound, though an earlier version of this comment said it was:
+ * a conversation index has **zero** centrality entries (measured on two of them), because there is no
+ * import graph in a chat log. `compacted_sessions` is not a reason either any more — it is recomputed
+ * from the merged symbols.
+ */
+const CONVERSATION_AMEND_MAX_SHARE = 0.5;
+
 async function incrementalConversationUpdate(
   rootPath: string,
   repoName: string,
   indexPath: string,
   options?: { embed?: boolean },
-): Promise<{ sessions: number; turns: number; changed: number } | null> {
+): Promise<{ sessions: number; turns: number; changed: number; compacted: number } | null> {
   if (options?.embed) return null;
 
   let stored: CodeIndex | null;
@@ -235,9 +267,13 @@ async function incrementalConversationUpdate(
   }
   if (changed.length === 0 && removed.length === 0) return null; // the caller's skip already handled this
 
-  // Past half the directory, amending file by file stops being cheaper than one pass — and the full
-  // path also refreshes `compacted_sessions` and centrality, which this one does not.
-  if (changed.length + removed.length > Math.max(1, Math.floor(entries.length / 2))) return null;
+  // Past this share of the directory, amending stops being cheaper than one clean pass: every amended
+  // file costs a remove-then-add over the shared postings maps, which churns the vocabulary, while a
+  // full build ingests each symbol once. The bound is measured, not guessed — see
+  // CONVERSATION_AMEND_MAX_SHARE.
+  if (changed.length + removed.length > Math.max(1, Math.floor(entries.length * CONVERSATION_AMEND_MAX_SHARE))) {
+    return null;
+  }
 
   const bm25 = await loadBM25Index(indexPath, stored);
   if (!bm25) return null;
@@ -275,22 +311,48 @@ async function incrementalConversationUpdate(
   }
 
   const mergedSymbols: CodeSymbol[] = [];
-  for (const list of symbolsByFile.values()) mergedSymbols.push(...list);
+  let compacted = 0;
+  let turns = 0;
+  for (const list of symbolsByFile.values()) {
+    mergedSymbols.push(...list);
+    // `turns_indexed` counts TURNS, and a compacted session also carries one `conversation_summary`
+    // symbol. Reporting `mergedSymbols.length` over-counted by exactly the number of compacted
+    // sessions — 15,894 against the full path's 15,887 on this machine, with compacted = 7.
+    for (const symbol of list) {
+      if (symbol.kind === "conversation_turn") turns++;
+      else if (symbol.kind === "conversation_summary") compacted++;
+    }
+  }
   const mergedFiles = [...files.values()];
+
+  // Write only the rows that moved. `saveIndex` rewrites every symbol of the repo: measured on a
+  // 15,838-symbol conversation index, 1,494 ms against **0-1 ms** for `saveIncremental` on one file —
+  // and the whole point of this path is that two sessions changed. Deletions go through
+  // `removeFileFromIndex`, which also drops the `files[]` row; `saveIncremental` would leave it.
+  for (const path of removed) await removeFileFromIndex(indexPath, path);
+  for (const { path } of changed) {
+    await saveIncremental(indexPath, path, symbolsByFile.get(path) ?? [], files.get(path));
+  }
+
+  // Both writers stamp `updated_at` themselves, so the value has to be read back rather than assumed:
+  // the BM25 header must carry what the database now says, or every later search rejects the file and
+  // rebuilds — the exact state this path exists to leave behind.
+  let updatedAt = Date.now();
+  try {
+    updatedAt = (await loadIndexSummary(indexPath))?.updated_at ?? updatedAt;
+  } catch {
+    return null; // cannot prove what the index says; a full pass will rewrite both consistently
+  }
   const codeIndex: CodeIndex = {
     repo: repoName,
     root: rootPath,
     symbols: mergedSymbols,
     files: mergedFiles,
     created_at: stored.created_at,
-    updated_at: Date.now(),
+    updated_at: updatedAt,
     symbol_count: mergedSymbols.length,
     file_count: mergedFiles.length,
   };
-  await saveIndex(indexPath, codeIndex);
-  // The amended index describes the code index that was just written, so its header has to be
-  // stamped from THAT object — otherwise every search rejects it and rebuilds, which is the state
-  // this whole path exists to leave behind.
   await saveBM25Index(indexPath, bm25, codeIndex);
   setConversationBM25Index(repoName, bm25, codeIndex.updated_at);
   const meta: RepoMeta = {
@@ -303,7 +365,12 @@ async function incrementalConversationUpdate(
   };
   await registerRepo(loadConfig().registryPath, meta);
 
-  return { sessions: mergedFiles.length, turns: mergedSymbols.length, changed: changed.length + removed.length };
+  return {
+    sessions: mergedFiles.length,
+    turns,
+    changed: changed.length + removed.length,
+    compacted,
+  };
 }
 
 async function scanConversationFiles(rootPath: string, repoName: string): Promise<ConversationScan> {

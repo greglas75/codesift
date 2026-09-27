@@ -84,6 +84,34 @@ describe("conversation indexing — change detection", () => {
     expect(second.turns_indexed).toBe(first.turns_indexed);
   });
 
+  it("counts turns, not symbols, on an incremental pass", async () => {
+    // A compacted session carries one `conversation_summary` symbol on top of its turns, so reporting
+    // the symbol count over-reported by exactly the compacted count — 15,894 against a scanned pass's
+    // 15,887 on this machine, with 7 compacted sessions.
+    const { indexConversations } = await import("../../src/tools/conversation-tools.js");
+    for (const id of ["s1", "s2", "s3", "s4"]) {
+      await writeFile(join(tmpDir, `${id}.jsonl`), session(id, 2));
+    }
+    await writeFile(join(tmpDir, "s3.jsonl"), [
+      session("s3", 2),
+      JSON.stringify({
+        type: "user", isCompactSummary: true,
+        message: { content: "earlier turns were compacted away" },
+        uuid: "u-sum", sessionId: "s3", timestamp: "2026-09-27T09:00:00Z",
+      }),
+    ].join("\n"));
+    const full = await indexConversations(tmpDir, { embed: false });
+
+    await writeFile(join(tmpDir, "s1.jsonl"), session("s1", 2));
+    const later = new Date(Date.now() + 5_000);
+    await utimes(join(tmpDir, "s1.jsonl"), later, later);
+    const incr = await indexConversations(tmpDir, { embed: false });
+    expect(incr.incremental).toBe(true);
+    // Same content, so the same turn count a scanned pass reported — not that plus the summary.
+    expect(incr.turns_indexed).toBe(full.turns_indexed);
+    expect(incr.compacted_sessions).toBe(full.compacted_sessions);
+  });
+
   it("rescans when a session gains a turn", async () => {
     const { indexConversations } = await import("../../src/tools/conversation-tools.js");
     const path = join(tmpDir, "s1.jsonl");
@@ -187,6 +215,84 @@ describe("conversation indexing — incremental update", () => {
 
     const after = await searchConversations("retention and budgets", tmpDir, 50);
     expect(new Set(after.results.map((x) => x.file)).has("s2.jsonl")).toBe(false);
+  });
+
+  it("reports compacted_sessions on an incremental pass instead of a silent zero", async () => {
+    // It used to return 0 because the count is not stored. A 0 there is indistinguishable from
+    // "scanned, found none" — and it is one pass over symbols this path already holds.
+    const { indexConversations } = await import("../../src/tools/conversation-tools.js");
+    for (const id of ["s1", "s2", "s3", "s4"]) {
+      await writeFile(join(tmpDir, `${id}.jsonl`), session(id, 2));
+    }
+    // A compacted session carries a `user` record flagged `isCompactSummary` — the extractor collects
+    // those separately and emits the LAST one as a `conversation_summary` symbol. `type: "summary"` is
+    // not a shape it recognises, which is what the first draft of this test wrote.
+    await writeFile(join(tmpDir, "s3.jsonl"), [
+      session("s3", 2),
+      JSON.stringify({
+        type: "user", isCompactSummary: true,
+        message: { content: "earlier turns were compacted away" },
+        uuid: "u-sum", sessionId: "s3", timestamp: "2026-09-27T09:00:00Z",
+      }),
+    ].join("\n"));
+    const full = await indexConversations(tmpDir, { embed: false });
+    expect(full.compacted_sessions).toBe(1);
+
+    await writeFile(join(tmpDir, "s1.jsonl"), session("s1", 4));
+    const incr = await indexConversations(tmpDir, { embed: false });
+    expect(incr.incremental).toBe(true);
+    // The compacted session was NOT the one that changed, so the count has to come from the merged
+    // symbols rather than from this pass's own scan.
+    expect(incr.compacted_sessions).toBe(1);
+  });
+
+  it("writes only the changed session's rows, leaving the rest of the index untouched", async () => {
+    // `saveIndex` rewrites every symbol of the repo — measured 1,494 ms on a 15,838-symbol index
+    // against 0-1 ms for `saveIncremental` on one file, for a pass whose whole premise is that two
+    // sessions moved. The observable guarantee is that untouched sessions keep their stored rows.
+    const { indexConversations } = await import("../../src/tools/conversation-tools.js");
+    const { getIndexPath, loadIndex } = await import("../../src/storage/index-store.js");
+    const { loadConfig } = await import("../../src/config.js");
+    for (const id of ["s1", "s2", "s3", "s4"]) {
+      await writeFile(join(tmpDir, `${id}.jsonl`), session(id, 2));
+    }
+    await indexConversations(tmpDir, { embed: false });
+    const indexPath = getIndexPath(loadConfig().dataDir, tmpDir);
+    const before = await loadIndex(indexPath);
+    const untouchedBefore = before.symbols.filter((x) => x.file === "s4.jsonl").map((x) => x.id).sort();
+
+    await writeFile(join(tmpDir, "s1.jsonl"), session("s1", 5));
+    expect((await indexConversations(tmpDir, { embed: false })).incremental).toBe(true);
+
+    const after = await loadIndex(indexPath);
+    expect(after.symbols.filter((x) => x.file === "s4.jsonl").map((x) => x.id).sort())
+      .toEqual(untouchedBefore);
+    // And the changed one really was replaced, not appended to.
+    const s1Ids = new Set(after.symbols.filter((x) => x.file === "s1.jsonl").map((x) => x.id));
+    expect(s1Ids.size).toBeGreaterThan(before.symbols.filter((x) => x.file === "s1.jsonl").length);
+    expect(after.files.map((f) => f.path).sort()).toEqual(["s1.jsonl", "s2.jsonl", "s3.jsonl", "s4.jsonl"]);
+  });
+
+  it("leaves a BM25 header the next search accepts, after incremental writes", async () => {
+    // Both `saveIncremental` and `removeFileFromIndex` stamp `updated_at` themselves, so the header
+    // has to be written from the value the database ends up with. Getting that wrong means every later
+    // search rejects the file and rebuilds — silently undoing this whole path.
+    const { indexConversations } = await import("../../src/tools/conversation-tools.js");
+    const { getIndexPath, loadIndex } = await import("../../src/storage/index-store.js");
+    const { loadConfig } = await import("../../src/config.js");
+    const { loadBM25Index } = await import("../../src/search/bm25-store.js");
+    for (const id of ["s1", "s2", "s3", "s4"]) {
+      await writeFile(join(tmpDir, `${id}.jsonl`), session(id, 2));
+    }
+    await indexConversations(tmpDir, { embed: false });
+    await writeFile(join(tmpDir, "s2.jsonl"), session("s2", 5));
+    expect((await indexConversations(tmpDir, { embed: false })).incremental).toBe(true);
+
+    const indexPath = getIndexPath(loadConfig().dataDir, tmpDir);
+    const code = await loadIndex(indexPath);
+    const bm25 = await loadBM25Index(indexPath, code);
+    expect(bm25).not.toBeNull();
+    expect(bm25!.docCount).toBe(code.symbols.length);
   });
 
   it("falls back to a full pass when most of the directory changed", async () => {
