@@ -330,6 +330,38 @@ describe("conversation indexing — incremental update", () => {
   });
 });
 
+describe("conversation indexing — the fast paths and `embed`", () => {
+  it("does not let an unchanged directory swallow a requested embed", async () => {
+    // Embedding is opt-in and only an explicit `index_conversations` asks for it, so "the files did
+    // not change" is not an answer to "are its vectors there". The skip used to run first and return
+    // before the embed step, silently dropping the work the caller invoked the tool for. Found by the
+    // cross-model review of this release.
+    const { indexConversations } = await import("../../src/tools/conversation-tools.js");
+    await writeFile(join(tmpDir, "s1.jsonl"), session("s1", 3));
+    await indexConversations(tmpDir, { embed: false });
+    // Second call with embed:false skips, as designed.
+    expect((await indexConversations(tmpDir, { embed: false })).unchanged).toBe(true);
+    // Same unchanged directory, but embedding requested: must take the full path, not the skip.
+    const embedded = await indexConversations(tmpDir, { embed: true });
+    expect(embedded.unchanged).toBeUndefined();
+    expect(embedded.incremental).toBeUndefined();
+    expect(embedded.sessions_found).toBe(1);
+  });
+
+  it("does not let the incremental path swallow a requested embed either", async () => {
+    const { indexConversations } = await import("../../src/tools/conversation-tools.js");
+    for (const id of ["s1", "s2", "s3", "s4"]) {
+      await writeFile(join(tmpDir, `${id}.jsonl`), session(id, 2));
+    }
+    await indexConversations(tmpDir, { embed: false });
+    await writeFile(join(tmpDir, "s2.jsonl"), session("s2", 5));
+    const embedded = await indexConversations(tmpDir, { embed: true });
+    expect(embedded.incremental).toBeUndefined();
+    expect(embedded.unchanged).toBeUndefined();
+    expect(embedded.sessions_found).toBe(4);
+  });
+});
+
 describe("conversation indexing — persisted BM25", () => {
   it("writes a BM25 file beside the index", async () => {
     const { indexConversations } = await import("../../src/tools/conversation-tools.js");

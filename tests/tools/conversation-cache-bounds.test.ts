@@ -43,15 +43,22 @@ function indexOfTokens(tokens: number): BM25Index {
 
 const MB = 1024 * 1024;
 let prevBudget: string | undefined;
+let prevTier: string | undefined;
 
 beforeEach(() => {
   prevBudget = process.env["CODESIFT_MAX_CONVERSATION_BM25_CACHE_MB"];
+  // The TIER var is restored here too: one case sets it to exercise the quarter-share default, and
+  // cleaning it up at the end of that test body leaks it to every later file if an assertion throws
+  // first. Env restoration belongs in afterEach for exactly that reason.
+  prevTier = process.env["CODESIFT_MAX_BM25_CACHE_MB"];
   clearConversationEmbeddingsCacheForTesting();
 });
 
 afterEach(() => {
   if (prevBudget === undefined) delete process.env["CODESIFT_MAX_CONVERSATION_BM25_CACHE_MB"];
   else process.env["CODESIFT_MAX_CONVERSATION_BM25_CACHE_MB"] = prevBudget;
+  if (prevTier === undefined) delete process.env["CODESIFT_MAX_BM25_CACHE_MB"];
+  else process.env["CODESIFT_MAX_BM25_CACHE_MB"] = prevTier;
   clearConversationEmbeddingsCacheForTesting();
 });
 
@@ -109,7 +116,6 @@ describe("conversation BM25 cache bound", () => {
     setConversationBM25Index("conversations/b", indexOfTokens(tokens));
     setConversationBM25Index("conversations/c", indexOfTokens(tokens));
     expect(conversationCacheStats().bm25).toBe(2);
-    delete process.env["CODESIFT_MAX_BM25_CACHE_MB"];
   });
 });
 

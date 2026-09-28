@@ -309,7 +309,18 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 
   memory = map;
   loadedFrom = path;
-  if (budget > 0) await compactIfUnreadableTailDominates(path, map, budget);
+  // Guarded at the CALL SITE as well as inside. This function is documented to never throw — "a cache
+  // that cannot be read must degrade into 'compute it again', never into an error" — and compaction
+  // was added after that promise, outside the try/finally above. Its own internals are guarded, so
+  // this is belt-and-braces rather than a known throw; the cross-model review of this release flagged
+  // the shape, and the contract is worth more than the one line it costs.
+  if (budget > 0) {
+    try {
+      await compactIfUnreadableTailDominates(path, map, budget);
+    } catch {
+      // A cache that could not be compacted is a cache that is merely large.
+    }
+  }
   return map;
 }
 
@@ -348,6 +359,15 @@ let compacted = false;
  * pinned env var), so every process reads the SAME prefix, and anything outside it was already
  * unreachable. The rewrite is the conservative direction — it turns bytes nothing could read into
  * bytes nothing needs to store.
+ *
+ * WHAT IT CAN LOSE, and why that is acceptable: the replacement is built from a map captured before
+ * the rename, so records another process appends inside that window are discarded when the rename
+ * lands. No lock is taken. That is a genuine TOCTOU, and it is bounded by this module's contract —
+ * a lost record is a cache MISS, recomputed on demand, never a wrong vector served. It fires at most
+ * once per process and only above the slack, so on a machine running 24-37 codesift processes the
+ * expected loss is a handful of recomputations, against the 12.70 GB the window buys back. A lock
+ * on a best-effort cache would cost more than the misses do. Raised by two independent reviewers of
+ * this release; recorded here so the third does not have to rediscover it.
  */
 async function compactIfUnreadableTailDominates(
   path: string,

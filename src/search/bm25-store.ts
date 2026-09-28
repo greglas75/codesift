@@ -58,6 +58,16 @@ const FORMAT_VERSION = 2;
  */
 const ID_CHUNK = 20_000;
 
+/**
+ * Largest id-table index a file may claim.
+ *
+ * The table is sized by a number read off disk, so it needs a ceiling for the same reason
+ * `MAX_DIM` exists in the shared embedding cache: a corrupt value must degrade into "rebuild this
+ * cache", never into an allocation the process cannot survive. 50M is two orders of magnitude above
+ * the largest index on this machine (352,166 symbols).
+ */
+const MAX_ID_TABLE = 50_000_000;
+
 type FieldName = "name" | "signature" | "docstring" | "body" | "comments";
 const FIELDS: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
 
@@ -227,9 +237,22 @@ export async function loadBM25Index(
         // Chunks arrive in order and each states its own start, so a reordered or missing chunk
         // leaves holes rather than shifting every id after it by one — a shift would attach the
         // wrong symbol to every posting and still look like a valid index.
-        const start = row[1] as number;
-        const chunk = row[2] as string[];
-        for (let i = 0; i < chunk.length; i++) idTable[start + i] = chunk[i] as string;
+        //
+        // The parameters come off disk, so they are bounded before use: a corrupt `start` would
+        // index the array at an arbitrary offset (V8 drops it into dictionary mode and the load
+        // degrades into a crawl), and a corrupt row shape would put non-strings in the table.
+        // A cache that cannot be trusted is rebuilt — that is always correct, and the alternative
+        // here is a slow death on a file nobody can read anyway.
+        const start = row[1];
+        const chunk = row[2];
+        if (typeof start !== "number" || !Number.isInteger(start) || start < 0 ||
+            start > MAX_ID_TABLE || !Array.isArray(chunk) ||
+            start + chunk.length > MAX_ID_TABLE) return null;
+        for (let i = 0; i < chunk.length; i++) {
+          const id = chunk[i];
+          if (typeof id !== "string") return null;
+          idTable[start + i] = id;
+        }
       } else if (kind === "p") {
         const field = row[1] as FieldName;
         const flat = row[3] as (string | number)[];

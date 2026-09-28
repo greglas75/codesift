@@ -145,6 +145,34 @@ describe("bm25 store v2 — interned symbol ids", () => {
     expect(await loadBM25Index(indexPath, code)).toBeNull();
   });
 
+  it("rebuilds rather than allocating when an id-table chunk claims an absurd offset", async () => {
+    // `start` comes off disk. A corrupt value would index the table at an arbitrary offset — V8 drops
+    // the array into dictionary mode and the load degrades into a crawl — so it is bounded before use,
+    // the same way MAX_DIM bounds the shared embedding cache. Raised as a CRITICAL by the cross-model
+    // review of this release.
+    const code = codeIndexOf(corpus(10));
+    await saveBM25Index(indexPath, buildBM25Index(code.symbols), code);
+    const path = bm25PathFor(indexPath);
+    const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+    const patched = lines.map((l) => (l.startsWith('["s"')
+      ? JSON.stringify(["s", 9_000_000_000, (JSON.parse(l) as [string, number, string[]])[2]])
+      : l));
+    writeFileSync(path, `${patched.join("\n")}\n`);
+
+    expect(await loadBM25Index(indexPath, code)).toBeNull();
+  });
+
+  it("rebuilds rather than trusting a non-string in the id table", async () => {
+    const code = codeIndexOf(corpus(10));
+    await saveBM25Index(indexPath, buildBM25Index(code.symbols), code);
+    const path = bm25PathFor(indexPath);
+    const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+    const patched = lines.map((l) => (l.startsWith('["s"') ? JSON.stringify(["s", 0, [null, 42]]) : l));
+    writeFileSync(path, `${patched.join("\n")}\n`);
+
+    expect(await loadBM25Index(indexPath, code)).toBeNull();
+  });
+
   it("rejects a v1 file so an existing cache migrates instead of being misread", async () => {
     const code = codeIndexOf(corpus(10));
     const built = buildBM25Index(code.symbols);

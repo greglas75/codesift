@@ -318,6 +318,19 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       if (!/^[0-9a-f]{8,}\.bm25\.ndjson$/.test(name)) continue;
       const full = join(dataDir, name);
       let version: number | undefined;
+      // Capture the identity the version decision is made ABOUT. Every writer here is
+      // temp-then-rename, so between reading this header and unlinking the file another process can
+      // atomically put a CURRENT-format index in its place — and the unlink would then delete a valid
+      // cache and force an expensive rebuild. Compared again immediately before the unlink below.
+      let seenMtimeMs: number;
+      let seenIno: number;
+      try {
+        const seen = statSync(full);
+        seenMtimeMs = seen.mtimeMs;
+        seenIno = seen.ino;
+      } catch {
+        continue;
+      }
       try {
         const handle = await open(full, "r");
         try {
@@ -336,6 +349,9 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       try {
         const fileStat = statSync(full);
         if (Date.now() - fileStat.mtimeMs < pruneGraceMs) continue;
+        // Same file, unchanged since its header was read? A different inode or mtime means a writer
+        // replaced it, and what sits there now is not what the version check looked at.
+        if (fileStat.mtimeMs !== seenMtimeMs || fileStat.ino !== seenIno) continue;
         unlinkSync(full);
         bytes += fileStat.size;
         files++;

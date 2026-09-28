@@ -78,7 +78,13 @@ export async function indexConversations(
   //
   // It is also what made persisting the index pointless: `persistConversationIndex` stamps
   // `updated_at: Date.now()`, so an unconditional rescan invalidated its own cache every time.
-  const unchanged = await conversationsUnchanged(rootPath, indexPath);
+  // `embed` is the ONE thing a skip cannot stand in for. Embedding is opt-in and only an explicit
+  // `index_conversations` asks for it, so skipping on "the files did not change" silently drops the
+  // work the caller invoked the tool to get — the directory being unchanged says nothing about
+  // whether its vectors exist. Found by the cross-model review of this release; it is a regression
+  // the fast paths introduced, not pre-existing behaviour.
+  const wantsEmbed = options?.embed ?? true;
+  const unchanged = wantsEmbed ? null : await conversationsUnchanged(rootPath, indexPath);
   if (unchanged) {
     return {
       sessions_found: unchanged.sessions,
@@ -101,7 +107,12 @@ export async function indexConversations(
   // A conversation log is append-only and sessions are independent files, which is the case
   // `updateBM25ForFile` already exists for: swap the changed file's symbols in place rather than
   // rebuilding the vocabulary for all 164,500 turns.
-  const incremental = await incrementalConversationUpdate(rootPath, repoName, indexPath, options);
+  // Same reason the skip is gated above: `incrementalConversationUpdate` already refuses when embedding
+  // was asked for (its first guard), and this makes that refusal visible at the call site rather than
+  // only inside the callee.
+  const incremental = wantsEmbed
+    ? null
+    : await incrementalConversationUpdate(rootPath, repoName, indexPath, options);
   if (incremental) {
     return {
       sessions_found: incremental.sessions,
@@ -118,7 +129,7 @@ export async function indexConversations(
 
   const scan = await scanConversationFiles(rootPath, repoName);
   // Explicit call embeds by default; auto-discovery passes embed:false (see below).
-  await persistConversationIndex(rootPath, repoName, indexPath, scan, { embed: options?.embed ?? true });
+  await persistConversationIndex(rootPath, repoName, indexPath, scan, { embed: wantsEmbed });
 
   return {
     sessions_found: scan.sessions,

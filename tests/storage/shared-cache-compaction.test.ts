@@ -117,6 +117,38 @@ describe("shared cache compaction", () => {
     expect(said).not.toMatch(/unreadable record/);
   });
 
+  it("collapses a duplicate-dominated tail, which is the shape actually measured", async () => {
+    // The file header describes 59.2% duplicates, and every other case here seeds DISTINCT keys only —
+    // so nothing exercised the mechanism the compaction exists for. Flagged as a coverage gap by the
+    // cross-model review of this release. Writing the same keys from a SECOND process view (a fresh
+    // module, so its dedup map starts empty) is exactly how the duplicates arise in production.
+    // 600 distinct + 600 repeats is ~3.7 MB, which must clear the 3x-budget threshold at a 1 MB
+    // budget — the first draft seeded 300 and produced a 1.86 MB file that correctly was NOT
+    // compacted, so the test failed on its own arithmetic rather than on the mechanism.
+    const keys = await seed(600);
+    const before = statSync(cacheFile()).size;
+    // Re-append the same keys with a fresh module: the writer cannot see what it never read.
+    const again = await fresh();
+    again._resetSharedCacheForTests();
+    again.appendSharedCache(keys.map((key, i) => {
+      const vec = new Float32Array(DIM);
+      vec[0] = i;
+      return { key, vec };
+    }));
+    const withDupes = statSync(cacheFile()).size;
+    expect(withDupes).toBeGreaterThan(before * 1.8);   // the tail really is duplicate-dominated
+
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    const map = await (await fresh()).loadSharedCache();
+    const after = statSync(cacheFile()).size;
+    expect(after).toBeLessThan(withDupes);
+    // One record per distinct key it kept — the duplicates are gone, not merely truncated away.
+    expect(after).toBeLessThanOrEqual(map.size * VECTOR_BYTES + map.size * 32);
+    // And the vectors still read back.
+    const reread = await (await fresh()).loadSharedCache();
+    for (const [k, v] of map) expect(reread.get(k)).toEqual(v);
+  });
+
   it("leaves a file alone while it still fits within the slack", async () => {
     await seed(200);                                        // ~614 KB
     const before = statSync(cacheFile()).size;
