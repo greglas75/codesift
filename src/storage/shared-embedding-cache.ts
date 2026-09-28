@@ -334,17 +334,25 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
 const COMPACT_ABOVE_BUDGETS = 3;
 
 /**
- * Size the file had when this process last compacted it, or 0 if it has not.
+ * Why there is NO once-per-process guard here, and what that leaves unbounded.
  *
- * A boolean here meant "at most once per process", which is wrong for the process that matters: the
- * shared daemon runs for days and appends the whole time, so the tail it was compacted for grows
- * straight back and nothing looks at it again until a restart. This is the file that reached
- * 12.97 GB — a once-ever guard in a long-lived writer is how it got there. Re-compaction is allowed
- * when the file has grown past the threshold AGAIN since the last one, which bounds the work to one
- * rewrite per threshold-crossing rather than one per load. Raised by the cross-model review of this
- * release.
+ * Two versions of one existed: a `compacted` boolean, then a `compactedAtSize` high-water mark added
+ * after a reviewer pointed out the boolean was the wrong bound for a daemon that runs for days. Both
+ * were DEAD CODE, and the second was wrong on top of being dead — it recorded the PRE-compaction size,
+ * so a 4 GB file compacted to 256 MB would have needed 4 GB again rather than the 3x-budget threshold
+ * its own comment promised.
+ *
+ * Dead because `loadSharedCache` memoises: the second call returns `memory` and never reaches
+ * compaction. That memo IS the once-per-process bound, and a second variable claiming the same job is
+ * how a safety property nobody actually has gets believed.
+ *
+ * What genuinely remains unbounded: a long-lived process compacts at most once, at the moment it first
+ * reads the cache, and then appends for the rest of its life without ever looking again. The daemon
+ * runs for days. Bounding that needs compaction reachable from the APPEND path — which is synchronous
+ * and hot — so it is a design question, recorded in memory/backlog.md rather than papered over with a
+ * guard that cannot fire. Each new process still compacts, which is what took 12.97 GB to 270 MB here.
  */
-let compactedAtSize = 0;
+
 
 /**
  * Rewrite the file to hold only the records the reader can actually use.
@@ -403,10 +411,6 @@ async function compactIfUnreadableTailDominates(
     return;
   }
   if (size <= budget * COMPACT_ABOVE_BUDGETS) return;
-  // Already compacted at this size or larger? Then the growth since is not yet worth another
-  // rewrite, and re-running would rewrite the same bytes on every load.
-  if (compactedAtSize > 0 && size <= compactedAtSize) return;
-  compactedAtSize = size;
 
   // Its temp sibling has no repository hash, so `artifactPattern()` cannot match it and `prune`
   // can never reclaim one — this writer has to sweep its own.
@@ -445,7 +449,8 @@ async function compactIfUnreadableTailDominates(
         `re-appended on every pass.`,
     );
   } catch {
-    // A failed compaction leaves the original in place, which is correct and merely large.
+    // A failed compaction leaves the original in place, which is correct and merely large. A fresh
+    // process tries again, which is where a transient cause resolves.
     try {
       await unlink(temp);
     } catch {
@@ -530,5 +535,4 @@ export function _resetSharedCacheForTests(): void {
   memory = null;
   loadedFrom = null;
   warnedWriteFailure = false;
-  compactedAtSize = 0;
 }

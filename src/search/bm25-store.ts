@@ -258,6 +258,10 @@ export async function loadBM25Index(
         for (let i = 0; i < chunk.length; i++) {
           const id = chunk[i];
           if (typeof id !== "string") return null;
+          // Two chunks claiming the same slot is not something this writer can produce, so a file
+          // that does is corrupt — and taking the later one would attach a DIFFERENT symbol to every
+          // posting that referenced it, which searches cleanly and answers wrongly. Rebuild instead.
+          if (idTable[start + i] !== undefined) return null;
           idTable[start + i] = id;
         }
       } else if (kind === "p") {

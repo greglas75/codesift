@@ -157,6 +157,41 @@ describe("shared cache compaction", () => {
     expect(statSync(cacheFile()).size).toBe(before);
   });
 
+  it("runs at most once per process because the load is memoised, not because of a guard", async () => {
+    // Two once-per-process guards were written here and both were dead code: `loadSharedCache`
+    // returns its memo on the second call and never reaches compaction. The second guard was also
+    // wrong — it recorded the PRE-compaction size, so a compacted file would have needed to exceed
+    // its ORIGINAL size before another rewrite. Asserting the real mechanism is what stops a third
+    // one being added: if this ever fails, the memo changed and the bound needs rethinking, not
+    // another variable.
+    await seed(1300);
+    const original = statSync(cacheFile()).size;
+    process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
+    const mod = await fresh();
+    await mod.loadSharedCache();
+    const afterFirst = statSync(cacheFile()).size;
+    expect(afterFirst).toBeLessThan(original);
+
+    // Regrow well past the threshold, then load again in the SAME module instance.
+    const vec = new Float32Array(DIM);
+    vec[0] = 7;
+    const more = [];
+    for (let i = 0; i < 1400; i++) more.push({ key: mod.contentKey("m", DIM, `regrown-${i}`), vec });
+    mod.appendSharedCache(more);
+    const regrown = statSync(cacheFile()).size;
+    expect(regrown).toBeGreaterThan(3 * 1024 * 1024);
+
+    await mod.loadSharedCache();
+    // Unchanged: the memoised load never re-enters compaction. This is the documented limitation,
+    // not a passing guard — a long-lived process appends without looking again.
+    expect(statSync(cacheFile()).size).toBe(regrown);
+
+    // A NEW process (a fresh module) does compact it, which is what bounds growth in practice.
+    const next = await fresh();
+    await next.loadSharedCache();
+    expect(statSync(cacheFile()).size).toBeLessThan(regrown);
+  });
+
   it("does not delete the cache when the read was disabled", async () => {
     // Budget 0 means "do not read", so the map is empty for a reason that has nothing to do with
     // the file's contents. Rewriting from it would destroy a perfectly good cache.

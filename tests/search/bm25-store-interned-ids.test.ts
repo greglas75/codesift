@@ -173,6 +173,23 @@ describe("bm25 store v2 — interned symbol ids", () => {
     expect(await loadBM25Index(indexPath, code)).toBeNull();
   });
 
+  it("rebuilds rather than letting two id-table chunks claim the same slot", async () => {
+    // This writer cannot produce an overlap, so a file that has one is corrupt — and taking the later
+    // chunk would attach a DIFFERENT symbol to every posting that referenced the slot, which searches
+    // cleanly and answers wrongly. Caught by the third cross-model pass.
+    const code = codeIndexOf(corpus(10));
+    await saveBM25Index(indexPath, buildBM25Index(code.symbols), code);
+    const path = bm25PathFor(indexPath);
+    const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
+    const table = lines.find((l) => l.startsWith('["s"'))!;
+    const ids = (JSON.parse(table) as [string, number, string[]])[2];
+    // A second chunk re-claiming slot 0 with a different id.
+    const overlap = JSON.stringify(["s", 0, [ids[1], ids[0]]]);
+    writeFileSync(path, `${[...lines, overlap].join("\n")}\n`);
+
+    expect(await loadBM25Index(indexPath, code)).toBeNull();
+  });
+
   it("rejects a v1 file so an existing cache migrates instead of being misread", async () => {
     const code = codeIndexOf(corpus(10));
     const built = buildBM25Index(code.symbols);
