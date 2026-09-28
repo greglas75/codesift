@@ -2,6 +2,122 @@
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-09-28
+
+The data directory was 141 GB and the daemon was at 15,194 MB of a 16,384 MB heap. Every bound that
+should have stopped both already existed; each was unreachable for its own reason.
+
+**Migration:** the persisted BM25 format changes v1 → v2, so every install rebuilds its BM25 caches
+once, on first use per repo. Nothing is lost — the cache is derived — and `prune` reclaims the v1
+files, which are unreadable from this version on. On the machine this was developed against that was
+47.96 GB.
+
+### Fixed
+
+- **Three cleanup paths existed and each was blocked separately, leaving 149 temp files / 11.15 GB,
+  the oldest three weeks old, a day after a `prune` that reported success.** `bm25-store` and
+  `edge-cache` were the only large-artifact writers that never called `cleanupOrphanTempFiles`, and
+  they held 6.93 of the 7.17 GB of `.tmp.*`; `writerPidIsAlive` parsed only `.generation.<pid>.`, so
+  adding a sweep to those two without teaching it the `.tmp.<pid>` shape would have deleted a LIVE
+  1.7 GB write (the hour guard is not enough when the daemon's event loop is 38 s late); and `prune`
+  checked `live.has(hash)` *before* it could reach the tail `artifactPattern()` had grown for exactly
+  this, which made that arm reachable only for a repo being de-registered in the same run — 1,507 of
+  1,511 registry roots were present. Pid liveness is now trusted only inside a 24-hour window,
+  because pids recycle and an unrelated live process would otherwise pin an abandoned write forever.
+- **The shared embedding cache was a growth loop, not a leak.** The reader stops at its 256 MB
+  budget and the writer deduplicates against the map that read produced, so every key past the
+  budget was invisible to every process and was appended again on the next pass. Measured: a
+  12.97 GB file, 3,309,550 records, of which the reader could ever see 268 MB / 87,381 records
+  (2.6%), and **59.2% of the file was duplicate**. v1's unconditional append was treated as a defect
+  at 11.3% repeats; this was five times worse, and arrived by bounding the reader without bounding
+  the writer. The file is now compacted to what the reader can use — 12.97 GB → 270 MB.
+- **Write-ahead logs had no owner.** SQLite truncates a `-wal` on a clean last close, and this
+  server's connections routinely do not close cleanly. `prune` now checkpoints logs whose database
+  no other process holds: 1,488 files / 4.17 GB → 0.01 GB.
+- **A second BM25 cache had no bound of any kind** — no LRU, no budget, no entry cap, and nothing had
+  ever removed an entry from `tools/conversation-cache.ts`. Its size is not bounded by what is on
+  disk either, because the loader builds from symbols: 3 of 1,258 conversation repos had a persisted
+  index at all. One `search_all_conversations` retained **2,784 MB** permanently (a second identical
+  call took 0.6 s, which is what proved the memory was still referenced). It now carries a quarter of
+  the BM25 budget — four full-tier budgets in one process is 4 GB of deliberate residency, which is
+  how a process with correct individual bounds still reaches its ceiling.
+- **The missing bound was masking a correctness defect.** The conversation index lookup was
+  `if (!bm25) build`, with no revalidation, so the first search in a process fixed the answer for
+  that process's life — on a daemon up 27 hours, conversation search could not see anything recorded
+  since its first call. Eviction happens to refresh, so bounding a cache hides one that never
+  revalidates.
+- **Three temp-file writers shared one name, so two concurrent saves spliced into one file.**
+  `saveBM25Index`, `saveEdgeCache` and the new compaction all named their temp file
+  `<target>.tmp.<pid>` — no nonce — and there is no single-flight guard on the BM25 miss path the way
+  there is on index loads. Two concurrent misses for one repo in ONE process, which is the shared
+  daemon's normal shape, opened the same path and whichever renamed last won with interleaved
+  content. `atomicWriteFile` had carried the correct reasoning in its own comment for months; these
+  three did not. All now carry a per-call nonce.
+- **`prune` could create the database it was about to checkpoint.** `new DatabaseSync(path)` creates
+  the file when it is absent, so a stray `-wal` with no database had this command manufacture an
+  empty one. Reclaiming bytes must not create artifacts.
+- **Compaction was guarded "once per process", which is the wrong bound for a daemon that runs for
+  days.** It appends throughout, so the tail regrew and nothing looked again until a restart — how
+  this file reached 12.97 GB in the first place. The guard is now the size at the last compaction:
+  one rewrite per threshold-crossing.
+- **The BM25 id-table bound is the file's own `symbolCount`**, not a round 50M constant that still
+  permitted a 50M-element sparse array from one corrupt integer. The table cannot hold more ids than
+  the index has documents.
+- **`/health` read `caches=0` as a substring**, so `?notcaches=0` also switched the report off.
+- **`conversation_turn` counts were over-reported on the fast paths** by exactly the number of
+  compacted sessions, because a compacted session carries one `conversation_summary` symbol on top
+  of its turns (15,894 against a scanned pass's 15,887, with 7 compacted).
+
+### Changed
+
+- **Persisted BM25 indexes intern their symbol ids (format v2).** v1 wrote the full id —
+  `repo:file:name:line`, averaging 121 characters — into every postings entry, and a document appears
+  once per token it contains: measured on a real 53 MB index, 398,712 postings pairs over 17,410
+  distinct ids, **22.9 repeats each and 91% of the file**. That made the cache not worth its disk —
+  the largest conversation index produced a 1,975 MB file whose load was only 1.4x faster than
+  rebuilding. The ids now live in a chunked table the postings reference by index: that file is
+  **165 MB (8.4%)** and loads **4.26x** faster than a rebuild, and a code index of 17,459 symbols went
+  from 53 MB to 6 MB (11.1%).
+- **Conversation indexing detects change instead of redoing everything.** Nothing did, so every call
+  re-read every `.jsonl`, re-extracted every turn and rebuilt the index — and `persistConversationIndex`
+  stamps `updated_at: Date.now()`, so it invalidated its own cache every time. `FileEntry.last_modified`
+  recorded when the scanner ran rather than when the file changed, and `mtime_ms` — documented in the
+  type as "for incremental skip" — was never set; both now hold the file's mtime. An unchanged
+  directory is skipped; a changed one re-extracts only the sessions that moved and amends the loaded
+  index with `updateBM25ForFile`, falling back to a full pass past 50% changed (measured: amending
+  wins 2.57x at 50% and loses 3.3x at 75%, because each amended file is a remove-then-add over shared
+  postings maps and the churn compounds). A 797-session directory went from a 71 s pass to 21 s, and
+  an 802-session one from 10.1 s to 0.04 s when nothing changed.
+- **Incremental passes write only the rows that moved**, via the `saveIncremental` /
+  `removeFileFromIndex` that already existed for the code path — 1,494 ms to rewrite a
+  15,838-symbol index against 0-1 ms for one file. Both writers stamp `updated_at` themselves, so the
+  BM25 header is written from the value read back off the database; assuming it made every later
+  search reject the file and rebuild, silently, with nothing failing.
+- **`search_all_conversations` fans out with a bounded worker pool.** It was one `Promise.all` over
+  every conversation repo, written when its own comment said "~20+"; this install has 1,258, so a
+  single call put that many index loads and BM25 builds in flight at once, past the two-at-a-time gate
+  the code path has for exactly that. First call 53.7 s → 16.6 s → **21.9 s cold / 5.8 s repeat** once
+  the persisted indexes exist.
+- **A budget stop no longer reports "stopped early at an unreadable record."** It named corruption as
+  the cause of a deliberate limit, on a clean 12.97 GB file.
+
+### Added
+
+- **`/health` reports `caches`** — entry count and each cache's own priced bytes, per cache
+  (`?caches=0` opts out). Attributing 15.2 GB of heap took an afternoon of standalone probes because
+  `/health` reported the total and nothing about who held it; two of the four things that afternoon
+  found were caches with no bound, and neither was visible from outside. Do not read
+  `heap_used_mb` minus that sum as unattributed retention: `heapUsed` includes uncollected garbage
+  (3,352 MB against 1,187 MB of priced caches 103 s after a restart, holding exactly one index).
+- **`prune` reclaims BM25 caches written by a superseded format** (`bm25_superseded_format`) and
+  reports `wal_checkpointed` / `wal_reclaimed_gb`. A format bump otherwise strands every existing
+  file: they are rejected on read and only overwritten when that repo is indexed again, which for a
+  repo nobody touches is never.
+- **`index_conversations` reports `unchanged` and `incremental`** with `changed_sessions`, so a caller
+  can tell a skip from a scan. A skip reports stored symbols rather than turns — that split is not
+  stored per file — and says so rather than silently differing from a scanned pass.
+
+
 ## [0.18.1] — 2026-09-25
 
 Four defects, all found by reading this install's own `~/.codesift/usage.jsonl` and daemon log rather
