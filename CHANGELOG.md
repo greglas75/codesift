@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-09-28
+
+0.19.0 was tagged but never reached the registry — its publish job failed on an npm token, as every
+release job has since 2026-08-10. This is the same release plus two fixes its own third cross-model
+pass found after the tag was cut.
+
+### Fixed
+
+- **Two once-per-process guards on the shared-cache compaction path were dead code, and the second was
+  wrong.** `compactedAtSize` recorded the size the file STARTED at, before the rename, so a 4 GB file
+  compacted to 256 MB would have needed 4 GB again before the next rewrite rather than the 3x-budget
+  threshold its own comment promised — and a compaction that failed was blocked from retrying. Fixing
+  the order exposed that the guard cannot fire at all: `loadSharedCache` memoises, so its memo is the
+  once-per-process bound and both guards were unreachable. Removed rather than corrected, with the real
+  mechanism documented. What remains unbounded, and is now recorded: a long-lived process compacts once
+  and then appends for the rest of its life without looking again.
+- **Two BM25 id-table chunks claiming the same slot now rebuild instead of letting the later one win.**
+  This writer cannot produce an overlap, so a file that has one is corrupt — and taking the later chunk
+  attaches a different symbol to every posting that referenced the slot, which searches cleanly and
+  answers wrongly.
+
+
 ## [0.19.0] — 2026-09-28
 
 The data directory was 141 GB and the daemon was at 15,194 MB of a 16,384 MB heap. Every bound that
