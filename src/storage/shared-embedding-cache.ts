@@ -333,8 +333,18 @@ export async function loadSharedCache(): Promise<Map<string, Float32Array>> {
  */
 const COMPACT_ABOVE_BUDGETS = 3;
 
-/** Set once a process has rewritten the file, so a long-lived server compacts at most once. */
-let compacted = false;
+/**
+ * Size the file had when this process last compacted it, or 0 if it has not.
+ *
+ * A boolean here meant "at most once per process", which is wrong for the process that matters: the
+ * shared daemon runs for days and appends the whole time, so the tail it was compacted for grows
+ * straight back and nothing looks at it again until a restart. This is the file that reached
+ * 12.97 GB — a once-ever guard in a long-lived writer is how it got there. Re-compaction is allowed
+ * when the file has grown past the threshold AGAIN since the last one, which bounds the work to one
+ * rewrite per threshold-crossing rather than one per load. Raised by the cross-model review of this
+ * release.
+ */
+let compactedAtSize = 0;
 
 /**
  * Rewrite the file to hold only the records the reader can actually use.
@@ -360,6 +370,15 @@ let compacted = false;
  * unreachable. The rewrite is the conservative direction — it turns bytes nothing could read into
  * bytes nothing needs to store.
  *
+ * MISMATCHED BUDGETS, and why this is not guarded: the budget is derived from RAM, so processes on
+ * one machine agree and compacting to the prefix cannot remove anything a sibling could read. A
+ * process with a PINNED `CODESIFT_MAX_SHARED_CACHE_MB` smaller than that default breaks the premise
+ * and truncates the file to its own, smaller prefix. The cross-model review of this release called
+ * that data loss; by this module's contract it is a larger cache MISS — the siblings recompute and
+ * the file refills — so it is documented rather than blocked. A guard on "an explicit budget is set"
+ * was written and reverted: it protects a narrow, within-contract degradation while disabling
+ * compaction for anyone who pins the variable machine-wide, which is the normal way to pin it.
+ *
  * WHAT IT CAN LOSE, and why that is acceptable: the replacement is built from a map captured before
  * the rename, so records another process appends inside that window are discarded when the rename
  * lands. No lock is taken. That is a genuine TOCTOU, and it is bounded by this module's contract —
@@ -376,7 +395,7 @@ async function compactIfUnreadableTailDominates(
 ): Promise<void> {
   // An empty map means the read found nothing — a missing file, an unreadable one, or a first run.
   // Rewriting from it would delete a cache this process simply failed to open.
-  if (compacted || map.size === 0) return;
+  if (map.size === 0) return;
   let size: number;
   try {
     size = statSync(path).size;
@@ -384,12 +403,18 @@ async function compactIfUnreadableTailDominates(
     return;
   }
   if (size <= budget * COMPACT_ABOVE_BUDGETS) return;
-  compacted = true;
+  // Already compacted at this size or larger? Then the growth since is not yet worth another
+  // rewrite, and re-running would rewrite the same bytes on every load.
+  if (compactedAtSize > 0 && size <= compactedAtSize) return;
+  compactedAtSize = size;
 
   // Its temp sibling has no repository hash, so `artifactPattern()` cannot match it and `prune`
   // can never reclaim one — this writer has to sweep its own.
   await cleanupOrphanTempFiles(path);
-  const temp = `${path}.tmp.${process.pid}`;
+  // Per-call nonce for consistency with the other two writers. Lower risk here — compaction is gated
+  // to fire at most once per process — but three independent spellings of "temp then rename" is how
+  // one of them ends up being the one without the guard.
+  const temp = `${path}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
   try {
     const handle = await open(temp, "w");
     try {
@@ -505,4 +530,5 @@ export function _resetSharedCacheForTests(): void {
   memory = null;
   loadedFrom = null;
   warnedWriteFailure = false;
+  compactedAtSize = 0;
 }

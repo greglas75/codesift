@@ -112,8 +112,14 @@ async function loadConversationIndex(rootPath: string): Promise<{
           bm25 = await buildBM25IndexYielding(codeIndex.symbols);
           // Written here as well as at index time, because every conversation repo on this machine
           // was already indexed by a build that did not persist one — without this they would only
-          // ever get a file on their next re-index. A duplicate concurrent write is safe: the writer
-          // is temp-then-rename.
+          // ever get a file on their next re-index.
+          //
+          // This comment used to claim "a duplicate concurrent write is safe: the writer is
+          // temp-then-rename". That was wrong, and the behaviour audit of this release said so:
+          // temp-then-rename makes ONE writer atomic, while two writers sharing a temp NAME collide
+          // on one inode. The writer's temp name now carries a per-call nonce, which is what actually
+          // makes a duplicate concurrent write safe — the rename is last-wins between two COMPLETE
+          // files rather than between two halves of an interleaved one.
           try {
             await saveBM25Index(indexPath, bm25, codeIndex);
           } catch {

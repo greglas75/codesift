@@ -441,7 +441,12 @@ export async function startHttpServer(
           // wants liveness; the report walks the cached indexes to price them, which is cheap but not
           // free on a process holding several hundred thousand symbols.
           const { readCacheReport } = await import("./server-helpers/cache-report.js");
-          const caches = url.includes("caches=0") ? undefined : await readCacheReport();
+          // A parsed query parameter, not a substring match: `?notcaches=0` and `?x=caches=0y` both
+          // satisfied `includes` and silently turned the report off. Harmless here — it gates an
+          // optional diagnostic on a loopback endpoint — but a flag that can be set by accident is a
+          // flag nobody can reason about. Raised as a NIT by the CQ audit of this release.
+          const wantsCaches = new URL(url, "http://127.0.0.1").searchParams.get("caches") !== "0";
+          const caches = wantsCaches ? await readCacheReport() : undefined;
           res.writeHead(stale ? 503 : 200, { "content-type": "application/json" });
           res.end(
             JSON.stringify(

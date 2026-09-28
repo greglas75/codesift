@@ -58,15 +58,6 @@ const FORMAT_VERSION = 2;
  */
 const ID_CHUNK = 20_000;
 
-/**
- * Largest id-table index a file may claim.
- *
- * The table is sized by a number read off disk, so it needs a ceiling for the same reason
- * `MAX_DIM` exists in the shared embedding cache: a corrupt value must degrade into "rebuild this
- * cache", never into an allocation the process cannot survive. 50M is two orders of magnitude above
- * the largest index on this machine (352,166 symbols).
- */
-const MAX_ID_TABLE = 50_000_000;
 
 type FieldName = "name" | "signature" | "docstring" | "body" | "comments";
 const FIELDS: FieldName[] = ["name", "signature", "docstring", "body", "comments"];
@@ -139,7 +130,16 @@ export async function saveBM25Index(
   await cleanupOrphanTempFiles(target);
   // Temp + rename, like every other artifact here: a process killed mid-write must not leave a
   // truncated file that the next start would read as a complete index.
-  const temp = `${target}.tmp.${process.pid}`;
+  //
+  // The name carries a per-call NONCE, not just the pid. Temp-then-rename makes ONE writer's write
+  // atomic and says nothing about two writers sharing a temp NAME: with `.tmp.<pid>` alone, two
+  // concurrent misses for the same repo IN THE SAME PROCESS — the shared daemon's normal shape, and
+  // there is no single-flight guard on the BM25 miss path the way `withIndexLoadSlot` guards index
+  // loads — open the same path, interleave into one inode, and whichever renames last wins with
+  // spliced content. `atomicWriteFile` in `storage/_shared.ts` already carried this reasoning in its
+  // own comment; this writer did not. Found by the behaviour audit of this release, against a comment
+  // of mine that asserted the opposite.
+  const temp = `${target}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
   const out = createWriteStream(temp, { encoding: "utf-8" });
 
   const write = (line: string): Promise<void> =>
@@ -245,9 +245,16 @@ export async function loadBM25Index(
         // here is a slow death on a file nobody can read anyway.
         const start = row[1];
         const chunk = row[2];
+        // Bounded by the file's OWN header rather than a round constant: the table can never hold
+        // more ids than the index has documents, and `symbolCount` was already read and validated
+        // against the live index by `isStale` above. An arbitrary 50M ceiling still permitted a
+        // 50M-element sparse array from one corrupt integer; this permits exactly what the file
+        // claims to contain. Tightened after the cross-model review called the constant too loose.
+        const maxIds = header.symbolCount;
         if (typeof start !== "number" || !Number.isInteger(start) || start < 0 ||
-            start > MAX_ID_TABLE || !Array.isArray(chunk) ||
-            start + chunk.length > MAX_ID_TABLE) return null;
+            !Array.isArray(chunk) || chunk.length > maxIds || start + chunk.length > maxIds) {
+          return null;
+        }
         for (let i = 0; i < chunk.length; i++) {
           const id = chunk[i];
           if (typeof id !== "string") return null;

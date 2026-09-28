@@ -17,7 +17,7 @@ async function handlePrune(_args: string[], flags: Flags): Promise<void> {
 }
 
 async function handlePruneLocked(flags: Flags, registryPath: string): Promise<void> {
-  const { readFileSync, readdirSync, statSync, unlinkSync } = await import("node:fs");
+  const { readFileSync, readdirSync, statSync, unlinkSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { loadConfig } = await import("../config.js");
   const dataDir = loadConfig().dataDir;
@@ -408,8 +408,14 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       }
       walBefore += size;
       if (size < 64 * 1024) { walAfter += size; continue; }
+      const dbPath = join(dataDir, name.slice(0, -"-wal".length));
+      // `new DatabaseSync(path)` CREATES the file when it is absent, so a stray `-wal` with no
+      // database — what a partial delete or an earlier prune leaves — would have this command
+      // manufacture an empty database and then "checkpoint" it. Reclaiming bytes must not create
+      // artifacts. Raised by the cross-model review of this release.
+      if (!existsSync(dbPath)) { walAfter += size; continue; }
       try {
-        const db = new DatabaseSync(join(dataDir, name.slice(0, -"-wal".length)));
+        const db = new DatabaseSync(dbPath);
         try {
           db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           walCheckpointed++;

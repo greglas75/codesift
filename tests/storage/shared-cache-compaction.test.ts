@@ -168,14 +168,25 @@ describe("shared cache compaction", () => {
     expect(statSync(cacheFile()).size).toBe(before);
   });
 
-  it("compacts at most once per process", async () => {
-    await seed(2000);
+  it("does not rewrite again until the file has grown past the threshold anew", async () => {
+    // A boolean "once per process" guard is wrong for the process that matters: the daemon runs for
+    // days and appends the whole time, so the tail grows straight back and nothing looks at it again
+    // until a restart — which is how this file reached 12.97 GB. The guard is now the SIZE at the last
+    // compaction, so one rewrite per threshold-crossing.
+    //
+    // This test also has to prove the first compaction HAPPENED before asserting the second does not:
+    // the earlier version asserted only that two loads produced the same size, which a run that never
+    // compacted at all would satisfy. Flagged by the cross-model review of this release.
+    const before = await seed(2000);
+    const original = statSync(cacheFile()).size;
     process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "1";
     const mod = await fresh();
     await mod.loadSharedCache();
     const afterFirst = statSync(cacheFile()).size;
+    expect(afterFirst).toBeLessThan(original);          // it really did compact
     await mod.loadSharedCache();
-    expect(statSync(cacheFile()).size).toBe(afterFirst);
+    expect(statSync(cacheFile()).size).toBe(afterFirst); // and not again, unprompted
+    expect(before.length).toBe(2000);
   });
 
   it("leaves no temp sibling behind", async () => {

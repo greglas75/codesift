@@ -115,7 +115,10 @@ export async function saveEdgeCache(
   await cleanupOrphanTempFiles(target);
   // Temp + rename, like every other artifact here: a process killed mid-write must not leave a
   // truncated file that the next start would read as complete.
-  const temp = `${target}.tmp.${process.pid}`;
+  // Per-call nonce, same reason as `saveBM25Index`: two concurrent saves for one target in one
+  // process would otherwise share a temp path and splice into one inode. `collectImportEdges` fires
+  // this unawaited (`void saveEdgeCache(...)`), so overlapping calls are the expected shape here.
+  const temp = `${target}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
   const out = createWriteStream(temp, { encoding: "utf-8" });
   const write = (line: string): Promise<void> =>
     out.write(line) ? Promise.resolve() : new Promise((r) => out.once("drain", () => r()));
