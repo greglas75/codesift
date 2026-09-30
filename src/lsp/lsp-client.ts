@@ -65,10 +65,11 @@ export class LspClient {
     });
   }
 
-  async initialize(rootUri: string): Promise<unknown> {
+  async initialize(rootUri: string, initializationOptions?: Record<string, unknown>): Promise<unknown> {
     const result = await this.request("initialize", {
       processId: process.pid,
       rootUri,
+      ...(initializationOptions ? { initializationOptions } : {}),
       capabilities: {
         textDocument: {
           references: { dynamicRegistration: false },

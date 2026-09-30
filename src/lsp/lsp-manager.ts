@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { LspClient } from "./lsp-client.js";
-import { getLspConfigForLanguage, isLspAvailable } from "./lsp-servers.js";
+import { getLspConfigForLanguage, isLspAvailable, resolveTsserverPath } from "./lsp-servers.js";
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const REAP_INTERVAL_MS = 60 * 1000;
@@ -43,7 +43,14 @@ export class LspManager {
 
       const client = new LspClient(proc);
       const rootUri = pathToFileURL(rootPath).href;
-      await client.initialize(rootUri);
+      // A workspace without node_modules (a worktree tested on the remote farm) has no TypeScript
+      // for the server to find; point it at one explicitly. See resolveTsserverPath.
+      let initOptions = lspInfo.config.initOptions;
+      if (lspInfo.name === "typescript") {
+        const tsserver = resolveTsserverPath(rootPath);
+        if (tsserver) initOptions = { ...initOptions, tsserver: { path: tsserver } };
+      }
+      await client.initialize(rootUri, initOptions);
 
       const session: LspSession = {
         client,
