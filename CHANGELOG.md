@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-10-01
+
+Two fixes, and a tag so the fleet picks them up: every host builds CodeSift from the newest `v*` git
+tag (deliberately not npm, which still lags at 0.17.0), so a commit on `main` reaches nothing until a
+tag exists.
+
+### Fixed
+
+- **`/health` reported a heap ceiling it had guessed at.** It scanned `process.execArgv` for
+  `--max-old-space-size=` and, finding nothing, approximated V8's default as
+  `min(4096, max(2048, totalmem/32))`. `execArgv` is EMPTY when the flag arrives through NODE_OPTIONS
+  — which is how a systemd user unit can set it — so on such a host the daemon genuinely had
+  8,384 MB while `/health` said 4,096: `heap_used_pct` inflated 2x, and `classifyVitals` would have
+  declared memory pressure at half the real usage. The approximation could not even produce the value
+  its own comment named (V8's default is 4,288 MB on that class of machine; `min(4096, …)` caps below
+  it). `getHeapStatistics().heap_size_limit` is authoritative in all three cases — flag in argv, flag
+  in NODE_OPTIONS, no flag — and costs nothing.
+- **The TypeScript language server is pointed at a TypeScript install when the workspace has none**,
+  so the LSP bridge stops failing on repos that do not depend on `typescript` themselves.
+
+
 ## [0.19.1] — 2026-09-28
 
 0.19.0 was tagged but never reached the registry — its publish job failed on an npm token, as every
