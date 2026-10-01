@@ -1,5 +1,5 @@
-import { totalmem } from "node:os";
 import { memoryUsage } from "node:process";
+import { getHeapStatistics } from "node:v8";
 
 /**
  * What `/health` has to be able to say.
@@ -66,15 +66,24 @@ export function setEventLoopLagForTesting(ms: number): void {
 }
 
 function heapLimitMb(): number {
-  // The ceiling this process was actually started with, not a guess: the LaunchAgent passes
-  // --max-old-space-size, and reading it back is the only way the percentage below means anything.
-  const flag = process.execArgv.find((a) => a.startsWith("--max-old-space-size="));
-  const parsed = flag ? Number.parseInt(flag.split("=")[1] ?? "", 10) : Number.NaN;
-  if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  // No flag: V8's default is derived from system memory and is what the OOM crash-loop hit on this
-  // machine (4288 MB on 128 GB of RAM). Approximating it is better than reporting a percentage of
-  // nothing, and the value is only ever used to say "how close are we".
-  return Math.min(4096, Math.max(2048, Math.round(totalmem() / 1024 ** 2 / 32)));
+  // V8's OWN number, not a parse of how this process was started. `getHeapStatistics().heap_size_limit`
+  // is authoritative in every case — a flag in argv, a flag in NODE_OPTIONS, or no flag at all — and it
+  // costs nothing.
+  //
+  // The previous version read `process.execArgv` for `--max-old-space-size=` and, failing that,
+  // APPROXIMATED the default as `min(4096, max(2048, totalmem/32))`. Both halves were wrong somewhere:
+  //
+  //   - `execArgv` is EMPTY when the flag arrives through NODE_OPTIONS, which is how the systemd user
+  //     unit sets it on Linux (the macOS LaunchAgent puts it in argv, so that platform read correctly
+  //     and this went unnoticed). Measured on a 187 GB Linux host: the daemon genuinely had 8,384 MB
+  //     and /health reported 4,096 — so `heap_used_pct` was inflated 2x and `classifyVitals` would
+  //     have declared memory pressure at half the real usage.
+  //   - the approximation could not even produce the value its own comment named: V8's default on that
+  //     class of machine is 4,288 MB, and `min(4096, …)` caps below it.
+  //
+  // Measured directly on that host: NODE_OPTIONS set -> heap_size_limit 8,384 MB with an empty
+  // execArgv; unset -> 4,288 MB. One call answers both.
+  return Math.round(getHeapStatistics().heap_size_limit / 1024 ** 2);
 }
 
 export function readVitals(): Vitals {
