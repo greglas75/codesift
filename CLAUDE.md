@@ -121,6 +121,23 @@ Cost is in the delta, not the file: a repeat push of a 44.8 MB log sent **66 byt
 append-mode optimisation is warranted (`--append` measured 5.2 s — the difference is the SSH
 handshake, and it would trade atomicity for nothing).
 
+**The peer list is the ssh ALIAS, and on a farm host the alias decides whether you find the data at
+all.** codesift runs as `tf` on waw-tf and ryzen-tf — `/home/tf/.codesift`, 160 and 63 entries — and
+root's home there has no `.codesift` whatsoever, so syncing through the `waw` / `ryzen` (root)
+aliases finds nothing and reports success. Measured 2026-10-01:
+
+| alias | login | tailnet | log | host tag |
+|---|---|---|---|---|
+| `ryzen-dev` | `greglas@ryzen-old-1` | 100.126.186.15 | `~/.codesift` | `ryzen-dev` |
+| `ryzen-tf` | `tf@ryzen-tf` | 100.108.105.19 | `/home/tf/.codesift` | `ryzen-tf` |
+| `waw-tf` | `tf@waw-tf` | 100.88.49.119 | `/home/tf/.codesift` | `waw-tf` |
+
+**Identify these boxes by tailnet address, never by `hostname`:** ryzen-old-1 still answers
+`ryzen-tf` after the hardware swap, so two different machines report one name — and the one whose
+name is wrong is the one most sessions run on. Its codesift rows are correct only because
+`<dataDir>/host-id` there says `ryzen-dev`; anything deriving a tag from `hostname` (zuvo's retro
+sender does) labels it `ryzen-tf`.
+
 ### Progressive response shortening (NEW)
 Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts only, >105K → hard truncate. Skipped when `detail_level` or `token_budget` is explicitly set. Annotation `[compact]` or `[counts]` prepended.
 
