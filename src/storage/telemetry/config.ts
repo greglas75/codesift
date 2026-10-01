@@ -19,7 +19,8 @@ export function getConfigPath(): string {
 }
 
 interface StoredConfig {
-  telemetry?: string | { level?: string };
+  telemetry?: string | { level?: string; url?: string };
+  telemetry_url?: string;
 }
 
 /** Best-effort read of ~/.codesift/config.json — never throws. */
@@ -32,6 +33,32 @@ export function readStoredConfig(): StoredConfig {
     /* absent or malformed → defaults */
   }
   return {};
+}
+
+/**
+ * Collector base URL from `~/.codesift/config.json`, or null.
+ *
+ * The URL used to be env-only, and that is how this fleet's telemetry ended up split in half:
+ * the collector moved host on 2026-09-07, nobody could set an env var on every launch path, so
+ * every install kept POSTing to the baked default while the READER looked at the new host —
+ * measured 2026-10-01, the reader's namespace had nothing newer than `2026-08-31.jsonl` and its
+ * puller kept re-reporting the same 181 rollups for a month. An env var is the wrong mechanism
+ * for a machine-level fact: a GUI-launched agent never sees `launchctl setenv`, each MCP client
+ * spawns servers its own way, and the same trap already cost this project its host tags
+ * (1,109 of 1,370 calls mis-tagged with the LaunchAgent in place). config.json is read by the
+ * process itself, whatever launched it.
+ *
+ * Accepts `telemetry_url` or `telemetry: { url }`. Env still wins, for a one-off override.
+ */
+export function readStoredTelemetryUrl(): string | null {
+  const cfg = readStoredConfig();
+  const nested = typeof cfg.telemetry === "object" && cfg.telemetry !== null ? cfg.telemetry.url : undefined;
+  const raw = cfg.telemetry_url ?? nested;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim().replace(/\/$/, "");
+  // Only http(s): a malformed or exotic value must fall through to the default rather than
+  // throw inside a fire-and-forget uploader.
+  return /^https?:\/\/\S+$/.test(trimmed) ? trimmed : null;
 }
 
 function normalizeLevel(v: unknown): TelemetryLevel | null {

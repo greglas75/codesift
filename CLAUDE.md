@@ -596,6 +596,37 @@ ADR-004 stage-2 work (query the DB instead of materialising indexes), not anothe
   symptom of load, not a cause of it. Checking the remote endpoint (tailnet ollama answered HTTP 200
   in 0.73 s) ruled that out early.
 
+## The collector address was env-only, so half the pipeline talked to a host nobody reads (2026-10-01)
+
+The collector moved to waw-tf on 2026-09-07. The uploader's address is `DEFAULT_TELEMETRY_URL`
+(`100.103.91.24`, the old box) overridable **only by `CODESIFT_TELEMETRY_URL`** — and an env var
+cannot be made to reach every launch path, which this project already learned with host tags
+(1,109 of 1,370 calls mis-tagged with the LaunchAgent in place). Result, measured a month later:
+
+- `/ingest/codesift` on waw-tf: **zero ingests in the whole container log**, newest stored file
+  `2026-08-31.jsonl`, while `/ingest/zuvo` there was current.
+- Senders were healthy and their watermarks advanced daily — to the OLD host, which is still live
+  and had `2026-10-01.jsonl`. Nothing failed anywhere.
+- `fleet-retro-pull` reads the codesift namespace **on waw**, so it re-reported the same "181 retros
+  from 14 installs" every 2 h for a month. Frozen fleet intelligence that looks like a quiet period.
+
+`endpoint()` now resolves **env → `config.json` → baked default** (`readStoredTelemetryUrl`, accepts
+`telemetry_url` or `telemetry: { url }`, http(s) only, trailing slash stripped; a malformed value
+falls through rather than throwing inside a fire-and-forget uploader). config.json is read by the
+process itself, whatever launched it — which is the property an env var does not have. The baked
+default is deliberately unchanged: moving it would redirect every anonymous install, which is a
+product decision, not a config fix.
+
+**Measuring the reader taught the lesson twice.** `fleet-retro-pull` transfers the whole namespace
+every run. First measurement said 3.3 s — taken as `… | wc -c` with the pipe ON THE REMOTE, so
+nothing crossed the network. The transfer the script actually performs: **136 s for 79.5 MB** at
+load ~110, past its own 100 s wall, so it failed every run. Gzipping on the collector: **13.6 s,
+7.1 MB, byte-identical after decompression** (`gzip -1 -c` remote, `gzip.decompress` local). After
+that it returned **256 retros from 19 installs in 36 s** — the first movement in a month.
+
+Carrying the history across is a copy, never a move: the old host keeps its files, and merging is
+`sort -u` per day-file so re-running cannot duplicate rows.
+
 ## Operating the shared daemon
 
 **Start is traced — read the log before sampling the process (2026-09-24).** `startDaemon` prints one

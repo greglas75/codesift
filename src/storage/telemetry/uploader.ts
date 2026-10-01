@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { resolveTelemetryLevel } from "./config.js";
+import { resolveTelemetryLevel, readStoredTelemetryUrl } from "./config.js";
 import { readLocalUsageEntries, aggregateToolMetrics, aggregateHintFunnel, aggregatePlanTurnFunnel } from "./aggregator.js";
 import { buildEnvProfile } from "./env-profile.js";
 import { getAnonId } from "./anon-id.js";
@@ -128,7 +128,9 @@ function writeWatermark(ts: number): boolean {
 const DEFAULT_TELEMETRY_URL = "http://100.103.91.24:5599";
 
 function endpoint(): { url: string; token: string } {
-  const url = (process.env["CODESIFT_TELEMETRY_URL"] ?? DEFAULT_TELEMETRY_URL).replace(/\/$/, "");
+  // env → config.json → baked default. See readStoredTelemetryUrl for why the file matters.
+  const url = (process.env["CODESIFT_TELEMETRY_URL"] ?? readStoredTelemetryUrl() ?? DEFAULT_TELEMETRY_URL)
+    .replace(/\/$/, "");
   const token = process.env["CODESIFT_TELEMETRY_TOKEN"] ?? "";
   return { url, token };
 }
