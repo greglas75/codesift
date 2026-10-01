@@ -104,6 +104,23 @@ dimension the notice does not name.
 ### Multi-host usage telemetry (NEW)
 Every usage.jsonl entry now carries `host` (os.hostname(), override via `CODESIFT_HOST_TAG`). Logs pulled from other machines into `~/.codesift/usage-remote/<host>.jsonl` (see `scripts/sync-usage-remote.sh` + cron) are merged by `usage_stats` (new `host` filter param, `hosts` breakdown in stats/report) and by the dashboard (Usage by Host section on /analytics). Entries predating the field inherit the local hostname or the remote file's name stem.
 
+**Pulling is not enough once work moves to a second machine (2026-10-01).** Measured here: the
+sessions host had 2,358 entries of its own (host-id `ryzen-dev`, 1,684 of them that day) and the Mac
+had **no `usage-remote/` directory at all** — nothing was scheduled anywhere, so every analysis of
+"what this fleet does" was silently one machine's. `--both` (or `CODESIFT_SYNC_BOTH=1`) adds the push
+direction: this machine's log lands on the peer as `usage-remote/<our host-id>.jsonl`.
+
+One scheduler does both directions on purpose. The pair cannot be symmetric — the Mac runs no sshd
+(the sessions host gets `connection refused` on :22), so only the machine that can reach the other
+can initiate. The push writes **only** into the peer's `usage-remote/`, never its `usage.jsonl`, and
+refuses a peer whose `host-id` equals ours, because a host appearing in its own remote dir makes
+every reader count those calls twice. Verified after the first run: 0 duplicate
+`(ts, tool, session_id)` between the local log and the pulled file.
+
+Cost is in the delta, not the file: a repeat push of a 44.8 MB log sent **66 bytes in 6.4 s**, so no
+append-mode optimisation is warranted (`--append` measured 5.2 s — the difference is the SSH
+handshake, and it would trade atomicity for nothing).
+
 ### Progressive response shortening (NEW)
 Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts only, >105K → hard truncate. Skipped when `detail_level` or `token_budget` is explicitly set. Annotation `[compact]` or `[counts]` prepended.
 
