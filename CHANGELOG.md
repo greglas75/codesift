@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-10-02
+
+Multi-host usage telemetry stopped being a star with one reader, and the collector address stopped
+being env-only. Both faults were silent by construction: every sender was healthy, every watermark
+advanced, and the aggregate nobody could see was frozen for a month.
+
+### Added
+
+- **The multi-host usage sync is two-way.** Pull-only left every analysis describing one machine, so
+  `usage_stats` on any host but the hub answered about that host alone. `sync-usage-remote.sh --both`
+  now pushes the local log as well as pulling the peers'.
+- **The hub relays what it pulled.** Pushing only our own log still built a star only the hub could
+  read: measured right after the two-way sync went in, the Mac saw 4 hosts and the sessions host saw
+  2, because the farm hosts' logs reached the hub and stopped there. `--both` now fans out every file
+  already in `usage-remote/` to each peer, skipping the one that belongs to that peer — a machine must
+  never receive its own rows as "remote" or every reader counts them twice. Verified on all four: each
+  peer holds exactly the other three logs, and the two machines with the CLI installed now agree
+  (133,910 vs 133,911 calls, the one-row drift being live traffic between the two calls).
+
+### Fixed
+
+- **The telemetry collector address was overridable only by an environment variable, so the senders
+  and the reader used different hosts.** The collector moved on 2026-09-07; `DEFAULT_TELEMETRY_URL`
+  still named the old one, and `CODESIFT_TELEMETRY_URL` is the one mechanism that cannot be made to
+  reach every launch path — this project already paid for that lesson with host tags, where 1,109 of
+  1,370 calls stayed mis-tagged with the LaunchAgent in place because a GUI-launched agent never sees
+  `launchctl setenv`. Measured a month later: **zero codesift ingests in the collector's entire
+  container log**, newest stored file `2026-08-31.jsonl`, while every sender was healthy and advancing
+  its watermark daily — to the old host, which is still live. Nothing failed anywhere, which is why it
+  lasted a month, and the retro reader re-reported the same "181 retros from 14 foreign installs"
+  every 2 h since August. Frozen fleet intelligence is indistinguishable from a quiet fleet.
+  `endpoint()` now resolves env → `config.json` → baked default, because config.json is read by the
+  process itself whatever launched it. The baked default is deliberately **unchanged**: moving it would
+  redirect every anonymous install, including the ten that are not ours. After setting the file on all
+  four machines the reader returned **256 retros from 19 installs**, the first movement in a month.
+
+### Documentation
+
+- The usage-sync peer list is an ssh alias, and on a farm host the wrong alias finds nothing.
+
 ## [0.19.2] — 2026-10-01
 
 Two fixes, and a tag so the fleet picks them up: every host builds CodeSift from the newest `v*` git
