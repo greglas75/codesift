@@ -43,7 +43,7 @@
     "get-tsconfig": "^4.14.0",
     "graphology": "^0.26.0",
     "graphology-metrics": "^2.4.0",
-    "ignore": "^6.0.0",
+    "ignore": "^7.0.6",
     "picomatch": "^4.0.4",
     "web-tree-sitter": "^0.26.11",
     "zod": "^4.3.6"
