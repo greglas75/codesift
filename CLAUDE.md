@@ -121,6 +121,13 @@ Cost is in the delta, not the file: a repeat push of a 44.8 MB log sent **66 byt
 append-mode optimisation is warranted (`--append` measured 5.2 s — the difference is the SSH
 handshake, and it would trade atomicity for nothing).
 
+**The hub also relays.** Pushing only our own log makes a star that only the hub can read: measured
+2026-10-01, the Mac saw 4 hosts and the sessions host saw 2, because the farm hosts' logs reach the
+hub and stop there. `--both` therefore fans out every file already pulled into `usage-remote/`,
+skipping the one belonging to that peer (the double-count guard, applied to the filename). After it,
+all four machines report the same fleet; the two farm hosts have no `codesift` on PATH for `tf`, so
+verify those by their `usage-remote/` contents rather than by `codesift stats`.
+
 **The peer list is the ssh ALIAS, and on a farm host the alias decides whether you find the data at
 all.** codesift runs as `tf` on waw-tf and ryzen-tf — `/home/tf/.codesift`, 160 and 63 entries — and
 root's home there has no `.codesift` whatsoever, so syncing through the `waw` / `ryzen` (root)

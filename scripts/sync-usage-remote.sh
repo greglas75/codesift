@@ -60,6 +60,33 @@ mkdir -p "$DEST"
 SELF_ID="$(cat "$DATA_DIR/host-id" 2>/dev/null || true)"
 [ -n "$SELF_ID" ] || SELF_ID="$(hostname -s 2>/dev/null || hostname)"
 
+# Fan out what this machine has ALREADY pulled, so every peer sees the whole fleet and not just
+# the hub. Without it the mesh is a star that only the hub can read: measured 2026-10-01, the Mac
+# saw 4 hosts and the sessions host saw 2, because the farm hosts' logs reach the hub and stop there.
+# The hub is the only machine that can reach all of them, so the hub is also the distributor.
+#
+# A peer never receives its OWN file back — that is the double-count guard again, applied to the
+# filename this time (the alias and the host-id both name the same machine in practice, so either
+# match is enough to refuse).
+fan_out_remotes() {
+  local host="$1" peer_id="$2" f base
+  for f in "$DEST"/*.jsonl; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    case "$base" in
+      "$host.jsonl"|"$peer_id.jsonl") continue ;;
+    esac
+    if rsync -az --timeout=20 "$f" "$host:.codesift/usage-remote/$base.tmp" 2>/dev/null \
+       && ssh -o ConnectTimeout=15 -o BatchMode=yes "$host" \
+            "mv ~/.codesift/usage-remote/$base.tmp ~/.codesift/usage-remote/$base" 2>/dev/null; then
+      echo "relayed ${base%.jsonl} -> $host ($(wc -l < "$f" | tr -d ' ') entries)"
+    else
+      ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "rm -f ~/.codesift/usage-remote/$base.tmp" 2>/dev/null || true
+      echo "skip relay ${base%.jsonl} -> $host" >&2
+    fi
+  done
+}
+
 push_to_peer() {
   local host="$1" src="$DATA_DIR/usage.jsonl"
   if [ ! -s "$src" ]; then
@@ -71,6 +98,7 @@ push_to_peer() {
   # is reachable under several names.
   local peer_id
   peer_id="$(ssh -o ConnectTimeout=15 -o BatchMode=yes "$host" 'cat ${CODESIFT_DATA_DIR:-$HOME/.codesift}/host-id 2>/dev/null' 2>/dev/null | tr -d "[:space:]")" || peer_id=""
+  PEER_ID_LAST="$peer_id"
   if [ -n "$peer_id" ] && [ "$peer_id" = "$SELF_ID" ]; then
     echo "skip push -> $host (same host-id \"$SELF_ID\" — that would double-count)" >&2
     return 0
@@ -110,5 +138,8 @@ for spec in "${HOSTS[@]}"; do
   else
     rm -f "$DEST/$host.jsonl.tmp"
     echo "skip $host (unreachable or no usage.jsonl)" >&2
+  fi
+  if [ "$BOTH" = "1" ]; then
+    fan_out_remotes "$host" "${PEER_ID_LAST:-}"
   fi
 done
