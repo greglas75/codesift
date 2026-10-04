@@ -2,29 +2,44 @@
 
 <!-- fingerprint: file|rule|signature -->
 
+<!-- session 2026-09-23..25 — read this install's usage.jsonl (12,763 calls / 14 d) + daemon.err.log.
+     Everything here was OBSERVED and MEASURED in that session and deliberately left unfixed; the
+     four defects that were fixed shipped in v0.18.1. Numbers are from that window, not estimates. -->
+- [ ] [HIGH] `src/cli/commands-daemon.ts|memory|daemon-oom-root-cause-unknown` — **12 `FatalProcessOutOfMemory` crash reports between 09-23 18:33 and 09-25**, against a 16 GB `--max-old-space-size`; one cycle crashed three times in 20 minutes. What is NOT the cause (each measured, do not re-litigate): host RAM alone (41 GB free during one failure), the tailnet ollama (HTTP 200 in 0.78 s), and v0.18.0's `shown-source` ledger (capped at 5,000 entries and disabled in the daemon). A 91-process / 34.6 GB `sentry-mcp` swarm starved the box during part of the window and is NOT this repo's bug, but it also does not explain the crashes that predate it. Recipe: capture a heap snapshot at high RSS (needs `--heapsnapshot-signal=SIGUSR2` on the LaunchAgent, or an in-process trigger) and name the retainer before changing anything — this is the ADR-004 stage-2 question, not another heap bump. Defer reason: needs the loop reproduced while the host is otherwise idle.
+- [ ] [MED] `src/cli/commands-daemon.ts|startup|server-import-dominates-boot` — the new boot trace shows `server module imported` is 3.9-4.3 s of a 4.4-5.4 s start on an idle box, and the same stage took **9+ minutes at load 155** (no listening socket the whole time; located only with `sample <pid>`, which is why the trace exists). The trace names the stage but nothing reduces it. Recipe: measure what that import pulls (150 tool modules, every parser, the storage layer) and defer what the first request does not need; `CODESIFT_TOOL_SURFACE=single` already proves most of it is optional for some sessions. Defer reason: needs a measurement pass, not a guess.
+- [ ] [MED] `src/cli/service.ts|verification|process-type-standard-unbooted` — `bba4172` switched the macOS LaunchAgent from `ProcessType: Background` to `Standard` on the hypothesis that priority throttling caused the 9-minute boot. The plist on disk carries it, but **no boot under load has gone through it**: at the time of writing the box was at load ~250 and the daemon had not restarted since. A drop-in no boot has passed is a hypothesis (see rules/service-liveness-and-boot-order). Recipe: restart the daemon while load is high and read the `boot +…` trace; if the stages are still minutes long, priority was not the cause.
+- [ ] [MED] `src/cli/service.ts|ops|daemon-log-never-rotates` — `~/.codesift/logs/daemon.err.log` is **141 MB** and nothing in the repo rotates or truncates it; the LaunchAgent only names the path. It grows fastest exactly when things are wrong (12,992 `embed batch … stalled` lines in the current file), so the log is least usable in the incident it was kept for — `tail -c` plus `tr -d '\000'` was needed to read it at all. Recipe: size-capped rotation at write time, or a `StandardErrorPath` that points at a rotated file, plus a truncate in `codesift prune`.
+- [ ] [MED] `src/search/*|efficiency|embed-stall-storm` — **12,992 `embed batch of N stalled (aborted due to timeout) — retrying as N/2+N/2`** lines in one daemon log, ending in per-repo `Embedding failed for local/tgm-panel@…`. The split-retry is bounded and works as designed, so this is not a retry loop — but a repo whose batches all end in `Embedding failed` keeps NO vectors for those chunks, and nothing reports which repos are left unembedded. Recipe: count stalls per repo and surface them in `index_status` (an install with silent embedding failure currently looks identical to one with semantic search working).
+- [ ] [MED] `src/parser/*|correctness|parser-pool-60s-on-tiny-php` — **25 × `parser-pool terminating worker due to timeout … 60000ms`**, all on small Yii2 validator files (`AsciiValidator.php`, `EmailValidator.php`, …), each followed by `worker exited with code 1 — respawning`. A 60-second parse of a file of that size is not a slow parse, it is a hang; the surrounding failures are attributed to the file rather than to the pool. Recipe: reproduce on one of those files in isolation (`index_file` on a copy) and check for a pathological tree-sitter pattern vs a pool-level deadlock under contention.
+- [ ] [MED] `src/storage/usage-tracker.ts|telemetry|error-class-other-35pct` — `classifyError` resolves **89 of 251 errors (35%) to `other`**, concentrated in the tools with the most errors: `index_folder` 14, `index_file` 14, `search_patterns` 12, `get_file_outline` 12. Since `error: true` discards the message by design, an `other` row is unrecoverable — the class exists precisely so a past error can be diagnosed without it. Recipe: reproduce one failure per tool, then add the missing classes; the taxonomy is a closed set on purpose, so this is an additive change plus the sanitizer allowlist.
+- [ ] [MED] `src/tools/plan-turn-tools.ts|adoption|recommendation-follow-through` — over 14 days `plan_turn` ran **40 times, every call carrying recommendations, and a recommended tool appeared in the next three calls only 5 times (12.5%)**. n is too small to call it a defect and the funnel field was added for exactly this question, so the task is measurement: does the agent ignore the recommendations, or does the surface it names not match what the task needs? Recipe: slice by the recommended tool and by whether the tool was reachable in that session (`isToolHiddenForHost`) before concluding anything.
+- [ ] [MED] `release|process|tag-without-publish` — **v0.18.0 was tagged and pushed but never published to npm**; `npm view codesift-mcp version` still answered `0.17.0` two days later, so every `npm install -g codesift-mcp` kept getting 0.17.0 while the repo, the changelog and the tag all said otherwise. Publishing is a manual OTP step at the end of a checklist and nothing checks it happened. Recipe: a release step (or CI job on a `v*` tag) that compares `npm view <pkg> version` with `package.json` and fails loudly; note that `postinstall` runs `setup all`, so the publish itself must stay `--ignore-scripts`.
+- [ ] [LOW] `src/server-helpers/response-hints.ts|design|h19-memory-cap-repeats` — the once-per-session H19 mute is bounded at 200 repo names (`H19_REPO_MEMORY_CAP`) because the daemon outlives every session; past the cap the hint starts repeating again. Deliberate — repeating is the safe direction versus an unbounded Set keyed by caller-supplied strings — but a session touching more than 200 repos gets the old behaviour back. Recipe: if that turns out to happen, key the mute by session id with an LRU rather than raising the number.
+- [ ] [LOW] `release|friction|npm-version-needs-clean-tree` — `npm version patch` refuses on a shared checkout whenever another agent session has uncommitted files (`memory/backlog.md`, `memory/last-ship.json` at the time), which is the normal state of this tree. The release then has to go through `--no-git-tag-version` plus a hand-made commit and tag, which is easy to get subtly wrong (it also must not sweep the other session's files into the release commit). Recipe: make the release path use `--no-git-tag-version` + explicit path staging by default, and document it in the Release section of CLAUDE.md.
+
+<!-- zuvo:ship 2026-09-23 3608aba..HEAD (v0.18.0) — release review deferrals -->
+- [ ] [MED] `src/server.ts|test-coverage|stdio-dual-era-integration` — createStdioClientHooks/startStdioTransport (serveStdio factory, envelope identification, front-load on a 2026-07-28 opening, usedModuleServer fallback) have no automated test; verified only by a hand-rolled protocol probe (60→181 tools for a modern Codex opening). Recipe: an integration test that spawns the built server and speaks both eras (the probe script is in the release session). Defer reason: [structural-refactor (multi-file)] — needs a built-dist test harness.
+- [ ] [LOW] `src/cli/hooks/{pre-compact,session}.ts|test-coverage|marker-touch-call-sites` — touchCompactionMarker is unit-tested, its two hook call sites are not (both handlers read stdin and exit the process). Defer reason: [NIT].
+- [ ] [MED] `src/tools/symbol-lookup-tools.ts|consistency|export-keyword-in-source` — get_symbol/find_and_show render a declaration WITHOUT its `export` keyword, get_symbols/explore WITH it, for the same symbol. Pre-existing; surfaced by the shown-source ledger, which (correctly) treats the two bodies as different and resends. Recipe: pick one source slice in both lookup paths. Defer reason: [structural-refactor (multi-file)].
+- [ ] [LOW] `src/tools/symbol-context-tools.ts|dead-code|formatSymbolsCompact-chain` — no tool handler calls formatSymbolsCompact any more (get_symbols renders per symbol for the ledger); only benchmarks/ import it, yet it is still re-exported through register-tool-loaders.ts and deps.ts. Defer reason: [NIT].
+- [ ] [LOW] `src/server-helpers.ts|efficiency|cache-bypasses-dedup` — an exact repeat served from the response cache returns the full body again instead of a pointer (lost saving, not a correctness issue). Defer reason: [NIT].
+
 <!-- zuvo:review 2026-08-03 v0.12.0..HEAD — release review deferrals -->
 - [ ] [MED] `src/storage/index-store.ts|CQ11|god-module-split` — 731L / 21 exports carrying six concerns (backend selection, JSON→SQLite migration, materialised-index LRU, stale/extractor-version detection, legacy JSON path + mutation batching, path helpers); the largest file in src/storage/ and the only multi-concern one (siblings own one job each). Recipe: (1) extract the LRU + data_version cache into `src/storage/index-cache.ts` — it only needs a dbPath key, so it lifts cleanly; (2) extract `sqlitePathFor` + `ensureSqliteMigrated` + the migration guard map into `src/storage/index-migration.ts`, re-exporting `sqlitePathFor` so register-tools/runtime.ts keeps its import path; (3) leave index-store.ts as the JSON backend + dispatcher, mirroring sqlite-index-store.ts so the two are symmetric. Defer reason: [structural-refactor (multi-file)].
 - [ ] [MED] `src/storage/*|convention|two-forTesting-styles` — src/storage/ now has both `resetXForTesting` (index-store.ts, sqlite-index-store.ts) and `_resetXForTests` (shared-embedding-cache.ts, telemetry/anon-id.ts) live at once with no rule distinguishing them. Pick one for the directory and align. Defer reason: [structural-refactor (multi-file)].
 - [ ] [LOW] `src/tools/workspace-scope-helper.ts|duplication|storage-fault-guard` — the `catch (err) { if (isIndexStorageError(err)) throw err; return null; }` idiom is implemented twice (also workspace-tools.ts getIndexOrEmpty); the comments already cross-reference each other. Promote getIndexOrEmpty to a shared location and have resolveWorkspaceScope call it. Defer reason: [structural-refactor (multi-file)].
 - [ ] [LOW] `src/storage/embedding-store.ts|duplication|index-path-derivation` — two copies of `indexPath.replace(/\.index\.json$/, ...)`, the same shape `sqlitePathFor` was created to remove for the .db case. Pre-existing (predates v0.12.0). Recipe: `embeddingPathsFor(indexPath)` returning both. Defer reason: [structural-refactor (multi-file)].
 - [ ] [MED] `src/storage/embedding-store.ts|correctness|hash-before-vector` — content hashes are committed for every symbol BEFORE embedFn returns, so a provider returning a short array leaves the OLD vector persisted under the NEW content hash; needsEmbed then sees a match and the symbol is permanently skipped from re-embedding. Confirmed by the behaviour audit; introduced by 748fdf4 which is an ANCESTOR of v0.12.0, so out of this range. Recipe: require vectors.length === batch.length before committing hashes, or commit each hash only after its vector is stored; also assert data.length === texts.length in isEmbeddingResponse. Defer reason: [structural-refactor (multi-file)] + out-of-range.
-- [x] [LOW] `src/storage/sqlite-index-store.ts|consistency|rethrowOperational-coverage` — DONE 2026-08-04 (6df1df4 write paths, 3056c5c narrow accessors + the `schema_version` meta read in openIndexDb, which was outside the guard because `CREATE TABLE IF NOT EXISTS` succeeds on a database with corrupt DATA pages). — only openIndexDb and loadIndexSqlite wrapped raw sqlite errors as IndexStorageError; the narrow accessors and write paths let them propagate raw, so a caller using isIndexStorageError (rather than classifyStorageError) will not recognise them.
 - [ ] [LOW] `src/storage/shared-embedding-cache.ts|concurrency|append-interleave` — appendFileSync of a multi-KB batch is not atomic beyond the OS write size, so concurrent codesift processes can interleave into a malformed line. Mitigated: the reader drops malformed lines, so the effect is a lost cache entry, not corruption. Defer reason: [NIT].
-- [x] STALE (verified fixed already) 2026-08-17 — [MED] `src/storage/index-store.ts|robustness|db-path-passed-as-index-path` — passing `<hash>.index.db` where `<hash>.index.json` is expected does three wrong things silently: it CREATES an empty `<hash>.index.db.db` (36 KB, doubled extension, registered nowhere), then reads the real 630 MB SQLite file as UTF-8 and fails with `Invalid string length` — V8's ~512 MiB single-string ceiling — reported as "index storage ... is unreadable (UNKNOWN_READ_ERROR)". The message blames the database; the actual problem is the caller's path shape. Hit for real 2026-08-10 while re-embedding. Recipe: in `readIndex`/`ensureSqliteMigrated`, reject a path already ending `.index.db` with a message naming the canonical `.index.json` form, before any file is created or read. Cheap, and it removes a class of self-inflicted confusion.
-- [x] [HIGH] `src/storage/embedding-store.ts|resilience|no-retry-on-transient-stall` — DONE 2026-08-10. `embedBatchWithStallRetry` in batchEmbed: a request that stalls without answering is retried with the batch halved (max 4 splits, floor 8 items); an HTTP 4xx is a real answer about the input and is re-thrown immediately. Proven before it was written — a scratch wrapper doing the same thing caught 5 stalls across the re-embedding run, and carried ResearchShieldNew to 379,808 vectors in 65 minutes after the un-retried attempt had thrown away 1226s of completed work. 6 tests, including that a 4xx is NOT retried and that a split batch stitches back in order.
 - [ ] [MED] `src/tools/index-tools/parse.ts|efficiency|embedChunks-always-rechunks` — `embedChunks` always calls `readAndChunkFiles`, re-reading and re-chunking the whole tree even when `<hash>.chunks.ndjson` already holds the finished chunks (197,913 of them / 154 MB for designer). Measured on a loaded Mac that pre-pass ran 20+ minutes without issuing a single embed request — and it is also what pushes the wall-clock abort deadline over. The `embed-child` docstring already claims "Everything it needs is read back from the on-disk index, so no parsing is repeated", which is true for symbols and false for chunks. Recipe: reuse the existing chunk file when the index's file SHAs are unchanged, fall back to re-chunking otherwise. Needs a staleness rule, hence not done inline.
 - [ ] [MED] `farm|rt-watchdog|silence-timeout-never-fires` — a job wedged in a 100%-CPU loop held a farm core for **54 minutes**; `tf-watchdog.sh` was invoked with a 600 s silence threshold and never fired against 3211 s of silence. Only the 14400 s absolute ceiling works. `rt --cancel <runid>` is the manual remedy. Farm-side (`~/DEV/i9-farma`), tracked here because this repo is where it was measured.
 - [ ] [MED] `farm|mirror|no-git-dir` — the farm mirrors the working tree without `.git`, so any test shelling out to git fails on an environment gap. Worked around in this repo by skipping (see `docs/runbook/farm-and-ci.md` 2.4); the real fix is mirroring `.git`, which also restores coverage instead of dropping it.
 
 <!-- zuvo:ship 2026-08-03 v0.13.0 — carried pre-existing flake -->
-- [x] [MED] `tests/server/http-session-cwd.test.ts|flake|econnreset-on-server-replace` — DONE 2026-08-10 (c3aad32). Measured 2/10 on the farm with `rt --repeat 10` (1/10 locally; load widens the window). **The recorded recipe was wrong**: it is not a readiness race, and no readiness helper was needed. Closing the first server leaves the CLIENT's pooled keep-alive socket dangling, so the next request dies inside undici with `UND_ERR_SOCKET` / "other side closed" before reaching the new process — HTTP connection reuse, not the session. The test now tolerates exactly one transport-level failure (no HTTP response at all) while still propagating an MCP-level `no valid session`, which is the regression it exists to catch. 12/12 after. Deferred as "structural-refactor (multi-file)" for two releases on a diagnosis that was never verified — the fix is one file.
 
 <!-- zuvo:ship 2026-08-03 v0.13.0 — daemon adversarial residuals -->
-- [x] FIXED 2026-08-17 — [MED] `src/cli/service.ts|injection|systemd-token-escaping` — the daemon token is interpolated into systemd unit syntax without escaping; a token containing whitespace, quotes or a newline can malform the environment assignment or inject further unit directives, so the service may fail or silently run with a different token. Recipe: reject control characters at parse time, then serialize the Environment= assignment with a systemd-compatible escaper. Found by adversarial on 8f6671f during ship v0.13.0. Defer reason: [structural-refactor (multi-file)] — touches the service plan builder and both platform unit writers.
-- [x] STALE (verified fixed already) 2026-08-17 — [MED] `src/cli/commands.ts|correctness|remote-cwd-from-client` — shared-daemon setup sends the CLIENT machine's process.cwd() as the path for the REMOTE host, so on machines with different checkout paths the generated config points the daemon at a nonexistent directory (or an unrelated one that happens to share the name) — while the help correctly states paths must exist on the daemon host. Recipe: require an explicit daemon-side path when --host is supplied instead of defaulting to the client CWD. Found by adversarial on 8f6671f during ship v0.13.0. Defer reason: [structural-refactor (multi-file)] — changes the --http contract across all four setup platforms.
 
 <!-- zuvo:review 2026-08-02 27fffbc..HEAD — SQLite index migration -->
-- [x] [MED] `src/storage/index-store.ts|error-contract|sqlite-operational-errors` — DONE 2026-08-02 (IndexStorageError + loadIndexOrStale "unreadable" + getCodeIndex throws + index_status reports). — `readIndex`/`loadIndexOrStale` collapse SQLite operational failures (locked, corrupt, permission) into `null`, i.e. "no index", so callers cannot tell transient storage failure from an absent index and may trigger needless rebuilds. Recipe: (1) introduce an `IndexReadError` distinguishing not-found/invalid from operational; (2) propagate operational errors out of `readIndex`; (3) update the 9 production importers of index-store to surface rather than rebuild. Defer reason: [structural-refactor (multi-file)].
 
 <!-- zuvo:review 2026-07-11 — 25 commits across 11 refactor branches -->
 - [ ] [MED] `src/parser/extractors/sql-symbols.ts|integration|symbol-utils-dependency` — when integrating SQL extractor + cycle branches, import shared helpers from `../symbol-utils.js` in both SQL leaf modules and run SQL/cycle tests. Defer reason: [structural-refactor (multi-file/cross-branch)].
@@ -39,58 +54,27 @@
 - [ ] **B-review-incomplete-2026-07-10** — rerun `zuvo:review d453ab3..209c975` after external providers are authenticated/reachable; three `--multi` attempts returned zero valid adversarial reviews, so no content-keyed artifact or `reviewed/*` tags were created.
 
 <!-- zuvo:review 2026-05-05 ae96065^..ae96065 — consolidated fixes (Hono mounts, extractors, tools, CLI) -->
-- [x] STALE (verified fixed already) 2026-08-17 — **R-0** `hono.ts|correctness|inflight-leak-on-throw` — MUST-FIX: `inFlight.delete(file)` outside `finally` in BOTH cache-hit (line ~150) and main-path (line ~239) branches; throw poisons cycle detection set [cross-provider CRITICAL]
-- [x] STALE (verified fixed already) 2026-08-17 — **R-1** `tsconfig-paths.ts|perf|ancestor-cache-lost` — populate ancestor dirs in `dirToConfigCache` with new compound key (sibling lookups regressed from O(1) to O(N))
 - [ ] **R-2** `heritage-edges.ts|telemetry|ambiguous-skip-counter` — persist counter for resolution misses (silently drops edges when 2+ files declare same name)
-- [x] STALE (verified fixed already) 2026-08-17 — **R-3** `git-hooks-installer.ts|robustness|hookspath-normalize` — `realpathSync` both sides before equality check on `core.hooksPath` [cross-provider WARNING]
-- [x] STALE (verified fixed already) 2026-08-17 — **R-4** `index-store.ts|UX|empty-index-language-arbitrary` — degenerate empty branch picks `Object.keys(currentVersions)[0]`; either distinct `reason: "empty_index"` or explicit sentinel in `mismatch_detail` [cross-provider WARNING]
 - [ ] **R-5** `pattern-tools.ts|test|postFilter-fail-open-untested` — add unit test asserting throwing postFilter keeps match + emits warning; document in CHANGELOG
-- [x] STALE (verified fixed already) 2026-08-17 — **R-6** `react-tools.ts|hygiene|sym-id-fallback-masks-bug` — drop `sym.id ?? sym.name` fallback at line 804 (sym.name not in reverseAdj keyset)
 - [ ] **R-7** `constant-file-pattern.ts|precision|4char-substring-fp` — raise threshold or word-boundary substring fallback [nit]
 - [ ] **R-8** `symbol-tools.ts|coverage|reexport-regex-anchored-misses` — drop `^` anchor or use tree-sitter walk over export_statement [nit]
 - [ ] **R-9** `commands.ts|UX|git-hooks-flag-precedence` — document `--no-git-hooks` always-wins precedence [nit, cross-provider]
 - [ ] **R-10** `hono.ts|observability|replay-error-context-lost` — capture `String(err)` once into skip_reasons [nit, cross-provider INFO]
 
 <!-- Pre-existing items (now [x]) shipped in this commit per review evidence: -->
-- [x] `typescript-constants-tools.ts|perf|pathmap` — memoized in `state.normalizedPathMap` (this commit)
-- [x] `typescript-constants-tools.ts|robustness|readFile-catch` — narrowed ENOENT vs other I/O (this commit)
-- [x] `typescript-constants-tools.ts|numeric|Number-precision` — `!Number.isFinite(n)` + `!Number.isSafeInteger(n)` guards (this commit)
-- [x] `constant-resolution-tools.ts|UX|infer-lang-fallback` — returns `[]` instead of `["python"]` (this commit)
-- [x] `index-store.ts|tolerance-dedup` — `isExtractorVersionCurrent` delegates to `collectExtractorVersionMismatches` (this commit)
-- [x] `index-store.ts|edge|empty-extractor` — degenerate-empty-index branch returns mismatch (this commit; see R-4 above for residual)
-- [x] `status-tools.ts|resilience|detectStale` — try/catch + shared `resolveRegisteredRepoMeta` (this commit)
 
 <!-- zuvo:review 2026-05-05 713a4a8..05805db astro-helpers + astro-middleware -->
-- [x] `astro-middleware.ts|heuristic|rewrite-return` — fixed: bare `context.rewrite` no longer satisfies EFFECT_RE; require `return` + redirect|rewrite
-- [x] `astro-middleware.ts|parser|js-extension` — fixed: `typescript` for `.ts`, `javascript` for `.js`/`.mjs`
-- [x] `astro-middleware.ts|UX|mw03-dedupe-lines` — fixed: one MW03 per if with `ifStmt.startPosition.row + 1`
-- [x] `astro-middleware.ts|coverage|export-shapes` — narrowed scope documented in file header (re-exports/default still future)
 - [ ] `git|hygiene|05805db-message` — amend commit message vs actual files (review-queue vs middleware) (R-5) [nit]
 
 <!-- zuvo:review 2026-05-05 b0ae5ff^..61d7d28 — fixed 2026-05-05 -->
-- [x] `hono.ts|correctness|parseFile-cache-mounts` — cache hit re-runs walkRouteMounts after replay
-- [x] `hono.ts|model|mount-parent-var` — parent_var from route ownerVar
-- [x] `hono.ts|cache|mounts-stale` — parsedCache.set after walkRouteMounts
-- [x] `python.ts|types|partial-meta` — partial_extraction on all symbols
-- [x] `hono.ts|observability|cycle-skip-reason` — parse_cycle_skipped skip_reason
 
 <!-- zuvo:review 2026-05-05 5cdb537..83ea333 task 9a-9c — patched 2026-05-05 -->
-- [x] `typescript.ts|parity|abstract-method-signature` — **patched:** `is_async`, `accessor_kind`, shared meta with `method_definition`
-- [x] `typescript.ts|metadata|accessor-in-modifiers` — **patched:** `accessor` in `MODIFIER_KEYWORD_TOKENS`
-- [x] `typescript.ts|ordering|abstract-modifier` — **patched:** `ensureAbstractRecorded` (unshift when no other modifiers, else push)
 - [ ] `typescript.ts|contract|enum-symbol-cardinality` — document 1+N symbols per enum for index consumers (R-4)
 - [ ] `typescript.ts|control-flow|enum-case-return` — `return` vs `break` in `enum_declaration` vs future post-switch hooks [below-threshold]
 
 <!-- zuvo:review 2026-05-05 fc4866b..803f259 — addressed in follow-up fix -->
-- [x] `tsconfig-paths.ts|security|absolute-specifier` — reject absolute importPath + clamp resolved path under repoRoot (R-1)
-- [x] `tsconfig-paths.ts|cache|repoRoot-key` — include repoRoot in dirToConfigCache key (R-2)
-- [x] `tsconfig-paths.ts|coverage|extensions` — add .mts/.cts/.mjs/.cjs (+ index variants) (R-3)
-- [x] `ts-imports.ts|coverage|legacy-module-syntax` — import=/export= forms (R-4)
-- [x] `ts-imports.ts|accuracy|export-type-specifiers` — per-specifier type on re-exports (R-5)
-- [x] `ts-imports.ts|accuracy|verbatim-module-syntax` — document or detect runtime retained imports (R-6)
 
 <!-- zuvo:review 2026-05-05 ff64858^..0be6cd6 tasks 11–12 -->
-- [x] `import-graph.ts|paths|alias-prefix-strip` — at `0be6cd6` used `startsWith(index.root)`; **[patched]** later on `HEAD` with `relative` + inside-repo guard (`memory/reviews/2026-05-05-ff64858-0be6cd6.md`)
 
 - [ ] **R-7** `src/tools/*.ts` | loadIndex-vs-stale | centralize Task 16 — silent stale on non-migrated callers
 
@@ -107,17 +91,13 @@
 - [ ] `constant-resolution-tools.ts|UX|infer-lang-fallback` — avoid silent default to python-only
 
 <!-- zuvo:review 2026-05-05 f570c4c^..fc4866b TS extractor implements Tasks 1–2 -->
-- [x] `_shared.ts|parity|heritage-array-copy` — `[...opts.extends]` / `[...opts.implements]` in `makeSymbol` + mutation test (`2026-05-05`)
-- [x] `context-tools|graph|heritage-edges` — `collectHeritageFileEdges` + persist `extends`/`implements` on knowledge graph (`2026-05-05`)
 
 <!-- zuvo:review 2026-05-05 e8a23a4^..5cdb537 tasks 6–8 -->
-- [x] STALE (verified fixed already) 2026-08-17 — `typescript.ts|perf|dup-getClassHeritage` — compute heritage once per class; align CQ14 comment (R-1)
 - [ ] `typescript.ts|heuristic|react-component-suffix` — tighten ECS-style false positives on `*.Component` vs preserve permissive DX (R-2)
 - [ ] `typescript.ts|coverage|signature-heritage-edge` — asserts/predicate returns; arrow param shape; mixin extends call_expression (R-3) [below-threshold cross-review]
 - [ ] `_helpers.ts|hardening|stale-message-sanitize` — cap length strip control chars if metadata untrusted (R-5) [nit cross-review]
 
 <!-- zuvo:review 2026-05-05 9e3be29^..9e3be29 react Tier 6 — 9 patterns + severity migration -->
-- [x] STALE (verified fixed already) 2026-08-17 — `pattern-tools.ts|precision|derived-state-reducer-sync-substring` — `[a-zA-Z_-]*sync` with `i` flag overmatches `async`/`asynchronous`; word-boundary or allowlist (R-1) [superseded][cross-review]
 - [ ] `pattern-tools.ts|accuracy|error-boundary-incomplete-description` — claim "React requires both" lifecycles is inaccurate; `cDC + setState` is valid (R-2) [superseded][cross-review]
 - [ ] `pattern-tools.ts|precision|rsc-deep-pascalcase-critical` — open-ended `[A-Z]\w*` constructor at severity=critical flags `new Error()`/`new URL()`; denylist + downgrade unknowns (R-3) [superseded][cross-review]
 - [ ] `pattern-tools.test.ts|coverage|severity-migration-hardcoded` — derive React-pattern list at runtime so Tier 5 + future tiers can't skip severity gate (R-4) [superseded][cross-review]
@@ -136,10 +116,7 @@
 - [ ] [LOW] cross-repo group orchestration: adversarial WARNINGs deferred (T15 iter3, 0 crit) — defaultRepoResolver path lacks unit tests (real getCodeIndex; covered only by T16 smoke); consumers_of_path scans all group repos each call (no cache); framework detect samples first 200 symbols (may miss endpoints in large repos). Source: adversarial-task-15. [POST-CAP: DEFERRED]
 
 <!-- zuvo:review 2026-06-13 2a6e4f0..ab615b2 — aggregate cross-task review of the 16-commit 4-feature plan (fixes committed 78843ec) -->
-- [x] STALE (verified fixed already) 2026-08-17 — [MED] `index-tools.ts|structure|indexFolder-monolith` — indexFolder body ~358 exec lines, 9 responsibilities (STRUCT-3); extract resolveIncrementalFiles + buildNewSnapshot + finalizeLegacyHashes. zuvo:refactor territory — overlaps the existing 364-line entry above. Source: aggregate Structure auditor.
 - [ ] [LOW] `hf-hub-download.ts|structure|over-100-exec-lines` — ~127 exec lines vs 100 util cap (STRUCT-1); extract downloadToCache + inflight map into hf-hub-download-inner.ts or fold into hf-download-stream.ts. Source: Structure auditor.
-- [x] STALE (verified fixed already) 2026-08-17 — [LOW] `cross-repo-contract-tools.ts|structure|386-exec-lines` — under the 450 tool cap but 4 concerns woven (STRUCT-4); split adapters+matchContracts into cross-repo-match.ts (pure logic, no I/O). Source: Structure auditor.
-- [x] FIXED 2026-08-17 — [LOW] `registry.ts|robustness|enoent-vs-parse` — loadRegistry silently returns empty on ALL errors incl. EACCES/EMFILE; align with group-registry's ENOENT-vs-parse distinction so transient FS errors throw not vanish (STRUCT-8). NOTE: parallel-session file, out of primary diff scope. Source: Structure auditor.
 - [ ] [LOW] `hash-snapshot.ts|deadcode|deleteHashSnapshot-unused` — exported but only test-used; invalidateCache does a bare unlink(snapshotPath) inline — route it through deleteHashSnapshot to dedup + get ENOENT-swallow (STRUCT-6). Source: Structure auditor.
 - [ ] [NIT] util over-exports — `HOST_IS_LE`/`destroyAndWait` (safetensors-loader/hf-download-stream) + `READ_INACTIVITY_MS`/`MAX_ZERO_READS`: underscore-prefix or @internal per project convention; destroyAndWait can be fully unexported (STRUCT-7). Source: Structure auditor.
 - [ ] [NIT] `cross-repo-outbound-lexer.ts|encapsulation|export-OutboundCallee-UrlLiteral` — un-export the two internal types (STRUCT-9). DEFERRED: both are referenced by the exported LexerOutboundCall, so un-exporting risks a TS4023 declaration-emit break under the package's `--declaration` — verify build before applying. Source: Structure auditor + post-fix judgment.
@@ -148,7 +125,6 @@
 - [ ] [LOW] `cross-repo-contract-tools.ts|CQ17|sequential-repo-resolve` — collectGroupData awaits resolver(repo) one at a time across up to 20 repos; parallelize with bounded concurrency (p-limit 4) — resolvers are independent (CQ-3). Source: CQ auditor.
 - [ ] [NIT] `cross-repo-outbound-lexer.ts|CQ3|nested-backtick-in-interp` — readTemplateContent tracks "/' inside `${}` but not a nested template literal's backtick; `` `/api/${`${id}`}` `` corrupts raw → false-negative dropped fetch (CQ-4). Source: CQ auditor.
 - [ ] [LOW] `index-tools.ts|behavior|snapshot-watcher-cold-start-tax` — saveIncremental (watcher edits) bumps updated_at but not the snapshot; next cold start's staleness guard discards it → full re-parse (BEHAV-4). Correct-and-safe by design; revisit only if cold-start cost matters. Source: Behavior auditor.
-- [x] [MED] STALE — NOT REPRODUCIBLE 2026-08-16 (0 findings in secret-scan* files; scanner otherwise healthy: 200 shown of 29,371 across 1,816 files) `secret-scan-shared.ts|CQ5-FP|scanner-flags-its-own-rule-file` — scan_secrets returns 200 findings on the scanner's OWN source: rule `azuredevopspersonalaccesstoken-2` matches ordinary words (`function`, `endsWith`, `includes`, `basename`) because the file has maximum secret-keyword density and there is no self-exclusion. Makes `review_diff` score 0/fail on any diff touching it, drowning real findings. Fix: exclude the rule-definition files from their own scan, or require higher entropy/length for that rule. Pre-existing on main (NOT from the integration range). Source: lead, verified by executing the masked output (`func***tion`=`function`). (B-5)
 - [ ] [NIT] `pg-introspection.ts:294,318|deadcode|redactError-return-discarded` — redactError() is pure; its return value is discarded at both catch sites. Leftover from 8320176, which replaced substring classification (`message.includes("timed out")`) with identity comparison (`err === timeoutError`). Two-line delete. Source: Behavior auditor + CQ auditor (independent). (B-1)
 - [ ] [NIT] `sql-parens.ts:57|cleanup|orphaned-section-header` — file ends on `// ── Byte-precise end finding ─` whose code moved to sql-end-scanner.ts in the same commit (be9973b). One-line delete. Source: Structure auditor. (B-2)
 - [ ] [LOW] `pg-introspection.ts:330|observability|cleanup-deadline-silent` — on timeout, settleCleanup races closeClient() against a 100ms deadline; if client.end() hangs longer the call returns while the socket may still be open. Deliberate tradeoff (the alternative is the unbounded hang the timeout exists to prevent), not a defect — but the deadline winning should surface a cleanup-failure metric rather than passing silently. Adversarial confirmed no double-end (WeakMap dedupe) and no unhandled rejection from the losing Promise.race branch. Source: adversarial pass 4 (codex-5.3). (B-3)
@@ -171,32 +147,23 @@
 
 ## From review 080ae7c..28ba048 (2026-08-04) — index memory + SQLite honesty
 
-- [x] **B-1 [structural-refactor (multi-file)]** DONE 2026-08-04. Surface ambiguity on the search path. When
   `resolveSearchHit` (`src/tools/symbol-tools.ts:234`) falls back to the BM25 hit for a colliding id,
   the response says nothing — the same silence `lossy_migration` was added to remove one layer down.
   Recipe: (1) return the collision group from `resolveSearchHit`, (2) thread `ambiguous_id: true` +
   candidate summaries through both tool registrations for `find_and_show` and `get_context_bundle`,
   (3) make the field unconditional, never conditional-on-ambiguity (a conditional shape was the
   earlier BEHAV-class bug in this same file).
-- [x] **B-2 [structural-refactor (multi-file)]** DONE 2026-08-04 (27a221f move, 6df1df4 + fbde1f0 + 3056c5c remediation). `src/storage/sqlite-index-store.ts` 1122L -> a 68L re-export facade over 8 modules in `src/storage/sqlite/` (largest 296L). Proven a MOVE, not asserted: bidirectional multiset diff of executable lines gives 677 on each side, 0 lost, 0 gained; an independent adversarial pass compared all 50 top-level declarations and found 0 differences; import-graph cycles identical before and after (5 pre-existing, 0 in src/storage/). The precondition this entry recorded held and is now ASSERTED rather than assumed — `sqliteCtor` lives only in runtime.ts, `connections` only in connection.ts, and tests/storage/sqlite-module-state.test.ts writes each through one module while reading it through another, so a forked copy fails. The audits on the move also surfaced 4 PRE-EXISTING correctness defects in this code, all fixed in follow-up commits with red-first tests; see memory/reviews/2026-08-04-sqlite-index-store-split.md.
-- [x] **B-18 [HIGH]** DONE 2026-08-07 — `registry.json|integrity|dead-roots-and-an-orphaned-index`. The registry had **32 of 335 entries pointing at directories that no longer exist**, and one index database with no entry at all. Those two facts combined into a live hazard: `local/tgm-survey-platform` resolved to a DELETED worktree, while the real main checkout — **240,706 symbols, 14,559 files, 630 MB** — was registered nowhere. `codesift prune` deletes artifacts whose hash is absent from the registry, so the largest index on the machine was one prune away from deletion. Repaired with `scripts/repair-registry.mjs`: dead entries removed, the orphan re-registered from **its own `meta` table** (reconstruction, not invention — an entry is written only when the recorded root still exists). 335 -> 304 entries, 0 dead roots. `prune --dry-run` now reports 159 orphan files / 12.94 GB freeable while keeping 1250 live artifacts; NOT run, that is a 13 GB deletion and the user's call.
 - [ ] **B-19 [MED]** `stdio-servers|observability|transport_closed-is-undiagnosable`. Two runs today reported `transport_closed` on `refactor-result-export-migrate-v2` (09:48, 09:52) — the MCP server started and then died mid-session, a different failure from B-17's "never started". **Cause unknown and not retroactively knowable**: no crash report exists in that window (so not the documented web-tree-sitter WASM segfault risk in `server.ts:49`), and a stdio server's stderr goes to its client and is retained nowhere. Two events, same repo, four minutes apart. Recipe: give stdio servers a rotating stderr file under `~/.codesift/logs/` keyed by pid, so the NEXT occurrence is diagnosable instead of being reconstructed from a one-word retro field. Do not guess a cause before that exists.
-- [x] **not_indexed (8 of 35 runs today)** INVESTIGATED 2026-08-07 — **not a defect**. All four repos (`i9-farma`, `thepopebot`, `refactor-telemetry-storage`, `refactor-project-controller`) now answer `indexed=true` when probed directly; `thepopebot` was indexed at 10:37, AFTER its 09:51 retro. So the reports were transient: a fresh worktree has no index until something builds one, and the first session in it sees that. Worth reducing (the first session in a new worktree is the one most likely to be a review or a ship), but nothing is broken.
-- [x] **B-17 [HIGH]** DONE 2026-08-07 (with a CORRECTION to the first fix). `~/.claude.json|availability|global-fallback-points-at-a-live-worktree`. The machine-wide `codesift` entry ran `node /Users/greglas/DEV/codesift-mcp/dist/server.js`, and `npm run build` opens with `rmSync('dist')` — so every build of this repo broke codesift for every NEW session without a per-project entry, which is exactly the population of freshly created worktrees (**148** of them). Measured in `~/.zuvo/retros.log` field 16: 2 `unavailable` of 90 on 08-03; **13 of 19 (68%) on 08-07**. **My first fix was wrong and I published it as done**: I repointed the entry at `~/.npm-global/bin/codesift-mcp`, calling it a stable install. It was a `npm link` SYMLINK back to the dev tree (dated Jul 6), and `~/.npm-global` shadowed the real prefix in PATH — so `npm i -g` reported installing 0.14.0 while installing nothing, and the 'fix' changed the path but not the file. Real fix: npm's actual global root is `/opt/homebrew/lib/node_modules`; the fallback and the launchd unit now point there, and the three dev-tree symlinks under `~/.npm-global` were removed. **Proven, not asserted**: `npm run build` now leaves the daemon PID unchanged and the B-16 hook reports `running from another install — left alone`. Guard against recurrence: `scripts/check-agent-codesift.mjs` resolves every entry (per-project AND the fallback that unlisted repos inherit) to a real file, and is itself exercised against fixtures reproducing both failure modes. Still unconfirmed: whether this removes the 68% — that needs tomorrow's retro read. Cost admitted: `service install --force` booted the daemon out and did not bring it back (`bootstrap` was not enough, `kickstart -p` was), so it was down for several minutes while I worked.
 - [ ] **B-14 [NIT]** `src/storage/sqlite/accessors.ts:136,163` — `saveIncrementalSqlite` and `removeFileFromIndexSqlite` read `meta.repo` to decide "does an index exist" BEFORE `BEGIN`, so the decision is made outside the transaction it guards — the same check-then-act shape `importLegacyIndexIfEmpty` uses `BEGIN IMMEDIATE` to avoid. Benign TODAY because nothing clears `meta.repo` concurrently, which is why it was left rather than folded into a remediation commit: moving it inside the transaction changes locking on the hottest write path (the postindex hook, one process per edited file) and deserves its own measurement. Source: blind CQ auditor on the B-2 split.
 - [ ] **B-15 [MED]** `src/cli/setup/mcp.ts|correctness|http-setup-bakes-one-cwd` — `codesift setup <platform> --http` writes a GLOBAL client config whose URL hardcodes `?cwd=<the repo setup ran in>`. The daemon itself is correct: `cwdFromUrl` (src/server.ts:148) reads cwd per REQUEST and is stateless, so one daemon serves any number of repos. The client is the constraint — one static URL means one static cwd, so every OTHER repo silently resolves to the setup repo's index. That is hint H19 as a permanent configuration, and it is very likely WHY the shared daemon had zero adoption: anyone who tried it once got wrong answers everywhere and went back to stdio. Measured 2026-08-04: daemon up 25h, 0 established TCP connections, 65 stdio processes / 3.49 GB instead. Workaround applied by hand to ~/.claude.json — a per-project entry for each of 78 existing project dirs, each with its own URL-encoded cwd, global stdio left as the fallback for unknown dirs (own process, correct cwd). Encoding is not optional: four project paths contain a space and one contains `&`, which truncates the query and silently substitutes the wrong directory. Recipe: (1) `setup --http` should refuse to write a global entry, or emit per-project entries for clients that support them (Claude Code `projects{}`, per-repo `.cursor/mcp.json`); (2) for clients with only a global config (Codex TOML, Gemini), either keep stdio or teach the daemon to take cwd from the tool call rather than the URL; (3) note that `setup all --http` reported success for Codex while leaving it on stdio — the flag is ignored on the TOML path.
-- [x] **B-16 [MED]** DONE 2026-08-05 — `package.json|operational|build-nukes-the-running-daemon`. `npm run build` starts with `rmSync('dist')` and the launchd daemon executes `dist/cli.js`, so a routine build deleted the code a machine-wide service was running from. Node kept serving already-resolved modules, so `/health` stayed 200 while every tool call failed on the first LAZILY imported module, with a message that reads like a source bug (`does not provide an export named 'getIndexSummary'` — the export was present in both src and dist). Fixed two ways, because either alone leaves a hole: (1) `scripts/restart-daemon-after-build.mjs` runs at the end of `build` and kickstarts the supervisor — but ONLY when the running unit's argv points at this checkout's dist, so it cannot restart somebody else's install, and it never fails a build; (2) `/health` now stamps the running module's mtime/size/inode at startup and answers **503 `stale`** with the kickstart command when the file it started from has been replaced. A status CODE, not a field in a 200 body — supervisors and shell one-liners read the code, and reporting 'everything from here will fail' inside a 200 is exactly how this hid. Probing an import cannot detect it (a successful import is cached and keeps returning the old copy), which is why the check is file identity. Red-first: `tests/server/health-stale-build.test.ts` fails against the pre-fix server. Verified live — build restarted the daemon (PID 61379 -> 61716), it answered in ~2 s, and a real `index_status` call through it returned tgm-survey-platform's own 240,611 symbols.
   (>2x the 450L ceiling; 587 non-comment). Extract the read-connection / paging / footprint block,
   mirroring the `index-footprint.ts` extraction already done.
 - [ ] **B-3 [NIT]** `indexCacheMemBudgetBytes` (`src/config.ts:76`) duplicates
   `embeddingMemBudgetBytes` (`:53`) — same env-parse + RAM-tier shape. Extract
   `ramTieredBudgetBytes(envVar, tiers)` when a third budget function appears.
-- [x] **B-4 [NIT, systemic/pre-existing]** DONE 2026-08-04 (Biome 2.5.7). No meta-linter repo-wide; `"lint"` is `tsc --noEmit`,
   no eslint/biome/oxlint config. Fails CQ40 on every TS file independent of any diff.
-- [x] **B-5 [NIT, pre-existing]** DONE 2026-08-04. `openIndexDb` read `schema_version` before taking
   `BEGIN IMMEDIATE` and never re-checks under the lock, so two processes can both run the v1->v2
   migration. Harmless (v2 has no PRIMARY KEY, so the second pass is a redundant copy) but wasteful.
-- [x] **B-6 [pre-carried]** `tests/server/http-session-cwd.test.ts` ECONNRESET flake — DONE 2026-08-10 (c3aad32), see the MED entry above for why the carried diagnosis was wrong.
 
 ## From review f8979e5..d9e424f (2026-08-04) — IndexSummary / ADR-004 stage 2
 
@@ -206,27 +173,22 @@
 - [ ] **B-8 [NIT]** `loadIndexSummarySqlite` reads the whole `files` table in one `.all()` with no
   `setImmediate` yield, unlike `readTablePaged`. Harmless while `files` stays orders of magnitude
   smaller than `symbols`; revisit if that stops holding.
-- [x] **B-9 [NIT]** DONE 2026-08-04. `summariseIndex`'s `[...index.files]` throws on a malformed index with no
   `files`, and the cache-hit call site is outside `getIndexSummary`'s try/catch. Unreachable via the
   typed path, undefended nonetheless.
 
 ## From the CQ audit of f8979e5..d9e424f (returned late; 2026-08-04)
 
-- [x] **B-10 [structural-refactor, CQ14]** DONE 2026-08-04. `loadIndexSqlite` and `loadIndexSummarySqlite` repeat the
   same ~10-line meta-extras block (extractor_version / workspaces / lossy_migration: JSON-parse,
   null-check, assign). Recipe: extract
   `parseIndexMetaExtras(meta: (k: string) => string | undefined): Pick<IndexSummary,
   "extractor_version" | "workspaces" | "lossy_migration">` in `sqlite-index-store.ts` and call it
   from both readers. Deferred rather than done inline: it edits the hot full-load path for a
   maintainability win, which is not a trade to make in the same commit as a correctness fix.
-- [x] **B-11 [NIT, CQ25]** DONE 2026-08-04. `loadIndexSummary` has no equivalent of `readIndex`'s `data_version`-aware
   cache, so a repo whose only traffic is `index_status` re-opens a connection every call while its
   `getCodeIndex` sibling is cached. Either add a lightweight summary cache keyed the same way, or
   state the asymmetry in the doc comment — currently it is neither.
-- [x] **B-12 [NIT]** DONE 2026-08-04. The line counts quoted in B-2 ("931 raw lines") and in the god-module entry
   ("731L") are stale after this diff: `sqlite-index-store.ts` is ~1100L and `index-store.ts` ~806L.
 
-- [x] **B-13 [NIT]** DONE 2026-08-04 (tests/tools/detect-stack-php.test.ts, 6 tests incl. negatives). `tests/tools/php-tools.test.ts` asserts that `project-profile-stack.ts` contains
   the string `"laravel", "symfony", "yii2"` and calls it Yii2 detection. Biome caught it: the test
   imported `detectStack` and never called it. Renamed to what it actually checks; a real test needs
   a temp dir with a `composer.json` requiring `yiisoft/yii2`, run through `detectStack`.
@@ -264,28 +226,13 @@
 - [ ] **B-28 [MEDIUM, correctness]** `next.ts|ADV|pages-exact-match` — Pages Router exact matching is inconsistent with other Next.js route forms. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-29 [MEDIUM, correctness]** `django.ts|ADV|include-prefix-resolution` — Django `include()` prefixes are not resolved into child URL patterns. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-30 [MEDIUM, correctness]** `django.ts|ADV|symbol-name-collision` — Django handler resolution can select the wrong same-named symbol. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-31 [MEDIUM, resilience]** `file-sources.ts|ADV|read-errors-swallowed` — route source loading converts every read failure to missing content, hiding permission and operational errors as absent routes. Source: `zuvo:refactor` adversarial review (reported twice). Seen: 2. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-32 [LOW, diagnostics]** `trace-route.ts|ADV|synthetic-start-line-skip` — synthetic symbols without usable start lines are skipped without an explanation. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-33 [MEDIUM, correctness]** `spring-kotlin.ts|ADV|first-request-mapping-prefix` — the first `@RequestMapping` can be mistaken for a class prefix and later mappings are ignored. Source: `zuvo:refactor` adversarial review (reported twice). Seen: 2. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-34 [LOW, correctness]** `trace-route.ts|ADV|duplicate-db-calls` — duplicate callee symbols can emit duplicate database-call entries. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-35 [MEDIUM, correctness]** `next-trace.ts|ADV|caller-array-index` — Next.js caller enrichment can associate metadata through the wrong caller-array index. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-36 [MEDIUM, rendering]** `mermaid-call-chain.ts|ADV|participant-alias-collision` — distinct call-chain participants can normalize to the same Mermaid alias. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-37 [MEDIUM, contract]** `trace-route.ts|ADV|mermaid-return-shape` — the optional Mermaid branch has a return-shape compatibility risk that needs an explicit public-contract decision. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-38 [LOW, efficiency]** `trace-route.ts|ADV|enrichment-without-handlers` — Next.js enrichment work is skipped or inconsistently applied when discovery returns no handlers. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-39 [MEDIUM, correctness]** `handler-discovery.ts|ADV|cross-framework-merge` — running all scanners and merging results can misclassify files containing overlapping framework syntax. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-40 [MEDIUM, rendering]** `route-mermaid.ts|ADV|label-escaping` — non-path Mermaid labels still need complete syntax escaping. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-41 [MEDIUM, correctness]** `next.ts|ADV|root-app-route` — a root App Router route can be skipped by path derivation. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-42 [MEDIUM, correctness]** `nest.ts|ADV|ambiguous-symbol-selection` — NestJS discovery can bind a decorator to the wrong same-named method symbol. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-43 [MEDIUM, correctness]** `nest.ts|ADV|method-modifier-parsing` — NestJS method modifiers can be mistaken for handler names. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-44 [MEDIUM, correctness]** `next.ts|ADV|head-options-exports` — Next.js `HEAD` and `OPTIONS` route exports are not discovered. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-45 [MEDIUM, correctness]** `hono.ts|ADV|first-app-selection` — Hono discovery assumes the first app construction is the routed application. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-46 [MEDIUM, resilience]** `hono.ts|ADV|extractor-errors-hidden` — Hono extractor failures are converted to empty route results without diagnostics. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-47 [MEDIUM, portability]** `hono.ts|ADV|platform-path-prefix` — Hono source-path normalization assumes one platform separator form. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-48 [MEDIUM, correctness]** `spring-kotlin.ts|ADV|annotation-adjacency` — Spring Kotlin discovery requires a mapping annotation to immediately precede `fun`, missing valid intervening syntax. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-49 [MEDIUM, correctness]** `django.ts|ADV|re-path-confusion` — the Django `path()` matcher can also consume `re_path()` constructs. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 - [ ] **B-50 [MEDIUM, correctness]** `ktor.ts|ADV|string-brace-depth` — braces inside Kotlin strings can corrupt Ktor nesting-depth tracking. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-51 [MEDIUM, correctness]** `laravel.ts|ADV|namespaced-string-controller` — Laravel namespaced string controllers are not resolved. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
-- [x] FIXED 2026-08-17 — **B-52 [MEDIUM, completeness]** `yii2.ts|ADV|first-config-only` — Yii2 discovery scans only the first matching configuration file. Source: `zuvo:refactor` adversarial review. Seen: 1. Added: 2026-08-10.
 
 ## From test audit 2026-08-10 — Nest extension analyzers
 
@@ -306,19 +253,17 @@ Triage rule established: slice `error_rate` by `codesift_ver` AND `day` before b
 broken. The all-time sum said `find_and_show` was failing at 14.1% (one cut read 69.7%); it has been
 at 0/100 since `974f92c` (2026-07-16). These four are what survived that slicing.
 
-- [x] **B-61 [HIGH, correctness]** DONE 2026-08-16 — `registry.ts|resolveExplicitRepoInput|worktree-binds-to-ancestor` — an absolute `repo` matches any registered repo that is an ANCESTOR of it, so an unregistered worktree silently binds to its parent checkout. Index-reading tools then answer about the wrong tree (H19); the git-diff family runs `git` in the parent and hard-fails. Measured post-fix: `diff_outline`/`impact_analysis`/`review_diff` 11.3%, `changed_symbols` 10.1% on path-as-repo vs 2.4-5.8% on name-as-repo — all four within 1.2 points, one shared resolver. Fix direction: when an absolute path is a git worktree that is not itself registered, refuse with "unregistered worktree — run index_folder(path=…)" instead of binding to an ancestor. File: `src/storage/registry.ts`. Added: 2026-08-12.
-- [x] **B-62 [MEDIUM, observability]** DONE 2026-08-16 (both halves: local log + L1 payload, notice updated) — `usage-tracker.ts:419,450|error-class-discarded` — `resultText` IS the error message but only its length is used; the entry carries `error: true` and nothing else, so the error CLASS is unrecoverable. Diagnosing `find_and_show` needed repo-name archaeology across `elapsed_ms`/`args_summary` instead of one query. Fix direction: a coarse ENUM (not the raw message — it carries absolute paths). NOTE: the L1 telemetry payload is anonymous BY OMISSION with an allowlist in `sanitizer.ts`, a first-run notice, and a test that fails if the payload emits a dimension the notice does not name — adding a field is a deliberate change to that contract, not a mechanical edit. Added: 2026-08-12.
-- [x] **B-63 [MEDIUM, correctness]** DONE 2026-08-16 — `file-indexer.ts:79|unguarded-stat-on-missing-file` — `await stat(absPath)` is unguarded, so `index_file` on a deleted/renamed path escapes as a raw `ENOENT: … stat '<abs>'` (verified by direct call). `handleFileDelete` exists only in the watcher, and the CLI hook (`codesift postindex-file`) is a fresh process with no watcher — so the path agents are told to use has no deletion branch at all and leaves the removed file's symbols in the index. Added: 2026-08-12.
-- [x] **B-64 [LOW, observability]** DONE 2026-08-16 — `repo-resolution.ts|injected-repo-misleads-index_file-telemetry` — `index_file` is not in `TOOLS_WITHOUT_REPO`, so a CWD-derived `repo` is injected into args that `indexFile(path)` ignores; the tracker logs it. "210 `index_file` errors in tgm-survey-platform" therefore means *sessions whose cwd was that repo*, not *files of that repo*, and `args_summary` omits `path` entirely. Either log `path` for this tool or stop injecting a `repo` it does not read. Added: 2026-08-12.
-- [x] **B-65 [HIGH, CI]** `search/optional-transformers.ts|optional-dep-was-a-build-dep` — DONE 2026-08-12. A lockfile edit invalidates the farm's warm dep cache, and the fresh install left `@huggingface/transformers` absent, so `tsc` died on TS2307 at `reranker.ts:21` + `semantic.ts:501` before a single test ran — i.e. no dependency or security bump could be validated on the farm, exactly when you least want to skip the suite. Fixed by widening the dynamic-import specifier to `string` so the OPTIONAL dependency stops being a MANDATORY build dependency; both call sites already cast it to `any` inside a `try`, so no type information was lost. Verified where it actually bites: full suite green on the farm WITHOUT the package (419 files / 5775 tests, build 7s), guard test green in both environments.
   **The first diagnosis filed here was wrong** and is kept as the correction: it blamed npm omitting `optionalDependencies`, then npm 11 vs npm 10. Isolating one variable at a time killed both — same lockfile, same host: `npm ci --ignore-scripts` → 238 packages, transformers present; `npm ci` → 207, absent; identical on npm 10.9.8 and 11.16.0, and `--include=optional` changed nothing. The cause is an install SCRIPT: `onnxruntime-node`'s postinstall finds no `nvcc`, **assumes CUDA 12**, downloads a multi-hundred-MB GPU tarball from GitHub releases, dies on `Error: socket hang up` via an unhandled error event — and npm drops the failed optional package together with `@huggingface/transformers`, which depends on it, then **exits 0**.
-- [x] **B-66 [MEDIUM, product]** DONE 2026-08-12 — `onnxruntime-node postinstall|cuda-download-silently-disables-local-embeddings` — the failure above is not farm-specific. Any user whose GitHub-releases download of `onnxruntime-linux-x64-gpu-*.tgz` fails (flaky network, proxy, firewall, no disk) loses `@huggingface/transformers` from an install that reports success, and local embeddings then go dark with no message naming the cause — on a machine with no GPU, for a CUDA build we never wanted. Worth pinning the CPU build (`ONNXRUNTIME_NODE_INSTALL_CUDA=skip` or equivalent) so the download is neither attempted nor able to take the feature with it. Measured 2026-08-12 on burst-i9. Added: 2026-08-12.
 
-- [x] **B-67 [HIGH, correctness]** DONE 2026-08-16 — `secret-tools.ts|silent-result-cap` — `scan_secrets` capped at 200 findings via `slice(0, maxResults)` and reported only `findings.length`, so "we found 200" read as "there are 200". Found while verifying the entry above: this repo returns **200 of 29,371** at min_confidence "low" — 99.3% hidden, with nothing in the response to say so, from a SECURITY tool. Now returns `truncated`, `total_findings` and a hint that states the remainder is NOT clean; absent when nothing was hidden, so absence stays a real signal.
 
 <!-- refactor-radar session 2026-09-25 (tgm-access) -->
 - [ ] [MED] `src/cli/hooks/pre-tool-use.ts (precheck-bash)|false-positive|blocks-find-grep-outside-indexed-scope` — `codesift precheck-bash` rejected Bash commands that were NOT code discovery in the indexed repo. (1) `find ~/DEV … ~/.zuvo /private/tmp/claude-501 … -name 'refactor-radar-*'`, a search for report directories outside any repo, run from cwd tgm-access, was blocked with "Current repo is indexed by CodeSift. Use get_file_tree". CodeSift cannot answer that. (2) `grep` over PHP files in a LINKED WORKTREE (`tgmdev-tgm-panel-worktrees/radar-4971266`, detached at a frozen SHA) was blocked, although the index describes the parent checkout on another branch; the tool's own worktree trap (H19) says that answer would be wrong. Workaround each time: rewrite as `python3 -c` (3 turns lost). Fix: block only when every path argument resolves inside the indexed root of the CURRENT worktree; allow a path outside it, or a linked worktree that is not indexed. Seen: 1. Added: 2026-09-25.
 - [ ] [MED] `src/cli/hooks/pre-tool-use.ts (precheck-bash)|fail-open|blocks-grep-while-server-unreachable` — 2026-09-25 the MCP server was unreachable for the whole session (`CONNECT_TIMEOUT` dialing `http://127.0.0.1:7077`, so no `mcp__codesift__*` tools at all), yet precheck-bash kept rejecting `grep -r` with "Use CodeSift MCP tools instead" — the agent was left with no search tool and fell back to `git grep`/`git ls-files` workarounds. The hook should fail open (or say so explicitly) when the daemon does not answer a cheap health probe. Source: tgm-panel PANEL-1515 session.
+
+<!-- zuvo build/test-audit session 2026-09-25 (zuvo-plugin worktree radar-coverage) -->
+- [ ] [MED] `src/tools/index-folder + audit-scan|timeout|no-progress-on-worktree` — On a linked worktree of zuvo-plugin (1,029 files) `index_folder` ran past the host's 300 s MCP idle timeout twice without a progress event (also with `include_paths` scoped to 2 directories), and `audit_scan` scoped to 4 test files (`checks=CQ8,CQ13,CQ14`) timed out twice the same way; per-file `index_file` worked (28–42 s each). Long operations need progress notifications or a background job id, otherwise the host aborts them and skills lose their mandatory tools. Source: zuvo:test-audit Validity Gate. Seen: 1. Added: 2026-09-25.
+- [ ] [LOW] `src/tools/find-references|partial|30s-scan-cap-on-bare-names` — `find_references(symbol_names=[parse, load, family, …], file_pattern="tests/gates/*.py")` returned `scan_coverage: partial` after the 30 s cap, matching unrelated tokens (`rev-parse`, `"family"` dict keys). For bare common names the result cannot establish test references; either qualify by module or say so in the response. Seen: 1. Added: 2026-09-25.
+
 
 <!-- zuvo:refactor-radar session 2026-09-27 (tgm-survey-platform, linked worktree radar-cov-0927 @ eff5f2c9c2, 19,379 files) -->
 - [ ] [MED] `src/tools/index-folder|correctness|include-paths-glob-indexes-zero` — `index_folder(path=<worktree>, include_paths=["apps/runner/**","apps/api/src/modules/runner/**","packages/survey-engine/src/**"], watch=false)` returned `file_count: 0` in 538 ms; the same call without `include_paths` indexed 19,379 files. The tool schema documents `include_paths` as "Glob patterns", but the matcher appears to be a prefix `startsWith` (see the walk/include_paths entry above), so a `**` glob matches nothing and the call reports success with an empty index. Fix: glob-match (or reject glob characters with an error), and fail loudly on a 0-file result when include_paths was given.
@@ -328,3 +273,107 @@ at 0/100 since `974f92c` (2026-07-16). These four are what survived that slicing
 - [ ] [MED] `src/tools/index-folder|timeout|worktree-index-times-out` — `index_folder(path=<linked worktree>, include_paths=["apps/api/**"], watch=false)` returned only the MCP client error "The operation timed out" — no partial index, no progress, no hint whether the daemon kept working. Together with the include_paths entry above this leaves the documented H19 remedy ("index_folder the worktree once") unusable on tgm-sized trees. Recipe: return immediately with a job id / progress handle for large folders, or report the file count it is about to index and refuse above the client timeout budget with a message naming the narrowing option that actually works.
 - [ ] [MED] `src/cli/hooks/pre-tool-use.ts (precheck-bash)|false-positive|unindexed-linked-worktree` — inside an UNINDEXED linked worktree the hook blocked `grep` with "Current repo is indexed by CodeSift" — true only of the PARENT checkout, so the suggested `search_text` would answer from another branch (310 commits apart here), i.e. exactly the H19 trap the rules warn about; with `index_folder` timing out (entry above) the session had no valid discovery path at all. Also seen again: `find` on a `$TMPDIR` artifact directory outside the repo was blocked (same class as the 2026-09-25 "outside indexed scope" entry). Recipe: when CWD is a linked worktree that is not itself indexed, allow grep/find (or allow after one failed/timed-out `index_folder`), and say so in the block message.
 - [ ] [LOW] `src/server.ts|availability|partial-tool-surface-drop` — mid-session the client reported 28 `mcp__codesift__*` tools as "no longer available (their MCP server disconnected)" while the rest of the surface (search_text, index_folder, find_references…) stayed callable. A partial drop looks like neither a crash nor a healthy server. Unverified whether this was a daemon restart racing a lazy tool surface or a client-side artifact. Recipe: correlate with the daemon boot trace / OOM entries for 2026-09-27 ~11:40Z before acting.
+
+## Findings carried from the v0.19.0 ship review (2026-09-28)
+
+Six providers (cursor-agent, codex-5.3, byteplus-3, claude, kimi, muse) produced 16 CRITICAL records
+over `v0.18.1..3cf4330`. Four were real and fixed in-run; these are the ones deliberately NOT fixed,
+with the reason.
+
+- **Conversation change detection is mtime-only.** A file rewritten with a preserved or
+  same-granularity mtime is missed. A proper fix compares SIZE as well, which needs a stored size on
+  `FileEntry` — a schema decision, not a patch. Low likelihood for append-only JSONL logs written by
+  the editor, which move the mtime on every append. (`src/tools/conversation-index-tools.ts`)
+- **`prune` may checkpoint a WAL whose database another process has open.** `PRAGMA
+  wal_checkpoint(TRUNCATE)` on a busy database is refused rather than destructive, and the call is
+  wrapped, so the log is left exactly as it was — but it can briefly contend for the write lock.
+  Bounded and non-destructive; worth revisiting if prune ever runs while indexing does.
+  (`src/cli/commands-maintenance.ts`)
+- **The code index and its BM25 file are linked by a mutable `updated_at`, non-atomically.** If a
+  write lands between reading the value back and stamping the header, the header is stale and the next
+  search rejects the file and rebuilds. Costs a rebuild, never a wrong answer — the staleness check is
+  what protects correctness. (`src/tools/conversation-index-tools.ts`)
+- **`DEAD_PID` in two test files is captured once at module load.** If the OS recycled that pid mid-run
+  the liveness assertions would invert. Test-only flake risk, vanishingly unlikely within one run on a
+  monotonic pid allocator. (`tests/storage/orphan-temp-of-live-repo.test.ts`, `tests/cli/prune.test.ts`)
+
+Recorded as false positives, with the reason, so they are not re-litigated:
+`cleanupOrphanTempFiles(path)` takes the TARGET path and derives the directory itself (that is its
+signature at every call site); the "unbounded peak during `Promise.all`" finding quotes the comment's
+description of the PRE-fix behaviour, which the bounded worker pool replaced (measured peak
+1,191 MB); a partially-failed incremental pass self-heals, because the unwritten file keeps its old
+recorded mtime and is reprocessed next run; `appendSharedCache` is synchronous, so the seed helper has
+nothing to await; and the conversation tests use a unique repo name per tmpdir, so module state cannot
+leak between them.
+
+### Separate: a hole in the push gate itself, not in this repo
+
+`pg_uncovered_files` reported **0 uncovered files** for this release. Removing the twelve
+`files: *` artifacts from `memory/reviews/` and re-running it reported all 12. Those artifacts are
+from July and August, months before this code existed, so the gate's "already reviewed" verdict was
+blanket coverage rather than evidence — and it satisfies `pre-push-gate.sh` the same way. Belongs to
+`zuvo`'s `hooks/lib/pipeline-gate-lib.sh`, not to codesift. This release was reviewed at full depth
+anyway, on the grounds that no honest per-file evidence line could be written.
+
+## Deferred from the v0.19.0 ship review — structural, with recipes (2026-09-28)
+
+Both are real, both are `zuvo:refactor` work, and neither is a correctness problem. Deferred per
+`zuvo:review` Phase 2: a structural refactor surfaced on an unrelated diff is scope creep and must
+not block a merge.
+
+- **B-STRUCT-1 `handlePruneLocked` is 423 lines doing four unrelated reclaim jobs**
+  (`src/cli/commands-maintenance.ts:19`). The 293-line baseline already broke the 50-line function
+  limit; this release added ~130 more as three further inline sweeps. Recipe: extract
+  `reclaimOrphanTempTails`, `reclaimSupersededBm25Files` and `checkpointOrphanWals`, leaving
+  `handlePruneLocked` an orchestrator. They are already comment-delimited and share nothing but
+  `dataDir`, `dryRun` and the `files`/`bytes` counters, so each extracts cleanly. The pre-existing
+  shared-cache-version sweep just below them is already its own block — match that shape.
+- **B-STRUCT-2 `incrementalConversationUpdate` is 149 lines and its file went 200L to 528L**
+  (`src/tools/conversation-index-tools.ts:238`). The file-size violation was created entirely by this
+  release. Recipe: move `conversationsUnchanged`, `incrementalConversationUpdate` and
+  `CONVERSATION_AMEND_MAX_SHARE` into a new `src/tools/conversation-incremental.ts` imported by
+  `indexConversations` — the same split `storage/index-json-mutations.ts` already is from
+  `index-store.ts`. That alone brings the file back under 300L.
+
+Coverage gaps the CQ audit named. The first is CLOSED in this release
+(`tests/server/health-cache-report.test.ts` covers `cache-report.ts`, the `/health` caches block and
+the opt-out); the rest are open:
+
+- **B-COV-2** no test asserts `CONVERSATION_SEARCH_CONCURRENCY` actually bounds in-flight searches —
+  the fan-out's correctness is covered, its boundedness is not. Instrument `searchOne` and assert
+  peak concurrency at or below the configured value.
+- **B-COV-3** `MAX_EMBEDDING_ENTRIES = 64` in `conversation-cache.ts` has no eviction test (seed 65+).
+- **B-COV-4** `saveEdgeCache`'s new `cleanupOrphanTempFiles` call is untested at the integration
+  point; only the primitive is tested standalone.
+- **B-CQ14-1** `evictBM25OverBudget` (`index-tools/state.ts`) and `evictOverBudget`
+  (`conversation-cache.ts`) are near-identical LRU policy, just under the duplication threshold. A
+  shared `evictLRUOverBudget(map, budget, pinned, onEvict?)` would close it. The two already share
+  their *pricing* functions after this release; this is the second-order duplication of the *policy*.
+- **B-CI-1** (pre-existing) the CI workflow runs the build but never the linter, so it enforces the
+  typecheck half of the lint script and not the Biome half.
+
+## B-FLAKE-1 `tests/tools/explore-tools.test.ts` fails 1 run in 2–3, measured (2026-09-28)
+
+Found while shipping v0.19.0, in a file that release does not touch. It reddens full-suite runs at a
+rate high enough to make every red ambiguous, which is worse than the test being absent.
+
+**Measured, isolated (`rt --repeat`):** 1/12, then 2/6, then 4/8 — so somewhere around a third,
+possibly rising with host load. Plus three separate full-suite reds in one session, in two different
+cases of the same file (`shows the head of a single line longer than the budget` and `does not record a
+clipped body as shown`).
+
+**Symptom:** `explore` answers `No symbols match "<fixture symbol>"` for a repo the `beforeEach`
+just indexed with an awaited `indexFolder(root)`.
+
+**A hypothesis that was tried and does NOT fix it:** the test reuses one repo NAME
+(`local/explore-project`) across tests while giving each a fresh `CODESIFT_DATA_DIR`, and the
+module-level caches (`codeIndexes`, `bm25Indexes`, the registry cache) are keyed by name — so a
+previous test's index, or a registry row pointing at a since-removed tmpdir, could survive into the
+next test. Clearing both (`releaseCachedIndexes()` + `_resetRegistryCacheForTests()` in `beforeEach`)
+measured 4/8, i.e. no improvement. Reverted; recorded here so the next attempt does not start there.
+
+**What to try next, in order:** (1) give each test a UNIQUE repo name by making the fixture directory
+basename unique, which removes name-keyed collision as a possibility rather than trying to clear it;
+(2) assert `index_status` inside `beforeEach` so the failure is attributed at setup rather than at the
+first `explore` call; (3) check whether `indexFolder`'s watcher or its detached wiki-regen child
+mutates the index after the await returns.
