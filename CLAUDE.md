@@ -1089,11 +1089,59 @@ no cron, nothing in the daemon called it. Measured 2026-09-02: **267 orphaned en
 58.7 GB**, `~/.codesift` at 98 GB and growing ~2 GB/day. Every worktree gets its own index by
 design, and a workflow that creates ten at a time and deletes them leaves ten behind each round.
 
-The daemon now schedules a sweep once a day in a DETACHED CHILD (`src/cli/auto-prune.ts`).
-Not in-process: `handlePrune` reaches `die()` on each of its safety guards, and `die` ends the
-process — inside the daemon a refused prune would be a dead server for every client. Off with
-`CODESIFT_AUTO_PRUNE=0`. Only the daemon schedules it; a stdio server per session would run it N
-times over.
+The daemon schedules the sweep in a DETACHED CHILD (`src/cli/auto-prune.ts`). Not in-process:
+`handlePrune` reaches `die()` on each of its safety guards, and `die` ends the process — inside the
+daemon a refused prune would be a dead server for every client. Off with `CODESIFT_AUTO_PRUNE=0`.
+Only the daemon schedules it; a stdio server per session would run it N times over.
+
+### "Once a day" was a lone `setTimeout`, so a long-lived daemon swept once (2026-10-04)
+
+The line above used to say "once a day" and the code could not deliver it: `scheduleAutoPrune` was a
+single `setTimeout(5 min)` armed once per daemon start, and `PRUNE_INTERVAL_MS` was only the throttle
+inside `pruneIsDue` — never a period. Nothing re-armed. So the real behaviour was **one sweep per
+daemon process**, and two failure shapes followed, both measured on the Mac (data dir **99 GB**, 1609
+indexes, **69 of them describing directories that no longer existed, holding 37.26 GB — 38% of the
+directory**, almost all deleted worktrees at ~0.7 GB each):
+
+- **The two-pass design never completed.** Pass 1 unregisters a repo whose root is gone, pass 2
+  collects its artifacts — so one sweep per start means pass 2 needs a SECOND start a day later.
+  **61 of the 69 were already unregistered and still on disk**, waiting for a pass only a restart
+  could bring. Run by hand, two passes minutes apart: **35.42 GB then 4.6 GB**, 99 GB → 62 GB, zero
+  dead-root indexes left.
+- **A daemon that started while the stamp was fresh never swept at all.** Its one attempt returned
+  `throttled`, nothing re-armed, and that process did no retention for its entire life.
+
+Now an hourly `setInterval` (`PRUNE_CHECK_INTERVAL_MS`) asks whether a sweep is due; `pruneIsDue`
+still owns the 24 h throttle, so the cadence is unchanged and only the *noticing* is fixed.
+`scheduleAutoPrune` returns `{ stop() }` rather than a timer, because the opening timeout and the
+recurring interval are two different handles and returning the first stops nothing after the first
+tick.
+
+**The stamp is still written BEFORE the child spawns**, deliberately: a crash-looping daemon must not
+re-spawn prune on every start. The cost is that a failed sweep consumes its day, which is acceptable
+only because the schedule now recurs — the next day's tick retries.
+
+**The child's output goes to `<dataDir>/auto-prune.log`, not `stdio: "ignore"`.** Ignoring it made
+the outcome unobservable: a sweep that reclaimed 35 GB and a sweep that died on a `die()` guard left
+the same trace, none. On 2026-10-04 the stamp claimed a sweep nine hours earlier while 35.42 GB of
+collectable orphans sat in the directory, and only re-running prune by hand could say which had
+happened.
+
+`runAutoPruneOnce` reads the stamp with `await readFile` and writes it after, so two calls closer
+together than that round trip both see the old stamp and both spawn. Unreachable at an hourly
+interval with a daily throttle — but it is why `tests/cli/auto-prune.test.ts` uses a 40 ms tick and
+not 1 ms, where it fails with "expected 2 to be 1".
+
+**The 2026-09-27 note that deleted worktrees were NOT the cause has a shelf life.** It measured 4 of
+1,511 roots gone holding 0.1 GB, and that was true then; seven days later it was 69 and 37 GB, i.e.
+~5 GB/day of dead worktree indexes on this machine. Re-measure rather than quoting it — the script is
+one `sqlite3 meta.root` read per `*.index.db` plus a `stat`.
+
+**Only the two machines that run a daemon are affected.** waw-tf and ryzen-tf hold **zero** indexes
+(0.05 GB of logs): the farm runs codesift through `npx` inside test jobs, each with its own temp data
+dir, and their updater is deliberately CLI-only. Unrelated, and not ours to clean: `ryzen-tf` also has
+**2.2 GB in 5 `/root/bot/data/workspaces/*/.codesift`** belonging to popebot, stopped by the owner on
+2026-09-30.
 
 **Read `stale_repos`, never `freed_gb`, from a dry run.** Prune is two-pass by construction — pass
 one unregisters, pass two collects — so a dry run can only ever see the first. Measured here:
