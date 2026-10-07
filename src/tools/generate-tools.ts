@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "../instructions.js";
+import { isPathWithin } from "../utils/path-within.js";
 import type { CodeIndex, FileEntry } from "../types.js";
 
 export interface GenerateClaudeMdResult {
@@ -168,7 +169,7 @@ export async function generateClaudeMd(
     // SEC-001: Validate output_path is within the repo root to prevent arbitrary file write
     const resolvedOutput = resolve(outputPath);
     const resolvedRoot = resolve(index.root);
-    if (!resolvedOutput.startsWith(resolvedRoot + "/") && resolvedOutput !== resolvedRoot) {
+    if (!isPathWithin(resolvedRoot, resolvedOutput)) {
       throw new Error(`output_path must be within the repository root: ${resolvedRoot}`);
     }
     try {

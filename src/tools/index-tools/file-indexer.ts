@@ -3,6 +3,7 @@ import { runGit } from "../git-exec.js";
 import { join, resolve, relative, basename, isAbsolute, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
+import { isPathWithin } from "../../utils/path-within.js";
 import {
   getRepo,
   listRepos as listRegistryRepos,
@@ -118,7 +119,7 @@ export async function indexFile(filePath: string): Promise<{
 
   // Find the most specific repo root that contains this file
   const matchingRepo = repos
-    .filter((r) => absPath.startsWith(r.root + "/") || absPath === r.root)
+    .filter((r) => isPathWithin(r.root, absPath))
     .sort((a, b) => b.root.length - a.root.length)[0];
 
   if (!matchingRepo) {

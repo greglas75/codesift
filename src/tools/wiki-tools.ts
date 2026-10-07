@@ -1,6 +1,7 @@
 import { writeFile, mkdir, readFile, readdir, rename, unlink, appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getCurrentGitCommit } from "../utils/git-head.js";
+import { isPathWithin } from "../utils/path-within.js";
 import { getCodeIndex } from "./index-tools.js";
 import { detectCommunities } from "./community-tools.js";
 import { classifySymbolRoles } from "./graph-tools.js";
@@ -169,7 +170,7 @@ export async function generateWiki(
   if (options?.output_dir) {
     const resolved = resolve(options.output_dir);
     const root = resolve(index.root);
-    if (!resolved.startsWith(root + "/") && resolved !== root) {
+    if (!isPathWithin(root, resolved)) {
       throw new Error(`output_dir "${options.output_dir}" is outside the repository root — path traversal not allowed`);
     }
   }
