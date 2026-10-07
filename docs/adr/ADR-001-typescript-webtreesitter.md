@@ -1,7 +1,7 @@
 # ADR-001: TypeScript + web-tree-sitter (WASM) as Core Stack
 
 **Status:** Accepted
-**Date:** 2026-03-13 | **Deciders:** Greg Laskowski | **Area:** Infra/Language
+**Date:** 2026-03-13 | **Deciders:** Greg Laski | **Area:** Infra/Language
 
 ---
 

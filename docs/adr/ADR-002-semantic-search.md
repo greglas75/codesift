@@ -1,7 +1,7 @@
 # ADR-002: Hybrid BM25 + Semantic Search Architecture
 
 **Status:** Accepted
-**Date:** 2026-03-13 | **Deciders:** Greg Laskowski | **Area:** Search/AI
+**Date:** 2026-03-13 | **Deciders:** Greg Laski | **Area:** Search/AI
 
 ---
 

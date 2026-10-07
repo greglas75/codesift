@@ -249,21 +249,19 @@ describe("setup", () => {
   // -------------------------------------------------------------------------
 
   describe("claude", () => {
-    it("creates settings.json when none exists", async () => {
+    it("creates ~/.claude.json when none exists", async () => {
       const result = await setup("claude");
 
       expect(result.status).toBe("created");
-      expect(result.config_path).toBe(join(tempHome, ".claude", "settings.json"));
+      expect(result.config_path).toBe(join(tempHome, ".claude.json"));
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expectStdioCodesiftEntry(content.mcpServers.codesift);
     });
 
-    it("adds to existing settings.json preserving other keys", async () => {
-      const configDir = join(tempHome, ".claude");
-      await mkdir(configDir, { recursive: true });
+    it("adds to existing ~/.claude.json preserving other keys", async () => {
       await writeFile(
-        join(configDir, "settings.json"),
+        join(tempHome, ".claude.json"),
         JSON.stringify({ theme: "dark", mcpServers: { other: { command: "foo" } } }),
         "utf-8",
       );
@@ -278,10 +276,8 @@ describe("setup", () => {
     });
 
     it("adds mcpServers key when missing from existing file", async () => {
-      const configDir = join(tempHome, ".claude");
-      await mkdir(configDir, { recursive: true });
       await writeFile(
-        join(configDir, "settings.json"),
+        join(tempHome, ".claude.json"),
         JSON.stringify({ theme: "dark" }),
         "utf-8",
       );
@@ -300,23 +296,49 @@ describe("setup", () => {
     });
 
     it("throws on invalid JSON", async () => {
-      const configDir = join(tempHome, ".claude");
-      await mkdir(configDir, { recursive: true });
-      await writeFile(join(configDir, "settings.json"), "not json{{{", "utf-8");
+      await writeFile(join(tempHome, ".claude.json"), "not json{{{", "utf-8");
 
       await expect(setup("claude")).rejects.toThrow(/Failed to parse/);
     });
 
-    it("treats empty settings.json as empty object", async () => {
-      const configDir = join(tempHome, ".claude");
-      await mkdir(configDir, { recursive: true });
-      await writeFile(join(configDir, "settings.json"), "", "utf-8");
+    it("treats empty ~/.claude.json as empty object", async () => {
+      await writeFile(join(tempHome, ".claude.json"), "", "utf-8");
 
       const result = await setup("claude");
       expect(result.status).toBe("updated");
 
       const content = JSON.parse(await readFile(result.config_path, "utf-8"));
       expect(content.mcpServers.codesift.command).toMatch(/(?:codesift-mcp|npx)$/);
+    });
+
+    it("removes the dead mcpServers.codesift entry from settings.json and keeps everything else", async () => {
+      const claudeDir = join(tempHome, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+      await writeFile(
+        join(claudeDir, "settings.json"),
+        JSON.stringify({ theme: "dark", mcpServers: { codesift: { command: "x" }, other: { command: "y" } } }),
+        "utf-8",
+      );
+
+      await setup("claude");
+
+      const settings = JSON.parse(await readFile(join(claudeDir, "settings.json"), "utf-8"));
+      expect(settings.theme).toBe("dark");
+      expect(settings.mcpServers).toEqual({ other: { command: "y" } });
+    });
+
+    it("keeps an existing entry's env when the invocation already matches", async () => {
+      await setup("claude");
+      const path = join(tempHome, ".claude.json");
+      const written = JSON.parse(await readFile(path, "utf-8"));
+      written.mcpServers.codesift.env = { CODESIFT_EMBEDDING_PROVIDER: "ollama" };
+      await writeFile(path, JSON.stringify(written), "utf-8");
+
+      const result = await setup("claude");
+
+      expect(result.status).toBe("already_configured");
+      const after = JSON.parse(await readFile(path, "utf-8"));
+      expect(after.mcpServers.codesift.env).toEqual({ CODESIFT_EMBEDDING_PROVIDER: "ollama" });
     });
   });
 
@@ -904,10 +926,10 @@ describe("setup", () => {
     it("setup('claude') without hooks flag does NOT write hook entries", async () => {
       await setup("claude");
 
-      // settings.json exists (mcpServers), but must have no hooks section
-      const settingsPath = join(tempHome, ".claude", "settings.json");
-      const settings = JSON.parse(await readFile(settingsPath, "utf-8"));
-      expect(settings.hooks).toBeUndefined();
+      // The MCP entry goes to ~/.claude.json, so without --hooks nothing writes settings.json.
+      expect(existsSync(join(tempHome, ".claude", "settings.json"))).toBe(false);
+      const config = JSON.parse(await readFile(join(tempHome, ".claude.json"), "utf-8"));
+      expect(config.hooks).toBeUndefined();
     });
 
     it("merges hooks into existing settings.json without overwriting other hooks", async () => {

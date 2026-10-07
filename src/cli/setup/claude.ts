@@ -6,7 +6,12 @@ import { ensureDir, readJsonFile, writeJsonFile } from "./fs.js";
 import { ensureHookEntry, hasCodesiftHook, loadHooksSection, saveHooksSection, type HookEntry, type HooksSection } from "./hooks.js";
 import { setupJsonPlatform } from "./mcp.js";
 
-const CLAUDE_CONFIG = { configDirName: ".claude", configFileName: "settings.json" };
+// User-scope MCP servers live in `~/.claude.json` (what `claude mcp add -s user` writes). Claude Code
+// does NOT read `mcpServers` from `~/.claude/settings.json` — setup wrote there for months, and the
+// entry was dead: tools never loaded, while the SessionStart hook still announced "CodeSift MCP is
+// available". It only looked fine on machines where someone had also run `claude mcp add`. Hooks DO
+// belong in settings.json and stay there.
+const CLAUDE_CONFIG = { configDirName: "", configFileName: ".claude.json" };
 
 const STDIN_HOOK_SUBCOMMANDS = [
   "session-start", "session-gate", "precheck-read", "precheck-bash", "precheck-glob",
@@ -107,8 +112,28 @@ async function migrateLegacyClaudeHooks(configDir: string): Promise<void> {
   await writeJsonFile(legacyPath, root);
 }
 
-export function setupClaude(options?: SetupOptions): Promise<SetupResult> {
-  return setupJsonPlatform("claude", CLAUDE_CONFIG, options);
+export async function setupClaude(options?: SetupOptions): Promise<SetupResult> {
+  const result = await setupJsonPlatform("claude", CLAUDE_CONFIG, options);
+  await removeDeadSettingsServerEntry(join(homedir(), ".claude", "settings.json"));
+  return result;
+}
+
+/** Drop the `mcpServers.codesift` entry earlier versions wrote where Claude Code never reads it. */
+async function removeDeadSettingsServerEntry(settingsPath: string): Promise<void> {
+  if (!existsSync(settingsPath)) return;
+  let root: Record<string, unknown>;
+  try {
+    root = await readJsonFile(settingsPath);
+  } catch {
+    return; // not ours to repair — the hooks installer reports a broken file
+  }
+  const servers = root["mcpServers"];
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return;
+  const record = servers as Record<string, unknown>;
+  if (!("codesift" in record)) return;
+  delete record["codesift"];
+  if (Object.keys(record).length === 0) delete root["mcpServers"];
+  await writeJsonFile(settingsPath, root);
 }
 
 export async function setupClaudeHooks(): Promise<void> {

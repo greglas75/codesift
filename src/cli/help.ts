@@ -532,7 +532,7 @@ By default, installs the MCP server config, rules file, and hooks (where support
 
 Platforms:
   codex         Add to ~/.codex/config.toml + AGENTS.md rules (OpenAI Codex CLI & IDE)
-  claude        Add to ~/.claude/settings.json + rules + hooks (Claude Code)
+  claude        Add to ~/.claude.json + rules + hooks (Claude Code)
   cursor        Add to ~/.cursor/mcp.json + .cursor/rules/codesift.mdc (Cursor IDE)
   gemini        Add to ~/.gemini/settings.json + GEMINI.md rules (Gemini CLI)
   antigravity   Add to ~/.gemini/antigravity/mcp_config.json (Google Antigravity)

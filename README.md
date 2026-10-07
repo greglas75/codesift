@@ -16,6 +16,10 @@ npm cache clean --force && npm i -g codesift-mcp@latest
 
 **Restart your AI client** (close + reopen) so the new MCP server is picked up. New terminal sessions in your IDE work fine — no need to quit the IDE itself.
 
+**Windows: close every MCP client before upgrading** (Claude Code, Codex, Cursor, …). A running
+CodeSift server holds native `.node` files open (`onnxruntime-node`, `@huggingface/transformers`),
+Windows will not let npm replace an open file, and the upgrade fails with `EBUSY` / `EPERM`.
+
 To configure individual platforms manually:
 
 ```bash

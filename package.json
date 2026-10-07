@@ -3,7 +3,7 @@
   "version": "0.20.0",
   "description": "MCP server for code intelligence — 146 tools for symbol search, call graph, semantic search, route tracing, community detection, LSP bridge, secret detection, conversation search, and Hono framework intelligence",
   "license": "BSL-1.1",
-  "author": "Greg Laskowski",
+  "author": "Greg Laski",
   "type": "module",
   "bin": {
     "codesift-mcp": "dist/server.js",
@@ -28,7 +28,7 @@
     "lint": "biome lint . && tsc --noEmit",
     "download-wasm": "tsx scripts/download-wasm.ts",
     "prepublishOnly": "npm run build && npm test",
-    "postinstall": "node ./dist/cli.js setup all 2>/dev/null && echo '\n  ✨ CodeSift MCP installed and configured for all platforms.\n  ⚠️  Restart your AI client (Cmd+Q for Claude Code) to load new MCP server.\n' || echo '\n  ✨ CodeSift MCP installed. Run: codesift setup all\n'; node ./dist/install-check.js 2>/dev/null || true",
+    "postinstall": "node ./dist/postinstall.js",
     "lint:fix": "biome lint --write . && tsc --noEmit"
   },
   "dependencies": {

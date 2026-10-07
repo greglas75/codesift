@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
 import { isLoopbackHost, assertPlainHost } from "../../utils/loopback.js";
 export { isLoopbackHost } from "../../utils/loopback.js";
-import { ensureDir, readJsonFile, writeJsonFile } from "./fs.js";
+import { ensureDir, readJsonFile, resolvePackageFile, writeJsonFile } from "./fs.js";
 
 export interface JsonPlatformConfig {
   configDirName: string;
@@ -29,7 +29,18 @@ export interface JsonPlatformConfig {
 
 const DEFAULT_DAEMON_PORT = 7077;
 
-export function resolveMcpServerEntry(): { command: string; args: string[] } {
+export function resolveMcpServerEntry(
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  // Windows: `which` (when Git Bash puts one on PATH) answers with an MSYS path such as
+  // `/c/Users/x/AppData/Roaming/npm/codesift-mcp` that Node cannot spawn, and the real global
+  // binary is a `.cmd` shim that a client spawning without a shell cannot run either. The node
+  // running setup and this package's own server.js are both known exactly, so name them.
+  if (platform === "win32") {
+    try {
+      return { command: process.execPath, args: [resolvePackageFile(join("dist", "server.js"))] };
+    } catch { /* not built (running from source) — fall through to npx */ }
+  }
   // NOTE: these two lookups used to `require("node:child_process")`. The package
   // is ESM, so the bare require threw ReferenceError, both try blocks fell
   // through, and setup ALWAYS wrote the `npx -y codesift-mcp` fallback — even
@@ -197,41 +208,16 @@ function serverEntryKind(entry: unknown): "http" | "stdio" {
   return "stdio";
 }
 
-/**
- * A stdio entry that must be REPLACED regardless of how it compares to the
- * desired one — i.e. the old direct-node invocation of a checked-out dev build
- * (`node /path/to/dist/server.js`), which silently pins a stale checkout.
- *
- * `npx -y codesift-mcp` is NOT legacy — it is exactly what resolveMcpServerEntry
- * produces when the binary is not globally installed (the documented npx install
- * path). Treating every `npx` command (and every `codesift-mcp` arg) as legacy
- * made serverEntriesEquivalent always return false for the desired entry, so
- * setup could never report `already_configured` and rewrote the config on every
- * single run. A genuinely different entry is still rewritten — the exact
- * command+args comparison below catches it.
- */
-function isLegacyStdioEntry(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-  const record = entry as Record<string, unknown>;
-  const command = typeof record["command"] === "string" ? record["command"] : "";
-  const args = Array.isArray(record["args"])
-    ? record["args"].filter((arg): arg is string => typeof arg === "string")
-    : [];
-  return (
-    command === "node" ||
-    command.endsWith("/node") ||
-    args.some((arg) => arg.includes("dist/server.js"))
-  );
-}
-
 function serverEntriesEquivalent(existing: unknown, desired: Record<string, unknown>): boolean {
   if (!existing || typeof existing !== "object" || Array.isArray(existing)) return false;
   if (serverEntryKind(existing) !== serverEntryKind(desired)) return false;
   if (serverEntryKind(desired) === "http") {
     return (existing as Record<string, unknown>)["url"] === desired["url"];
   }
-  if (isLegacyStdioEntry(existing)) return false;
-
+  // An old direct-node entry (`node /path/to/checkout/dist/server.js`, which pins a stale build) is
+  // simply not this invocation, so the exact comparison rewrites it. It used to be refused up front
+  // as "legacy", but on win32 the DESIRED entry has that very shape, and refusing it first would
+  // rewrite the config on every run.
   const current = existing as Record<string, unknown>;
   return current["command"] === desired["command"] &&
     JSON.stringify(current["args"] ?? []) === JSON.stringify(desired["args"] ?? []);

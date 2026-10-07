@@ -1,7 +1,7 @@
 # ADR-005: Embedding Storage Format — fixed-width float32 per repo, not references into a shared cache
 
 **Status:** Proposed
-**Date:** 2026-08-09 | **Deciders:** Greg Laskowski | **Area:** Storage
+**Date:** 2026-08-09 | **Deciders:** Greg Laski | **Area:** Storage
 
 ---
 

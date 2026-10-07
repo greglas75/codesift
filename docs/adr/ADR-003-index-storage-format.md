@@ -1,7 +1,7 @@
 # ADR-003: Index Storage Format — SQLite instead of one JSON blob per repo
 
 **Status:** Accepted
-**Date:** 2026-08-02 | **Deciders:** Greg Laskowski | **Area:** Storage
+**Date:** 2026-08-02 | **Deciders:** Greg Laski | **Area:** Storage
 
 ---
 

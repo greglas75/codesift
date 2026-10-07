@@ -1,7 +1,7 @@
 # ADR-004: Index memory footprint — budget the cache in bytes, keep whole-index loads for now
 
 **Status:** Accepted (staged — stage 1 done; stage 2 started, first increment shipped)
-**Date:** 2026-08-04 | **Deciders:** Greg Laskowski | **Area:** Storage
+**Date:** 2026-08-04 | **Deciders:** Greg Laski | **Area:** Storage
 
 ---
 
