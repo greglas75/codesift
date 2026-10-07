@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.20.2] — 2026-10-07
+
+### Fixed
+
+- **`search_text`, `find_references` and `migration_lint` returned absolute paths on Windows.**
+  Each stripped `root + "/"` from what the external tool printed, and on win32 ripgrep keeps the root
+  exactly as given and joins the rest with `\` — `C:\Project\modules\x.php`, `C:/Project/modules\x.php`
+  for a forward-slash root, or `modules\x.php` relative to its cwd — so the prefix matched none of
+  them (confirmed on a Windows install, rg 15.2.0). All three now go through `relativeIfWithin`,
+  which keeps the platform separator so results compare equal to the index's own paths.
+- **`find_references` never dropped build output on Windows**: the noise filter compared `dist\x.js`
+  against `dist/`. It now ignores the separator.
+- **0.20.1's postinstall failed `npm ci` in any clone without a build** (fresh checkouts, CI, the test
+  farm): `node ./dist/postinstall.js` ran before `dist/` existed. A root `postinstall.mjs` now skips
+  configuration when `dist/` is absent. Installs from npm were not affected.
+
 ## [0.20.1] — 2026-10-07
 
 Windows fixes, from a Windows install report. Until this release `npm install -g codesift-mcp`
