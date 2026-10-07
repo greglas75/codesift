@@ -12,6 +12,7 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { getCodeIndex } from "./index-tools.js";
 import { matchFilePattern } from "../utils/glob.js";
+import { relativeIfWithin } from "../utils/path-within.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -202,14 +203,10 @@ export async function migrationLint(
 
   // ---- 5. Parse squawk JSON ----------------------------------------------
   const raw = parseSquawkOutput(stdout);
-  const rootPrefix = index.root.endsWith("/") ? index.root : index.root + "/";
 
   const findings: MigrationLintFinding[] = raw.map((r) => {
     // Normalise file paths back to repo-relative when possible.
-    let filePath = r.file;
-    if (filePath.startsWith(rootPrefix)) {
-      filePath = filePath.slice(rootPrefix.length);
-    }
+    const filePath = relativeIfWithin(index.root, r.file);
     const level: "warning" | "error" =
       String(r.level).toLowerCase() === "error" ? "error" : "warning";
     const finding: MigrationLintFinding = {

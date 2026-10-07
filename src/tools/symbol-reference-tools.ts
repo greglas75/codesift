@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { findReferencesLsp } from "../lsp/lsp-tools.js";
 import type { Reference } from "../types.js";
 import { matchFilePattern } from "../utils/glob.js";
+import { relativeIfWithin } from "../utils/path-within.js";
 import {
   isNoisePath,
   MAX_CONTEXT_LENGTH,
@@ -212,7 +213,6 @@ async function findReferencesWithRipgrep(
     return null;
   }
 
-  const rootPrefix = root.endsWith("/") ? root : root + "/";
   const lines = stdout.split("\n").filter(Boolean);
   const refs: Reference[] = [];
   const identifierPattern = wordBoundaryPattern(symbolName);
@@ -224,7 +224,7 @@ async function findReferencesWithRipgrep(
     if (!match || !match[1] || !match[2] || match[3] === undefined) continue;
 
     const absPath = match[1];
-    const relPath = absPath.startsWith(rootPrefix) ? absPath.slice(rootPrefix.length) : absPath;
+    const relPath = relativeIfWithin(root, absPath);
     if (!filePattern && isNoisePath(relPath)) continue;
     // `rg -w` is incorrect for valid identifiers such as `$store` and `#handler`. The literal
     // search keeps metacharacters safe; this Unicode-aware filter supplies language boundaries.

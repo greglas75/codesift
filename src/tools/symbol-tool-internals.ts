@@ -27,7 +27,9 @@ const NOISE_EXTENSIONS = new Set([
 ]);
 
 export function isNoisePath(filePath: string): boolean {
-  if (NOISE_PATH_PREFIXES.some((prefix) => filePath.startsWith(prefix))) return true;
+  // Repo-relative paths carry `\` on win32 (`dist\x.js`), which a `/`-suffixed prefix never matches.
+  const posixPath = filePath.replace(/\\/g, "/");
+  if (NOISE_PATH_PREFIXES.some((prefix) => posixPath.startsWith(prefix))) return true;
   const dot = filePath.lastIndexOf(".");
   return dot >= 0 && NOISE_EXTENSIONS.has(filePath.slice(dot));
 }

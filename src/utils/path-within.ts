@@ -23,3 +23,23 @@ export function isPathWithin(
   // `..foo` is a legitimate child name; only a whole `..` segment escapes.
   return rel !== ".." && !rel.startsWith(`..${impl.sep}`);
 }
+
+/**
+ * `candidate` made relative to `root` when it lies inside it; otherwise returned unchanged.
+ *
+ * For paths reported by an external tool (ripgrep, squawk). On win32 rg keeps the root exactly as it
+ * was given and joins the rest with `\` — `C:\Project\modules\x.php`, or `C:/Project/modules\x.php`
+ * for a forward-slash root, or `modules\x.php` relative to its cwd — so stripping `root + "/"` matched
+ * none of them and every result came back absolute. `resolve` absorbs all three shapes.
+ *
+ * The result uses the platform separator ON PURPOSE: the indexer stores `relative(root, file)` too,
+ * so a result compares equal to the index's own paths (normalising to `/` would break that on win32).
+ */
+export function relativeIfWithin(
+  root: string,
+  candidate: string,
+  impl: typeof path = path,
+): string {
+  const abs = impl.resolve(root, candidate);
+  return isPathWithin(root, abs, impl) ? impl.relative(root, abs) : candidate;
+}

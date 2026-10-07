@@ -1,6 +1,6 @@
 import { posix, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPathWithin } from "../../src/utils/path-within.js";
+import { isPathWithin, relativeIfWithin } from "../../src/utils/path-within.js";
 
 describe("isPathWithin", () => {
   describe("win32 — the case `startsWith(root + \"/\")` got wrong", () => {
@@ -43,5 +43,31 @@ describe("isPathWithin", () => {
     it("accepts a child whose name merely starts with two dots", () => {
       expect(isPathWithin("/repo", "/repo/..cache/a.ts", posix)).toBe(true);
     });
+  });
+});
+
+describe("relativeIfWithin — the shapes ripgrep prints on win32", () => {
+  it("strips a backslash root", () => {
+    expect(relativeIfWithin("C:\\Project\\modules", "C:\\Project\\modules\\buyers\\X.php", win32))
+      .toBe("buyers\\X.php");
+  });
+
+  it("strips a forward-slash root followed by backslashes (mixed separators)", () => {
+    expect(relativeIfWithin("C:/Project/modules", "C:/Project/modules\\buyers\\X.php", win32))
+      .toBe("buyers\\X.php");
+  });
+
+  it("keeps an already-relative path relative", () => {
+    expect(relativeIfWithin("C:\\Project", "modules\\buyers\\X.php", win32)).toBe("modules\\buyers\\X.php");
+  });
+
+  it("returns a path outside the root unchanged", () => {
+    expect(relativeIfWithin("C:\\Project", "D:\\Other\\X.php", win32)).toBe("D:\\Other\\X.php");
+  });
+
+  it("matches the old prefix strip on posix", () => {
+    expect(relativeIfWithin("/repo", "/repo/src/a.ts", posix)).toBe("src/a.ts");
+    expect(relativeIfWithin("/repo/", "/repo/src/a.ts", posix)).toBe("src/a.ts");
+    expect(relativeIfWithin("/repo", "/elsewhere/a.ts", posix)).toBe("/elsewhere/a.ts");
   });
 });

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { TextMatch } from "../../types.js";
 import { MAX_LINE_CHARS, RG_EXCLUDE_DIRS, RIPGREP_TIMEOUT_MS } from "./constants.js";
 import { currentAbortSignal } from "../../server-helpers/request-context.js";
+import { relativeIfWithin } from "../../utils/path-within.js";
 
 interface RipgrepOptions {
   regex?: boolean;
@@ -95,11 +96,6 @@ function executeRipgrep(
   });
 }
 
-function relativePath(absolutePath: string, rootPrefix: string): string {
-  return absolutePath.startsWith(rootPrefix)
-    ? absolutePath.slice(rootPrefix.length)
-    : absolutePath;
-}
 
 interface ParsedRipgrepLine {
   path: string;
@@ -121,7 +117,7 @@ function stripLineEnding(content: string): string {
   return content.replace(/\r?\n$/, "");
 }
 
-function parseJsonEvent(rawLine: string, rootPrefix: string): ParsedRipgrepLine | null {
+function parseJsonEvent(rawLine: string, root: string): ParsedRipgrepLine | null {
   let event: RipgrepJsonEvent;
   try {
     event = JSON.parse(rawLine) as RipgrepJsonEvent;
@@ -134,7 +130,7 @@ function parseJsonEvent(rawLine: string, rootPrefix: string): ParsedRipgrepLine 
   const content = event.data?.lines?.text;
   if (!path || line === undefined || content === undefined) return null;
   return {
-    path: relativePath(path, rootPrefix),
+    path: relativeIfWithin(root, path),
     line,
     content: stripLineEnding(content),
     isMatch: event.type === "match",
@@ -171,14 +167,14 @@ function buildContextMatch(
 
 function parseRipgrepOutput(
   stdout: string,
-  rootPrefix: string,
+  root: string,
   maxResults: number,
   contextLines: number,
 ): TextMatch[] {
   const matches: TextMatch[] = [];
   const parsedLines = stdout.split("\n")
     .filter(Boolean)
-    .map((line) => parseJsonEvent(line, rootPrefix))
+    .map((line) => parseJsonEvent(line, root))
     .filter((line): line is ParsedRipgrepLine => line !== null);
   for (let index = 0; index < parsedLines.length; index++) {
     if (matches.length >= maxResults) break;
@@ -200,6 +196,5 @@ export async function searchWithRipgrep(
   // wiring exists to prevent. Either signal firing must stop ripgrep.
   const signal = combineSignals(options.signal, currentAbortSignal());
   const stdout = await executeRipgrep(buildRipgrepArgs(root, query, options), signal, root);
-  const rootPrefix = root.endsWith("/") ? root : `${root}/`;
-  return parseRipgrepOutput(stdout, rootPrefix, options.maxResults, options.contextLines);
+  return parseRipgrepOutput(stdout, root, options.maxResults, options.contextLines);
 }
