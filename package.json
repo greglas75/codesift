@@ -12,6 +12,7 @@
   "main": "./dist/server.js",
   "files": [
     "dist",
+    "postinstall.mjs",
     "rules",
     "hooks",
     "src/parser/languages",
@@ -28,7 +29,7 @@
     "lint": "biome lint . && tsc --noEmit",
     "download-wasm": "tsx scripts/download-wasm.ts",
     "prepublishOnly": "npm run build && npm test",
-    "postinstall": "node ./dist/postinstall.js",
+    "postinstall": "node ./postinstall.mjs",
     "lint:fix": "biome lint --write . && tsc --noEmit"
   },
   "dependencies": {

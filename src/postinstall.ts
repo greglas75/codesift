@@ -7,6 +7,8 @@
  * ROLLED BACK the whole `npm install -g`, leaving the old version in place with no clear reason.
  * Reported from a Windows install; the only way out was `--ignore-scripts`.
  *
+ * Invoked through the root `postinstall.mjs`, which skips it in an unbuilt clone.
+ *
  * Every path ends at exit 0: a configuration step must never be able to fail the install it follows.
  */
 import { spawnSync } from "node:child_process";
