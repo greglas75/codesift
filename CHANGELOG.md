@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-10-07
+
+Windows fixes, from a Windows install report. Until this release `npm install -g codesift-mcp`
+could not complete there at all.
+
+### Fixed
+
+- **`npm install -g` rolled back the whole install on Windows.** The postinstall was a shell line
+  with `2>/dev/null` and `;`, and npm runs lifecycle scripts through `cmd.exe`, where `/dev/null`
+  does not exist. The script exited 1 and npm restored the previous version without a clear reason.
+  It is now `node ./dist/postinstall.js`, which always exits 0; a test fails if a user-machine
+  lifecycle script regains POSIX-only syntax.
+- **`codesift setup claude` registered the server where Claude Code never reads it.** It wrote
+  `mcpServers` into `~/.claude/settings.json`; user-scope MCP servers live in `~/.claude.json`
+  (what `claude mcp add -s user` writes). The tools never loaded while the SessionStart banner still
+  said "CodeSift MCP is available" — it only looked fine where someone had also run `claude mcp add`.
+  Setup now writes `~/.claude.json` (an existing entry with the same invocation is left alone, `env`
+  included) and removes the dead `settings.json` entry. Hooks stay in `settings.json`, where they
+  belong.
+- **On Windows the registered command was an MSYS path** (`/c/Users/…/npm/codesift-mcp`, from Git
+  Bash's `which`) that Node cannot spawn. Setup now registers `node <package>\dist\server.js`.
+
+- **`index_file` never matched a repository on Windows.** The root-containment check was
+  `absPath.startsWith(r.root + "/")`, which compares `C:\Project\modules\x.php` against `C:\Project/`
+  and never matches. Every call failed with a misleading "checkout is not indexed", and the
+  PostToolUse hook silently refreshed nothing, so the index went stale under every edit (reported from
+  a Windows install on 0.17.0; still present in 0.20.0). The `output_dir` guard in `wiki-generate` and
+  the `output_path` guard in `generate_claude_md` had the same check and rejected every valid path
+  there. All three now go through `isPathWithin` (`path.relative`: platform separator, drive letters,
+  case-insensitive on win32).
+- **The daily auto-prune swept once per daemon process.** It was a single `setTimeout` armed at start,
+  so prune's second pass needed a restart, and a daemon started while the stamp was fresh never swept
+  at all. Measured: 69 dead-root indexes holding 37.26 GB. Now an hourly check; the 24 h throttle is
+  unchanged, and the child's output goes to `<dataDir>/auto-prune.log`.
+
+### Documentation
+
+- Windows: close every MCP client before upgrading — a running server holds native `.node` files
+  open and npm fails with `EBUSY` / `EPERM`.
+- Author name corrected to Greg Laski (`package.json`, `LICENSE`, ADRs).
+
 ## [0.20.0] — 2026-10-02
 
 Multi-host usage telemetry stopped being a star with one reader, and the collector address stopped
