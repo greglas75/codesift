@@ -1,6 +1,17 @@
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import { matchNamePattern } from "../utils/glob.js";
-import type { CodeIndex, CodeSymbol, SymbolKind } from "../types.js";
+import type { CodeSymbol, FileEntry, SymbolKind } from "../types.js";
+
+/**
+ * Every tool in this file reads the file list, one file's symbols, or a fold over names and kinds —
+ * none holds the symbol array (ADR-004 stage 2). `IndexSummary` has no `symbols` field, so the
+ * compiler, not review, keeps the file-list tools honest; the two symbol readers ask for exactly the
+ * rows they use. The summary is fetched first everywhere because it carries `getCodeIndex`'s null
+ * semantics — unknown AND stale both read as "not found" — which the symbol accessors do not.
+ */
+interface FileListed {
+  files: FileEntry[];
+}
 
 export interface FileTreeNode {
   name: string;
@@ -57,9 +68,9 @@ function pathDepth(filePath: string): number {
 
 /** Filter index files by shared criteria (path prefix, name pattern, min symbols). */
 function filterIndexFiles(
-  index: CodeIndex,
+  index: FileListed,
   options?: { path_prefix?: string | undefined; name_pattern?: string | undefined; min_symbols?: number | undefined },
-): CodeIndex["files"] {
+): FileEntry[] {
   let files = index.files;
   const pathPrefix = options?.path_prefix;
   const namePattern = options?.name_pattern;
@@ -89,7 +100,7 @@ function filterIndexFiles(
  * ancestor directories). When name_pattern is set, empty branches are pruned.
  */
 function buildTree(
-  index: CodeIndex,
+  index: FileListed,
   options?: FileTreeOptions,
 ): FileTreeNode[] {
   const maxDepth = options?.depth ?? Infinity;
@@ -245,7 +256,7 @@ function buildTree(
  * Much cheaper than the full nested tree — similar to `find` output.
  */
 function buildCompactList(
-  index: CodeIndex,
+  index: FileListed,
   options?: FileTreeOptions,
 ): CompactFileEntry[] {
   const pathPrefix = options?.path_prefix;
@@ -285,7 +296,7 @@ export async function getFileTree(
   repo: string,
   options?: FileTreeOptions,
 ): Promise<FileTreeNode[] | CompactFileEntry[] | { entries: CompactFileEntry[]; truncated: boolean; total: number; hint: string }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
@@ -378,14 +389,21 @@ export async function getFileOutline(
   opts?: { includeLocals?: boolean },
 ): Promise<{ symbols: FileOutlineEntry[]; truncated?: boolean; total_symbols?: number; locals_hidden?: number }> {
   const includeLocals = opts?.includeLocals === true;
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
-  const sorted = index.symbols
-    .filter((s) => s.file === filePath)
-    .sort((a, b) => a.start_line - b.start_line);
+  // One indexed `WHERE file = ?` instead of materialising every symbol to filter them. The outline
+  // never prints `source`, so it is not read. Rows arrive in index order — the order the old filter
+  // saw — which matters because the sort below is stable: two symbols on one line (a type and a
+  // value sharing a name) keep their relative order.
+  const fileSymbols = await findRepoSymbols(
+    repo,
+    { file: filePath, withSource: false },
+    { skipFreshness: true },
+  );
+  const sorted = fileSymbols.sort((a, b) => a.start_line - b.start_line);
   const allSymbols = includeLocals ? sorted : withoutNestedLocals(sorted);
 
   const truncated = allSymbols.length > MAX_OUTLINE_SYMBOLS;
@@ -427,7 +445,7 @@ export async function getFileOutline(
 export async function getRepoOutline(
   repo: string,
 ): Promise<RepoOutlineResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
@@ -487,7 +505,7 @@ export async function suggestQueries(repo: string): Promise<{
   kind_distribution: Record<string, number>;
   example_queries: string[];
 }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
@@ -498,19 +516,30 @@ export async function suggestQueries(repo: string): Promise<{
     .slice(0, 10)
     .map((f) => ({ path: f.path, symbols: f.symbol_count }));
 
-  // Kind distribution
+  // Kind distribution, name frequencies and the first React component, folded in ONE pass over
+  // pages of symbols instead of three passes over a materialised array. Pages arrive in index order,
+  // which is what the result depends on: `kinds` keys appear in first-occurrence order, ties among
+  // the top names break by first occurrence (Map insertion order + stable sort), and "the first
+  // component" is the first in index order.
+  const ROOT_COMPONENT_NAMES = ["App", "Root", "Main", "Layout", "Page"];
   const kinds: Record<string, number> = {};
-  for (const sym of index.symbols) {
-    kinds[sym.kind] = (kinds[sym.kind] ?? 0) + 1;
-  }
-
-  // Extract top symbol names by frequency (most common names = core concepts)
   const nameCounts = new Map<string, number>();
-  for (const sym of index.symbols) {
-    // Skip internal/anonymous
-    if (sym.name.startsWith("<") || sym.name.length < 3) continue;
-    nameCounts.set(sym.name, (nameCounts.get(sym.name) ?? 0) + 1);
-  }
+  let firstRootComponent: string | undefined;
+  let firstComponent: string | undefined;
+  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+    for (const sym of batch) {
+      kinds[sym.kind] = (kinds[sym.kind] ?? 0) + 1;
+      if (sym.kind === "component") {
+        firstComponent ??= sym.name;
+        if (firstRootComponent === undefined && ROOT_COMPONENT_NAMES.includes(sym.name)) {
+          firstRootComponent = sym.name;
+        }
+      }
+      // Skip internal/anonymous
+      if (sym.name.startsWith("<") || sym.name.length < 3) continue;
+      nameCounts.set(sym.name, (nameCounts.get(sym.name) ?? 0) + 1);
+    }
+  }, { skipFreshness: true });
   const topNames = [...nameCounts.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
@@ -537,10 +566,7 @@ export async function suggestQueries(repo: string): Promise<{
     if (hasComponents) {
       examples.push(`search_symbols(repo, "", kind="component")  // list all React components`);
       // Find a likely root component (App, Root, Main, Layout, Page)
-      const roots = ["App", "Root", "Main", "Layout", "Page"];
-      const rootName = index.symbols.find(
-        (s) => s.kind === "component" && roots.includes(s.name),
-      )?.name ?? index.symbols.find((s) => s.kind === "component")?.name;
+      const rootName = firstRootComponent ?? firstComponent;
       if (rootName) {
         examples.push(`trace_component_tree(repo, "${rootName}")  // JSX composition tree`);
       }

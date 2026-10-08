@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getBM25Index, getCodeIndex } from "../index-tools.js";
+import { getBM25Index, getCodeIndex, getIndexSummary } from "../index-tools.js";
 import { walkDirectory } from "../../utils/walk.js";
 import { matchFilePattern } from "../../utils/glob.js";
 import { raceWallClock } from "../../utils/wall-clock.js";
-import type { CodeIndex, TextMatch, TextMatchGroup } from "../../types.js";
+import type { FileEntry, TextMatch, TextMatchGroup } from "../../types.js";
 import {
   AUTO_GROUP_THRESHOLD,
   BINARY_EXTENSIONS,
@@ -27,6 +27,16 @@ import { hasRipgrep, searchWithRipgrep } from "./ripgrep.js";
 import type { SearchTextOptions } from "./types.js";
 
 type SearchTextResult = TextMatch[] | TextMatchGroup[] | string;
+
+/**
+ * What the scan reads of the index: the root and the file list (ADR-004 stage 2). Both
+ * `IndexSummary` and `CodeIndex` satisfy it, and the scan is given the summary — a text search
+ * reads files off disk and never needed the symbol array it used to materialise to find them.
+ */
+interface SearchScope {
+  root: string;
+  files: FileEntry[];
+}
 
 function compileSearchRegex(query: string): RegExp {
   if (REDOS_PATTERNS.some((pattern) => pattern.test(query))) {
@@ -94,7 +104,7 @@ function groupMatchesByFile(matches: TextMatch[]): TextMatchGroup[] {
 }
 
 async function resolveFallbackFiles(
-  index: CodeIndex,
+  index: SearchScope,
   filePattern: string | undefined,
 ): Promise<string[]> {
   if (filePattern) return index.files.map((file) => file.path);
@@ -106,7 +116,7 @@ async function resolveFallbackFiles(
 }
 
 interface MatchCollectionOptions {
-  index: CodeIndex;
+  index: SearchScope;
   query: string;
   useRegex: boolean;
   filePattern: string | undefined;
@@ -172,13 +182,20 @@ function callerOmittedGrouping(options: SearchTextOptions | undefined): boolean 
 
 async function rankMatches(
   repo: string,
-  index: CodeIndex,
   matches: TextMatch[],
 ): Promise<TextMatch[]> {
   try {
     const { classifyHitsWithSymbols } = await import("../search-ranker.js");
     const bm25Index = await getBM25Index(repo);
-    return bm25Index
+    if (!bm25Index) return matches;
+    // Ranking classifies each hit by its containing symbol, so it genuinely reads symbols — and it
+    // is the ONLY part of search_text that does. The full index is loaded here, lazily, instead of
+    // up front for every search: a regex, grouped or compact search never ranks and never pays it.
+    // When `getBM25Index` had to build or restore itself it just materialised this same index, so
+    // this is served from the storage cache; when BM25 was already resident it is the load the old
+    // path did before every search. Freshness already ran for this call.
+    const index = await getCodeIndex(repo, { skipFreshness: true });
+    return index
       ? await classifyHitsWithSymbols(matches, index, { centrality: bm25Index.centrality })
       : matches;
   } catch {
@@ -293,7 +310,7 @@ async function searchTextInner(
   options?: SearchTextOptions,
   signal: AbortSignal = new AbortController().signal,
 ): Promise<SearchTextResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   const { useRegex, filePattern, maxResults, contextLines } = resolveTextSearchOptions(options);
   if (useRegex) compileSearchRegex(query);
@@ -309,7 +326,7 @@ async function searchTextInner(
   });
   const omittedGrouping = callerOmittedGrouping(options);
   if (shouldRankMatches(query, options, useRegex, omittedGrouping) && matches.length > 0) {
-    const rankedMatches = await rankMatches(repo, index, matches);
+    const rankedMatches = await rankMatches(repo, matches);
     if (options?.group_by_file === true || options?.compact === true) {
       return formatMatches(rankedMatches, options, contextLines, false);
     }

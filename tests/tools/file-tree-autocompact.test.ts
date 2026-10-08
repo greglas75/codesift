@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// get_file_tree reads the file list only, through the summary accessor — which has no `symbols`
+// field, so the fixture below carries none either.
 const mockGetIndex = vi.fn();
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: () => mockGetIndex(),
+  getIndexSummary: () => mockGetIndex(),
 }));
 
 import { getFileTree } from "../../src/tools/outline-tools.js";
@@ -14,7 +16,6 @@ function syntheticIndex(nFiles: number): unknown {
       path: `src/dir${i % 12}/file${i}.ts`,
       symbol_count: 3,
     })),
-    symbols: [],
   };
 }
 

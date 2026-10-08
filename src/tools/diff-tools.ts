@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbolsInFiles, getIndexSummary } from "./index-tools.js";
 import { runGit } from "./git-exec.js";
 import { buildGitDiffArgs } from "../utils/git-validation.js";
 import type { CodeSymbol } from "../types.js";
@@ -123,7 +123,7 @@ export async function diffOutline(
   since: string,
   until?: string,
 ): Promise<DiffOutlineResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
@@ -139,7 +139,16 @@ export async function diffOutline(
   const added: CodeSymbol[] = [];
   const modified: CodeSymbol[] = [];
 
-  for (const sym of index.symbols) {
+  // Only a symbol in a new file or in a file with a hunk can be added or modified, so those files'
+  // symbols are read — in index order, which is the order the old walk over every symbol produced —
+  // instead of all of them (ADR-004 stage 2). With source: the result hands back whole symbols, and
+  // they have always carried it.
+  const touchedFiles = [...new Set([...newFiles, ...hunks.map((h) => h.file)])];
+  const candidates = await findRepoSymbolsInFiles(repo, touchedFiles, {
+    withSource: true,
+    skipFreshness: true,
+  });
+  for (const sym of candidates) {
     // Symbols in new files are "added"
     if (newFileSet.has(sym.file)) {
       added.push(sym);
@@ -175,7 +184,7 @@ export async function changedSymbols(
   until?: string,
   options?: { include_diff?: boolean },
 ): Promise<ChangedFileSymbols[]> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
@@ -191,9 +200,14 @@ export async function changedSymbols(
 
   const changedFileSet = new Set(changedFiles);
 
-  // Group symbols by file
+  // Group symbols by file. Only the changed files' symbols are read, and only their names are used
+  // (ADR-004 stage 2); index order within a file is what the old walk produced.
   const symbolsByFile = new Map<string, string[]>();
-  for (const sym of index.symbols) {
+  const changedFileSymbols = await findRepoSymbolsInFiles(repo, changedFiles, {
+    withSource: false,
+    skipFreshness: true,
+  });
+  for (const sym of changedFileSymbols) {
     if (!changedFileSet.has(sym.file)) continue;
 
     const existing = symbolsByFile.get(sym.file);
