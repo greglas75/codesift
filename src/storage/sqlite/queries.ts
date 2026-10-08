@@ -50,7 +50,7 @@ export interface IndexMeta {
 }
 
 /** Every column except `source`, so the projection can drop the expensive one by name. */
-const COLUMNS_WITHOUT_SOURCE =
+export const COLUMNS_WITHOUT_SOURCE =
   "id, file, name, kind, start_line, end_line, start_col, end_col, start_byte, end_byte, " +
   "signature, docstring, parent, is_async, is_exported, extras";
 
@@ -59,7 +59,7 @@ const COLUMNS_WITHOUT_SOURCE =
  * than a slow query, so it is chunked — and the chunks are unioned by the caller, not by SQL,
  * because a UNION would have to re-sort.
  */
-const MAX_BOUND_PARAMS = 900;
+export const MAX_BOUND_PARAMS = 900;
 
 interface Predicate {
   sql: string;
@@ -72,10 +72,14 @@ function buildPredicate(query: SymbolQuery, idChunk?: readonly string[]): Predic
   if (query.file !== undefined) { clauses.push("file = ?"); binds.push(query.file); }
   if (query.name !== undefined) { clauses.push("name = ?"); binds.push(query.name); }
   if (query.namePrefix !== undefined) {
-    // `LIKE 'x%'` uses idx_symbols_name; the ESCAPE clause keeps a literal % or _ in a symbol name
-    // from turning into a wildcard, which would silently widen the query.
-    clauses.push("name LIKE ? ESCAPE '\\'");
-    binds.push(`${query.namePrefix.replace(/[\\%_]/g, "\\$&")}%`);
+    // GLOB, not LIKE. SQLite's LIKE is case-INSENSITIVE for ASCII unless a pragma says otherwise,
+    // so `LIKE 'create%'` also returned `CreateUser` — while the JSON branch and the resident-index
+    // filter test `startsWith`, which is case-sensitive. That is a filter failing open on one
+    // backend only: more rows than were asked for, silently. GLOB is case-sensitive and still uses
+    // idx_symbols_name for a literal prefix. Its metacharacters `*`, `?` and `[` are escaped by
+    // wrapping each in a bracket class, which GLOB reads as that one literal character.
+    clauses.push("name GLOB ?");
+    binds.push(`${query.namePrefix.replace(/[*?[]/g, "[$&]")}*`);
   }
   if (query.kind !== undefined) { clauses.push("kind = ?"); binds.push(query.kind); }
   if (query.parent !== undefined) { clauses.push("parent = ?"); binds.push(query.parent); }
@@ -101,7 +105,7 @@ function chunkIds(ids: readonly string[] | undefined): Array<readonly string[] |
  * passes that test. Giving it an explicit null is what keeps the key absent rather than present
  * and undefined — the distinction the whole `withSource` contract rests on.
  */
-function rowToSymbolNoSource(row: Omit<SymbolRow, "source">, repo: string): CodeSymbol {
+export function rowToSymbolNoSource(row: Omit<SymbolRow, "source">, repo: string): CodeSymbol {
   return rowToSymbol({ ...row, source: null } as SymbolRow, repo);
 }
 
@@ -120,8 +124,14 @@ export async function findSymbolsSqlite(
       const { sql, binds } = buildPredicate(query, idChunk);
       const remaining = query.limit === undefined ? undefined : query.limit - out.length;
       const limitSql = remaining === undefined ? "" : ` LIMIT ${Math.max(0, remaining)}`;
+      // ORDER BY rowid: the order a full load hands back (`readTablePaged` walks rowid), so a tool
+      // moved from `index.symbols.filter(...)` onto this keeps its result order, and `limit` keeps
+      // choosing the same rows. Without it the order is whatever index the planner picked — name
+      // order for a prefix query — which is a different answer to "the first N", not a slower one.
+      // For an equality on an indexed column SQLite satisfies this from the index itself (rowid is
+      // every index's trailing key), so it costs no sort on the hot predicates.
       const rows = db
-        .prepare(`SELECT ${columns} FROM symbols ${sql}${limitSql}`)
+        .prepare(`SELECT ${columns} FROM symbols ${sql} ORDER BY rowid${limitSql}`)
         .all(...(binds as never[])) as unknown as SymbolRow[];
       for (const row of rows) {
         out.push(query.withSource ? rowToSymbol(row, repo) : rowToSymbolNoSource(row, repo));
