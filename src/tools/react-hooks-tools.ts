@@ -1,7 +1,8 @@
 /**
  * React hook inventory and Rule of Hooks analysis.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { REACT_STDLIB_HOOKS } from "./react-shared-tools.js";
 
@@ -124,7 +125,7 @@ export async function analyzeHooks(
     max_entries?: number | undefined;
   },
 ): Promise<AnalyzeHooksResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
@@ -134,13 +135,15 @@ export async function analyzeHooks(
   const includeTests = options?.include_tests ?? false;
   const maxEntries = options?.max_entries ?? 100;
 
-  // Filter symbols to components and hooks
-  let symbols = index.symbols.filter(
-    (s) => s.kind === "component" || s.kind === "hook",
-  );
-  if (!includeTests) symbols = symbols.filter((s) => !isTestFile(s.file));
-  if (componentName) symbols = symbols.filter((s) => s.name === componentName);
-  if (filePattern) symbols = symbols.filter((s) => s.file.includes(filePattern));
+  // Components and hooks, in index order. Two kinds cannot be one `kind =` query, and merging two
+  // queries would lose the interleaving the `maxEntries` cut-off depends on — so the scan is a
+  // stream (paged, never all resident) narrowed to one name when a component is named. Source is
+  // requested: every check below parses it (ADR-004 stage 2).
+  const wanted = (s: CodeSymbol): boolean =>
+    (s.kind === "component" || s.kind === "hook")
+    && (includeTests || !isTestFile(s.file))
+    && (!componentName || s.name === componentName)
+    && (!filePattern || s.file.includes(filePattern));
 
   const entries: HookInventoryEntry[] = [];
   const globalHookCount = new Map<string, number>();
@@ -148,8 +151,10 @@ export async function analyzeHooks(
   let totalHooks = 0;
   let violationsCount = 0;
 
-  for (const sym of symbols) {
-    if (!sym.source) continue;
+  /** Returns false once `maxEntries` is reached — the same point the full-array loop broke at. */
+  const visit = (sym: CodeSymbol): boolean => {
+    if (!wanted(sym)) return true;
+    if (!sym.source) return true;
 
     const hookCalls = extractHookCalls(sym.source);
     const violations = findRuleOfHooksViolations(sym.source);
@@ -158,7 +163,7 @@ export async function analyzeHooks(
     else if (sym.kind === "hook") totalHooks++;
 
     // Skip empty entries (no hooks, no violations)
-    if (hookCalls.length === 0 && violations.length === 0) continue;
+    if (hookCalls.length === 0 && violations.length === 0) return true;
 
     violationsCount += violations.length;
 
@@ -176,7 +181,17 @@ export async function analyzeHooks(
       violations,
     });
 
-    if (entries.length >= maxEntries) break;
+    return entries.length < maxEntries;
+  };
+
+  const foldBatch = (batch: CodeSymbol[]): boolean | undefined => {
+    for (const sym of batch) if (!visit(sym)) return false;
+    return undefined;
+  };
+  if (componentName) {
+    foldBatch(await findRepoSymbols(repo, { withSource: true, name: componentName }, { skipFreshness: true }));
+  } else {
+    await streamRepoSymbols(repo, { withSource: true }, foldBatch, { skipFreshness: true });
   }
 
   // Sort entries: violations first, then by hook_count descending

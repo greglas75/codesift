@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// The tool reads the summary and pages through symbols; both are derived from the one
+// getCodeIndex fixture so the test asserts on the tool, not on which accessor is stubbed.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { withDerivedIndexAccessors } = await import("../helpers/index-accessors-from-fixture.js");
+  return withDerivedIndexAccessors({ getCodeIndex: vi.fn() });
+});
 
 import { analyzeRenders } from "../../src/tools/react-tools.js";
 import { getCodeIndex } from "../../src/tools/index-tools.js";

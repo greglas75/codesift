@@ -2,6 +2,7 @@
  * React context graph mapping.
  */
 import type { CodeSymbol } from "../types.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 
 // ─────────────────────────────────────────────────────────────
 // buildContextGraph — React context flow mapping (Item 10)
@@ -90,4 +91,40 @@ export function buildContextGraph(symbols: CodeSymbol[]): ContextGraph {
   }
 
   return { contexts: [...contexts.values()] };
+}
+
+/**
+ * `buildContextGraph` over a repository, without materialising its index (ADR-004 stage 2).
+ *
+ * The graph never looks past two prefixes of the symbol list: pass 1 stops at the first
+ * MAX_CONTEXT_SYMBOLS symbols that carry source, pass 2 at the first MAX_CONTEXT_SYMBOLS
+ * components/hooks that carry source. So the symbols are streamed in index order, the members of
+ * either prefix are kept, and the stream stops once both prefixes are complete. Any symbol that
+ * precedes a kept one inside a prefix is itself kept, so each pass meets exactly the sequence it
+ * met over the full array, and the graph is the same one.
+ *
+ * Returns null when the repository is not indexed, mirroring the summary read.
+ */
+export async function analyzeContextGraph(repo: string): Promise<ContextGraph | null> {
+  const summary = await getIndexSummary(repo);
+  if (!summary) return null;
+
+  const kept: CodeSymbol[] = [];
+  let withSource = 0;
+  let renderersWithSource = 0;
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const sym of batch) {
+      if (!sym.source) continue;
+      const inPass1 = withSource < MAX_CONTEXT_SYMBOLS;
+      const isRenderer = sym.kind === "component" || sym.kind === "hook";
+      const inPass2 = isRenderer && renderersWithSource < MAX_CONTEXT_SYMBOLS;
+      if (inPass1) withSource++;
+      if (inPass2) renderersWithSource++;
+      if (inPass1 || inPass2) kept.push(sym);
+      if (withSource >= MAX_CONTEXT_SYMBOLS && renderersWithSource >= MAX_CONTEXT_SYMBOLS) return false;
+    }
+    return undefined;
+  }, { skipFreshness: true });
+
+  return buildContextGraph(kept);
 }

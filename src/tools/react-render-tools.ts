@@ -1,7 +1,7 @@
 /**
  * React static render-risk analysis.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { buildJsxAdjacency, buildReverseAdjacency, computePropChainDepth } from "./react-component-tree-tools.js";
 
@@ -179,7 +179,9 @@ export async function analyzeRenders(
     format?: "json" | "markdown" | undefined;
   },
 ): Promise<AnalyzeRendersResult | string> {
-  const index = await getCodeIndex(repo);
+  // The summary gives the file list and the symbol COUNT; the only symbols read are the
+  // components, with source (every risk check parses it) — not the whole index (ADR-004 stage 2).
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
@@ -189,7 +191,7 @@ export async function analyzeRenders(
   const includeTests = options?.include_tests ?? false;
   const maxEntries = options?.max_entries ?? 100;
 
-  let components = index.symbols.filter((s) => s.kind === "component");
+  let components = await findRepoSymbols(repo, { withSource: true, kind: "component" }, { skipFreshness: true });
   if (!includeTests) components = components.filter((s) => !isTestFile(s.file));
   if (componentName) components = components.filter((s) => s.name === componentName);
   if (filePattern) components = components.filter((s) => s.file.includes(filePattern));
@@ -203,7 +205,7 @@ export async function analyzeRenders(
   );
   const extractorFailure =
     components.length === 0 &&
-    index.symbols.length > 0 &&
+    index.symbol_count > 0 &&
     hasJsxIndexedFiles;
 
   // Tier 5 — sort components alphabetically by id ?? name BEFORE building adjacency

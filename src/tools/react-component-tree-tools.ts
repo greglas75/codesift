@@ -1,7 +1,7 @@
 /**
  * React component tree analysis helpers.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { resolveAlias } from "../utils/react-alias.js";
 import type { CodeSymbol, CallNode } from "../types.js";
@@ -289,7 +289,7 @@ export async function traceComponentTree(
   rootComponent: string,
   options?: TraceComponentTreeOptions,
 ): Promise<CallNode | { mermaid: string; root: string; depth: number }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
@@ -299,9 +299,13 @@ export async function traceComponentTree(
   const includeSource = options?.include_source ?? false;
   const includeTests = options?.include_tests ?? false;
 
+  // Only components are ever read: the root lookup below and `buildJsxAdjacency` both skip every
+  // other kind. So the components, with source (adjacency parses JSX out of it) — not the whole
+  // index (ADR-004 stage 2). Index order is kept, so `candidates[0]` is the same symbol it was.
+  const allComponents = await findRepoSymbols(repo, { withSource: true, kind: "component" }, { skipFreshness: true });
   const symbols = includeTests
-    ? index.symbols
-    : index.symbols.filter((s) => !isTestFile(s.file));
+    ? allComponents
+    : allComponents.filter((s) => !isTestFile(s.file));
 
   // Find root component
   const candidates = symbols.filter(
