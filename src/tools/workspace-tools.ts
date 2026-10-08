@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { CodeIndex, Workspace, WorkspaceBoundaryRule, AffectedResult } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
+import type { Workspace, WorkspaceBoundaryRule, AffectedResult } from "../types.js";
+import { getIndexSummary } from "./index-tools.js";
+
+type IndexSummary = NonNullable<Awaited<ReturnType<typeof getIndexSummary>>>;
 import { collectImportEdges, buildWorkspaceAliasResolver } from "../utils/import-graph.js";
 import { isIndexStorageError } from "../storage/sqlite-index-store.js";
 
@@ -440,11 +442,15 @@ export async function workspaceBoundariesHandler(args: {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function getIndexOrEmpty(repo?: string): Promise<CodeIndex | null> {
+/**
+ * The SUMMARY: every workspace tool reads `workspaces`, `root` and — for the import graph —
+ * `files`, and none of them reads a symbol (ADR-004 stage 2).
+ */
+async function getIndexOrEmpty(repo?: string): Promise<IndexSummary | null> {
   try {
-    return await getCodeIndex(repo ?? "", { skipFreshness: true });
+    return await getIndexSummary(repo ?? "", { skipFreshness: true });
   } catch (err) {
-    // A storage fault must NOT become "this repo has no workspaces". `getCodeIndex` throws
+    // A storage fault must NOT become "this repo has no workspaces". `getIndexSummary` throws
     // IndexStorageError for a locked or corrupt index precisely so callers stop rendering it
     // as an empty result; swallowing it here would put every workspace tool
     // (list_workspaces, workspace_graph, affected_workspaces, workspace_boundaries) right back

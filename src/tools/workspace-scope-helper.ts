@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import type { Workspace } from "../types.js";
 import { isIndexStorageError } from "../storage/sqlite-index-store.js";
 
@@ -29,7 +29,8 @@ export async function resolveWorkspaceScope(
 ): Promise<WorkspaceScopeResolved | WorkspaceScopeError> {
   let index;
   try {
-    index = await getCodeIndex(repo, { skipFreshness: true });
+    // The summary: only `workspaces` and `root` are read (ADR-004 stage 2).
+    index = await getIndexSummary(repo, { skipFreshness: true });
   } catch (err) {
     // Same reason as workspace-tools' getIndexOrEmpty: this feeds the `workspace=` parameter on
     // framework_audit, nextjs_route_map, nextjs_metadata_audit, analyze_hono_app, nest_audit and

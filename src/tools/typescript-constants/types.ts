@@ -43,7 +43,9 @@ export interface EvaluationResult {
 }
 
 export interface ResolutionState {
-  index: CodeIndex;
+  /** Only `root` is read (file-context.ts reads candidate files off disk), so a summary or a full
+   *  index both satisfy it — the resolver never needs the whole symbol table (ADR-004 stage 2). */
+  index: Pick<CodeIndex, "root">;
   parser: Parser;
   fileCache: Map<string, TypeScriptFileContext | null>;
   retiredTrees: TSTree[];

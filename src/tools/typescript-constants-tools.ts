@@ -1,7 +1,7 @@
-import type { CodeIndex } from "../types.js";
+import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
 import { buildNormalizedPathMap } from "../utils/import-graph.js";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { matchesConstantFilePattern } from "../utils/constant-file-pattern.js";
 import type {
   ConstantResolutionMatch,
@@ -25,11 +25,15 @@ export async function resolveTypeScriptConstantValue(
   options?: {
     file_pattern?: string;
     max_depth?: number;
-    /** When set, skips a second getCodeIndex (multi-language orchestrator). */
+    /** When set, skips a second index read (multi-language orchestrator). */
     index?: CodeIndex;
   },
 ): Promise<ConstantResolutionResult> {
-  const index = options?.index ?? await getCodeIndex(repo);
+  // Without an orchestrator-supplied index this reads the SUMMARY (root + files, for the path map
+  // and file reads) and only the symbols NAMED `symbolName` — the one predicate every candidate must
+  // pass — instead of materialising the whole index (ADR-004 stage 2). Source is requested because
+  // function-default resolution parses the candidate's body.
+  const index = options?.index ?? await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found.`);
   }
@@ -39,9 +43,12 @@ export async function resolveTypeScriptConstantValue(
     throw new Error("TypeScript parser unavailable");
   }
 
-  const candidates = index.symbols
+  const named: CodeSymbol[] = options?.index
+    ? options.index.symbols.filter((symbol) => symbol.name === symbolName)
+    : await findRepoSymbols(repo, { withSource: true, name: symbolName }, { skipFreshness: true });
+
+  const candidates = named
     .filter((symbol) => isTypeScriptFile(symbol.file))
-    .filter((symbol) => symbol.name === symbolName)
     .filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern))
     .filter((symbol) => ["constant", "variable", "function", "method", "hook", "component"].includes(symbol.kind))
     .sort((a, b) => a.file.localeCompare(b.file) || a.start_line - b.start_line);
