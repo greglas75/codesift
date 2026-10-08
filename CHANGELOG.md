@@ -30,11 +30,18 @@ release: while it indexed a new worktree, `/health` read `busy` with ~2.2 s of e
 - `findSymbols` returned `namePrefix` matches case-insensitively and in name order on SQLite (not on
   the JSON backend), so a `limit` picked different rows per backend.
 
+- Index children are bounded: a SIGKILL ceiling (3 h index, 6 h embed —
+  `CODESIFT_INDEX_CHILD_TIMEOUT_MS` / `CODESIFT_EMBED_CHILD_TIMEOUT_MS`), at most 2 at once across
+  repos (`CODESIFT_INDEX_CHILD_CONCURRENCY`), and the daemon's resident caches are dropped whatever
+  the child's outcome. The daemon's own incremental writes (`index_file`, the watcher) `await` a
+  running child of that index instead of spinning on SQLite's lock inside a synchronous call.
+
 ### Known
 
-- While a child writes a large index, an `index_file` on the same repo waits SQLite's 5 s busy
-  timeout and can fail with `SQLITE_BUSY` (previously it queued in-process).
+- A writer in ANOTHER process — the CLI's `postindex-file` hook — still meets a running child's write
+  lock through SQLite's 5 s busy timeout, as it did against an in-process daemon write before.
 - A child loads the whole index into its own heap, so RSS peaks at roughly double during indexing.
+- Structural follow-ups from the release review are in `memory/backlog.md` (B-0210-*).
 
 ## [0.20.2] — 2026-10-07
 
