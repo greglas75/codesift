@@ -1,17 +1,8 @@
 import type { Flags } from "./args.js";
 import { getFlag, getBoolFlag, requireArg, parseCommaSeparated, output } from "./args.js";
 
-export function scanEmbeddingMarker(
-  tail: string,
-  chunk: string,
-  marker: string,
-): { sawMarker: boolean; tail: string } {
-  const combined = tail + chunk;
-  return {
-    sawMarker: combined.includes(marker),
-    tail: marker.length > 1 ? combined.slice(-(marker.length - 1)) : "",
-  };
-}
+// Moved beside the markers it scans for; re-exported for existing importers.
+export { scanEmbeddingMarker } from "./embed-child-marker.js";
 
 // ---------------------------------------------------------------------------
 // Index commands
@@ -32,44 +23,12 @@ export function scanEmbeddingMarker(
 async function runEmbeddingChild(repoName: string, rootPath: string): Promise<void> {
   const { getIndexPath } = await import("../storage/index-store.js");
   const { loadConfig } = await import("../config.js");
-  const { spawn } = await import("node:child_process");
-  const { fileURLToPath } = await import("node:url");
-  const { dirname, join } = await import("node:path");
-
   const config = loadConfig();
   if (!config.embeddingProvider) return; // lite mode — nothing to embed
 
-  const indexPath = getIndexPath(config.dataDir, rootPath);
-  const childScript = join(dirname(fileURLToPath(import.meta.url)), "embed-child.js");
-  const { EMBED_CHILD_OK_MARKER } = await import("./embed-child-marker.js");
-
-  await new Promise<void>((resolve) => {
-    const child = spawn(process.execPath, [childScript, indexPath, repoName, rootPath], {
-      stdio: ["ignore", "pipe", "inherit"],
-      env: { ...process.env, CODESIFT_EMBED_OUT_OF_PROCESS: "0" },
-    });
-
-    let sawMarker = false;
-    let markerTail = "";
-    child.stdout.on("data", (buf: Buffer) => {
-      const scan = scanEmbeddingMarker(markerTail, buf.toString(), EMBED_CHILD_OK_MARKER);
-      if (scan.sawMarker) sawMarker = true;
-      markerTail = scan.tail;
-    });
-    child.on("error", (err) => {
-      process.stderr.write(`[codesift] embedding skipped: ${err.message}\n`);
-      resolve();
-    });
-    child.on("close", (code, signal) => {
-      if (!sawMarker) {
-        process.stderr.write(
-          `[codesift] embedding did not complete (exit ${code ?? signal}) — ` +
-            `search falls back to BM25 for this repo.\n`,
-        );
-      }
-      resolve();
-    });
-  });
+  // The same runner the daemon uses (out-of-process.ts), so the two cannot drift.
+  const { runEmbeddingChildProcess } = await import("../tools/index-tools/out-of-process.js");
+  await runEmbeddingChildProcess(repoName, rootPath, getIndexPath(config.dataDir, rootPath));
 }
 
 async function handleIndex(args: string[], flags: Flags): Promise<void> {

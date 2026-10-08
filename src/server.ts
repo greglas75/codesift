@@ -671,6 +671,9 @@ async function main(): Promise<void> {
     const port = Number(process.env["CODESIFT_HTTP_PORT"]) || 7077;
     const handle = await startHttpServer({ port });
     console.error(`CodeSift MCP HTTP server on ${handle.url}`);
+    // Shared daemon: index/embed in child processes, never on the thread serving every client.
+    const { enableOutOfProcessIndexing } = await import("./tools/index-tools/out-of-process.js");
+    enableOutOfProcessIndexing();
     autoEnableFrameworkToolsFromPackageJson(process.cwd()).catch(() => {});
     autoIndexCurrentRepo(process.cwd()).catch((err: unknown) => {
       console.error("[codesift] auto-index failed:", err);

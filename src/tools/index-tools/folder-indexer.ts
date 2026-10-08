@@ -19,12 +19,18 @@ import { walkDirectory } from "../../utils/walk.js";
 import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
 import { HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../../storage/hash-snapshot.js";
 import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../../types.js";
-import { activeWatchers, codeIndexes, lastFullIndexAt, rememberBM25Index } from "./state.js";
+import { activeWatchers, bm25Indexes, codeIndexes, invalidateEmbeddingCaches, lastFullIndexAt, rememberBM25Index } from "./state.js";
 import { parseFiles, propagateDirtySignatures, embedSymbols, embedChunks } from "./parse.js";
 import { drainLegacyHashQueue, loadIndexSnapshot, saveIndexSnapshot, sha1OfFile } from "./snapshots.js";
 import { setupWatcher } from "./watcher.js";
 import { validateAndMergeFolderWalk } from "./folder-merge.js";
 import type { IndexFolderResult } from "./types.js";
+import {
+  runEmbeddingChildProcess,
+  runIndexChild,
+  shouldIndexOutOfProcess,
+  type IndexFolderReport,
+} from "./out-of-process.js";
 
 export type { IndexFolderResult } from "./types.js";
 
@@ -94,6 +100,137 @@ export async function awaitPendingEmbeddings(): Promise<void> {
   }
 }
 
+/** Same threshold, and the same reasoning, as `BM25_PERSIST_MIN_BUILD_MS` in registry.ts. */
+const BM25_PERSIST_MIN_BUILD_MS = 1_000;
+
+async function enableReportedFrameworks(frameworks: Iterable<string>, repoName: string): Promise<void> {
+  const list = [...frameworks];
+  if (list.length === 0) return;
+  // Lazy import to avoid circular dep: index-tools → register-tools → tool handlers → index-tools
+  const { enableFrameworkToolBundle } = await import("../../register-tools.js");
+  for (const fw of list) {
+    const enabled = enableFrameworkToolBundle(fw);
+    if (enabled.length > 0) {
+      console.error(`[codesift] auto-enabled ${enabled.length} ${fw} tools for ${repoName}: ${enabled.join(", ")}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-process indexing (daemon only) — see out-of-process.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs keyed by root + options, so an identical request that arrives while one is in flight joins
+ * it instead of starting a second child over the same tree. The workload that makes this matter:
+ * a new worktree is typically requested by an agent's `index_folder`, by `ensureIndexFresh` on its
+ * first tool call, and by a sibling session at once — in-process those raced into the same
+ * database; as children they would also each hold a full copy of the index in memory.
+ *
+ * A joined caller gets a result that started before its own request. That is the same freshness an
+ * in-flight in-process run gave, and the watcher / freshness check pick up anything later.
+ */
+interface ChildRun {
+  promise: Promise<IndexFolderResult>;
+  /** Any caller asking for a watcher gets one — a joined `index_folder` must not inherit the
+   *  `watch: false` of the `ensureIndexFresh` call it happened to join. */
+  wants: { watch: boolean };
+}
+const childRunsByKey = new Map<string, ChildRun>();
+/** The latest run per root. A request with DIFFERENT options queues behind it rather than writing
+ *  the same SQLite file concurrently from a second process. */
+const childRunTailByRoot = new Map<string, Promise<unknown>>();
+
+function indexFolderInChild(
+  folderPath: string,
+  rootPath: string,
+  options: Parameters<typeof indexFolder>[1],
+): Promise<IndexFolderResult> {
+  let rootKey: string;
+  try { rootKey = canonicalPath(rootPath); } catch { rootKey = rootPath; }
+  const childOptions = {
+    incremental: options?.incremental,
+    include_paths: options?.include_paths,
+    max_files: options?.max_files,
+    force: options?.force,
+  };
+  // Only what changes the OUTCOME is in the key. `incremental` is accepted and never read (the
+  // mtime/sha reuse below always runs), and `force` only bypasses the short-circuit, which has
+  // already been decided in this process — so `ensureIndexFresh`'s `{incremental: true}` joins an
+  // agent's plain `index_folder` of the same tree instead of queueing a second full run behind it.
+  const key = `${rootKey}\0${JSON.stringify([childOptions.include_paths ?? null, childOptions.max_files ?? null])}`;
+  const joined = childRunsByKey.get(key);
+  if (joined) {
+    if (options?.watch !== false) joined.wants.watch = true;
+    return joined.promise;
+  }
+
+  const prev = childRunTailByRoot.get(rootKey) ?? Promise.resolve();
+  const wants = { watch: options?.watch !== false };
+  const run = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const { result, report } = await runIndexChild({ path: folderPath, options: childOptions });
+      await adoptChildIndex(result, report, wants.watch);
+      return result;
+    });
+  const record: ChildRun = { promise: run, wants };
+  childRunsByKey.set(key, record);
+  childRunTailByRoot.set(rootKey, run);
+  void run
+    .finally(() => {
+      if (childRunsByKey.get(key) === record) childRunsByKey.delete(key);
+      if (childRunTailByRoot.get(rootKey) === run) childRunTailByRoot.delete(rootKey);
+    })
+    .catch(() => undefined);
+  return run;
+}
+
+/**
+ * Bring this process's state in line with what a child just wrote, then do what the in-process
+ * path would have done at its tail — and ONLY what it would have done: a seeded or rejected run
+ * schedules no embedding, starts no watcher and arms no short-circuit in-process, so `completed`
+ * gates all three here.
+ *
+ * The caches are dropped whatever the outcome. A child that wrote anything — a seed, a catch-up, a
+ * full index — has made every resident copy of that repo stale, and a resident index is answered
+ * without consulting the database, so nothing else would ever notice.
+ */
+async function adoptChildIndex(
+  result: IndexFolderResult,
+  report: IndexFolderReport,
+  watch: boolean,
+): Promise<void> {
+  const repoName = result.repo;
+  const rootPath = result.root;
+  codeIndexes.delete(repoName);
+  bm25Indexes.delete(repoName);
+  invalidateEmbeddingCaches(repoName);
+  clearTsconfigCache();
+
+  if (!report.completed) return;
+  const config = loadConfig();
+  const indexPath = report.index_path ?? getIndexPath(config.dataDir, rootPath);
+
+  // In-process this was `scheduleEmbedding(… embedSymbols + embedChunks …)`. Same queue, so runs for
+  // one repo still serialise (the 163 GB lesson above) — the work just happens in embed-child, and
+  // the vectors it wrote replace whatever this process had cached.
+  if (config.embeddingProvider && process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
+    void scheduleEmbedding(repoName, async () => {
+      await runEmbeddingChildProcess(repoName, rootPath, indexPath);
+      invalidateEmbeddingCaches(repoName);
+    });
+  }
+
+  if (watch) await setupWatcher(rootPath, repoName, indexPath);
+  try {
+    await enableReportedFrameworks(report.frameworks ?? [], repoName);
+  } catch {
+    // Non-fatal, as in-process.
+  }
+  lastFullIndexAt.set(rootPath, Date.now());
+}
+
 function getDefaultMaxFiles(): number {
   const envVal = process.env.CODESIFT_MAX_FILES;
   if (envVal) {
@@ -154,6 +291,12 @@ export async function indexFolder(
      * indexRepo for fresh clones where defensive reindex is correct.
      */
     force?: boolean | undefined;
+    /**
+     * Internal — set only by `src/cli/index-child.ts`. Marks this call as running inside an index
+     * child: what the daemon must act on afterwards (frameworks to enable, whether the full path
+     * completed) is recorded here instead of being applied to a process that is about to exit.
+     */
+    report?: IndexFolderReport | undefined;
   },
 ): Promise<IndexFolderResult> {
   if (!folderPath || typeof folderPath !== "string") {
@@ -184,6 +327,14 @@ export async function indexFolder(
         hint: "pass force=true to override",
       };
     }
+  }
+
+  // In the daemon, everything below — seed copy, walk, parse, whole-index write, BM25 build, and the
+  // embedding pass after it — runs in a child process instead of on the thread serving every
+  // client. See out-of-process.ts for the measurements. The short-circuit above stays here: it reads
+  // this process's watcher state, which a child cannot see.
+  if (!options?.report && shouldIndexOutOfProcess()) {
+    return indexFolderInChild(folderPath, rootPath, options);
   }
 
   // Clear tsconfig path resolver cache so config edits between runs take effect.
@@ -473,7 +624,9 @@ export async function indexFolder(
   // Build and cache BM25 index from the FINAL (possibly merged) symbol set.
   // Built here (not before the guard) so a rejected_partial early-return leaves
   // the previous in-memory BM25 index intact rather than swapping in a partial.
+  const bm25Started = Date.now();
   const bm25 = await buildBM25IndexYielding(mergedSymbols);
+  const bm25BuildMs = Date.now() - bm25Started;
   rememberBM25Index(repoName, bm25);
 
   // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges
@@ -508,6 +661,19 @@ export async function indexFolder(
   // path above keeps symbols from the previous index for unchanged files, and those carry
   // whatever an older schema left behind — so a partial re-parse must not clear the lossy marker.
   await saveIndex(indexPath, codeIndex, { sourceComplete: filesToParse.length === files.length });
+
+  // In an index child the BM25 index just built dies with the process, and the daemon's first
+  // search would rebuild it — measured 10.04 s against 0.70 s to reload the sidecar on the largest
+  // index here (registry.ts, BM25_PERSIST_MIN_BUILD_MS). Same threshold as that path: persist only
+  // when the build cost something. Awaited, because the process exits right after it returns.
+  if (options?.report && bm25BuildMs >= BM25_PERSIST_MIN_BUILD_MS) {
+    try {
+      const { saveBM25Index } = await import("../../search/bm25-store.js");
+      await saveBM25Index(indexPath, bm25, codeIndex);
+    } catch {
+      // A cache that failed to write is rebuilt on first use — slower, never wrong.
+    }
+  }
 
   // Persist the hash snapshot AFTER the index lands (mirrors registerRepo
   // ordering) and only on the success path — the rejected_partial branch
@@ -590,17 +756,22 @@ export async function indexFolder(
   // Lazy import to avoid circular dep: index-tools → register-tools → tool handlers → index-tools
   try {
     const { detectFrameworks } = await import("../../utils/framework-detect.js");
-    const { enableFrameworkToolBundle } = await import("../../register-tools.js");
     const tempIndex = { root: rootPath, files: mergedEntries, symbols: mergedSymbols } as CodeIndex;
     const frameworks = detectFrameworks(tempIndex);
-    for (const fw of frameworks) {
-      const enabled = enableFrameworkToolBundle(fw);
-      if (enabled.length > 0) {
-        console.error(`[codesift] auto-enabled ${enabled.length} ${fw} tools for ${repoName}: ${enabled.join(", ")}`);
-      }
+    if (options?.report) {
+      // The tool surface belongs to the daemon; enabling it in a child would enable nothing. The
+      // daemon applies the list through enableReportedFrameworks.
+      options.report.frameworks = [...frameworks];
+    } else {
+      await enableReportedFrameworks(frameworks, repoName);
     }
   } catch {
     // Non-fatal — framework auto-enable is a convenience feature
+  }
+
+  if (options?.report) {
+    options.report.completed = true;
+    options.report.index_path = indexPath;
   }
 
   // Record completion timestamp so subsequent re-runs can short-circuit when
