@@ -10,7 +10,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { getParser } from "../parser/parser-manager.js";
 import { extractPythonImports } from "../utils/python-imports.js";
 import { resolvePythonImport, detectSrcLayout } from "../utils/python-import-resolver.js";
@@ -38,7 +38,7 @@ export async function findPythonCircularImports(
     max_cycles?: number;
   },
 ): Promise<CircularImportsResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;

@@ -1,9 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { CODESIFT_INSTRUCTIONS } from "../instructions.js";
 import { isPathWithin } from "../utils/path-within.js";
-import type { CodeIndex, FileEntry } from "../types.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
+import type { FileEntry } from "../types.js";
 
 export interface GenerateClaudeMdResult {
   content: string;
@@ -14,7 +15,7 @@ export interface GenerateClaudeMdResult {
  * Count symbols per top-level directory from the index.
  */
 function countByDirectory(
-  index: CodeIndex,
+  index: IndexSummary,
 ): Map<string, { fileCount: number; symbolCount: number }> {
   const dirStats = new Map<string, { fileCount: number; symbolCount: number }>();
 
@@ -60,7 +61,7 @@ function countByLanguage(files: FileEntry[]): Map<string, number> {
 /**
  * Detect the tech stack from file patterns in the index.
  */
-function detectTechStack(index: CodeIndex): string[] {
+function detectTechStack(index: IndexSummary): string[] {
   const stack: string[] = [];
   const fileSet = new Set(index.files.map((f) => f.path));
   const extensions = new Set(
@@ -120,7 +121,9 @@ export async function generateClaudeMd(
   repo: string,
   outputPath?: string,
 ): Promise<GenerateClaudeMdResult> {
-  const index = await getCodeIndex(repo);
+  // File metadata and counts only — per-directory symbol counts come from each file entry's
+  // `symbol_count`, so no symbol is ever read.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }

@@ -7,7 +7,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 export interface PyprojectInfo {
   name?: string;
@@ -27,7 +27,7 @@ export interface PyprojectInfo {
 export async function parsePyproject(
   repo: string,
 ): Promise<PyprojectInfo | null> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const filePath = join(index.root, "pyproject.toml");

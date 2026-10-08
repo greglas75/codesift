@@ -1,5 +1,5 @@
 /** Public facade for the compound Python project health check. */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { runCheck } from "./python-audit/runner.js";
 import { aggregateAudit } from "./python-audit/aggregate.js";
 import { runCircularImports } from "./python-audit/checks/circular-imports.js";
@@ -21,7 +21,7 @@ const ALL_CHECKS = [
 
 export async function pythonAudit(repo: string, options?: PythonAuditOptions): Promise<PythonAuditResult> {
   const startTime = Date.now();
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const hasDjangoFiles = index.files.some((file) => /\/settings\.py$|\/settings\/[\w_]+\.py$/.test(file.path));

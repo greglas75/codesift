@@ -10,7 +10,7 @@
  */
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { matchFilePattern } from "../utils/glob.js";
 import { relativeIfWithin } from "../utils/path-within.js";
 
@@ -97,7 +97,7 @@ export async function migrationLint(
     pg_version?: string;
   },
 ): Promise<MigrationLintResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   // ---- 1. Find migration files in the index -------------------------------

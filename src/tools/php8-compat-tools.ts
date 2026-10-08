@@ -18,7 +18,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -198,7 +198,7 @@ export async function php8CompatCheck(
     rules?: Php8RuleId[];
   },
 ): Promise<Php8CompatReport> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const sampleLimit = options?.max_samples_per_rule ?? SAMPLE_LIMIT;

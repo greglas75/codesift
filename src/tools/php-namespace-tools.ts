@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 // 7a. resolve_php_namespace — PSR-4 resolver
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ export async function resolvePhpNamespace(
   repo: string,
   className: string,
 ): Promise<PhpNamespaceResolution> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const composer = await readJsonSafe(join(index.root, "composer.json"));

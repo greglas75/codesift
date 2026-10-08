@@ -1,6 +1,6 @@
 /** SQL DML safety scanning capability. */
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { searchText } from "./search-tools.js";
 
 export interface DmlFinding {
@@ -29,7 +29,7 @@ export async function scanDmlSafety(
   repo: string,
   options?: { file_pattern?: string; max_results?: number },
 ): Promise<ScanDmlSafetyResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }

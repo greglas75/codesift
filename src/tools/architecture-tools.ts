@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { analyzeProject } from "./project-tools.js";
 import { detectCommunities } from "./community-tools.js";
 import { findCircularDeps } from "./graph-tools.js";
@@ -140,7 +140,7 @@ export async function architectureSummary(
 ): Promise<ArchitectureSummaryResult> {
   const startMs = Date.now();
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }

@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { resolvePhpNamespace } from "./php-namespace-tools.js";
 
 // 7e. resolve_php_service — DI / Service Locator resolver
@@ -35,7 +35,7 @@ export async function resolvePhpService(
   repo: string,
   options?: { service_name?: string },
 ): Promise<{ services: PhpServiceResolution[]; total: number }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const services: PhpServiceResolution[] = [];
