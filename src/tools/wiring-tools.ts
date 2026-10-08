@@ -3,7 +3,7 @@
  * Django signals, Celery tasks, middleware chains, management commands,
  * Flask extensions, FastAPI event handlers.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 
 export interface WiringEntry {
   type: "signal" | "task" | "middleware" | "command" | "extension" | "event_handler" | "task_call";
@@ -51,13 +51,16 @@ export async function findFrameworkWiring(
     file_pattern?: string;
   },
 ): Promise<WiringResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  // Every Python symbol is scanned (decorators and bodies), so this folds over pages instead of
+  // holding the whole index resident; entries come out in the same index order.
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
   const entries: WiringEntry[] = [];
 
-  for (const sym of index.symbols) {
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  for (const sym of batch) {
     if (!sym.file.endsWith(".py")) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
 
@@ -173,6 +176,7 @@ export async function findFrameworkWiring(
       }
     }
   }
+  }, { skipFreshness: true });
 
   const by_type: Record<string, number> = {};
   for (const e of entries) {

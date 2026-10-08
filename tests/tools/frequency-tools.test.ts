@@ -4,9 +4,12 @@ import { djb2, normalizeNodeType, hashSubtree, frequencyAnalysis } from "../../s
 const mockGetCodeIndex = vi.fn();
 const mockParseFile = vi.fn();
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: (...args: any[]) => mockGetCodeIndex(...args),
-}));
+// Converted tools read through the narrow accessors (ADR-004 stage 2); the helper derives them all
+// from this one getCodeIndex stub so the fixture cannot drift between shapes.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock((...args: any[]) => mockGetCodeIndex(...args));
+});
 
 vi.mock("../../src/parser/parser-manager.js", () => ({
   parseFile: (...args: any[]) => mockParseFile(...args),

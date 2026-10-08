@@ -1,5 +1,5 @@
-import type { CodeIndex } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import type { ConstantResolutionResult, ConstantResolutionMatch } from "./python-constants-tools.js";
 import { resolveConstantValue as resolvePythonConstantValue } from "./python-constants-tools.js";
 import { resolveTypeScriptConstantValue } from "./typescript-constants-tools.js";
@@ -11,20 +11,23 @@ function isTypeScriptFile(filePath: string): boolean {
   return filePath.endsWith(".ts") || filePath.endsWith(".tsx");
 }
 
-function inferLanguages(
-  index: CodeIndex,
+async function inferLanguages(
+  repo: string,
+  index: IndexSummary,
   symbolName: string,
   options?: { file_pattern?: string; language?: ConstantResolutionLanguage },
-): ConstantResolutionLanguage[] {
+): Promise<ConstantResolutionLanguage[]> {
   if (options?.language) return [options.language];
 
   const pattern = options?.file_pattern ?? "";
   if (pattern.endsWith(".py")) return ["python"];
   if (pattern.endsWith(".ts") || pattern.endsWith(".tsx")) return ["typescript"];
 
-  const candidates = index.symbols
-    .filter((symbol) => symbol.name === symbolName)
-    .filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern));
+  // Only symbols with this exact name can vote, so one `WHERE name = ?` read replaces a walk over
+  // the whole materialised index. Their file is all that is looked at.
+  const candidates = (
+    await findRepoSymbols(repo, { name: symbolName, withSource: false }, { skipFreshness: true })
+  ).filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern));
 
   const hasPython = candidates.some((symbol) => symbol.file.endsWith(".py"));
   const hasTypeScript = candidates.some((symbol) => isTypeScriptFile(symbol.file));
@@ -61,27 +64,31 @@ export async function resolveConstantValue(
     language?: ConstantResolutionLanguage;
   },
 ): Promise<ConstantResolutionResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found.`);
   }
 
-  const languages = inferLanguages(index, symbolName, options);
+  const languages = await inferLanguages(repo, index, symbolName, options);
   if (languages.length === 0) {
     return { query: symbolName, matches: [] };
   }
 
   const matches: ConstantResolutionMatch[] = [];
 
+  // No shared index is handed down any more: the Python resolver reads only what it needs, and
+  // the TypeScript resolver loads its own when it runs (it already did so whenever it was called
+  // directly). Materialising here would force the whole index on a Python-only query.
+  const { language: _language, ...resolverOptions } = options ?? {};
   for (const language of languages) {
     if (language === "python") {
-      const result = await resolvePythonConstantValue(repo, symbolName, { ...options, index });
+      const result = await resolvePythonConstantValue(repo, symbolName, resolverOptions);
       matches.push(...normalizeMatches(result.matches, "python"));
       continue;
     }
 
     if (language === "typescript") {
-      const result = await resolveTypeScriptConstantValue(repo, symbolName, { ...options, index });
+      const result = await resolveTypeScriptConstantValue(repo, symbolName, resolverOptions);
       matches.push(...normalizeMatches(result.matches, "typescript"));
     }
   }

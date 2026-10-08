@@ -6,9 +6,12 @@ import { findExtensionFunctions, analyzeSealedHierarchy, traceSuspendChain, anal
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 // Mock getCodeIndex
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// Converted tools read through the narrow accessors (ADR-004 stage 2); the helper derives them all
+// from this one getCodeIndex stub so the fixture cannot drift between shapes.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock(vi.fn());
+});
 
 const { getCodeIndex } = await import("../../src/tools/index-tools.js");
 

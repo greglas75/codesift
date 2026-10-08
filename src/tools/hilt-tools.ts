@@ -10,7 +10,7 @@
  * extractor already surfaced. Requires the extractor to populate
  * `decorators` on class/method symbols (added in Wave 2 Task 3).
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -190,8 +190,8 @@ function parseProviderReturnType(sym: CodeSymbol): string | null {
 // ---------------------------------------------------------------------------
 
 export async function buildHiltGraph(repo: string): Promise<HiltGraphResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
@@ -203,7 +203,12 @@ export async function buildHiltGraph(repo: string): Promise<HiltGraphResult> {
   // Track modules by id so we can attach providers in the second pass.
   const modulesById = new Map<string, HiltModule>();
 
-  for (const sym of index.symbols) {
+  //
+  // Folded over pages rather than a materialised index. One pass over every kind, not a read per
+  // kind: classes and interfaces interleave in index order, and that is the order entries and
+  // modules are reported in. `source` is read for the annotation fallback and @Inject parsing.
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  for (const sym of batch) {
     if (sym.kind !== "class" && sym.kind !== "interface") continue;
 
     const entryKind = firstMatchingAnnotation(sym, ENTRY_ANNOTATIONS);
@@ -234,13 +239,19 @@ export async function buildHiltGraph(repo: string): Promise<HiltGraphResult> {
       modulesById.set(sym.id, mod);
     }
   }
+  }, { skipFreshness: true });
 
-  // Second pass — attach provider methods to their parent modules.
-  for (const sym of index.symbols) {
+  // Second pass — attach provider methods to their parent modules. Read per module by parent id
+  // (modules are few), which yields each module's children in index order — the order a full
+  // scan attached them in, since a provider only ever joins its own module's list.
+  for (const [moduleId, module] of modulesById) {
+  const children = await findRepoSymbols(
+    repo,
+    { parent: moduleId, withSource: true },
+    { skipFreshness: true },
+  );
+  for (const sym of children) {
     if (sym.kind !== "method" && sym.kind !== "function") continue;
-    if (!sym.parent) continue;
-    const module = modulesById.get(sym.parent);
-    if (!module) continue;
 
     let providerKind: HiltProviderKind | null = null;
     if (hasAnnotation(sym, "Provides")) providerKind = "provides";
@@ -257,6 +268,7 @@ export async function buildHiltGraph(repo: string): Promise<HiltGraphResult> {
       kind: providerKind,
       provides: returnType,
     });
+  }
   }
 
   // Build edge table — map provider type → {method, module}.

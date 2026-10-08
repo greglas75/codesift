@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 
 // 7h. find_php_n_plus_one — detect foreach + relation access without ->with()
 // ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ export async function findPhpNPlusOne(
   repo: string,
   options?: { limit?: number; file_pattern?: string },
 ): Promise<{ findings: NPlusOneFinding[]; total: number }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const findings: NPlusOneFinding[] = [];
@@ -222,13 +222,21 @@ export async function findPhpNPlusOne(
   }
 
   // Method-level scan (Patterns 1-4 inside class methods, the original surface).
-  for (const sym of index.symbols) {
-    if (sym.kind !== "method" || !sym.file.endsWith(".php") || !sym.source) continue;
-    if (filePattern && !sym.file.includes(filePattern)) continue;
-    if (scanChunk(sym.file, sym.name, sym.source, sym.start_line)) {
-      return { findings, total: findings.length };
+  // Methods only, folded over pages and stopped the moment `limit` is hit — the old loop
+  // returned at the same point, and the view scan below is skipped exactly as it was.
+  let limitHit = false;
+  await streamRepoSymbols(repo, { kind: "method", withSource: true }, (batch) => {
+    for (const sym of batch) {
+      if (!sym.file.endsWith(".php") || !sym.source) continue;
+      if (filePattern && !sym.file.includes(filePattern)) continue;
+      if (scanChunk(sym.file, sym.name, sym.source, sym.start_line)) {
+        limitHit = true;
+        return false;
+      }
     }
-  }
+    return undefined;
+  }, { skipFreshness: true });
+  if (limitHit) return { findings, total: findings.length };
 
   // View-level scan (Sprint 3 Pattern 5) — Yii2 views/**/*.php files render
   // lists of models at module level. They're not class methods so they have

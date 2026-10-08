@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,7 +83,7 @@ export async function auditAgentConfig(
   repo: string,
   options?: { config_path?: string; compare_with?: string },
 ): Promise<AgentConfigAuditResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`No index found for repo "${repo}". Run index_folder first.`);
   }
@@ -99,8 +99,14 @@ export async function auditAgentConfig(
     throw err;
   }
 
-  // Build lookup sets from the index
-  const symbolNames = new Set(index.symbols.map((s) => s.name));
+  // Build lookup sets from the index. Symbol names come from one streamed pass without `source`,
+  // keeping only the names — never the symbol objects of a materialised index. Not one
+  // `WHERE name = ?` read per reference: a config names hundreds of identifiers, and on the JSON
+  // backend every narrow read re-parses the whole document.
+  const symbolNames = new Set<string>();
+  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+    for (const s of batch) symbolNames.add(s.name);
+  }, { skipFreshness: true });
   const filePaths = new Set(index.files.map((f) => f.path));
 
   const lines = content.split("\n");

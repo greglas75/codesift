@@ -1,6 +1,6 @@
 /** SQL column search capability. */
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { normalizeSqlType } from "./sql-shared-tools.js";
 
 export interface SearchColumnsOptions {
@@ -35,8 +35,10 @@ export async function searchColumns(
   repo: string,
   options: SearchColumnsOptions,
 ): Promise<SearchColumnsResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  // Two kind-keyed reads (tables, then fields) instead of a materialised index; neither needs
+  // `source`, and the field read keeps the index's row order, which is the hit order.
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
@@ -48,16 +50,18 @@ export async function searchColumns(
 
   // Build table-id → table-name lookup (only SQL tables, not Prisma models)
   const tableIdToName = new Map<string, { name: string; file: string }>();
-  for (const sym of index.symbols) {
-    if (sym.kind !== "table") continue;
+  for (const sym of await findRepoSymbols(repo, { kind: "table", withSource: false }, { skipFreshness: true })) {
     if (filePattern && !sym.file.includes(filePattern)) continue;
     tableIdToName.set(sym.id, { name: sym.name, file: sym.file });
   }
 
   // Collect field symbols whose parent is a SQL table
   const allHits: ColumnSearchHit[] = [];
-  for (const sym of index.symbols) {
-    if (sym.kind !== "field") continue;
+  // Skipped outright when no table matched: no field can have a parent in an empty map.
+  const fields = tableIdToName.size === 0
+    ? []
+    : await findRepoSymbols(repo, { kind: "field", withSource: false }, { skipFreshness: true });
+  for (const sym of fields) {
     if (!sym.parent) continue;
     const parent = tableIdToName.get(sym.parent);
     if (!parent) continue;

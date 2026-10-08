@@ -6,7 +6,7 @@
 
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import {
   CHECK_DEADLINE_MS,
   SEVERITY_RANK,
@@ -208,7 +208,7 @@ export async function dependencyAudit(
 ): Promise<DependencyAuditResult> {
   const startMs = Date.now();
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }

@@ -1,7 +1,8 @@
 /** SQL schema analysis capability. */
 
-import { getCodeIndex } from "./index-tools.js";
-import { detectSqlDialect, type SqlDialect } from "./sql-shared-tools.js";
+import type { CodeSymbol } from "../types.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import { detectSqlDialect, fieldsByParent, type SqlDialect } from "./sql-shared-tools.js";
 
 export interface AnalyzeSchemaOptions {
   file_pattern?: string;
@@ -49,8 +50,8 @@ export async function analyzeSchema(
   repo: string,
   options?: AnalyzeSchemaOptions,
 ): Promise<SchemaAnalysisResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
@@ -62,10 +63,21 @@ export async function analyzeSchema(
   const views: Array<{ name: string; file: string; line: number }> = [];
   const warnings: string[] = [];
 
-  const tableSymbols = index.symbols.filter((s) =>
-    (s.kind === "table" || s.kind === "view") &&
-    (!filePattern || s.file.includes(filePattern))
-  );
+  // One streamed pass rather than two kind-keyed reads: tables and views arrive INTERLEAVED in
+  // index order, and that order decides both the duplicate-name warning order and which sources
+  // fill the 32 KB dialect probe below. Two separate reads would concatenate them instead.
+  //
+  // The first table of each name is kept from the UNFILTERED stream: the table-level FK scan
+  // below looked it up across the whole index, not just within `file_pattern`.
+  const tableSymbols: CodeSymbol[] = [];
+  const firstTableByName = new Map<string, CodeSymbol>();
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const s of batch) {
+      if (s.kind !== "table" && s.kind !== "view") continue;
+      if (s.kind === "table" && !firstTableByName.has(s.name)) firstTableByName.set(s.name, s);
+      if (!filePattern || s.file.includes(filePattern)) tableSymbols.push(s);
+    }
+  }, { skipFreshness: true });
 
   if (tableSymbols.length === 0) {
     warnings.push("No SQL files indexed in this repository.");
@@ -83,6 +95,8 @@ export async function analyzeSchema(
     }
   }
 
+  const fieldsByTable = includeColumns ? await fieldsByParent(repo, false) : new Map<string, CodeSymbol[]>();
+
   for (const sym of tableSymbols) {
     if (sym.kind === "view") {
       views.push({ name: sym.name, file: sym.file, line: sym.start_line });
@@ -91,7 +105,7 @@ export async function analyzeSchema(
 
     const columns: Array<{ name: string; type: string }> = [];
     if (includeColumns) {
-      const fields = index.symbols.filter((f) => f.kind === "field" && f.parent === sym.id);
+      const fields = fieldsByTable.get(sym.id) ?? [];
       for (const f of fields) {
         columns.push({ name: f.name, type: f.signature ?? "unknown" });
       }
@@ -134,7 +148,7 @@ export async function analyzeSchema(
     }
 
     // Table-level FOREIGN KEY constraints: scan full table source
-    const tableSym = index.symbols.find((s) => s.kind === "table" && s.name === table.name);
+    const tableSym = firstTableByName.get(table.name);
     if (tableSym?.source) {
       // Table-level FOREIGN KEY constraint — same identifier shapes as FK_RE.
       // Capture layout:

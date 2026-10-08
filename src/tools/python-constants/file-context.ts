@@ -2,16 +2,16 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getParser } from "../../parser/parser-manager.js";
 import { resolvePythonImport, detectSrcLayout } from "../../utils/python-import-resolver.js";
-import type { CodeIndex } from "../../types.js";
 import type {
   AssignmentBinding,
   ImportBinding,
   PythonFileContext,
+  PythonResolutionIndex,
 } from "./model.js";
 import { getImportModule } from "./syntax.js";
 
 async function loadPythonFileContext(
-  index: CodeIndex,
+  index: PythonResolutionIndex,
   filePath: string,
   cache: Map<string, PythonFileContext | null>,
 ): Promise<PythonFileContext | null> {

@@ -1,6 +1,6 @@
 /** SQL migration diff classification capability. */
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 export interface MigrationOp {
   operation: string;         // e.g. "CREATE TABLE", "DROP COLUMN", "ALTER TABLE ADD"
@@ -61,7 +61,7 @@ export async function diffMigrations(
   repo: string,
   options?: { file_pattern?: string },
 ): Promise<DiffMigrationsResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
@@ -79,19 +79,6 @@ export async function diffMigrations(
   const destructive: MigrationOp[] = [];
 
   for (const fileEntry of sqlFiles) {
-    // Read file source from symbols (each symbol has source)
-    // Or reconstruct from all symbols in this file
-    const fileSymbols = index.symbols.filter((s) => s.file === fileEntry.path);
-
-    // Collect all raw source lines we can access
-    const seenLines = new Set<string>();
-    for (const sym of fileSymbols) {
-      if (!sym.source) continue;
-      for (const line of sym.source.split("\n")) {
-        seenLines.add(line);
-      }
-    }
-
     // Also scan the file directly for DML patterns not captured as symbols
     // (ALTER, DROP, TRUNCATE aren't symbols — they're imperative ops)
     let fullSource: string | undefined;
@@ -103,9 +90,28 @@ export async function diffMigrations(
       // File not accessible — use symbol sources only
     }
 
+    // Reconstruct from the file's symbol sources — only when the file itself could not be read,
+    // which is the only case these lines were ever scanned. One `WHERE file = ?` read, instead of
+    // filtering every symbol of a materialised index per migration file.
+    let seenLines: Set<string> | undefined;
+    if (!fullSource) {
+      seenLines = new Set<string>();
+      const fileSymbols = await findRepoSymbols(
+        repo,
+        { file: fileEntry.path, withSource: true },
+        { skipFreshness: true },
+      );
+      for (const sym of fileSymbols) {
+        if (!sym.source) continue;
+        for (const line of sym.source.split("\n")) {
+          seenLines.add(line);
+        }
+      }
+    }
+
     const linesToScan = fullSource
       ? fullSource.split("\n")
-      : [...seenLines];
+      : [...(seenLines ?? [])];
 
     for (let lineIdx = 0; lineIdx < linesToScan.length; lineIdx++) {
       const line = linesToScan[lineIdx]!;

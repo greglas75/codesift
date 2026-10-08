@@ -26,7 +26,7 @@
  *   - prioritize commands that look risky
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -166,11 +166,16 @@ export async function analyzeYiiConsoleCommands(
   repo: string,
   options?: { controller_id?: string },
 ): Promise<YiiConsoleAudit> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
-  const consoleClasses = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
+  // The extends walk only ever looks up `kind === "class"` symbols, so the class list (index order,
+  // with source for the stale-index fallback) is all it can see — one kind-keyed read instead of a
+  // materialised index. Each controller's actions are then read by parent id.
+  const classes = await findRepoSymbols(repo, { kind: "class", withSource: true }, { skipFreshness: true });
+  const index: IndexLike = { symbols: classes };
+
+  const consoleClasses = classes.filter((s) => {
     if (!s.file.endsWith(".php")) return false;
     if (!s.name.endsWith("Controller")) return false;
     if (!isConsoleControllerClass(s, index)) return false;
@@ -183,13 +188,13 @@ export async function analyzeYiiConsoleCommands(
     const cliId = pascalToKebab(cls.name.replace(/Controller$/, ""));
     if (options?.controller_id && cliId !== options.controller_id) continue;
 
-    const actionMethods = index.symbols.filter(
-      (s) =>
-        s.parent === cls.id &&
-        s.kind === "method" &&
-        s.name.startsWith("action") &&
-        s.name.length > "action".length,
-    );
+    const actionMethods = (
+      await findRepoSymbols(
+        repo,
+        { parent: cls.id, kind: "method", withSource: true },
+        { skipFreshness: true },
+      )
+    ).filter((s) => s.name.startsWith("action") && s.name.length > "action".length);
 
     const actions: YiiConsoleAction[] = actionMethods.map((m) => {
       const actionId = pascalToKebab(m.name.slice("action".length));

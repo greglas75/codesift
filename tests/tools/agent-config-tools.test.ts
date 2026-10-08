@@ -8,9 +8,12 @@ import type { CodeIndex, FileEntry, CodeSymbol } from "../../src/types.js";
 
 const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
-}));
+// Converted tools read through the narrow accessors (ADR-004 stage 2); the helper derives them all
+// from this one getCodeIndex stub so the fixture cannot drift between shapes.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock((...args: unknown[]) => mockGetCodeIndex(args[0] as string));
+});
 
 // ---------------------------------------------------------------------------
 // Mock fs/promises — I/O boundary (reads config files)

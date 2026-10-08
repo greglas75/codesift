@@ -1,6 +1,7 @@
 /** SQL schema complexity capability. */
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
+import { fieldsByParent } from "./sql-shared-tools.js";
 
 export interface TableComplexity {
   name: string;
@@ -24,24 +25,28 @@ export async function analyzeSchemaComplexity(
   repo: string,
   options?: { file_pattern?: string; top_n?: number },
 ): Promise<SchemaComplexityResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  // The summary only answers "is this repo indexed"; the symbols this tool reads — tables, indexes,
+  // fields — are three kind-keyed reads instead of a materialised index.
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
   const filePattern = options?.file_pattern;
   const topN = options?.top_n ?? 50;
 
-  const tables = index.symbols.filter((s) => {
-    if (s.kind !== "table") return false;
-    if (filePattern && !s.file.includes(filePattern)) return false;
-    return true;
-  });
+  const tables = (
+    await findRepoSymbols(repo, { kind: "table", withSource: false }, { skipFreshness: true })
+  ).filter((s) => !filePattern || s.file.includes(filePattern));
 
   // Pre-compute: index count per table name
   const indexCounts = new Map<string, number>();
-  for (const sym of index.symbols) {
-    if (sym.kind !== "index") continue;
+  const indexSymbols = await findRepoSymbols(
+    repo,
+    { kind: "index", withSource: true },
+    { skipFreshness: true },
+  );
+  for (const sym of indexSymbols) {
     // Index source typically contains "ON table_name(...)"
     const onMatch = /\bON\s+(?:`([^`]+)`|"([^"]+)"|\[([^\]]+)\]|(\w+))/i.exec(sym.source ?? "");
     if (onMatch) {
@@ -51,11 +56,10 @@ export async function analyzeSchemaComplexity(
   }
 
   const results: TableComplexity[] = [];
+  const fields = await fieldsByParent(repo, false);
 
   for (const table of tables) {
-    const columns = index.symbols.filter(
-      (s) => s.kind === "field" && s.parent === table.id,
-    );
+    const columns = fields.get(table.id) ?? [];
     const column_count = columns.length;
 
     // Count FK references in columns

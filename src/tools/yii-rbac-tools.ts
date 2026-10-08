@@ -37,7 +37,8 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -102,7 +103,7 @@ export async function analyzeYiiRbac(
   repo: string,
   options?: { include_vendor?: boolean },
 ): Promise<YiiRbacAudit> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const includeVendor = options?.include_vendor ?? false;
@@ -163,7 +164,7 @@ export async function analyzeYiiRbac(
 
   // Controllers without access control. We need to read each Controller
   // class symbol's source for behaviors() body presence + can() calls.
-  const controllers = scanControllersWithoutAccessControl(index);
+  const controllers = await scanControllersWithoutAccessControl(repo);
 
   return {
     repo,
@@ -269,20 +270,9 @@ function collectChecks(
 // Surface 3: controllers without access control
 // ---------------------------------------------------------------------------
 
-interface IndexLike {
-  symbols: Array<{
-    name: string;
-    kind: string;
-    file: string;
-    parent?: string | undefined;
-    source?: string | undefined;
-    extends?: string[] | undefined;
-  }>;
-}
-
-function scanControllersWithoutAccessControl(
-  index: IndexLike,
-): RbacControllerRef[] {
+async function scanControllersWithoutAccessControl(
+  repo: string,
+): Promise<RbacControllerRef[]> {
   const out: RbacControllerRef[] = [];
 
   // Find class symbols whose name ends in Controller AND that aren't in
@@ -290,14 +280,19 @@ function scanControllersWithoutAccessControl(
   // Yii2 Controllers — a class named *Controller in the user's own code is
   // 99% a real Yii2 controller, and the false-positive cost is one extra
   // line in the report.
-  const controllers = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
+  //
+  // Classes only, folded over pages, keeping just the controllers — never the index resident.
+  const isController = (s: CodeSymbol): boolean => {
     if (!s.name.endsWith("Controller")) return false;
     if (!s.file.endsWith(".php")) return false;
     if (VENDOR_RE.test(s.file)) return false;
     if (!s.source) return false;
     return true;
-  });
+  };
+  const controllers: CodeSymbol[] = [];
+  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+    for (const s of batch) if (isController(s)) controllers.push(s);
+  }, { skipFreshness: true });
 
   for (const ctrl of controllers) {
     const src = ctrl.source!;

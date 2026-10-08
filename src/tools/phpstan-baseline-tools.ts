@@ -28,7 +28,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -69,7 +69,7 @@ export async function analyzePhpStanBaseline(
   repo: string,
   options?: { baseline_path?: string; max_paths?: number },
 ): Promise<PhpStanBaselineAudit> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const maxPaths = options?.max_paths ?? 50;

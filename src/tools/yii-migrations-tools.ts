@@ -29,7 +29,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -334,8 +334,14 @@ export async function analyzeYiiMigrations(
   repo: string,
   options?: { file_pattern?: string; rules?: YiiMigrationAuditFinding["rule_id"][] },
 ): Promise<YiiMigrationsAudit> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  // The hierarchy walk only ever looks up `kind === "class"` symbols, so the class list (in index
+  // order, with source for the legacy `extends` fallback) is everything it can see — one
+  // kind-keyed read instead of a materialised index.
+  const classes = await findRepoSymbols(repo, { kind: "class", withSource: true }, { skipFreshness: true });
+  const classIndex = { symbols: classes };
 
   const ruleFilter = options?.rules ? new Set(options.rules) : null;
   const filePattern = options?.file_pattern;
@@ -345,12 +351,11 @@ export async function analyzeYiiMigrations(
   // signal (some app code sits in folders named `migrations/`), and class
   // alone misses tgm-panel's `extends Model` data-fix scripts which we
   // intentionally exclude.
-  const migrationClasses = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
+  const migrationClasses = classes.filter((s) => {
     if (!s.file.endsWith(".php")) return false;
     if (!MIGRATION_FILENAME_RE.test(s.file)) return false;
     if (filePattern && !s.file.includes(filePattern)) return false;
-    if (!isMigrationHierarchy(s, index)) return false;
+    if (!isMigrationHierarchy(s, classIndex)) return false;
     return true;
   });
 

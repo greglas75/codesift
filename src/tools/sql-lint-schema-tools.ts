@@ -1,6 +1,7 @@
 /** SQL schema linting capability. */
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
+import { fieldsByParent } from "./sql-shared-tools.js";
 
 export interface LintFinding {
   rule: string;
@@ -31,8 +32,9 @@ export async function lintSchema(
   repo: string,
   options?: { file_pattern?: string },
 ): Promise<LintSchemaResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  // Kind-keyed reads for tables, fields and indexes instead of a materialised index.
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
@@ -40,11 +42,10 @@ export async function lintSchema(
   const findings: LintFinding[] = [];
   const warnings: string[] = [];
 
-  const tables = index.symbols.filter((s) => {
-    if (s.kind !== "table") return false;
-    if (filePattern && !s.file.includes(filePattern)) return false;
-    return true;
-  });
+  // `source` is needed: the no-primary-key rule reads the table body.
+  const tables = (
+    await findRepoSymbols(repo, { kind: "table", withSource: true }, { skipFreshness: true })
+  ).filter((s) => !filePattern || s.file.includes(filePattern));
 
   if (tables.length === 0) {
     warnings.push("No SQL tables found in this repository.");
@@ -68,10 +69,9 @@ export async function lintSchema(
   }
 
   // Rule 2: wide-table — >20 columns
+  const fieldsByTable = await fieldsByParent(repo, false);
   for (const table of tables) {
-    const fields = index.symbols.filter(
-      (s) => s.kind === "field" && s.parent === table.id,
-    );
+    const fields = fieldsByTable.get(table.id) ?? [];
     if (fields.length > 20) {
       findings.push({
         rule: "wide-table",
@@ -86,11 +86,9 @@ export async function lintSchema(
 
   // Rule 3: duplicate-index-name
   const indexNames = new Map<string, { file: string; line: number }>();
-  const indexes = index.symbols.filter((s) => {
-    if (s.kind !== "index") return false;
-    if (filePattern && !s.file.includes(filePattern)) return false;
-    return true;
-  });
+  const indexes = (
+    await findRepoSymbols(repo, { kind: "index", withSource: false }, { skipFreshness: true })
+  ).filter((s) => !filePattern || s.file.includes(filePattern));
   for (const idx of indexes) {
     const key = idx.name.toLowerCase();
     if (indexNames.has(key)) {

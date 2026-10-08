@@ -1,5 +1,5 @@
 import { getParser, initParser } from "../parser/parser-manager.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Query as TSQueryCtor } from "web-tree-sitter";
@@ -41,7 +41,7 @@ export async function astQuery(
     max_matches?: number | undefined;
   },
 ): Promise<AstQueryResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);
 
   await initParser();

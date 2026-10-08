@@ -3,7 +3,7 @@
  *
  * Implementation module extracted from the legacy php-tools facade.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { analyzeActiveRecord } from "./php-active-record-tools.js";
 
 // 7i. find_php_god_model — oversized ActiveRecord models
@@ -43,8 +43,10 @@ export async function findPhpGodModel(
     scope?: "activerecord" | "all";
   },
 ): Promise<{ models: GodModelFinding[]; total: number }> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  // Keyed reads only — a class by (file, name, kind), or the class and method lists without
+  // `source`. Nothing here ever read a body; only line spans and parent links.
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const minM = options?.min_methods ?? 50;
   const minR = options?.min_relations ?? 15;
@@ -58,8 +60,10 @@ export async function findPhpGodModel(
     for (const m of ar.models) {
       // Look up the class symbol by (name, kind, file) — file match keeps
       // duplicate class names in different paths reported independently.
-      const classSym = index.symbols.find(
-        (s) => s.name === m.name && s.kind === "class" && s.file === m.file,
+      const [classSym] = await findRepoSymbols(
+        repo,
+        { file: m.file, name: m.name, kind: "class", withSource: false, limit: 1 },
+        { skipFreshness: true },
       );
       const lineCount = classSym ? classSym.end_line - classSym.start_line : 0;
 
@@ -81,13 +85,16 @@ export async function findPhpGodModel(
     }
   } else {
     // scope === "all" — iterate every PHP class symbol directly.
-    const classSyms = index.symbols.filter(
-      (s) => s.kind === "class" && s.file.endsWith(".php"),
-    );
+    const classSyms = (
+      await findRepoSymbols(repo, { kind: "class", withSource: false }, { skipFreshness: true })
+    ).filter((s) => s.file.endsWith(".php"));
+    const methodCountByParent = new Map<string, number>();
+    for (const method of await findRepoSymbols(repo, { kind: "method", withSource: false }, { skipFreshness: true })) {
+      if (method.parent === undefined) continue;
+      methodCountByParent.set(method.parent, (methodCountByParent.get(method.parent) ?? 0) + 1);
+    }
     for (const cls of classSyms) {
-      const methodCount = index.symbols.filter(
-        (s) => s.parent === cls.id && s.kind === "method",
-      ).length;
+      const methodCount = methodCountByParent.get(cls.id) ?? 0;
       const lineCount = cls.end_line - cls.start_line;
 
       const reasons: string[] = [];

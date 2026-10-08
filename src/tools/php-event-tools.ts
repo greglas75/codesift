@@ -6,7 +6,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
 import { extractPhpNamespace, extractPhpUseImports, resolvePhpClassReference } from "./php-import-utils.js";
 
 // 7c. trace_php_event — Event → Listener chain
@@ -41,27 +42,46 @@ interface ConstantValueIndex {
   ambiguousShortKeys: Set<string>;
 }
 
+/**
+ * Fed one symbol at a time, so the map is built while symbols stream past instead of over a
+ * materialised array. Owners are collected as they arrive; constants are held (only those, and
+ * only until `finish`) because a constant can precede its class in index order, and the old
+ * two-loop walk saw every owner before the first constant.
+ */
+function createConstantValueCollector(): {
+  add: (s: CodeSymbol) => void;
+  finish: () => ConstantValueIndex;
+} {
+  const classIdToName = new Map<string, string>();
+  const classIdToFqcn = new Map<string, string>();
+  const constants: CodeSymbol[] = [];
+  return {
+    add(s) {
+      if (s.kind === "class" || s.kind === "interface" || s.kind === "enum") {
+        // Use the symbol id as key — every constant carries `parent` referring
+        // to its enclosing class id, so we only need the id→name lookup.
+        const id = (s as { id?: string }).id;
+        if (id) {
+          classIdToName.set(id, s.name);
+          classIdToFqcn.set(id, phpClassFqcn(s));
+        }
+      } else if (s.kind === "constant" && s.parent && s.source) {
+        constants.push(s);
+      }
+    },
+    finish: () => buildConstantValueMap(constants, classIdToName, classIdToFqcn),
+  };
+}
+
 function buildConstantValueMap(
-  index: { symbols: Array<{ name: string; kind: string; parent?: string; source?: string }> },
+  constants: CodeSymbol[],
+  classIdToName: Map<string, string>,
+  classIdToFqcn: Map<string, string>,
 ): ConstantValueIndex {
   const out = new Map<string, string>();
   const globalValues = new Map<string, string>();
   const ambiguousShortKeys = new Set<string>();
-  // First, build classId → className map so we can resolve const owners.
-  const classIdToName = new Map<string, string>();
-  const classIdToFqcn = new Map<string, string>();
-  for (const s of index.symbols) {
-    if (s.kind === "class" || s.kind === "interface" || s.kind === "enum") {
-      // Use the symbol id as key — every constant carries `parent` referring
-      // to its enclosing class id, so we only need the id→name lookup.
-      const id = (s as { id?: string }).id;
-      if (id) {
-        classIdToName.set(id, s.name);
-        classIdToFqcn.set(id, phpClassFqcn(s));
-      }
-    }
-  }
-  for (const s of index.symbols) {
+  for (const s of constants) {
     if (s.kind !== "constant") continue;
     if (!s.parent || !s.source) continue;
     const className = classIdToName.get(s.parent);
@@ -102,11 +122,15 @@ interface FilePhpContext {
   namespace: string | null;
 }
 
-async function buildFilePhpContexts(index: {
-  root: string;
-  files: Array<{ path: string }>;
-  symbols: Array<{ file: string; source?: string }>;
-}): Promise<{ contexts: Map<string, FilePhpContext>; warnings: string[] }> {
+/**
+ * Symbol sources are added first (as they stream past, via `addSource`) and file contents after
+ * (`addFiles`) — the order the single function used: imports merge last-wins and the namespace
+ * is first-wins, so the order is part of the result.
+ */
+function createFilePhpContexts(): {
+  addSource: (file: string, source: string) => void;
+  addFiles: (index: { root: string; files: Array<{ path: string }> }) => Promise<{ contexts: Map<string, FilePhpContext>; warnings: string[] }>;
+} {
   const byFile = new Map<string, FilePhpContext>();
   const warnings: string[] = [];
   const addSource = (file: string, source: string): void => {
@@ -117,12 +141,15 @@ async function buildFilePhpContexts(index: {
     context.namespace ??= extractPhpNamespace(source);
     byFile.set(file, context);
   };
+  return { addSource, addFiles: (index) => addFileContexts(index, addSource, byFile, warnings) };
+}
 
-  for (const sym of index.symbols) {
-    if (!sym.source) continue;
-    addSource(sym.file, sym.source);
-  }
-
+async function addFileContexts(
+  index: { root: string; files: Array<{ path: string }> },
+  addSource: (file: string, source: string) => void,
+  byFile: Map<string, FilePhpContext>,
+  warnings: string[],
+): Promise<{ contexts: Map<string, FilePhpContext>; warnings: string[] }> {
   for (const file of index.files) {
     if (!file.path.endsWith(".php")) continue;
     try {
@@ -141,12 +168,23 @@ export async function tracePhpEvent(
   repo: string,
   options?: { event_name?: string },
 ): Promise<{ events: PhpEventChain[]; total: number; warnings?: string[] }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const eventMap = new Map<string, PhpEventChain>();
-  const constantValues = buildConstantValueMap(index);
-  const { contexts: fileContexts, warnings } = await buildFilePhpContexts(index);
+  // Pass 1, streamed: every symbol feeds the constant map and the per-file import context. Both
+  // must be complete before any trigger is resolved, so the scan below is a second pass rather
+  // than the same one.
+  const constantCollector = createConstantValueCollector();
+  const fileContextBuilder = createFilePhpContexts();
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const sym of batch) {
+      constantCollector.add(sym);
+      if (sym.source) fileContextBuilder.addSource(sym.file, sym.source);
+    }
+  }, { skipFreshness: true });
+  const constantValues = constantCollector.finish();
+  const { contexts: fileContexts, warnings } = await fileContextBuilder.addFiles(index);
 
   const getOrCreate = (name: string): PhpEventChain => {
     let e = eventMap.get(name);
@@ -195,11 +233,11 @@ export async function tracePhpEvent(
   const constRefPattern = String.raw`\\?[A-Za-z_][\w]*(?:\\[A-Za-z_][\w]*)*::[A-Za-z_][\w]*`;
   const classRefPattern = String.raw`\\?[A-Za-z_][\w]*(?:\\[A-Za-z_][\w]*)*::class`;
 
-  // Scan PHP file symbols for event triggers and listeners
-  const phpSymbols = index.symbols.filter((s) => s.file.endsWith(".php") && s.source);
-
-  for (const sym of phpSymbols) {
-    const source = sym.source!;
+  // Scan PHP file symbols for event triggers and listeners — pass 2, streamed again.
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  for (const sym of batch) {
+    if (!sym.file.endsWith(".php") || !sym.source) continue;
+    const source = sym.source;
 
     // Triggers: ->trigger('eventName') or ->trigger(Class::CONST)
     // Now also accepts a bare identifier path (Foo::BAR) in addition to the
@@ -245,6 +283,7 @@ export async function tracePhpEvent(
       });
     }
   }
+  }, { skipFreshness: true });
 
   const events = [...eventMap.values()];
   return warnings.length > 0

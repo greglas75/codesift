@@ -3,7 +3,8 @@
  * Supports Django (ForeignKey, ManyToManyField, OneToOneField) and
  * SQLAlchemy (relationship, ForeignKey Column).
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
 
 export interface ModelNode {
   name: string;
@@ -50,16 +51,18 @@ export async function getModelGraph(
     output_format?: "json" | "mermaid";
   },
 ): Promise<ModelGraph | { mermaid: string }> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
 
   // Find model classes — Python classes that look like ORM models.
   // Strict detection: must have ORM-specific field patterns in source,
   // not just a generic base class name like "Base" (which Flask uses).
-  const modelSymbols = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
+  //
+  // Only classes can be models: streamed by kind, keeping just the matches, instead of filtering a
+  // materialised index. `source` is what the detection reads.
+  const isModel = (s: CodeSymbol): boolean => {
     if (!s.file.endsWith(".py")) return false;
     if (filePattern && !s.file.includes(filePattern)) return false;
     const source = s.source ?? "";
@@ -71,7 +74,11 @@ export async function getModelGraph(
       || /=\s*relationship\s*\(/.test(source)
       || /__tablename__\s*=/.test(source);
     return isDjangoModel || isSQLAlchemy;
-  });
+  };
+  const modelSymbols: CodeSymbol[] = [];
+  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+    for (const s of batch) if (isModel(s)) modelSymbols.push(s);
+  }, { skipFreshness: true });
 
   const models: ModelNode[] = [];
   const edges: ModelEdge[] = [];

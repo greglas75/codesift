@@ -1,4 +1,33 @@
 /** Shared SQL tool helpers. */
+import type { CodeSymbol } from "../types.js";
+import { findRepoSymbols } from "./index-tools.js";
+
+// ── narrow symbol reads (ADR-004 stage 2) ────────────────
+
+/**
+ * Every `field` symbol, grouped by the id of its parent.
+ *
+ * The SQL tools filtered `index.symbols` once per table for `kind === "field" && parent ===
+ * table.id` — a walk over every symbol of a fully materialised index, per table. One
+ * `kind = 'field'` read grouped here answers every table's question, and each group keeps the
+ * index's row order, so columns come out in the order they always did.
+ *
+ * Callers resolve the repo (and its freshness) first, so this read skips the freshness check.
+ */
+export async function fieldsByParent(
+  repo: string,
+  withSource: boolean,
+): Promise<Map<string, CodeSymbol[]>> {
+  const fields = await findRepoSymbols(repo, { kind: "field", withSource }, { skipFreshness: true });
+  const byParent = new Map<string, CodeSymbol[]>();
+  for (const field of fields) {
+    if (field.parent === undefined) continue;
+    const group = byParent.get(field.parent);
+    if (group) group.push(field);
+    else byParent.set(field.parent, [field]);
+  }
+  return byParent;
+}
 
 export type SqlDialect = "mysql" | "postgres" | "sqlite" | "mssql" | "unknown";
 

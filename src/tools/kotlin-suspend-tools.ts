@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface SuspendDispatcherTransition {
@@ -166,8 +166,8 @@ export async function traceSuspendChain(
   functionName: string,
   options?: { depth?: number },
 ): Promise<SuspendChainResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
@@ -175,20 +175,23 @@ export async function traceSuspendChain(
   if (!Number.isInteger(maxDepth) || maxDepth < 0) {
     throw new Error("depth must be a non-negative integer");
   }
-  const root = index.symbols.find(
-    (symbol) => symbol.name === functionName
-      && (symbol.kind === "function" || symbol.kind === "method"),
-  );
+  const root = (
+    await findRepoSymbols(repo, { name: functionName, withSource: true }, { skipFreshness: true })
+  ).find((symbol) => symbol.kind === "function" || symbol.kind === "method");
   if (!root) throw new Error(`Suspend function "${functionName}" not found.`);
   if (!isSuspendFunction(root)) throw new Error(`"${functionName}" is not a suspend function.`);
 
+  // Only suspend functions are kept, folded over pages. One pass over every kind rather than a
+  // read per kind: overloads are walked in index order, and functions and methods interleave.
   const suspendByName = new Map<string, CodeSymbol[]>();
-  for (const symbol of index.symbols) {
-    if (!isSuspendFunction(symbol)) continue;
-    const overloads = suspendByName.get(symbol.name) ?? [];
-    overloads.push(symbol);
-    suspendByName.set(symbol.name, overloads);
-  }
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const symbol of batch) {
+      if (!isSuspendFunction(symbol)) continue;
+      const overloads = suspendByName.get(symbol.name) ?? [];
+      overloads.push(symbol);
+      suspendByName.set(symbol.name, overloads);
+    }
+  }, { skipFreshness: true });
 
   const state: TraversalState = {
     maxDepth,

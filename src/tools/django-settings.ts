@@ -7,7 +7,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 export interface SettingsFinding {
   rule: string;
@@ -265,7 +265,7 @@ export async function analyzeDjangoSettings(
     settings_file?: string; // explicit file instead of auto-detection
   },
 ): Promise<DjangoSettingsResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   // Locate settings files

@@ -4,7 +4,7 @@
  * trace_room_schema — build Entity → Dao → Database graph from indexed
  * Kotlin symbols annotated with @Entity, @Dao, @Database, @Query, etc.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -109,8 +109,8 @@ function extractDatabaseVersion(sym: CodeSymbol): number | undefined {
 export async function traceRoomSchema(
   repo: string,
 ): Promise<RoomSchemaResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
@@ -120,7 +120,10 @@ export async function traceRoomSchema(
   const daoById = new Map<string, RoomDao>();
 
   // First pass: classify @Entity, @Dao, @Database.
-  for (const sym of index.symbols) {
+  // Folded over pages; one pass over every kind because classes and interfaces interleave in
+  // index order, which is the reporting order. `source` feeds the annotation fallback and parsers.
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  for (const sym of batch) {
     if (sym.kind !== "class" && sym.kind !== "interface") continue;
 
     if (hasAnnotation(sym, "Entity")) {
@@ -157,14 +160,16 @@ export async function traceRoomSchema(
       databases.push(db);
     }
   }
+  }, { skipFreshness: true });
 
   // Second pass: attach @Query/@Insert/@Update/@Delete methods to parent Dao.
+  // Read per DAO by parent id: each DAO's children arrive in index order, which is the order a
+  // full scan attached them in — a method only ever joins its own DAO.
   const ROOM_METHOD_ANNOTATIONS = ["Query", "Insert", "Update", "Delete", "RawQuery"];
-  for (const sym of index.symbols) {
+  for (const [daoId, dao] of daoById) {
+  const children = await findRepoSymbols(repo, { parent: daoId, withSource: true }, { skipFreshness: true });
+  for (const sym of children) {
     if (sym.kind !== "method" && sym.kind !== "function") continue;
-    if (!sym.parent) continue;
-    const dao = daoById.get(sym.parent);
-    if (!dao) continue;
 
     for (const ann of ROOM_METHOD_ANNOTATIONS) {
       if (hasAnnotation(sym, ann)) {
@@ -188,6 +193,7 @@ export async function traceRoomSchema(
         break;
       }
     }
+  }
   }
 
   return {

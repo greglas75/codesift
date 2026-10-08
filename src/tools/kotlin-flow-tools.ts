@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 export interface FlowChainResult {
   root: string;
@@ -65,12 +65,17 @@ export async function traceFlowChain(
   repo: string,
   symbolName: string,
 ): Promise<FlowChainResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
-  const symbol = index.symbols.find((candidate) => candidate.name === symbolName);
+  // The first symbol with this name, in index order — a `WHERE name = ? LIMIT 1` read.
+  const [symbol] = await findRepoSymbols(
+    repo,
+    { name: symbolName, withSource: true, limit: 1 },
+    { skipFreshness: true },
+  );
   if (!symbol) throw new Error(`Symbol "${symbolName}" not found.`);
   const source = symbol.source ?? "";
 

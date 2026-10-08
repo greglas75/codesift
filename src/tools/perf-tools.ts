@@ -1,6 +1,6 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
-import type { SymbolKind } from "../types.js";
+import type { CodeSymbol, SymbolKind } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -191,8 +191,8 @@ export async function findPerfHotspots(
     max_results?: number;
   },
 ): Promise<PerfHotspotsResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
@@ -209,7 +209,7 @@ export async function findPerfHotspots(
   const findings: PerfFinding[] = [];
   let scanned = 0;
 
-  const addFinding = (sym: typeof index.symbols[0], patternName: string, meta: { severity: "high" | "medium" | "low"; fix_hint: string }, lineOffset: number, context: string): void => {
+  const addFinding = (sym: CodeSymbol, patternName: string, meta: { severity: "high" | "medium" | "low"; fix_hint: string }, lineOffset: number, context: string): void => {
     findings.push({
       pattern: patternName,
       severity: meta.severity,
@@ -223,13 +223,17 @@ export async function findPerfHotspots(
   };
 
   let yieldCounter = 0;
-  for (const sym of index.symbols) {
+  // Folded over pages and stopped as soon as `max_results` is reached — the old loop broke out at
+  // the same point, and `false` keeps the reader from paging the rest of the table after it.
+  await streamRepoSymbols(repo, { withSource: true }, async (batch) => {
+  for (const sym of batch) {
     // Yield to event loop every 256 iterations so MCP transport stays responsive
     // during long scans. Without this, 50k+ symbol indexes block the loop for
-    // seconds and MCP client closes the connection (-32000).
+    // seconds and MCP client closes the connection (-32000). Still needed with paging:
+    // a resident index arrives as ONE batch.
     if ((++yieldCounter & 255) === 0) await new Promise((r) => setImmediate(r));
 
-    if (findings.length >= maxResults) break;
+    if (findings.length >= maxResults) return false;
     if (!sym.source) continue;
     if (!includeTests && isTestFile(sym.file)) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
@@ -263,6 +267,8 @@ export async function findPerfHotspots(
       if (result) addFinding(sym, "expensive-recompute", EXPENSIVE_RECOMPUTE_META, result.line, result.context);
     }
   }
+  return undefined;
+  }, { skipFreshness: true });
 
   // Sort: high first, then medium, then low
   const severityOrder = { high: 0, medium: 1, low: 2 };

@@ -23,7 +23,7 @@ import {
   type KeyValue,
   type Value,
 } from "@mrleebo/prisma-ast";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -375,7 +375,7 @@ export async function analyzePrismaSchema(
   repo: string,
   options?: { schema_path?: string },
 ): Promise<PrismaSchemaReport> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(
       `Repository "${repo}" not found. Index it first with index_folder.`,

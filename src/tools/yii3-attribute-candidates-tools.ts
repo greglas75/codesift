@@ -45,7 +45,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -109,7 +109,7 @@ export async function findYii3AttributeCandidates(
     include_vendor?: boolean;
   },
 ): Promise<Yii3AttributeCandidates> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const sampleLimit = options?.max_samples_per_rule ?? SAMPLE_LIMIT;
@@ -126,12 +126,15 @@ export async function findYii3AttributeCandidates(
 
   const candidates: Yii3AttributeCandidate[] = [];
 
-  // Symbol-level rules use the index directly.
+  // Symbol-level rules. Each looks only at methods with one exact name (`behaviors`, `rules`), so
+  // each reads just those by name — not the materialised index.
+  const methodsNamed = (name: string) =>
+    findRepoSymbols(repo, { name, kind: "method", withSource: true }, { skipFreshness: true });
   if (!ruleFilter || ruleFilter.has("behaviors-to-attributes")) {
-    findBehaviorsToAttributes(index, candidates);
+    findBehaviorsToAttributes(await methodsNamed("behaviors"), candidates);
   }
   if (!ruleFilter || ruleFilter.has("rules-to-attributes")) {
-    findRulesToAttributes(index, candidates);
+    findRulesToAttributes(await methodsNamed("rules"), candidates);
   }
   // File-level rule (urlmanager-rule-to-route) reads config files directly.
   if (!ruleFilter || ruleFilter.has("urlmanager-rule-to-route")) {
@@ -182,10 +185,10 @@ export async function findYii3AttributeCandidates(
 // ---------------------------------------------------------------------------
 
 function findBehaviorsToAttributes(
-  index: IndexLike,
+  symbols: IndexLike["symbols"],
   out: Yii3AttributeCandidate[],
 ): void {
-  const behaviorsMethods = index.symbols.filter(
+  const behaviorsMethods = symbols.filter(
     (s) =>
       s.kind === "method" &&
       s.name === "behaviors" &&
@@ -255,10 +258,10 @@ const VALIDATOR_TO_ATTRIBUTE: Record<string, string> = {
 };
 
 function findRulesToAttributes(
-  index: IndexLike,
+  symbols: IndexLike["symbols"],
   out: Yii3AttributeCandidate[],
 ): void {
-  const rulesMethods = index.symbols.filter(
+  const rulesMethods = symbols.filter(
     (s) =>
       s.kind === "method" &&
       s.name === "rules" &&

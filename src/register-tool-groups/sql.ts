@@ -223,15 +223,21 @@ export const SQL_TOOL_ENTRIES: ToolDefinitionEntry[] = [
               "drift_check requires an explicit `repo` to load migration-derived schema symbols",
           };
         }
-        const { getCodeIndex } = await import("../tools/index-tools.js");
-        const index = await getCodeIndex(repo);
+        const { getIndexSummary, findRepoSymbols } = await import("../tools/index-tools.js");
+        const index = await getIndexSummary(repo);
         if (!index) {
           return {
             error: `drift_check: repo '${repo}' is not indexed — cannot load migration-derived schema symbols`,
           };
         }
-        const symbols = index.symbols ?? [];
-        const drift = pgDriftCheck(result, symbols);
+        // pgDriftCheck reads `table` and `field` symbols and nothing else (buildMigrationTables
+        // makes one pass per kind), so two kind-keyed reads replace the materialised index.
+        // Each keeps the index's row order, which is the order those passes saw.
+        const [tables, fields] = await Promise.all([
+          findRepoSymbols(repo, { kind: "table", withSource: false }, { skipFreshness: true }),
+          findRepoSymbols(repo, { kind: "field", withSource: false }, { skipFreshness: true }),
+        ]);
+        const drift = pgDriftCheck(result, [...tables, ...fields]);
         return { ...result, drift };
       }
       return result;

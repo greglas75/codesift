@@ -3,7 +3,7 @@
  *
  * Implementation module extracted from the legacy php-tools facade.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { extractPhpNamespace, extractPhpUseImports, resolvePhpClassReference } from "./php-import-utils.js";
 
 // 7b. analyze_activerecord — Model schema
@@ -138,12 +138,17 @@ export async function analyzeActiveRecord(
   repo: string,
   options?: { model_name?: string; file_pattern?: string },
 ): Promise<ActiveRecordAnalysis> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
+
+  // The hierarchy walk only ever looks up `kind === "class"` symbols, so the class list — in
+  // index order, with source for namespace and `use` resolution — is everything it can see.
+  // One kind-keyed read replaces the materialised index; child methods are read per model below.
+  const allClasses = await findRepoSymbols(repo, { kind: "class", withSource: true }, { skipFreshness: true });
+  const index = { symbols: allClasses };
 
   // Find PHP class symbols in model files
-  const classSymbols = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
+  const classSymbols = allClasses.filter((s) => {
     if (!s.file.endsWith(".php")) return false;
     if (options?.model_name && s.name !== options.model_name) return false;
     if (options?.file_pattern && !s.file.includes(options.file_pattern)) return false;
@@ -171,8 +176,10 @@ export async function analyzeActiveRecord(
     if (tableMatch) model.table_name = tableMatch[1]!;
 
     // Find child method symbols
-    const methods = index.symbols.filter(
-      (s) => s.parent === cls.id && s.kind === "method",
+    const methods = await findRepoSymbols(
+      repo,
+      { parent: cls.id, kind: "method", withSource: true },
+      { skipFreshness: true },
     );
     model.methods = methods.map((m) => m.name);
 

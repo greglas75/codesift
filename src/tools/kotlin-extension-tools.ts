@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 export interface ExtensionFunctionResult {
   receiver_type: string;
@@ -18,15 +18,21 @@ export async function findExtensionFunctions(
   receiverType: string,
   options?: { file_pattern?: string },
 ): Promise<ExtensionFunctionResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
   const pattern = `${receiverType}.`;
   const extensions: ExtensionFunctionResult["extensions"] = [];
-  for (const sym of index.symbols) {
-    if (sym.kind !== "function") continue;
+  // Extensions are functions identified by their signature, so one kind-keyed read without
+  // `source` replaces the materialised index.
+  const functions = await findRepoSymbols(
+    repo,
+    { kind: "function", withSource: false },
+    { skipFreshness: true },
+  );
+  for (const sym of functions) {
     if (!sym.signature) continue;
     if (options?.file_pattern && !sym.file.includes(options.file_pattern)) continue;
 

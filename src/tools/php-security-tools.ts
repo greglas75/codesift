@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { BUILTIN_PATTERNS, searchPatterns } from "./pattern-tools.js";
 
 // 7f. php_security_scan — Compound security tool
@@ -143,7 +143,7 @@ async function runFileLevelChecks(
   checks: typeof PHP_SECURITY_CHECKS,
   filePattern: string | undefined,
 ): Promise<PhpSecurityFinding[]> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) return [];
   const out: PhpSecurityFinding[] = [];
 

@@ -4,9 +4,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mocks — must come before imports so vi.mock hoists correctly
 // ---------------------------------------------------------------------------
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// Converted tools read through the narrow accessors (ADR-004 stage 2); the helper derives them all
+// from this one getCodeIndex stub so the fixture cannot drift between shapes.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock(vi.fn());
+});
 
 vi.mock("node:fs/promises", () => ({
   readFile: vi.fn(),
