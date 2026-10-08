@@ -58,17 +58,28 @@ export async function nestLifecycleMap(
   // read serves both remaining needs: the hook's own body (the async test below) and the file's
   // classes (the enclosing-class fallback). Both keep index order within the file, so a file's
   // hooks here are the same subsequence pass 1 saw, and `find` meets candidates in the same order.
-  const sourcedHooksByFile = new Map<string, CodeSymbol[]>();
+  // Paired by id, not by position: the two passes are separate reads, so an `index_file` landing
+  // between them could shift a file's hooks and pair a hook with its neighbour's body. A queue per
+  // id keeps colliding ids (`file:name:line` is not unique) paired in order.
+  const sourcedHooksById = new Map<string, CodeSymbol[]>();
   const classesByFile = new Map<string, CodeSymbol[]>();
   for (const file of new Set(hookOrder.map((sym) => sym.file))) {
     const fileSymbols = await findRepoSymbols(repo, { withSource: true, file }, { skipFreshness: true });
-    sourcedHooksByFile.set(file, fileSymbols.filter(isHook));
+    for (const sym of fileSymbols) {
+      if (!isHook(sym)) continue;
+      const queue = sourcedHooksById.get(sym.id) ?? [];
+      queue.push(sym);
+      sourcedHooksById.set(sym.id, queue);
+    }
     classesByFile.set(file, fileSymbols.filter((s) => s.kind === "class"));
   }
 
   for (const hookSym of hookOrder) {
-    // Taken in pass-1 order, so the k-th hook of a file pairs with the k-th sourced hook of it.
-    const sym = sourcedHooksByFile.get(hookSym.file)?.shift() ?? hookSym;
+    // A hook pass 2 no longer sees (its file changed in between) is read on its own, with source,
+    // rather than reported with an empty body — which would read as "not async".
+    const sym = sourcedHooksById.get(hookSym.id)?.shift()
+      ?? (await findRepoSymbols(repo, { withSource: true, ids: [hookSym.id], limit: 1 }, { skipFreshness: true }))[0]
+      ?? hookSym;
 
     // Determine parent class name from source or file context
     let className = "Unknown";
