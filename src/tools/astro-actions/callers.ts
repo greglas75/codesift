@@ -61,7 +61,8 @@ function addCaller(
 }
 
 /** Scan indexed Astro/JSX callers while preserving index file order. */
-export function scanActionCallers(index: CodeIndex, actionNames: Set<string>): CallerScanResult {
+// Root + file list only — a summary satisfies it, so the tool never materialises symbols (ADR-004).
+export function scanActionCallers(index: Pick<CodeIndex, "root" | "files">, actionNames: Set<string>): CallerScanResult {
   const result: CallerScanResult = {
     callersByAction: new Map(),
     reportableCalls: [],

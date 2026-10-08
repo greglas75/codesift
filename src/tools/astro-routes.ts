@@ -2,9 +2,9 @@
  * Astro file-based routing: src/pages/ → routes.
  * Exports findAstroHandlers (for traceRoute) and astroRouteMap (tool handler).
  */
-import type { CodeIndex, CodeSymbol, RouteFramework } from "../types.js";
+import type { CodeIndex, CodeSymbol, FileEntry, RouteFramework } from "../types.js";
 import { matchPath } from "./route-shared.js";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 export interface AstroRouteHandler {
   symbol: Omit<CodeSymbol, "source" | "tokens">;
@@ -58,11 +58,47 @@ function placeholder(file: string, name: string): Omit<CodeSymbol, "source" | "t
   return { id: `${file}:${name}`, repo: "", name, kind: "function", file, start_line: 1, end_line: 1 };
 }
 
+/**
+ * What route building reads: the file list, and the symbols of the PAGE files under src/pages/ —
+ * every symbol lookup below is `s.file === <page file>`, so symbols elsewhere in the repository are
+ * never consulted. A full `CodeIndex` satisfies this, and so does a summary paired with exactly the
+ * page files' symbols (`loadAstroRouteIndex`), which is what lets astro_route_map and astro_audit
+ * stop materialising every symbol in the repo to list a handful of pages (ADR-004 stage 2).
+ */
+export interface AstroRouteIndex {
+  files: ReadonlyArray<Pick<FileEntry, "path">>;
+  symbols: ReadonlyArray<Pick<CodeSymbol, "file" | "name">>;
+}
+
+function isPageFile(path: string): boolean {
+  return PAGES_RE.test(path) && EXT_RE.test(path);
+}
+
+/**
+ * The route index from a summary: its file list, plus the symbols of each page file fetched by
+ * one indexed `WHERE file = ?` lookup apiece. Source is not requested — route building reads only
+ * names. Freshness was already settled by the summary read, so the per-file lookups skip it.
+ *
+ * Page order is the summary's file order and each file's symbols keep their index order, so every
+ * `filter`/`find`/`some` in `buildRouteEntries` sees the same sequence it saw over the full index.
+ */
+export async function loadAstroRouteIndex(
+  repo: string,
+  files: readonly FileEntry[],
+): Promise<AstroRouteIndex> {
+  const symbols: CodeSymbol[] = [];
+  for (const file of files) {
+    if (!isPageFile(file.path)) continue;
+    symbols.push(...await findRepoSymbols(repo, { withSource: false, file: file.path }, { skipFreshness: true }));
+  }
+  return { files, symbols };
+}
+
 /** Build all routes from an Astro project index. */
-export function buildRouteEntries(index: CodeIndex): { routes: AstroRouteEntry[]; warnings: string[] } {
+export function buildRouteEntries(index: AstroRouteIndex): { routes: AstroRouteEntry[]; warnings: string[] } {
   const routes: AstroRouteEntry[] = [];
   const warnings: string[] = [];
-  const pageFiles = index.files.filter((f) => PAGES_RE.test(f.path) && EXT_RE.test(f.path));
+  const pageFiles = index.files.filter((f) => isPageFile(f.path));
 
   for (const file of pageFiles) {
     const routePath = fileToRoute(file.path);
@@ -139,10 +175,11 @@ export async function astroRouteMap(args: {
   summary: { total_routes: number; static_pages: number; server_pages: number; api_endpoints: number; dynamic_routes: number };
   virtual_routes_disclaimer: string[];
 }> {
-  const index = await getCodeIndex(args.repo ?? "");
-  if (!index) throw new Error("Repository not found");
+  const repo = args.repo ?? "";
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error("Repository not found");
 
-  const { routes: allRoutes, warnings } = buildRouteEntries(index);
+  const { routes: allRoutes, warnings } = buildRouteEntries(await loadAstroRouteIndex(repo, summary.files));
   const routes = args.include_endpoints === false ? allRoutes.filter((r) => r.type === "page") : allRoutes;
 
   return {

@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { walkDirectory } from "../utils/walk.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 export interface SvgImportRecord {
   name: string;
@@ -133,7 +133,7 @@ export async function auditSvgFromRoot(root: string): Promise<SvgAuditResult> {
 
 export async function astroSvgComponents(args: { project_root?: string; repo?: string }): Promise<SvgAuditResult> {
   if (args.project_root) return auditSvgFromRoot(args.project_root);
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { imports: [], used: [], unused: [], astro_version: null, issues: [], summary: { imports_total: 0, issues_total: 0 } };
   return auditSvgFromRoot(index.root);
 }

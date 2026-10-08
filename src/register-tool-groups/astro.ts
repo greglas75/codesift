@@ -1,5 +1,5 @@
 import { z, lazySchema, type ToolDefinitionEntry, type ToolCategory } from "./shared.js";
-import { getCodeIndex, astroAnalyzeIslands, astroHydrationAudit, astroRouteMap, astroActionsAudit, astroAudit, astroConfigAnalyze, astroContentCollections, astroMiddlewareAudit, astroSessionsAudit, astroDbAudit, astroEnvValidator, astroImageAudit, astroSvgComponents, astroMigrationCheck } from "./deps.js";
+import { astroAnalyzeIslands, astroHydrationAudit, astroRouteMap, astroActionsAudit, astroAudit, astroConfigAnalyze, astroContentCollections, astroMiddlewareAudit, astroSessionsAudit, astroDbAudit, astroEnvValidator, astroImageAudit, astroSvgComponents, astroMigrationCheck } from "./deps.js";
 
 export const ASTRO_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   // --- Astro tools ---
@@ -68,7 +68,9 @@ export const ASTRO_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     })),
     handler: async (args) => {
-      const index = await getCodeIndex(args.repo as string ?? "");
+      // Only the root is needed, so the SUMMARY rather than every symbol (ADR-004 stage 2).
+      const { getIndexSummary } = await import("../tools/index-tools.js");
+      const index = await getIndexSummary(args.repo as string ?? "");
       if (!index) throw new Error("Repository not found — run index_folder first");
       return await astroConfigAnalyze({ project_root: index.root });
     },
@@ -99,7 +101,8 @@ export const ASTRO_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       validate_entries: z.boolean().default(true).describe("Validate entry frontmatter against required schema fields (default: true)"),
     })),
     handler: async (args) => {
-      const index = await getCodeIndex(args.repo as string ?? "");
+      const { getIndexSummary } = await import("../tools/index-tools.js");
+      const index = await getIndexSummary(args.repo as string ?? "");
       if (!index) throw new Error("Repository not found — run index_folder first");
       const opts: Parameters<typeof astroContentCollections>[0] = { project_root: index.root };
       if (args.validate_entries != null) opts.validate_entries = args.validate_entries as boolean;
