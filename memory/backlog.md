@@ -377,3 +377,39 @@ basename unique, which removes name-keyed collision as a possibility rather than
 (2) assert `index_status` inside `beforeEach` so the failure is attributed at setup rather than at the
 first `explore` call; (3) check whether `indexFolder`'s watcher or its detached wiki-regen child
 mutates the index after the await returns.
+
+## Deferred from the v0.21.0 review (70d3bf1..7866d32, 2026-10-08)
+
+Review: `memory/reviews/2026-10-08-v0-21-0-adr004-stage2.md`. Fixed in the same run: child
+timeouts, cache drop on child failure, the write barrier, out-of-process before listen, astro routes
+N+1, row-wise push, rankMatches storage-error rethrow, child payload checks, mock fidelity, nest
+lifecycle id pairing, a cross-root cap on concurrent index children. What follows was deferred, each with its defer-reason.
+
+- **B-0210-1 [structural-refactor (multi-file)] one `SymbolQuery` predicate.** `applySymbolQuery`
+  (storage/index-store.ts) and `filterCachedSymbols` (tools/index-tools/registry.ts) are line-for-line
+  twins, and registry.ts still says they must not share — narrow-reads.ts now imports from storage, so
+  that reason is gone. Recipe: move the predicate into storage/narrow-filters.ts next to
+  `filterByFiles`; make both call sites use it; keep the SQL `buildPredicate` as the only other
+  statement of the rule and let the backend-parity tests guard the pair.
+- **B-0210-2 [structural-refactor (multi-file)] one test helper.** tests/helpers/index-accessors-from-fixture.ts
+  (24 suites) and tests/helpers/narrow-index-mock.ts (32 suites) implement the same contract with
+  different summary-count and option-forwarding behaviour. Recipe: keep the fixture helper (it forwards
+  options), port the mock's callers to it, delete the mock.
+- **B-0210-3 [structural-refactor (multi-file)] child-run orchestration out of folder-indexer.ts.**
+  It grew 639 → 810 lines (`indexFolder` is 534). Recipe: move `childRunsByKey`,
+  `childRunTailByRoot`, `indexFolderInChild`, `adoptChildIndex` into out-of-process.ts (or a sibling
+  `child-runs.ts`), leaving `indexFolder` one `if (shouldIndexOutOfProcess()) return …` call.
+- **B-0210-4 [structural-refactor (multi-file)] resolve the repo once per tool call.** Every narrow
+  read calls `resolveRegisteredRepoMeta`, which reads and parses registry.json (~1,500 repos here).
+  Tools that read per parent/file in a loop (yii-modules, php-god-model, php-active-record,
+  php-view, yii-console, django-view-security, nest-lifecycle, sql-orphan-table) pay it N times.
+  Recipe: an accessor variant taking the resolved meta, or a batched `parent IN (…)` read like
+  `findRepoSymbolsInFiles`; measure on a 1,000-controller fixture before and after.
+- **B-0210-6 [NIT] dead `resolveHonoEntryFile` / `resolveSymbolPosition`.** Both are now reference
+  implementations their tests pin (and `positionOfSymbol`'s column logic is covered through the
+  latter). Fold the tests onto the live functions, then delete.
+- **B-0210-7 [NIT] chunked `limit`/order in `streamSymbolsSqlite` / `findSymbolsSqlite` for >900 ids.**
+  No caller passes that many ids with a limit today; the cached and DB paths would disagree if one did.
+- **B-0210-8 [NIT] test depth.** The new parity tests use fixtures under one stream page, so
+  multi-page early-stop, the 200-symbol framework sample boundary and the stale-index → not-found
+  invariant are untested; `index-out-of-process` has no crash/no-marker/bad-request child case.

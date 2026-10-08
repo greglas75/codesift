@@ -140,6 +140,28 @@ describe("indexFolder out of process", () => {
     expect(codeIndexes.get(repo)).toBeUndefined();
   }, CHILD_TIMEOUT_MS);
 
+  it("queues index children beyond the cross-root cap instead of deadlocking", async () => {
+    const a = join(scratch, "cap-a");
+    const b = join(scratch, "cap-b");
+    await writeFixture(a);
+    await writeFixture(b);
+    const saved = process.env["CODESIFT_INDEX_CHILD_CONCURRENCY"];
+    process.env["CODESIFT_INDEX_OUT_OF_PROCESS"] = "1";
+    process.env["CODESIFT_INDEX_CHILD_CONCURRENCY"] = "1";
+    try {
+      const [ra, rb] = await Promise.all([
+        indexFolder(a, { watch: false }),
+        indexFolder(b, { watch: false }),
+      ]);
+      expect(ra.repo).not.toBe(rb.repo);
+      expect(ra.symbol_count).toBeGreaterThan(0);
+      expect(rb.symbol_count).toBe(ra.symbol_count);
+    } finally {
+      if (saved === undefined) delete process.env["CODESIFT_INDEX_CHILD_CONCURRENCY"];
+      else process.env["CODESIFT_INDEX_CHILD_CONCURRENCY"] = saved;
+    }
+  }, CHILD_TIMEOUT_MS);
+
   it("reports the outcome the in-process path reports for a path that cannot be indexed", async () => {
     const missing = join(scratch, "does-not-exist");
     const outcome = async (): Promise<string> => {

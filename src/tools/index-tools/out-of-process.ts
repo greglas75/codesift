@@ -159,7 +159,38 @@ export interface IndexChildResponse {
  * when this ran in-process) and its tail is kept, because an OOM-killed child prints nothing on
  * stdout and "exited without a result" is useless without the reason.
  */
+/**
+ * At most this many index children at once, across roots. Runs serialise per root already, but N new
+ * worktrees requested together started N full-index children, each holding a whole index in its own
+ * heap with the daemon's heap flag — on the host whose daemon was already OOM-looping.
+ */
+const DEFAULT_INDEX_CHILD_CONCURRENCY = 2;
+let runningIndexChildren = 0;
+const waitingIndexChildren: Array<() => void> = [];
+
+function indexChildConcurrency(): number {
+  const raw = Number(process.env["CODESIFT_INDEX_CHILD_CONCURRENCY"]);
+  return Number.isInteger(raw) && raw > 0 ? raw : DEFAULT_INDEX_CHILD_CONCURRENCY;
+}
+
+async function withIndexChildSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (runningIndexChildren >= indexChildConcurrency()) {
+    await new Promise<void>((resolve) => waitingIndexChildren.push(resolve));
+  }
+  runningIndexChildren++;
+  try {
+    return await work();
+  } finally {
+    runningIndexChildren--;
+    waitingIndexChildren.shift()?.();
+  }
+}
+
 export function runIndexChild(request: IndexChildRequest): Promise<IndexChildResponse> {
+  return withIndexChildSlot(() => spawnIndexChild(request));
+}
+
+function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse> {
   return new Promise<IndexChildResponse>((resolve, reject) => {
     const child = spawn(
       process.execPath,
