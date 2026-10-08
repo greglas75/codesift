@@ -51,9 +51,12 @@ let daemonOptIn = 0;
 const DEFAULT_INDEX_CHILD_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 const DEFAULT_EMBED_CHILD_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 
+/** setTimeout fires immediately for anything above 2^31−1 ms, which would kill every child at once. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 function childTimeoutMs(envName: string, fallback: number): number {
   const raw = Number(process.env[envName]);
-  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, MAX_TIMER_MS) : fallback;
 }
 
 /** SIGKILL the child after `ms`; `onTimeout` runs once. The timer never keeps the daemon alive. */
@@ -221,10 +224,8 @@ function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse
     armChildTimeout(child, timeoutMs, () => { timedOut = true; });
     child.on("error", (err) => reject(err));
     child.on("close", (code, signal) => {
-      if (timedOut) {
-        reject(new Error(`index child for ${request.path} killed after ${timeoutMs} ms without a result`));
-        return;
-      }
+      // The result marker is read FIRST: a child that committed and printed its result just before
+      // the timer fired succeeded, and reporting it as killed would discard a finished index.
       for (const line of stdout.split("\n")) {
         if (line.startsWith(INDEX_CHILD_RESULT_MARKER)) {
           try {
@@ -235,7 +236,9 @@ function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse
               typeof parsed?.result?.repo !== "string" ||
               typeof parsed.result.root !== "string" ||
               typeof parsed.report !== "object" ||
-              parsed.report === null
+              parsed.report === null ||
+              Array.isArray(parsed.report) ||
+              typeof parsed.report.completed !== "boolean"
             ) {
               throw new Error(`index child for ${request.path} returned a malformed result`);
             }
@@ -250,6 +253,10 @@ function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse
           reject(new Error(line.slice(INDEX_CHILD_ERROR_MARKER.length)));
           return;
         }
+      }
+      if (timedOut) {
+        reject(new Error(`index child for ${request.path} killed after ${timeoutMs} ms without a result`));
+        return;
       }
       const tail = stderrTail.trim().split("\n").slice(-3).join(" | ");
       reject(new Error(

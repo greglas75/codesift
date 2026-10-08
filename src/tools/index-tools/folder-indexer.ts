@@ -171,8 +171,15 @@ function indexFolderInChild(
     .catch(() => undefined)
     .then(async () => {
       let response: Awaited<ReturnType<typeof runIndexChild>>;
+      // Only the child itself is an external writer. Registering the whole run (queue wait + the
+      // adoption tail) would make an incremental write wait on work that is not writing — and on
+      // anything in that tail that itself writes this index, forever. Both spellings of the path:
+      // the registry may hold the canonical root (`/private/tmp/…`) while this call got a symlink.
+      const child = runIndexChild({ path: folderPath, options: childOptions });
+      const { dataDir } = loadConfig();
+      for (const root of new Set([rootPath, rootKey])) trackExternalWriter(getIndexPath(dataDir, root), child);
       try {
-        response = await runIndexChild({ path: folderPath, options: childOptions });
+        response = await child;
       } catch (err) {
         // The child may have committed the index before failing in its tail (registry write,
         // framework detection, an OOM kill): the database is new while a resident copy here is old,
@@ -187,7 +194,6 @@ function indexFolderInChild(
   const record: ChildRun = { promise: run, wants };
   childRunsByKey.set(key, record);
   childRunTailByRoot.set(rootKey, run);
-  trackExternalWriter(getIndexPath(loadConfig().dataDir, rootPath), run);
   void run
     .finally(() => {
       if (childRunsByKey.get(key) === record) childRunsByKey.delete(key);
