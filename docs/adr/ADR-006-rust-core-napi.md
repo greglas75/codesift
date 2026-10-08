@@ -154,3 +154,26 @@ Still TypeScript: the whole-index `loadIndexSqlite` — materialising every symb
 itself, so a native fetch would not change what it holds; the fix there is callers moving to the
 narrow reads (ADR-004 stage 2). Gate still open: the measurement under disk saturation.
 
+### Third increment — `extras` copied as raw JSON
+
+Timed on the Rust side alone (`crates/codesift-core/examples/time_find.rs`): a 34,849-row read with
+source took 79 ms, of which SQLite stepping the rows is 21 ms. The biggest single cost was the
+`extras` column — parsing every row's tokens/meta into a tree and serialising it again. They are now
+copied as raw JSON text (`RawValue`): 79 → 61 ms, and the stored text reaches the JS parser
+unchanged, so numbers and key order cannot drift. A hand-written string escaper was tried and
+measured slower than serde's (60 → 80 ms), so it was not kept.
+
+Re-measured after it (same index, Mac at load 7–17, median of 5):
+
+| op | rows | block TS → Rust | wall TS → Rust |
+|---|---:|---:|---:|
+| meta | 1 | 11.1 → 2.0 ms | 8.2 → 6.9 ms |
+| prefix=get | 10,434 | 120 → 15 ms | 117 → 104 ms |
+| kind=function | 34,849 | 127 → 26 ms | 122 → 99 ms |
+| kind=function + source | 34,849 | 121 → 43 ms | 118 → 143 ms |
+| kind=variable | 98,420 | 312 → 50 ms | 309 → 203 ms |
+| stream all + source | 352,694 | 72 → 43 ms | 1,048 → 1,400 ms |
+
+Parity re-verified: 0 differences on the five indexes, fresh seed, 5.6M rows. The remaining wall-time
+cost is confined to source-heavy reads (+22% find, +34% stream).
+

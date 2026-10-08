@@ -10,9 +10,9 @@ description = "CodeSift core: storage, search and parsing, independent of Node"
 # `bundled`: SQLite is compiled in, so the core never depends on whatever libsqlite3 a host has.
 # Same on-disk format as node:sqlite's bundled copy — rule 1 of ADR-006 (no format change).
 rusqlite = { version = "0.40", features = ["bundled"] }
-# `preserve_order`: `meta` inside `extras` is re-emitted, and its key order must survive so the
-# JSON.parse on the JS side builds the same object the TypeScript path builds.
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# `raw_value`: the `extras` column's values are copied as raw JSON text (see `write_extras`), so
+# the JS side's JSON.parse sees exactly the text the TypeScript path parses.
+serde_json = { version = "1", features = ["raw_value"] }
 
 [dev-dependencies]
 tempfile = "3"

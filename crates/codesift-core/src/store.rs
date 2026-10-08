@@ -16,6 +16,7 @@
 //! the TypeScript `openIndexDb`, which the JS facade runs once per database before the first native
 //! read. This module only ever issues SELECTs.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
@@ -23,6 +24,7 @@ use std::time::Duration;
 
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{Connection, OpenFlags, Statement};
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 /// Must match `MAX_BOUND_PARAMS` in queries.ts: chunk boundaries decide where `limit` cuts.
@@ -467,6 +469,9 @@ fn write_value(out: &mut Vec<u8>, v: ValueRef<'_>) -> Result<()> {
     Ok(())
 }
 
+/// A JSON string literal. serde's escaper, deliberately: a hand-written run-copying escaper was
+/// measured SLOWER here (60 -> 80 ms on a 38 MB source-heavy read) — serde's 256-entry lookup table
+/// beats a per-byte `match`. `string_escaping_round_trips` holds whichever is used to round-tripping.
 fn write_json_str(out: &mut Vec<u8>, s: &str) -> Result<()> {
     serde_json::to_writer(&mut *out, s).map_err(json_err)
 }
@@ -481,23 +486,39 @@ fn json_err(e: serde_json::Error) -> StoreError {
 /// The `extras` column: `JSON.parse` it, then copy tokens, decorators, extends, implements, meta —
 /// in that order, each only if the key is PRESENT (a stored `null` is copied as `null`, exactly as
 /// `extras.tokens !== undefined` lets it through).
+///
+/// The values are copied as RAW JSON text (`RawValue`), never rebuilt into a tree: the JS side
+/// parses them anyway, and parsing + re-serialising every row's tokens and meta was the largest
+/// single cost of a native read. Raw text also keeps every number and every key order exactly as
+/// stored, and a duplicate key resolves to its LAST occurrence — the map insert overwrites, as
+/// `JSON.parse` does.
+///
+/// Non-object JSON mirrors what the TS mapper does with `JSON.parse`'s result: an array, string,
+/// number or boolean has no such properties (nothing copied); `null` makes `extras.tokens` throw,
+/// so it fails here too; invalid JSON fails like `JSON.parse` does.
 fn write_extras(out: &mut Vec<u8>, first: &mut bool, raw: &[u8]) -> Result<()> {
-    let parsed: Value = serde_json::from_slice(raw).map_err(|e| StoreError {
+    let malformed = |detail: String| StoreError {
         sqlite_code: None,
-        message: format!("malformed extras column: {e}"),
-    })?;
-    let Value::Object(map) = parsed else {
-        // The TS mapper reads `extras.tokens` off whatever JSON.parse returned; on `null` that
-        // throws. Refuse just as loudly rather than inventing an answer.
-        return Err(StoreError {
-            sqlite_code: None,
-            message: "malformed extras column: not a JSON object".to_string(),
-        });
+        message: format!("malformed extras column: {detail}"),
     };
+    let text = std::str::from_utf8(raw).map_err(|e| malformed(e.to_string()))?;
+    match text.trim_start().as_bytes().first() {
+        Some(b'{') => {}
+        Some(b'n') => {
+            let _: Value = serde_json::from_str(text).map_err(|e| malformed(e.to_string()))?;
+            return Err(malformed("null".to_string()));
+        }
+        _ => {
+            let _: &RawValue = serde_json::from_str(text).map_err(|e| malformed(e.to_string()))?;
+            return Ok(());
+        }
+    }
+    let map: HashMap<String, &RawValue> =
+        serde_json::from_str(text).map_err(|e| malformed(e.to_string()))?;
     for key in ["tokens", "decorators", "extends", "implements", "meta"] {
         if let Some(v) = map.get(key) {
             write_key(out, first, key);
-            serde_json::to_writer(&mut *out, v).map_err(json_err)?;
+            out.extend_from_slice(v.get().as_bytes());
         }
     }
     Ok(())
@@ -805,6 +826,71 @@ mod tests {
         assert_eq!(all.count, 3, "{}", all.json);
         drop(snap);
         assert!(one(&q(), &p).contains("late"));
+    }
+
+    #[test]
+    fn extras_mirror_json_parse_for_odd_but_valid_shapes() {
+        let (_d, p) = db();
+        let c = Connection::open(&p).unwrap();
+        c.execute_batch(
+            r#"INSERT INTO symbols (id,file,name,kind,start_line,end_line,extras) VALUES
+                 ('a','x.ts','arr','function',1,1,'[1,2]'),
+                 ('d','x.ts','dup','function',1,1,'{"tokens":["first"],"tokens":["last"],"meta":{"n":1.50,"k":1e3}}');"#,
+        )
+        .unwrap();
+        let arr = one(
+            &SymbolQuery {
+                name: Some("arr".into()),
+                ..q()
+            },
+            &p,
+        );
+        assert!(
+            !arr.contains("tokens") && arr.ends_with(r#""end_line":1}]"#),
+            "{arr}"
+        );
+        let dup = one(
+            &SymbolQuery {
+                name: Some("dup".into()),
+                ..q()
+            },
+            &p,
+        );
+        // Last occurrence wins; numbers keep their stored spelling (JSON.parse reads 1.50 as 1.5).
+        assert!(
+            dup.contains(r#""tokens":["last"],"meta":{"n":1.50,"k":1e3}"#),
+            "{dup}"
+        );
+        c.execute_batch(
+            "INSERT INTO symbols (id,file,name,kind,start_line,end_line,extras) VALUES ('n','x.ts','nul','function',1,1,'null')",
+        )
+        .unwrap();
+        let err = find_symbols_json(
+            &p,
+            &SymbolQuery {
+                name: Some("nul".into()),
+                ..q()
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("malformed extras"), "{err}");
+    }
+
+    #[test]
+    fn string_escaping_round_trips() {
+        let cases = [
+            "",
+            "plain ascii",
+            "quote \" backslash \\ slash /",
+            "newline\n tab\t cr\r bs\u{8} ff\u{c} nul\u{0} unit\u{1f}",
+            "zażółć gęślą jaźń 中文 🚀 \u{2028} \u{2029} \u{7f}",
+        ];
+        for case in cases {
+            let mut out = Vec::new();
+            write_json_str(&mut out, case).unwrap();
+            let back: String = serde_json::from_slice(&out).unwrap();
+            assert_eq!(back, case, "{}", String::from_utf8_lossy(&out));
+        }
     }
 
     #[test]
