@@ -144,7 +144,7 @@ jobs:
       - name: Build the addon
         run: npm run build:native
 
-      - name: Loader tests against the built addon
+      - name: Native tests and the storage suite against the built addon
         env:
           CODESIFT_NATIVE: "1"
-        run: npx vitest run tests/native
+        run: npx vitest run tests/native tests/storage

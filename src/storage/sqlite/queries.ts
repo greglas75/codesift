@@ -1,8 +1,9 @@
 import type { CodeSymbol } from "../../types.js";
 import { openIndexDb, openReadConnection, readMetaValue } from "./connection.js";
-import { rethrowOperational } from "./errors.js";
+import { classifyStorageError, rethrowOperational } from "./errors.js";
 import { rowToSymbol, type SymbolRow } from "./rows.js";
 import { nextPageRows } from "./index-io.js";
+import { getNativeCore, type NativeCore } from "../../native/index.js";
 
 /**
  * Ask the database for the rows a tool needs, instead of materialising the whole index.
@@ -109,10 +110,68 @@ export function rowToSymbolNoSource(row: Omit<SymbolRow, "source">, repo: string
   return rowToSymbol({ ...row, source: null } as SymbolRow, repo);
 }
 
+/**
+ * The Rust core, when it serves this database (ADR-006 stage 1), else null.
+ *
+ * `openIndexDb` still runs first, through the TypeScript driver, and is cached after the first
+ * call per path. It owns everything that WRITES on open — schema creation, the v1 -> v2 migration,
+ * the newer `kind`/`parent` indexes — and the "written by a newer CodeSift" refusal. Skipping it
+ * would let the native reader scan an old database without `idx_symbols_kind` (2 s instead of
+ * 32 ms) or read one written by a newer schema; the Rust side therefore only ever issues SELECTs.
+ *
+ * `:memory:` stays on TypeScript: an in-memory database is private to the connection that made it,
+ * so a second connection would see an empty one.
+ */
+async function nativeStoreFor(dbPath: string): Promise<NativeCore | null> {
+  if (dbPath === ":memory:") return null;
+  const core = getNativeCore("store");
+  if (!core) return null;
+  await openIndexDb(dbPath);
+  return core;
+}
+
+/**
+ * Route a native failure through the SAME classifier as the TypeScript path.
+ *
+ * The binding reports SQLite faults as `[sqlite:<extended code>] <message>`; the code goes back on
+ * as `errcode`, which is the field `classifyStorageError` reads for node:sqlite errors. A locked or
+ * corrupt database must become an `IndexStorageError` whichever implementation met it — otherwise
+ * the fault falls into the "not indexed" branch, the failure this store's error handling exists for.
+ */
+export function rethrowNative(err: unknown, dbPath: string): never {
+  const message = err instanceof Error ? err.message : String(err);
+  const tagged = /^\[sqlite:(-?\d+)\] /.exec(message);
+  if (tagged) {
+    const like = Object.assign(new Error(message.slice(tagged[0].length)), { errcode: Number(tagged[1]) });
+    // Unclassified (e.g. a plain SQLITE_ERROR) keeps the original error and its stack.
+    if (classifyStorageError(like) !== null) rethrowOperational(like, dbPath);
+  }
+  throw err;
+}
+
 export async function findSymbolsSqlite(
   dbPath: string,
   query: SymbolQuery,
 ): Promise<CodeSymbol[]> {
+  const native = await nativeStoreFor(dbPath);
+  if (native) {
+    let chunks: string[];
+    try {
+      chunks = await native.findSymbols(dbPath, query);
+    } catch (err) {
+      rethrowNative(err, dbPath);
+    }
+    // The only part of the query that runs on the event loop — one ~4 MB parse at a time, yielding
+    // between them, so a large result costs other clients a few ms per chunk, not its whole size.
+    if (chunks.length === 1) return JSON.parse(chunks[0]!) as CodeSymbol[];
+    const out: CodeSymbol[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      for (const s of JSON.parse(chunks[i]!) as CodeSymbol[]) out.push(s);
+      chunks[i] = ""; // release the text as soon as it is parsed
+    }
+    return out;
+  }
   const db = await openIndexDb(dbPath);
   try {
     const repo = readMetaValue(db, "repo");
@@ -225,6 +284,23 @@ export async function streamSymbolsSqlite(
  * (`nest-pipeline-tools.ts:45`, `sql-dml-safety-tools.ts:32`).
  */
 export async function getIndexMetaSqlite(dbPath: string): Promise<IndexMeta | null> {
+  const native = await nativeStoreFor(dbPath);
+  if (native) {
+    let m: Awaited<ReturnType<NativeCore["indexMeta"]>>;
+    try {
+      m = await native.indexMeta(dbPath);
+    } catch (err) {
+      rethrowNative(err, dbPath);
+    }
+    if (m === null) return null;
+    return {
+      repo: m.repo,
+      root: m.root,
+      updatedAt: Number(m.updatedAt ?? 0),
+      symbolCount: m.symbolCount,
+      fileCount: m.fileCount,
+    };
+  }
   const db = await openIndexDb(dbPath);
   try {
     const repo = readMetaValue(db, "repo");

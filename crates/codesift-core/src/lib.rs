@@ -2,13 +2,15 @@
 //! tool logic: index storage, BM25, parsing (ADR-006). Nothing here knows about Node; the
 //! `codesift-napi` crate is the only binding layer.
 
+pub mod store;
+
 /// Shape version of the surface `codesift-napi` exposes to JS.
 ///
 /// The loader (`src/native/index.ts`, `NATIVE_ABI`) refuses a binary whose number differs. A
 /// stale `.node` left in `native/` by an older build would otherwise be loaded and called with
 /// arguments it does not understand — the same failure as a daemon running replaced files, one
 /// layer down. Bump it on ANY change to an exported function's name, arguments or result.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// Version of this crate, so `/health` can say which core build is loaded.
 pub fn version() -> &'static str {

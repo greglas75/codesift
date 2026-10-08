@@ -20,7 +20,12 @@ component keeps its TS implementation; the binary is OPTIONAL.
   Dev hosts use rustup for `greglas`, pinned straight to 1.99.0: the Mac and ryzen-dev (ryzen-old-1).
 - Rustup treats `1.99.0` and `stable` as DIFFERENT toolchains even when they are the same build — a
   fresh `rustup` install plus this repo's pin downloads the compiler twice. `rustup default 1.99.0`.
-- Rust checks run on the farm, not the Mac: `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
+- **Stage 1 (store):** `findSymbolsSqlite`/`getIndexMetaSqlite` go native when loaded — query off the
+  main thread, results as ≤4 MB JSON chunks parsed with yields. Parity: `node --max-old-space-size=12288
+  --import tsx scripts/native-parity.ts <copy of an index.db>` (0 diffs on 5 real indexes);
+  benchmark: `scripts/bench-store.ts`. Measurements in ADR-006. Never one JSON string per result — a
+  conversation index here hits V8's ~512 MB string limit.
+- Rust checks run on the farm, not the Mac: `rt rust` (profile in `.tf.json`), or `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
   The darwin addon can only be built on a Mac (`TF_ALLOW_LOCAL=1 npm run build:native`).
 
 ## Response Hint Codes

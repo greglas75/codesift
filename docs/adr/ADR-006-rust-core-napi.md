@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 in progress)
+**Status:** Accepted (stage 0 done; stage 1 first increment shipped)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -94,3 +94,45 @@ Rules that hold across all of them:
   component until the TypeScript one is retired.
 - **Retiring a TypeScript implementation** is its own decision, taken only after the native one has
   been the default for at least one release with zero parity failures — not as part of porting it.
+
+## Stage 1, first increment — measured (2026-10-08)
+
+`findSymbolsSqlite` and `getIndexMetaSqlite` dispatch to Rust when the core is loaded
+(`CODESIFT_NATIVE_STORE`). The query runs on the libuv pool and returns JSON arrays of at most 4 MB;
+the JS side parses one chunk at a time and yields between them. `openIndexDb` still runs first on
+the TypeScript driver (cached per path), so schema creation, migration and the newer-schema refusal
+are unchanged and Rust only issues SELECTs. Failures carry SQLite's extended code back into the same
+`classifyStorageError`.
+
+**Parity on real indexes** (`scripts/native-parity.ts`, query matrix drawn from each index's own
+values, compared element by element after `JSON.stringify`): **0 differences** on ResearchShieldNew
+(122 queries, 763,052 rows), rdesigner (649,245 rows), codesift (71,694), and two conversation
+indexes (265,445 and 3,669,264 rows).
+
+**One defect found before it shipped:** the first version returned ONE JSON string. A conversation
+index here holds ~330 MB of raw text, so a full-source query sat at V8's ~512 MB string limit — the
+native path would have thrown where TypeScript answers. Results are chunked since.
+
+**Benchmark** (`scripts/bench-store.ts`, 352,694-symbol index, warm page cache, Mac at load ~8, median
+of 5). `block` = longest stretch the event loop ran no timer, i.e. what every other client waited:
+
+| op | rows | block TS → Rust | wall TS → Rust |
+|---|---:|---:|---:|
+| meta | 1 | 8.9 → 2.9 ms | 6.5 → 8.2 ms |
+| prefix=get | 10,434 | 119 → 16 ms | 116 → 114 ms |
+| kind=function | 34,849 | 113 → 30 ms | 110 → 105 ms |
+| kind=function + source | 34,849 | 107 → 45 ms | **104 → 164 ms** |
+| kind=variable | 98,420 | 320 → 52 ms | 317 → 225 ms |
+
+What it does and does not buy: the loop is blocked 4–7x less, which is the property the daemon
+incidents were about — and on a saturated disk, where a read is a blocking syscall, the TypeScript
+block grows with the I/O while the Rust one does not (gate measurement under load still to do).
+Wall time for source-heavy queries is WORSE on a warm cache: the text is copied through JSON twice
+(escape in Rust, transcode + parse in V8). Retained heap is unchanged (+5–10%) — results are still
+JS objects, so memory falls only as callers move from whole-index loads to narrow queries. Remaining
+block is mostly napi converting all chunk strings in one `resolve`; returning Buffers decoded per
+chunk would cut it further.
+
+Not yet native: `streamSymbolsSqlite` (needs a cursor holding one snapshot across calls) and the
+whole-index `loadIndexSqlite`.
+

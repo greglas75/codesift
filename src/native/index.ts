@@ -19,11 +19,35 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 1;
+export const NATIVE_ABI = 2;
+
+/** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
+export interface NativeSymbolQuery {
+  withSource: boolean;
+  file?: string;
+  name?: string;
+  namePrefix?: string;
+  kind?: string;
+  parent?: string;
+  ids?: readonly string[];
+  limit?: number;
+}
+
+export interface NativeIndexMeta {
+  repo: string;
+  root: string;
+  updatedAt?: string | null;
+  symbolCount: number;
+  fileCount: number;
+}
 
 export interface NativeCore {
   version(): string;
   abiVersion(): number;
+  /** Matching symbols as JSON arrays to concatenate in order — chunked so no single string nears
+   *  V8's ~512 MB limit — built off the main thread (ADR-006 stage 1). */
+  findSymbols(dbPath: string, query: NativeSymbolQuery): Promise<string[]>;
+  indexMeta(dbPath: string): Promise<NativeIndexMeta | null>;
 }
 
 export type NativeMode = "auto" | "off" | "required";

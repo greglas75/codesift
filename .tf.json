@@ -1,5 +1,11 @@
 {
   "node": "24",
   "build": "npm run download-wasm && npm run build && export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && npm run build:native -- --debug",
-  "test": "npx vitest run"
+  "test": "npx vitest run",
+  "profiles": {
+    "rust": {
+      "build": false,
+      "test": "export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+    }
+  }
 }
