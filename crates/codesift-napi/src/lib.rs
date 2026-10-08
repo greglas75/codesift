@@ -2,6 +2,7 @@
 //! `codesift_core`, conversion out. Any logic that grows here is logic `cargo test` cannot reach.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use codesift_core::store::{self, StoreError, SymbolQuery};
 use napi::bindgen_prelude::AsyncTask;
@@ -120,4 +121,124 @@ pub fn index_meta(db_path: String) -> AsyncTask<IndexMetaTask> {
     AsyncTask::new(IndexMetaTask {
         db_path: PathBuf::from(db_path),
     })
+}
+
+/// A read snapshot held across pages (see `store::Snapshot`). The connection lives behind a mutex
+/// because each page is fetched on a pool thread; `close` (or GC) ends the read transaction.
+#[napi]
+pub struct SymbolSnapshot {
+    inner: Arc<Mutex<Option<store::Snapshot>>>,
+    repo: Option<String>,
+}
+
+#[napi]
+impl SymbolSnapshot {
+    /// The index's repo, or `null` when the database holds no index.
+    #[napi(getter)]
+    pub fn repo(&self) -> Option<String> {
+        self.repo.clone()
+    }
+
+    /// One page, fetched on the libuv pool.
+    #[napi]
+    pub fn page(
+        &self,
+        query: SymbolQueryJs,
+        id_chunk: Option<Vec<String>>,
+        after_rowid: i64,
+        rows: i64,
+    ) -> AsyncTask<PageTask> {
+        AsyncTask::new(PageTask {
+            inner: Arc::clone(&self.inner),
+            query: query.into(),
+            id_chunk,
+            after_rowid,
+            rows,
+        })
+    }
+
+    /// End the read transaction now rather than at garbage collection.
+    #[napi]
+    pub fn close(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.take();
+        }
+    }
+}
+
+pub struct OpenSnapshotTask {
+    db_path: PathBuf,
+}
+
+impl Task for OpenSnapshotTask {
+    type Output = store::Snapshot;
+    type JsValue = SymbolSnapshot;
+
+    fn compute(&mut self) -> napi::Result<store::Snapshot> {
+        store::Snapshot::open(&self.db_path).map_err(to_napi)
+    }
+
+    fn resolve(&mut self, _env: Env, output: store::Snapshot) -> napi::Result<SymbolSnapshot> {
+        let repo = output.repo().map(str::to_string);
+        Ok(SymbolSnapshot {
+            inner: Arc::new(Mutex::new(Some(output))),
+            repo,
+        })
+    }
+}
+
+/// Open a read snapshot of the index for paged reading.
+#[napi]
+pub fn open_snapshot(db_path: String) -> AsyncTask<OpenSnapshotTask> {
+    AsyncTask::new(OpenSnapshotTask {
+        db_path: PathBuf::from(db_path),
+    })
+}
+
+#[napi(object)]
+pub struct PageJs {
+    pub json: String,
+    pub count: i64,
+    pub last_rowid: Option<i64>,
+}
+
+pub struct PageTask {
+    inner: Arc<Mutex<Option<store::Snapshot>>>,
+    query: SymbolQuery,
+    id_chunk: Option<Vec<String>>,
+    after_rowid: i64,
+    rows: i64,
+}
+
+impl Task for PageTask {
+    type Output = store::Page;
+    type JsValue = PageJs;
+
+    fn compute(&mut self) -> napi::Result<store::Page> {
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "snapshot lock poisoned"))?;
+        let Some(snap) = guard.as_ref() else {
+            return Err(napi::Error::new(
+                Status::GenericFailure,
+                "snapshot already closed",
+            ));
+        };
+        snap.page(
+            &self.query,
+            self.id_chunk.as_deref(),
+            self.after_rowid,
+            self.rows,
+        )
+        .map_err(to_napi)
+    }
+
+    fn resolve(&mut self, _env: Env, p: store::Page) -> napi::Result<PageJs> {
+        Ok(PageJs {
+            json: p.json,
+            count: p.count,
+            last_rowid: p.last_rowid,
+        })
+    }
 }

@@ -145,8 +145,11 @@ export function rethrowNative(err: unknown, dbPath: string): never {
     const like = Object.assign(new Error(message.slice(tagged[0].length)), { errcode: Number(tagged[1]) });
     // Unclassified (e.g. a plain SQLITE_ERROR) keeps the original error and its stack.
     if (classifyStorageError(like) !== null) rethrowOperational(like, dbPath);
+    throw err;
   }
-  throw err;
+  // Not from SQLite — but classified like anything else the TypeScript path catches, so a fault
+  // raised by a stream's own callback is treated identically on both paths.
+  rethrowOperational(err, dbPath);
 }
 
 export async function findSymbolsSqlite(
@@ -224,6 +227,8 @@ export async function streamSymbolsSqlite(
    *  abandon a scan without reading the rest of the table. */
   onBatch: (batch: CodeSymbol[]) => void | boolean | Promise<void | boolean>,
 ): Promise<void> {
+  const native = await nativeStoreFor(dbPath);
+  if (native) return streamSymbolsNative(native, dbPath, query, onBatch);
   const reader = await openReadConnection(dbPath);
   try {
     const repo = readMetaValue(reader, "repo");
@@ -275,6 +280,55 @@ export async function streamSymbolsSqlite(
     rethrowOperational(err, dbPath);
   } finally {
     try { reader.close(); } catch { /* already gone */ }
+  }
+}
+
+/**
+ * The native half of `streamSymbolsSqlite`: the SAME loop, with only the page fetch moved to Rust.
+ *
+ * Page sizing by time budget, termination on an empty page, the limit (counted per id chunk, as the
+ * loop above counts it), early stop and the yields are all this function's — copied, not
+ * re-derived, so the two paths cannot disagree about which symbols a stream delivers. What Rust adds
+ * is that a page is read off the main thread, from one snapshot held open for the whole stream.
+ */
+async function streamSymbolsNative(
+  native: NativeCore,
+  dbPath: string,
+  query: SymbolQuery,
+  onBatch: (batch: CodeSymbol[]) => void | boolean | Promise<void | boolean>,
+): Promise<void> {
+  let snapshot: Awaited<ReturnType<NativeCore["openSnapshot"]>>;
+  try {
+    snapshot = await native.openSnapshot(dbPath);
+  } catch (err) {
+    rethrowNative(err, dbPath);
+  }
+  try {
+    if (snapshot.repo === null || snapshot.repo === undefined) return;
+    for (const idChunk of chunkIds(query.ids)) {
+      let cursor = 0;
+      let rows = 50;
+      let seen = 0;
+      for (;;) {
+        const started = Date.now();
+        const page = await snapshot.page(query, idChunk, cursor, rows);
+        if (page.count === 0) break;
+        cursor = page.lastRowid!;
+        const batch = JSON.parse(page.json) as CodeSymbol[];
+        seen += batch.length;
+        if (query.limit !== undefined && seen >= query.limit) {
+          await onBatch(batch.slice(0, batch.length - (seen - query.limit)));
+          break;
+        }
+        if ((await onBatch(batch)) === false) break;
+        rows = nextPageRows(rows, Date.now() - started);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+  } catch (err) {
+    rethrowNative(err, dbPath);
+  } finally {
+    snapshot.close();
   }
 }
 

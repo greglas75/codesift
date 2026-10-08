@@ -16,6 +16,7 @@ import {
   findSymbolsSqlite,
   getIndexMetaSqlite,
   rethrowNative,
+  streamSymbolsSqlite,
   type SymbolQuery,
 } from "../../src/storage/sqlite/queries.js";
 import { closeAllIndexDbs } from "../../src/storage/sqlite/connection.js";
@@ -116,6 +117,42 @@ describe.skipIf(!native)("native store parity with the TypeScript read path", ()
     expect(rs).toEqual(ts);
     // toEqual ignores key order and undefined-vs-absent; serialised tool output does not.
     expect(JSON.stringify(rs)).toBe(JSON.stringify(ts));
+  });
+
+  // Page sizes follow a time budget, so batch BOUNDARIES legitimately differ between runs; the
+  // flattened sequence must not.
+  it.each(QUERIES)("stream: %s", async (_label, q) => {
+    const collect = async (impl: "ts" | "native") => {
+      process.env["CODESIFT_NATIVE_STORE"] = impl === "ts" ? "0" : "1";
+      const all: CodeSymbol[] = [];
+      await streamSymbolsSqlite(dbPath, q, (batch) => {
+        all.push(...batch);
+      });
+      return all;
+    };
+    const ts = await collect("ts");
+    const rs = await collect("native");
+    expect(JSON.stringify(rs)).toBe(JSON.stringify(ts));
+  });
+
+  it("stream: stops when the callback returns false, after the first batch", async () => {
+    process.env["CODESIFT_NATIVE_STORE"] = "1";
+    let calls = 0;
+    await streamSymbolsSqlite(dbPath, { withSource: false }, () => {
+      calls++;
+      return false;
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("stream: a callback's own error reaches the caller unchanged", async () => {
+    process.env["CODESIFT_NATIVE_STORE"] = "1";
+    const boom = new Error("callback failed");
+    await expect(
+      streamSymbolsSqlite(dbPath, { withSource: false }, () => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
   });
 
   it("keeps an unselected source ABSENT, not undefined", async () => {

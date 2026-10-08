@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 2;
+export const NATIVE_ABI = 3;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -41,6 +41,20 @@ export interface NativeIndexMeta {
   fileCount: number;
 }
 
+/** One page of a paged read (`SymbolSnapshot.page`). `lastRowid` is null on an empty page. */
+export interface NativePage {
+  json: string;
+  count: number;
+  lastRowid?: number | null;
+}
+
+/** A read transaction held across pages; `close()` ends it. */
+export interface NativeSymbolSnapshot {
+  readonly repo: string | null;
+  page(query: NativeSymbolQuery, idChunk: readonly string[] | undefined, afterRowid: number, rows: number): Promise<NativePage>;
+  close(): void;
+}
+
 export interface NativeCore {
   version(): string;
   abiVersion(): number;
@@ -48,6 +62,7 @@ export interface NativeCore {
    *  V8's ~512 MB limit — built off the main thread (ADR-006 stage 1). */
   findSymbols(dbPath: string, query: NativeSymbolQuery): Promise<string[]>;
   indexMeta(dbPath: string): Promise<NativeIndexMeta | null>;
+  openSnapshot(dbPath: string): Promise<NativeSymbolSnapshot>;
 }
 
 export type NativeMode = "auto" | "off" | "required";

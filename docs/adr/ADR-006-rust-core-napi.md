@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1 first increment shipped)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -133,6 +133,24 @@ JS objects, so memory falls only as callers move from whole-index loads to narro
 block is mostly napi converting all chunk strings in one `resolve`; returning Buffers decoded per
 chunk would cut it further.
 
-Not yet native: `streamSymbolsSqlite` (needs a cursor holding one snapshot across calls) and the
-whole-index `loadIndexSqlite`.
+### Second increment — `streamSymbolsSqlite`
+
+The paging LOOP stays in TypeScript (time-budget page sizing, stop on an empty page, the limit, the
+yields); only each page's fetch moves to Rust, from one read transaction held for the whole stream
+(`Snapshot` / `SymbolSnapshot`). Copying the loop instead of re-deriving it is what keeps the two
+paths from disagreeing about which symbols a stream delivers. Parity including streams: 0
+differences on the same five indexes with a new seed (5.8M rows).
+
+| op | rows | block TS → Rust | wall TS → Rust |
+|---|---:|---:|---:|
+| stream all + source | 352,694 | 62 → 41 ms | **938 → 1,443 ms** |
+
+The same trade as source-heavy finds, larger: less blocking, more wall time, because every source
+string crosses JSON twice. If the gate measurement under load does not show the block reduction
+paying for that, the source column is the thing to move off JSON (e.g. a parallel array of strings
+created in `resolve`), not the approach.
+
+Still TypeScript: the whole-index `loadIndexSqlite` — materialising every symbol into V8 is the cost
+itself, so a native fetch would not change what it holds; the fix there is callers moving to the
+narrow reads (ADR-004 stage 2). Gate still open: the measurement under disk saturation.
 

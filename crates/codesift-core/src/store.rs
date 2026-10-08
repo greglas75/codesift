@@ -1,9 +1,9 @@
 //! Read path of the SQLite index (ADR-006 stage 1).
 //!
 //! Mirrors `src/storage/sqlite/queries.ts` — same SQL, same predicates, same row-to-symbol mapping
-//! as `rowToSymbol` in `rows.ts` — but produces the result as ONE JSON array of symbols, built off
-//! the Node main thread. The JS side does a single `JSON.parse`, which is the only part of the
-//! query that still runs on the event loop.
+//! as `rowToSymbol` in `rows.ts` — but produces the result as JSON arrays of symbols, built off the
+//! Node main thread. The JS side parses them, which is the only part of a query that still runs on
+//! the event loop.
 //!
 //! Why JSON and not napi objects: building 100k objects through N-API runs on the main thread and
 //! costs more than V8 parsing the same data from text. JSON also expresses the contract the TS path
@@ -21,7 +21,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::types::ValueRef;
+use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{Connection, OpenFlags, Statement};
 use serde_json::Value;
 
@@ -125,34 +125,34 @@ fn read_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
 }
 
 /// `buildPredicate` in queries.ts, clause for clause and in the same order.
-fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec<String>) {
+fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec<SqlValue>) {
     let mut clauses: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
+    let mut binds: Vec<SqlValue> = Vec::new();
     if let Some(v) = &q.file {
         clauses.push("file = ?".into());
-        binds.push(v.clone());
+        binds.push(SqlValue::Text(v.clone()));
     }
     if let Some(v) = &q.name {
         clauses.push("name = ?".into());
-        binds.push(v.clone());
+        binds.push(SqlValue::Text(v.clone()));
     }
     if let Some(v) = &q.name_prefix {
         // A literal % or _ in a symbol name must not become a wildcard.
         clauses.push("name LIKE ? ESCAPE '\\'".into());
-        binds.push(format!("{}%", escape_like(v)));
+        binds.push(SqlValue::Text(format!("{}%", escape_like(v))));
     }
     if let Some(v) = &q.kind {
         clauses.push("kind = ?".into());
-        binds.push(v.clone());
+        binds.push(SqlValue::Text(v.clone()));
     }
     if let Some(v) = &q.parent {
         clauses.push("parent = ?".into());
-        binds.push(v.clone());
+        binds.push(SqlValue::Text(v.clone()));
     }
     if let Some(chunk) = id_chunk {
         let marks = vec!["?"; chunk.len()].join(",");
         clauses.push(format!("id IN ({marks})"));
-        binds.extend(chunk.iter().cloned());
+        binds.extend(chunk.iter().cloned().map(SqlValue::Text));
     }
     let sql = if clauses.is_empty() {
         String::new()
@@ -291,24 +291,26 @@ fn find_in_snapshot(conn: &Connection, q: &SymbolQuery, chunk_bytes: usize) -> R
         };
         let sql = format!("SELECT {columns} FROM symbols {pred}{limit_sql}");
         let mut stmt = conn.prepare(&sql)?;
-        emitted += write_rows(&mut stmt, &binds, &repo, &mut out)?;
+        emitted += write_rows(&mut stmt, &binds, &repo, &mut out)?.0;
     }
     out.finish()
 }
 
-/// Write each row of `stmt` as a symbol object; returns how many were written.
+/// Write each row of `stmt` as a symbol object; returns how many were written and, when the query
+/// selected `rowid AS _rid`, the last row's rowid (the paged reader's cursor).
 fn write_rows(
     stmt: &mut Statement<'_>,
-    binds: &[String],
+    binds: &[SqlValue],
     repo: &str,
     out: &mut Chunks,
-) -> Result<i64> {
+) -> Result<(i64, Option<i64>)> {
     let names: Vec<String> = stmt
         .column_names()
         .into_iter()
         .map(str::to_string)
         .collect();
     let col = |n: &str| names.iter().position(|c| c == n);
+    let rid = col("_rid");
     let idx = ColumnIndex {
         id: col("id"),
         file: col("file"),
@@ -330,11 +332,15 @@ fn write_rows(
     };
     let mut rows = stmt.query(rusqlite::params_from_iter(binds.iter()))?;
     let mut count = 0;
+    let mut last_rid = None;
     while let Some(row) = rows.next()? {
         write_symbol(row, &idx, repo, out.begin_item()?)?;
+        if let Some(r) = rid {
+            last_rid = Some(row.get::<_, i64>(r)?);
+        }
         count += 1;
     }
-    Ok(count)
+    Ok((count, last_rid))
 }
 
 struct ColumnIndex {
@@ -497,6 +503,93 @@ fn write_extras(out: &mut Vec<u8>, first: &mut bool, raw: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// One page of a paged read: the symbols as a JSON array, how many, and the rowid to resume after.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    pub json: String,
+    pub count: i64,
+    pub last_rowid: Option<i64>,
+}
+
+/// A read transaction held open across pages — the native half of `streamSymbolsSqlite`.
+///
+/// The paging LOOP stays in TypeScript (page sizing by time budget, stop on an empty page, the
+/// limit, the yields), so its semantics are the TypeScript ones by construction; only the fetch of
+/// each page moves here. What this type owns is the property the TS reader gets from its private
+/// connection: every page comes from ONE snapshot, so a commit landing between two pages can never
+/// make one stream a mixture of two database states.
+pub struct Snapshot {
+    conn: Connection,
+    repo: Option<String>,
+}
+
+impl Snapshot {
+    pub fn open(db_path: &Path) -> Result<Snapshot> {
+        let conn = open(db_path)?;
+        conn.execute_batch("BEGIN")?;
+        // A deferred BEGIN takes its snapshot at the first read; reading `repo` here pins it now,
+        // before the caller has seen anything.
+        let repo = read_meta(&conn, "repo")?;
+        Ok(Snapshot { conn, repo })
+    }
+
+    /// `None` when the database holds no index — the stream then delivers nothing.
+    pub fn repo(&self) -> Option<&str> {
+        self.repo.as_deref()
+    }
+
+    /// Up to `rows` matches with rowid greater than `after_rowid`, in rowid order — the statement
+    /// `streamSymbolsSqlite` prepares, with the same predicate.
+    pub fn page(
+        &self,
+        q: &SymbolQuery,
+        id_chunk: Option<&[String]>,
+        after_rowid: i64,
+        rows: i64,
+    ) -> Result<Page> {
+        let Some(repo) = self.repo.as_deref() else {
+            return Ok(Page {
+                json: "[]".to_string(),
+                count: 0,
+                last_rowid: None,
+            });
+        };
+        let columns = if q.with_source {
+            "*"
+        } else {
+            COLUMNS_WITHOUT_SOURCE
+        };
+        let (pred, mut binds) = build_predicate(q, id_chunk);
+        let where_sql = if pred.is_empty() {
+            "WHERE rowid > ?".to_string()
+        } else {
+            format!("{pred} AND rowid > ?")
+        };
+        binds.push(SqlValue::Integer(after_rowid));
+        binds.push(SqlValue::Integer(rows));
+        let sql = format!(
+            "SELECT rowid AS _rid, {columns} FROM symbols {where_sql} ORDER BY rowid LIMIT ?"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        // A page is at most 20,000 rows (PAGE_MAX_ROWS in index-io.ts) — one string is safe.
+        let mut out = Chunks::new(usize::MAX);
+        let (count, last_rowid) = write_rows(&mut stmt, &binds, repo, &mut out)?;
+        let json = out.finish()?.pop().unwrap_or_else(|| "[]".to_string());
+        Ok(Page {
+            json,
+            count,
+            last_rowid,
+        })
+    }
+}
+
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        // Ends the read transaction so the WAL checkpoint is no longer pinned behind it.
+        let _ = self.conn.execute_batch("COMMIT");
+    }
+}
+
 /// `getIndexMetaSqlite`: `None` when the database holds no index (no `repo` or no `root`).
 pub fn index_meta(db_path: &Path) -> Result<Option<IndexMeta>> {
     let conn = open(db_path)?;
@@ -531,6 +624,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.index.db");
         let conn = Connection::open(&path).unwrap();
+        // Every real index is WAL (openIndexDb sets it); in rollback-journal mode a held read
+        // snapshot would block writers, which is not the condition the snapshot tests describe.
+        conn.execute_batch("PRAGMA journal_mode = WAL").unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute_batch(
             "INSERT INTO meta VALUES ('repo','t'),('root','/r'),('updated_at','42');
@@ -676,6 +772,39 @@ mod tests {
             .unwrap();
         assert_eq!(one(&q(), &p), "[]");
         assert_eq!(index_meta(&p).unwrap(), None);
+    }
+
+    #[test]
+    fn snapshot_pages_resume_after_the_last_rowid_and_end_empty() {
+        let (_d, p) = db();
+        let snap = Snapshot::open(&p).unwrap();
+        assert_eq!(snap.repo(), Some("t"));
+        let first = snap.page(&q(), None, 0, 2).unwrap();
+        assert_eq!(first.count, 2);
+        let rest = snap.page(&q(), None, first.last_rowid.unwrap(), 2).unwrap();
+        assert_eq!(rest.count, 1);
+        assert!(rest.json.contains("axb"), "{}", rest.json);
+        let done = snap.page(&q(), None, rest.last_rowid.unwrap(), 2).unwrap();
+        assert_eq!(
+            (done.count, done.last_rowid, done.json.as_str()),
+            (0, None, "[]")
+        );
+        // The rowid alias is a cursor, never a field of the symbol.
+        assert!(!first.json.contains("_rid"), "{}", first.json);
+    }
+
+    #[test]
+    fn snapshot_does_not_see_a_commit_made_after_it_opened() {
+        let (_d, p) = db();
+        let snap = Snapshot::open(&p).unwrap();
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch("INSERT INTO symbols (id,file,name,kind,start_line,end_line) VALUES ('n','n.ts','late','function',1,1)")
+            .unwrap();
+        let all = snap.page(&q(), None, 0, 100).unwrap();
+        assert_eq!(all.count, 3, "{}", all.json);
+        drop(snap);
+        assert!(one(&q(), &p).contains("late"));
     }
 
     #[test]

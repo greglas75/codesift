@@ -16,7 +16,7 @@
  * Point it at a COPY of a live index, like bench-store.ts.
  */
 import { DatabaseSync } from "node:sqlite";
-import { findSymbolsSqlite, getIndexMetaSqlite, type SymbolQuery } from "../src/storage/sqlite/queries.js";
+import { findSymbolsSqlite, getIndexMetaSqlite, streamSymbolsSqlite, type SymbolQuery } from "../src/storage/sqlite/queries.js";
 import { closeAllIndexDbs } from "../src/storage/sqlite/connection.js";
 import { getNativeCore, resetNativeForTesting } from "../src/native/index.js";
 
@@ -98,6 +98,35 @@ async function main(): Promise<void> {
       }
     }
   }
+
+  // The stream: same flattened sequence (batch boundaries follow a time budget and may differ).
+  const streamed: Array<[string, SymbolQuery]> = [
+    ...kinds.slice(0, 5).map((k): [string, SymbolQuery] => [`stream kind=${k}`, { withSource: true, kind: k }]),
+    ["stream all", { withSource: false }],
+    ["stream ids x2000", { withSource: true, ids: pick(ids, 2000) }],
+  ];
+  for (const [label, q] of streamed) {
+    const collect = async (flag: string): Promise<unknown[]> => {
+      process.env["CODESIFT_NATIVE_STORE"] = flag;
+      const all: unknown[] = [];
+      await streamSymbolsSqlite(dbPath, q, (b) => {
+        for (const x of b) all.push(x);
+      });
+      return all;
+    };
+    const ts = await collect("0");
+    const rs = await collect("1");
+    rows += ts.length;
+    let bad = ts.length === rs.length ? -1 : Math.min(ts.length, rs.length);
+    for (let i = 0; bad < 0 && i < ts.length; i++) {
+      if (JSON.stringify(ts[i]) !== JSON.stringify(rs[i])) bad = i;
+    }
+    if (bad >= 0) {
+      diffs++;
+      console.log(`DIFF ${label}: lengths ts=${ts.length} rs=${rs.length}, first differing element #${bad}`);
+    }
+  }
+  queries.push(...streamed);
 
   process.env["CODESIFT_NATIVE_STORE"] = "0";
   const metaTs = JSON.stringify(await getIndexMetaSqlite(dbPath));
