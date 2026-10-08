@@ -441,7 +441,10 @@ async function persistConversationIndex(
   options?: { embed?: boolean },
 ): Promise<void> {
   const config = loadConfig();
-  const bm25 = await buildBM25IndexYielding(scan.symbols);
+  // TypeScript engine on purpose: this index is persisted below, and the incremental pass amends that
+  // file. A native index has nothing to persist (ADR-006 stage 2), which would turn every later pass
+  // into a full one.
+  const bm25 = await buildBM25IndexYielding(scan.symbols, { engine: "ts" });
   setConversationBM25Index(repoName, bm25);
   const codeIndex: CodeIndex = {
     repo: repoName,

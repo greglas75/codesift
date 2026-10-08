@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 3;
+export const NATIVE_ABI = 4;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -55,6 +55,35 @@ export interface NativeSymbolSnapshot {
   close(): void;
 }
 
+/** The `CodeSymbol` fields the native BM25 reads; a whole `CodeSymbol` satisfies it. */
+export interface NativeBm25Symbol {
+  id: string;
+  file: string;
+  name: string;
+  signature?: string;
+  docstring?: string;
+  source?: string;
+}
+
+export interface NativeBm25Hit {
+  id: string;
+  score: number;
+  matches: string[];
+}
+
+/** A BM25 index living in Rust memory (ADR-006 stage 2). */
+export interface NativeBm25Handle {
+  ingest(symbols: readonly NativeBm25Symbol[]): void;
+  finish(): void;
+  /** `weights` in field order: name, signature, docstring, body, comments. */
+  search(query: string, topK: number, weights: number[]): NativeBm25Hit[];
+  updateFile(file: string, symbols: readonly NativeBm25Symbol[]): void;
+  /** `[file, score]` for every file with a non-zero import centrality. */
+  centrality(): Array<[string, number]>;
+  readonly docCount: number;
+  footprintBytes(): number;
+}
+
 export interface NativeCore {
   version(): string;
   abiVersion(): number;
@@ -63,6 +92,7 @@ export interface NativeCore {
   findSymbols(dbPath: string, query: NativeSymbolQuery): Promise<string[]>;
   indexMeta(dbPath: string): Promise<NativeIndexMeta | null>;
   openSnapshot(dbPath: string): Promise<NativeSymbolSnapshot>;
+  NativeBm25: new () => NativeBm25Handle;
 }
 
 export type NativeMode = "auto" | "off" | "required";

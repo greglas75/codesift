@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use codesift_core::bm25;
 use codesift_core::store::{self, StoreError, SymbolQuery};
 use napi::bindgen_prelude::AsyncTask;
 use napi::{Env, Status, Task};
@@ -240,5 +241,123 @@ impl Task for PageTask {
             count: p.count,
             last_rowid: p.last_rowid,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// BM25 (ADR-006 stage 2)
+// ---------------------------------------------------------------------------------------------
+
+/// The `CodeSymbol` fields BM25 reads. JS passes its symbol objects as they are; napi reads only
+/// these keys.
+#[napi(object)]
+pub struct Bm25SymbolJs {
+    pub id: String,
+    pub file: String,
+    pub name: String,
+    pub signature: Option<String>,
+    pub docstring: Option<String>,
+    pub source: Option<String>,
+}
+
+impl From<Bm25SymbolJs> for bm25::SymbolInput {
+    fn from(s: Bm25SymbolJs) -> Self {
+        bm25::SymbolInput {
+            id: s.id,
+            file: s.file,
+            name: s.name,
+            signature: s.signature,
+            docstring: s.docstring,
+            source: s.source,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct Bm25HitJs {
+    pub id: String,
+    pub score: f64,
+    pub matches: Vec<String>,
+}
+
+/// A BM25 index held in Rust memory, outside the V8 heap. All methods are synchronous: ingestion
+/// is driven in batches by the JS builder (which yields between them), and a search over the
+/// postings is milliseconds.
+#[napi]
+pub struct NativeBm25 {
+    inner: bm25::Bm25,
+}
+
+#[napi]
+impl NativeBm25 {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        NativeBm25 {
+            inner: bm25::Bm25::new(),
+        }
+    }
+
+    /// One batch of a build, in order.
+    #[napi]
+    pub fn ingest(&mut self, symbols: Vec<Bm25SymbolJs>) {
+        let batch: Vec<bm25::SymbolInput> = symbols.into_iter().map(Into::into).collect();
+        self.inner.ingest_build(&batch);
+    }
+
+    /// End of a build: resolves import centrality over every file seen.
+    #[napi]
+    pub fn finish(&mut self) {
+        self.inner.finish();
+    }
+
+    /// `weights` in field order: name, signature, docstring, body, comments.
+    #[napi]
+    pub fn search(
+        &self,
+        query: String,
+        top_k: u32,
+        weights: Vec<f64>,
+    ) -> napi::Result<Vec<Bm25HitJs>> {
+        let w: [f64; bm25::FIELD_COUNT] = weights.try_into().map_err(|_| {
+            napi::Error::new(Status::InvalidArg, "weights must have exactly 5 entries")
+        })?;
+        Ok(self
+            .inner
+            .search(&query, top_k as usize, &w)
+            .into_iter()
+            .map(|h| Bm25HitJs {
+                id: h.id,
+                score: h.score,
+                matches: h.matches,
+            })
+            .collect())
+    }
+
+    #[napi]
+    pub fn update_file(&mut self, file: String, symbols: Vec<Bm25SymbolJs>) {
+        let batch: Vec<bm25::SymbolInput> = symbols.into_iter().map(Into::into).collect();
+        self.inner.update_file(&file, &batch);
+    }
+
+    /// `[file, score]` for every file with a non-zero import centrality.
+    #[napi]
+    pub fn centrality(&self) -> Vec<(String, f64)> {
+        self.inner.centrality_entries()
+    }
+
+    #[napi(getter)]
+    pub fn doc_count(&self) -> i64 {
+        self.inner.doc_count()
+    }
+
+    #[napi]
+    pub fn footprint_bytes(&self) -> f64 {
+        self.inner.footprint_bytes() as f64
+    }
+}
+
+impl Default for NativeBm25 {
+    fn default() -> Self {
+        Self::new()
     }
 }

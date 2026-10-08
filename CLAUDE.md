@@ -25,6 +25,10 @@ component keeps its TS implementation; the binary is OPTIONAL.
   --import tsx scripts/native-parity.ts <copy of an index.db>` (0 diffs on 5 real indexes);
   benchmark: `scripts/bench-store.ts`. Measurements in ADR-006. Never one JSON string per result — a
   conversation index here hits V8's ~512 MB string limit.
+- **Stage 2 (BM25):** `buildBM25IndexYielding` → `NativeBM25Index` (postings in Rust, `symbols` Map
+  in JS). Heap retained on a 353k-symbol repo 400 → 14 MB, conversation index 870 → 7 MB. Parity:
+  `scripts/native-bm25-parity.ts <copy.db>` (0 diffs on 5 indexes). Conversation persistence keeps the
+  TS engine (`{ engine: "ts" }`) because incremental passes amend its sidecar.
 - Rust checks run on the farm, not the Mac: `rt rust` (profile in `.tf.json`), or `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
   The darwin addon can only be built on a Mac (`TF_ALLOW_LOCAL=1 npm run build:native`).
 

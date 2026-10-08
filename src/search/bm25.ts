@@ -2,6 +2,7 @@ import { totalmem } from "node:os";
 import { tokenizeIdentifier } from "../parser/symbol-utils.js";
 import { isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, SearchResult } from "../types.js";
+import { getNativeCore, type NativeBm25Handle } from "../native/index.js";
 
 // BM25 parameters
 const K1 = 1.2;
@@ -18,7 +19,11 @@ const TEST_FILE_SCORE_MULTIPLIER = 0.3;
 
 type FieldName = "name" | "signature" | "docstring" | "body" | "comments";
 
-export interface BM25Index {
+/**
+ * The TypeScript index. Its maps ARE the index, and they live on the V8 heap — measured at 32.5 B per
+ * token, ~500 MB for the largest repo here, which is what the native index below moves out.
+ */
+export interface TsBM25Index {
   /** Per-field inverted index: token -> Map<symbolId, termFrequency> */
   fields: Record<FieldName, Map<string, Map<string, number>>>;
   /** Per-field average document length (in tokens) */
@@ -37,6 +42,40 @@ export interface BM25Index {
    * back as `avg * docCount` would work on paper and accumulate float error in practice.
    */
   totalFieldLengths: Record<FieldName, number>;
+}
+
+/**
+ * The same index held in Rust memory (ADR-006 stage 2), behind a handle. Only `symbols` stays in JS:
+ * search results are symbol OBJECTS, and those are the very objects the loaded code index already
+ * holds, so keeping the Map costs pointers, not copies. `docCount` reads through to the handle.
+ */
+export interface NativeBM25Index {
+  readonly native: NativeBm25Handle;
+  symbols: Map<string, CodeSymbol>;
+  readonly docCount: number;
+  /** Read by file in `search_text(ranked=true)`. Fixed after the build — updates do not recompute it
+   *  in either implementation — so it is materialised once, on first read. */
+  readonly centrality: Map<string, number>;
+}
+
+export type BM25Index = TsBM25Index | NativeBM25Index;
+
+/**
+ * Whether builds produce native indexes. Callers that would otherwise RESTORE a TypeScript index
+ * from the sidecar check this first: loading that file rebuilds the very heap maps stage 2 moves
+ * out, and a native build from the symbols already in memory is the cheaper of the two anyway.
+ */
+export function nativeBM25Enabled(): boolean {
+  return getNativeCore("bm25") !== null;
+}
+
+export function isNativeBM25(index: BM25Index): index is NativeBM25Index {
+  return (index as Partial<NativeBM25Index>).native !== undefined;
+}
+
+/** Field order the native handle takes weights in — `fieldNames` below. */
+function weightsArray(w: Record<FieldName, number>): number[] {
+  return [w.name, w.signature, w.docstring, w.body, w.comments];
 }
 
 /**
@@ -185,7 +224,7 @@ function ingestSymbol(acc: BM25Accumulator, symbol: CodeSymbol): void {
  * At 6% of the build it was not worth changing while fixing the blocking, but it is the obvious next
  * thing if this pass ever grows.
  */
-function finishBuild(acc: BM25Accumulator, symbols: CodeSymbol[]): BM25Index {
+function finishBuild(acc: BM25Accumulator, symbols: CodeSymbol[]): TsBM25Index {
 
   const { fields, totalFieldLengths, symbolMap, fieldLengths } = acc;
   const docCount = symbols.length;
@@ -229,7 +268,7 @@ function finishBuild(acc: BM25Accumulator, symbols: CodeSymbol[]): BM25Index {
   return { fields, avgFieldLengths, docCount, symbols: symbolMap, centrality, fieldLengths, totalFieldLengths };
 }
 
-function recomputeAverages(index: BM25Index): void {
+function recomputeAverages(index: TsBM25Index): void {
   const n = index.docCount;
   for (const field of fieldNames) {
     index.avgFieldLengths[field] = n > 0 ? index.totalFieldLengths[field] / n : 0;
@@ -247,7 +286,7 @@ function recomputeAverages(index: BM25Index): void {
  * totals stay symmetric with what ingest actually added even if tokenisation ever changes under a
  * long-lived index.
  */
-function removeSymbolFromIndex(index: BM25Index, symbol: CodeSymbol): void {
+function removeSymbolFromIndex(index: TsBM25Index, symbol: CodeSymbol): void {
   const fieldTokens = getFieldTokens(symbol);
   const stored = index.fieldLengths.get(symbol.id);
 
@@ -284,6 +323,13 @@ function removeSymbolFromIndex(index: BM25Index, symbol: CodeSymbol): void {
  * marginally stale until the next full build; a 6.8 s pause would not.
  */
 export function updateBM25ForFile(index: BM25Index, file: string, symbols: CodeSymbol[]): void {
+  if (isNativeBM25(index)) {
+    index.native.updateFile(file, symbols);
+    // The JS half mirrors the same Map operations the TypeScript path performs on `index.symbols`.
+    for (const [id, existing] of [...index.symbols]) if (existing.file === file) index.symbols.delete(id);
+    for (const symbol of symbols) index.symbols.set(symbol.id, symbol);
+    return;
+  }
   // Select by the STORED symbol's file, never by parsing the incoming ids: ids are
   // `repo:file:name:line` and are documented as non-unique, so an incoming id can collide with a
   // symbol that lives in a different file. Matching on the stored record cannot touch it.
@@ -326,6 +372,8 @@ export function updateBM25ForFile(index: BM25Index, file: string, symbols: CodeS
  * copy of this per cache is how their budgets drift apart.
  */
 export function bm25FootprintBytes(index: BM25Index): number {
+  // Measured by the allocator's own capacities rather than estimated per token.
+  if (isNativeBM25(index)) return index.native.footprintBytes();
   let tokens = 0;
   for (const field of Object.keys(index.totalFieldLengths) as (keyof typeof index.totalFieldLengths)[]) {
     tokens += index.totalFieldLengths[field];
@@ -351,7 +399,7 @@ export function bm25CacheBudgetBytes(env: NodeJS.ProcessEnv = process.env): numb
   return mb * 1024 * 1024;
 }
 
-export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
+export function buildBM25Index(symbols: CodeSymbol[]): TsBM25Index {
   const acc = newAccumulator();
   for (const symbol of symbols) ingestSymbol(acc, symbol);
   return finishBuild(acc, symbols);
@@ -363,7 +411,15 @@ export function buildBM25Index(symbols: CodeSymbol[]): BM25Index {
  * Identical work and identical output — it simply hands the loop a turn every SYMBOLS_PER_TURN
  * symbols, so other clients keep getting answers while a large repository is indexed.
  */
-export async function buildBM25IndexYielding(symbols: CodeSymbol[]): Promise<BM25Index> {
+export async function buildBM25IndexYielding(
+  symbols: CodeSymbol[],
+  /** `"ts"` forces the TypeScript index — for the one caller whose job is to WRITE the sidecar
+   *  (conversation persistence), since incremental passes amend that file and a native index has
+   *  nothing to write. */
+  opts?: { engine?: "ts" },
+): Promise<BM25Index> {
+  const core = opts?.engine === "ts" ? null : getNativeCore("bm25");
+  if (core) return buildNativeBM25(core.NativeBm25, symbols);
   const acc = newAccumulator();
   let sinceYield = 0;
   for (const symbol of symbols) {
@@ -371,6 +427,35 @@ export async function buildBM25IndexYielding(symbols: CodeSymbol[]): Promise<BM2
     if (++sinceYield >= SYMBOLS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
   }
   return finishBuild(acc, symbols);
+}
+
+/**
+ * The native build: same input, same batches, same yields — the tokenising moves to Rust. The
+ * `symbols` Map is filled with the same `set` calls `ingestSymbol` makes, so it holds exactly the
+ * entries (and the same last-wins winner per colliding id) the TypeScript index would.
+ */
+async function buildNativeBM25(Ctor: new () => NativeBm25Handle, symbols: CodeSymbol[]): Promise<NativeBM25Index> {
+  const native = new Ctor();
+  const symbolMap = new Map<string, CodeSymbol>();
+  for (let i = 0; i < symbols.length; i += SYMBOLS_PER_TURN) {
+    const batch = symbols.slice(i, i + SYMBOLS_PER_TURN);
+    native.ingest(batch);
+    for (const symbol of batch) symbolMap.set(symbol.id, symbol);
+    if (i + SYMBOLS_PER_TURN < symbols.length) await yieldToEventLoop();
+  }
+  native.finish();
+  let centrality: Map<string, number> | undefined;
+  return {
+    native,
+    symbols: symbolMap,
+    get docCount() {
+      return native.docCount;
+    },
+    get centrality() {
+      centrality ??= new Map(native.centrality());
+      return centrality;
+    },
+  };
 }
 
 export function searchBM25(
@@ -381,6 +466,28 @@ export function searchBM25(
 ): SearchResult[] {
   if (index.docCount === 0 || !query.trim()) {
     return [];
+  }
+
+  // A field without a weight contributes nothing. Production always passes all five
+  // (`config.bm25FieldWeights` is typed so), but an untyped caller passing four used to turn that
+  // field's postings into NaN scores, whose sort order is unspecified — and differs between V8's sort
+  // and Rust's, so the two engines could not agree on it. Zero is the only well-defined reading.
+  fieldWeights = {
+    name: fieldWeights.name ?? 0,
+    signature: fieldWeights.signature ?? 0,
+    docstring: fieldWeights.docstring ?? 0,
+    body: fieldWeights.body ?? 0,
+    comments: fieldWeights.comments ?? 0,
+  };
+
+  if (isNativeBM25(index)) {
+    const results: SearchResult[] = [];
+    for (const hit of index.native.search(query, topK, weightsArray(fieldWeights))) {
+      const symbol = index.symbols.get(hit.id);
+      if (!symbol) continue;
+      results.push({ symbol, score: hit.score, matches: hit.matches });
+    }
+    return results;
   }
 
   const queryTokens = tokenizeText(query);

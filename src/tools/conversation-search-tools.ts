@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { loadIndex, getIndexPath } from "../storage/index-store.js";
-import { buildBM25IndexYielding, searchBM25, applyCutoff, type BM25Index } from "../search/bm25.js";
+import { buildBM25IndexYielding, nativeBM25Enabled, searchBM25, applyCutoff, type BM25Index } from "../search/bm25.js";
 import { loadBM25Index, saveBM25Index } from "../search/bm25-store.js";
 import { loadConfig } from "../config.js";
 import {
@@ -107,7 +107,7 @@ async function loadConversationIndex(rootPath: string): Promise<{
         // code index and returns null on any disagreement, so a stale file costs one line of parsing
         // rather than a wrong answer. Measured on the three largest conversation directories here:
         // 4.3x, 20.3x and 12.1x faster than rebuilding.
-        bm25 = await loadBM25Index(indexPath, codeIndex);
+        bm25 = nativeBM25Enabled() ? null : await loadBM25Index(indexPath, codeIndex);
         if (!bm25) {
           bm25 = await buildBM25IndexYielding(codeIndex.symbols);
           // Written here as well as at index time, because every conversation repo on this machine

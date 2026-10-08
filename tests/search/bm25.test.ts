@@ -1,4 +1,4 @@
-import { buildBM25Index, buildBM25IndexYielding, searchBM25, tokenizeText, applyCutoff } from "../../src/search/bm25.js";
+import { buildBM25Index, buildBM25IndexYielding, isNativeBM25, searchBM25, tokenizeText, applyCutoff } from "../../src/search/bm25.js";
 import type { CodeSymbol, SearchResult } from "../../src/types.js";
 
 function makeSymbol(overrides: Partial<CodeSymbol> & { id: string; name: string }): CodeSymbol {
@@ -195,7 +195,10 @@ describe("buildBM25IndexYielding", () => {
     // Identical work, identical output — the only difference is who gets the CPU meanwhile.
     const symbols = manySymbols(300) as never;
     const sync = buildBM25Index(symbols);
-    const async_ = await buildBM25IndexYielding(symbols);
+    // Pinned to the TypeScript engine: this compares the maps themselves. The native engine's parity
+    // is checked by ranking in tests/native/bm25-parity.test.ts.
+    const async_ = await buildBM25IndexYielding(symbols, { engine: "ts" });
+    if (isNativeBM25(async_)) throw new Error("expected the TypeScript engine");
 
     expect(async_.docCount).toBe(sync.docCount);
     expect(async_.symbols.size).toBe(sync.symbols.size);

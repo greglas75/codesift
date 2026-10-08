@@ -35,7 +35,7 @@ import {
 import { getChunkPath, getChunkEmbeddingPath } from "../../storage/chunk-store.js";
 import { getGraphPath } from "../../storage/graph-store.js";
 import { getSnapshotPath } from "../../storage/hash-snapshot.js";
-import { buildBM25IndexYielding } from "../../search/bm25.js";
+import { buildBM25IndexYielding, nativeBM25Enabled } from "../../search/bm25.js";
 import type { BM25Index } from "../../search/bm25.js";
 import { loadConfig, localEmbeddingsDisabled, embeddingMemBudgetBytes } from "../../config.js";
 import { ensureIndexFresh } from "./file-indexer.js";
@@ -136,7 +136,7 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   // a rebuild is 10.04 s, reconstructing the same maps from the sidecar is 0.70 s. The expensive
   // half of a build is tokenising every symbol, and that result does not change until the index
   // does — so it is worth writing down. A stale or unreadable sidecar returns null and we rebuild.
-  const restored = await loadBM25Index(meta.index_path, index);
+  const restored = nativeBM25Enabled() ? null : await loadBM25Index(meta.index_path, index);
   if (restored) {
     rememberBM25Index(resolvedName, restored);
     return restored;

@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { rename, unlink, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import type { BM25Index } from "./bm25.js";
+import { isNativeBM25, type BM25Index, type TsBM25Index } from "./bm25.js";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { cleanupOrphanTempFiles } from "../storage/_shared.js";
 
@@ -73,7 +73,7 @@ interface Header {
   indexUpdatedAt: number;
 }
 
-function headerFor(index: BM25Index, code: CodeIndex): Header {
+function headerFor(index: TsBM25Index, code: CodeIndex): Header {
   return {
     v: FORMAT_VERSION,
     docCount: index.docCount,
@@ -120,6 +120,10 @@ export async function saveBM25Index(
   index: BM25Index,
   code: CodeIndex,
 ): Promise<void> {
+  // A native index (ADR-006 stage 2) is not written: it lives in Rust memory, and rebuilding it is
+  // the cheap half this file exists to avoid paying in TypeScript. The format is unchanged, so a
+  // sidecar written by the TypeScript path stays readable by either.
+  if (isNativeBM25(index)) return;
   const target = bm25PathFor(indexPath);
   // Reclaim temp halves left by a writer that was KILLED rather than failed — the `catch` below
   // only runs when the write throws. This writer produces the largest orphans in the data dir by a
@@ -203,7 +207,7 @@ function resolveId(ref: unknown, idTable: string[]): string | null {
 export async function loadBM25Index(
   indexPath: string,
   code: CodeIndex,
-): Promise<BM25Index | null> {
+): Promise<TsBM25Index | null> {
   const target = bm25PathFor(indexPath);
   try {
     if (!(await stat(target)).isFile()) return null;

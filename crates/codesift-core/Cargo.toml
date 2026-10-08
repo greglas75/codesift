@@ -14,5 +14,9 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # the JS side's JSON.parse sees exactly the text the TypeScript path parses.
 serde_json = { version = "1", features = ["raw_value"] }
 
+# BM25 (stage 2): the comment and import patterns of bm25.ts, and substring search for centrality.
+regex = "1"
+memchr = "2"
+
 [dev-dependencies]
 tempfile = "3"

@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -176,4 +176,45 @@ Re-measured after it (same index, Mac at load 7–17, median of 5):
 
 Parity re-verified: 0 differences on the five indexes, fresh seed, 5.6M rows. The remaining wall-time
 cost is confined to source-heavy reads (+22% find, +34% stream).
+
+## Stage 2 — BM25 in Rust (2026-10-09)
+
+`buildBM25IndexYielding` builds a `NativeBM25Index` when the core is loaded (`CODESIFT_NATIVE_BM25`):
+the postings, field lengths, vocabulary and centrality live in Rust memory behind a handle; JS keeps
+only the `symbols` Map, whose values are the code index's own objects. `searchBM25`,
+`updateBM25ForFile`, `bm25FootprintBytes` and `centrality` dispatch on the index type. Input is the
+same JS symbol array the TypeScript build reads, in the same batches with the same yields — so every
+caller (repo index, `index_folder`, conversations, the JSON backend) feeds both engines identically.
+
+What "the same ranking" took, each with a test:
+
+- `Map` semantics on non-unique ids: `set` on an existing id overwrites in place, delete-then-add
+  moves to the end, and ties sort in that insertion order. Each key also remembers the token list of
+  its LAST symbol, because removal re-derives from it — so a collided id leaves stale postings exactly
+  where the TypeScript maps leave them.
+- `source.slice(0, 500)` counts UTF-16 code units; JS `\s` (incl. U+FEFF) is spelled out in the
+  centrality regex; the camelCase split is hand-written and checked against the original regexes on
+  20,000 random strings.
+- `Math.log` vs `ln` may differ in the last bit — the only tolerance (1e-12 relative); order, symbol
+  identity and matched tokens compare exactly.
+
+Measured (`scripts/native-bm25-parity.ts`: 300 queries drawn from each index, run after the build and
+again after 25 file updates; 0 differences on all five):
+
+| index | symbols | build TS → Rust | V8 heap retained TS → Rust | Rust-side memory |
+|---|---:|---:|---:|---:|
+| codesift | 32,421 | 448 → 229 ms | 42 → 1 MB | 32 MB |
+| zuvo conversations | 17,302 | 918 → 399 ms | 85 → 1 MB | 47 MB |
+| ResearchShieldNew | 352,694 | 6.5 → 3.2 s | **400 → 14 MB** | 328 MB |
+| rdesigner | 295,322 | 6.8 → 2.7 s | **451 → 14 MB** | 345 MB |
+| tgm-survey-platform conversations | 168,984 | 9.5 → 3.4 s | **870 → 7 MB** | 432 MB |
+
+This is the heap the OOM crash-loops were made of (two BM25 caches, 15.2 GB at the worst). The memory
+still exists — in Rust, counted exactly by `footprintBytes()` and so enforced by the same budget — but
+it no longer counts against V8's ceiling, and it is ~35–50% smaller.
+
+Deliberately unchanged in this increment: the tool ranker (150 entries, sync `buildBM25Index`), and
+conversation PERSISTENCE, which still builds a TypeScript index because the incremental pass amends
+the sidecar it writes. Search paths skip restoring that sidecar when native BM25 is on — loading it
+would rebuild the heap maps this stage removes, and the native build is the cheaper of the two.
 
