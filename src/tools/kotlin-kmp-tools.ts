@@ -1,5 +1,6 @@
-import { getCodeIndex } from "./index-tools.js";
-import type { CodeIndex, CodeSymbol } from "../types.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
+import type { CodeSymbol } from "../types.js";
 
 export interface KmpMatchedDeclaration {
   name: string;
@@ -37,7 +38,7 @@ function parseSourceSet(filePath: string): string | null {
   return /src\/(\w+Main)\/kotlin\//.exec(filePath)?.[1] ?? null;
 }
 
-function collectSourceSets(index: CodeIndex): Set<string> {
+function collectSourceSets(index: IndexSummary): Set<string> {
   const sourceSets = new Set<string>();
   for (const file of index.files) {
     const sourceSet = parseSourceSet(file.path);
@@ -46,9 +47,14 @@ function collectSourceSets(index: CodeIndex): Set<string> {
   return sourceSets;
 }
 
-function groupDeclarations(index: CodeIndex): Map<string, GroupedDeclarations> {
+/**
+ * The expect/actual marker lives in `meta`, not in `source`, so this folds over pages without
+ * reading a single body — and never holds the index resident. Groups fill in index order.
+ */
+async function groupDeclarations(repo: string): Promise<Map<string, GroupedDeclarations>> {
   const groups = new Map<string, GroupedDeclarations>();
-  for (const symbol of index.symbols) {
+  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+  for (const symbol of batch) {
     const modifier = symbol.meta?.["kmp_modifier"];
     if (modifier !== "expect" && modifier !== "actual") continue;
     const sourceSet = parseSourceSet(symbol.file);
@@ -59,6 +65,7 @@ function groupDeclarations(index: CodeIndex): Map<string, GroupedDeclarations> {
     if (modifier === "expect") group.expects.push({ sym: symbol, sourceSet });
     else group.actuals.push({ sym: symbol, sourceSet });
   }
+  }, { skipFreshness: true });
   return groups;
 }
 
@@ -121,7 +128,7 @@ function buildAnalysis(
 
 /** Match Kotlin Multiplatform expect/actual declarations across source sets. */
 export async function analyzeKmpDeclarations(repo: string): Promise<KmpAnalysisResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  return buildAnalysis(groupDeclarations(index), collectSourceSets(index));
+  return buildAnalysis(await groupDeclarations(repo), collectSourceSets(index));
 }

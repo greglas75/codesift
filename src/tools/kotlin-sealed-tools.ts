@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
-import type { CodeIndex, CodeSymbol } from "../types.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
+import type { CodeSymbol } from "../types.js";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -22,31 +23,44 @@ export interface SealedHierarchyResult {
   all_exhaustive: boolean;
 }
 
-function findSealedSymbol(index: CodeIndex, sealedClassName: string): CodeSymbol | undefined {
-  return index.symbols.find(
-    (symbol) => symbol.name === sealedClassName
-      && (symbol.kind === "class" || symbol.kind === "interface")
+/** The first class/interface of that name whose body says `sealed` — a `WHERE name = ?` read. */
+async function findSealedSymbol(repo: string, sealedClassName: string): Promise<CodeSymbol | undefined> {
+  const named = await findRepoSymbols(
+    repo,
+    { name: sealedClassName, withSource: true },
+    { skipFreshness: true },
+  );
+  return named.find(
+    (symbol) => (symbol.kind === "class" || symbol.kind === "interface")
       && symbol.source?.includes("sealed"),
   );
 }
 
-function collectSubtypes(
-  index: CodeIndex,
+/**
+ * Folded over pages, one pass over every kind: classes and interfaces interleave in index order,
+ * and that order is the order subtypes are reported in.
+ */
+async function collectSubtypes(
+  repo: string,
   sealedClassName: string,
-): SealedHierarchyResult["subtypes"] {
+): Promise<SealedHierarchyResult["subtypes"]> {
   const escapedClassName = escapeRegExp(sealedClassName);
   const subtypePattern = new RegExp(
     `:\\s*(?:[\\w<>,\\s]+,\\s*)?${escapedClassName}\\s*[({,)]|:\\s*${escapedClassName}\\s*$`,
   );
-  return index.symbols.flatMap((symbol) => {
-    const isCandidate = (symbol.kind === "class" || symbol.kind === "interface")
-      && symbol.name !== sealedClassName
-      && symbol.source !== undefined
-      && subtypePattern.test(symbol.source);
-    return isCandidate
-      ? [{ name: symbol.name, file: symbol.file, start_line: symbol.start_line, kind: symbol.kind }]
-      : [];
-  });
+  const subtypes: SealedHierarchyResult["subtypes"] = [];
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const symbol of batch) {
+      const isCandidate = (symbol.kind === "class" || symbol.kind === "interface")
+        && symbol.name !== sealedClassName
+        && symbol.source !== undefined
+        && subtypePattern.test(symbol.source);
+      if (isCandidate) {
+        subtypes.push({ name: symbol.name, file: symbol.file, start_line: symbol.start_line, kind: symbol.kind });
+      }
+    }
+  }, { skipFreshness: true });
+  return subtypes;
 }
 
 function findClosingBrace(source: string, blockStart: number): number {
@@ -112,7 +126,7 @@ function analyzeWhenSource(
 }
 
 async function collectWhenBlocks(
-  index: CodeIndex,
+  index: IndexSummary,
   subtypeNames: Set<string>,
 ): Promise<SealedHierarchyResult["when_blocks"]> {
   const kotlinFiles = index.files.filter((entry) => /\.kts?$/.test(entry.path));
@@ -134,15 +148,15 @@ export async function analyzeSealedHierarchy(
   repo: string,
   sealedClassName: string,
 ): Promise<SealedHierarchyResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  const sealedSymbol = findSealedSymbol(index, sealedClassName);
+  const sealedSymbol = await findSealedSymbol(repo, sealedClassName);
   if (!sealedSymbol) {
     throw new Error(
       `Sealed class/interface "${sealedClassName}" not found. Ensure the file is indexed.`,
     );
   }
-  const subtypes = collectSubtypes(index, sealedClassName);
+  const subtypes = await collectSubtypes(repo, sealedClassName);
   const whenBlocks = await collectWhenBlocks(index, new Set(subtypes.map((subtype) => subtype.name)));
   return {
     sealed_class: {

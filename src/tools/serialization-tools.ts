@@ -5,7 +5,7 @@
  * data classes by walking indexed symbol signatures + source for field names,
  * types, @SerialName remapping, nullable types, and default values.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -153,16 +153,18 @@ export async function extractKotlinSerializationContract(
   repo: string,
   options?: { file_pattern?: string; class_name?: string },
 ): Promise<SerializationContractResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
   const contracts: SerializableContract[] = [];
   let totalFields = 0;
 
-  for (const sym of index.symbols) {
-    if (sym.kind !== "class") continue;
+  // Only classes are candidates, so the read is keyed on kind and folded over pages: `source` is
+  // needed (the @Serializable fallback and field extraction both read it), residency is not.
+  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+  for (const sym of batch) {
     if (!sym.decorators?.includes("Serializable")) {
       // Fallback: scan source
       if (!sym.source?.slice(0, 200).includes("@Serializable")) continue;
@@ -184,6 +186,7 @@ export async function extractKotlinSerializationContract(
     });
     totalFields += fields.length;
   }
+  }, { skipFreshness: true });
 
   // Sort by name for stable output.
   contracts.sort((a, b) => a.class_name.localeCompare(b.class_name));

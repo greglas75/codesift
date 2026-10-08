@@ -4,7 +4,7 @@
  * trace_compose_tree           — build component hierarchy from @Composable calls
  * analyze_compose_recomposition — detect unstable params causing unnecessary recompositions
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -63,18 +63,23 @@ export async function traceComposeTree(
   rootName: string,
   options?: { depth?: number },
 ): Promise<ComposeTreeResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
   const maxDepth = options?.depth ?? 10;
 
-  // Index all composables by name (excluding @Preview).
+  // Index all composables by name (excluding @Preview). Composables are `component` symbols, so
+  // one kind-keyed read replaces the materialised index; the walk needs them all, with source.
   const composablesByName = new Map<string, CodeSymbol>();
   const composableNames = new Set<string>();
-  for (const sym of index.symbols) {
-    if (sym.kind !== "component") continue;
+  const components = await findRepoSymbols(
+    repo,
+    { kind: "component", withSource: true },
+    { skipFreshness: true },
+  );
+  for (const sym of components) {
     if (sym.meta?.["compose_preview"]) continue;
     if (!composablesByName.has(sym.name)) {
       composablesByName.set(sym.name, sym);
@@ -183,8 +188,8 @@ export async function analyzeComposeRecomposition(
   repo: string,
   options?: { file_pattern?: string },
 ): Promise<RecompositionResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
@@ -192,8 +197,9 @@ export async function analyzeComposeRecomposition(
   let scanned = 0;
   const withIssues = new Set<string>();
 
-  for (const sym of index.symbols) {
-    if (sym.kind !== "component") continue;
+  // Only `component` symbols are scanned: a kind-keyed read, folded over pages.
+  await streamRepoSymbols(repo, { kind: "component", withSource: true }, (batch) => {
+  for (const sym of batch) {
     if (sym.meta?.["compose_preview"]) continue;
     if (options?.file_pattern && !sym.file.includes(options.file_pattern)) continue;
     scanned++;
@@ -255,6 +261,7 @@ export async function analyzeComposeRecomposition(
       withIssues.add(sym.name);
     }
   }
+  }, { skipFreshness: true });
 
   return {
     issues,

@@ -31,9 +31,12 @@ function makeIndex(symbols: CodeSymbol[]): CodeIndex {
 }
 
 // Stub out getCodeIndex to return our fixture
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// Converted tools read through the narrow accessors (ADR-004 stage 2); the helper derives them all
+// from this one getCodeIndex stub so the fixture cannot drift between shapes.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock(vi.fn());
+});
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 
@@ -80,7 +83,7 @@ fun provideUserRepo(): UserRepository {
 }`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([userViewModel, repositoryModule, provideMethod]),
     );
 
@@ -112,7 +115,7 @@ class MainActivity @Inject constructor(
 ) : AppCompatActivity()`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([mainActivity]),
     );
 
@@ -147,7 +150,7 @@ abstract class BindingModule {
 abstract fun bindUserRepo(impl: UserRepositoryImpl): UserRepository`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([bindingModule, bindMethod]),
     );
 
@@ -166,7 +169,7 @@ abstract fun bindUserRepo(impl: UserRepositoryImpl): UserRepository`,
       source: `class User(val name: String)`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([plainClass]),
     );
 
@@ -221,7 +224,7 @@ object RepositoryModule {
       source: `@Provides fun provideLogger(): Logger = ConsoleLogger()`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([userViewModel, repositoryModule, provideRepo, provideLogger]),
     );
 
@@ -248,7 +251,7 @@ object RepositoryModule {
       source: `class PlainService`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([plainClass]),
     );
 
@@ -266,7 +269,7 @@ class UserViewModel @Inject constructor(
 ) : ViewModel()`,
     });
 
-    (getCodeIndex as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    (getCodeIndex as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue(
       makeIndex([userViewModel]),
     );
 

@@ -76,9 +76,12 @@ beforeAll(async () => {
 });
 
 // Stub getCodeIndex for the analyzer functions we're exercising.
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// Converted tools read through the narrow accessors (ADR-004 stage 2); the helper derives them all
+// from this one getCodeIndex stub so the fixture cannot drift between shapes.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock(vi.fn());
+});
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 
 describe("Kotlin Wave 2 — fixture parsing", () => {
@@ -128,7 +131,7 @@ describe("Kotlin Wave 2 — KMP expect/actual", () => {
   });
 
   it("analyzeKmpDeclarations pairs commonMain expect with androidMain actual", async () => {
-    vi.mocked(getCodeIndex).mockResolvedValueOnce(index);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
     const result = await analyzeKmpDeclarations("kotlin-sample");
 
     expect(result.total_expects).toBeGreaterThanOrEqual(2);
@@ -150,7 +153,7 @@ describe("Kotlin Wave 2 — KMP expect/actual", () => {
 
 describe("Kotlin Wave 2 — Hilt DI graph", () => {
   it("builds a graph with UserViewModel and RepositoryModule", async () => {
-    vi.mocked(getCodeIndex).mockResolvedValueOnce(index);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
     const graph = await buildHiltGraph("kotlin-sample");
 
     expect(graph.view_models).toHaveLength(1);
@@ -167,7 +170,7 @@ describe("Kotlin Wave 2 — Hilt DI graph", () => {
   });
 
   it("traceHiltGraph resolves both dependencies through RepositoryModule", async () => {
-    vi.mocked(getCodeIndex).mockResolvedValueOnce(index);
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
     const tree = await traceHiltGraph("kotlin-sample", "UserViewModel");
 
     expect(tree.root.name).toBe("UserViewModel");
