@@ -16,7 +16,7 @@ import { join, relative } from "node:path";
 import { discoverWorkspaces } from "../utils/nextjs.js";
 import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
 import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import {
   extractServerActionFunctions,
   detectAuthGuard,
@@ -122,7 +122,7 @@ export async function nextjsAuditServerActions(
     throw new Error("nextjs_audit_server_actions is disabled via CODESIFT_DISABLE_TOOLS");
   }
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}. Run index_folder first.`);
   }

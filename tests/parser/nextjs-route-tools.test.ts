@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Mock getCodeIndex for orchestrator integration tests (Task 30)
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// The tools read the SUMMARY (root + files) now; the accessors are derived from the one
+// getCodeIndex fixture so the test asserts on the tool, not on which accessor is stubbed.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { withDerivedIndexAccessors } = await import("../helpers/index-accessors-from-fixture.js");
+  return withDerivedIndexAccessors({ getCodeIndex: vi.fn() });
+});
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 
 import {
