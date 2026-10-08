@@ -1,6 +1,6 @@
 # ADR-004: Index memory footprint — budget the cache in bytes, keep whole-index loads for now
 
-**Status:** Accepted (staged — stage 1 done; stage 2 started, first increment shipped)
+**Status:** Accepted (staged — stage 1 done; stage 2 mostly done in 0.21.0: ~125 of ~160 remaining call sites moved to narrow reads)
 **Date:** 2026-08-04 | **Deciders:** Greg Laski | **Area:** Storage
 
 ---
@@ -83,6 +83,23 @@ against summary **2.3 s / 3 MB**: **7.0x faster, 345 MB less resident heap**, wi
 `file_count` identical (the SQL `COUNT(*)` agrees with the materialised array length).
 
 The remaining consumers are the bulk of the work; see the call-site count below.
+
+**0.21.0 (2026-10-08): the bulk.** Three batches, each with a real-index test asserting the narrow
+path returns what the full-index path returned:
+
+- hot lookups — `get_file_outline`, `get_file_tree`, `get_repo_outline`, `get_symbol(s)`, unranked
+  `search_text`, `diff_outline`, `changed_symbols`, the LSP tools. Measured on a private copy of a
+  435,629-symbol index, cold, one process per run: ~2 s / 644 MB → 45–390 ms / 5–14 MB each. New
+  reads: `findSymbolsByRequestedIds`, `findSymbolsInFiles`; `findSymbols` now orders by rowid and
+  matches `namePrefix` case-sensitively (it silently did neither on SQLite).
+- framework tools — Next.js, Astro, React, Nest, Hono (via `detectRepoFrameworks`), workspace.
+- other languages and analyses — Python, PHP/Yii, SQL/Prisma, Kotlin, clone/perf/frequency/report.
+
+Still on the full index, each for a stated reason: the call-graph tools (`trace_call_chain`,
+`impact_analysis`, `trace_route`, `classify_roles`, `callNeighbours`) need every symbol's source;
+`review_diff`, `plan_turn`, `assemble_context` L2, `get_knowledge_map`, `analyze_project`, `wiki`,
+`taint` and the semantic fallback hand the index to helpers typed `CodeIndex`; ranked `search_text`
+classifies hits by symbol.
 
 ## What stage 2 costs, and why it is not being done quietly
 

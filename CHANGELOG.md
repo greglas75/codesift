@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-10-08
+
+The shared daemon stops starving its own requests. Measured on the sessions host before this
+release: while it indexed a new worktree, `/health` read `busy` with ~2.2 s of event-loop lag and
+`search_symbols` on a large repo hit its 90 s timeout. Two causes, both addressed.
+
+### Changed
+
+- **The daemon indexes in a child process.** `codesift serve` hands `index_folder`, the large-HEAD-move
+  refresh, the worktree seed/catch-up and the embedding pass to `index-child` / `embed-child`, then
+  drops its caches when the child finishes. Benchmark (`scripts/bench-index-event-loop.mjs`, 4,000
+  files / 428,000 symbols, a cheap call every 50 ms): worst event-loop stall **7,542 ms → 49 ms**,
+  time spent in stalls ≥100 ms **225 s → 0**, cheap-call p99 **355 ms → 4 ms**. The CLI, stdio servers
+  and tests still index in-process; `CODESIFT_INDEX_OUT_OF_PROCESS=0|1` overrides.
+- **~125 tool call sites read only the rows they need instead of materialising the index**
+  (ADR-004 stage 2). The hot lookups — `get_file_outline`, `get_file_tree`, `get_repo_outline`,
+  `get_symbol(s)`, unranked `search_text`, `diff_outline`, `changed_symbols`, LSP — went from ~2 s /
+  644 MB to 45–390 ms / 5–14 MB each on a 435,629-symbol index; under daemon load a cold full load
+  was ~16 s. Framework tools (Next.js, Astro, React, Nest, Hono), Python, PHP/Yii, SQL/Prisma,
+  Kotlin and several analyses followed. Each batch has a real-index test asserting the narrow result
+  equals the full-index one. The call-graph tools, ranked `search_text`, `review_diff`, `plan_turn`
+  and a few others still load the full index — see ADR-004.
+
+### Fixed
+
+- `findSymbols` returned `namePrefix` matches case-insensitively and in name order on SQLite (not on
+  the JSON backend), so a `limit` picked different rows per backend.
+
+### Known
+
+- While a child writes a large index, an `index_file` on the same repo waits SQLite's 5 s busy
+  timeout and can fail with `SQLITE_BUSY` (previously it queued in-process).
+- A child loads the whole index into its own heap, so RSS peaks at roughly double during indexing.
+
 ## [0.20.2] — 2026-10-07
 
 ### Fixed
