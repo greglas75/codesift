@@ -8,6 +8,7 @@ import { indexFolder, resetIndexFolderRedundancyForTesting, type IndexFolderResu
 import { indexFile, clearLastIndexedStateForTesting, ensureIndexFresh, resetFreshnessCache } from "./index-tools/file-indexer.js";
 import { listAllRepos, invalidateCache, getBM25Index, getCodeIndex, getIndexSummary, findRepoSymbols, streamRepoSymbols, getEmbeddingCache, autoIndexCurrentRepo, _cachedEmbeddingReposForTesting, _embeddingLoadCountForTesting, _resetEmbeddingLoadCountForTesting, type RepoSummary } from "./index-tools/registry.js";
 import { embedSymbols } from "./index-tools/parse.js";
+import { findRepoSymbolsByRequestedIds, findRepoSymbolsInFiles } from "./index-tools/narrow-reads.js";
 import { drainLegacyHashQueue, ASTRO_LOCK_FILENAME, EXTRACTOR_VERSIONS_FILENAME, checkAstroExtractorVersion, type AstroReindexResult } from "./index-tools/snapshots.js";
 import {
   activeWatchers,
@@ -36,6 +37,8 @@ export {
   getIndexSummary,
   findRepoSymbols,
   streamRepoSymbols,
+  findRepoSymbolsByRequestedIds,
+  findRepoSymbolsInFiles,
   getEmbeddingCache,
   autoIndexCurrentRepo,
   _cachedEmbeddingReposForTesting,

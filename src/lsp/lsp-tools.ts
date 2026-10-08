@@ -2,9 +2,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getLspManager } from "./lsp-manager.js";
-import { getCodeIndex, indexFile } from "../tools/index-tools.js";
+import { findRepoSymbols, getIndexSummary, indexFile } from "../tools/index-tools.js";
 import { withTimeout } from "../retrieval/retrieval-utils.js";
-import type { CodeIndex, Reference } from "../types.js";
+import type { CodeIndex, CodeSymbol, Reference } from "../types.js";
 
 const LSP_TIMEOUT_MS = 10_000;
 
@@ -32,7 +32,48 @@ export async function resolveSymbolPosition(
   }
   const sym = index.symbols.find((s) => s.name === symbolName);
   if (!sym) return null;
+  return positionOfSymbol(index.root, sym);
+}
 
+/**
+ * The tools' form of `resolveSymbolPosition`, reading one row instead of the whole index
+ * (ADR-004 stage 2). `index.symbols.find(name)` is "the first symbol with this name in index
+ * order", which is exactly `WHERE name = ? ORDER BY rowid LIMIT 1` — and an explicit position never
+ * needed a symbol at all, so it no longer pays for one.
+ *
+ * Callers fetch the summary first: it carries `getCodeIndex`'s null semantics (unknown and stale
+ * both read as "not found"), which is why the lookup here can skip freshness.
+ */
+async function resolveRepoSymbolPosition(
+  repo: string,
+  root: string,
+  symbolName: string,
+  filePath?: string,
+  line?: number,
+  character?: number,
+): Promise<{ filePath: string; line: number; character: number } | null> {
+  if (filePath && line !== undefined) {
+    return { filePath, line, character: character ?? 0 };
+  }
+  const sym = await firstSymbolNamed(repo, symbolName, false);
+  if (!sym) return null;
+  return positionOfSymbol(root, sym);
+}
+
+/** The first symbol named `name` in index order — `index.symbols.find((s) => s.name === name)`. */
+async function firstSymbolNamed(
+  repo: string,
+  name: string,
+  withSource: boolean,
+): Promise<CodeSymbol | undefined> {
+  const [first] = await findRepoSymbols(repo, { name, withSource, limit: 1 }, { skipFreshness: true });
+  return first;
+}
+
+async function positionOfSymbol(
+  root: string,
+  sym: CodeSymbol,
+): Promise<{ filePath: string; line: number; character: number }> {
   // LSP hover/definition/type only respond when the position lands ON the
   // identifier token. character:0 points at the start of the line (e.g. the
   // `export` keyword of `export function foo(...)`), where every server returns
@@ -40,7 +81,7 @@ export async function resolveSymbolPosition(
   // there; fall back to column 0 if the line can't be read.
   let col = 0;
   try {
-    const abs = index.root ? join(index.root, sym.file) : sym.file;
+    const abs = root ? join(root, sym.file) : sym.file;
     const src = await readFile(abs, "utf-8");
     const declLine = src.split("\n")[sym.start_line - 1];
     if (declLine) {
@@ -66,10 +107,10 @@ export async function goToDefinition(
   line?: number,
   character?: number,
 ): Promise<{ file: string; line: number; character: number; preview?: string; via: "lsp" | "index"; hint?: string } | null> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
-  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  const pos = await resolveRepoSymbolPosition(repo, index.root, symbolName, filePath, line, character);
   if (!pos) return null;
 
   const language = detectLanguage(pos.filePath);
@@ -118,8 +159,8 @@ export async function goToDefinition(
     }
   }
 
-  // Fallback: search index
-  const sym = index.symbols.find((s) => s.name === symbolName);
+  // Fallback: search index. With source, for the preview — the only reader of it in this file.
+  const sym = await firstSymbolNamed(repo, symbolName, true);
   if (!sym) return null;
 
   const hint = language ? manager.getServerName(language) : null;
@@ -144,10 +185,10 @@ export async function getTypeInfo(
   line?: number,
   character?: number,
 ): Promise<{ type: string; documentation?: string; via: "lsp" } | { via: "unavailable"; hint: string }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
-  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  const pos = await resolveRepoSymbolPosition(repo, index.root, symbolName, filePath, line, character);
   if (!pos) return { via: "unavailable", hint: "Symbol not found in index" };
 
   const language = detectLanguage(pos.filePath);
@@ -212,10 +253,10 @@ export async function findReferencesLsp(
   line?: number,
   character?: number,
 ): Promise<Reference[] | null> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) return null;
 
-  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  const pos = await resolveRepoSymbolPosition(repo, index.root, symbolName, filePath, line, character);
   if (!pos) return null;
 
   const language = detectLanguage(pos.filePath);
@@ -298,10 +339,10 @@ export async function getCallHierarchy(
   line?: number,
   character?: number,
 ): Promise<CallHierarchyResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
-  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  const pos = await resolveRepoSymbolPosition(repo, index.root, symbolName, filePath, line, character);
   if (!pos) return { symbol: { name: symbolName, kind: "unknown", file: "", line: 0 }, incoming: [], outgoing: [], via: "unavailable", hint: "Symbol not found in index" };
 
   const language = detectLanguage(pos.filePath);
@@ -403,10 +444,10 @@ export async function renameSymbol(
   line?: number,
   character?: number,
 ): Promise<{ files_changed: number; edits: RenameEdit[] }> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
-  const pos = await resolveSymbolPosition(index, symbolName, filePath, line, character);
+  const pos = await resolveRepoSymbolPosition(repo, index.root, symbolName, filePath, line, character);
   if (!pos) throw new Error(`Symbol "${symbolName}" not found in index.`);
 
   const language = detectLanguage(pos.filePath);

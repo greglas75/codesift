@@ -1,8 +1,21 @@
 import { open, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CodeSymbol, SymbolKind } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
-import { requireCodeIndex } from "./symbol-tool-internals.js";
+import {
+  findRepoSymbols,
+  findRepoSymbolsByRequestedIds,
+  getIndexSummary,
+  streamRepoSymbols,
+} from "./index-tools.js";
+import { requireIndexSummary } from "./symbol-tool-internals.js";
+
+/*
+ * Every lookup here reads the rows it needs instead of materialising the index (ADR-004 stage 2):
+ * an id probe, a `WHERE name = ?`, a `WHERE parent = ?`. Each first fetches the summary, which is
+ * what carries `getCodeIndex`'s null semantics — an unknown repo and a STALE one both read as "not
+ * found" — and only then asks for symbols with `skipFreshness`, so freshness runs once, as before.
+ * The symbol accessors alone would answer a stale index with rows, which the old path never did.
+ */
 
 /**
  * Best-effort symbol NAME out of whatever the caller passed.
@@ -28,16 +41,17 @@ export async function resolveSymbolIdExact(
   const nameGuess = extractSymbolNameGuess(requestedId);
   if (!nameGuess) return null;
 
-  const index = await getCodeIndex(repo, { skipFreshness: true });
-  if (!index) return null;
+  const summary = await getIndexSummary(repo, { skipFreshness: true });
+  if (!summary) return null;
 
-  let match: string | null = null;
-  for (const s of index.symbols) {
-    if (s.name !== nameGuess) continue;
-    if (match) return null; // ambiguous — let the caller show suggestions
-    match = s.id;
-  }
-  return match;
+  // Two rows are enough to decide: one is a unique match, a second makes it ambiguous.
+  const named = await findRepoSymbols(
+    repo,
+    { name: nameGuess, withSource: false, limit: 2 },
+    { skipFreshness: true },
+  );
+  if (named.length !== 1) return null; // none, or ambiguous — let the caller show suggestions
+  return named[0]!.id;
 }
 
 export async function findSimilarSymbols(
@@ -45,24 +59,30 @@ export async function findSimilarSymbols(
   requestedId: string,
   limit = 3,
 ): Promise<Array<{ id: string; name: string; kind: string; file: string; start_line: number }>> {
-  const index = await getCodeIndex(repo, { skipFreshness: true });
-  if (!index) return [];
+  const summary = await getIndexSummary(repo, { skipFreshness: true });
+  if (!summary) return [];
 
   const nameGuess = extractSymbolNameGuess(requestedId);
   if (!nameGuess) return [];
   const lower = nameGuess.toLowerCase();
 
-  const exact: typeof index.symbols = [];
-  const prefix: typeof index.symbols = [];
-  const substr: typeof index.symbols = [];
+  const exact: CodeSymbol[] = [];
+  const prefix: CodeSymbol[] = [];
+  const substr: CodeSymbol[] = [];
 
-  for (const s of index.symbols) {
-    const sn = s.name.toLowerCase();
-    if (sn === lower) exact.push(s);
-    else if (sn.startsWith(lower) || lower.startsWith(sn)) prefix.push(s);
-    else if (sn.includes(lower) || lower.includes(sn)) substr.push(s);
-    if (exact.length >= limit) break;
-  }
+  // A case-insensitive substring match in both directions has no index, so this folds over pages
+  // in index order — the order the old loop walked — and stops at the same point it broke. The
+  // early stop is per symbol, inside the page, so the buckets are filled exactly as before.
+  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+    for (const s of batch) {
+      const sn = s.name.toLowerCase();
+      if (sn === lower) exact.push(s);
+      else if (sn.startsWith(lower) || lower.startsWith(sn)) prefix.push(s);
+      else if (sn.includes(lower) || lower.includes(sn)) substr.push(s);
+      if (exact.length >= limit) return false;
+    }
+    return true;
+  }, { skipFreshness: true });
 
   const ranked = [...exact, ...prefix, ...substr].slice(0, limit);
   return ranked.map((s) => ({
@@ -85,11 +105,6 @@ function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "sta
   return { ...rest, id: shortId };
 }
 
-function matchesSymbolId(symbol: CodeSymbol, requestedId: string): boolean {
-  if (symbol.id === requestedId) return true;
-  const separator = symbol.id.indexOf(":");
-  return separator >= 0 && symbol.id.slice(separator + 1) === requestedId;
-}
 
 /**
  * Read a source file and extract lines for a symbol (1-based, inclusive).
@@ -200,9 +215,14 @@ export async function resolveSearchHit(
     // Falling back is defensible; falling back SILENTLY is not. The caller is being handed one of
     // several symbols and has no way to tell from the result — which is the same silence the
     // `lossy_migration` marker was added to remove one layer down.
-    const index = await requireCodeIndex(repo);
-    const candidates = index.symbols
-      .filter((s) => s.id === hit.id)
+    await requireIndexSummary(repo);
+    // Exact id equality, as before — not the short-id rule: the hit carries the full id.
+    const sharing = await findRepoSymbols(
+      repo,
+      { ids: [hit.id], withSource: false },
+      { skipFreshness: true },
+    );
+    const candidates = sharing
       .map((s) => ({ name: s.name, kind: s.kind, file: s.file, start_line: s.start_line }));
     return {
       symbol: hit,
@@ -216,7 +236,7 @@ export async function getSymbol(
   symbolId: string,
   options?: { include_related?: boolean },
 ): Promise<{ symbol: CodeSymbol; related?: CodeSymbol[] } | null> {
-  const index = await requireCodeIndex(repo);
+  const summary = await requireIndexSummary(repo);
   const includeRelated = options?.include_related ?? true;
 
   // `repo:file:name:line` is NOT unique — a minified bundle puts many symbols on line 1, and
@@ -226,7 +246,14 @@ export async function getSymbol(
   // states the rule for names ("two symbols named `handler` must stay ambiguous — silently
   // picking one is worse than the miss it replaces"); it was never applied to ids because they
   // were assumed unique.
-  const matches = index.symbols.filter((s) => matchesSymbolId(s, symbolId));
+  //
+  // An id probe, not a filter over every symbol. `source` is requested because the result falls
+  // back to the STORED source when the file cannot be read from disk below — dropping it here would
+  // turn "file unreadable" into "this symbol has no body".
+  const matches = await findRepoSymbolsByRequestedIds(repo, [symbolId], {
+    withSource: true,
+    skipFreshness: true,
+  });
   if (matches.length === 0) return null;
   if (matches.length > 1) {
     const where = matches
@@ -242,7 +269,7 @@ export async function getSymbol(
   const symbol = matches[0]!;
 
   const source = await extractSource(
-    index.root,
+    summary.root,
     symbol.file,
     symbol.start_line,
     symbol.end_line,
@@ -264,8 +291,14 @@ export async function getSymbol(
   // Prefetch children for classes/interfaces
   const related: CodeSymbol[] = [];
   if (symbol.kind === "class" || symbol.kind === "interface") {
-    const children = index.symbols.filter((s) => s.parent === symbol.id);
-    for (const child of children.slice(0, 20)) {
+    // `WHERE parent = ? LIMIT 20` in index order: the first twenty the old filter would have kept.
+    // With source, because `stripSymbol` keeps it and the related entries have always carried it.
+    const children = await findRepoSymbols(
+      repo,
+      { parent: symbol.id, withSource: true, limit: 20 },
+      { skipFreshness: true },
+    );
+    for (const child of children) {
       related.push(stripSymbol(child) as CodeSymbol);
     }
   }
@@ -283,7 +316,7 @@ export async function getSymbols(
   repo: string,
   symbolIds: string[],
 ): Promise<CodeSymbol[]> {
-  const index = await requireCodeIndex(repo);
+  const summary = await requireIndexSummary(repo);
 
   // Build lookup map for requested symbols.
   //
@@ -293,10 +326,18 @@ export async function getSymbols(
   // the array. Leaving the batch path permissive would have meant two entry points in this file
   // disagreeing about the same input, one throwing and one substituting, which is worse than
   // either rule applied consistently.
+  //
+  // The loop below is unchanged; only its input is narrowed, from every symbol to the ones that
+  // answer to a requested id (in index order, collisions included) — the only ones it could ever
+  // have kept. With source, for the same stored-source fallback as getSymbol when a file is gone.
   const requestedIds = new Set(symbolIds);
   const symbolMap = new Map<string, CodeSymbol>();
   const collisions = new Map<string, CodeSymbol[]>();
-  for (const sym of index.symbols) {
+  const answering = await findRepoSymbolsByRequestedIds(repo, symbolIds, {
+    withSource: true,
+    skipFreshness: true,
+  });
+  for (const sym of answering) {
     const separator = sym.id.indexOf(":");
     const candidates = separator >= 0 ? [sym.id, sym.id.slice(separator + 1)] : [sym.id];
     for (const requestedId of new Set(candidates)) {
@@ -349,7 +390,7 @@ export async function getSymbols(
   const fileEntries = [...byFile.entries()];
   const fileContents = await Promise.all(
     fileEntries.map(([file]) =>
-      readFile(join(index.root, file), "utf-8").catch(() => undefined),
+      readFile(join(summary.root, file), "utf-8").catch(() => undefined),
     ),
   );
 

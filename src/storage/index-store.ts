@@ -45,6 +45,11 @@ import {
   removeFileFromJsonIndex,
   saveIncrementalJson,
 } from "./index-json-mutations.js";
+import {
+  findSymbolsByRequestedIdsSqlite,
+  findSymbolsInFilesSqlite,
+} from "./sqlite/narrow-queries.js";
+import { filterByFiles, filterByRequestedIds } from "./narrow-filters.js";
 export {
   getIndexCacheBytesForTesting,
   getIndexCacheSizeForTesting,
@@ -165,6 +170,48 @@ export async function findSymbols(
   const index = await loadJsonIndex(indexPath);
   if (index === null) return [];
   return applySymbolQuery(index.symbols, query);
+}
+
+/**
+ * Symbols a caller could mean by any of `requestedIds` — the full id, or the short form with the
+ * `repo:` prefix stripped — in index order, collisions included. See
+ * `findSymbolsByRequestedIdsSqlite` for why this is an index probe and not a scan.
+ *
+ * JSON keeps the old cost (a whole-document parse), as everywhere in this file: parity, not speed.
+ */
+export async function findSymbolsByRequestedIds(
+  indexPath: string,
+  requestedIds: readonly string[],
+  opts: { withSource: boolean },
+): Promise<CodeSymbol[]> {
+  assertCanonicalIndexPath(indexPath);
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return findSymbolsByRequestedIdsSqlite(dbPath, requestedIds, opts.withSource);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  if (index === null) return [];
+  return filterByRequestedIds(index.symbols, requestedIds, opts.withSource);
+}
+
+/** Every symbol in any of `files`, in index order. JSON: parity, not speed. */
+export async function findSymbolsInFiles(
+  indexPath: string,
+  files: readonly string[],
+  opts: { withSource: boolean },
+): Promise<CodeSymbol[]> {
+  assertCanonicalIndexPath(indexPath);
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return findSymbolsInFilesSqlite(dbPath, files, opts.withSource);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  if (index === null) return [];
+  return filterByFiles(index.symbols, files, opts.withSource);
 }
 
 /**

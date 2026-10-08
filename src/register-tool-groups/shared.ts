@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { STUB_LANGUAGES } from "../parser/stub-languages.js";
-import { getCodeIndex } from "../register-tool-loaders.js";
 import type { AuditScanResult } from "../tools/audit-tools.js";
 
 export { z };
@@ -244,10 +243,15 @@ export function buildH11Hint(
 export async function checkTextStubHint(repo: string | undefined, toolName: string, resultEmpty: boolean): Promise<string | null> {
   if (!resultEmpty || !repo || !SYMBOL_TOOLS.has(toolName)) return null;
 
-  const index = await getCodeIndex(repo);
-  if (!index) return null;
+  // The hint reads languages off the file list and nothing else, yet it runs on every EMPTY symbol
+  // result — and used to materialise the whole index to get there (ADR-004 stage 2). Imported
+  // lazily, as the loader module this used to go through did, so registering tools still does not
+  // pull in the indexing stack.
+  const { getIndexSummary } = await import("../tools/index-tools.js");
+  const summary = await getIndexSummary(repo);
+  if (!summary) return null;
 
-  return buildH11Hint(index.files);
+  return buildH11Hint(summary.files);
 }
 
 export function formatAuditScan(result: AuditScanResult): string {
