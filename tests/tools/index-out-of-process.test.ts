@@ -119,6 +119,27 @@ describe("indexFolder out of process", () => {
     expect(a.file_count).toBeGreaterThan(0);
   }, CHILD_TIMEOUT_MS);
 
+  // A wedged child must fail its run (runs for one root are chained, so a hang parked the repo),
+  // and a failed run must still drop resident copies: the child may have committed before failing.
+  it("kills a child that outlives its timeout, fails the run, and drops the resident copy", async () => {
+    const root = join(scratch, "timeout");
+    await writeFixture(root);
+    process.env["CODESIFT_INDEX_OUT_OF_PROCESS"] = "0";
+    const { repo } = await indexFolder(root, { watch: false });
+    codeIndexes.set(repo, { repo, symbols: [], files: [] } as unknown as CodeIndex);
+
+    const savedTimeout = process.env["CODESIFT_INDEX_CHILD_TIMEOUT_MS"];
+    process.env["CODESIFT_INDEX_OUT_OF_PROCESS"] = "1";
+    process.env["CODESIFT_INDEX_CHILD_TIMEOUT_MS"] = "1";
+    try {
+      await expect(indexFolder(root, { watch: false, force: true })).rejects.toThrow(/killed after 1 ms/);
+    } finally {
+      if (savedTimeout === undefined) delete process.env["CODESIFT_INDEX_CHILD_TIMEOUT_MS"];
+      else process.env["CODESIFT_INDEX_CHILD_TIMEOUT_MS"] = savedTimeout;
+    }
+    expect(codeIndexes.get(repo)).toBeUndefined();
+  }, CHILD_TIMEOUT_MS);
+
   it("reports the outcome the in-process path reports for a path that cannot be indexed", async () => {
     const missing = join(scratch, "does-not-exist");
     const outcome = async (): Promise<string> => {

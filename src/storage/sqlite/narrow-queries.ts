@@ -41,6 +41,15 @@ function inRowidOrder(rows: RowWithRid[], repo: string, withSource: boolean): Co
 }
 
 /**
+ * `rows.push(...batch)` passes every row as a call argument, and V8 caps those: a `file IN (…)` or
+ * `id IN (…)` chunk bounds the PARAMETERS at 900, not the rows, so one chunk over a minified or
+ * generated file can return enough rows to throw `RangeError: Maximum call stack size exceeded`.
+ */
+function pushAll<T>(target: T[], batch: readonly T[]): void {
+  for (const item of batch) target.push(item);
+}
+
+/**
  * Every symbol a caller could mean by one of `requestedIds`: its id equals the request, or its id
  * minus everything up to and including the FIRST `:` does. That second form is the short id the
  * lookup tools print (`file:name:line`, with the `repo:` prefix stripped), and agents pass it back.
@@ -93,7 +102,7 @@ export async function findSymbolsByRequestedIdsSqlite(
         candidates.add(sharedPrefix + r);
       }
       for (const ids of chunk([...candidates])) {
-        rows.push(...(db
+        pushAll(rows, (db
           .prepare(`SELECT rowid AS _rid, ${columns} FROM symbols WHERE id IN (${placeholders(ids.length)})`)
           .all(...(ids as never[])) as unknown as RowWithRid[]));
       }
@@ -102,7 +111,7 @@ export async function findSymbolsByRequestedIdsSqlite(
       for (let i = 0; i < requested.length; i += MAX_BOUND_PARAMS / 2) {
         const ids = requested.slice(i, i + MAX_BOUND_PARAMS / 2);
         const marks = placeholders(ids.length);
-        rows.push(...(db
+        pushAll(rows, (db
           .prepare(
             `SELECT rowid AS _rid, ${columns} FROM symbols WHERE id IN (${marks}) ` +
               `OR (instr(id, ':') > 0 AND substr(id, instr(id, ':') + 1) IN (${marks}))`,
@@ -137,7 +146,7 @@ export async function findSymbolsInFilesSqlite(
     const columns = withSource ? "*" : COLUMNS_WITHOUT_SOURCE;
     const rows: RowWithRid[] = [];
     for (const paths of chunk(wanted)) {
-      rows.push(...(db
+      pushAll(rows, (db
         .prepare(`SELECT rowid AS _rid, ${columns} FROM symbols WHERE file IN (${placeholders(paths.length)})`)
         .all(...(paths as never[])) as unknown as RowWithRid[]));
     }

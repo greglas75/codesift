@@ -28,6 +28,10 @@ async function main(): Promise<number> {
   try {
     request = JSON.parse(raw ?? "") as IndexChildRequest;
     if (!request || typeof request.path !== "string") throw new Error("missing path");
+    // The options are spread into indexFolder; anything but a plain object is a broken caller.
+    if (request.options !== undefined && (typeof request.options !== "object" || request.options === null || Array.isArray(request.options))) {
+      throw new Error("options must be an object");
+    }
   } catch (err) {
     await writeLine(`${INDEX_CHILD_ERROR_MARKER}index-child: bad request (${(err as Error).message})`);
     return 2;

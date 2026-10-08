@@ -42,6 +42,35 @@ import type { IndexFolderResult } from "./types.js";
 let daemonOptIn = 0;
 
 /**
+ * A child that never exits must not park its repo forever. Runs for one root are chained, so one
+ * wedged index child blocked every later `index_folder` and `ensureIndexFresh` for that repo —
+ * i.e. every tool call on it — until the daemon restarted; in-process the same hang only froze one
+ * promise. The ceilings are generous on purpose: the largest full index measured here took 107
+ * minutes, and killing a slow-but-healthy run is worse than waiting for it.
+ */
+const DEFAULT_INDEX_CHILD_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+const DEFAULT_EMBED_CHILD_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+
+function childTimeoutMs(envName: string, fallback: number): number {
+  const raw = Number(process.env[envName]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+/** SIGKILL the child after `ms`; `onTimeout` runs once. The timer never keeps the daemon alive. */
+function armChildTimeout(
+  child: { kill: (signal: NodeJS.Signals) => boolean; once: (event: "close", cb: () => void) => unknown },
+  ms: number,
+  onTimeout: () => void,
+): void {
+  const timer = setTimeout(() => {
+    onTimeout();
+    child.kill("SIGKILL");
+  }, ms);
+  timer.unref();
+  child.once("close", () => clearTimeout(timer));
+}
+
+/**
  * Called by the daemon at start; returns the undo for its `close()`. A counter rather than a
  * boolean because tests start and stop several daemons in one process, and one closing must not
  * switch the mode off under another.
@@ -156,12 +185,30 @@ export function runIndexChild(request: IndexChildRequest): Promise<IndexChildRes
       process.stderr.write(chunk);
       stderrTail = (stderrTail + chunk).slice(-2_000);
     });
+    let timedOut = false;
+    const timeoutMs = childTimeoutMs("CODESIFT_INDEX_CHILD_TIMEOUT_MS", DEFAULT_INDEX_CHILD_TIMEOUT_MS);
+    armChildTimeout(child, timeoutMs, () => { timedOut = true; });
     child.on("error", (err) => reject(err));
     child.on("close", (code, signal) => {
+      if (timedOut) {
+        reject(new Error(`index child for ${request.path} killed after ${timeoutMs} ms without a result`));
+        return;
+      }
       for (const line of stdout.split("\n")) {
         if (line.startsWith(INDEX_CHILD_RESULT_MARKER)) {
           try {
-            resolve(JSON.parse(line.slice(INDEX_CHILD_RESULT_MARKER.length)) as IndexChildResponse);
+            const parsed = JSON.parse(line.slice(INDEX_CHILD_RESULT_MARKER.length)) as Partial<IndexChildResponse>;
+            // The daemon adopts this result (cache keys, watcher root): a malformed one must fail
+            // here, by name, not as a TypeError somewhere inside the adoption.
+            if (
+              typeof parsed?.result?.repo !== "string" ||
+              typeof parsed.result.root !== "string" ||
+              typeof parsed.report !== "object" ||
+              parsed.report === null
+            ) {
+              throw new Error(`index child for ${request.path} returned a malformed result`);
+            }
+            resolve(parsed as IndexChildResponse);
           } catch (err) {
             reject(err instanceof Error ? err : new Error(String(err)));
           }
@@ -215,6 +262,11 @@ export function runEmbeddingChildProcess(
       return;
     }
 
+    armChildTimeout(
+      child,
+      childTimeoutMs("CODESIFT_EMBED_CHILD_TIMEOUT_MS", DEFAULT_EMBED_CHILD_TIMEOUT_MS),
+      () => process.stderr.write(`[codesift] embedding child for ${repoName} timed out — killing it.\n`),
+    );
     let sawMarker = false;
     let markerTail = "";
     child.stdout.on("data", (buf: Buffer) => {

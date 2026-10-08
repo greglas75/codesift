@@ -50,6 +50,7 @@ import {
   findSymbolsInFilesSqlite,
 } from "./sqlite/narrow-queries.js";
 import { filterByFiles, filterByRequestedIds } from "./narrow-filters.js";
+import { awaitExternalWriter } from "./external-writers.js";
 export {
   getIndexCacheBytesForTesting,
   getIndexCacheSizeForTesting,
@@ -510,6 +511,8 @@ export async function saveIncremental(
   fileEntry?: FileEntry,
 ): Promise<void> {
   assertCanonicalIndexPath(indexPath);
+  // A child process rewriting this index holds the write lock; queue behind it (external-writers.ts).
+  await awaitExternalWriter(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);
@@ -531,6 +534,8 @@ export async function removeFileFromIndex(
   deletedFile: string,
 ): Promise<void> {
   assertCanonicalIndexPath(indexPath);
+  // A child process rewriting this index holds the write lock; queue behind it (external-writers.ts).
+  await awaitExternalWriter(indexPath);
   if ((await resolveIndexBackend()) === "sqlite") {
     const dbPath = sqlitePathFor(indexPath);
     await ensureSqliteMigrated(indexPath, dbPath);

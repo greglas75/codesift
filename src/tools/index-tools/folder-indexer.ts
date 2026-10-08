@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { EXTRACTOR_VERSIONS } from "../index-shared.js";
 import { getLanguageForExtension } from "../../parser/parser-manager.js";
 import { saveIndex, loadIndex, loadIndexSummary, getIndexPath } from "../../storage/index-store.js";
+import { trackExternalWriter } from "../../storage/external-writers.js";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
 import {
   registerRepo,
@@ -144,6 +145,7 @@ const childRunTailByRoot = new Map<string, Promise<unknown>>();
 function indexFolderInChild(
   folderPath: string,
   rootPath: string,
+  repoName: string,
   options: Parameters<typeof indexFolder>[1],
 ): Promise<IndexFolderResult> {
   let rootKey: string;
@@ -170,13 +172,24 @@ function indexFolderInChild(
   const run = prev
     .catch(() => undefined)
     .then(async () => {
-      const { result, report } = await runIndexChild({ path: folderPath, options: childOptions });
-      await adoptChildIndex(result, report, wants.watch);
-      return result;
+      let response: Awaited<ReturnType<typeof runIndexChild>>;
+      try {
+        response = await runIndexChild({ path: folderPath, options: childOptions });
+      } catch (err) {
+        // The child may have committed the index before failing in its tail (registry write,
+        // framework detection, an OOM kill): the database is new while a resident copy here is old,
+        // and a resident index is answered without consulting the database. The in-process path
+        // dropped the cache before saving, so a post-save throw left nothing stale; keep that.
+        dropResidentCaches(repoName);
+        throw err;
+      }
+      await adoptChildIndex(response.result, response.report, wants.watch);
+      return response.result;
     });
   const record: ChildRun = { promise: run, wants };
   childRunsByKey.set(key, record);
   childRunTailByRoot.set(rootKey, run);
+  trackExternalWriter(getIndexPath(loadConfig().dataDir, rootPath), run);
   void run
     .finally(() => {
       if (childRunsByKey.get(key) === record) childRunsByKey.delete(key);
@@ -184,6 +197,13 @@ function indexFolderInChild(
     })
     .catch(() => undefined);
   return run;
+}
+
+function dropResidentCaches(repoName: string): void {
+  codeIndexes.delete(repoName);
+  bm25Indexes.delete(repoName);
+  invalidateEmbeddingCaches(repoName);
+  clearTsconfigCache();
 }
 
 /**
@@ -203,10 +223,7 @@ async function adoptChildIndex(
 ): Promise<void> {
   const repoName = result.repo;
   const rootPath = result.root;
-  codeIndexes.delete(repoName);
-  bm25Indexes.delete(repoName);
-  invalidateEmbeddingCaches(repoName);
-  clearTsconfigCache();
+  dropResidentCaches(repoName);
 
   if (!report.completed) return;
   const config = loadConfig();
@@ -334,7 +351,7 @@ export async function indexFolder(
   // client. See out-of-process.ts for the measurements. The short-circuit above stays here: it reads
   // this process's watcher state, which a child cannot see.
   if (!options?.report && shouldIndexOutOfProcess()) {
-    return indexFolderInChild(folderPath, rootPath, options);
+    return indexFolderInChild(folderPath, rootPath, repoName, options);
   }
 
   // Clear tsconfig path resolver cache so config edits between runs take effect.

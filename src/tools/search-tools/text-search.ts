@@ -24,6 +24,7 @@ import {
   SERVER_AUTO_GROUP_THRESHOLD,
 } from "./constants.js";
 import { hasRipgrep, searchWithRipgrep } from "./ripgrep.js";
+import { isIndexStorageError } from "../../storage/sqlite-index-store.js";
 import type { SearchTextOptions } from "./types.js";
 
 type SearchTextResult = TextMatch[] | TextMatchGroup[] | string;
@@ -198,7 +199,11 @@ async function rankMatches(
     return index
       ? await classifyHitsWithSymbols(matches, index, { centrality: bm25Index.centrality })
       : matches;
-  } catch {
+  } catch (err) {
+    // Ranking is an enhancement, so a ranking failure degrades to unranked hits — but a storage
+    // fault is not a ranking failure: the `try` now also covers the index load, and swallowing an
+    // IndexStorageError would turn "the database is broken" into a normal-looking answer.
+    if (isIndexStorageError(err)) throw err;
     return matches;
   }
 }
