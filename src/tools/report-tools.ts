@@ -1,16 +1,24 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { analyzeComplexity } from "./complexity-tools.js";
 import { findDeadCode } from "./symbol-tools.js";
 import { detectCommunities } from "./community-tools.js";
 import { analyzeHotspots } from "./hotspot-tools.js";
 import { getCumulativeSavings } from "../storage/usage-tracker.js";
-import type { CodeIndex } from "../types.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
+import type { CodeSymbol } from "../types.js";
 
 export async function generateReport(repo: string): Promise<{ path: string; sections: number }> {
-  const index = await getCodeIndex(repo);
+  // The report reads file metadata and counts from the summary, and from symbols only the React
+  // components (with source, for size and hook usage) and hooks — two kind-keyed reads instead of
+  // a materialised index.
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
+  const [components, hooks] = await Promise.all([
+    findRepoSymbols(repo, { kind: "component", withSource: true }, { skipFreshness: true }),
+    findRepoSymbols(repo, { kind: "hook", withSource: false }, { skipFreshness: true }),
+  ]);
 
   const [complexity, deadCode, communities, hotspots] = await Promise.allSettled([
     analyzeComplexity(repo, { top_n: 10 }),
@@ -19,7 +27,7 @@ export async function generateReport(repo: string): Promise<{ path: string; sect
     analyzeHotspots(repo, {}),
   ]);
 
-  const html = buildHtml(repo, index, {
+  const html = buildHtml(repo, index, { components, hooks }, {
     complexity: complexity.status === "fulfilled" ? complexity.value : null,
     deadCode: deadCode.status === "fulfilled" ? deadCode.value : null,
     communities: communities.status === "fulfilled" ? communities.value : null,
@@ -33,7 +41,7 @@ export async function generateReport(repo: string): Promise<{ path: string; sect
   return { path: outPath, sections: 6 };
 }
 
-function buildHtml(repo: string, index: CodeIndex, data: {
+function buildHtml(repo: string, index: IndexSummary, react: ReactSymbols, data: {
   complexity: unknown;
   deadCode: unknown;
   communities: unknown;
@@ -51,7 +59,7 @@ function buildHtml(repo: string, index: CodeIndex, data: {
   const deadCodeSection = buildDeadCodeSection(data.deadCode);
   const hotspotRows = buildHotspotRows(data.hotspots);
   const communitiesSection = buildCommunitiesSection(data.communities);
-  const reactSection = buildReactSection(index);
+  const reactSection = buildReactSection(react);
 
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>CodeSift Report \u2014 ${esc(repo)}</title>
@@ -113,9 +121,12 @@ ${reactSection}
  * components by source size, and most-used hooks. Returns empty string for
  * non-React projects.
  */
-function buildReactSection(index: CodeIndex): string {
-  const components = index.symbols.filter((s) => s.kind === "component");
-  const hooks = index.symbols.filter((s) => s.kind === "hook");
+interface ReactSymbols {
+  components: CodeSymbol[];
+  hooks: CodeSymbol[];
+}
+
+function buildReactSection({ components, hooks }: ReactSymbols): string {
   if (components.length === 0 && hooks.length === 0) return "";
 
   // Top 5 components by source length (complexity proxy)

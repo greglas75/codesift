@@ -1,5 +1,5 @@
 import type { SymbolKind } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import { parseFile } from "../parser/parser-manager.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 
@@ -138,8 +138,8 @@ export async function frequencyAnalysis(
   repo: string,
   options?: FrequencyOptions,
 ): Promise<FrequencyResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
 
   const topN = options?.top_n ?? 30;
   const minNodes = options?.min_nodes ?? 5;
@@ -161,18 +161,21 @@ export async function frequencyAnalysis(
     symbols: SymbolRef[];
   }>();
 
-  const filteredSymbols: typeof index.symbols = [];
-  for (const sym of index.symbols) {
+  // Folded over pages: each symbol is filtered, parsed and hashed, then dropped. The tool reads
+  // `source` on every candidate, so the bytes cannot be avoided — but holding all of them at once
+  // never was needed. Symbols are processed in index order either way, so clusters and their
+  // member order are unchanged.
+  let analyzedCount = 0;
+  await streamRepoSymbols(repo, { withSource: true }, async (batch) => {
+  for (const sym of batch) {
     if (!kinds.has(sym.kind)) continue;
     if (!includeTests && isTestFile(sym.file)) continue;
     if (options?.file_pattern && !sym.file.includes(options.file_pattern)) continue;
     if (!sym.source) { skippedNoSource++; continue; }
     if (sym.source.endsWith("...")) { skippedTruncated++; continue; }
-    filteredSymbols.push(sym);
-  }
+    analyzedCount++;
 
-  for (const sym of filteredSymbols) {
-    const tree = await parseFile(sym.file, sym.source!);
+    const tree = await parseFile(sym.file, sym.source);
     if (!tree) { skippedNoSource++; continue; }
 
     const result = hashSubtree(tree.rootNode);
@@ -193,6 +196,7 @@ export async function frequencyAnalysis(
       });
     }
   }
+  }, { skipFreshness: true });
 
   const allClusters = [...clusterMap.entries()]
     .filter(([_, c]) => c.symbols.length >= 2)
@@ -232,14 +236,14 @@ export async function frequencyAnalysis(
   return {
     clusters,
     summary: {
-      total_symbols_analyzed: filteredSymbols.length,
+      total_symbols_analyzed: analyzedCount,
       total_nodes_hashed: totalNodesHashed,
       total_clusters_found: totalClustersFound,
       clusters_returned: clusters.length,
       skipped_no_source: skippedNoSource,
       skipped_truncated: skippedTruncated,
       skipped_below_min: skippedBelowMin,
-      low_signal: filteredSymbols.length < 50 || largestCount < 3,
+      low_signal: analyzedCount < 50 || largestCount < 3,
     },
   };
 }

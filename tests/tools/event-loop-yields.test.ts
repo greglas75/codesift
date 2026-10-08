@@ -2,9 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { findPerfHotspots } from "../../src/tools/perf-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: async (_repo: string): Promise<CodeIndex> => makeLargeIndex(20_000),
-}));
+// findPerfHotspots reads through the narrow accessors (ADR-004 stage 2). The helper delivers a
+// stream as ONE batch — the shape of a resident index — which is the worst case for yielding.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
+  return narrowIndexMock(async (_repo: unknown): Promise<CodeIndex> => makeLargeIndex(20_000));
+});
 
 function makeLargeIndex(n: number): CodeIndex {
   const symbols: CodeSymbol[] = [];

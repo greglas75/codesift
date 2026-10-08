@@ -1,4 +1,4 @@
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { SymbolKind } from "../types.js";
 
@@ -219,8 +219,8 @@ export async function findClones(
     include_tests?: boolean | undefined;
   },
 ): Promise<CloneResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
@@ -229,7 +229,13 @@ export async function findClones(
   const includeTests = options?.include_tests ?? false;
   const filePattern = options?.file_pattern;
 
-  const entries = prepareEntries(index.symbols, minLines, includeTests, filePattern);
+  // Entries are prepared page by page: each symbol's source is normalised into an entry or
+  // dropped, so the raw bodies of the whole index never need to be resident at once. Pages arrive
+  // in index order, so the entry list — and hence clone pairing — is unchanged.
+  const entries: CloneEntry[] = [];
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const entry of prepareEntries(batch, minLines, includeTests, filePattern)) entries.push(entry);
+  }, { skipFreshness: true });
   const exactClones = findExactMatches(entries, minSimilarity, minLines, MAX_CLONES);
   const nearClones = findNearMatches(entries, exactClones, minSimilarity, minLines, MAX_CLONES);
 
