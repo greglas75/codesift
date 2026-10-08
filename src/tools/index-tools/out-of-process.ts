@@ -178,19 +178,34 @@ function indexChildConcurrency(): number {
 
 async function withIndexChildSlot<T>(work: () => Promise<T>): Promise<T> {
   if (runningIndexChildren >= indexChildConcurrency()) {
+    // The releaser hands its slot straight to us (it does not decrement), so a caller arriving in
+    // between cannot take it and push the count past the cap.
     await new Promise<void>((resolve) => waitingIndexChildren.push(resolve));
+  } else {
+    runningIndexChildren++;
   }
-  runningIndexChildren++;
   try {
     return await work();
   } finally {
-    runningIndexChildren--;
-    waitingIndexChildren.shift()?.();
+    const next = waitingIndexChildren.shift();
+    if (next) next();
+    else runningIndexChildren--;
   }
 }
 
-export function runIndexChild(request: IndexChildRequest): Promise<IndexChildResponse> {
-  return withIndexChildSlot(() => spawnIndexChild(request));
+/**
+ * `onSpawn` runs when the child actually starts — after any wait for a slot — with the promise of
+ * its outcome. The write barrier hangs off it: a run still queued for a slot is not writing.
+ */
+export function runIndexChild(
+  request: IndexChildRequest,
+  hooks?: { onSpawn?: (outcome: Promise<IndexChildResponse>) => void },
+): Promise<IndexChildResponse> {
+  return withIndexChildSlot(() => {
+    const outcome = spawnIndexChild(request);
+    hooks?.onSpawn?.(outcome);
+    return outcome;
+  });
 }
 
 function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse> {
@@ -237,8 +252,7 @@ function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse
               typeof parsed.result.root !== "string" ||
               typeof parsed.report !== "object" ||
               parsed.report === null ||
-              Array.isArray(parsed.report) ||
-              typeof parsed.report.completed !== "boolean"
+              Array.isArray(parsed.report)
             ) {
               throw new Error(`index child for ${request.path} returned a malformed result`);
             }

@@ -171,13 +171,19 @@ function indexFolderInChild(
     .catch(() => undefined)
     .then(async () => {
       let response: Awaited<ReturnType<typeof runIndexChild>>;
-      // Only the child itself is an external writer. Registering the whole run (queue wait + the
-      // adoption tail) would make an incremental write wait on work that is not writing — and on
-      // anything in that tail that itself writes this index, forever. Both spellings of the path:
-      // the registry may hold the canonical root (`/private/tmp/…`) while this call got a symlink.
-      const child = runIndexChild({ path: folderPath, options: childOptions });
+      // Only the running child is an external writer — from its spawn, not from the wait for a slot,
+      // and not the adoption tail: registering either would make an incremental write wait on work
+      // that is not writing, and on anything in the tail that itself writes this index, forever.
+      // Both spellings of the path: the registry may hold the canonical root (`/private/tmp/…`)
+      // while this call got a symlink.
       const { dataDir } = loadConfig();
-      for (const root of new Set([rootPath, rootKey])) trackExternalWriter(getIndexPath(dataDir, root), child);
+      const child = runIndexChild({ path: folderPath, options: childOptions }, {
+        onSpawn: (outcome) => {
+          for (const indexPath of new Set([getIndexPath(dataDir, rootPath), getIndexPath(dataDir, rootKey)])) {
+            trackExternalWriter(indexPath, outcome);
+          }
+        },
+      });
       try {
         response = await child;
       } catch (err) {

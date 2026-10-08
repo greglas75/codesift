@@ -153,6 +153,9 @@ describe("indexFolder out of process", () => {
         indexFolder(a, { watch: false }),
         indexFolder(b, { watch: false }),
       ]);
+      // A third run after both finished must still find a free slot (no leaked permit).
+      const again = await indexFolder(a, { watch: false, force: true });
+      expect(again.repo).toBe(ra.repo);
       expect(ra.repo).not.toBe(rb.repo);
       expect(ra.symbol_count).toBeGreaterThan(0);
       expect(rb.symbol_count).toBe(ra.symbol_count);
