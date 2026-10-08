@@ -103,7 +103,8 @@ classifies hits by symbol.
 
 ## What stage 2 costs, and why it is not being done quietly
 
-`loadIndex` / `getCodeIndex` has **348 call sites across 150 files**. This is not a mechanical
+`loadIndex` / `getCodeIndex` had **348 call sites across 150 files** when this was written (about
+20 remain after 0.21.0 — see Stage 2 above). This is not a mechanical
 edit — each site has to be read to establish which slice of the index it genuinely uses, and the
 failure mode of getting it wrong is the one this codebase has been repeatedly burned by: a tool
 that returns fewer results and reports success, so a partial answer reads as a fact about the

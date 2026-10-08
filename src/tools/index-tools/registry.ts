@@ -50,7 +50,7 @@ import {
   cacheEmbeddingIfGenerationCurrent,
   invalidateEmbeddingCache,
   chunkCacheKey,
-  invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index } from "./state.js";
+  invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index, BM25_PERSIST_MIN_BUILD_MS } from "./state.js";
 import type { CodeIndex, RepoMeta, CodeSymbol } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
 
@@ -108,11 +108,6 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   return true;
 }
 
-/**
- * Below this, rebuilding is cheaper than the disk it would cost. 1 s is roughly where a repo is
- * large enough that a restart is noticeable to whoever is waiting on the first search.
- */
-const BM25_PERSIST_MIN_BUILD_MS = 1_000;
 
 export async function getBM25Index(repoName: string): Promise<BM25Index | null> {
   // Resolve through the case-insensitive registry resolver (mirrors

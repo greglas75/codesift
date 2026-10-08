@@ -20,7 +20,7 @@ import { walkDirectory } from "../../utils/walk.js";
 import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
 import { HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../../storage/hash-snapshot.js";
 import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../../types.js";
-import { activeWatchers, bm25Indexes, codeIndexes, invalidateEmbeddingCaches, lastFullIndexAt, rememberBM25Index } from "./state.js";
+import { activeWatchers, bm25Indexes, BM25_PERSIST_MIN_BUILD_MS, codeIndexes, invalidateEmbeddingCaches, lastFullIndexAt, rememberBM25Index } from "./state.js";
 import { parseFiles, propagateDirtySignatures, embedSymbols, embedChunks } from "./parse.js";
 import { drainLegacyHashQueue, loadIndexSnapshot, saveIndexSnapshot, sha1OfFile } from "./snapshots.js";
 import { setupWatcher } from "./watcher.js";
@@ -101,8 +101,6 @@ export async function awaitPendingEmbeddings(): Promise<void> {
   }
 }
 
-/** Same threshold, and the same reasoning, as `BM25_PERSIST_MIN_BUILD_MS` in registry.ts. */
-const BM25_PERSIST_MIN_BUILD_MS = 1_000;
 
 async function enableReportedFrameworks(frameworks: Iterable<string>, repoName: string): Promise<void> {
   const list = [...frameworks];

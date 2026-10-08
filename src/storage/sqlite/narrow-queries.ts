@@ -54,7 +54,7 @@ function pushAll<T>(target: T[], batch: readonly T[]): void {
  * minus everything up to and including the FIRST `:` does. That second form is the short id the
  * lookup tools print (`file:name:line`, with the `repo:` prefix stripped), and agents pass it back.
  *
- * This is `symbol-lookup-tools`' `matchesSymbolId`, exactly, and it is answered by an index probe
+ * This is `symbolMatchesRequestedId` (storage/narrow-filters.ts), exactly, answered by an index probe
  * rather than a scan. The suffix form looks unindexable — "strip the first segment, then compare" —
  * but it is not, given one fact that two O(log n) probes establish: if the smallest and largest ids
  * share a prefix `P` that ends at the smallest id's first colon, EVERY id between them shares it
@@ -63,7 +63,8 @@ function pushAll<T>(target: T[], batch: readonly T[]): void {
  * `id IN (...)` on idx_symbols_id.
  *
  * When the ids do NOT share a prefix — a hand-assembled index, ids without a colon — the probe says
- * so and this falls back to scanning the id index with the suffix rule spelled out in SQL. Slower,
+ * so and this falls back to a full scan of the symbols table with the suffix rule spelled out in SQL
+ * (`substr(instr())` cannot use an index). Slower,
  * still exact; the fast path is never taken on an assumption about what ids look like.
  *
  * Colliding ids are returned as separate rows. Ids are `file:name:line`, which is not unique, and

@@ -257,6 +257,7 @@ export async function analyzeComplexity(
     return true;
   };
 
+  // Freshness already ran for this call, in getIndexSummary above.
   await streamRepoSymbols(repo, { withSource: true }, (batch: CodeSymbol[]) => {
     for (const sym of batch) {
       if (!isAnalyzable(sym)) continue;
@@ -304,7 +305,7 @@ export async function analyzeComplexity(
       analyzable++;
     }
     return undefined;
-  });
+  }, { skipFreshness: true });
 
   // Sort by complexity descending
   results.sort((a, b) => b.cyclomatic_complexity - a.cyclomatic_complexity);

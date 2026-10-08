@@ -1,10 +1,11 @@
 /**
- * Shared Hono entry-file resolution. Used by all 13 Hono tools to locate the
- * `new Hono()` or `new OpenAPIHono()` instantiation in the indexed symbols.
+ * Hono entry-file resolution over a materialised index: the first symbol (index order) whose source
+ * instantiates `Hono` / `OpenAPIHono`.
  *
- * Previously this helper was copy-pasted into every tool file, violating DRY.
- * A single bug in entry detection would have required 13 fixes; a single
- * improvement required 13 edits.
+ * Since ADR-004 stage 2 the tools resolve by repo name instead (`resolveRepoHonoEntryFile` in
+ * framework-detect-repo.ts, which pages through the table and stops at the first hit). This form is
+ * kept as the reference that test asserts against, and `HONO_INSTANTIATION` is the one regex both
+ * use. `route-tools/hono.ts` has its own resolver that prefers non-test files — a different rule.
  */
 
 import { join } from "node:path";

@@ -196,3 +196,9 @@ export function millisSinceLastActivity(): number {
 export function _setLastActivityForTests(ms: number): void {
   lastActivityAt = Date.now() - ms;
 }
+
+/**
+ * Below this, rebuilding is cheaper than the disk it would cost. 1 s is roughly where a repo is
+ * large enough that a restart is noticeable to whoever is waiting on the first search.
+ */
+export const BM25_PERSIST_MIN_BUILD_MS = 1_000;

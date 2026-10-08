@@ -5,9 +5,10 @@ import type { CodeSymbol } from "../types.js";
  * `file:name:line` the lookup tools print with the `repo:` prefix stripped?
  *
  * The in-memory statement of the rule `findSymbolsByRequestedIdsSqlite` answers with an index probe.
- * One definition, used by the JSON backend, by the resident-index path and by the lookup tools
- * themselves: three copies of a matching rule are three places for it to drift, and a drifted
- * matcher does not fail — it resolves an id to a different symbol, or to none.
+ * One definition for the JSON backend and the resident-index path: copies of a matching rule are
+ * places for it to drift, and a drifted matcher does not fail — it resolves an id to a different
+ * symbol, or to none. `getSymbols` applies the same rule inline because it must also know WHICH
+ * request a symbol answers, which a boolean cannot tell it.
  */
 export function symbolMatchesRequestedId(symbolId: string, requested: ReadonlySet<string>): boolean {
   if (requested.has(symbolId)) return true;
