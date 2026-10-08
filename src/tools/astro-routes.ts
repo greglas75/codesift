@@ -4,7 +4,7 @@
  */
 import type { CodeIndex, CodeSymbol, FileEntry, RouteFramework } from "../types.js";
 import { matchPath } from "./route-shared.js";
-import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
+import { findRepoSymbolsInFiles, getIndexSummary } from "./index-tools.js";
 
 export interface AstroRouteHandler {
   symbol: Omit<CodeSymbol, "source" | "tokens">;
@@ -75,22 +75,20 @@ function isPageFile(path: string): boolean {
 }
 
 /**
- * The route index from a summary: its file list, plus the symbols of each page file fetched by
- * one indexed `WHERE file = ?` lookup apiece. Source is not requested — route building reads only
- * names. Freshness was already settled by the summary read, so the per-file lookups skip it.
+ * The route index from a summary: its file list, plus the symbols of the page files, fetched in ONE
+ * `file IN (…)` read rather than one awaited lookup per page (each of which also re-resolved the
+ * repo — an N+1 on exactly the many-pages case this tool serves). Source is not requested — route
+ * building reads only names. Freshness was already settled by the summary read.
  *
- * Page order is the summary's file order and each file's symbols keep their index order, so every
- * `filter`/`find`/`some` in `buildRouteEntries` sees the same sequence it saw over the full index.
+ * `buildRouteEntries` filters symbols per page file, and within a file the rows keep their index
+ * order, so every `filter`/`find`/`some` there sees the same sequence it saw over the full index.
  */
 export async function loadAstroRouteIndex(
   repo: string,
   files: readonly FileEntry[],
 ): Promise<AstroRouteIndex> {
-  const symbols: CodeSymbol[] = [];
-  for (const file of files) {
-    if (!isPageFile(file.path)) continue;
-    symbols.push(...await findRepoSymbols(repo, { withSource: false, file: file.path }, { skipFreshness: true }));
-  }
+  const pages = files.filter((file) => isPageFile(file.path)).map((file) => file.path);
+  const symbols = await findRepoSymbolsInFiles(repo, pages, { withSource: false, skipFreshness: true });
   return { files, symbols };
 }
 

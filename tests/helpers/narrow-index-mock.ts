@@ -96,7 +96,26 @@ export function narrowIndexMock<T extends IndexLoader>(getCodeIndex: T) {
     ) => {
       const index = await load(repo);
       if (!index) return;
-      await onBatch(filterSymbols(symbolsOf(index), query));
+      // Pages of two, honouring a `false` stop, like the real reader: one convenient batch would let
+      // an early-exit or cross-page bug ship green.
+      const symbols = filterSymbols(symbolsOf(index), query);
+      for (let i = 0; i < symbols.length; i += 2) {
+        if ((await onBatch(symbols.slice(i, i + 2))) === false) return;
+      }
+    },
+    findRepoSymbolsInFiles: async (repo: unknown, files: readonly string[], options: { withSource: boolean }) => {
+      const wanted = new Set(files);
+      return filterSymbols(symbolsOf(await load(repo)).filter((s) => wanted.has(s.file)), { withSource: options.withSource });
+    },
+    findRepoSymbolsByRequestedIds: async (repo: unknown, ids: readonly string[], options: { withSource: boolean }) => {
+      const wanted = new Set(ids);
+      const answers = (id: string | undefined): boolean => {
+        if (id === undefined) return false;
+        if (wanted.has(id)) return true;
+        const separator = id.indexOf(":");
+        return separator >= 0 && wanted.has(id.slice(separator + 1));
+      };
+      return filterSymbols(symbolsOf(await load(repo)).filter((s) => answers(s.id)), { withSource: options.withSource });
     },
   };
 }

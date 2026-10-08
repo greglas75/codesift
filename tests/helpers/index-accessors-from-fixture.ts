@@ -90,6 +90,16 @@ export function withDerivedIndexAccessors<T extends { getCodeIndex: GetCodeIndex
     onBatch: (batch: FixtureSymbol[]) => unknown,
     options?: { skipFreshness?: boolean },
   ) => Promise<void>;
+  findRepoSymbolsInFiles: (
+    repo: string,
+    files: readonly string[],
+    options: { withSource: boolean; skipFreshness?: boolean },
+  ) => Promise<FixtureSymbol[]>;
+  findRepoSymbolsByRequestedIds: (
+    repo: string,
+    ids: readonly string[],
+    options: { withSource: boolean; skipFreshness?: boolean },
+  ) => Promise<FixtureSymbol[]>;
 } {
   const { getCodeIndex } = base;
   return {
@@ -115,6 +125,24 @@ export function withDerivedIndexAccessors<T extends { getCodeIndex: GetCodeIndex
       for (let i = 0; i < symbols.length; i += STREAM_PAGE) {
         if ((await onBatch(symbols.slice(i, i + STREAM_PAGE))) === false) return;
       }
+    },
+    findRepoSymbolsInFiles: async (repo, files, options) => {
+      const index = await fixtureOf(getCodeIndex, repo, { skipFreshness: options.skipFreshness });
+      const wanted = new Set(files);
+      const symbols = (index?.["symbols"] as FixtureSymbol[] | undefined) ?? [];
+      return filterFixtureSymbols(symbols.filter((s) => wanted.has(s.file ?? "")), { withSource: options.withSource });
+    },
+    findRepoSymbolsByRequestedIds: async (repo, ids, options) => {
+      const index = await fixtureOf(getCodeIndex, repo, { skipFreshness: options.skipFreshness });
+      const wanted = new Set(ids);
+      // Full id, or the short id the lookup tools print (`repo:` stripped) — the real rule.
+      const answers = (id: string): boolean => {
+        if (wanted.has(id)) return true;
+        const separator = id.indexOf(":");
+        return separator >= 0 && wanted.has(id.slice(separator + 1));
+      };
+      const symbols = (index?.["symbols"] as FixtureSymbol[] | undefined) ?? [];
+      return filterFixtureSymbols(symbols.filter((s) => answers(s.id ?? "")), { withSource: options.withSource });
     },
   };
 }

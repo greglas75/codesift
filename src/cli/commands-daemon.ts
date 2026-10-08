@@ -122,6 +122,7 @@ export async function startDaemon(
   };
 
   let handle: HttpServerHandle | undefined;
+  let disableOutOfProcess: (() => void) | undefined;
   try {
     // PID and port are metadata only. Holding the SQLite transaction is the
     // ownership proof, so stale or malformed files are safe to overwrite.
@@ -131,6 +132,14 @@ export async function startDaemon(
     const { startHttpServer } = await import("../server.js");
     // The heavy one: this pulls the whole tool surface, every parser and the storage layer.
     trace("server module imported");
+    // One process answers every client on the machine, so indexing and embedding must not run on
+    // its thread (out-of-process.ts has the measurements). Switched on BEFORE the server listens:
+    // a request that lands in between would otherwise index in-process — exactly the stall this
+    // exists to prevent — and the first `index_folder` of a session is routinely that early.
+    // Undone on close so a test that starts a daemon does not leave every later indexFolder in that
+    // worker spawning children.
+    const { enableOutOfProcessIndexing } = await import("../tools/index-tools/out-of-process.js");
+    disableOutOfProcess = enableOutOfProcessIndexing();
     const httpOpts: { port?: number; host?: string; token?: string } = {};
     if (opts.port !== undefined) httpOpts.port = opts.port;
     if (opts.host !== undefined) httpOpts.host = opts.host;
@@ -139,20 +148,15 @@ export async function startDaemon(
     trace(`listening on ${handle.port}`);
     writeFileSync(portPath, String(handle.port));
 
-    // One process answers every client on the machine, so indexing and embedding must not run on
-    // its thread (out-of-process.ts has the measurements). Undone on close so a test that starts a
-    // daemon does not leave every later indexFolder in that worker spawning children.
-    const { enableOutOfProcessIndexing } = await import("../tools/index-tools/out-of-process.js");
-    const disableOutOfProcess = enableOutOfProcessIndexing();
-
     const origClose = handle.close;
+    const undoOutOfProcess = disableOutOfProcess;
     return {
       ...handle,
       close: async () => {
         try {
           await origClose();
         } finally {
-          disableOutOfProcess();
+          undoOutOfProcess();
           release();
         }
       },
@@ -161,6 +165,7 @@ export async function startDaemon(
     if (handle) {
       try { await handle.close(); } catch { /* preserve the startup error */ }
     }
+    disableOutOfProcess?.();
     release();
     throw error;
   }
