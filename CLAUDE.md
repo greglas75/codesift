@@ -670,6 +670,49 @@ Projects with no `codesift` entry in `~/.claude.json` inherit the **global** con
 `stdio` entry silently gives every such project its own server; per-project `http` entries carry
 `?cwd=`, which the daemon needs.
 
+## The daemon indexes and embeds in child processes (2026-10-08)
+
+Incident on the sessions host (0.20.0): the daemon indexed and embedded a new worktree of a
+436k-symbol repo on its one thread. `/health` sat at `busy` with `event_loop_lag_ms` ≈ 2,200,
+`get_file_tree` took 9.8 s, and `search_symbols` timed out at 90 s. The journal also shows seeds of
+an 87,730-file index taking **37–100 s**. Those seeds are a synchronous `VACUUM INTO` on that thread.
+
+Which paths ran index work in the daemon: `index_folder` (agent), `ensureIndexFresh` (HEAD moved
+by more than 50 files, so a full `indexFolder`), `autoIndexCurrentRepo` (the daemon's cwd, usually
+nothing), the worktree seed + catch-up (inside `indexFolder`), and the embedding chain scheduled at
+`indexFolder`'s tail. All of these go through `indexFolder`. The per-file paths (`index_file`, the
+watcher, the ≤50-file freshness branch) cost milliseconds each and stay in-process. So does
+conversation auto-discovery.
+
+`indexFolder` now delegates to `src/cli/index-child.ts` when `shouldIndexOutOfProcess()` is true.
+`startDaemon` and the `CODESIFT_TRANSPORT=http` path opt in, and `CODESIFT_INDEX_OUT_OF_PROCESS=0|1`
+overrides that. Embedding then runs in the existing `embed-child.ts`, through the same per-repo
+`scheduleEmbedding` queue. The daemon keeps four jobs: the redundant-call short-circuit, dropping
+`codeIndexes`/`bm25Indexes`/embedding caches when a child finishes, the watcher, and framework
+bundles (the child reports them). It also coalesces identical in-flight requests per root and
+queues different ones. The CLI, the stdio server and tests still index in-process.
+
+Measured with `scripts/bench-index-event-loop.mjs`: 4,000 generated files, 428,000 symbols, a stub
+Ollama in its own process, and a probe calling `getIndexSummary` every 50 ms.
+
+| | in-process | child |
+|---|---:|---:|
+| index only: worst loop stall | 682 ms | **4 ms** |
+| index only: probe max | 349 ms | **9 ms** |
+| index + embed: worst loop stall | 7,542 ms | **49 ms** |
+| index + embed: time in ≥100 ms stalls | **225 s** of 553 s | **0** |
+| index + embed: probe max / p99 | 2,979 / 355 ms | **13 / 4 ms** |
+
+Embedding is the dominant part, by two orders of magnitude over the index phase. Even against a
+stub that answers instantly it takes ~490 s of CPU for 428k symbols. That cost still exists on the
+host, in the child. Two places to look next: `readAndChunkFiles` filters every symbol per file
+(O(files × symbols)), and vectors are written as text.
+
+Open risk: the child's whole-index write is one SQLite transaction. A concurrent `index_file` on
+the same repo from the daemon or the CLI hook waits `busy_timeout` (5 s) and then fails with
+SQLITE_BUSY. Before, the in-process per-path lock made it wait. The CLI hook already had this
+exposure against an in-process daemon write.
+
 ## Host identity
 
 `os.hostname()` is **not stable on macOS** — it follows DHCP/network state. One

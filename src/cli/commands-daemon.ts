@@ -139,6 +139,12 @@ export async function startDaemon(
     trace(`listening on ${handle.port}`);
     writeFileSync(portPath, String(handle.port));
 
+    // One process answers every client on the machine, so indexing and embedding must not run on
+    // its thread (out-of-process.ts has the measurements). Undone on close so a test that starts a
+    // daemon does not leave every later indexFolder in that worker spawning children.
+    const { enableOutOfProcessIndexing } = await import("../tools/index-tools/out-of-process.js");
+    const disableOutOfProcess = enableOutOfProcessIndexing();
+
     const origClose = handle.close;
     return {
       ...handle,
@@ -146,6 +152,7 @@ export async function startDaemon(
         try {
           await origClose();
         } finally {
+          disableOutOfProcess();
           release();
         }
       },
