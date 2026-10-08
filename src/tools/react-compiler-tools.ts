@@ -1,7 +1,7 @@
 /**
  * React Compiler adoption readiness analysis.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -51,14 +51,16 @@ export async function auditCompilerReadiness(
   },
 ): Promise<CompilerReadinessResult> {
   const { searchPatterns } = await import("./pattern-tools.js");
-  const index = await getCodeIndex(repo);
+  // Existence (and staleness/storage faults) from the summary; the only symbols read are the
+  // components, for a count — no source (ADR-004 stage 2).
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);
 
   const includeTests = options?.include_tests ?? false;
   const filePattern = options?.file_pattern;
 
   // Count total components
-  let components = index.symbols.filter((s) => s.kind === "component");
+  let components = await findRepoSymbols(repo, { withSource: false, kind: "component" }, { skipFreshness: true });
   if (!includeTests) components = components.filter((s) => !isTestFile(s.file));
   if (filePattern) components = components.filter((s) => s.file.includes(filePattern));
   const totalComponents = components.length;

@@ -124,8 +124,9 @@ function toDescriptor(action: ExtractedAction): ActionDescriptor {
   return descriptor;
 }
 
+/** Reads `root` and `files` only, so a summary or a full index both satisfy it (ADR-004). */
 export async function auditAstroActionsFromIndex(
-  index: CodeIndex,
+  index: Pick<CodeIndex, "root" | "files">,
   severity?: ActionsSeverity,
 ): Promise<ActionsAuditResult> {
   const parsed = await parseActionsFile(index.root);

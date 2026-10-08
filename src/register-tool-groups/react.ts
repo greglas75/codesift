@@ -1,5 +1,5 @@
 import { z, zBool, zNum, lazySchema, type ToolDefinitionEntry } from "./shared.js";
-import { getCodeIndex, traceComponentTree, analyzeHooks, analyzeRenders, buildContextGraph, auditCompilerReadiness, reactQuickstart } from "./deps.js";
+import { traceComponentTree, analyzeHooks, analyzeRenders, auditCompilerReadiness, reactQuickstart } from "./deps.js";
 
 export const REACT_TOOL_ENTRIES: ToolDefinitionEntry[] = [
   { order: 1642, definition: {
@@ -78,9 +78,10 @@ export const REACT_TOOL_ENTRIES: ToolDefinitionEntry[] = [
       repo: z.string().optional().describe("Repository identifier (default: auto-detected from CWD)"),
     })),
     handler: async (args) => {
-      const index = await getCodeIndex(args.repo as string);
-      if (!index) throw new Error(`Repository not found: ${args.repo}`);
-      const result = await buildContextGraph(index.symbols);
+      // Streams symbols instead of materialising the index (ADR-004 stage 2).
+      const { analyzeContextGraph } = await import("../tools/react-context-tools.js");
+      const result = await analyzeContextGraph(args.repo as string);
+      if (!result) throw new Error(`Repository not found: ${args.repo}`);
       return JSON.stringify(result, null, 2);
     },
   } },

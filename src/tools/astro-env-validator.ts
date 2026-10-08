@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Node as TSNode } from "web-tree-sitter";
 import { walkDirectory } from "../utils/walk.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { getParser, initParser } from "../parser/parser-manager.js";
 import { getProperty, stripQuotes } from "./astro-helpers.js";
 
@@ -197,7 +197,7 @@ export async function auditEnvFromRoot(root: string): Promise<EnvValidatorResult
 
 export async function astroEnvValidator(args: { project_root?: string; repo?: string }): Promise<EnvValidatorResult> {
   if (args.project_root) return auditEnvFromRoot(args.project_root);
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { config_found: false, declared_vars: [], used_vars: [], missing: [], unused: [], issues: [], summary: { declared: 0, used: 0, issues: 0 } };
   return auditEnvFromRoot(index.root);
 }

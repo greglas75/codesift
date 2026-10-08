@@ -4,7 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { parseUseGuards } from "./nest-guard-tools.js";
 import type { NestToolError } from "./nest-shared-tools.js";
 
@@ -45,7 +45,7 @@ export async function nestRouteInventory(
   repo: string,
   options?: { max_routes?: number },
 ): Promise<NestRouteInventoryResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
 
   const maxRoutes = options?.max_routes ?? 500;

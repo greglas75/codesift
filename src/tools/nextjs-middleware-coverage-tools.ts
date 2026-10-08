@@ -8,7 +8,7 @@
  */
 
 import { traceMiddleware } from "../utils/nextjs.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { nextjsRouteMap } from "./nextjs-route-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ export async function nextjsMiddlewareCoverage(
     throw new Error("nextjs_middleware_coverage is disabled via CODESIFT_DISABLE_TOOLS");
   }
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}. Run index_folder first.`);
   }

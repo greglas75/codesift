@@ -3,9 +3,16 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { parseAstroTemplate, type Island, type AstroTemplateParse } from "../parser/astro-template.js";
 import type { CodeIndex } from "../types.js";
+
+/**
+ * What the island and hydration analyses read: the root and the file list. They parse each
+ * `.astro` file off disk and never touch a symbol, so a summary satisfies this as well as a full
+ * index — which is what lets the tool entry points stop materialising every symbol (ADR-004).
+ */
+export type AstroFilesIndex = Pick<CodeIndex, "root" | "files">;
 
 // -- Shared helpers ----------------------------------------------------------
 
@@ -30,7 +37,7 @@ function checkServerFallback(source: string, island: Island): boolean {
   return !!line && !/\/\s*>/.test(line);
 }
 
-function walkAstroFiles(index: CodeIndex, pathPrefix?: string) {
+function walkAstroFiles(index: AstroFilesIndex, pathPrefix?: string) {
   return index.files.filter((f) => f.language === "astro" && (!pathPrefix || f.path.startsWith(pathPrefix)));
 }
 
@@ -83,12 +90,12 @@ export interface AnalyzeIslandsResult {
 }
 
 export async function astroAnalyzeIslands(args: { repo?: string; path_prefix?: string; include_recommendations?: boolean }): Promise<AnalyzeIslandsResult> {
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { islands: [], summary: { total_islands: 0, by_directive: {}, by_framework: {}, warnings: [] }, server_islands: [] };
   return analyzeIslandsFromIndex(index, args.path_prefix);
 }
 
-export function analyzeIslandsFromIndex(index: CodeIndex, pathPrefix?: string): AnalyzeIslandsResult {
+export function analyzeIslandsFromIndex(index: AstroFilesIndex, pathPrefix?: string): AnalyzeIslandsResult {
   const allIslands: IslandWithBundle[] = [], serverIslands: ServerIsland[] = [];
   for (const file of walkAstroFiles(index, pathPrefix)) {
     let source: string;
@@ -223,7 +230,7 @@ function computeScore(issues: AuditIssue[]): "A" | "B" | "C" | "D" {
 }
 
 export async function astroHydrationAudit(args: { repo?: string; severity?: "all" | "warnings" | "errors"; path_prefix?: string; fail_on?: "error" | "warning" | "info" }): Promise<HydrationAuditResult> {
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { issues: [], anti_patterns_checked: ALL_CODES, score: "A", exit_code: 0 };
   return hydrationAuditFromIndex(index, args.severity, args.path_prefix, args.fail_on);
 }
@@ -239,7 +246,7 @@ function computeExitCode(issues: AuditIssue[], failOn: "error" | "warning" | "in
   return 0;
 }
 
-export function hydrationAuditFromIndex(index: CodeIndex, severity?: "all" | "warnings" | "errors", pathPrefix?: string, failOn?: "error" | "warning" | "info"): HydrationAuditResult {
+export function hydrationAuditFromIndex(index: AstroFilesIndex, severity?: "all" | "warnings" | "errors", pathPrefix?: string, failOn?: "error" | "warning" | "info"): HydrationAuditResult {
   let issues: AuditIssue[] = [];
   for (const file of walkAstroFiles(index, pathPrefix)) {
     let source: string;

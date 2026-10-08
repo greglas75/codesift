@@ -2,7 +2,7 @@
  * NestJS request pipeline visualization.
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { nestGuardChain } from "./nest-guard-tools.js";
 import { nestRouteInventory } from "./nest-route-tools.js";
 import type { NestToolError } from "./nest-shared-tools.js";
@@ -42,7 +42,7 @@ export async function nestRequestPipeline(
   repo: string,
   options: { route: string; method?: string; output_format?: "json" | "mermaid" },
 ): Promise<NestRequestPipelineResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
 
   const targetRoute = options.route;

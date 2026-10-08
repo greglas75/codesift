@@ -4,9 +4,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { CodeIndex } from "../../src/types.js";
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// The tool reads the SUMMARY (root + files) now; it is derived from the one getCodeIndex fixture
+// so the test asserts on the tool, not on which accessor is stubbed.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { withDerivedIndexAccessors } = await import("../helpers/index-accessors-from-fixture.js");
+  return withDerivedIndexAccessors({ getCodeIndex: vi.fn() });
+});
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { nestWebSocketMap } from "../../src/tools/nest-ext-tools.js";

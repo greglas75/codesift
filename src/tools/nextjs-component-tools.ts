@@ -20,7 +20,7 @@ import { relative, join } from "node:path";
 import { cachedParseFile as parseFile } from "../utils/nextjs-audit-cache.js";
 import { scanDirective, discoverWorkspaces } from "../utils/nextjs.js";
 import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import {
   MAX_FILE_SIZE_BYTES,
   DEFAULT_MAX_FILES,
@@ -90,7 +90,7 @@ const COMPONENT_EXTS = new Set([".tsx", ".jsx"]);
  *
  * Flow:
  *   1. Kill switch check (`CODESIFT_DISABLE_TOOLS`)
- *   2. Resolve project root via `getCodeIndex(repo).root`
+ *   2. Resolve project root via `getIndexSummary(repo).root`
  *   3. Determine workspaces: explicit `workspace` param, `discoverWorkspaces()`,
  *      or single root.
  *   4. For each workspace, walk `app/` for `.tsx`/`.jsx` files.
@@ -108,7 +108,7 @@ export async function analyzeNextjsComponents(
     throw new Error("analyze_nextjs_components is disabled via CODESIFT_DISABLE_TOOLS");
   }
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}. Run index_folder first.`);
   }

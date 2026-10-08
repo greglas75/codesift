@@ -12,7 +12,7 @@
  * Exports `astroContentCollections(args)` as the MCP handler.
  */
 import { getParser, initParser } from "../parser/parser-manager.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import {
   discoverCollections,
   findConfig,
@@ -80,7 +80,7 @@ function configErrorResult(
 
 async function resolveProjectRoot(args: ContentCollectionsArgs): Promise<string | null> {
   if (args.project_root) return args.project_root;
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   return index?.root ?? null;
 }
 

@@ -11,7 +11,7 @@
 import { relative, join } from "node:path";
 import { discoverWorkspaces, traceMiddleware } from "../utils/nextjs.js";
 import { cachedWalkDirectory as walkDirectory } from "../utils/nextjs-audit-cache.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { parseRouteFile } from "./nextjs-route-readers.js";
 import type { NextjsRouteEntry, NextjsRouteConflict } from "./nextjs-route-readers.js";
 
@@ -77,7 +77,7 @@ export async function nextjsRouteMap(
     throw new Error("nextjs_route_map is disabled via CODESIFT_DISABLE_TOOLS");
   }
 
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}. Run index_folder first.`);
   }

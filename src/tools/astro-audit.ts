@@ -15,11 +15,18 @@
  * Mirrors the react_quickstart pattern.
  */
 
-import { getCodeIndex } from "./index-tools.js";
-import { analyzeIslandsFromIndex, hydrationAuditFromIndex } from "./astro-islands.js";
-import { buildRouteEntries } from "./astro-routes.js";
+import { getIndexSummary } from "./index-tools.js";
+import { analyzeIslandsFromIndex, hydrationAuditFromIndex, type AstroFilesIndex } from "./astro-islands.js";
+import { buildRouteEntries, loadAstroRouteIndex, type AstroRouteIndex } from "./astro-routes.js";
 import { extractAstroConventions } from "./astro-config.js";
-import type { CodeIndex } from "../types.js";
+
+/**
+ * What the audit reads: the repo name and root (handed to the sub-tools), the file list (islands,
+ * hydration) and the page files' symbols (routes). A full `CodeIndex` satisfies it; `astroAudit`
+ * builds it from a summary plus `loadAstroRouteIndex`, so the audit never holds every symbol in the
+ * repository to list a handful of pages (ADR-004 stage 2).
+ */
+export type AstroAuditIndex = AstroFilesIndex & AstroRouteIndex & { repo: string };
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -189,11 +196,11 @@ async function tryImportOptionalTool(
 }
 
 // ---------------------------------------------------------------------------
-// Core logic (works with a CodeIndex directly — testable without getCodeIndex)
+// Core logic (works with a CodeIndex directly — testable without the index accessors)
 // ---------------------------------------------------------------------------
 
 export async function astroAuditFromIndex(
-  index: CodeIndex,
+  index: AstroAuditIndex,
   skip: Set<string>,
   patternCounts?: PatternCount[],
 ): Promise<AstroAuditResult> {
@@ -534,8 +541,8 @@ export async function astroAudit(args: {
   const repo = args.repo ?? "";
   const skip = new Set(args.skip ?? []);
 
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     // Return a minimal failure result when no index is available
     return {
       score: "D",
@@ -579,5 +586,14 @@ export async function astroAudit(args: {
     }
   }
 
+  // The routes section is the only reader of symbols, and only of the page files' — fetched by
+  // file rather than by materialising the whole index.
+  const routeIndex = await loadAstroRouteIndex(repo, summary.files);
+  const index: AstroAuditIndex = {
+    repo: summary.repo,
+    root: summary.root,
+    files: summary.files,
+    symbols: routeIndex.symbols,
+  };
   return astroAuditFromIndex(index, skip, patternCounts);
 }

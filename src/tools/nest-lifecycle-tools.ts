@@ -2,8 +2,9 @@
  * NestJS lifecycle hook mapping.
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { NestToolError } from "./nest-shared-tools.js";
+import type { CodeSymbol } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // B5: nest_lifecycle_map — types + implementation
@@ -32,17 +33,42 @@ export interface NestLifecycleMapResult {
 export async function nestLifecycleMap(
   repo: string,
 ): Promise<NestLifecycleMapResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  // The summary settles existence, staleness and storage faults exactly as the full load did; the
+  // reads below then skip the freshness check it already ran.
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   }
 
   const hooks: NestLifecycleEntry[] = [];
   const errors: NestToolError[] = [];
 
-  for (const sym of index.symbols) {
-    if (!LIFECYCLE_HOOKS.has(sym.name)) continue;
-    if (sym.kind !== "method" && sym.kind !== "function") continue;
+  // Pass 1 — which symbols are lifecycle hooks, in index order, WITHOUT source. A name/kind test
+  // needs no body, and source is ~45% of an index; this used to hold every symbol of the repository
+  // resident to find a handful of methods.
+  const isHook = (sym: CodeSymbol): boolean =>
+    LIFECYCLE_HOOKS.has(sym.name) && (sym.kind === "method" || sym.kind === "function");
+  const hookOrder: CodeSymbol[] = [];
+  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+    for (const sym of batch) if (isHook(sym)) hookOrder.push(sym);
+    return undefined;
+  }, { skipFreshness: true });
+
+  // Pass 2 — the files that hold a hook, WITH source, one indexed `WHERE file = ?` each. That one
+  // read serves both remaining needs: the hook's own body (the async test below) and the file's
+  // classes (the enclosing-class fallback). Both keep index order within the file, so a file's
+  // hooks here are the same subsequence pass 1 saw, and `find` meets candidates in the same order.
+  const sourcedHooksByFile = new Map<string, CodeSymbol[]>();
+  const classesByFile = new Map<string, CodeSymbol[]>();
+  for (const file of new Set(hookOrder.map((sym) => sym.file))) {
+    const fileSymbols = await findRepoSymbols(repo, { withSource: true, file }, { skipFreshness: true });
+    sourcedHooksByFile.set(file, fileSymbols.filter(isHook));
+    classesByFile.set(file, fileSymbols.filter((s) => s.kind === "class"));
+  }
+
+  for (const hookSym of hookOrder) {
+    // Taken in pass-1 order, so the k-th hook of a file pairs with the k-th sourced hook of it.
+    const sym = sourcedHooksByFile.get(hookSym.file)?.shift() ?? hookSym;
 
     // Determine parent class name from source or file context
     let className = "Unknown";
@@ -51,15 +77,17 @@ export async function nestLifecycleMap(
     // Try to find the enclosing class via parent_id (if available)
     const symAny = sym as unknown as { parent_id?: string };
     if (symAny.parent_id) {
-      const parentSym = index.symbols.find((s) => s.id === symAny.parent_id);
+      const [parentSym] = await findRepoSymbols(
+        repo, { withSource: false, ids: [symAny.parent_id], limit: 1 }, { skipFreshness: true },
+      );
       if (parentSym) className = parentSym.name;
     }
 
     // Fallback: look for class name in source
     if (className === "Unknown") {
       // Check if there's a class symbol in the same file that contains this method
-      const classSym = index.symbols.find(
-        (s) => s.file === sym.file && s.kind === "class" && s.start_line <= sym.start_line && s.end_line >= sym.end_line,
+      const classSym = (classesByFile.get(sym.file) ?? []).find(
+        (s) => s.start_line <= sym.start_line && s.end_line >= sym.end_line,
       );
       if (classSym) className = classSym.name;
     }

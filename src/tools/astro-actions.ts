@@ -5,7 +5,7 @@
  * this module preserves the lazy-loader path and every public export.
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { ALL_ACTION_CODES, auditAstroActionsFromIndex } from "./astro-actions/audit.js";
 import type { ActionsAuditResult } from "./astro-actions/types.js";
 
@@ -20,7 +20,7 @@ export async function astroActionsAudit(args: {
   repo?: string;
   severity?: "all" | "warnings" | "errors";
 }): Promise<ActionsAuditResult> {
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) {
     return {
       actions: [],

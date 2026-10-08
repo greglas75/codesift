@@ -13,7 +13,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Parser, Tree as TSTree  } from "web-tree-sitter";
 import { getParser } from "../parser/parser-manager.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import type { CodeIndex } from "../types.js";
 
 export interface MiddlewareIssue {
@@ -164,8 +164,9 @@ export async function auditAstroMiddlewareFromRoot(
   };
 }
 
+/** Reads only `root`, so a summary or a full index both satisfy it (ADR-004 stage 2). */
 export async function auditAstroMiddlewareFromIndex(
-  index: CodeIndex,
+  index: Pick<CodeIndex, "root">,
 ): Promise<MiddlewareAuditResult> {
   return auditAstroMiddlewareFromRoot(index.root);
 }
@@ -174,7 +175,7 @@ export async function astroMiddlewareAudit(
   args: { project_root?: string; repo?: string },
 ): Promise<MiddlewareAuditResult> {
   if (args.project_root) return auditAstroMiddlewareFromRoot(args.project_root);
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { middleware_file: null, handlers: [], sequence: [], routes_protected_count: 0, issues: [], summary: { handlers_total: 0, issues_total: 0 } };
   return auditAstroMiddlewareFromIndex(index);
 }

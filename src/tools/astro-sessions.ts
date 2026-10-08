@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { extractAstroConventions } from "./astro-config.js";
 import { walkDirectory } from "../utils/walk.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { getParser, initParser } from "../parser/parser-manager.js";
 import { getProperty } from "./astro-helpers.js";
 
@@ -137,7 +137,7 @@ export async function astroSessionsAudit(args: {
   project_root?: string; repo?: string;
 }): Promise<SessionsAuditResult> {
   if (args.project_root) return auditSessionsFromRoot(args.project_root);
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { config_found: false, adapter: null, sessions_enabled: false, usage_count: 0, usage_files: [], adapter_compatibility: {}, issues: [], summary: { usage_total: 0, issues_total: 0 } };
   return auditSessionsFromRoot(index.root);
 }

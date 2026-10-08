@@ -15,9 +15,11 @@ import { tmpdir } from "node:os";
 // but falls back gracefully for the tmpdir-based tests where we pass root directly.
 // ---------------------------------------------------------------------------
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
-}));
+// The tool reads only the root, so it takes the SUMMARY; it is derived from the same fixture.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { withDerivedIndexAccessors } = await import("../helpers/index-accessors-from-fixture.js");
+  return withDerivedIndexAccessors({ getCodeIndex: vi.fn() });
+});
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";
 import { astroMigrationCheck } from "../../src/tools/astro-migration.js";

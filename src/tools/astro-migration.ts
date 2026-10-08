@@ -410,9 +410,9 @@ export async function astroMigrationCheck(args: {
   let root: string;
 
   if (args.repo) {
-    // Try to resolve via CodeIndex
-    const { getCodeIndex } = await import("./index-tools.js");
-    const index = await getCodeIndex(args.repo);
+    // Only the root is read, so the summary — not the whole index with every symbol.
+    const { getIndexSummary } = await import("./index-tools.js");
+    const index = await getIndexSummary(args.repo);
     if (!index) throw new Error(`Repository "${args.repo}" not found. Run index_folder first.`);
     root = index.root;
   } else {
@@ -420,8 +420,8 @@ export async function astroMigrationCheck(args: {
     root = process.cwd();
     // Try to auto-detect via index
     try {
-      const { getCodeIndex } = await import("./index-tools.js");
-      const index = await getCodeIndex(undefined as unknown as string);
+      const { getIndexSummary } = await import("./index-tools.js");
+      const index = await getIndexSummary(undefined as unknown as string);
       if (index) root = index.root;
     } catch {
       // Use CWD

@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Node as TSNode } from "web-tree-sitter";
 import { walkDirectory } from "../utils/walk.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { getParser, initParser } from "../parser/parser-manager.js";
 import { getProperty } from "./astro-helpers.js";
 import { parseAstroDbSchema, type TableDef } from "./astro-db-parser.js";
@@ -228,7 +228,7 @@ export async function auditDbFromRoot(root: string): Promise<DbAuditResult> {
 
 export async function astroDbAudit(args: { project_root?: string; repo?: string }): Promise<DbAuditResult> {
   if (args.project_root) return auditDbFromRoot(args.project_root);
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { config_file: null, tables: [], n_plus_one: [], missing_indexes: [], issues: [], summary: { tables_total: 0, issues_total: 0 } };
   return auditDbFromRoot(index.root);
 }

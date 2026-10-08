@@ -511,11 +511,12 @@ export const collections = { blog: defineCollection({ type: "content" }) };
 `,
       },
       async (root) => {
-        vi.spyOn(indexTools, "getCodeIndex").mockResolvedValue({ root } as Awaited<
-          ReturnType<typeof indexTools.getCodeIndex>
+        // Only the root is read, so the tool takes the SUMMARY rather than the whole index.
+        vi.spyOn(indexTools, "getIndexSummary").mockResolvedValue({ root } as Awaited<
+          ReturnType<typeof indexTools.getIndexSummary>
         >);
         const result = await astroContentCollections({ repo: "local/example" });
-        expect(indexTools.getCodeIndex).toHaveBeenCalledWith("local/example");
+        expect(indexTools.getIndexSummary).toHaveBeenCalledWith("local/example");
         expect(result.config_file).toBe("src/content.config.ts");
         expect(result.collections[0]!.name).toBe("blog");
       },

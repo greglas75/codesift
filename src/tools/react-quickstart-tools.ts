@@ -1,7 +1,7 @@
 /**
  * React day-1 onboarding composite.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -68,12 +68,15 @@ export async function reactQuickstart(
 ): Promise<ReactQuickstartResult> {
   const { searchPatterns } = await import("./pattern-tools.js");
   const { analyzeProject } = await import("./project-tools.js");
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);
 
-  // Inventory
-  const components = index.symbols.filter((s) => s.kind === "component" && !isTestFile(s.file));
-  const hooks = index.symbols.filter((s) => s.kind === "hook" && !isTestFile(s.file));
+  // Inventory — by kind, not by materialising every symbol. Components keep their source (the
+  // top-hooks tally below reads it); hooks are only counted (ADR-004 stage 2).
+  const components = (await findRepoSymbols(repo, { withSource: true, kind: "component" }, { skipFreshness: true }))
+    .filter((s) => !isTestFile(s.file));
+  const hooks = (await findRepoSymbols(repo, { withSource: false, kind: "hook" }, { skipFreshness: true }))
+    .filter((s) => !isTestFile(s.file));
 
   // Find likely root component: prefer App > Root > Main > Layout > Page
   const rootNames = ["App", "Root", "Main", "Layout", "Page"];

@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { walkDirectory } from "../utils/walk.js";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 
 export interface ImageIssue {
   code: "IM01" | "IM02" | "IM03" | "IM04";
@@ -143,7 +143,7 @@ export async function auditImagesFromRoot(root: string): Promise<ImageAuditResul
 
 export async function astroImageAudit(args: { project_root?: string; repo?: string }): Promise<ImageAuditResult> {
   if (args.project_root) return auditImagesFromRoot(args.project_root);
-  const index = await getCodeIndex(args.repo ?? "");
+  const index = await getIndexSummary(args.repo ?? "");
   if (!index) return { raw_img_count: 0, image_component_count: 0, picture_component_count: 0, getImage_calls: [], missing_alt: [], empty_alt: [], issues: [], summary: { files_scanned: 0, issues_total: 0 } };
   return auditImagesFromRoot(index.root);
 }
