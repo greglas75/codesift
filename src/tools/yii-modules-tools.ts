@@ -22,7 +22,7 @@
 
 import { readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -110,16 +110,21 @@ export async function analyzeYiiModules(
   repo: string,
   options?: { module_id?: string },
 ): Promise<YiiModulesAudit> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
+
+  // Every symbol lookup below is `kind === "class"` (or a class's methods, read by parent id), so
+  // the class list — in index order, with source for the hierarchy fallback and
+  // `$controllerNamespace` — replaces the materialised index.
+  const classes = await findRepoSymbols(repo, { kind: "class", withSource: true }, { skipFreshness: true });
+  const classIndex = { symbols: classes };
 
   // Find all class symbols whose file basename is exactly Module.php — Yii2
   // canonical convention. We additionally verify the class extends Module
   // (catches cases where a Module.php contains an unrelated helper class).
-  const moduleClasses = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
+  const moduleClasses = classes.filter((s) => {
     if (!s.file.endsWith("/Module.php") && s.file !== "Module.php") return false;
-    if (!isModuleHierarchy(s, index)) return false;
+    if (!isModuleHierarchy(s, classIndex)) return false;
     return true;
   });
 
@@ -152,21 +157,24 @@ export async function analyzeYiiModules(
     const controllersPath = join(moduleDir, "controllers");
 
     // Find controller classes living under the module's controllers/ dir.
-    const controllerSymbols = index.symbols.filter(
+    const controllerSymbols = classes.filter(
       (s) =>
-        s.kind === "class" &&
         s.file.startsWith(controllersPath + "/") &&
         s.name.endsWith("Controller"),
     );
-    const controllers: YiiControllerRef[] = controllerSymbols.map((c) => ({
-      class: effectiveNs ? `${effectiveNs}\\${c.name}` : c.name,
-      file: c.file,
-      actions: index.symbols
-        .filter(
-          (s) => s.parent === c.id && s.kind === "method" && s.name.startsWith("action"),
-        )
-        .map((s) => s.name),
-    }));
+    const controllers: YiiControllerRef[] = [];
+    for (const c of controllerSymbols) {
+      const methods = await findRepoSymbols(
+        repo,
+        { parent: c.id, kind: "method", withSource: false },
+        { skipFreshness: true },
+      );
+      controllers.push({
+        class: effectiveNs ? `${effectiveNs}\\${c.name}` : c.name,
+        file: c.file,
+        actions: methods.filter((s) => s.name.startsWith("action")).map((s) => s.name),
+      });
+    }
 
     // Views, migrations, sub-modules — each detected by directory presence.
     const viewsPath = join(moduleDir, "views");
@@ -180,9 +188,8 @@ export async function analyzeYiiModules(
     ).length;
 
     // Sub-modules: nested module directories with their own Module.php.
-    const submoduleClasses = index.symbols.filter(
+    const submoduleClasses = classes.filter(
       (s) =>
-        s.kind === "class" &&
         (s.file.endsWith("/Module.php") || s.file === "Module.php") &&
         s.file !== cls.file &&
         s.file.startsWith(moduleDir + "/"),

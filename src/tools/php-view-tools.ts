@@ -6,7 +6,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 
 // 7d. find_php_views — render() → view file mapping
 // ---------------------------------------------------------------------------
@@ -99,7 +99,10 @@ export async function findPhpViews(
     include_asset_bundles?: boolean;
   },
 ): Promise<FindPhpViewsResult> {
-  const index = await getCodeIndex(repo);
+  // The summary carries the root and file list the alias/view resolution reads. Symbols come
+  // from narrow reads: classes by kind, each controller's actions by parent id, and one streamed
+  // pass for the widget / asset-bundle scan — never the whole index resident.
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const includeWidgets = options?.include_widgets ?? true;
@@ -118,8 +121,9 @@ export async function findPhpViews(
     : [];
 
   // Find action methods in controllers
-  const controllers = index.symbols.filter(
-    (s) => s.kind === "class" && s.name.endsWith("Controller") && s.file.endsWith(".php"),
+  const classes = await findRepoSymbols(repo, { kind: "class", withSource: true }, { skipFreshness: true });
+  const controllers = classes.filter(
+    (s) => s.name.endsWith("Controller") && s.file.endsWith(".php"),
   );
 
   for (const ctrl of controllers) {
@@ -142,9 +146,13 @@ export async function findPhpViews(
       }
     }
 
-    const actions = index.symbols.filter(
-      (s) => s.parent === ctrl.id && s.kind === "method" && s.name.startsWith("action"),
-    );
+    const actions = (
+      await findRepoSymbols(
+        repo,
+        { parent: ctrl.id, kind: "method", withSource: true },
+        { skipFreshness: true },
+      )
+    ).filter((s) => s.name.startsWith("action"));
 
     for (const action of actions) {
       if (!action.source) continue;
@@ -201,14 +209,27 @@ export async function findPhpViews(
   }
 
   // Widget references — scan ALL PHP symbols + all .php files at module
-  // level (views are file-scope code, not symbols).
+  // level (views are file-scope code, not symbols). AssetBundle::register() — same scope.
+  //
+  // Both scanners see the same sequence the two separate loops did — every symbol in index
+  // order, then the raw view files — so they share ONE streamed pass; each fills its own list.
+  const scanners: Array<(sym: ScannedSource) => void> = [];
   if (includeWidgets) {
-    collectWidgetRefs(index, widgets, rawViewSources);
+    const idToClass = new Map<string, string>();
+    for (const s of classes) {
+      const id = (s as { id?: string }).id;
+      if (id) idToClass.set(id, s.name);
+    }
+    scanners.push(createWidgetScanner(idToClass, widgets));
   }
-
-  // AssetBundle::register() — same scope.
   if (includeBundles) {
-    collectAssetBundleRefs(index, assetBundles, rawViewSources);
+    scanners.push(createAssetBundleScanner(assetBundles));
+  }
+  if (scanners.length > 0) {
+    await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+      for (const sym of batch) for (const scan of scanners) scan(sym);
+    }, { skipFreshness: true });
+    for (const raw of rawViewSources) for (const scan of scanners) scan(raw);
   }
 
   return {
@@ -387,31 +408,24 @@ function resolveAliasPrefix(
   };
 }
 
-function collectWidgetRefs(
-  index: {
-    symbols: Array<{
-      name: string;
-      kind: string;
-      file: string;
-      parent?: string | undefined;
-      source?: string | undefined;
-      start_line: number;
-    }>;
-  },
-  out: PhpWidgetReference[],
-  rawSources: PhpRawViewSource[] = [],
-): void {
-  // Build a quick parentId → class name map so we can attribute widget
-  // references to their containing class (when the widget lives inside
-  // a class method).
-  const idToClass = new Map<string, string>();
-  for (const s of index.symbols) {
-    if (s.kind === "class") {
-      const id = (s as { id?: string }).id;
-      if (id) idToClass.set(id, s.name);
-    }
-  }
+/** A symbol, or a raw view file dressed as one — what the widget and bundle scanners read. */
+interface ScannedSource {
+  name: string;
+  kind: string;
+  file: string;
+  start_line: number;
+  parent?: string | undefined;
+  source?: string | undefined;
+}
 
+/**
+ * `idToClass` (parentId → class name) attributes a widget reference to its containing class when
+ * the widget lives inside a class method. It is built by the caller from every class symbol.
+ */
+function createWidgetScanner(
+  idToClass: Map<string, string>,
+  out: PhpWidgetReference[],
+): (sym: ScannedSource) => void {
   // Yii2 widget API: `Widget::begin([...])` (followed by ::end()) and
   // `Widget::widget([...])`. Both are method-call forms; we look for any
   // CamelCase identifier ending in expected widget suffixes (Form, View,
@@ -422,9 +436,9 @@ function collectWidgetRefs(
   const re = /\b([A-Z][\w]*?)::(begin|widget)\s*\(/g;
   const seen = new Set<string>();
 
-  for (const sym of [...index.symbols, ...rawSources]) {
-    if (!sym.source) continue;
-    if (!sym.file.endsWith(".php")) continue;
+  return (sym) => {
+    if (!sym.source) return;
+    if (!sym.file.endsWith(".php")) return;
 
     let m: RegExpExecArray | null;
     while ((m = re.exec(sym.source)) !== null) {
@@ -450,28 +464,17 @@ function collectWidgetRefs(
         kind: kindRaw === "begin" ? "begin" : "widget",
       });
     }
-  }
+  };
 }
 
-function collectAssetBundleRefs(
-  index: {
-    symbols: Array<{
-      kind: string;
-      file: string;
-      source?: string | undefined;
-      start_line: number;
-    }>;
-  },
-  out: PhpAssetBundleRef[],
-  rawSources: PhpRawViewSource[] = [],
-): void {
+function createAssetBundleScanner(out: PhpAssetBundleRef[]): (sym: ScannedSource) => void {
   // `BundleClass::register($this)` — the canonical AssetBundle entry
   // point. We capture the class name (last segment for FQCN forms).
   const re = /\b([A-Z][\w\\]*?)::register\s*\(\s*\$this\b/g;
   const seen = new Set<string>();
-  for (const sym of [...index.symbols, ...rawSources]) {
-    if (!sym.source) continue;
-    if (!sym.file.endsWith(".php")) continue;
+  return (sym) => {
+    if (!sym.source) return;
+    if (!sym.file.endsWith(".php")) return;
     let m: RegExpExecArray | null;
     while ((m = re.exec(sym.source)) !== null) {
       const fqcn = m[1]!;
@@ -489,7 +492,7 @@ function collectAssetBundleRefs(
       seen.add(key);
       out.push({ bundle: last, file: sym.file, line });
     }
-  }
+  };
 }
 
 // ---------------------------------------------------------------------------
