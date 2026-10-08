@@ -17,6 +17,7 @@ component keeps its TS implementation; the binary is OPTIONAL.
 - Toolchain pinned to **1.99.0** (`rust-toolchain.toml`). On the farm it is the standalone tarball at
   `/home/tf/runtimes/rust-1.99.0` (i9-farma `server/tf-rust-install.sh`), put on PATH by `.tf.json`;
   installed on waw-tf, ryzen-tf, hz2/3/4-tf. **hz1-tf has no `tf` user** (not a working farm host).
+  Dev hosts use rustup for `greglas`, pinned straight to 1.99.0: the Mac and ryzen-dev (ryzen-old-1).
 - Rustup treats `1.99.0` and `stable` as DIFFERENT toolchains even when they are the same build — a
   fresh `rustup` install plus this repo's pin downloads the compiler twice. `rustup default 1.99.0`.
 - Rust checks run on the farm, not the Mac: `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
