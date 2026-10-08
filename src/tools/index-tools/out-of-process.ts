@@ -203,7 +203,12 @@ export function runIndexChild(
 ): Promise<IndexChildResponse> {
   return withIndexChildSlot(() => {
     const outcome = spawnIndexChild(request);
-    hooks?.onSpawn?.(outcome);
+    try {
+      hooks?.onSpawn?.(outcome);
+    } catch (err) {
+      // The child is already running; a failing hook must not orphan its outcome.
+      process.stderr.write(`[codesift] index child onSpawn hook failed: ${(err as Error).message}\n`);
+    }
     return outcome;
   });
 }
@@ -252,7 +257,10 @@ function spawnIndexChild(request: IndexChildRequest): Promise<IndexChildResponse
               typeof parsed.result.root !== "string" ||
               typeof parsed.report !== "object" ||
               parsed.report === null ||
-              Array.isArray(parsed.report)
+              Array.isArray(parsed.report) ||
+              // Only a full run sets `completed`; a seed or a rejected partial omits it. Absent is
+              // valid, a wrong type is not.
+              (parsed.report.completed !== undefined && typeof parsed.report.completed !== "boolean")
             ) {
               throw new Error(`index child for ${request.path} returned a malformed result`);
             }
