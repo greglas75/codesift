@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS extractor native)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -238,4 +238,37 @@ Grammar identity, verified by hash: the shipped `.wasm` files are byte-identical
 `tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1`; the Rust crates of the same
 versions are what stage 3 builds on. `download-wasm.ts` now pins `tree-sitter-typescript` (it was
 the one TS/JS grammar left floating), so the two sides cannot drift apart on a new release.
+
+### Stage 3, first language — TypeScript / TSX / JavaScript (2026-10-09)
+
+`runTreeSitterParse` sends TS, TSX and JS to the Rust extractor when the core is loaded
+(`CODESIFT_NATIVE_PARSER`): native tree-sitter 0.26.11 with the 0.23.2 / 0.23.1 grammars, a 1:1 port
+of the nine `typescript*.ts` modules, parsed on the libuv pool instead of the two WASM workers.
+
+Parity on real code (`scripts/native-extract-parity.ts`, byte-for-byte JSON per file):
+
+| code | files | symbols | differences |
+|---|---:|---:|---:|
+| codesift `src` + `tests` | 1,292 | 29,256 | 0 |
+| codesift-dashboard (React) | 57 | 599 | 0 |
+| ResearchShieldNew (TS, JS, bundles) | 22,022 | 461,113 | 0 |
+| tgm-survey-platform (TSX-heavy, incl. worktrees) | 184,970 | 3,393,366 | 0 |
+
+**The one defect parity found:** the UTF-16 input callback halved an offset the binding had ALREADY
+halved, so every read past the first returned text from the wrong place — 18 of 660 files diverged,
+always late in the file. A unit test on short snippets could not have seen it.
+
+Details the port had to carry, each from reading the TypeScript rather than guessing: positions are
+UTF-16 code units (`start_byte` included); a class is pushed after its members; `isExported` flows into
+the children of continue-after nodes; `getTestName` keeps an empty suite name; the export post-pass
+appends `is_exported` as the LAST key; JS `trim`/`\s` include U+FEFF; a class without a body keeps its
+whole untruncated text.
+
+One intended difference: on a tree deeper than V8's stack the TypeScript extractor catches the
+RangeError and returns a partial list; the Rust walk runs on 64 MB stacks and returns every symbol.
+
+Measured: a full `index_folder` of ResearchShieldNew (33,227 files, 494,840 symbols — the same count
+both ways) **34.7 s → 19.5 s**. The TypeScript baseline parsed in-thread (a dev run has no built
+worker); production's two workers make the real gap smaller. Parallelism here is bounded by the libuv
+pool (4 threads) — spawning on the extractor's own pool is the next step if parsing still dominates.
 

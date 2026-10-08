@@ -29,6 +29,11 @@ component keeps its TS implementation; the binary is OPTIONAL.
   in JS). Heap retained on a 353k-symbol repo 400 → 14 MB, conversation index 870 → 7 MB. Parity:
   `scripts/native-bm25-parity.ts <copy.db>` (0 diffs on 5 indexes). Conversation persistence keeps the
   TS engine (`{ engine: "ts" }`) because incremental passes amend its sidecar.
+- **Stage 3 (parser, TS/TSX/JS):** `runTreeSitterParse` → `extractSymbols` in Rust
+  (`crates/codesift-core/src/extract/ts.rs`, a 1:1 port). tree-sitter `=0.26.11` (= web-tree-sitter),
+  grammars `=0.23.2`/`=0.23.1` (= the shipped .wasm, verified by hash). Everything positional is UTF-16
+  code units. Parity: `scripts/native-extract-parity.ts <dir>` (0 diffs on 3.39M symbols). The
+  `parse_utf16_le_with_options` callback gets a CODE-UNIT offset — do not halve it again.
 - Rust checks run on the farm, not the Mac: `rt rust` (profile in `.tf.json`), or `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
   The darwin addon can only be built on a Mac (`TF_ALLOW_LOCAL=1 npm run build:native`).
 

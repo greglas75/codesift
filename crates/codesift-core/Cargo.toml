@@ -18,5 +18,13 @@ serde_json = { version = "1", features = ["raw_value"] }
 regex = "1"
 memchr = "2"
 
+# Parsing (stage 3). EXACT versions on purpose: the trees must be the ones web-tree-sitter builds —
+# the runtime matches web-tree-sitter 0.26.11 and the grammars are the versions the shipped .wasm
+# files were built from (verified by hash; see download-wasm.ts). Bump together with those.
+tree-sitter = "=0.26.11"
+tree-sitter-typescript = "=0.23.2"
+tree-sitter-javascript = "=0.23.1"
+rayon = "1"
+
 [dev-dependencies]
 tempfile = "3"

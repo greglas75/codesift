@@ -361,3 +361,73 @@ impl Default for NativeBm25 {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Symbol extraction (ADR-006 stage 3)
+// ---------------------------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct ExtractedJs {
+    /// The symbols as a JSON array, in `makeSymbol` key order.
+    pub json: String,
+    /// The tree had syntax errors (the TypeScript extractor logs a warning).
+    pub has_error: bool,
+    /// The parse ran past its budget; no symbols, as the TypeScript path's rejected race.
+    pub timed_out: bool,
+}
+
+pub struct ExtractTask {
+    source: String,
+    file: String,
+    repo: String,
+    language: String,
+    timeout_ms: u32,
+}
+
+impl Task for ExtractTask {
+    type Output = codesift_core::extract::ExtractOutput;
+    type JsValue = ExtractedJs;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        codesift_core::extract::extract_to_json(
+            &self.source,
+            &self.file,
+            &self.repo,
+            &self.language,
+            std::time::Duration::from_millis(self.timeout_ms as u64),
+        )
+        .ok_or_else(|| {
+            napi::Error::new(
+                Status::InvalidArg,
+                format!("no native extractor for language {:?}", self.language),
+            )
+        })
+    }
+
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> napi::Result<ExtractedJs> {
+        Ok(ExtractedJs {
+            json: out.json,
+            has_error: out.has_error,
+            timed_out: out.timed_out,
+        })
+    }
+}
+
+/// Parse `source` and extract its symbols off the main thread. `file` is the repo-relative path the
+/// symbol ids carry.
+#[napi]
+pub fn extract_symbols(
+    source: String,
+    file: String,
+    repo: String,
+    language: String,
+    timeout_ms: u32,
+) -> AsyncTask<ExtractTask> {
+    AsyncTask::new(ExtractTask {
+        source,
+        file,
+        repo,
+        language,
+        timeout_ms,
+    })
+}

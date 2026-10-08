@@ -159,7 +159,7 @@ export function languageHasParser(language: string): boolean {
  */
 export const DEFAULT_PARSE_TIMEOUT_MS = 30_000;
 
-function getParseTimeoutMs(): number {
+export function getParseTimeoutMs(): number {
   const envVal = process.env.CODESIFT_PARSE_TIMEOUT_MS;
   if (envVal) {
     const parsed = Number.parseInt(envVal, 10);

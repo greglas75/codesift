@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import type { CodeSymbol } from "../types.js";
+import { getNativeCore, type NativeCore } from "../native/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -203,7 +204,37 @@ async function runInThreadParse(req: ParseRequest): Promise<CodeSymbol[]> {
  *
  * In dev/test (no built parse-worker.js) falls back to in-thread parsing.
  */
+/** Languages the Rust extractor covers (ADR-006 stage 3) — the TypeScript extractor's own set. */
+const NATIVE_EXTRACT_LANGUAGES = new Set(["typescript", "tsx", "javascript"]);
+
+/**
+ * The native path: parse and extract in Rust, on the libuv pool rather than one of the two workers,
+ * with the same timeout and the same two warnings the TypeScript path prints. Symbols arrive as JSON
+ * in `makeSymbol`'s key order — verified byte-identical to the TypeScript extractor on 3.39M symbols
+ * (scripts/native-extract-parity.ts).
+ *
+ * No worker isolation, deliberately: the worker exists because a WASM parse could hang its thread
+ * synchronously or crash the process. Here the parse is cancelled by tree-sitter's own progress
+ * callback at the timeout, and the walk runs on 64 MB stacks, so the failure modes the pool contains
+ * are not the ones this path has.
+ */
+async function runNativeExtract(core: NativeCore, req: ParseRequest): Promise<CodeSymbol[]> {
+  const { getParseTimeoutMs } = await import("./parser-manager.js");
+  const timeoutMs = getParseTimeoutMs();
+  const out = await core.extractSymbols(req.source, req.relPath, req.repoName, req.language, timeoutMs);
+  if (out.timedOut) {
+    console.warn(`[parser] Parse error in ${req.filePath}: parse timeout after ${timeoutMs}ms`);
+    return [];
+  }
+  if (out.hasError) {
+    console.warn(`[ts-extractor] grammar errors detected in ${req.relPath}; some symbols may be incomplete`);
+  }
+  return JSON.parse(out.json) as CodeSymbol[];
+}
+
 export async function runTreeSitterParse(req: ParseRequest): Promise<CodeSymbol[]> {
+  const native = NATIVE_EXTRACT_LANGUAGES.has(req.language) ? getNativeCore("parser") : null;
+  if (native) return runNativeExtract(native, req);
   if (!isPoolAvailable()) return runInThreadParse(req);
   if (!initialized) init();
   const taskId = nextTaskId++;
