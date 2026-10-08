@@ -1,6 +1,7 @@
 /** SQL query/reference tracing capability. */
 
-import { getCodeIndex } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import { searchText } from "./search-tools.js";
 import { escapeRegex } from "./sql-shared-tools.js";
 
@@ -41,7 +42,9 @@ export async function traceQuery(
     throw new Error("table parameter is required");
   }
 
-  const index = await getCodeIndex(repo);
+  // The summary gives the file list; symbols are read by name, by file, or streamed — never all
+  // resident at once.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
@@ -51,9 +54,9 @@ export async function traceQuery(
   const includeOrm = options.include_orm ?? true;
 
   // Find table definition
-  const tableSym = index.symbols.find(
-    (s) => (s.kind === "table" || s.kind === "view") && s.name === tableName,
-  );
+  const tableSym = (
+    await findRepoSymbols(repo, { name: tableName, withSource: false }, { skipFreshness: true })
+  ).find((s) => s.kind === "table" || s.kind === "view");
   const table_definition = tableSym
     ? { file: tableSym.file, line: tableSym.start_line, kind: tableSym.kind as "table" | "view" }
     : null;
@@ -112,7 +115,11 @@ export async function traceQuery(
     // Prisma detection
     const prismaFiles = index.files.filter((f) => f.path.endsWith(".prisma"));
     for (const pf of prismaFiles) {
-      const prismaSymbols = index.symbols.filter((s) => s.file === pf.path);
+      const prismaSymbols = await findRepoSymbols(
+        repo,
+        { file: pf.path, withSource: true },
+        { skipFreshness: true },
+      );
       for (const sym of prismaSymbols) {
         // Check @@map("tableName") in source
         if (sym.source?.includes(`@@map("${tableName}")`)) {
@@ -140,19 +147,32 @@ export async function traceQuery(
 
     // Drizzle detection
     const tsFiles = index.files.filter((f) => f.path.endsWith(".ts") || f.path.endsWith(".js"));
-    for (const tf of tsFiles) {
-      const tsSymbols = index.symbols.filter((s) => s.file === tf.path && s.source);
-      for (const sym of tsSymbols) {
-        if (sym.source?.includes(`pgTable("${tableName}"`) ||
-            sym.source?.includes(`mysqlTable("${tableName}"`) ||
-            sym.source?.includes(`sqliteTable("${tableName}"`)) {
-          orm_references.push({
-            file: sym.file,
-            line: sym.start_line,
-            orm: "drizzle",
-            model_name: sym.name,
-          });
+    // One streamed pass instead of a per-file query: a per-file read over every TS file costs
+    // ~10 ms each, which on a large repo is minutes. Matches are bucketed by file and emitted in
+    // file-list order below, which is the order the per-file loop over `index.files` produced —
+    // row order in the table is not guaranteed to follow it after incremental re-indexing.
+    const tsFileSet = new Set(tsFiles.map((f) => f.path));
+    const drizzleByFile = new Map<string, CodeSymbol[]>();
+    await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+      for (const sym of batch) {
+        if (!sym.source || !tsFileSet.has(sym.file)) continue;
+        if (sym.source.includes(`pgTable("${tableName}"`) ||
+            sym.source.includes(`mysqlTable("${tableName}"`) ||
+            sym.source.includes(`sqliteTable("${tableName}"`)) {
+          const bucket = drizzleByFile.get(sym.file);
+          if (bucket) bucket.push(sym);
+          else drizzleByFile.set(sym.file, [sym]);
         }
+      }
+    }, { skipFreshness: true });
+    for (const tf of tsFiles) {
+      for (const sym of drizzleByFile.get(tf.path) ?? []) {
+        orm_references.push({
+          file: sym.file,
+          line: sym.start_line,
+          orm: "drizzle",
+          model_name: sym.name,
+        });
       }
     }
 

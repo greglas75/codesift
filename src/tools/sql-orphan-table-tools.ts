@@ -1,7 +1,7 @@
 /** SQL orphan table detection capability. */
 
 import type { TextMatch } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { searchText } from "./search-tools.js";
 import { escapeRegex } from "./sql-shared-tools.js";
 
@@ -26,19 +26,18 @@ export async function findOrphanTables(
   repo: string,
   options?: { file_pattern?: string },
 ): Promise<FindOrphanTablesResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  // Tables by kind, columns by parent — and only for the tables that turn out to be orphans.
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
   const filePattern = options?.file_pattern;
 
   // Collect all SQL tables
-  const tables = index.symbols.filter((s) => {
-    if (s.kind !== "table") return false;
-    if (filePattern && !s.file.includes(filePattern)) return false;
-    return true;
-  });
+  const tables = (
+    await findRepoSymbols(repo, { kind: "table", withSource: false }, { skipFreshness: true })
+  ).filter((s) => !filePattern || s.file.includes(filePattern));
 
   const orphans: OrphanTable[] = [];
 
@@ -74,8 +73,12 @@ export async function findOrphanTables(
     });
 
     if (realRefs.length === 0) {
-      const columnCount = index.symbols.filter(
-        (s) => s.kind === "field" && s.parent === table.id,
+      const columnCount = (
+        await findRepoSymbols(
+          repo,
+          { kind: "field", parent: table.id, withSource: false },
+          { skipFreshness: true },
+        )
       ).length;
 
       orphans.push({

@@ -1,8 +1,8 @@
 /** SQL schema drift detection capability. */
 
 import type { CodeSymbol } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
-import { normalizeSqlType } from "./sql-shared-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
+import { fieldsByParent, normalizeSqlType } from "./sql-shared-tools.js";
 
 export type DriftKind = "extra_in_orm" | "extra_in_sql" | "type_mismatch";
 
@@ -141,8 +141,10 @@ export async function analyzeSchemaDrift(
   repo: string,
   options?: AnalyzeSchemaDriftOptions,
 ): Promise<SchemaDriftResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  // Three kind-keyed reads — tables, their fields, Prisma model classes — replace a materialised
+  // index. Each collection is built from its own read, so each keeps the index's row order.
+  const indexed = await getIndexSummary(repo);
+  if (!indexed) {
     throw new Error(`Repository "${repo}" not found. Run index_folder first.`);
   }
 
@@ -158,14 +160,17 @@ export async function analyzeSchemaDrift(
     columns: Map<string, { type: string; file: string; line: number }>;
   }>();
 
-  for (const sym of index.symbols) {
-    if (sym.kind !== "table") continue;
+  const tableSymbols = await findRepoSymbols(
+    repo,
+    { kind: "table", withSource: false },
+    { skipFreshness: true },
+  );
+  const fieldsByTable = await fieldsByParent(repo, false);
+  for (const sym of tableSymbols) {
     if (filePattern && !sym.file.includes(filePattern)) continue;
 
     const columns = new Map<string, { type: string; file: string; line: number }>();
-    const fields = index.symbols.filter(
-      (f) => f.kind === "field" && f.parent === sym.id,
-    );
+    const fields = fieldsByTable.get(sym.id) ?? [];
     for (const f of fields) {
       columns.set(f.name.toLowerCase(), {
         type: f.signature ?? "unknown",
@@ -182,8 +187,12 @@ export async function analyzeSchemaDrift(
 
   // Collect Prisma models (kind === "class" in prisma extractor)
   const prismaModels: PrismaModel[] = [];
-  for (const sym of index.symbols) {
-    if (sym.kind !== "class") continue;
+  const classSymbols = await findRepoSymbols(
+    repo,
+    { kind: "class", withSource: true },
+    { skipFreshness: true },
+  );
+  for (const sym of classSymbols) {
     if (!sym.file.endsWith(".prisma")) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
     prismaModels.push(parsePrismaModel(sym));
