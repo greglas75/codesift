@@ -47,7 +47,11 @@ interface GrammarDef {
 
 const GRAMMARS: GrammarDef[] = [
   {
-    pkg: "tree-sitter-typescript",
+    // Pinned to 0.23.2 — the version every shipped build has used (its .wasm is byte-identical to the
+    // one in src/parser/languages). Unpinned, a new release would change the trees web-tree-sitter
+    // builds while the Rust parser (ADR-006 stage 3, crate tree-sitter-typescript 0.23.2) kept the
+    // old ones, and the two extractors would silently disagree. Bump both together.
+    pkg: "tree-sitter-typescript@0.23.2",
     wasmPaths: [
       "tree-sitter-typescript.wasm",
       "tree-sitter-tsx.wasm",

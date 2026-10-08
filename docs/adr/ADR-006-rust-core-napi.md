@@ -218,3 +218,24 @@ conversation PERSISTENCE, which still builds a TypeScript index because the incr
 the sidecar it writes. Search paths skip restoring that sidecar when native BM25 is on — loading it
 would rebuild the heap maps this stage removes, and the native build is the cheaper of the two.
 
+## Stage 3 — go/no-go measurement (2026-10-09)
+
+CPU profile of a full `index_folder` of ResearchShieldNew (352,694 symbols, parser inline so one
+thread holds every sample, native store and BM25 on): **36.2 s** sampled.
+
+| where | time | share |
+|---|---:|---:|
+| tree-sitter WASM — parsing, and the extractors' node accessors | 16.9 s | **47%** |
+| SQLite writes (`writeIndexRows`) | 7.3 s | 20% |
+| BM25 build (native, incl. napi conversion) | 5.0 s | 14% |
+| extractor logic itself (TypeScript, self time) | 0.7 s | 2% |
+
+**Go.** Nearly half of indexing is the WASM boundary, and the extractors' own logic is 2% of it — the
+rest of their time is calls into WASM nodes. Native tree-sitter, with files parsed in parallel instead
+of on the pool's two workers (`DEFAULT_POOL_SIZE = 2`), is the largest remaining lever on indexing.
+
+Grammar identity, verified by hash: the shipped `.wasm` files are byte-identical to npm
+`tree-sitter-typescript@0.23.2` and `tree-sitter-javascript@0.23.1`; the Rust crates of the same
+versions are what stage 3 builds on. `download-wasm.ts` now pins `tree-sitter-typescript` (it was
+the one TS/JS grammar left floating), so the two sides cannot drift apart on a new release.
+
