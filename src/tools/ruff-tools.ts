@@ -3,7 +3,7 @@
  * and correlate findings with CodeSift's symbol graph.
  */
 import { execFileSync } from "node:child_process";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface RuffFinding {
@@ -58,7 +58,7 @@ export async function runRuff(
     max_results?: number;
   },
 ): Promise<RuffResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const categories = options?.categories ?? DEFAULT_CATEGORIES;
@@ -104,14 +104,19 @@ export async function runRuff(
     return { findings: [], total: 0, by_rule: {}, ruff_available: true };
   }
 
-  // Build Python symbols by file for fast lookup
+  // Symbols are only needed to name the one containing each finding, so they are fetched per
+  // file, on first use, with one `WHERE file = ?` read — not every symbol of the repo up front.
+  // Only Python files ever had entries, so any other path keeps resolving to none.
   const symbolsByFile = new Map<string, CodeSymbol[]>();
-  for (const sym of index.symbols) {
-    if (!sym.file.endsWith(".py")) continue;
-    const existing = symbolsByFile.get(sym.file);
-    if (existing) existing.push(sym);
-    else symbolsByFile.set(sym.file, [sym]);
-  }
+  const symbolsInFile = async (file: string): Promise<CodeSymbol[]> => {
+    if (!file.endsWith(".py")) return [];
+    let syms = symbolsByFile.get(file);
+    if (!syms) {
+      syms = await findRepoSymbols(repo, { file, withSource: false }, { skipFreshness: true });
+      symbolsByFile.set(file, syms);
+    }
+    return syms;
+  };
 
   const findings: RuffFinding[] = [];
   const by_rule: Record<string, number> = {};
@@ -127,7 +132,7 @@ export async function runRuff(
     if (filePattern && !relPath.includes(filePattern)) continue;
 
     // Find containing symbol
-    const fileSyms = symbolsByFile.get(relPath) ?? [];
+    const fileSyms = await symbolsInFile(relPath);
     const containing = fileSyms.find(
       (s) => s.start_line <= raw.location.row && s.end_line >= raw.location.row,
     );

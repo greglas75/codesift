@@ -3,7 +3,7 @@
  * Scans conftest.py hierarchy, extracts fixtures with scope, autouse,
  * and dependencies (fixture parameters that reference other fixtures).
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface FixtureInfo {
@@ -38,14 +38,20 @@ export async function getTestFixtures(
     file_pattern?: string;
   },
 ): Promise<FixtureGraph> {
-  const index = await getCodeIndex(repo);
+  // Fixtures are `test_hook` symbols, so one kind-keyed read replaces the materialised index; the
+  // summary supplies the conftest file list. `source` is read for scope/autouse extraction.
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
 
   // Find all fixture symbols (kind === "test_hook")
-  const fixtureSymbols = index.symbols.filter((s) => {
-    if (s.kind !== "test_hook") return false;
+  const testHooks = await findRepoSymbols(
+    repo,
+    { kind: "test_hook", withSource: true },
+    { skipFreshness: true },
+  );
+  const fixtureSymbols = testHooks.filter((s) => {
     if (!s.file.endsWith(".py")) return false;
     if (filePattern && !s.file.includes(filePattern)) return false;
     return true;

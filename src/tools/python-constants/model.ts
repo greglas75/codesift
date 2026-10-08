@@ -94,8 +94,15 @@ interface EvaluationResult {
   reason?: string;
 }
 
+/**
+ * What resolution reads from an index: the root (to read files) and the file list (to resolve
+ * imports). Never `symbols` — so a summary satisfies it, and the resolver does not need the
+ * index materialised (ADR-004 stage 2).
+ */
+type PythonResolutionIndex = Pick<CodeIndex, "root" | "files">;
+
 interface ResolutionState {
-  index: CodeIndex;
+  index: PythonResolutionIndex;
   fileCache: Map<string, PythonFileContext | null>;
   visited: Set<string>;
   maxDepth: number;
@@ -106,5 +113,6 @@ export type {
   EvaluationResult,
   ImportBinding,
   PythonFileContext,
+  PythonResolutionIndex,
   ResolutionState,
 };

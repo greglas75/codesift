@@ -14,7 +14,7 @@
  *
  * Unique differentiator — no other MCP server traces FastAPI DI.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface DependsCallSite {
@@ -92,18 +92,29 @@ export async function traceFastAPIDepends(
     max_depth?: number;
   },
 ): Promise<FastAPIDependsResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
   const endpointFilter = options?.endpoint;
   const maxDepth = options?.max_depth ?? MAX_DEPTH;
 
+  // Both passes below look only at Python functions and methods, so those are the only symbols
+  // kept — collected in ONE streamed pass with the kind filter in JS. Two kind-keyed reads would
+  // concatenate functions before methods, and `symbolByName` keeps the FIRST symbol of each name
+  // in index order, so the interleaving is part of the answer.
+  const pyFunctions: CodeSymbol[] = [];
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const sym of batch) {
+      if (!sym.file.endsWith(".py")) continue;
+      if (sym.kind !== "function" && sym.kind !== "method") continue;
+      pyFunctions.push(sym);
+    }
+  }, { skipFreshness: true });
+
   // Build a lookup: function name → symbol (for resolving dep references)
   const symbolByName = new Map<string, CodeSymbol>();
-  for (const sym of index.symbols) {
-    if (!sym.file.endsWith(".py")) continue;
-    if (sym.kind !== "function" && sym.kind !== "method") continue;
+  for (const sym of pyFunctions) {
     if (!symbolByName.has(sym.name)) {
       symbolByName.set(sym.name, sym);
     }
@@ -113,9 +124,7 @@ export async function traceFastAPIDepends(
   const endpoints: FastAPIEndpointDeps[] = [];
   const sharedDeps = new Map<string, number>();
 
-  for (const sym of index.symbols) {
-    if (!sym.file.endsWith(".py")) continue;
-    if (sym.kind !== "function" && sym.kind !== "method") continue;
+  for (const sym of pyFunctions) {
     if (filePattern && !sym.file.includes(filePattern)) continue;
     if (endpointFilter && sym.name !== endpointFilter) continue;
     if (!sym.decorators || sym.decorators.length === 0) continue;

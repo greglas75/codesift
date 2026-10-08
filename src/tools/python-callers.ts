@@ -12,7 +12,7 @@
  *   - Returns call context (containing function, call kind)
  *   - Respects Python aliasing: `from X import Y as Z`
  */
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 
 export interface PythonCallerInfo {
   caller_symbol: string;
@@ -47,14 +47,16 @@ export async function findPythonCallers(
     max_results?: number;
   },
 ): Promise<PythonCallersResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  // The target is found by name (one `WHERE name = ?` read); callers by a streamed scan of bodies
+  // that stops at `max_results`, as the old loop did — never the whole index resident.
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const maxResults = options?.max_results ?? 100;
 
   // 1. Find the target symbol
-  const candidates = index.symbols.filter((s) => {
-    if (s.name !== targetName) return false;
+  const named = await findRepoSymbols(repo, { name: targetName, withSource: false }, { skipFreshness: true });
+  const candidates = named.filter((s) => {
     if (!s.file.endsWith(".py")) return false;
     if (options?.target_file && !s.file.includes(options.target_file)) return false;
     return true;
@@ -91,8 +93,9 @@ export async function findPythonCallers(
   const filesSeen = new Set<string>();
   const filePattern = options?.file_pattern;
 
-  for (const sym of index.symbols) {
-    if (callers.length >= maxResults) break;
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  for (const sym of batch) {
+    if (callers.length >= maxResults) return false;
     if (!sym.file.endsWith(".py")) continue;
     if (sym.file === targetSymbol.file && sym.name === targetSymbol.name) continue; // skip self
     if (filePattern && !sym.file.includes(filePattern)) continue;
@@ -129,6 +132,8 @@ export async function findPythonCallers(
     });
     filesSeen.add(sym.file);
   }
+  return undefined;
+  }, { skipFreshness: true });
 
   return {
     target: {

@@ -5,7 +5,7 @@
  * findings with CodeSift's symbol graph for containing_symbol context.
  */
 import { execFileSync } from "node:child_process";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface TypeCheckFinding {
@@ -87,7 +87,7 @@ async function runTypeCheck(
     max_results?: number;
   },
 ): Promise<TypeCheckResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
@@ -143,20 +143,26 @@ async function runTypeCheck(
     : parsePyrightOutput(raw, index.root);
 
   // Correlate with symbols
+  // Symbols are only needed to name the one containing each finding, so they are fetched per
+  // file, on first use, with one `WHERE file = ?` read — not every symbol of the repo up front.
+  // Only Python files ever had entries, so any other path keeps resolving to none.
   const symbolsByFile = new Map<string, CodeSymbol[]>();
-  for (const sym of index.symbols) {
-    if (!sym.file.endsWith(".py")) continue;
-    const existing = symbolsByFile.get(sym.file);
-    if (existing) existing.push(sym);
-    else symbolsByFile.set(sym.file, [sym]);
-  }
+  const symbolsInFile = async (file: string): Promise<CodeSymbol[]> => {
+    if (!file.endsWith(".py")) return [];
+    let syms = symbolsByFile.get(file);
+    if (!syms) {
+      syms = await findRepoSymbols(repo, { file, withSource: false }, { skipFreshness: true });
+      symbolsByFile.set(file, syms);
+    }
+    return syms;
+  };
 
   const enriched: TypeCheckFinding[] = [];
   for (const f of findings) {
     if (enriched.length >= maxResults) break;
     if (filePattern && !f.file.includes(filePattern)) continue;
 
-    const fileSyms = symbolsByFile.get(f.file) ?? [];
+    const fileSyms = await symbolsInFile(f.file);
     const containing = fileSyms.find(
       (s) => s.start_line <= f.line && s.end_line >= f.line,
     );

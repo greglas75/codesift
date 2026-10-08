@@ -8,7 +8,8 @@
  * Complements get_model_graph (Django/SQLAlchemy) — Pydantic is the
  * FastAPI contract layer, not the persistence layer.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
 
 export interface PydanticField {
   name: string;
@@ -73,18 +74,23 @@ export async function getPydanticModels(
     output_format?: "json" | "mermaid";
   },
 ): Promise<PydanticModelsResult | { mermaid: string }> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  // Only classes are candidates: one kind-keyed read (with source — the source-level Pydantic
+  // markers and field extraction read it) replaces the materialised index.
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
 
   // Pass 1a: collect all candidate Python classes (for transitive inheritance resolution)
-  const candidates = index.symbols.filter((s) => {
-    if (s.kind !== "class") return false;
-    if (!s.file.endsWith(".py")) return false;
-    if (filePattern && !s.file.includes(filePattern)) return false;
-    return true;
-  });
+  // Streamed so that only the Python classes are kept: in a mixed repo most classes are not.
+  const candidates: CodeSymbol[] = [];
+  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+    for (const s of batch) {
+      if (!s.file.endsWith(".py")) continue;
+      if (filePattern && !s.file.includes(filePattern)) continue;
+      candidates.push(s);
+    }
+  }, { skipFreshness: true });
   const candidateByName = new Map<string, typeof candidates[0]>();
   for (const c of candidates) candidateByName.set(c.name, c);
 

@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CodeIndex, CodeSymbol } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
+import type { CodeSymbol } from "../types.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { traceRoute } from "./route-tools.js";
 
 export interface DjangoViewSecurityAssessment {
@@ -63,7 +64,7 @@ function collectAuthGuards(decorators: string[], mixins: string[]): string[] {
   return [...guards];
 }
 
-function getSettingsFiles(index: CodeIndex, explicitSettingsFile?: string): string[] {
+function getSettingsFiles(index: IndexSummary, explicitSettingsFile?: string): string[] {
   if (explicitSettingsFile) return [explicitSettingsFile];
   return index.files
     .filter((file) => file.path.endsWith(".py"))
@@ -71,7 +72,7 @@ function getSettingsFiles(index: CodeIndex, explicitSettingsFile?: string): stri
     .map((file) => file.path);
 }
 
-async function collectMiddleware(index: CodeIndex, settingsFiles: string[]): Promise<string[]> {
+async function collectMiddleware(index: IndexSummary, settingsFiles: string[]): Promise<string[]> {
   const middlewares = new Set<string>();
   for (const filePath of settingsFiles) {
     let source: string;
@@ -181,25 +182,34 @@ function dedupeAssessments(assessments: DjangoViewSecurityAssessment[]): DjangoV
   return result;
 }
 
-function findParentSymbol(index: CodeIndex, symbol: CodeSymbol): CodeSymbol | undefined {
+// Symbol reads below never touch `source`: an assessment is built from decorators and bases only.
+// Each is a keyed lookup (by id, or by file + name) — never the whole index.
+
+async function findParentSymbol(repo: string, symbol: CodeSymbol): Promise<CodeSymbol | undefined> {
   if (!symbol.parent) return undefined;
-  return index.symbols.find((candidate) => candidate.id === symbol.parent);
+  const [parent] = await findRepoSymbols(
+    repo,
+    { ids: [symbol.parent], withSource: false, limit: 1 },
+    { skipFreshness: true },
+  );
+  return parent;
 }
 
-async function resolveSymbolsFromPath(index: CodeIndex, path: string): Promise<CodeSymbol[]> {
-  const trace = await traceRoute(index.repo, path);
+async function resolveSymbolsFromPath(repo: string, path: string): Promise<CodeSymbol[]> {
+  const trace = await traceRoute(repo, path);
   if (!trace || typeof trace !== "object" || !("handlers" in trace)) return [];
 
   const handlers = (trace as { handlers: Array<{ framework?: string; symbol: { file: string; name: string; start_line: number } }> }).handlers;
-  return handlers
-    .filter((handler) => handler.framework === "django")
-    .map((handler) => index.symbols.find(
-      (symbol) =>
-        symbol.file === handler.symbol.file &&
-        symbol.name === handler.symbol.name &&
-        symbol.start_line === handler.symbol.start_line,
-    ))
-    .filter((symbol): symbol is CodeSymbol => symbol !== undefined);
+  const resolved: Array<CodeSymbol | undefined> = [];
+  for (const handler of handlers.filter((h) => h.framework === "django")) {
+    const sameName = await findRepoSymbols(
+      repo,
+      { file: handler.symbol.file, name: handler.symbol.name, withSource: false },
+      { skipFreshness: true },
+    );
+    resolved.push(sameName.find((symbol) => symbol.start_line === handler.symbol.start_line));
+  }
+  return resolved.filter((symbol): symbol is CodeSymbol => symbol !== undefined);
 }
 
 export async function effectiveDjangoViewSecurity(
@@ -211,7 +221,7 @@ export async function effectiveDjangoViewSecurity(
     settings_file?: string;
   },
 ): Promise<DjangoViewSecurityResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
   if (!options.path && !options.symbol_name) {
     throw new Error("Provide either path or symbol_name.");
@@ -222,19 +232,25 @@ export async function effectiveDjangoViewSecurity(
 
   let symbols: CodeSymbol[] = [];
   if (options.path) {
-    symbols = await resolveSymbolsFromPath(index, options.path);
+    symbols = await resolveSymbolsFromPath(index.repo, options.path);
   } else if (options.symbol_name) {
-    symbols = index.symbols.filter((symbol) =>
+    const named = await findRepoSymbols(
+      repo,
+      { name: options.symbol_name, withSource: false },
+      { skipFreshness: true },
+    );
+    symbols = named.filter((symbol) =>
       symbol.file.endsWith(".py")
-      && symbol.name === options.symbol_name
       && (symbol.kind === "function" || symbol.kind === "class" || symbol.kind === "method")
       && (!options.file_pattern || symbol.file.includes(options.file_pattern))
     );
   }
 
-  const assessments = dedupeAssessments(symbols.map((symbol) =>
-    buildAssessment(symbol, findParentSymbol(index, symbol), middleware, options.path),
-  ));
+  const assessed: ReturnType<typeof buildAssessment>[] = [];
+  for (const symbol of symbols) {
+    assessed.push(buildAssessment(symbol, await findParentSymbol(repo, symbol), middleware, options.path));
+  }
+  const assessments = dedupeAssessments(assessed);
 
   return {
     assessments,

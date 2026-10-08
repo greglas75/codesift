@@ -1,5 +1,4 @@
-import type { CodeIndex } from "../types.js";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import { matchesConstantFilePattern } from "../utils/constant-file-pattern.js";
 import { resolveConstantSymbol } from "./python-constants/constant-match.js";
 import { resolveFunctionDefaults } from "./python-constants/function-defaults.js";
@@ -27,18 +26,23 @@ export async function resolveConstantValue(
   options?: {
     file_pattern?: string;
     max_depth?: number;
-    /** When set, skips a second getCodeIndex (multi-language orchestrator). */
-    index?: CodeIndex;
   },
 ): Promise<ConstantResolutionResult> {
-  const index = options?.index ?? await getCodeIndex(repo);
+  // Resolution reads the root and the file list (to load files and resolve imports) plus the
+  // symbols NAMED `symbolName` — never the rest. The summary and one `WHERE name = ?` read
+  // replace the materialised index. `source` is kept: function-default resolution parses it.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository "${repo}" not found.`);
   }
 
-  const candidates = index.symbols
+  const named = await findRepoSymbols(
+    repo,
+    { name: symbolName, withSource: true },
+    { skipFreshness: true },
+  );
+  const candidates = named
     .filter((symbol) => symbol.file.endsWith(".py"))
-    .filter((symbol) => symbol.name === symbolName)
     .filter((symbol) => matchesConstantFilePattern(symbol.file, options?.file_pattern))
     .filter((symbol) => symbol.kind === "constant" || symbol.kind === "function" || symbol.kind === "method")
     .sort((a, b) => a.file.localeCompare(b.file) || a.start_line - b.start_line);

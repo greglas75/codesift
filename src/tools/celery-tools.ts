@@ -7,7 +7,7 @@
  *
  * This answers the question: "If I change this task, what breaks?"
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface CeleryTask {
@@ -74,8 +74,11 @@ export async function traceCeleryChain(
     task_name?: string; // restrict to one task for focused analysis
   },
 ): Promise<CeleryResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found.`);
+  // Two streamed passes instead of a materialised index. The first reads decorators only (they
+  // live outside `source`); the second scans bodies for call sites against the task map the
+  // first built, so they cannot be merged into one.
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
   const targetTaskName = options?.task_name;
@@ -84,7 +87,8 @@ export async function traceCeleryChain(
   const tasks: CeleryTask[] = [];
   const taskByName = new Map<string, CeleryTask>();
 
-  for (const sym of index.symbols) {
+  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+  for (const sym of batch) {
     if (!sym.file.endsWith(".py")) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
     if (!sym.decorators || sym.decorators.length === 0) continue;
@@ -123,12 +127,14 @@ export async function traceCeleryChain(
     tasks.push(task);
     taskByName.set(sym.name, task);
   }
+  }, { skipFreshness: true });
 
   // 2. Find all call sites across the codebase
   let totalCallSites = 0;
   const canvasUsages: CeleryCanvasUsage[] = [];
 
-  for (const sym of index.symbols) {
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  for (const sym of batch) {
     if (!sym.file.endsWith(".py")) continue;
     if (!sym.source) continue;
 
@@ -165,6 +171,7 @@ export async function traceCeleryChain(
       }
     }
   }
+  }, { skipFreshness: true });
 
   // Count total call sites across all tasks
   for (const task of tasks) {
