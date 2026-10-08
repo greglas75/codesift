@@ -4,7 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { detectCycles, type NestToolError } from "./nest-shared-tools.js";
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ export async function nestDIGraph(
   repo: string,
   options?: { max_nodes?: number; focus?: string },
 ): Promise<NestDIGraphResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
 
   const maxNodes = options?.max_nodes ?? 200;

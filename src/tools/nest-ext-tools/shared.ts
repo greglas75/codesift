@@ -1,10 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "../index-tools.js";
+import { getIndexSummary } from "../index-tools.js";
 import type { NestToolError } from "../nest-tools.js";
 import { stripCommentsAndStrings } from "../../utils/source-stripper.js";
 
-export type NestCodeIndex = NonNullable<Awaited<ReturnType<typeof getCodeIndex>>>;
+/**
+ * The SUMMARY — root and file list. Every nest-ext tool filters `files` by path and reads the
+ * matches off disk; none of them reads a symbol, so materialising the whole index to hand them a
+ * file list was pure cost (ADR-004 stage 2). The type has no `symbols` field at all, so a future
+ * tool that needs symbols fails to compile instead of reading an empty array as "none".
+ */
+export type NestCodeIndex = NonNullable<Awaited<ReturnType<typeof getIndexSummary>>>;
 
 export interface NestClassRange {
   name: string;
@@ -25,7 +31,7 @@ export interface NestMethodMatch {
 }
 
 export async function requireNestCodeIndex(repo: string): Promise<NestCodeIndex> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
   return index;
 }

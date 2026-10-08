@@ -8,32 +8,11 @@ import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 // nest_audit reaches search_patterns, which now takes the SUMMARY and streams symbols instead of
 // materialising the index. The mock projects the one fixture into all three shapes so the audit is
 // asserting on its own checks rather than on which accessor happens to be stubbed.
-vi.mock("../../src/tools/index-tools.js", () => {
-  const getCodeIndex = vi.fn();
-  return {
-    getCodeIndex,
-    getIndexSummary: async (...args: unknown[]) => {
-      const index = await (getCodeIndex as (r: unknown) => Promise<unknown>)(args[0]);
-      if (!index) return null;
-      const { symbols: _symbols, ...summary } = index as Record<string, unknown>;
-      return {
-        ...summary,
-        symbol_count: ((index as { symbols?: unknown[] }).symbols ?? []).length,
-        file_count: ((index as { files?: unknown[] }).files ?? []).length,
-      };
-    },
-    findRepoSymbols: async (...args: unknown[]) => {
-      const index = await (getCodeIndex as (r: unknown) => Promise<unknown>)(args[0]);
-      const query = args[1] as { file?: string } | undefined;
-      const symbols = ((index as { symbols?: Array<{ file: string }> } | null)?.symbols) ?? [];
-      return query?.file === undefined ? symbols : symbols.filter((s) => s.file === query.file);
-    },
-    streamRepoSymbols: async (...args: unknown[]) => {
-      const index = await (getCodeIndex as (r: unknown) => Promise<unknown>)(args[0]);
-      const onBatch = args[2] as (b: unknown[]) => unknown;
-      await onBatch(((index as { symbols?: unknown[] } | null)?.symbols) ?? []);
-    },
-  };
+// The shared helper applies every SymbolQuery predicate and drops `source` when it was not asked
+// for, so a narrowed read that relies on a filter it did not pass fails here rather than in prod.
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { withDerivedIndexAccessors } = await import("../helpers/index-accessors-from-fixture.js");
+  return withDerivedIndexAccessors({ getCodeIndex: vi.fn() });
 });
 
 import { getCodeIndex } from "../../src/tools/index-tools.js";

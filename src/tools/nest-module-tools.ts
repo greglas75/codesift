@@ -4,7 +4,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { detectCycles, type NestToolError } from "./nest-shared-tools.js";
 import { extractNestConventions } from "./project-tools.js";
 
@@ -34,7 +34,7 @@ export async function nestModuleGraph(
   repo: string,
   options?: { max_modules?: number; output_format?: "json" | "mermaid" },
 ): Promise<NestModuleGraphResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
 
   const maxModules = options?.max_modules ?? 200;

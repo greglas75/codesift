@@ -16,7 +16,7 @@
  * Uses symbol graph: walks each async function's source text for the
  * patterns above. Returns file/line/symbol/pattern/suggested fix.
  */
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary, streamRepoSymbols } from "./index-tools.js";
 import type { CodeSymbol } from "../types.js";
 
 export interface AsyncFinding {
@@ -126,7 +126,7 @@ export async function analyzeAsyncCorrectness(
     max_results?: number;
   },
 ): Promise<AsyncCorrectnessResult> {
-  const index = await getCodeIndex(repo);
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const filePattern = options?.file_pattern;
@@ -141,11 +141,14 @@ export async function analyzeAsyncCorrectness(
   const findings: AsyncFinding[] = [];
   let asyncFunctionCount = 0;
 
-  for (const sym of index.symbols) {
-    if (findings.length >= maxResults) break;
-    if (!sym.file.endsWith(".py")) continue;
-    if (filePattern && !sym.file.includes(filePattern)) continue;
-    if (!sym.is_async) continue;
+  // Streamed in index order and folded page by page: every async function's source is scanned,
+  // but never all resident at once, and the scan stops at the same `maxResults` point the
+  // full-array loop broke at (ADR-004 stage 2).
+  const visit = (sym: CodeSymbol): boolean => {
+    if (findings.length >= maxResults) return false;
+    if (!sym.file.endsWith(".py")) return true;
+    if (filePattern && !sym.file.includes(filePattern)) return true;
+    if (!sym.is_async) return true;
 
     asyncFunctionCount++;
     const source = sym.source ?? "";
@@ -191,7 +194,13 @@ export async function analyzeAsyncCorrectness(
         fix: check.fix,
       });
     }
-  }
+    return true;
+  };
+
+  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    for (const sym of batch) if (!visit(sym)) return false;
+    return undefined;
+  }, { skipFreshness: true });
 
   const by_rule: Record<string, number> = {};
   for (const f of findings) {
