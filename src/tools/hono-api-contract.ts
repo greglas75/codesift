@@ -7,11 +7,9 @@
  * Spec: docs/specs/2026-04-10-hono-framework-intelligence-spec.md (Task 19)
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks, resolveRepoHonoEntryFile } from "./framework-detect-repo.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
-import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
-import { detectFrameworks } from "../utils/framework-detect.js";
 
 export type ContractFormat = "openapi" | "summary";
 
@@ -32,13 +30,13 @@ export async function extractApiContract(
   entryFile?: string,
   format: ContractFormat = "openapi",
 ): Promise<ApiContractResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) return { error: `Repository "${repo}" not found` };
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) return { error: `Repository "${repo}" not found` };
 
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("hono")) return { error: "No Hono app detected" };
 
-  const resolved = entryFile ?? resolveHonoEntryFile(index);
+  const resolved = entryFile ?? await resolveRepoHonoEntryFile(repo, scan.root);
   if (!resolved) return { error: "No Hono entry file found" };
 
   let model;

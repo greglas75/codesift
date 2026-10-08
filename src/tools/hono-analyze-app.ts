@@ -8,11 +8,9 @@
  * Spec: docs/specs/2026-04-10-hono-framework-intelligence-spec.md (Task 17)
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks, resolveRepoHonoEntryFile } from "./framework-detect-repo.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
-import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
-import { detectFrameworks } from "../utils/framework-detect.js";
 import type { HonoAppModel, HonoRoute } from "../parser/extractors/hono-model.js";
 
 export interface AnalyzeHonoAppResult {
@@ -57,17 +55,17 @@ export async function analyzeHonoApp(
   entryFile?: string,
   forceRefresh?: boolean,
 ): Promise<AnalyzeHonoAppResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) {
     return { error: `Repository "${repo}" not found` };
   }
 
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("hono")) {
     return { error: "No Hono app detected in this repo" };
   }
 
-  const resolvedEntry = entryFile ?? resolveHonoEntryFile(index);
+  const resolvedEntry = entryFile ?? await resolveRepoHonoEntryFile(repo, scan.root);
   if (!resolvedEntry) {
     return { error: "No Hono app entry file found" };
   }

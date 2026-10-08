@@ -23,7 +23,7 @@ interface IndexLike {
  * Regex matches `new Hono()`, `new Hono<...>()`, `new OpenAPIHono()`, and
  * `new OpenAPIHono<...>()` — all covered by an optional generic-arg block.
  */
-const HONO_INSTANTIATION = /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/;
+export const HONO_INSTANTIATION = /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/;
 
 /**
  * Resolve the entry file for a Hono app by scanning indexed symbol sources

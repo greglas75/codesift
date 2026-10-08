@@ -11,11 +11,9 @@
  * Spec: docs/specs/2026-04-11-hono-phase-2-plan.md (T8)
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks, resolveRepoHonoEntryFile } from "./framework-detect-repo.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
-import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
-import { detectFrameworks } from "../utils/framework-detect.js";
 import type { InlineHandlerAnalysis } from "../parser/extractors/hono-model.js";
 
 export interface InlineHandlerReport {
@@ -41,13 +39,13 @@ export async function analyzeInlineHandler(
   method?: string,
   routePath?: string,
 ): Promise<InlineHandlerResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) return { error: `Repository "${repo}" not found` };
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) return { error: `Repository "${repo}" not found` };
 
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("hono")) return { error: "No Hono app detected" };
 
-  const entryFile = resolveHonoEntryFile(index);
+  const entryFile = await resolveRepoHonoEntryFile(repo, scan.root);
   if (!entryFile) return { error: "No Hono app entry file found" };
 
   let model;

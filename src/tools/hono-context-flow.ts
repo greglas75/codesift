@@ -7,11 +7,9 @@
  * Spec: docs/specs/2026-04-10-hono-framework-intelligence-spec.md (Task 18)
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks, resolveRepoHonoEntryFile } from "./framework-detect-repo.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
-import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
-import { detectFrameworks } from "../utils/framework-detect.js";
 import type { ContextVariable } from "../parser/extractors/hono-model.js";
 
 export interface ContextFlowResult {
@@ -29,13 +27,13 @@ export async function traceContextFlow(
   repo: string,
   variable?: string,
 ): Promise<ContextFlowResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) return { error: `Repository "${repo}" not found` };
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) return { error: `Repository "${repo}" not found` };
 
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("hono")) return { error: "No Hono app detected" };
 
-  const entryFile = resolveHonoEntryFile(index);
+  const entryFile = await resolveRepoHonoEntryFile(repo, scan.root);
   if (!entryFile) return { error: "No Hono app entry file found" };
 
   let model;

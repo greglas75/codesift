@@ -2,7 +2,7 @@
  * NestJS audit meta-orchestrator.
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks } from "./framework-detect-repo.js";
 import { nestDIGraph, type NestDIGraphResult } from "./nest-di-tools.js";
 import { nestGuardChain, type NestGuardChainResult } from "./nest-guard-tools.js";
 import { nestLifecycleMap, type NestLifecycleMapResult } from "./nest-lifecycle-tools.js";
@@ -50,12 +50,11 @@ export async function nestAudit(
   repo: string,
   options?: { checks?: string[] },
 ): Promise<NestAuditResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
 
   // Check if this is a NestJS repo
-  const { detectFrameworks } = await import("../utils/framework-detect.js");
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("nestjs")) {
     return {
       framework_detected: false,

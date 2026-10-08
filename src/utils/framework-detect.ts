@@ -1,4 +1,4 @@
-import type { CodeIndex, CodeSymbol } from "../types.js";
+import type { CodeSymbol } from "../types.js";
 import type { HonoAppModel } from "../parser/extractors/hono-model.js";
 
 export type Framework = "react" | "nestjs" | "nextjs" | "express" | "astro" | "hono" | "test" | "kotlin-android";
@@ -64,10 +64,23 @@ export const NEXT_CONFIG_FILE = /^(src\/)?next\.config\.[mc]?[jt]s$/;
 /** Exported for testing — App Router convention files */
 export const NEXT_APP_CONVENTION_FILE = /(^|\/)app\/(.*\/)?(page|layout|loading|error|not-found|global-error|default|template|route)\.[jt]sx?$/;
 
-export function detectFrameworks(index: CodeIndex): Set<Framework> {
+/** How many leading symbols (index order) `detectFrameworks` reads source from. */
+export const FRAMEWORK_SOURCE_SAMPLE = 200;
+
+/**
+ * What detection reads: the file list, and the source of the first `FRAMEWORK_SOURCE_SAMPLE`
+ * symbols. Narrower than `CodeIndex` so a tool can pass a summary plus a 200-row read instead of
+ * materialising every symbol (ADR-004 stage 2); a full index still satisfies it.
+ */
+export interface FrameworkDetectInput {
+  files: ReadonlyArray<{ path: string }>;
+  symbols: ReadonlyArray<Pick<CodeSymbol, "source">>;
+}
+
+export function detectFrameworks(index: FrameworkDetectInput): Set<Framework> {
   const frameworks = new Set<Framework>();
   // Sample first 200 symbols' source for framework indicators
-  const sources = index.symbols.slice(0, 200).map((s) => s.source ?? "").join("\n");
+  const sources = index.symbols.slice(0, FRAMEWORK_SOURCE_SAMPLE).map((s) => s.source ?? "").join("\n");
 
   if (sources.includes("@nestjs/") || sources.includes("NestFactory")) frameworks.add("nestjs");
   if (sources.includes("from 'react'") || sources.includes('from "react"') || sources.includes("useState")) frameworks.add("react");

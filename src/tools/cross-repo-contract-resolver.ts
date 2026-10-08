@@ -7,17 +7,16 @@ import { extractOutboundCalls, type OutboundCall } from "./cross-repo-outbound-c
 const CONSUMER_SOURCE_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cts", ".mts"]);
 
 /**
- * Default repo resolver: real getCodeIndex → framework-detected producer
+ * Default repo resolver: index summary → framework-detected producer
  * extraction (hono/nest/nextjs adapters) + indexed-source outbound scan.
  * Dynamic imports avoid a register-tools ↔ index-tools cycle at module load.
  */
 async function defaultRepoResolver(repo: string): Promise<RepoContractData> {
-  const { getCodeIndex } = await import("./index-tools.js");
-  const index = await getCodeIndex(repo);
-  if (!index) return { producers: [], consumers: [], indexed: false };
+  const { detectRepoFrameworks } = await import("./framework-detect-repo.js");
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) return { producers: [], consumers: [], indexed: false };
 
-  const { detectFrameworks } = await import("../utils/framework-detect.js");
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
 
   // --- producers: run EVERY detected framework's extractor (a monorepo can
   // serve Hono + NestJS + Next.js side by side — an else-if chain would drop
@@ -58,7 +57,7 @@ async function defaultRepoResolver(repo: string): Promise<RepoContractData> {
   // of awaited readFile calls (CQ17 — avoids per-call latency stacking).
   const { readFile } = await import("node:fs/promises");
   const { join, extname } = await import("node:path");
-  const scanFiles = index.files.filter((fe) => CONSUMER_SOURCE_EXT.has(extname(fe.path)));
+  const scanFiles = scan.files.filter((fe) => CONSUMER_SOURCE_EXT.has(extname(fe.path)));
   const consumers: Array<OutboundCall & { repo: string }> = [];
   const CONSUMER_SCAN_CONCURRENCY = 16;
   for (let b = 0; b < scanFiles.length; b += CONSUMER_SCAN_CONCURRENCY) {
@@ -66,7 +65,7 @@ async function defaultRepoResolver(repo: string): Promise<RepoContractData> {
     const scans = await Promise.all(batch.map(async (fe) => {
       let src: string;
       try {
-        src = await readFile(join(index.root, fe.path), "utf-8");
+        src = await readFile(join(scan.root, fe.path), "utf-8");
       } catch (err: unknown) {
         return {
           calls: [] as OutboundCall[],

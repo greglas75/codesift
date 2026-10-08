@@ -16,12 +16,10 @@
  *       docs/specs/2026-04-11-hono-phase-2-plan.md (T7 consolidation)
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks, resolveRepoHonoEntryFile } from "./framework-detect-repo.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
-import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
 import { matchPath } from "./route-tools.js";
-import { detectFrameworks } from "../utils/framework-detect.js";
 import type { MiddlewareEntry, HonoRoute } from "../parser/extractors/hono-model.js";
 
 export interface MiddlewareChainOptions {
@@ -52,17 +50,17 @@ export async function traceMiddlewareChain(
   method?: string,
   options?: MiddlewareChainOptions,
 ): Promise<MiddlewareChainResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) {
     return { chain: [], total: 0, error: `Repository "${repo}" not found` };
   }
 
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("hono")) {
     return { chain: [], total: 0, error: "No Hono app detected in this repo" };
   }
 
-  const entryFile = resolveHonoEntryFile(index);
+  const entryFile = await resolveRepoHonoEntryFile(repo, scan.root);
   if (!entryFile) {
     return { chain: [], total: 0, error: "No Hono app entry file found" };
   }

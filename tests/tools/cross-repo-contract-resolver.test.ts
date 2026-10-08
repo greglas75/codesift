@@ -10,11 +10,13 @@ const { getCodeIndexMock, detectFrameworksMock, extractApiContractMock } = vi.ho
   extractApiContractMock: vi.fn(),
 }));
 
-vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: getCodeIndexMock,
-}));
+vi.mock("../../src/tools/index-tools.js", async () => {
+  const { withDerivedIndexAccessors } = await import("../helpers/index-accessors-from-fixture.js");
+  return withDerivedIndexAccessors({ getCodeIndex: getCodeIndexMock });
+});
 
 vi.mock("../../src/utils/framework-detect.js", () => ({
+  FRAMEWORK_SOURCE_SAMPLE: 200,
   detectFrameworks: detectFrameworksMock,
 }));
 

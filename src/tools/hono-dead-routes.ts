@@ -11,11 +11,9 @@
  * Spec: docs/specs/2026-04-11-hono-phase-2-plan.md (T12)
  */
 
-import { getCodeIndex } from "./index-tools.js";
+import { detectRepoFrameworks, resolveRepoHonoEntryFile } from "./framework-detect-repo.js";
 import { honoCache } from "../cache/hono-cache.js";
 import { HonoExtractor } from "../parser/extractors/hono.js";
-import { resolveHonoEntryFile } from "./hono-entry-resolver.js";
-import { detectFrameworks } from "../utils/framework-detect.js";
 import { relative } from "node:path";
 import { readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
@@ -41,13 +39,13 @@ const HEURISTIC_NOTE =
 export async function findDeadHonoRoutes(
   repo: string,
 ): Promise<DeadRoutesResult> {
-  const index = await getCodeIndex(repo);
-  if (!index) return { error: `Repository "${repo}" not found` };
+  const scan = await detectRepoFrameworks(repo);
+  if (!scan) return { error: `Repository "${repo}" not found` };
 
-  const frameworks = detectFrameworks(index);
+  const frameworks = scan.frameworks;
   if (!frameworks.has("hono")) return { error: "No Hono app detected" };
 
-  const entryFile = resolveHonoEntryFile(index);
+  const entryFile = await resolveRepoHonoEntryFile(repo, scan.root);
   if (!entryFile) return { error: "No Hono app entry file found" };
 
   let model;
@@ -73,7 +71,7 @@ export async function findDeadHonoRoutes(
     }
   };
   const serverFiles = new Set(model.files_used.map(canon));
-  const allTsFiles = await walkDirectory(index.root, {
+  const allTsFiles = await walkDirectory(scan.root, {
     fileFilter: (ext) => /\.(tsx?|jsx?)$/.test(ext),
   });
   const candidateFiles = allTsFiles
@@ -110,7 +108,7 @@ export async function findDeadHonoRoutes(
 
     findings.push({
       route: `${route.method} ${route.path}`,
-      file: relative(index.root, route.file),
+      file: relative(scan.root, route.file),
       line: route.line,
       reason: "no_rpc_client_caller_found",
     });
