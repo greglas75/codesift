@@ -1,0 +1,17 @@
+# Rust core for CodeSift (ADR-006). Two crates on purpose:
+#   codesift-core — plain Rust, no napi; everything testable with `cargo test`.
+#   codesift-napi — the thin #[napi] binding layer Node loads as a .node file.
+# Keeping napi out of the core means the logic never depends on a running V8.
+[workspace]
+resolver = "2"
+members = ["crates/codesift-core", "crates/codesift-napi"]
+
+[workspace.package]
+edition = "2021"
+license = "BUSL-1.1"
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"

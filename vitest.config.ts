@@ -106,6 +106,7 @@ export default defineConfig({
             "tests/integration/**/*.test.ts",
             "tests/retrieval/**/*.test.ts",
             "tests/utils/**/*.test.ts",
+            "tests/native/**/*.test.ts",
           ],
           // Node 20 is a supported JSON-backend runtime, but unflagged
           // `node:sqlite` is unavailable before 22.13. Keep the compatibility

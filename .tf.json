@@ -1,5 +1,5 @@
 {
   "node": "24",
-  "build": "npm run download-wasm && npm run build",
+  "build": "npm run download-wasm && npm run build && export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && npm run build:native -- --debug",
   "test": "npx vitest run"
 }

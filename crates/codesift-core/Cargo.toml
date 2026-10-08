@@ -1,0 +1,9 @@
+[package]
+name = "codesift-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "CodeSift core: storage, search and parsing, independent of Node"
+
+[dependencies]

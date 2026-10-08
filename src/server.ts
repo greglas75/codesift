@@ -22,6 +22,7 @@ import { resolve as pathResolve, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { statSync } from "node:fs";
 import { readVitals, classifyVitals, startVitals } from "./server-helpers/health-vitals.js";
+import { nativeStatus } from "./native/index.js";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHost } from "./utils/loopback.js";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
@@ -470,6 +471,8 @@ export async function startHttpServer(
                       sessions: inFlight,
                       version: PKG_VERSION,
                       vitals,
+                      // Which core is serving (ADR-006): the Rust one or the TypeScript fallback.
+                      native: nativeStatus(),
                       ...(caches ? { caches } : {}),
                       ...(reasons.length > 0 ? { reasons } : {}),
                     };

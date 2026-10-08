@@ -103,3 +103,48 @@ jobs:
             exit 1
           fi
           exit "$rc"
+
+  # The Rust core (ADR-006) on every platform a prebuilt binary will ship for. The
+  # `test` job above deliberately runs WITHOUT it — the TypeScript fallback is the
+  # default install — so this job is what proves the crate builds, passes its own
+  # tests, and is accepted by the loader (ABI check) on each OS.
+  # CODESIFT_NATIVE=1 makes a binary that fails to load fail the tests instead of
+  # quietly falling back to TypeScript.
+  native:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # rustup is preinstalled on every hosted runner and honours rust-toolchain.toml,
+      # so the first cargo call installs the pinned 1.99.0 — the farm's version.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format and lints
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Build the addon
+        run: npm run build:native
+
+      - name: Loader tests against the built addon
+        env:
+          CODESIFT_NATIVE: "1"
+        run: npx vitest run tests/native

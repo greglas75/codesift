@@ -1,0 +1,6 @@
+# Same version the farm has at /home/tf/runtimes/rust-1.99.0 (i9-farma tf-rust-install.sh).
+# The farm uses a standalone toolchain, not rustup, so this file only steers rustup users;
+# bump both together.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

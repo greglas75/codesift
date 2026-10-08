@@ -21,6 +21,7 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && cp -r src/parser/languages dist/parser/ && chmod +x dist/cli.js dist/server.js && node scripts/restart-daemon-after-build.mjs",
+    "build:native": "node scripts/build-native.mjs",
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",

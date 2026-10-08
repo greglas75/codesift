@@ -29,3 +29,7 @@ docs/review-queue.md
 
 # zuvo session state (local runtime, not committed)
 zuvo/
+
+# Rust core (ADR-006): cargo output and locally built addons
+/target/
+/native/*.node

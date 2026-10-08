@@ -1,5 +1,26 @@
 ## Tech Stack
-TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge
+TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
+
+## Rust core (ADR-006, stage 0 — 2026-10-08)
+
+Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
+`crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every
+component keeps its TS implementation; the binary is OPTIONAL.
+
+- Build: `npm run build:native` → `native/codesift-core.<tag>.node` (gitignored). Not part of
+  `npm run build`, so installs and CI without Rust keep working.
+- Loader `src/native/index.ts`: local `native/` build first, then `@codesift/core-<tag>`.
+  `CODESIFT_NATIVE=auto|0|1` + per-component `CODESIFT_NATIVE_<STORE|BM25|PARSER>`; `1` = required
+  (a load failure throws — parity suites and the CI `native` job run with it). `/health` → `native`.
+- **ABI guard:** `codesift_core::ABI_VERSION` must equal `NATIVE_ABI` in the loader; bump both on any
+  change to an exported function, or a stale `.node` gets called with arguments it does not know.
+- Toolchain pinned to **1.99.0** (`rust-toolchain.toml`). On the farm it is the standalone tarball at
+  `/home/tf/runtimes/rust-1.99.0` (i9-farma `server/tf-rust-install.sh`), put on PATH by `.tf.json`;
+  installed on waw-tf, ryzen-tf, hz2/3/4-tf. **hz1-tf has no `tf` user** (not a working farm host).
+- Rustup treats `1.99.0` and `stable` as DIFFERENT toolchains even when they are the same build — a
+  fresh `rustup` install plus this repo's pin downloads the compiler twice. `rustup default 1.99.0`.
+- Rust checks run on the farm, not the Mac: `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
+  The darwin addon can only be built on a Mac (`TF_ALLOW_LOCAL=1 npm run build:native`).
 
 ## Response Hint Codes
 

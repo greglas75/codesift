@@ -1,0 +1,18 @@
+[package]
+name = "codesift-napi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Node-API binding for codesift-core"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+codesift-core = { path = "../codesift-core" }
+napi = "3"
+napi-derive = "3"
+
+[build-dependencies]
+napi-build = "2"
