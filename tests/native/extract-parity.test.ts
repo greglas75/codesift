@@ -154,6 +154,49 @@ def client(): ...
 def view():
     def nested(): pass
 `],
+  ["go: types, fields, methods, package vars", "n.go", `
+package store
+
+// Store keeps things.
+// It is safe for concurrent use.
+type Store struct {
+	// mu guards m
+	mu sync.Mutex
+	a, b int
+}
+
+type Reader interface{ Read(p []byte) (int, error) }
+type ID string
+
+func New() *Store { return &Store{} }
+
+// Get returns a value.
+func (s *Store) Get(ctx context.Context, k string) (v string, ok bool) { return }
+
+const (
+	A = iota
+	B
+)
+var global = 1
+`],
+  ["rust: items, impls, traits, modules", "o.rs", `
+/// A point.
+/// With two doc lines.
+#[derive(Debug)]
+pub struct Point { pub x: i32, y: i32 }
+
+impl Point {
+    pub fn new(x: i32) -> Self { fn helper() {} Point { x, y: 0 } }
+}
+impl<T> Wrap<T> { fn get(&self) -> &T { &self.0 } }
+impl Display for Point { fn fmt(&self, f: &mut Formatter) -> Result { Ok(()) } }
+
+pub trait Shape { fn area(&self) -> f64; fn name(&self) -> &str { "s" } }
+pub enum Color { Red, Green }
+type Alias = u32;
+static COUNT: u32 = 0;
+mod inner { pub const LIMIT: u32 = 3; fn private() {} }
+`],
 ];
 
 describe.skipIf(!native)("native extractor parity with the TypeScript extractor", () => {
@@ -162,7 +205,8 @@ describe.skipIf(!native)("native extractor parity with the TypeScript extractor"
   });
 
   it.each(CASES)("%s", async (_label, file, source) => {
-    const language = file.endsWith(".tsx") ? "tsx" : file.endsWith(".js") ? "javascript" : file.endsWith(".py") ? "python" : "typescript";
+    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust" };
+    const language = byExt[file.split(".").pop()!] ?? "typescript";
     const tree = await parseFile(`/repo/${file}`, source);
     const ts = tree ? extractSymbols(tree, file, source, "local/t", language) : [];
     const out = await native!.extractSymbols(source, file, "local/t", language, 30_000);

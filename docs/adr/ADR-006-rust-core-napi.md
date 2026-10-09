@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS + Python extractors native)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS, Python, Go, Rust extractors native)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -285,4 +285,17 @@ Parity on the first run: **0 differences** on sentry, data-lab, tgm-statbox and 
 
 Shared now in `extract/mod.rs`: `Sym`, `Opts`, `make_symbol` (= `_shared.ts`), `meta_set` (JS object
 assignment semantics), the serialiser, and `Extracted` with a `warnings` list.
+
+### Stage 3 — Go and Rust
+
+Ports of `go.ts` and `rust.ts` on `tree-sitter-go =0.25.0` and `tree-sitter-rust =0.24.0` — the
+versions whose `.wasm` matches the shipped one by hash (both were unpinned npm deps; rust 0.23.3 and
+0.24.0 ship byte-identical wasm). Parity, first run, 0 differences: the Go 1.23.4 standard library
+(6,683 files, 367,969 symbols) and 74 crates from the cargo registry (2,335 files, 102,745 symbols).
+
+**A performance defect parity timing exposed:** Go names every spec of a `const (...)` block after the
+WHOLE block, and `make_symbol` copied the node's full text before truncating it — O(block) per spec,
+quadratic per block. The Go stdlib took 23.4 s native against 10.5 s in TypeScript, where V8's `slice`
+is O(1). `node_source` now slices only the 5,000 units it keeps: 23.4 s → 7.1 s, output unchanged
+(TypeScript and Python parity re-run, still 0 differences).
 

@@ -9,7 +9,9 @@
 //! `start_byte`/`end_byte`, `source.slice(...)` and the 5,000-character truncation all count UTF-16
 //! code units. Sources are parsed with `parse_utf16_le` and every offset here is a code-unit index.
 
+pub mod go;
 pub mod python;
+pub mod rust;
 pub mod ts;
 
 use std::sync::OnceLock;
@@ -75,6 +77,22 @@ pub fn end_index(node: Node<'_>) -> usize {
 /// Code-unit length of a string, as `String.prototype.length` measures it.
 pub fn utf16_len(s: &str) -> usize {
     s.chars().map(char::len_utf16).sum()
+}
+
+/// `extractNodeSource`: the node's text, cut at `MAX_SOURCE_LENGTH` units plus `"..."`.
+///
+/// Slices only the units it keeps. Copying the whole node first and truncating after is O(node) per
+/// symbol — and Go names every spec of a `const (...)` block after the WHOLE block, so a large block
+/// made that quadratic (the Go stdlib took 2.2x the TypeScript time). V8's `slice` is O(1) there.
+pub fn node_source(src: &Utf16Source, node: Node<'_>) -> String {
+    let start = start_index(node);
+    let end = end_index(node);
+    if end - start <= MAX_SOURCE_LENGTH {
+        return src.slice(start, end);
+    }
+    let mut out = src.slice(start, start + MAX_SOURCE_LENGTH);
+    out.push_str("...");
+    out
 }
 
 /// `text.length > MAX ? text.slice(0, MAX) + "..." : text`, in code units.
@@ -241,7 +259,7 @@ pub fn make_symbol(
 ) -> Sym {
     let start_line = node.start_position().row + 1;
     let id = format!("{repo}:{file}:{name}:{start_line}");
-    let source = truncate_source(src.text(node));
+    let source = node_source(src, node);
     let tokens = crate::bm25::tokenize_identifier(&name);
     Sym {
         id,
@@ -391,7 +409,7 @@ fn pool() -> &'static rayon::ThreadPool {
 }
 
 /// Languages with a native extractor — the JS side routes only these here.
-pub const LANGUAGES: [&str; 4] = ["typescript", "tsx", "javascript", "python"];
+pub const LANGUAGES: [&str; 6] = ["typescript", "tsx", "javascript", "python", "go", "rust"];
 
 /// Parse and extract one file. `None` for a language without a native extractor.
 pub fn extract_to_json(
@@ -408,6 +426,8 @@ pub fn extract_to_json(
                 ts::extract(&src, file, repo, language, timeout)?
             }
             "python" => python::extract(&src, file, repo, timeout),
+            "go" => go::extract(&src, file, repo, timeout),
+            "rust" => rust::extract(&src, file, repo, timeout),
             _ => return None,
         };
         let mut json = String::new();
