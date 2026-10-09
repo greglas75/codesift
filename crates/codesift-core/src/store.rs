@@ -139,9 +139,10 @@ fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec
         binds.push(SqlValue::Text(v.clone()));
     }
     if let Some(v) = &q.name_prefix {
-        // A literal % or _ in a symbol name must not become a wildcard.
-        clauses.push("name LIKE ? ESCAPE '\\'".into());
-        binds.push(SqlValue::Text(format!("{}%", escape_like(v))));
+        // GLOB, as queries.ts: case-sensitive like `startsWith` (LIKE is case-insensitive for
+        // ASCII), and `*`, `?`, `[` escaped by wrapping each in a one-character bracket class.
+        clauses.push("name GLOB ?".into());
+        binds.push(SqlValue::Text(format!("{}*", escape_glob(v))));
     }
     if let Some(v) = &q.kind {
         clauses.push("kind = ?".into());
@@ -164,14 +165,17 @@ fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec
     (sql, binds)
 }
 
-/// `namePrefix.replace(/[\\%_]/g, "\\$&")`.
-fn escape_like(s: &str) -> String {
+/// `namePrefix.replace(/[*?[]/g, "[$&]")`.
+fn escape_glob(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for ch in s.chars() {
-        if ch == '\\' || ch == '%' || ch == '_' {
-            out.push('\\');
+        if ch == '*' || ch == '?' || ch == '[' {
+            out.push('[');
+            out.push(ch);
+            out.push(']');
+        } else {
+            out.push(ch);
         }
-        out.push(ch);
     }
     out
 }
@@ -291,7 +295,9 @@ fn find_in_snapshot(conn: &Connection, q: &SymbolQuery, chunk_bytes: usize) -> R
             Some(limit) => format!(" LIMIT {}", (limit - emitted).max(0)),
             None => String::new(),
         };
-        let sql = format!("SELECT {columns} FROM symbols {pred}{limit_sql}");
+        // ORDER BY rowid, as queries.ts: the order a full load hands back, so `limit` keeps choosing
+        // the same rows.
+        let sql = format!("SELECT {columns} FROM symbols {pred} ORDER BY rowid{limit_sql}");
         let mut stmt = conn.prepare(&sql)?;
         emitted += write_rows(&mut stmt, &binds, &repo, &mut out)?.0;
     }
@@ -884,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn name_prefix_treats_underscore_as_a_literal() {
+    fn name_prefix_is_case_sensitive_and_globs_are_literals() {
         let (_d, p) = db();
         let got = one(
             &SymbolQuery {
@@ -894,6 +900,15 @@ mod tests {
             &p,
         );
         assert!(got.contains("\"a_b\"") && !got.contains("\"axb\""), "{got}");
+        let upper = one(
+            &SymbolQuery {
+                name_prefix: Some("A".into()),
+                ..q()
+            },
+            &p,
+        );
+        assert_eq!(upper, "[]");
+        assert_eq!(escape_glob("a*b?[c"), "a[*]b[?][[]c");
     }
 
     #[test]
