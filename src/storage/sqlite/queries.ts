@@ -43,6 +43,21 @@ export interface SymbolQuery {
   parent?: string;
   ids?: readonly string[];
   limit?: number;
+  /**
+   * The predicates a whole-repo SCAN can push down (ADR-006 stage 6). A scanning tool used to pull
+   * every symbol, source included, into V8 and discard most of it in JS; these let the store do the
+   * discarding before anything is serialised. Each one is exact — the same answer from SQL, the Rust
+   * store, the resident index and the JSON backend (`symbolMatchesScanPredicates`) — so a caller
+   * applies them with no change in what it receives. Regexes stay in the caller: JS and Rust regex
+   * semantics differ, so the store only ever gets literal text.
+   */
+  /** Any of these kinds. Empty matches nothing. */
+  kinds?: readonly string[];
+  /** `source` contains at least one of these literal strings (case-sensitive). Empty matches nothing;
+   *  a symbol with no source matches nothing. */
+  sourceContainsAny?: readonly string[];
+  /** `end_line - start_line + 1 >= minLines`. */
+  minLines?: number;
 }
 
 export interface IndexMeta {
@@ -87,6 +102,21 @@ function buildPredicate(query: SymbolQuery, idChunk?: readonly string[]): Predic
   }
   if (query.kind !== undefined) { clauses.push("kind = ?"); binds.push(query.kind); }
   if (query.parent !== undefined) { clauses.push("parent = ?"); binds.push(query.parent); }
+  if (query.kinds !== undefined) {
+    // `IN ()` is a syntax error; an empty list is a filter that matches nothing, as `includes` says.
+    if (query.kinds.length === 0) clauses.push("0");
+    else { clauses.push(`kind IN (${query.kinds.map(() => "?").join(",")})`); binds.push(...query.kinds); }
+  }
+  if (query.sourceContainsAny !== undefined) {
+    // instr is a case-sensitive substring test, NULL for a NULL source — `String.includes` on a
+    // symbol that has no source is likewise no match.
+    if (query.sourceContainsAny.length === 0) clauses.push("0");
+    else {
+      clauses.push(`(${query.sourceContainsAny.map(() => "instr(source, ?) > 0").join(" OR ")})`);
+      binds.push(...query.sourceContainsAny);
+    }
+  }
+  if (query.minLines !== undefined) { clauses.push("end_line - start_line + 1 >= ?"); binds.push(query.minLines); }
   if (idChunk !== undefined) {
     clauses.push(`id IN (${idChunk.map(() => "?").join(",")})`);
     binds.push(...idChunk);

@@ -41,6 +41,9 @@ pub struct SymbolQueryJs {
     pub parent: Option<String>,
     pub ids: Option<Vec<String>>,
     pub limit: Option<i64>,
+    pub kinds: Option<Vec<String>>,
+    pub source_contains_any: Option<Vec<String>>,
+    pub min_lines: Option<i64>,
 }
 
 impl From<SymbolQueryJs> for SymbolQuery {
@@ -54,6 +57,9 @@ impl From<SymbolQueryJs> for SymbolQuery {
             parent: q.parent,
             ids: q.ids,
             limit: q.limit,
+            kinds: q.kinds,
+            source_contains_any: q.source_contains_any,
+            min_lines: q.min_lines,
         }
     }
 }

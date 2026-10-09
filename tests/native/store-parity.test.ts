@@ -115,6 +115,15 @@ const QUERIES: Array<[string, SymbolQuery]> = [
   ["limit 3", { withSource: false, kind: "function", limit: 3 }],
   ["combined", { withSource: false, file: "gen.ts", kind: "class", namePrefix: "n1" }],
   ["no match", { withSource: true, name: "does-not-exist" }],
+  // Scan predicates (stage 6) — the Rust SQL must answer exactly as the TypeScript SQL.
+  ["kinds", { withSource: false, kinds: ["class", "method"] }],
+  ["empty kinds", { withSource: false, kinds: [] }],
+  ["sourceContainsAny", { withSource: true, sourceContainsAny: ["createUser", "absent"] }],
+  ["sourceContainsAny empty needle (every non-null source)", { withSource: false, sourceContainsAny: [""] }],
+  ["empty sourceContainsAny", { withSource: false, sourceContainsAny: [] }],
+  ["minLines", { withSource: false, minLines: 5 }],
+  ["scan combo + limit", { withSource: true, kinds: ["function"], minLines: 1, sourceContainsAny: ["function"], limit: 1 }],
+  ["kinds across id chunks", { withSource: false, ids: many, kinds: ["class"] }],
 ];
 
 describe.skipIf(!native)("native store parity with the TypeScript read path", () => {

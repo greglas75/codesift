@@ -52,6 +52,14 @@ const QUERIES: SymbolQuery[] = [
   { withSource: false, limit: 2 },
   { withSource: true, name: "createUser" },
   { withSource: false, file: "b.ts", kind: "class" },
+  // Scan predicates (ADR-006 stage 6): a backend that ignores one returns MORE rows — it fails open.
+  { withSource: false, kinds: ["class", "method"] },
+  { withSource: false, kinds: [] },
+  { withSource: true, sourceContainsAny: ["createUser", "absent"] },
+  { withSource: false, sourceContainsAny: [""] },
+  { withSource: false, sourceContainsAny: [] },
+  { withSource: false, minLines: 5 },
+  { withSource: false, minLines: 6 },
 ];
 
 beforeEach(() => {

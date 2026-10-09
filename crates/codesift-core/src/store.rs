@@ -46,6 +46,11 @@ pub struct SymbolQuery {
     pub parent: Option<String>,
     pub ids: Option<Vec<String>>,
     pub limit: Option<i64>,
+    /// Scan predicates (queries.ts `kinds` / `sourceContainsAny` / `minLines`): exact, pushed into SQL
+    /// so a whole-repo scan serialises only what matches.
+    pub kinds: Option<Vec<String>>,
+    pub source_contains_any: Option<Vec<String>>,
+    pub min_lines: Option<i64>,
 }
 
 /// The fields `getIndexMetaSqlite` reads. `updated_at` stays a string: the JS side applies
@@ -151,6 +156,29 @@ fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec
     if let Some(v) = &q.parent {
         clauses.push("parent = ?".into());
         binds.push(SqlValue::Text(v.clone()));
+    }
+    // The same three clauses queries.ts builds — an empty list matches nothing (`IN ()` would be a
+    // syntax error), instr is a case-sensitive substring test and NULL for a NULL source.
+    if let Some(kinds) = &q.kinds {
+        if kinds.is_empty() {
+            clauses.push("0".into());
+        } else {
+            clauses.push(format!("kind IN ({})", vec!["?"; kinds.len()].join(",")));
+            binds.extend(kinds.iter().cloned().map(SqlValue::Text));
+        }
+    }
+    if let Some(needles) = &q.source_contains_any {
+        if needles.is_empty() {
+            clauses.push("0".into());
+        } else {
+            let any = vec!["instr(source, ?) > 0"; needles.len()].join(" OR ");
+            clauses.push(format!("({any})"));
+            binds.extend(needles.iter().cloned().map(SqlValue::Text));
+        }
+    }
+    if let Some(n) = q.min_lines {
+        clauses.push("end_line - start_line + 1 >= ?".into());
+        binds.push(SqlValue::Integer(n));
     }
     if let Some(chunk) = id_chunk {
         let marks = vec!["?"; chunk.len()].join(",");

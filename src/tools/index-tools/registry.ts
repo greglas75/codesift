@@ -53,6 +53,7 @@ import {
   invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index, BM25_PERSIST_MIN_BUILD_MS } from "./state.js";
 import type { CodeIndex, RepoMeta, CodeSymbol } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
+import { symbolMatchesScanPredicates } from "../../storage/narrow-filters.js";
 
 export interface RepoSummary {
   name: string;
@@ -329,6 +330,7 @@ function filterCachedSymbols(symbols: CodeSymbol[], query: SymbolQuery): CodeSym
     if (query.kind !== undefined && symbol.kind !== query.kind) continue;
     if (query.parent !== undefined && symbol.parent !== query.parent) continue;
     if (ids !== null && !ids.has(symbol.id)) continue;
+    if (!symbolMatchesScanPredicates(symbol, query)) continue;
     if (query.withSource) {
       out.push(symbol);
     } else {

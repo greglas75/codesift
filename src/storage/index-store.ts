@@ -49,7 +49,7 @@ import {
   findSymbolsByRequestedIdsSqlite,
   findSymbolsInFilesSqlite,
 } from "./sqlite/narrow-queries.js";
-import { filterByFiles, filterByRequestedIds } from "./narrow-filters.js";
+import { filterByFiles, filterByRequestedIds, symbolMatchesScanPredicates } from "./narrow-filters.js";
 import { awaitExternalWriter } from "./external-writers.js";
 export {
   getIndexCacheBytesForTesting,
@@ -288,6 +288,7 @@ function applySymbolQuery(symbols: CodeSymbol[], query: SymbolQuery): CodeSymbol
     if (query.kind !== undefined && symbol.kind !== query.kind) continue;
     if (query.parent !== undefined && symbol.parent !== query.parent) continue;
     if (ids !== null && !ids.has(symbol.id)) continue;
+    if (!symbolMatchesScanPredicates(symbol, query)) continue;
     if (query.withSource) {
       out.push(symbol);
     } else {
