@@ -49,10 +49,25 @@ const MAX_GRAPHS = 4;
  * could keep gigabytes alive; the delay lets a call already holding this graph finish with it.
  */
 const RELEASE_DELAY_MS = 60_000;
+/**
+ * At most ONE retired graph waits out its delay. Under version churn — an agent editing a big repo,
+ * each edit moving `data_version` — every graph call retires the previous build, and a 60 s grace per
+ * graph would hold several 380 MB graphs at once (raised by the review of 1f681871). A newer retirement
+ * releases the one already waiting, so the bound is MAX_GRAPHS + 1.
+ */
+let waiting: { graph: NativeCallGraphHandle; timer: NodeJS.Timeout } | null = null;
 function retire(entry: CachedGraph): void {
   entry.graph.then((g) => {
-    const timer = setTimeout(() => g.release(), RELEASE_DELAY_MS);
+    if (waiting) {
+      clearTimeout(waiting.timer);
+      waiting.graph.release();
+    }
+    const timer = setTimeout(() => {
+      g.release();
+      if (waiting?.graph === g) waiting = null;
+    }, RELEASE_DELAY_MS);
     timer.unref();
+    waiting = { graph: g, timer };
   }, () => undefined);
 }
 
