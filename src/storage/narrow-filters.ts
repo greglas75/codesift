@@ -2,12 +2,13 @@ import type { CodeSymbol } from "../types.js";
 import type { SymbolQuery } from "./sqlite/queries.js";
 
 /**
- * The in-memory statement of the scan predicates on `SymbolQuery` (`kinds`, `sourceContainsAny`,
+ * The in-memory statement of the scan predicates on `SymbolQuery` (`kinds`, `names`, `sourceContainsAny`,
  * `minLines`, `fileSuffixAny`) — ONE definition for the resident-index filter and the JSON backend, the same answer the
  * SQL in `queries.ts` and `store.rs` gives. A filter missing here fails OPEN: more rows than asked for.
  */
 export function symbolMatchesScanPredicates(symbol: CodeSymbol, query: SymbolQuery): boolean {
   if (query.kinds !== undefined && !query.kinds.includes(symbol.kind)) return false;
+  if (query.names !== undefined && !query.names.includes(symbol.name)) return false;
   if (query.sourceContainsAny !== undefined) {
     const source = symbol.source;
     if (source === undefined || source === null) return false;

@@ -3,7 +3,8 @@ import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 import type { ToolRecommendation, ToolRankerContext } from "../../src/search/tool-ranker.js";
 
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
+  getIndexSummary: vi.fn(),
+  findRepoSymbols: vi.fn(),
 }));
 
 vi.mock("../../src/search/tool-ranker.js", () => ({
@@ -73,7 +74,7 @@ import {
   _resetPlanTurnCaches,
 } from "../../src/tools/plan-turn-tools.js";
 import { collectFileRecommendations } from "../../src/tools/plan-turn/recommendations.js";
-import { getCodeIndex } from "../../src/tools/index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "../../src/tools/index-tools.js";
 import { rankTools, getToolEmbeddings } from "../../src/search/tool-ranker.js";
 import { getSessionState } from "../../src/storage/session-state.js";
 import { getUsageStats } from "../../src/storage/usage-stats.js";
@@ -286,7 +287,15 @@ function baseSession() {
 
 const rankToolsMock = vi.mocked(rankTools);
 const getToolEmbeddingsMock = vi.mocked(getToolEmbeddings);
-const getCodeIndexMock = vi.mocked(getCodeIndex);
+const getIndexSummaryMock = vi.mocked(getIndexSummary);
+const findRepoSymbolsMock = vi.mocked(findRepoSymbols);
+
+/** Serve `index` the way planTurn reads it: the summary, plus the symbols a `names` query asks for. */
+function mockIndex(index: CodeIndex | null): void {
+  getIndexSummaryMock.mockResolvedValue(index);
+  findRepoSymbolsMock.mockImplementation(async (_repo, query) =>
+    (index?.symbols ?? []).filter((sym) => query.names?.includes(sym.name) ?? true));
+}
 const getSessionStateMock = vi.mocked(getSessionState);
 const getUsageStatsMock = vi.mocked(getUsageStats);
 const detectAutoLoadToolsMock = vi.mocked(detectAutoLoadToolsCached);
@@ -324,7 +333,7 @@ describe("planTurn", () => {
   });
 
   it("1. happy path: index + ranker results → tools populated", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock.mockReturnValue([
       rec("search_text", 0.9),
       rec("find_dead_code", 0.7, true),
@@ -341,7 +350,7 @@ describe("planTurn", () => {
   });
 
   it("2. STOP_AND_REPORT_GAP: prior negative evidence with same query", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getSessionStateMock.mockReturnValue(
       makeSessionState({
         negativeEvidence: [
@@ -368,7 +377,7 @@ describe("planTurn", () => {
   });
 
   it("3. already-used dedup: prior find_dead_code moves to already_used but top-3 retained", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getSessionStateMock.mockReturnValue(
       makeSessionState({
         queries: [
@@ -398,7 +407,7 @@ describe("planTurn", () => {
   });
 
   it("4. unindexed repo: returns structured error with index_folder rec, no throw", async () => {
-    getCodeIndexMock.mockResolvedValue(null);
+    mockIndex(null);
 
     const result = await planTurn("missing", "anything");
 
@@ -408,7 +417,7 @@ describe("planTurn", () => {
   });
 
   it("reports truncation when an unindexed query exceeds the input cap", async () => {
-    getCodeIndexMock.mockResolvedValue(null);
+    mockIndex(null);
 
     const result = await planTurn("missing", "x".repeat(1_001));
 
@@ -418,7 +427,7 @@ describe("planTurn", () => {
   });
 
   it("5. hidden tools → reveal_required populated", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock.mockReturnValue([rec("find_dead_code", 0.9, true)]);
 
     const result = await planTurn("test", "query");
@@ -430,7 +439,7 @@ describe("planTurn", () => {
     // Everything applicable is enabled during the handshake there, so a reveal
     // instruction would send the agent into a dead end: the reveal succeeds and
     // the tool still cannot be called.
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock.mockReturnValue([rec("find_dead_code", 0.9, true)]);
     hostState.frozen = true;
 
@@ -446,7 +455,7 @@ describe("planTurn", () => {
   });
 
   it("6. metadata flags: vague_query, duration, embedding_available", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getToolEmbeddingsMock.mockResolvedValue(new Map([["search_text", [0.1, 0.2]]]));
     rankToolsMock.mockReturnValue([rec("search_text", 0.5)]);
 
@@ -458,7 +467,7 @@ describe("planTurn", () => {
   });
 
   it("7. multi-intent 'audit AND refactor' → rankTools called per intent, merged", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock
       .mockReturnValueOnce([rec("search_text", 0.8)])
       .mockReturnValueOnce([rec("find_dead_code", 0.95, true)]);
@@ -473,7 +482,7 @@ describe("planTurn", () => {
   });
 
   it("8. monorepo query for runner/shared-types does not boost Astro tools from apps/help", async () => {
-    getCodeIndexMock.mockResolvedValue(makeMonorepoIndex());
+    mockIndex(makeMonorepoIndex());
     detectAutoLoadToolsMock.mockResolvedValue([
       "astro_config_analyze",
       "astro_route_map",
@@ -494,7 +503,7 @@ describe("planTurn", () => {
   });
 
   it("9. monorepo query for help/Astro keeps Astro tools", async () => {
-    getCodeIndexMock.mockResolvedValue(makeMonorepoIndex());
+    mockIndex(makeMonorepoIndex());
     detectAutoLoadToolsMock.mockResolvedValue([
       "astro_config_analyze",
       "astro_route_map",
@@ -512,7 +521,7 @@ describe("planTurn", () => {
   });
 
   it("10. recovers when registry, usage, framework, embeddings, and ranker fail", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     resolveRegisteredRepoMetaMock.mockRejectedValue(new Error("registry unavailable"));
     getUsageStatsMock.mockRejectedValue(new Error("usage unavailable"));
     detectAutoLoadToolsMock.mockRejectedValue(new Error("framework detection unavailable"));
@@ -527,7 +536,7 @@ describe("planTurn", () => {
   });
 
   it("11. keeps the strongest duplicate recommendation and reuses usage cache", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getUsageStatsMock.mockResolvedValue({
       total_calls: 3, total_sessions: 1, avg_calls_per_session: 3,
       tools: [{ tool: "search_text", total_calls: 3, percentage: 100, avg_duration_ms: 1, total_tokens: 10 }],
@@ -548,7 +557,7 @@ describe("planTurn", () => {
   it("12. returns stable symbol/file recommendations and metadata flags", async () => {
     const duplicate = { ...makeSym("createUser", "src/second.ts"), start_line: 7 };
     const index = { ...makeIndex([makeSym("createUser"), duplicate]), files: [{ path: "src/auth.ts", hash: "x", size: 1, language: "typescript", updated_at: 1 }] };
-    getCodeIndexMock.mockResolvedValue(index);
+    mockIndex(index);
     detectAutoLoadToolsMock.mockResolvedValue(["astro_route_map"]);
     rankToolsMock.mockReturnValue([rec("search_text", 0.8), rec("find_dead_code", 0.78, true)]);
 
@@ -563,7 +572,7 @@ describe("planTurn", () => {
   });
 
   it("13. skip_session bypasses matching negative evidence and prior-tool dedup", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getSessionStateMock.mockReturnValue(makeSessionState({
       negativeEvidence: [{ tool: "search_text", query: "find dead code", repo: "test", ts: 1, stale: false }],
       queries: [{ tool: "hidden_tool", query: "prior", repo: "test", ts: 1, resultCount: 1 }],
@@ -578,7 +587,7 @@ describe("planTurn", () => {
   });
 
   it("14. clamps invalid max_results instead of applying negative slice semantics", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock.mockReturnValue([rec("search_text", 0.9), rec("find_dead_code", 0.8)]);
 
     const negative = await planTurn("test", "find dead code", { max_results: -1 });
@@ -600,7 +609,7 @@ describe("planTurn", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-      getCodeIndexMock.mockResolvedValue(makeIndex());
+      mockIndex(makeIndex());
       rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
 
       await planTurn("test", "first query");
@@ -619,7 +628,7 @@ describe("planTurn", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-      getCodeIndexMock.mockResolvedValue(makeIndex());
+      mockIndex(makeIndex());
       rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
 
       await planTurn("test", "first query");
@@ -635,7 +644,7 @@ describe("planTurn", () => {
   });
 
   it("16. detects framework tools from the planned repository root", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
 
     await planTurn("test", "inspect react hooks");
@@ -644,7 +653,7 @@ describe("planTurn", () => {
   });
 
   it("17. keeps punctuation-sensitive queries distinct in negative evidence", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getSessionStateMock.mockReturnValue(makeSessionState({
       negativeEvidence: [{ tool: "search_text", query: "c++", repo: "test", ts: 1, stale: false }],
     }) as unknown as ReturnType<typeof getSessionState>);
@@ -657,7 +666,7 @@ describe("planTurn", () => {
   });
 
   it("18. deduplicates monorepo framework augmentation", async () => {
-    getCodeIndexMock.mockResolvedValue(makeMonorepoIndex());
+    mockIndex(makeMonorepoIndex());
     detectAutoLoadToolsMock.mockResolvedValue(["list_workspaces"]);
     let frameworkTools: string[] = [];
     rankToolsMock.mockImplementation((context: ToolRankerContext) => {
@@ -671,7 +680,7 @@ describe("planTurn", () => {
   });
 
   it("19. caps the query echoed in plan results", async () => {
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     rankToolsMock.mockReturnValue([rec("search_text", 0.9)]);
 
     const result = await planTurn("test", "a".repeat(2000));
@@ -723,7 +732,7 @@ describe("planTurn integration", () => {
     clearBM25Cache();
 
     // Set up planTurn mocks so planTurn doesn't fail on infra calls
-    getCodeIndexMock.mockResolvedValue(makeIndex());
+    mockIndex(makeIndex());
     getSessionStateMock.mockReturnValue(makeSessionState() as unknown as ReturnType<typeof getSessionState>);
     getUsageStatsMock.mockResolvedValue({
       total_calls: 0, total_sessions: 0, avg_calls_per_session: 0,

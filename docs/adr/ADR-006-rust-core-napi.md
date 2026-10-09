@@ -615,3 +615,25 @@ the native parser off and on):
 Both measured on the Mac under its usual load. Python's import extraction stays in TypeScript; its
 cost has not been measured as a separate item.
 
+
+## Stage 7 — the full loads left on hot paths (2026-10-10)
+
+Ranked `search_text` (the most used tool) and `plan_turn` (~4,800 calls in the usage log) both loaded
+the whole index to read a handful of symbols. Ranking needs only the symbols of the files the hits are
+in, without source (`findRepoSymbolsInFiles`). `plan_turn` needs only the first symbol for each name
+the query mentions, which is the new `names` predicate (`name IN (...)`, served by `idx_symbols_name`,
+on all four implementations plus the parity matrices; ABI 19). Both keep index order, so the answers
+do not change: checked on codesift and ResearchShieldNew, 7 ranked queries and 5 plan queries each,
+old and new compared as JSON. All were identical.
+
+On tgm-survey-platform (rdesigner), each read in a fresh process:
+
+| read | time | heap |
+|---|---:|---:|
+| `getCodeIndex` (what both did before) | 12,905 ms | +2,422 MB |
+| symbols of 300 files, no source (ranking) | 421 ms | +85 MB |
+| `names` for 5 identifiers (`plan_turn`) | 32 ms | +12 MB |
+
+Still loading the index: `impact_analysis`, `review_diff`, `trace_route`, `test_impact_analysis`. Each
+walks the call graph and maps it onto the whole symbol array, and `impact_analysis` also visits every
+test symbol. Moving them means indexless walks like the ones `trace_call_chain` has.

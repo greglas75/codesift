@@ -1,4 +1,4 @@
-import { getCodeIndex } from "../index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "../index-tools.js";
 import {
   CORE_TOOL_NAMES,
   detectAutoLoadToolsCached,
@@ -21,7 +21,7 @@ import {
   detectFrameworkMismatch,
   filterWorkspaceFrameworkTools,
 } from "./framework-context.js";
-import { capQuery, parseQuery } from "./query-parser.js";
+import { capQuery, parseQuery, queryIdentifiers } from "./query-parser.js";
 import {
   buildUnindexedResult,
   collectFileRecommendations,
@@ -337,11 +337,21 @@ export async function planTurn(
   const startedAt = Date.now();
   const maxTools = resolveMaxTools(options?.max_results);
   const skipSession = options?.skip_session === true;
-  const index = await getCodeIndex(repo, { skipFreshness: true });
-  if (!index) {
+  const summary = await getIndexSummary(repo, { skipFreshness: true });
+  if (!summary) {
     const cappedQuery = capQuery(query);
     return buildUnindexedResult(cappedQuery, startedAt, cappedQuery.length < query.length);
   }
+  // plan_turn reads symbols only to find the ones the query names, so only those are fetched — in
+  // index order, which is the order the recommendations take them in. It used to materialise the
+  // whole index for this (ADR-004 stage 2). Every other field comes from the summary.
+  const names = queryIdentifiers(query);
+  const index: CodeIndex = {
+    ...summary,
+    symbols: names.length === 0
+      ? []
+      : await findRepoSymbols(repo, { names, withSource: false }, { skipFreshness: true }),
+  };
 
   const lastGitCommit = await readLastGitCommit(repo);
   const parsed = parseQuery(query, index);

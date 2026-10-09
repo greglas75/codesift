@@ -128,6 +128,9 @@ const QUERIES: Array<[string, SymbolQuery]> = [
   ["fileSuffixAny case-sensitive", { withSource: false, fileSuffixAny: [".TS"] }],
   ["fileSuffixAny glob metacharacters are literal", { withSource: false, fileSuffixAny: ["*.ts", "?.ts"] }],
   ["empty fileSuffixAny", { withSource: false, fileSuffixAny: [] }],
+  ["names", { withSource: false, names: ["createUser", "absent", "odd"] }],
+  ["empty names", { withSource: false, names: [] }],
+  ["names + limit", { withSource: false, names: ["createUser", "odd"], limit: 1 }],
 ];
 
 describe.skipIf(!native)("native store parity with the TypeScript read path", () => {

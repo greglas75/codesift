@@ -20,7 +20,12 @@ const FILE_EXT_RE = /\b[\w./-]+\.(?:ts|tsx|js|jsx|py|go|rs|php|kt|sql)\b/gi;
 const IDENT_RE = /\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b/g;
 const MULTI_INTENT_RE = /\s+(?:and|or)\s+|\s*(?:;|&&)\s*/i;
 
-export function parseQuery(raw: string, index: CodeIndex): ParsedQuery {
+/** The identifier-shaped tokens of a query — the only names `parseQuery` can match to symbols. */
+export function queryIdentifiers(raw: string): string[] {
+  return Array.from(new Set(capQuery(raw).match(IDENT_RE) ?? []));
+}
+
+export function parseQuery(raw: string, index: Pick<CodeIndex, "symbols">): ParsedQuery {
   const original = capQuery(raw);
   const truncated = raw.length > MAX_QUERY_LENGTH;
   const normalized = original.toLowerCase().trim();

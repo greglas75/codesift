@@ -64,6 +64,9 @@ const QUERIES: SymbolQuery[] = [
   { withSource: false, fileSuffixAny: ["b.ts", "nope"] },
   { withSource: false, fileSuffixAny: [".TS"] },
   { withSource: false, fileSuffixAny: [] },
+  { withSource: false, names: ["createUser", "nope"] },
+  { withSource: false, names: ["CreateUser"] },
+  { withSource: false, names: [] },
 ];
 
 beforeEach(() => {

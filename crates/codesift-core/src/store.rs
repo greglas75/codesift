@@ -49,6 +49,8 @@ pub struct SymbolQuery {
     /// Scan predicates (queries.ts `kinds` / `sourceContainsAny` / `minLines`): exact, pushed into SQL
     /// so a whole-repo scan serialises only what matches.
     pub kinds: Option<Vec<String>>,
+    /// `name IN (...)`: any of these exact names. Empty matches nothing.
+    pub names: Option<Vec<String>>,
     pub source_contains_any: Option<Vec<String>>,
     pub min_lines: Option<i64>,
     pub file_suffix_any: Option<Vec<String>>,
@@ -166,6 +168,14 @@ fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec
         } else {
             clauses.push(format!("kind IN ({})", vec!["?"; kinds.len()].join(",")));
             binds.extend(kinds.iter().cloned().map(SqlValue::Text));
+        }
+    }
+    if let Some(names) = &q.names {
+        if names.is_empty() {
+            clauses.push("0".into());
+        } else {
+            clauses.push(format!("name IN ({})", vec!["?"; names.len()].join(",")));
+            binds.extend(names.iter().cloned().map(SqlValue::Text));
         }
     }
     if let Some(needles) = &q.source_contains_any {

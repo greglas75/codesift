@@ -53,6 +53,8 @@ export interface SymbolQuery {
    */
   /** Any of these kinds. Empty matches nothing. */
   kinds?: readonly string[];
+  /** Any of these exact names (`name IN`, served by idx_symbols_name). Empty matches nothing. */
+  names?: readonly string[];
   /** `source` contains at least one of these literal strings (case-sensitive). Empty matches nothing;
    *  a symbol with no source matches nothing. */
   sourceContainsAny?: readonly string[];
@@ -108,6 +110,10 @@ function buildPredicate(query: SymbolQuery, idChunk?: readonly string[]): Predic
     // `IN ()` is a syntax error; an empty list is a filter that matches nothing, as `includes` says.
     if (query.kinds.length === 0) clauses.push("0");
     else { clauses.push(`kind IN (${query.kinds.map(() => "?").join(",")})`); binds.push(...query.kinds); }
+  }
+  if (query.names !== undefined) {
+    if (query.names.length === 0) clauses.push("0");
+    else { clauses.push(`name IN (${query.names.map(() => "?").join(",")})`); binds.push(...query.names); }
   }
   if (query.sourceContainsAny !== undefined) {
     // instr is a case-sensitive substring test, NULL for a NULL source — `String.includes` on a

@@ -46,7 +46,8 @@ function findContainingSymbol(
 // ── Main pipeline ──────────────────────────────────────────
 export async function classifyHitsWithSymbols(
   matches: TextMatch[],
-  index: CodeIndex,
+  /** At least the symbols of the files the hits are in, in index order; no source needed. */
+  index: Pick<CodeIndex, "symbols">,
   bm25Idx: { centrality: Map<string, number> },
 ): Promise<TextMatch[]> {
   // Edge: empty matches

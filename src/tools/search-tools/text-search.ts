@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getBM25Index, getCodeIndex, getIndexSummary } from "../index-tools.js";
+import { findRepoSymbolsInFiles, getBM25Index, getIndexSummary } from "../index-tools.js";
 import { walkDirectory } from "../../utils/walk.js";
 import { matchFilePattern } from "../../utils/glob.js";
 import { raceWallClock } from "../../utils/wall-clock.js";
@@ -189,16 +189,13 @@ async function rankMatches(
     const { classifyHitsWithSymbols } = await import("../search-ranker.js");
     const bm25Index = await getBM25Index(repo);
     if (!bm25Index) return matches;
-    // Ranking classifies each hit by its containing symbol, so it genuinely reads symbols — and it
-    // is the ONLY part of search_text that does. The full index is loaded here, lazily, instead of
-    // up front for every search: a regex, grouped or compact search never ranks and never pays it.
-    // When `getBM25Index` had to build or restore itself it just materialised this same index, so
-    // this is served from the storage cache; when BM25 was already resident it is the load the old
-    // path did before every search. Freshness already ran for this call.
-    const index = await getCodeIndex(repo, { skipFreshness: true });
-    return index
-      ? await classifyHitsWithSymbols(matches, index, { centrality: bm25Index.centrality })
-      : matches;
+    // Ranking classifies each hit by its containing symbol — the ONLY part of search_text that reads
+    // symbols, and it needs only those of the files the hits are in, without source. It used to load
+    // the whole index for that (ADR-004 stage 2): on a 450k-symbol repo, every ranked search
+    // materialised every symbol to look up a few files. Freshness already ran for this call.
+    const files = [...new Set(matches.map((m) => m.file))];
+    const symbols = await findRepoSymbolsInFiles(repo, files, { withSource: false, skipFreshness: true });
+    return await classifyHitsWithSymbols(matches, { symbols }, { centrality: bm25Index.centrality });
   } catch (err) {
     // Ranking is an enhancement, so a ranking failure degrades to unranked hits — but a storage
     // fault is not a ranking failure: the `try` now also covers the index load, and swallowing an
