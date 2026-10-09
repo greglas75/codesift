@@ -97,6 +97,34 @@ export function resolveCliPath(): string {
   return join(dirname(dirname(fileURLToPath(import.meta.url))), "cli.js");
 }
 
+/** Names `service install` never copies into a unit: anything that names a credential. */
+const CREDENTIAL_NAME = /_(KEY|TOKEN|SECRET|PASSWORD)$/;
+
+/**
+ * The caller's `CODESIFT_*` variables to write into the unit, and the credential names left out.
+ *
+ * A service gets almost nothing from the shell, so `install` carries the caller's settings along —
+ * an embedding provider set only in the shell would otherwise be lost and the daemon would fall back
+ * to on-CPU ONNX. It used to carry EVERY `CODESIFT_*` name, and the unit is a plaintext file
+ * (`~/Library/LaunchAgents/*.plist` is world-readable): found 2026-10-09, an OpenAI key a repo's
+ * `.env` had put into the shell sat in the LaunchAgent in clear text — for a daemon whose provider
+ * was ollama and never read it. Credentials stay out; `--token` is the one secret a unit carries,
+ * because the caller passes it for exactly that.
+ */
+export function serviceEnvFromShell(env: NodeJS.ProcessEnv): {
+  env: Record<string, string>;
+  skipped: string[];
+} {
+  const out: Record<string, string> = {};
+  const skipped: string[] = [];
+  for (const [k, v] of Object.entries(env)) {
+    if (!k.startsWith("CODESIFT_") || typeof v !== "string") continue;
+    if (CREDENTIAL_NAME.test(k)) skipped.push(k);
+    else out[k] = v;
+  }
+  return { env: out, skipped: skipped.sort() };
+}
+
 export function buildServicePlan(opts: {
   port?: number;
   host?: string;

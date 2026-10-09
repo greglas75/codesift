@@ -177,7 +177,7 @@ async function handleFindClones(args: string[], flags: Flags): Promise<void> {
  * model cannot tolerate: every client is configured to talk to one process.
  */
 async function handleService(args: string[], flags: Flags): Promise<void> {
-  const { installService, uninstallService, serviceStatus, DEFAULT_SERVICE_PORT } =
+  const { installService, uninstallService, serviceStatus, serviceEnvFromShell, DEFAULT_SERVICE_PORT } =
     await import("./service.js");
   const { loadConfig } = await import("../config.js");
   const dataDir = loadConfig().dataDir;
@@ -189,14 +189,13 @@ async function handleService(args: string[], flags: Flags): Promise<void> {
       const host = getFlag(flags, "host") ?? "127.0.0.1";
       // A routable bind needs a token; the server enforces the same rule.
       const token = getFlag(flags, "token") ?? process.env["CODESIFT_HTTP_TOKEN"];
-      // Carry the caller's CODESIFT_* environment into the unit. A service gets
-      // almost nothing from the shell, so an embedding provider set only in the
-      // shell is silently lost and the daemon falls back to on-CPU ONNX.
-      const inheritedEnv: Record<string, string> = {};
-      for (const [k, v] of Object.entries(process.env)) {
-        if (k.startsWith("CODESIFT_") && k !== "CODESIFT_HTTP_TOKEN" && typeof v === "string") {
-          inheritedEnv[k] = v;
-        }
+      // The caller's CODESIFT_* settings go into the unit; credentials do not (serviceEnvFromShell).
+      const { env: inheritedEnv, skipped } = serviceEnvFromShell(process.env);
+      if (skipped.length > 0) {
+        process.stderr.write(
+          `[codesift] not written into the service unit (credentials, stored there in plain text): `
+            + `${skipped.join(", ")}. The daemon will not see them.\n`,
+        );
       }
       output(
         installService({

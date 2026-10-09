@@ -13,6 +13,7 @@ import {
   installService,
   uninstallService,
   serviceStatus,
+  serviceEnvFromShell,
   SERVICE_PATH_ENTRIES,
   SERVICE_LABEL,
   type CommandRunner,
@@ -325,5 +326,36 @@ describe("service — daemon heap ceiling", () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("serviceEnvFromShell", () => {
+  // Bug it catches: `service install` wrote a CODESIFT_OPENAI_API_KEY from the shell into the
+  // plaintext LaunchAgent (found 2026-10-09). Settings must still travel; look-alikes must not be lost.
+  it("carries settings into the unit and leaves credentials out", () => {
+    const { env, skipped } = serviceEnvFromShell({
+      CODESIFT_EMBEDDING_PROVIDER: "ollama",
+      CODESIFT_MAX_RESPONSE_TOKENS: "20000",
+      CODESIFT_TOOL_KEYWORDS: "x",
+      CODESIFT_SECRET_SCAN: "1",
+      CODESIFT_OPENAI_API_KEY: "sk-test",
+      CODESIFT_VOYAGE_API_KEY: "pa-test",
+      CODESIFT_HTTP_TOKEN: "t",
+      CODESIFT_TELEMETRY_TOKEN: "t",
+      OPENAI_API_KEY: "sk-other",
+      PATH: "/bin",
+    });
+    expect(env).toEqual({
+      CODESIFT_EMBEDDING_PROVIDER: "ollama",
+      CODESIFT_MAX_RESPONSE_TOKENS: "20000",
+      CODESIFT_TOOL_KEYWORDS: "x",
+      CODESIFT_SECRET_SCAN: "1",
+    });
+    expect(skipped).toEqual([
+      "CODESIFT_HTTP_TOKEN",
+      "CODESIFT_OPENAI_API_KEY",
+      "CODESIFT_TELEMETRY_TOKEN",
+      "CODESIFT_VOYAGE_API_KEY",
+    ]);
   });
 });
