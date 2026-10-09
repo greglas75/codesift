@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 12;
+export const NATIVE_ABI = 13;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -104,6 +104,32 @@ export interface NativeIndexWriter {
   rollback(): void;
 }
 
+/** `DatabaseSync` options the native port reads — node's names. */
+export interface NativeSqliteOpenOptions {
+  open?: boolean;
+  readOnly?: boolean;
+  enableForeignKeyConstraints?: boolean;
+  enableDoubleQuotedStringLiterals?: boolean;
+  timeout?: number;
+}
+
+/** The raw binding; `storage/sqlite/native-sqlite.ts` wraps it into a `node:sqlite` lookalike. */
+export interface NativeSqliteStatement {
+  /** `makeRow(columnNames)` returns the constructor the binding calls once per row. */
+  get(named: object | undefined, positional: unknown[], makeRow: (names: string[]) => (...values: unknown[]) => object): unknown;
+  all(named: object | undefined, positional: unknown[], makeRow: (names: string[]) => (...values: unknown[]) => object): unknown[];
+  run(named: object | undefined, positional: unknown[]): { changes: number; lastInsertRowid: number };
+}
+
+export interface NativeSqliteDatabase {
+  readonly isOpen: boolean;
+  readonly isTransaction: boolean;
+  open(): void;
+  close(): void;
+  exec(sql: string): void;
+  prepare(sql: string): NativeSqliteStatement;
+}
+
 export interface NativeCore {
   version(): string;
   abiVersion(): number;
@@ -117,6 +143,8 @@ export interface NativeCore {
   beginIndexWrite(dbPath: string): Promise<NativeIndexWriter>;
   /** Parse and extract one file off the main thread (every language with a tree-sitter grammar: TS/TSX/JS, Python, Go, Rust, PHP, Kotlin, Gradle KTS, Java, Ruby, CSS). */
   extractSymbols(source: string, file: string, repo: string, language: string, timeoutMs: number): Promise<NativeExtracted>;
+  /** `node:sqlite`'s `DatabaseSync`, ported onto the core's SQLite copy (stage 1: one copy per process). */
+  SqliteDatabase: new (location: string, options?: NativeSqliteOpenOptions) => NativeSqliteDatabase;
 }
 
 export type NativeMode = "auto" | "off" | "required";
@@ -166,7 +194,10 @@ function parseMode(raw: string | undefined): NativeMode | undefined {
  * Rust connection closing ran the last-connection checkpoint and deleted `-wal`/`-shm` that node still
  * had open (caught as SQLITE_IOERR in tests/storage; in the field that is lost writes). SQLite documents
  * this as a way to corrupt a database ("multiple copies of SQLite linked into the same application").
- * It stays opt-in until every index-database access in a process goes through one copy (ADR-006).
+ *
+ * That condition is now met: with the store on, `loadSqliteCtor()` hands every caller the core's own
+ * `DatabaseSync` (storage/sqlite/native-sqlite.ts), so one copy owns every index database in the
+ * process. It stays opt-in only until a daemon has run on it under monitoring (ADR-006, stage 1).
  */
 const OPT_IN_ONLY = new Set(["store"]);
 

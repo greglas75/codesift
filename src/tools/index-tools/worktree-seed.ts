@@ -185,8 +185,12 @@ export async function seedWorktreeIndexFromParent(
     return { seeded: false, reason: "parent index is not in the SQLite backend" };
   }
 
-  const { isSqliteAvailable } = await import("../../storage/sqlite/runtime.js");
-  if (!(await isSqliteAvailable())) {
+  // `loadSqliteCtor`, never `node:sqlite` directly: with the native store on, the Rust copy of SQLite
+  // owns every index database in the process — the daemon has the parent open through it — and a
+  // second copy on the same file is how one gets corrupted (ADR-006 stage 1).
+  const { loadSqliteCtor } = await import("../../storage/sqlite/runtime.js");
+  const DatabaseSync = await loadSqliteCtor();
+  if (!DatabaseSync) {
     return { seeded: false, reason: "node:sqlite unavailable (Node < 22.5)" };
   }
 
@@ -195,8 +199,6 @@ export async function seedWorktreeIndexFromParent(
   const tempDb = `${targetDb}.seeding.${process.pid}`;
   try {
     if (existsSync(tempDb)) await unlink(tempDb);
-
-    const { DatabaseSync } = await import("node:sqlite");
 
     // Read-only source: this runs while the daemon and other agents may hold the parent open.
     // VACUUM INTO takes a consistent snapshot and refuses to run inside a transaction, which is

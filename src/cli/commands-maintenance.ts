@@ -20,6 +20,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   const { readFileSync, readdirSync, statSync, unlinkSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { loadConfig } = await import("../config.js");
+  const { loadSqliteCtor } = await import("../storage/sqlite/runtime.js");
   const dataDir = loadConfig().dataDir;
   const dryRun = getBoolFlag(flags, "dry-run");
   const pruneGraceMs = 5 * 60 * 1000;
@@ -117,7 +118,11 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     if (!m?.[1] || live.has(m[1])) continue;
     let db: import("node:sqlite").DatabaseSync | undefined;
     try {
-      const { DatabaseSync } = await import("node:sqlite");
+      // Through `loadSqliteCtor`, never `node:sqlite` directly: with the native store on, the Rust
+      // copy of SQLite owns every index database in the process, and a second copy opening the same
+      // file is how one gets corrupted (ADR-006 stage 1).
+      const DatabaseSync = await loadSqliteCtor();
+      if (!DatabaseSync) throw new Error("node:sqlite is unavailable (requires Node >= 22.5)");
       db = new DatabaseSync(`file:${join(dataDir, name)}?mode=ro`, { open: true });
       const rows = db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>;
       const meta = Object.fromEntries(rows.map((r) => [r.key, r.value]));
@@ -396,7 +401,8 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   // just rewrite its own, and the bytes are not worth the syscalls.
   let walBefore = 0, walAfter = 0, walCheckpointed = 0;
   if (!dryRun) {
-    const { DatabaseSync } = await import("node:sqlite");
+    // `loadSqliteCtor`, for the same reason as the meta read above.
+    const DatabaseSync = await loadSqliteCtor();
     for (const name of readdirSync(dataDir)) {
       if (!name.endsWith(".index.db-wal")) continue;
       const full = join(dataDir, name);
@@ -413,7 +419,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
       // database — what a partial delete or an earlier prune leaves — would have this command
       // manufacture an empty database and then "checkpoint" it. Reclaiming bytes must not create
       // artifacts. Raised by the cross-model review of this release.
-      if (!existsSync(dbPath)) { walAfter += size; continue; }
+      if (!existsSync(dbPath) || !DatabaseSync) { walAfter += size; continue; }
       try {
         const db = new DatabaseSync(dbPath);
         try {

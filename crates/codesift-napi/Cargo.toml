@@ -13,7 +13,8 @@ crate-type = ["cdylib"]
 codesift-core = { path = "../codesift-core" }
 # `tokio_rt`: extraction runs as an async fn on tokio's blocking pool, NOT on libuv's four threads —
 # those also serve every fs.readFile/stat the indexer does, and a parse holding one starved them.
-napi = { version = "3", features = ["tokio_rt"] }
+# `napi6`: BigInt and own-property-name enumeration, which the `node:sqlite` port binds with.
+napi = { version = "3", features = ["tokio_rt", "napi6"] }
 tokio = { version = "1", features = ["rt"] }
 napi-derive = "3"
 

@@ -20,11 +20,14 @@ component keeps its TS implementation; the binary is OPTIONAL.
   Dev hosts use rustup for `greglas`, pinned straight to 1.99.0: the Mac and ryzen-dev (ryzen-old-1).
 - Rustup treats `1.99.0` and `stable` as DIFFERENT toolchains even when they are the same build — a
   fresh `rustup` install plus this repo's pin downloads the compiler twice. `rustup default 1.99.0`.
-- ⛔ **The native store is OPT-IN ONLY (`CODESIFT_NATIVE_STORE=1`), never `auto`.** Two copies of
-  SQLite (node:sqlite + rusqlite) on one file in one process corrupt it: POSIX locks never conflict
-  within a process, so a closing Rust connection deleted `-wal`/`-shm` node still had open
-  (SQLITE_IOERR; in the field, lost writes). Safe only once ONE copy owns every index-db access in a
-  process — see ADR-006. Do not "fix" by opting it into `auto`.
+- ⛔ **Two SQLite copies must never open one file in one process.** node:sqlite and rusqlite's bundle
+  are two copies; POSIX locks never conflict within a process, so a closing Rust connection deleted
+  `-wal`/`-shm` node still had open (SQLITE_IOERR; in the field, lost writes). With the store on,
+  `loadSqliteCtor()` returns the core's own `DatabaseSync` (`storage/sqlite/native-sqlite.ts` over
+  `sqlite_compat.rs`), so ONE copy owns everything opened through it. **Never `import("node:sqlite")`
+  for a database in `src/`** — go through `loadSqliteCtor()` (the one exception: `daemon-lock.db`,
+  which nothing else opens). The store is still OPT-IN (`CODESIFT_NATIVE_STORE=1`) until a monitored
+  daemon run; parity of the port is `tests/native/sqlite-compat-parity.test.ts` (ADR-006).
 - **Stage 1 (store, opt-in):** `findSymbolsSqlite`/`getIndexMetaSqlite` go native when enabled — query off the
   main thread, results as ≤4 MB JSON chunks parsed with yields. Parity: `node --max-old-space-size=12288
   --import tsx scripts/native-parity.ts <copy of an index.db>` (0 diffs on 5 real indexes);

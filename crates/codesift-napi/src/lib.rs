@@ -1,6 +1,8 @@
 //! Node-API surface of the CodeSift core. Thin by rule: conversion in, call into
 //! `codesift_core`, conversion out. Any logic that grows here is logic `cargo test` cannot reach.
 
+mod sqlite_compat;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

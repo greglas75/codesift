@@ -12,6 +12,7 @@ import {
 } from "../../src/storage/sqlite-index-store.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+import { getNativeCore } from "../../src/native/index.js";
 
 const DatabaseSync = HAS_NODE_SQLITE
   ? (await import("node:sqlite")).DatabaseSync
@@ -120,8 +121,20 @@ describeWithSqlite("classifyStorageError reads node:sqlite's numeric errcode", (
   });
 });
 
+// With the native store on, `saveIndexSqlite` writes through the core's own connection, which the
+// `max_page_count` set below (a per-connection pragma) never reaches — so this test cannot stage the
+// condition there. The same property is pinned in Rust:
+// store.rs `a_full_database_reports_sqlite_full_and_the_index_survives`.
+const nativeStoreOn = (() => {
+  try {
+    return getNativeCore("store") !== null;
+  } catch {
+    return false;
+  }
+})();
+
 describeWithSqlite("a failing write reports what actually went wrong", () => {
-  it("survives SQLite's automatic rollback instead of being replaced by it", async () => {
+  it.skipIf(nativeStoreOn)("survives SQLite's automatic rollback instead of being replaced by it", async () => {
     // SQLite auto-rolls back on SQLITE_FULL, so the explicit ROLLBACK in the catch used to throw
     // "cannot rollback - no transaction is active" and THAT propagated — a message that classifies
     // as nothing, replacing a perfectly good disk-full diagnosis.

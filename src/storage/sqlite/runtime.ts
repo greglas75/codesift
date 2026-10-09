@@ -1,4 +1,6 @@
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { getNativeCore } from "../../native/index.js";
+import { nativeDatabaseSyncCtor } from "./native-sqlite.js";
 
 /**
  * Runtime availability of `node:sqlite`.
@@ -15,6 +17,15 @@ let sqliteCtor: typeof DatabaseSyncType | null | undefined;
 
 export async function loadSqliteCtor(): Promise<typeof DatabaseSyncType | null> {
   if (sqliteCtor !== undefined) return sqliteCtor;
+  // The native store owns EVERY SQLite file this process opens through here (ADR-006 stage 1): two
+  // SQLite copies on one database is how it gets corrupted, so the choice is made once per process and
+  // memoised with it. `getNativeCore` throws when the store is required and the binary is missing —
+  // that refusal is the point of `CODESIFT_NATIVE_STORE=1`.
+  const core = getNativeCore("store");
+  if (core) {
+    sqliteCtor = nativeDatabaseSyncCtor(core);
+    return sqliteCtor;
+  }
   try {
     const mod = await import("node:sqlite");
     sqliteCtor = mod.DatabaseSync;

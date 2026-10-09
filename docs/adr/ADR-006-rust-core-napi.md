@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: no-go for now, native store opt-in only; stage 2: BM25 native; stage 3: every tree-sitter extractor native; stage 4: no-go for now)
+**Status:** Accepted (stage 0 done; stage 1: single-owner migration done, native store still opt-in pending a live run; stage 2: BM25 native; stage 3: every tree-sitter extractor native; stage 4: no-go for now)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -403,3 +403,64 @@ so the work is not lost and remains tested. **Revisit when** a measurement on a 
 `/health` or `initialize` blocked by index reads despite the page floor, or when index writes become
 the dominant cost of an incident — then do the whole single-owner migration, not part of it.
 
+
+## Stage 1 — the single-owner migration, done (2026-10-09, owner decision)
+
+The owner overrode the no-go above: do the whole migration. It turned out not to need the ~1,800-line
+rewrite the cost estimate assumed.
+
+**Approach: port `node:sqlite` itself, not the callers.** Every index-database caller already reached
+SQLite through one seam — `loadSqliteCtor()` — or through `import("node:sqlite")` in two places
+(`commands-maintenance.ts` prune, `worktree-seed.ts`), now routed through the seam too. So the core got
+a `DatabaseSync`/`StatementSync` of its own (`crates/codesift-napi/src/sqlite_compat.rs`, a line-by-line
+port of `node_sqlite.cc` on the raw C API of the SAME bundled SQLite rusqlite uses, re-exported as
+`codesift_core::sqlite_ffi`), and `loadSqliteCtor()` returns it whenever the store is on. The choice is
+memoised per process, so a process is all-node or all-Rust for every file it opens through the seam —
+the condition the IOERR finding requires. All of `src/storage/sqlite/*` runs unchanged on top of it,
+and the existing native fast paths (find, stream, whole-index writer) share the same copy.
+
+Outside the seam, deliberately: `commands-daemon.ts` opens `daemon-lock.db`, which nothing else opens,
+so one copy owns it regardless. On Linux the `.node` neither exports nor imports any `sqlite3_*` symbol
+(`nm -D`), and node exports none, so the two copies cannot be cross-bound by the dynamic linker.
+
+**Parity is a transcript.** `tests/native/sqlite-compat-scenarios.ts` drives ~150 steps through both
+classes — every bind type, arity and named-parameter rule, every storage class read back, row
+prototype, duplicate/`__proto__`/index-like column names, statement reuse and reset, `run()` on
+SELECT/RETURNING/constraint failures, transactions, a second connection (WAL, `data_version`, BUSY),
+every constructor option, URIs, and the lifecycle after `close()` — recording values with their types
+and errors with class, `code`, `errcode` and `errstr`. The transcripts are identical except where
+node:sqlite itself differs between Node releases, found by running the same test on the Mac (24.18)
+and the farm (24.21): 24.21 binds a boolean as INTEGER and refuses SQL that compiles to nothing, 24.18
+throws on the first and returns a dead statement for the second. The port pins the newer behaviour
+(`PINNED` in the test); nothing in `src/` does either.
+
+Two build differences were found by diffing `PRAGMA compile_options` and are closed in
+`.cargo/config.toml`: libsqlite3-sys's bundle lacked math functions, percentile and geopoly, and had a
+32,766 variable limit against Homebrew node's 250,000 (the official Linux build has 32,766 — so the
+test compares SQL-visible options and requires our limit to be at least node's).
+
+**Full suite with `CODESIFT_NATIVE_STORE=1`** (every SQLite call in the process through the core):
+6,493 passed, 0 failed. One TypeScript test is skipped there — it stages a full disk with a
+per-connection `max_page_count` on the cached connection, which the native writer's own connection
+never sees; the property it guards is pinned in Rust instead
+(`a_full_database_reports_sqlite_full_and_the_index_survives`).
+
+**Cost of the port** (731 MB real index, 454,892 symbols, Mac, best of rounds):
+
+| | node:sqlite | port |
+|---|---:|---:|
+| whole table, paged as `loadIndexSqlite` reads it | 590–640 ms | 730–780 ms |
+| 2,000 `file = ?` lookups | 62 ms | 74 ms |
+| 20,000 meta reads | 27 ms | 33 ms |
+| 50,000 inserts × 20 params | 70 ms | 113–131 ms |
+
+Rows were 1.8x node's when each column crossed napi on its own (`napi_set_property`); the fix that
+held was building each row with ONE call into a factory the facade compiles per column list,
+`(v0, v1, …) => ({ __proto__: null, "id": v0, … })` — the null-prototype literal node's
+`Object::New` produces. What remains is napi's own call cost, ~90 ns per call and ~30 ns per bound
+parameter (measured against the raw binding; the JS facade adds nothing measurable). The heavy
+operations do not take this path when the store is on: whole-index writes go through the native
+writer (off the main thread), and `find`/`stream` through their native paths.
+
+**Still open: default-on.** `store` stays in `OPT_IN_ONLY` until a daemon has run on it under the
+monitoring the owner asked for (RSS and `/health` every 15 minutes for 24 h). Rollback is the switch.

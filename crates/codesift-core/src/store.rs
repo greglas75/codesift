@@ -1146,6 +1146,35 @@ mod tests {
     }
 
     #[test]
+    fn a_full_database_reports_sqlite_full_and_the_index_survives() {
+        // The native twin of sqlite-fault-classification.test.ts's "survives SQLite's automatic
+        // rollback": SQLite rolls back by itself on SQLITE_FULL, so the error must be the FULL one
+        // (code 13, which the TS side classifies) and the abandoned write must leave the old index.
+        let (_d, p) = db();
+        let w = Writer::begin(&p).unwrap();
+        w.conn()
+            .unwrap()
+            .execute_batch("PRAGMA max_page_count = 4")
+            .unwrap();
+        let rows: Vec<SymbolRowIn> = (0..4000)
+            .map(|i| SymbolRowIn {
+                id: format!("x{i}"),
+                file: "x.ts".into(),
+                name: format!("x{i}"),
+                kind: "function".into(),
+                start_line: 1.0,
+                end_line: 2.0,
+                source: Some("y".repeat(200)),
+                ..SymbolRowIn::default()
+            })
+            .collect();
+        let err = w.insert_symbols(&rows).unwrap_err().to_string();
+        assert!(err.contains("[sqlite:13]"), "{err}");
+        drop(w);
+        assert!(one(&q(), &p).contains("axb"));
+    }
+
+    #[test]
     fn a_missing_file_is_cantopen_not_an_empty_index() {
         let err = find_symbols_json(Path::new("/nonexistent/dir/x.db"), &q()).unwrap_err();
         assert_eq!(err.sqlite_code.map(|c| c & 0xff), Some(14), "{err}");
