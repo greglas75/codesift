@@ -232,6 +232,48 @@ class UserTest extends \\PHPUnit\\Framework\\TestCase {
     public function it_works() {}
 }
 `],
+  ["kotlin: classes, compose, kmp, companion, kotest, enums", "q.kt", `
+package app
+
+/** A repository. */
+@Singleton
+expect class Repo(private val api: Api, name: String) : Base(), Iface {
+    val cache = mutableMapOf<String, Int>()
+    suspend fun <T> String.load(id: T): User? = null
+    companion object Factory { const val MAX = 3 }
+    object Nested { fun x() {} }
+}
+interface Shape { fun area(): Double }
+@Composable
+@Preview
+fun Screen(state: State) {}
+@Test fun itWorks() {}
+@BeforeEach fun setup() {}
+typealias Id = String
+enum class Color(val hex: String) { RED("f00"), GREEN("0f0"); fun lower() = name }
+class MySpec : FunSpec({
+    test("adds") { }
+    context("group") { test("inner") { } }
+    \`when\`("w") { then("t") { } }
+})
+class Strs : StringSpec({ "a string test" { } })
+`],
+  ["gradle kts: plugins, dependencies, config", "build.gradle.kts", `
+plugins {
+    kotlin("jvm") version "1.9.0"
+    id("com.android.application")
+    alias(libs.plugins.android.application)
+}
+dependencies {
+    implementation("io.ktor:ktor-server:2.3.0")
+    testImplementation(libs.junit)
+    api(project(":core"))
+}
+android {
+    namespace = "com.example"
+    compileSdk = 34
+}
+`],
 ];
 
 describe.skipIf(!native)("native extractor parity with the TypeScript extractor", () => {
@@ -240,8 +282,8 @@ describe.skipIf(!native)("native extractor parity with the TypeScript extractor"
   });
 
   it.each(CASES)("%s", async (_label, file, source) => {
-    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust", php: "php" };
-    const language = byExt[file.split(".").pop()!] ?? "typescript";
+    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust", php: "php", kt: "kotlin" };
+    const language = file.endsWith(".gradle.kts") ? "gradle-kts" : byExt[file.split(".").pop()!] ?? "typescript";
     const tree = await parseFile(`/repo/${file}`, source);
     const ts = tree ? extractSymbols(tree, file, source, "local/t", language) : [];
     const out = await native!.extractSymbols(source, file, "local/t", language, 30_000);

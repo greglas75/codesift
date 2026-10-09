@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS, Python, Go, Rust, PHP extractors native)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: every tree-sitter extractor native)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -311,4 +311,18 @@ exists; JS's ASCII `\w` and its `\s` set are spelled out in the docblock pattern
 
 Parity on the first run: **0 differences** on Mobi4, tgm-panel (Yii2), tgm-collect (Laravel) and
 tgm-flux — 83,279 files, 909,405 symbols, vendor code included. Native 1.7x faster single-threaded.
+
+### Stage 3 — Kotlin and Gradle KTS: every tree-sitter extractor is now native
+
+Ports of `kotlin.ts` (+ its AST-helper and Kotest modules) and `gradle-kts.ts`, both on
+`tree-sitter-kotlin-ng =1.1.0` — the crate of the `@tree-sitter-grammars/tree-sitter-kotlin` 1.1.0
+grammar whose `.wasm` ships (by hash). Parity on the first run: **0 differences** on tgm-app and three
+public projects chosen for coverage (nowinandroid for Compose + Gradle KTS, ktor, kotest for the DSL) —
+6,100 files, 83,519 symbols.
+
+That completes the TypeScript extractors that run on a tree-sitter grammar: TS/TSX/JS, Python, Go,
+Rust, PHP, Kotlin, Gradle KTS — about 4.6M symbols compared in total, 0 differences. What stays in
+TypeScript has no grammar to share: the regex extractors (Markdown, Prisma, SQL, Astro, Hono,
+conversations), the generic fallback for Java/Ruby/CSS, and the ~28 tools that walk ASTs in
+TypeScript through web-tree-sitter.
 

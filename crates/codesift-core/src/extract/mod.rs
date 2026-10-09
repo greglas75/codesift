@@ -10,6 +10,7 @@
 //! code units. Sources are parsed with `parse_utf16_le` and every offset here is a code-unit index.
 
 pub mod go;
+pub mod kotlin;
 pub mod php;
 pub mod python;
 pub mod rust;
@@ -454,6 +455,8 @@ pub fn extract_to_json(
             "go" => go::extract(&src, file, repo, timeout),
             "rust" => rust::extract(&src, file, repo, timeout),
             "php" => php::extract(&src, file, repo, timeout),
+            "kotlin" => kotlin::extract(&src, file, repo, timeout),
+            "gradle-kts" => kotlin::extract_gradle_kts(&src, file, repo, timeout),
             _ => return None,
         };
         let mut json = String::new();
