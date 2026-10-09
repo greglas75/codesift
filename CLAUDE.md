@@ -1,14 +1,16 @@
 ## Tech Stack
 TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
 
-## Rust core (ADR-006 — stages 0, 2, 3 done; 1 and 4 no-go for now — 2026-10-09)
+## Rust core (ADR-006 — stages 0–3 done, store still opt-in pending a monitored daemon run; 4 no-go — 2026-10-09)
 
 Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
 `crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every
 component keeps its TS implementation; the binary is OPTIONAL.
 
 - Build: `npm run build:native` → `native/codesift-core.<tag>.node` (gitignored). Not part of
-  `npm run build`, so installs and CI without Rust keep working.
+  `npm run build`, so installs and CI without Rust keep working. It installs by RENAME: copying over
+  the file a running daemon has mapped makes macOS SIGKILL every process that pages code from it
+  ("CODESIGNING Invalid Page", exit 137, no message) — never `cp` a new build over the old one.
 - Loader `src/native/index.ts`: local `native/` build first, then `@codesift/core-<tag>`.
   `CODESIFT_NATIVE=auto|0|1` + per-component `CODESIFT_NATIVE_<STORE|BM25|PARSER>`; `1` = required
   (a load failure throws — parity suites and the CI `native` job run with it). `/health` → `native`.
