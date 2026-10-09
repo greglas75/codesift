@@ -20,8 +20,12 @@ import { cleanupOrphanTempFiles } from "../../storage/_shared.js";
  * agreement forever.
  */
 
-/** Bump on any format change: a mismatch rebuilds rather than misreads. */
-const FORMAT_VERSION = 2;
+/**
+ * Bump on any format change — and on any change to which edges a file yields, since an entry is
+ * replayed while the file's mtime holds: a mismatch rebuilds rather than misreads. 3: an exported
+ * string value (`export default "./x"`) stopped producing an edge.
+ */
+const FORMAT_VERSION = 3;
 
 export interface CachedEdgeCall {
   to: string;
