@@ -166,6 +166,20 @@ describe("streamSymbolsSqlite early stop", () => {
     );
     expect(calls).toBe(1);
   });
+
+  // Bug it catches: the limit was counted per 900-id chunk, so `limit: 7` over 2000 ids delivered 21.
+  it("applies the limit to the whole stream, not to each id chunk", async () => {
+    seed(Array.from({ length: 2000 }, (_, i) => sym({ id: `s${i}`, name: `n${i}` })));
+    let delivered = 0;
+    await streamSymbolsSqlite(
+      dbPath,
+      { withSource: false, limit: 7, ids: Array.from({ length: 2000 }, (_, i) => `s${i}`) },
+      (batch) => {
+        delivered += batch.length;
+      },
+    );
+    expect(delivered).toBe(7);
+  });
 });
 
 describe("getIndexMetaSqlite", () => {

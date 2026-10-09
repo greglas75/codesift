@@ -218,6 +218,9 @@ export async function streamSymbolsSqlite(
     const columns = query.withSource ? "*" : COLUMNS_WITHOUT_SOURCE;
     reader.exec("BEGIN");
     try {
+      // Counted across the whole stream: a limit is a promise about what the caller receives,
+      // and counting it per 900-id chunk delivered up to `limit` per chunk.
+      let seen = 0;
       streams: for (const idChunk of chunkIds(query.ids)) {
         const { sql, binds } = buildPredicate(query, idChunk);
         const where = sql === "" ? "WHERE rowid > ?" : `${sql} AND rowid > ?`;
@@ -226,7 +229,6 @@ export async function streamSymbolsSqlite(
         );
         let cursor = 0;
         let rows = 50;
-        let seen = 0;
         for (;;) {
           const started = Date.now();
           const page = stmt.all(...(binds as never[]), cursor, rows) as unknown as Array<
@@ -248,7 +250,7 @@ export async function streamSymbolsSqlite(
           seen += batch.length;
           if (query.limit !== undefined && seen >= query.limit) {
             await onBatch(batch.slice(0, batch.length - (seen - query.limit)));
-            break;
+            break streams;
           }
           if ((await onBatch(batch)) === false) break streams; // the whole stream, not this id chunk
           rows = nextPageRows(rows, Date.now() - started);
@@ -268,8 +270,8 @@ export async function streamSymbolsSqlite(
 /**
  * The native half of `streamSymbolsSqlite`: the SAME loop, with only the page fetch moved to Rust.
  *
- * Page sizing by time budget, termination on an empty page, the limit (counted per id chunk, as the
- * loop above counts it), early stop and the yields are all this function's — copied, not
+ * Page sizing by time budget, termination on an empty page, the limit (counted over the whole
+ * stream, as the loop above counts it), early stop and the yields are all this function's — copied, not
  * re-derived, so the two paths cannot disagree about which symbols a stream delivers. What Rust adds
  * is that a page is read off the main thread, from one snapshot held open for the whole stream.
  */
@@ -287,10 +289,10 @@ async function streamSymbolsNative(
   }
   try {
     if (snapshot.repo === null || snapshot.repo === undefined) return;
+    let seen = 0;
     streams: for (const idChunk of chunkIds(query.ids)) {
       let cursor = 0;
       let rows = 50;
-      let seen = 0;
       for (;;) {
         const started = Date.now();
         const page = await snapshot.page(query, idChunk, cursor, rows);
@@ -300,7 +302,7 @@ async function streamSymbolsNative(
         seen += batch.length;
         if (query.limit !== undefined && seen >= query.limit) {
           await onBatch(batch.slice(0, batch.length - (seen - query.limit)));
-          break;
+          break streams;
         }
         if ((await onBatch(batch)) === false) break streams; // the whole stream, not this id chunk
         rows = nextPageRows(rows, Date.now() - started);
