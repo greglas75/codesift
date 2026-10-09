@@ -11,8 +11,9 @@ import {
 import { findReferences } from "./symbol-reference-tools.js";
 import {
   requireBM25Index,
-  requireCodeIndex,
+  requireIndexSummary,
 } from "./symbol-tool-internals.js";
+import { findRepoSymbols, findRepoSymbolsInFiles } from "./index-tools.js";
 
 /** Format references as compact string for MCP output. Groups by file to avoid repeating paths. */
 export function formatRefsCompact(refs: Reference[]): string {
@@ -148,7 +149,9 @@ export async function getContextBundle(
   const topResult = results[0];
   if (!topResult) return null;
 
-  const index = await requireCodeIndex(repo);
+  // Freshness runs here; every read below is a narrow one (ADR-004 stage 2) — this used to load the
+  // whole index for a file's siblings and a handful of names.
+  const index = await requireIndexSummary(repo);
 
   // Get full symbol with source
   const resolved = await resolveSearchHit(repo, topResult.symbol);
@@ -172,8 +175,9 @@ export async function getContextBundle(
   const imports = extractImportLines(fileSource);
 
   // Get sibling symbols (other symbols in the same file)
-  const siblings = index.symbols
-    .filter((s) => s.file === fullSymbol.file && s.id !== fullSymbol.id)
+  const fileSymbols = await findRepoSymbolsInFiles(repo, [fullSymbol.file], { withSource: false, skipFreshness: true });
+  const siblings = fileSymbols
+    .filter((s) => s.id !== fullSymbol.id)
     .map((s) => ({
       name: s.name,
       kind: s.kind,
@@ -182,7 +186,7 @@ export async function getContextBundle(
     }));
 
   // Extract type names used in the symbol's source
-  const typesUsed = extractTypesUsed(fullSymbol.source ?? "", index.symbols);
+  const typesUsed = await extractTypesUsed(repo, fullSymbol.source ?? "");
 
   // React-specific enrichment for components
   const bundle: ContextBundle = {
@@ -193,7 +197,7 @@ export async function getContextBundle(
     id_ambiguity: ambiguity,
   };
   if (fullSymbol.kind === "component") {
-    bundle.react_context = buildReactContext(fullSymbol, index.symbols);
+    bundle.react_context = await buildReactContext(repo, fullSymbol);
   }
 
   return bundle;
@@ -206,10 +210,10 @@ export async function getContextBundle(
  * Uses REACT_STDLIB_HOOKS imported from react-tools.js as the single source
  * of truth for stdlib hook detection (CQ14 — no duplication).
  */
-function buildReactContext(
+async function buildReactContext(
+  repo: string,
   component: CodeSymbol,
-  allSymbols: CodeSymbol[],
-): ReactContext {
+): Promise<ReactContext> {
   const source = component.source ?? "";
 
   // Extract hooks used (uses shared extractHookNames from react-tools.ts — CQ14)
@@ -231,10 +235,15 @@ function buildReactContext(
   // Extract parent components: find other components whose source uses <ThisComponent>
   const escapedComponentName = component.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const ownPattern = new RegExp(`<${escapedComponentName}\\b`);
-  const parent_components = allSymbols
+  // The literal `<Name` is a prefilter the store applies; the regex still decides.
+  const candidates = await findRepoSymbols(
+    repo,
+    { kinds: ["component"], sourceContainsAny: [`<${component.name}`], withSource: true },
+    { skipFreshness: true },
+  );
+  const parent_components = candidates
     .filter(
       (s) =>
-        s.kind === "component" &&
         s.id !== component.id &&
         s.name !== component.name &&
         s.source &&
@@ -262,8 +271,10 @@ function buildReactContext(
   // Look for an interface or type alias with the same name as props_type.
   let props_interface_source: string | null = null;
   if (props_type) {
-    const declarations = allSymbols.filter(
-      (s) => (s.kind === "interface" || s.kind === "type") && s.name === props_type,
+    const declarations = await findRepoSymbols(
+      repo,
+      { names: [props_type], kinds: ["interface", "type"], withSource: true },
+      { skipFreshness: true },
     );
     const decl = declarations.find((s) => s.file === component.file) ?? declarations[0];
     if (decl?.source) {
@@ -280,18 +291,19 @@ function buildReactContext(
 /**
  * Extract type/interface names referenced in source by matching against known symbols.
  */
-function extractTypesUsed(source: string, allSymbols: CodeSymbol[]): string[] {
-  const typeNames = new Set(allSymbols
-    .filter((s) => (s.kind === "interface" || s.kind === "type" || s.kind === "enum") && s.name.length >= 3)
-    .map((s) => s.name));
-
-  if (typeNames.size === 0) return [];
-
-  const used = new Set<string>();
+async function extractTypesUsed(repo: string, source: string): Promise<string[]> {
+  const identifiers = new Set<string>();
   for (const match of source.matchAll(/[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}]*/gu)) {
-    const name = match[0];
-    if (typeNames.has(name)) used.add(name);
+    if (match[0].length >= 3) identifiers.add(match[0]);
   }
+  if (identifiers.size === 0) return [];
 
-  return [...used].sort();
+  // The type names among the source's identifiers, asked of the store instead of collected from
+  // every symbol in the repo.
+  const types = await findRepoSymbols(
+    repo,
+    { names: [...identifiers], kinds: ["interface", "type", "enum"], withSource: false },
+    { skipFreshness: true },
+  );
+  return [...new Set(types.map((s) => s.name))].sort();
 }

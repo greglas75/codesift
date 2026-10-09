@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
+  getIndexSummary: vi.fn(),
 }));
 
 vi.mock("../../src/tools/impact-tools.js", () => ({
@@ -25,7 +25,7 @@ import {
   matchTestFile,
   testImpactAnalysis,
 } from "../../src/tools/test-impact-tools.js";
-import { getCodeIndex } from "../../src/tools/index-tools.js";
+import { getIndexSummary } from "../../src/tools/index-tools.js";
 import { impactAnalysis } from "../../src/tools/impact-tools.js";
 import { computeCoChangePairs } from "../../src/tools/coupling-tools.js";
 import { existsSync } from "node:fs";
@@ -128,7 +128,7 @@ describe("testImpactAnalysis", () => {
 
   it("returns affected tests with naming matches and confidence scores", async () => {
     const fakeIndex = makeFakeIndex();
-    vi.mocked(getCodeIndex).mockResolvedValue(fakeIndex);
+    vi.mocked(getIndexSummary).mockResolvedValue(fakeIndex);
     vi.mocked(impactAnalysis).mockResolvedValue(makeFakeImpactResult());
     vi.mocked(computeCoChangePairs).mockResolvedValue({
       pairs: [],
@@ -155,7 +155,7 @@ describe("testImpactAnalysis", () => {
 
   it("includes vitest in suggested_command when vitest.config.ts exists", async () => {
     const fakeIndex = makeFakeIndex();
-    vi.mocked(getCodeIndex).mockResolvedValue(fakeIndex);
+    vi.mocked(getIndexSummary).mockResolvedValue(fakeIndex);
     vi.mocked(impactAnalysis).mockResolvedValue(makeFakeImpactResult());
     vi.mocked(computeCoChangePairs).mockResolvedValue({
       pairs: [],
@@ -171,7 +171,7 @@ describe("testImpactAnalysis", () => {
   });
 
   it("throws when repo is not found", async () => {
-    vi.mocked(getCodeIndex).mockResolvedValue(null);
+    vi.mocked(getIndexSummary).mockResolvedValue(null);
 
     await expect(testImpactAnalysis("nonexistent")).rejects.toThrow(
       "Repository not found: nonexistent",

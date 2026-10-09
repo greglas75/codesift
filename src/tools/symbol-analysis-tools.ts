@@ -6,7 +6,7 @@ import {
   isFrameworkEntryPoint,
 } from "../utils/framework-detect.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
-import { requireCodeIndex } from "./symbol-tool-internals.js";
+import { requireCodeIndex, requireIndexSummary } from "./symbol-tool-internals.js";
 
 const MAX_DEAD_CODE_RESULTS = 100;
 
@@ -346,7 +346,8 @@ export async function findUnusedImports(
   repo: string,
   options?: { file_pattern?: string; include_tests?: boolean },
 ): Promise<UnusedImportsResult> {
-  const index = await requireCodeIndex(repo);
+  // The file list and the root are all it reads; the compiler holds that (IndexSummary has no symbols).
+  const index = await requireIndexSummary(repo);
   const includeTests = options?.include_tests ?? false;
 
   const unused: UnusedImport[] = [];

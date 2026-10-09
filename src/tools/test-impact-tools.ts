@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { getCodeIndex } from "./index-tools.js";
+import { getIndexSummary } from "./index-tools.js";
 import { impactAnalysis } from "./impact-tools.js";
 import { computeCoChangePairs } from "./coupling-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
@@ -89,7 +89,8 @@ export async function testImpactAnalysis(
   repo: string,
   options?: { since?: string; until?: string; max_tests?: number },
 ): Promise<TestImpactResult> {
-  const index = await getCodeIndex(repo);
+  // Test files and the root are all it reads — the summary, not the whole index.
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
