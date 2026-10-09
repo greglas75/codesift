@@ -7,6 +7,7 @@
 //
 // Usage: node scripts/build-native.mjs [--debug] [--target x86_64-apple-darwin]
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +99,32 @@ function main() {
   copyFileSync(built, tmp);
   renameSync(tmp, out);
   console.log(`build-native: ${out}`);
+  if (!cross) warnOnDistAbiMismatch(out, root);
+}
+
+/**
+ * The addon and `dist/` move separately: this script installs a new `.node`, `npm run build` rebuilds
+ * the loader. In between, a daemon restart loads the new addon into the old loader, the ABI check
+ * rejects it, and a daemon running with CODESIFT_NATIVE_STORE=1 (required) has no store at all — seen
+ * 2026-10-09, when a restart landed in exactly that gap. Say so loudly instead of leaving it to be found.
+ */
+function warnOnDistAbiMismatch(addonPath, root) {
+  const loader = join(root, "dist", "native", "index.js");
+  if (!existsSync(loader)) return;
+  const match = /NATIVE_ABI = (\d+)/.exec(readFileSync(loader, "utf8"));
+  if (!match) return;
+  let addonAbi;
+  try {
+    addonAbi = createRequire(import.meta.url)(addonPath).abiVersion();
+  } catch {
+    return;
+  }
+  if (Number(match[1]) !== addonAbi) {
+    console.warn(
+      `build-native: WARNING — dist/ expects ABI ${match[1]}, this addon is ABI ${addonAbi}. ` +
+        "Run `npm run build` before the daemon restarts: until then it cannot load the native core.",
+    );
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();

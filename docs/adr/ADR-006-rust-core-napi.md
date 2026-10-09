@@ -515,3 +515,25 @@ callees compared in order): **0 differences** in all three option sets the tools
 The main-thread cost goes to zero, the heap stops carrying the edges, and a repeat call reuses the
 graph instead of rebuilding it. Still loading the whole index: these tools need `index.symbols` for
 the nodes they print — the second half of stage 7 serves those from the store as well.
+
+## Stage 9 — BM25 persistence in Rust: no-go (2026-10-09)
+
+Measured before building it. `search_all_conversations` over 1,259 conversation repos, fresh process,
+three queries compared result by result:
+
+| | first call | second call | results |
+|---|---:|---:|---|
+| TypeScript engine, loading `.bm25.ndjson` sidecars | 11,824 ms | 3,249 ms | — |
+| native engine, building from symbols (no sidecar) | **4,557 ms** | 4,589 ms | identical top-10, scores to 6 decimals |
+
+The native build — parallel, off the main thread — already beats the TypeScript engine reading its
+persisted files. Persisting the native index would also need the per-key token lists the native index
+keeps for exact removal, which the v2 file does not carry: rebuilding them means tokenising (the cost
+persistence exists to avoid) or a new reconstruction path in the one component where a subtle bug
+returns confident wrong results. Not worth it. Conversation persistence keeps the TypeScript engine
+for its incremental amend; search uses the native build.
+
+Found while measuring, and guarded: `build:native` and `npm run build` move the addon and the loader
+separately, and a daemon restart between them loads an addon the loader's ABI check rejects — with
+`CODESIFT_NATIVE_STORE=1` that daemon has no store. `build-native.mjs` now warns when the addon's ABI
+differs from `dist/`'s.
