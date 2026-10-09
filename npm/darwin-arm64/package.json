@@ -1,0 +1,23 @@
+{
+  "name": "@codesift/core-darwin-arm64",
+  "version": "0.0.0",
+  "description": "CodeSift's native core (Rust, Node-API) for macOS (Apple silicon). Installed automatically as an optional dependency of codesift-mcp; not used on its own.",
+  "main": "codesift-core.darwin-arm64.node",
+  "files": [
+    "codesift-core.darwin-arm64.node"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "license": "BSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/greglas75/codesift.git"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

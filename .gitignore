@@ -33,3 +33,6 @@ zuvo/
 # Rust core (ADR-006): cargo output and locally built addons
 /target/
 /native/*.node
+
+# Native platform packages: the .node files are copied in by the release workflow
+npm/*/*.node

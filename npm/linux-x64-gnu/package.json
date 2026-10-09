@@ -1,0 +1,26 @@
+{
+  "name": "@codesift/core-linux-x64-gnu",
+  "version": "0.0.0",
+  "description": "CodeSift's native core (Rust, Node-API) for Linux x64 (glibc). Installed automatically as an optional dependency of codesift-mcp; not used on its own.",
+  "main": "codesift-core.linux-x64-gnu.node",
+  "files": [
+    "codesift-core.linux-x64-gnu.node"
+  ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "license": "BSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/greglas75/codesift.git"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

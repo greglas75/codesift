@@ -30,7 +30,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The native core (ADR-006), built once per platform package under npm/. A failed or missing build
+  # does NOT stop the release: publish-native-packages.mjs only lists the platforms that published,
+  # and users elsewhere get the TypeScript path, as before the core existed.
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tag: darwin-arm64, os: macos-14 }
+          # Cross-compiled on Apple silicon: Intel macOS runners are being retired.
+          - { tag: darwin-x64, os: macos-14, target: x86_64-apple-darwin }
+          # 22.04 rather than latest: the binary links the runner's glibc, and an older one keeps it
+          # loadable on more distributions.
+          - { tag: linux-x64-gnu, os: ubuntu-22.04 }
+          - { tag: linux-arm64-gnu, os: ubuntu-22.04-arm }
+          - { tag: win32-x64-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # rustup is preinstalled and honours rust-toolchain.toml (1.99.0).
+      - name: Add the cross target
+        if: matrix.target
+        run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the addon
+        shell: bash
+        run: node scripts/build-native.mjs ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.tag }}
+          path: native/codesift-core.${{ matrix.tag }}.node
+          if-no-files-found: error
+
   publish:
+    needs: native
+    # Runs even if some native builds failed — see the comment on the `native` job.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Backstop ABOVE the in-step ceiling below. Without any timeout this job
     # inherits GitHub's hard 6h cap: five consecutive runs (30588161669,
@@ -79,6 +121,16 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION" >&2
             exit 1
           fi
+
+      # Platform packages first, so the main package's optionalDependencies (written by this step,
+      # only for the ones that published) never point at a version that does not exist. Trusted
+      # publishing needs each @codesift/core-* package to exist and trust this workflow — the one-time
+      # bootstrap is in docs/release-native.md.
+      - uses: actions/download-artifact@v4
+        with:
+          path: native-artifacts
+      - name: Publish native platform packages
+        run: node scripts/publish-native-packages.mjs --artifacts native-artifacts
 
       # prepublishOnly runs `npm run build && npm test` — the same gate as a
       # local publish, so CI cannot ship an untested build. That also means
