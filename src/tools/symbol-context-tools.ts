@@ -14,6 +14,7 @@ import {
   requireIndexSummary,
 } from "./symbol-tool-internals.js";
 import { findRepoSymbols, findRepoSymbolsInFiles } from "./index-tools.js";
+import { MAX_BOUND_PARAMS } from "../storage/sqlite/queries.js";
 
 /** Format references as compact string for MCP output. Groups by file to avoid repeating paths. */
 export function formatRefsCompact(refs: Reference[]): string {
@@ -299,11 +300,17 @@ async function extractTypesUsed(repo: string, source: string): Promise<string[]>
   if (identifiers.size === 0) return [];
 
   // The type names among the source's identifiers, asked of the store instead of collected from
-  // every symbol in the repo.
-  const types = await findRepoSymbols(
-    repo,
-    { names: [...identifiers], kinds: ["interface", "type", "enum"], withSource: false },
-    { skipFreshness: true },
-  );
-  return [...new Set(types.map((s) => s.name))].sort();
+  // every symbol in the repo — in chunks under SQLite's bound-parameter limit, since only the set of
+  // names matters here, not their order.
+  const all = [...identifiers];
+  const used = new Set<string>();
+  for (let i = 0; i < all.length; i += MAX_BOUND_PARAMS) {
+    const types = await findRepoSymbols(
+      repo,
+      { names: all.slice(i, i + MAX_BOUND_PARAMS), kinds: ["interface", "type", "enum"], withSource: false },
+      { skipFreshness: true },
+    );
+    for (const t of types) used.add(t.name);
+  }
+  return [...used].sort();
 }
