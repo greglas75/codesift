@@ -18,7 +18,7 @@ import { initParser, parseFile, getLanguageForPath } from "../src/parser/parser-
 import { extractSymbols } from "../src/parser/symbol-extractor.js";
 import { getNativeCore } from "../src/native/index.js";
 
-const NATIVE_LANGUAGES = new Set(["typescript", "tsx", "javascript", "python", "go", "rust"]);
+const NATIVE_LANGUAGES = new Set(["typescript", "tsx", "javascript", "python", "go", "rust", "php"]);
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", "target", ".venv", "venv", "__pycache__"]);
 
 function walk(dir: string, out: string[]): void {

@@ -197,6 +197,41 @@ type Alias = u32;
 static COUNT: u32 = 0;
 mod inner { pub const LIMIT: u32 = 3; fn private() {} }
 `],
+  ["php: namespaces, docblock members, promotion, enums, tests", "p.php", `<?php
+namespace App\\Models;
+
+use Foo\\Bar;
+
+/**
+ * @property int $id
+ * @property-read string $name
+ * @property-write array $tags
+ * @method self find(int $id)
+ * @method static findAll()
+ */
+#[ORM\\Entity(repositoryClass: UserRepo::class)]
+abstract class User extends \\Base\\Model implements JsonSerializable, Countable {
+    use SoftDeletes, HasRoles;
+    const MAX = 10, MIN = 1;
+    /** @var string */
+    protected static $email, $phone;
+    public readonly int $age;
+    public function __construct(private readonly ?int $limit = null, public string $label = '') {}
+    abstract protected function name(): string;
+    final public static function make(): static { return new static(); }
+    public function find($id) {}
+}
+interface Shape extends Countable { public function area(): float; }
+trait HasRoles { public function roles() {} }
+enum Status: string implements HasLabel { case Active = 'a'; case Off = 'o'; }
+function helper(int $x): int { return $x; }
+class UserTest extends \\PHPUnit\\Framework\\TestCase {
+    protected function setUp(): void {}
+    public function testItWorks() {}
+    /** @test */
+    public function it_works() {}
+}
+`],
 ];
 
 describe.skipIf(!native)("native extractor parity with the TypeScript extractor", () => {
@@ -205,7 +240,7 @@ describe.skipIf(!native)("native extractor parity with the TypeScript extractor"
   });
 
   it.each(CASES)("%s", async (_label, file, source) => {
-    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust" };
+    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust", php: "php" };
     const language = byExt[file.split(".").pop()!] ?? "typescript";
     const tree = await parseFile(`/repo/${file}`, source);
     const ts = tree ? extractSymbols(tree, file, source, "local/t", language) : [];

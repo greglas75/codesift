@@ -13,7 +13,7 @@ pub mod store;
 /// arguments it does not understand — the same failure as a daemon running replaced files, one
 /// layer down. Bump it on ANY change to an exported function's name, arguments or result — and when
 /// the set of languages `extractSymbols` accepts grows, since JS routes them by that set.
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 /// Version of this crate, so `/health` can say which core build is loaded.
 pub fn version() -> &'static str {

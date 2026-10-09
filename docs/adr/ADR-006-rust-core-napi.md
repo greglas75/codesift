@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS, Python, Go, Rust extractors native)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS, Python, Go, Rust, PHP extractors native)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -298,4 +298,17 @@ WHOLE block, and `make_symbol` copied the node's full text before truncating it 
 quadratic per block. The Go stdlib took 23.4 s native against 10.5 s in TypeScript, where V8's `slice`
 is O(1). `node_source` now slices only the 5,000 units it keeps: 23.4 s → 7.1 s, output unchanged
 (TypeScript and Python parity re-run, still 0 differences).
+
+### Stage 3 — PHP
+
+Port of the five `php-*.ts` modules (`extract/php.rs`). The grammar is tree-sitter-php **0.23.12**,
+the version whose `.wasm` ships (by hash) — never published to crates.io, so it is a git dependency on
+the `v0.23.12` tag; 0.23.11, the newest crate of that line, has a different grammar. Carried over: a
+bodiless top-level `namespace X;` parents every later top-level node; docblock members are synthesised
+after the class body, `@property` before `@method`, and skipped when a real member of that kind
+exists; JS's ASCII `\w` and its `\s` set are spelled out in the docblock patterns. Attributes add a
+`meta` value kind — an array of `{name, args?}` objects.
+
+Parity on the first run: **0 differences** on Mobi4, tgm-panel (Yii2), tgm-collect (Laravel) and
+tgm-flux — 83,279 files, 909,405 symbols, vendor code included. Native 1.7x faster single-threaded.
 

@@ -205,7 +205,7 @@ async function runInThreadParse(req: ParseRequest): Promise<CodeSymbol[]> {
  * In dev/test (no built parse-worker.js) falls back to in-thread parsing.
  */
 /** Languages with a Rust extractor (ADR-006 stage 3) — `codesift_core::extract::LANGUAGES`. */
-const NATIVE_EXTRACT_LANGUAGES = new Set(["typescript", "tsx", "javascript", "python", "go", "rust"]);
+const NATIVE_EXTRACT_LANGUAGES = new Set(["typescript", "tsx", "javascript", "python", "go", "rust", "php"]);
 
 /**
  * The native path: parse and extract in Rust, on the libuv pool rather than one of the two workers,

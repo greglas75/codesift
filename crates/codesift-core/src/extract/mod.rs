@@ -10,6 +10,7 @@
 //! code units. Sources are parsed with `parse_utf16_le` and every offset here is a code-unit index.
 
 pub mod go;
+pub mod php;
 pub mod python;
 pub mod rust;
 pub mod ts;
@@ -204,6 +205,8 @@ pub enum Meta {
     Int(i64),
     Strs(Vec<String>),
     Str(String),
+    /// PHP attributes: `[{name, args?}]`, keys in that order.
+    Attrs(Vec<(String, Option<String>)>),
 }
 
 /// A `CodeSymbol` as `makeSymbol` builds it.
@@ -360,6 +363,20 @@ pub fn write_json(symbols: &[Sym], repo: &str, file: &str, out: &mut String) {
                     }
                     Meta::Str(t) => out.push_str(&q(t)),
                     Meta::Strs(list) => out.push_str(&qs(list)),
+                    Meta::Attrs(list) => {
+                        out.push('[');
+                        for (n, (name, args)) in list.iter().enumerate() {
+                            if n > 0 {
+                                out.push(',');
+                            }
+                            let _ = write!(out, "{{\"name\":{}", q(name));
+                            if let Some(a) = args {
+                                let _ = write!(out, ",\"args\":{}", q(a));
+                            }
+                            out.push('}');
+                        }
+                        out.push(']');
+                    }
                 }
             }
             out.push('}');
@@ -409,7 +426,15 @@ fn pool() -> &'static rayon::ThreadPool {
 }
 
 /// Languages with a native extractor — the JS side routes only these here.
-pub const LANGUAGES: [&str; 6] = ["typescript", "tsx", "javascript", "python", "go", "rust"];
+pub const LANGUAGES: [&str; 7] = [
+    "typescript",
+    "tsx",
+    "javascript",
+    "python",
+    "go",
+    "rust",
+    "php",
+];
 
 /// Parse and extract one file. `None` for a language without a native extractor.
 pub fn extract_to_json(
@@ -428,6 +453,7 @@ pub fn extract_to_json(
             "python" => python::extract(&src, file, repo, timeout),
             "go" => go::extract(&src, file, repo, timeout),
             "rust" => rust::extract(&src, file, repo, timeout),
+            "php" => php::extract(&src, file, repo, timeout),
             _ => return None,
         };
         let mut json = String::new();
