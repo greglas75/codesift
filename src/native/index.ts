@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 15;
+export const NATIVE_ABI = 16;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -142,6 +142,9 @@ export interface NativeCallGraphHandle {
   callees(id: string): Uint32Array | null;
   callers(id: string): Uint32Array | null;
   footprintBytes(): number;
+  idsAt(positions: Uint32Array): string[];
+  degrees(ids: string[]): Uint32Array;
+  symbolsJson(positions: Uint32Array, withSource: boolean): Promise<string[]>;
 }
 
 export interface NativeCore {

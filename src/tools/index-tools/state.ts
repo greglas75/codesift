@@ -2,6 +2,7 @@ import type { FSWatcher } from "../../storage/watcher.js";
 import { bm25CacheBudgetBytes, bm25FootprintBytes, type BM25Index } from "../../search/bm25.js";
 import type { CodeIndex } from "../../types.js";
 import { indexFootprintBytes } from "../../storage/index-footprint.js";
+import { indexCacheMemBudgetBytes } from "../../config.js";
 
 export const activeWatchers = new Map<string, FSWatcher>();
 export const bm25Indexes = new Map<string, BM25Index>();
@@ -55,6 +56,38 @@ function evictBM25OverBudget(pinned: string): void {
 
 
 export const codeIndexes = new Map<string, CodeIndex>();
+
+/**
+ * Put a loaded index into `codeIndexes`, evicting least-recently-used entries past the index byte
+ * budget — the most recent one is always kept.
+ *
+ * `codeIndexes` had no bound at all: entries left only when that repo's files changed or the whole
+ * server went idle, and a daemon serving ~30 sessions is never idle. The byte budget that ADR-004 put on
+ * the storage-level cache (`storage/index-cache.ts`) did not reach it — this map kept every index
+ * referenced after the storage cache let go. Measured on the Mac daemon 2026-10-09: 9 indexes, 4.9 GB
+ * priced, over a 4 GB budget and still growing. Third occurrence of one class here (the conversation
+ * BM25 cache, the code BM25 cache): a second map of one structure with no bound of its own.
+ */
+export function rememberCodeIndex(repoName: string, index: CodeIndex): void {
+  codeIndexes.delete(repoName);
+  codeIndexes.set(repoName, index);
+  const budget = indexCacheMemBudgetBytes();
+  let total = 0;
+  for (const cached of codeIndexes.values()) total += indexFootprintBytes(cached);
+  while (codeIndexes.size > 1 && total > budget) {
+    const oldest = codeIndexes.keys().next().value!;
+    total -= indexFootprintBytes(codeIndexes.get(oldest)!);
+    codeIndexes.delete(oldest);
+  }
+}
+
+/** Mark an index as just used, so budget eviction takes the stalest one first. */
+export function touchCodeIndex(repoName: string): void {
+  const index = codeIndexes.get(repoName);
+  if (index === undefined) return;
+  codeIndexes.delete(repoName);
+  codeIndexes.set(repoName, index);
+}
 export const embeddingCaches = new Map<string, Map<string, Float32Array>>();
 export const embeddingCacheGenerations = new Map<string, number>();
 export const embeddingCacheSources = new Map<string, string>();

@@ -50,7 +50,7 @@ import {
   cacheEmbeddingIfGenerationCurrent,
   invalidateEmbeddingCache,
   chunkCacheKey,
-  invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index, BM25_PERSIST_MIN_BUILD_MS } from "./state.js";
+  invalidateEmbeddingCaches, rememberBM25Index, touchBM25Index, BM25_PERSIST_MIN_BUILD_MS, rememberCodeIndex, touchCodeIndex } from "./state.js";
 import type { CodeIndex, RepoMeta, CodeSymbol } from "../../types.js";
 import { findWorkingTree } from "../../utils/worktree.js";
 import { symbolMatchesScanPredicates } from "../../storage/narrow-filters.js";
@@ -182,7 +182,10 @@ export async function getCodeIndex(
   }
 
   const cached = codeIndexes.get(resolvedName);
-  if (cached) return cached;
+  if (cached) {
+    touchCodeIndex(resolvedName);
+    return cached;
+  }
 
   // Only a COLD load is gated: a resident index costs nothing and is returned above. See
   // overload-guard.ts for why refusing fast beats blocking — the caller's 120 s timeout turns one
@@ -232,7 +235,7 @@ export async function getCodeIndex(
     return null;
   }
 
-  codeIndexes.set(resolvedName, result.index);
+  rememberCodeIndex(resolvedName, result.index);
   return result.index;
 }
 

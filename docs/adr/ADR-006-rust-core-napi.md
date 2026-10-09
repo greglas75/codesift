@@ -552,3 +552,27 @@ if in-process indexing (CLI, stdio) turns out to matter.
 A profiling trap worth recording: `CODESIFT_EMBEDDING_PROVIDER=none` is not a valid value, so the run
 fell through to the local ONNX model and 6-8 s of "indexing" was `onnxruntime-node`. Disable embeddings
 with `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` and no provider variables when measuring the pipeline.
+
+## Stage 7, second half — graph tools without an index in memory (2026-10-09)
+
+`trace_call_chain`, `classify_roles` and `explore`'s neighbours no longer load the index when the native
+graph serves the repo: the graph keeps each node's id and rowid, BFS runs over it with
+`buildCallTree`'s exact visit order and limits, and the store returns only the symbols the answer holds
+(`symbols_by_rowid_json`, each row checked against the graph's id — a write since the build is a
+fallback to the TypeScript path, never a different symbol). `classify_roles` streams the callable
+symbols without source and reads degrees off the graph in batches.
+
+Parity (`scripts/native-graph-tools-parity.ts`, ResearchShieldNew, 528,405 symbols — 40 symbols × both
+directions × tests on/off at depth 2, neighbours of all 40, roles with and without tests), run in two
+processes and diffed: **identical**. Time for that batch: **11.6 s** native against **693.5 s** on the
+TypeScript path, which rebuilds the adjacency on every call.
+
+Found and fixed alongside, while reading the daemon's memory for stage 5: `codeIndexes`, the tool-level
+cache of loaded indexes, had no bound — entries left only when a repo's files changed or the server went
+idle, which a daemon serving ~30 sessions never is (9 indexes, 4.9 GB over a 4 GB budget). It now obeys
+the same byte budget as the storage cache (`rememberCodeIndex`, LRU, newest always kept). The third
+instance here of a second map of one structure without a bound of its own.
+
+Still materialising the index, and on the ADR-004 list: `impact_analysis`, `trace_route`, `review_diff`,
+`plan_turn`, ranked `search_text`, `context L2`, wiki, taint, test-impact and a few helpers. They now get
+the Rust graph through `adjacencyFor`, so the expensive part is gone; what remains is the load itself.

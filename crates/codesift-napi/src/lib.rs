@@ -713,7 +713,7 @@ impl IndexWriter {
 /// order — `index.symbols` positions once the JS side has checked `idHash` against its array.
 #[napi]
 pub struct NativeCallGraph {
-    inner: codesift_core::callgraph::CallGraph,
+    inner: Arc<codesift_core::callgraph::CallGraph>,
 }
 
 #[napi]
@@ -755,6 +755,57 @@ impl NativeCallGraph {
     pub fn footprint_bytes(&self) -> f64 {
         self.inner.footprint_bytes() as f64
     }
+
+    /// The ids of these node positions.
+    #[napi]
+    pub fn ids_at(
+        &self,
+        positions: napi::bindgen_prelude::Uint32Array,
+    ) -> napi::Result<Vec<String>> {
+        self.inner.ids_at(&positions).map_err(to_napi)
+    }
+
+    /// `[callers0, callees0, callers1, callees1, …]` list lengths for `ids`.
+    #[napi]
+    pub fn degrees(&self, ids: Vec<String>) -> napi::bindgen_prelude::Uint32Array {
+        napi::bindgen_prelude::Uint32Array::new(self.inner.degrees(&ids))
+    }
+
+    /// The symbols at these node positions, as JSON arrays to concatenate in order, read off the main
+    /// thread from the database the graph was built from.
+    #[napi]
+    pub fn symbols_json(
+        &self,
+        positions: napi::bindgen_prelude::Uint32Array,
+        with_source: bool,
+    ) -> AsyncTask<GraphSymbolsTask> {
+        AsyncTask::new(GraphSymbolsTask {
+            graph: Arc::clone(&self.inner),
+            positions: positions.to_vec(),
+            with_source,
+        })
+    }
+}
+
+pub struct GraphSymbolsTask {
+    graph: Arc<codesift_core::callgraph::CallGraph>,
+    positions: Vec<u32>,
+    with_source: bool,
+}
+
+impl Task for GraphSymbolsTask {
+    type Output = Vec<String>;
+    type JsValue = Vec<String>;
+
+    fn compute(&mut self) -> napi::Result<Vec<String>> {
+        self.graph
+            .symbols_json(&self.positions, self.with_source)
+            .map_err(to_napi)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Vec<String>) -> napi::Result<Vec<String>> {
+        Ok(output)
+    }
 }
 
 pub struct BuildCallGraphTask {
@@ -777,7 +828,9 @@ impl Task for BuildCallGraphTask {
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<NativeCallGraph> {
-        Ok(NativeCallGraph { inner: output })
+        Ok(NativeCallGraph {
+            inner: Arc::new(output),
+        })
     }
 }
 

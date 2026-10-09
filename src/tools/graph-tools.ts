@@ -1,8 +1,9 @@
-import { getCodeIndex, getIndexSummary } from "./index-tools.js";
+import { getCodeIndex, getIndexSummary, findRepoSymbols, streamRepoSymbols } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { REACT_STDLIB_HOOKS } from "./react-tools.js";
 import type { CodeSymbol, Direction, CallNode } from "../types.js";
-import { nativeAdjacency, type AdjacencyLookup } from "./graph-native.js";
+import { nativeAdjacency, nativeGraphFor, graphSymbolsAt, type AdjacencyLookup } from "./graph-native.js";
+import type { NativeCallGraphHandle } from "../native/index.js";
 
 const DEFAULT_CALL_DEPTH = 1;
 
@@ -261,6 +262,86 @@ function buildCallTree(
   return expand(root, 0);
 }
 
+/** Ids of a neighbour list, fetched in slices: a hub can have 100k callers and BFS reads ~20. */
+function lazyIds(graph: NativeCallGraphHandle, positions: Uint32Array): (i: number) => string {
+  const SLICE = 64;
+  const cache: string[] = [];
+  return (i: number) => {
+    if (cache[i] === undefined) {
+      const start = i - (i % SLICE);
+      const ids = graph.idsAt(positions.subarray(start, Math.min(positions.length, start + SLICE)));
+      for (let k = 0; k < ids.length; k++) cache[start + k] = ids[k]!;
+    }
+    return cache[i]!;
+  };
+}
+
+/**
+ * `buildCallTree` over the Rust graph, with no index in memory (stage 7): the same visit order, the
+ * same id-keyed `visited` set and the same node limits, then ONE store read for the symbols the tree
+ * actually holds. `null` when the graph cannot serve this repo, or a row changed under it — the caller
+ * then takes the TypeScript path, so the answer never depends on which one ran.
+ */
+async function nativeCallTree(
+  repo: string,
+  symbolName: string,
+  direction: Direction,
+  maxDepth: number,
+  includeSource: boolean,
+  includeTests: boolean,
+  filterReactHooks: boolean,
+): Promise<CallNode | null> {
+  // The target first: this read runs the freshness check, so a moved HEAD is re-indexed before the
+  // graph reads the database. Same candidate order as `index.symbols.filter` (rowid order).
+  const candidates = await findRepoSymbols(repo, { withSource: includeSource, name: symbolName });
+  const graph = await nativeGraphFor(repo, !includeTests, filterReactHooks);
+  if (!graph) return null;
+  let target: CodeSymbol | undefined;
+  if (!includeTests) target = candidates.find((s) => !isTestFile(s.file));
+  target ??= candidates[0];
+  if (!target) throw new Error(`Symbol "${symbolName}" not found in repository "${repo}"`);
+
+  interface Pending { pos: number; children: Pending[] }
+  const visited = new Set<string>([target.id]);
+  let totalNodes = 1;
+  const neighbours = (id: string): Uint32Array | null =>
+    direction === "callees" ? graph.callees(id) : graph.callers(id);
+  const expand = (id: string, depth: number): Pending[] => {
+    if (depth >= maxDepth || totalNodes >= MAX_TREE_NODES) return [];
+    const positions = neighbours(id);
+    if (!positions || positions.length === 0) return [];
+    const idAt = lazyIds(graph, positions);
+    const children: Pending[] = [];
+    for (let i = 0; i < positions.length; i++) {
+      if (totalNodes >= MAX_TREE_NODES) break;
+      if (children.length >= MAX_CHILDREN_PER_NODE) break;
+      const neighbourId = idAt(i);
+      if (visited.has(neighbourId)) continue;
+      visited.add(neighbourId);
+      totalNodes++;
+      children.push({ pos: positions[i]!, children: expand(neighbourId, depth + 1) });
+    }
+    return children;
+  };
+  const rootChildren = expand(target.id, 0);
+
+  const order: number[] = [];
+  const collect = (list: Pending[]): void => {
+    for (const p of list) { order.push(p.pos); collect(p.children); }
+  };
+  collect(rootChildren);
+  let fetched: CodeSymbol[];
+  try {
+    fetched = await graphSymbolsAt(graph, order, includeSource);
+  } catch {
+    return null; // a row changed since the graph was built — the TypeScript path re-reads everything
+  }
+  const byPos = new Map<number, CodeSymbol>();
+  order.forEach((pos, i) => byPos.set(pos, fetched[i]!));
+  const toNode = (p: Pending): CallNode => ({ symbol: byPos.get(p.pos)!, children: p.children.map(toNode) });
+  return { symbol: target, children: rootChildren.map(toNode) };
+}
+
 /**
  * Strip the `source` field from a CodeSymbol, keeping compact metadata.
  */
@@ -303,11 +384,6 @@ export async function traceCallChain(
   direction: Direction,
   depthOrOptions?: number | TraceOptions,
 ): Promise<CallNode> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
-    throw new Error(`Repository not found: ${repo}`);
-  }
-
   // Support both legacy (depth: number) and new (options: TraceOptions) signatures
   let maxDepth: number;
   let includeSource: boolean;
@@ -326,6 +402,20 @@ export async function traceCallChain(
     includeTests = false;
     outputFormat = "json";
     filterReactHooks = false;
+  }
+
+  // The Rust graph answers without materialising the index (stage 7); `null` means it cannot here.
+  const nativeTree = await nativeCallTree(repo, symbolName, direction, maxDepth, includeSource, includeTests, filterReactHooks);
+  if (nativeTree) {
+    if (outputFormat === "mermaid") {
+      return { mermaid: callTreeToMermaid(nativeTree, direction), direction, root: symbolName, depth: maxDepth } as unknown as CallNode;
+    }
+    return includeSource ? nativeTree : stripCallTreeSource(nativeTree);
+  }
+
+  const index = await getCodeIndex(repo);
+  if (!index) {
+    throw new Error(`Repository not found: ${repo}`);
   }
 
   // Find the target symbol — prefer non-test files when tests are excluded
@@ -425,10 +515,13 @@ export async function classifySymbolRoles(
   repo: string,
   options?: { file_pattern?: string | undefined; include_tests?: boolean | undefined; top_n?: number | undefined },
 ): Promise<SymbolRoleInfo[]> {
+  const skipTests = !(options?.include_tests ?? false);
+  const native = await nativeSymbolRoles(repo, skipTests, options);
+  if (native) return native;
+
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);
 
-  const skipTests = !(options?.include_tests ?? false);
   const adjacency = await adjacencyFor(repo, index.symbols, skipTests);
 
   const results: SymbolRoleInfo[] = [];
@@ -666,6 +759,88 @@ function canonicalCycleSignature(nodes: string[]): string {
 export { buildAdjacencyIndex, extractCallSites, buildCallTree, stripSource, isTestFile, classifyRole };
 
 /**
+ * `callNeighbours` over the Rust graph with no index in memory: dedupe by id in list order, the first
+ * `limit` of each, then one store read for exactly those symbols. `null` → the TypeScript path.
+ */
+async function nativeNeighbours(
+  repo: string,
+  symbolIds: readonly string[],
+  limit: number,
+): Promise<Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }> | null> {
+  await getIndexSummary(repo); // the freshness check getCodeIndex would have run
+  const graph = await nativeGraphFor(repo, true, false);
+  if (!graph) return null;
+  const pick = (positions: Uint32Array | null): { kept: number[]; total: number } => {
+    if (!positions || positions.length === 0) return { kept: [], total: 0 };
+    const ids = graph.idsAt(positions);
+    const seen = new Set<string>();
+    const unique: number[] = [];
+    for (let i = 0; i < positions.length; i++) {
+      if (seen.has(ids[i]!)) continue;
+      seen.add(ids[i]!);
+      unique.push(positions[i]!);
+    }
+    return { kept: unique.slice(0, limit), total: unique.length };
+  };
+  const plan = symbolIds.map((id) => ({ id, callers: pick(graph.callers(id)), callees: pick(graph.callees(id)) }));
+  const wanted = plan.flatMap((p) => [...p.callers.kept, ...p.callees.kept]);
+  let fetched: CodeSymbol[];
+  try {
+    fetched = await graphSymbolsAt(graph, wanted, false);
+  } catch {
+    return null;
+  }
+  let cursor = 0;
+  const take = (n: number): CodeSymbol[] => fetched.slice(cursor, (cursor += n)).map(stripSource);
+  const out = new Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>();
+  for (const p of plan) {
+    out.set(p.id, {
+      callers: take(p.callers.kept.length),
+      callees: take(p.callees.kept.length),
+      callersTotal: p.callers.total,
+      calleesTotal: p.callees.total,
+    });
+  }
+  return out;
+}
+
+/**
+ * `classifySymbolRoles` over the Rust graph: the callable symbols streamed in index order without
+ * source, their degrees read off the graph in batches. `null` → the TypeScript path.
+ */
+async function nativeSymbolRoles(
+  repo: string,
+  skipTests: boolean,
+  options: { file_pattern?: string | undefined; top_n?: number | undefined } | undefined,
+): Promise<SymbolRoleInfo[] | null> {
+  await getIndexSummary(repo); // the freshness check getCodeIndex would have run
+  const graph = await nativeGraphFor(repo, skipTests, false);
+  if (!graph) return null;
+  const results: SymbolRoleInfo[] = [];
+  await streamRepoSymbols(repo, { withSource: false, kinds: [...CALLABLE_KINDS] }, (batch) => {
+    const kept = batch.filter((sym) =>
+      !(skipTests && isTestFile(sym.file)) && !(options?.file_pattern && !sym.file.includes(options.file_pattern)));
+    if (kept.length === 0) return;
+    const degrees = graph.degrees(kept.map((s) => s.id));
+    kept.forEach((sym, i) => {
+      const callerCount = degrees[i * 2]!;
+      const calleeCount = degrees[i * 2 + 1]!;
+      results.push({
+        id: sym.id,
+        name: sym.name,
+        kind: sym.kind,
+        file: sym.file,
+        role: classifyRole(callerCount, calleeCount),
+        callers: callerCount,
+        callees: calleeCount,
+      });
+    });
+  }, { skipFreshness: true });
+  results.sort((a, b) => (b.callers + b.callees) - (a.callers + a.callees));
+  return results.slice(0, options?.top_n ?? 100);
+}
+
+/**
  * Adjacency per loaded symbol array. Building it scans the source of every symbol, which is the
  * whole cost of trace_call_chain; `explore` asks for neighbours on every call, so it must not pay
  * that per call. Keyed by the index's symbols array: a re-index replaces the array, so a stale
@@ -681,6 +856,8 @@ export async function callNeighbours(
 ): Promise<Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>> {
   const out = new Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>();
   if (symbolIds.length === 0) return out;
+  const native = await nativeNeighbours(repo, symbolIds, limit);
+  if (native) return native;
   const index = await getCodeIndex(repo);
   if (!index) throw new Error(`Repository not found: ${repo}`);
   let adjacency = neighbourAdjacency.get(index.symbols);

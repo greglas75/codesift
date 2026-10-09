@@ -14,13 +14,13 @@
 //! - the regexes use JS semantics: ASCII `\w` and `\b`, and JS's `\s` spelled out.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use rayon::prelude::*;
 use regex::Regex;
 
-use crate::store::{open, Result};
+use crate::store::{open, symbols_by_rowid_json, Result, StoreError};
 
 /// `MIN_CALL_NAME_LENGTH`, counted in UTF-16 units like JS `.length`.
 const MIN_CALL_NAME_LENGTH: usize = 3;
@@ -286,6 +286,10 @@ pub struct CallGraph {
     callees: HashMap<String, Vec<u32>>,
     callers: HashMap<String, Vec<u32>>,
     edges: usize,
+    /// Per node: its id and rowid, so a caller holding no index can name nodes and fetch them.
+    ids: Vec<String>,
+    rowids: Vec<i64>,
+    db_path: PathBuf,
 }
 
 struct Node {
@@ -320,7 +324,9 @@ impl CallGraph {
         conn.execute_batch("BEGIN")?;
         let result = Self::build_in(&conn, skip_tests, filter_react_hooks);
         let _ = conn.execute_batch("COMMIT");
-        result
+        let mut graph = result?;
+        graph.db_path = db_path.to_path_buf();
+        Ok(graph)
     }
 
     fn build_in(
@@ -430,13 +436,15 @@ impl CallGraph {
                 break;
             }
         }
-        let _ = rowids;
         Ok(CallGraph {
             node_count: nodes.len(),
             id_hash,
             callees,
             callers,
             edges,
+            ids: nodes.into_iter().map(|n| n.id).collect(),
+            rowids,
+            db_path: PathBuf::new(),
         })
     }
 
@@ -460,6 +468,39 @@ impl CallGraph {
         self.callers.get(id).map(Vec::as_slice)
     }
 
+    /// The ids of these node positions (out-of-range positions are an error).
+    pub fn ids_at(&self, positions: &[u32]) -> Result<Vec<String>> {
+        positions
+            .iter()
+            .map(|&p| {
+                self.ids.get(p as usize).cloned().ok_or_else(|| StoreError {
+                    sqlite_code: None,
+                    message: format!("node {p} out of range"),
+                })
+            })
+            .collect()
+    }
+
+    /// `(callers, callees)` list lengths for each id, 0 where the map has no entry — what
+    /// `classifySymbolRoles` reads off the TypeScript maps.
+    pub fn degrees(&self, ids: &[String]) -> Vec<u32> {
+        let mut out = Vec::with_capacity(ids.len() * 2);
+        for id in ids {
+            out.push(self.callers.get(id).map_or(0, Vec::len) as u32);
+            out.push(self.callees.get(id).map_or(0, Vec::len) as u32);
+        }
+        out
+    }
+
+    /// The symbols at these node positions, in order, read from the database the graph was built
+    /// from. Each row is checked against the id the graph recorded, so a write since the build is an
+    /// error rather than a different symbol.
+    pub fn symbols_json(&self, positions: &[u32], with_source: bool) -> Result<Vec<String>> {
+        let ids = self.ids_at(positions)?;
+        let rowids: Vec<i64> = positions.iter().map(|&p| self.rowids[p as usize]).collect();
+        symbols_by_rowid_json(&self.db_path, &rowids, Some(&ids), with_source)
+    }
+
     /// Resident bytes, counted from the containers (for the cache budget and `/health`).
     pub fn footprint_bytes(&self) -> usize {
         let map = |m: &HashMap<String, Vec<u32>>| -> usize {
@@ -467,7 +508,10 @@ impl CallGraph {
                 .map(|(k, v)| k.capacity() + v.capacity() * 4 + 48)
                 .sum::<usize>()
         };
-        map(&self.callees) + map(&self.callers)
+        map(&self.callees)
+            + map(&self.callers)
+            + self.ids.iter().map(|s| s.capacity() + 24).sum::<usize>()
+            + self.rowids.capacity() * 8
     }
 }
 

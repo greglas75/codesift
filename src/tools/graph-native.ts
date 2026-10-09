@@ -96,16 +96,15 @@ function lookup(symbols: CodeSymbol[], fetch: (id: string) => Uint32Array | null
 }
 
 /**
- * The native graph for `repo` mapped onto `symbols`, or `null` when it cannot be used — no core, the
- * native store off, the JSON backend, a build failure, or `symbols` not matching the graph's node order.
- * `null` means "build it in TypeScript", never "no edges".
+ * The native graph of `repo`'s index for these options, built (or reused) at the database's current
+ * `data_version` — or `null` when it cannot be used: no core, the native store off, the JSON backend,
+ * an unknown repo, or a failed build. `null` always means "do it in TypeScript".
  */
-export async function nativeAdjacency(
+export async function nativeGraphFor(
   repo: string,
-  symbols: CodeSymbol[],
   skipTests: boolean,
   filterReactHooks: boolean,
-): Promise<NativeAdjacency | null> {
+): Promise<NativeCallGraphHandle | null> {
   const core = getNativeCore("store");
   if (!core || typeof core.buildCallGraph !== "function") return null;
   if ((await resolveIndexBackend()) !== "sqlite") return null;
@@ -114,7 +113,6 @@ export async function nativeAdjacency(
   const dbPath = sqlitePathFor(resolved.meta.index_path);
 
   const key = `${dbPath}|${skipTests ? 1 : 0}|${filterReactHooks ? 1 : 0}`;
-  let graph: NativeCallGraphHandle;
   try {
     const version = await getDataVersion(dbPath);
     let entry = graphs.get(key);
@@ -126,17 +124,43 @@ export async function nativeAdjacency(
     graphs.delete(key);
     graphs.set(key, entry); // most recently used last
     while (graphs.size > MAX_GRAPHS) graphs.delete(graphs.keys().next().value!);
-    graph = await entry.graph;
+    return await entry.graph;
   } catch {
     // A failed build must not stay cached as this key's answer.
     graphs.delete(key);
     return null;
   }
-  if (!describes(graph, symbols)) return null;
+}
+
+/**
+ * The native graph for `repo` mapped onto `symbols`, or `null` when it cannot be used — including
+ * `symbols` not matching the graph's node order. `null` means "build it in TypeScript", never "no edges".
+ */
+export async function nativeAdjacency(
+  repo: string,
+  symbols: CodeSymbol[],
+  skipTests: boolean,
+  filterReactHooks: boolean,
+): Promise<NativeAdjacency | null> {
+  const graph = await nativeGraphFor(repo, skipTests, filterReactHooks);
+  if (!graph || !describes(graph, symbols)) return null;
   return {
     callees: lookup(symbols, (id) => graph.callees(id)),
     callers: lookup(symbols, (id) => graph.callers(id)),
   };
+}
+
+/** The symbols at these node positions, in order — from the store, checked against the graph's ids. */
+export async function graphSymbolsAt(
+  graph: NativeCallGraphHandle,
+  positions: readonly number[],
+  withSource: boolean,
+): Promise<CodeSymbol[]> {
+  if (positions.length === 0) return [];
+  const chunks = await graph.symbolsJson(Uint32Array.from(positions), withSource);
+  const out: CodeSymbol[] = [];
+  for (const chunk of chunks) for (const sym of JSON.parse(chunk) as CodeSymbol[]) out.push(sym);
+  return out;
 }
 
 /** For `/health`: resident graphs and their bytes as the core counts them (finished builds only). */

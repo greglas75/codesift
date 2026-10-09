@@ -346,6 +346,101 @@ fn find_in_snapshot(conn: &Connection, q: &SymbolQuery, chunk_bytes: usize) -> R
     out.finish()
 }
 
+/// The symbols at `rowids`, in that order (repeats allowed), serialised exactly as `find_symbols_json`
+/// serialises them — for callers that already know WHICH rows they want, i.e. the call graph's nodes
+/// (stage 7). `expect_ids[i]`, when given, must be the id at `rowids[i]`: a row that changed under the
+/// caller since it learned the rowid is an error, never a different symbol.
+pub fn symbols_by_rowid_json(
+    db_path: &Path,
+    rowids: &[i64],
+    expect_ids: Option<&[String]>,
+    with_source: bool,
+) -> Result<Vec<String>> {
+    let conn = open(db_path)?;
+    conn.execute_batch("BEGIN")?;
+    let result = symbols_by_rowid_in(&conn, rowids, expect_ids, with_source);
+    let _ = conn.execute_batch("COMMIT");
+    result
+}
+
+fn symbols_by_rowid_in(
+    conn: &Connection,
+    rowids: &[i64],
+    expect_ids: Option<&[String]>,
+    with_source: bool,
+) -> Result<Vec<String>> {
+    let Some(repo) = read_meta(conn, "repo")? else {
+        return Ok(vec!["[]".to_string()]);
+    };
+    let columns = if with_source {
+        "*"
+    } else {
+        COLUMNS_WITHOUT_SOURCE
+    };
+    let mut unique: Vec<i64> = rowids.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    let mut by_rowid: HashMap<i64, (String, Vec<u8>)> = HashMap::with_capacity(unique.len());
+    for chunk in unique.chunks(MAX_BOUND_PARAMS) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let sql = format!("SELECT rowid AS _rid, {columns} FROM symbols WHERE rowid IN ({marks})");
+        let mut stmt = conn.prepare(&sql)?;
+        let names: Vec<String> = stmt
+            .column_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let col = |n: &str| names.iter().position(|c| c == n);
+        let rid_col = col("_rid").expect("selected");
+        let idx = ColumnIndex {
+            id: col("id"),
+            file: col("file"),
+            name: col("name"),
+            kind: col("kind"),
+            start_line: col("start_line"),
+            end_line: col("end_line"),
+            start_col: col("start_col"),
+            end_col: col("end_col"),
+            start_byte: col("start_byte"),
+            end_byte: col("end_byte"),
+            signature: col("signature"),
+            docstring: col("docstring"),
+            source: col("source"),
+            parent: col("parent"),
+            is_async: col("is_async"),
+            is_exported: col("is_exported"),
+            extras: col("extras"),
+        };
+        let mut rows = stmt.query(rusqlite::params_from_iter(chunk.iter()))?;
+        while let Some(row) = rows.next()? {
+            let rid: i64 = row.get(rid_col)?;
+            let id: String = row.get(idx.id.expect("selected"))?;
+            let mut buf = Vec::new();
+            write_symbol(row, &idx, &repo, &mut buf)?;
+            by_rowid.insert(rid, (id, buf));
+        }
+    }
+    let mut out = Chunks::new(CHUNK_BYTES);
+    for (i, rid) in rowids.iter().enumerate() {
+        let Some((id, buf)) = by_rowid.get(rid) else {
+            return Err(StoreError {
+                sqlite_code: None,
+                message: format!("rowid {rid} is no longer in the index"),
+            });
+        };
+        if let Some(expected) = expect_ids {
+            if expected.get(i).map(String::as_str) != Some(id.as_str()) {
+                return Err(StoreError {
+                    sqlite_code: None,
+                    message: format!("rowid {rid} now holds a different symbol"),
+                });
+            }
+        }
+        out.begin_item()?.extend_from_slice(buf);
+    }
+    out.finish()
+}
+
 /// Write each row of `stmt` as a symbol object; returns how many were written and, when the query
 /// selected `rowid AS _rid`, the last row's rowid (the paged reader's cursor).
 fn write_rows(
