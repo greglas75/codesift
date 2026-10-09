@@ -93,7 +93,7 @@ export async function findPythonCallers(
   const filesSeen = new Set<string>();
   const filePattern = options?.file_pattern;
 
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, fileSuffixAny: [".py"] }, (batch) => {
   for (const sym of batch) {
     if (callers.length >= maxResults) return false;
     if (!sym.file.endsWith(".py")) continue;

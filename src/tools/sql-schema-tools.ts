@@ -71,7 +71,7 @@ export async function analyzeSchema(
   // below looked it up across the whole index, not just within `file_pattern`.
   const tableSymbols: CodeSymbol[] = [];
   const firstTableByName = new Map<string, CodeSymbol>();
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: ["table", "view"] }, (batch) => {
     for (const s of batch) {
       if (s.kind !== "table" && s.kind !== "view") continue;
       if (s.kind === "table" && !firstTableByName.has(s.name)) firstTableByName.set(s.name, s);

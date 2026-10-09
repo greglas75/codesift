@@ -87,7 +87,7 @@ export async function traceCeleryChain(
   const tasks: CeleryTask[] = [];
   const taskByName = new Map<string, CeleryTask>();
 
-  await streamRepoSymbols(repo, { withSource: false }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: false, fileSuffixAny: [".py"] }, (batch) => {
   for (const sym of batch) {
     if (!sym.file.endsWith(".py")) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;
@@ -133,7 +133,7 @@ export async function traceCeleryChain(
   let totalCallSites = 0;
   const canvasUsages: CeleryCanvasUsage[] = [];
 
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, fileSuffixAny: [".py"] }, (batch) => {
   for (const sym of batch) {
     if (!sym.file.endsWith(".py")) continue;
     if (!sym.source) continue;

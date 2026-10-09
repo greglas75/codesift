@@ -3,7 +3,7 @@ import type { SymbolQuery } from "./sqlite/queries.js";
 
 /**
  * The in-memory statement of the scan predicates on `SymbolQuery` (`kinds`, `sourceContainsAny`,
- * `minLines`) — ONE definition for the resident-index filter and the JSON backend, the same answer the
+ * `minLines`, `fileSuffixAny`) — ONE definition for the resident-index filter and the JSON backend, the same answer the
  * SQL in `queries.ts` and `store.rs` gives. A filter missing here fails OPEN: more rows than asked for.
  */
 export function symbolMatchesScanPredicates(symbol: CodeSymbol, query: SymbolQuery): boolean {
@@ -14,6 +14,7 @@ export function symbolMatchesScanPredicates(symbol: CodeSymbol, query: SymbolQue
     if (!query.sourceContainsAny.some((needle) => source.includes(needle))) return false;
   }
   if (query.minLines !== undefined && symbol.end_line - symbol.start_line + 1 < query.minLines) return false;
+  if (query.fileSuffixAny !== undefined && !query.fileSuffixAny.some((sfx) => symbol.file.endsWith(sfx))) return false;
   return true;
 }
 

@@ -84,7 +84,7 @@ export async function getPydanticModels(
   // Pass 1a: collect all candidate Python classes (for transitive inheritance resolution)
   // Streamed so that only the Python classes are kept: in a mixed repo most classes are not.
   const candidates: CodeSymbol[] = [];
-  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { kind: "class", withSource: true, fileSuffixAny: [".py"] }, (batch) => {
     for (const s of batch) {
       if (!s.file.endsWith(".py")) continue;
       if (filePattern && !s.file.includes(filePattern)) continue;

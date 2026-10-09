@@ -233,7 +233,9 @@ export async function findClones(
   // dropped, so the raw bodies of the whole index never need to be resident at once. Pages arrive
   // in index order, so the entry list — and hence clone pairing — is unchanged.
   const entries: CloneEntry[] = [];
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  // Both predicates only drop what prepareEntries would drop: it keeps ANALYZABLE_KINDS, and a body
+  // spanning fewer than `minLines` lines cannot normalise to `minLines` or more.
+  await streamRepoSymbols(repo, { withSource: true, kinds: [...ANALYZABLE_KINDS], minLines }, (batch) => {
     for (const entry of prepareEntries(batch, minLines, includeTests, filePattern)) entries.push(entry);
   }, { skipFreshness: true });
   const exactClones = findExactMatches(entries, minSimilarity, minLines, MAX_CLONES);

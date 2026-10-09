@@ -51,6 +51,7 @@ pub struct SymbolQuery {
     pub kinds: Option<Vec<String>>,
     pub source_contains_any: Option<Vec<String>>,
     pub min_lines: Option<i64>,
+    pub file_suffix_any: Option<Vec<String>>,
 }
 
 /// The fields `getIndexMetaSqlite` reads. `updated_at` stays a string: the JS side applies
@@ -179,6 +180,19 @@ fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec
     if let Some(n) = q.min_lines {
         clauses.push("end_line - start_line + 1 >= ?".into());
         binds.push(SqlValue::Integer(n));
+    }
+    if let Some(suffixes) = &q.file_suffix_any {
+        if suffixes.is_empty() {
+            clauses.push("0".into());
+        } else {
+            let any = vec!["file GLOB ?"; suffixes.len()].join(" OR ");
+            clauses.push(format!("({any})"));
+            binds.extend(
+                suffixes
+                    .iter()
+                    .map(|s| SqlValue::Text(format!("*{}", escape_glob(s)))),
+            );
+        }
     }
     if let Some(chunk) = id_chunk {
         let marks = vec!["?"; chunk.len()].join(",");

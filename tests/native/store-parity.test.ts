@@ -124,6 +124,10 @@ const QUERIES: Array<[string, SymbolQuery]> = [
   ["minLines", { withSource: false, minLines: 5 }],
   ["scan combo + limit", { withSource: true, kinds: ["function"], minLines: 1, sourceContainsAny: ["function"], limit: 1 }],
   ["kinds across id chunks", { withSource: false, ids: many, kinds: ["class"] }],
+  ["fileSuffixAny", { withSource: false, fileSuffixAny: ["b.ts", ".zz"] }],
+  ["fileSuffixAny case-sensitive", { withSource: false, fileSuffixAny: [".TS"] }],
+  ["fileSuffixAny glob metacharacters are literal", { withSource: false, fileSuffixAny: ["*.ts", "?.ts"] }],
+  ["empty fileSuffixAny", { withSource: false, fileSuffixAny: [] }],
 ];
 
 describe.skipIf(!native)("native store parity with the TypeScript read path", () => {

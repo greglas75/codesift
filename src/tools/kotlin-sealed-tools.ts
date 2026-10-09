@@ -49,7 +49,7 @@ async function collectSubtypes(
     `:\\s*(?:[\\w<>,\\s]+,\\s*)?${escapedClassName}\\s*[({,)]|:\\s*${escapedClassName}\\s*$`,
   );
   const subtypes: SealedHierarchyResult["subtypes"] = [];
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: ["class", "interface"] }, (batch) => {
     for (const symbol of batch) {
       const isCandidate = (symbol.kind === "class" || symbol.kind === "interface")
         && symbol.name !== sealedClassName

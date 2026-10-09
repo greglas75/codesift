@@ -104,7 +104,7 @@ export async function traceFastAPIDepends(
   // concatenate functions before methods, and `symbolByName` keeps the FIRST symbol of each name
   // in index order, so the interleaving is part of the answer.
   const pyFunctions: CodeSymbol[] = [];
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, fileSuffixAny: [".py"], kinds: ["function", "method"] }, (batch) => {
     for (const sym of batch) {
       if (!sym.file.endsWith(".py")) continue;
       if (sym.kind !== "function" && sym.kind !== "method") continue;

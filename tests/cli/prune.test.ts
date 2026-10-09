@@ -118,7 +118,11 @@ describe("codesift prune", () => {
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("CREATE TABLE bulk (id INTEGER PRIMARY KEY, blob TEXT)");
     const insert = db.prepare("INSERT INTO bulk (blob) VALUES (?)");
+    // One transaction per batch: 4000 autocommits are 4000 fsyncs, past the timeout on a slow farm
+    // disk (hz4). The log grows the same either way.
+    db.exec("BEGIN");
     for (let i = 0; i < 4000; i++) insert.run("x".repeat(400));
+    db.exec("COMMIT");
     db.close();
     // A clean close truncates it, so grow the log with the database closed to get the shape a killed
     // writer leaves: reopen, write without checkpointing, and abandon the handle.
@@ -126,7 +130,9 @@ describe("codesift prune", () => {
     second.exec("PRAGMA journal_mode = WAL");
     second.exec("PRAGMA wal_autocheckpoint = 0");
     const more = second.prepare("INSERT INTO bulk (blob) VALUES (?)");
+    second.exec("BEGIN");
     for (let i = 0; i < 4000; i++) more.run("y".repeat(400));
+    second.exec("COMMIT");
     const wal = `${dbPath}-wal`;
     expect(existsSync(wal)).toBe(true);
     expect(statSync(wal).size).toBeGreaterThan(64 * 1024);

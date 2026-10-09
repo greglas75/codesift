@@ -34,6 +34,7 @@ export interface NativeSymbolQuery {
   kinds?: readonly string[];
   sourceContainsAny?: readonly string[];
   minLines?: number;
+  fileSuffixAny?: readonly string[];
 }
 
 export interface NativeIndexMeta {

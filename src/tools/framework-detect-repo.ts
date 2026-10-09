@@ -42,7 +42,8 @@ export async function resolveRepoHonoEntryFile(repo: string, root: string): Prom
   let found: string | null = null;
   await streamRepoSymbols(
     repo,
-    { withSource: true },
+    // Every HONO_INSTANTIATION match contains the literal "Hono", so the store can skip the rest.
+    { withSource: true, sourceContainsAny: ["Hono"] },
     (batch) => {
       const hit = batch.find((sym) => sym.source !== undefined && HONO_INSTANTIATION.test(sym.source));
       if (!hit) return true;

@@ -59,7 +59,7 @@ export async function findFrameworkWiring(
   const filePattern = options?.file_pattern;
   const entries: WiringEntry[] = [];
 
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, fileSuffixAny: [".py"] }, (batch) => {
   for (const sym of batch) {
     if (!sym.file.endsWith(".py")) continue;
     if (filePattern && !sym.file.includes(filePattern)) continue;

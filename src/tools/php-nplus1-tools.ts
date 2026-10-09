@@ -225,7 +225,7 @@ export async function findPhpNPlusOne(
   // Methods only, folded over pages and stopped the moment `limit` is hit — the old loop
   // returned at the same point, and the view scan below is skipped exactly as it was.
   let limitHit = false;
-  await streamRepoSymbols(repo, { kind: "method", withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { kind: "method", withSource: true, fileSuffixAny: [".php"] }, (batch) => {
     for (const sym of batch) {
       if (!sym.file.endsWith(".php") || !sym.source) continue;
       if (filePattern && !sym.file.includes(filePattern)) continue;

@@ -60,6 +60,10 @@ const QUERIES: SymbolQuery[] = [
   { withSource: false, sourceContainsAny: [] },
   { withSource: false, minLines: 5 },
   { withSource: false, minLines: 6 },
+  { withSource: false, fileSuffixAny: [".ts"] },
+  { withSource: false, fileSuffixAny: ["b.ts", "nope"] },
+  { withSource: false, fileSuffixAny: [".TS"] },
+  { withSource: false, fileSuffixAny: [] },
 ];
 
 beforeEach(() => {

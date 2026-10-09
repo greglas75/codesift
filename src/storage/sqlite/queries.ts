@@ -58,6 +58,8 @@ export interface SymbolQuery {
   sourceContainsAny?: readonly string[];
   /** `end_line - start_line + 1 >= minLines`. */
   minLines?: number;
+  /** `file` ends with one of these (case-sensitive, like `endsWith`). Empty matches nothing. */
+  fileSuffixAny?: readonly string[];
 }
 
 export interface IndexMeta {
@@ -117,6 +119,14 @@ function buildPredicate(query: SymbolQuery, idChunk?: readonly string[]): Predic
     }
   }
   if (query.minLines !== undefined) { clauses.push("end_line - start_line + 1 >= ?"); binds.push(query.minLines); }
+  if (query.fileSuffixAny !== undefined) {
+    // GLOB for the same reason as namePrefix: case-sensitive, metacharacters escaped by bracketing.
+    if (query.fileSuffixAny.length === 0) clauses.push("0");
+    else {
+      clauses.push(`(${query.fileSuffixAny.map(() => "file GLOB ?").join(" OR ")})`);
+      binds.push(...query.fileSuffixAny.map((s) => `*${s.replace(/[*?[]/g, "[$&]")}`));
+    }
+  }
   if (idChunk !== undefined) {
     clauses.push(`id IN (${idChunk.map(() => "?").join(",")})`);
     binds.push(...idChunk);

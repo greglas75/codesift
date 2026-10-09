@@ -153,7 +153,10 @@ export async function traceQuery(
     // row order in the table is not guaranteed to follow it after incremental re-indexing.
     const tsFileSet = new Set(tsFiles.map((f) => f.path));
     const drizzleByFile = new Map<string, CodeSymbol[]>();
-    await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+    // The three table constructors are matched as literals below, so the store can drop every other
+    // symbol before its source is serialised.
+    const tableMarkers = [`pgTable("${tableName}"`, `mysqlTable("${tableName}"`, `sqliteTable("${tableName}"`];
+    await streamRepoSymbols(repo, { withSource: true, sourceContainsAny: tableMarkers }, (batch) => {
       for (const sym of batch) {
         if (!sym.source || !tsFileSet.has(sym.file)) continue;
         if (sym.source.includes(`pgTable("${tableName}"`) ||

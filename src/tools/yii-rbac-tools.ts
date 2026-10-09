@@ -290,7 +290,7 @@ async function scanControllersWithoutAccessControl(
     return true;
   };
   const controllers: CodeSymbol[] = [];
-  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { kind: "class", withSource: true, fileSuffixAny: [".php"] }, (batch) => {
     for (const s of batch) if (isController(s)) controllers.push(s);
   }, { skipFreshness: true });
 

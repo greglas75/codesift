@@ -76,7 +76,7 @@ export async function getModelGraph(
     return isDjangoModel || isSQLAlchemy;
   };
   const modelSymbols: CodeSymbol[] = [];
-  await streamRepoSymbols(repo, { kind: "class", withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { kind: "class", withSource: true, fileSuffixAny: [".py"] }, (batch) => {
     for (const s of batch) if (isModel(s)) modelSymbols.push(s);
   }, { skipFreshness: true });
 

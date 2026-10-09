@@ -184,7 +184,7 @@ export async function traceSuspendChain(
   // Only suspend functions are kept, folded over pages. One pass over every kind rather than a
   // read per kind: overloads are walked in index order, and functions and methods interleave.
   const suspendByName = new Map<string, CodeSymbol[]>();
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: ["function", "method"] }, (batch) => {
     for (const symbol of batch) {
       if (!isSuspendFunction(symbol)) continue;
       const overloads = suspendByName.get(symbol.name) ?? [];

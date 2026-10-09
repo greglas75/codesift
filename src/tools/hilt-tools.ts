@@ -207,7 +207,7 @@ export async function buildHiltGraph(repo: string): Promise<HiltGraphResult> {
   // Folded over pages rather than a materialised index. One pass over every kind, not a read per
   // kind: classes and interfaces interleave in index order, and that is the order entries and
   // modules are reported in. `source` is read for the annotation fallback and @Inject parsing.
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: ["class", "interface"] }, (batch) => {
   for (const sym of batch) {
     if (sym.kind !== "class" && sym.kind !== "interface") continue;
 

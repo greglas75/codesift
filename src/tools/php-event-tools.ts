@@ -234,7 +234,7 @@ export async function tracePhpEvent(
   const classRefPattern = String.raw`\\?[A-Za-z_][\w]*(?:\\[A-Za-z_][\w]*)*::class`;
 
   // Scan PHP file symbols for event triggers and listeners — pass 2, streamed again.
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, fileSuffixAny: [".php"] }, (batch) => {
   for (const sym of batch) {
     if (!sym.file.endsWith(".php") || !sym.source) continue;
     const source = sym.source;

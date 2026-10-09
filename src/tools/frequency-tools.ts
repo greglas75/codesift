@@ -166,7 +166,7 @@ export async function frequencyAnalysis(
   // never was needed. Symbols are processed in index order either way, so clusters and their
   // member order are unchanged.
   let analyzedCount = 0;
-  await streamRepoSymbols(repo, { withSource: true }, async (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: [...kinds] }, async (batch) => {
   for (const sym of batch) {
     if (!kinds.has(sym.kind)) continue;
     if (!includeTests && isTestFile(sym.file)) continue;

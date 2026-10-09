@@ -464,3 +464,29 @@ writer (off the main thread), and `find`/`stream` through their native paths.
 
 **Still open: default-on.** `store` stays in `OPT_IN_ONLY` until a daemon has run on it under the
 monitoring the owner asked for (RSS and `/health` every 15 minutes for 24 h). Rollback is the switch.
+
+## Stage 6 — scan predicates pushed into the store (2026-10-09)
+
+Thirty-four tools scan the whole repo through `streamRepoSymbols`, 27 of them with source, and
+discarded most of it in JS. `SymbolQuery` gained four predicates the store applies before anything is
+serialised — `kinds`, `sourceContainsAny` (literal, case-sensitive), `minLines`, `fileSuffixAny` — in
+SQL (`queries.ts`, `store.rs`) and in one in-memory statement (`symbolMatchesScanPredicates`) shared by
+the resident-index filter and the JSON backend. Both parity matrices cover them. Regexes stay in the
+callers: the store only gets literal text, because JS and Rust regex semantics differ.
+
+Migrated (each predicate only drops what the callback already discarded unconditionally): fastapi,
+celery ×2, hilt, kotlin sealed/suspend, frequency, room, sql schema/query, php n+1/events, pydantic,
+python callers, wiring, model graph, yii rbac, complexity, clones, Hono detection.
+
+Measured on a 454,892-symbol rdesigner index, whole stream with source vs. with a predicate:
+
+| | rows | TypeScript store | Rust store |
+|---|---:|---:|---:|
+| all + source | 454,892 | 1,199 ms | 1,701 ms |
+| `kinds` function/method | 66,073 | 456 ms (2.6x) | 572 ms |
+| `fileSuffixAny` .py | 2,295 | 102 ms (11.7x) | 129 ms |
+| `sourceContainsAny` "Hono" | 38 | 262 ms (4.6x) | 297 ms |
+
+The win is the rows that never reach V8, on either store. Not migrated yet, because their filters are
+per-pattern or stateful: `search_patterns` (`patterns/execution.ts`), `perf-tools`, `async-correctness`,
+the React and PHP-view scanners — each needs its own literal hints.

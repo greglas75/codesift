@@ -122,7 +122,7 @@ export async function traceRoomSchema(
   // First pass: classify @Entity, @Dao, @Database.
   // Folded over pages; one pass over every kind because classes and interfaces interleave in
   // index order, which is the reporting order. `source` feeds the annotation fallback and parsers.
-  await streamRepoSymbols(repo, { withSource: true }, (batch) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: ["class", "interface"] }, (batch) => {
   for (const sym of batch) {
     if (sym.kind !== "class" && sym.kind !== "interface") continue;
 

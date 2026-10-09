@@ -258,7 +258,7 @@ export async function analyzeComplexity(
   };
 
   // Freshness already ran for this call, in getIndexSummary above.
-  await streamRepoSymbols(repo, { withSource: true }, (batch: CodeSymbol[]) => {
+  await streamRepoSymbols(repo, { withSource: true, kinds: [...ANALYZABLE_KINDS] }, (batch: CodeSymbol[]) => {
     for (const sym of batch) {
       if (!isAnalyzable(sym)) continue;
       // Cooperative time budget — checked every 512 symbols so the check itself is
