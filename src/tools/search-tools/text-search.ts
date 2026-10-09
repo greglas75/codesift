@@ -185,6 +185,7 @@ async function rankMatches(
   repo: string,
   matches: TextMatch[],
 ): Promise<TextMatch[]> {
+  if (matches.length === 0) return matches;
   try {
     const { classifyHitsWithSymbols } = await import("../search-ranker.js");
     const bm25Index = await getBM25Index(repo);

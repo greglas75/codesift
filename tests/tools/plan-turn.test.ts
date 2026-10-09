@@ -294,7 +294,7 @@ const findRepoSymbolsMock = vi.mocked(findRepoSymbols);
 function mockIndex(index: CodeIndex | null): void {
   getIndexSummaryMock.mockResolvedValue(index);
   findRepoSymbolsMock.mockImplementation(async (_repo, query) =>
-    (index?.symbols ?? []).filter((sym) => query.names?.includes(sym.name) ?? true));
+    (index?.symbols ?? []).filter((sym) => query.names?.includes(sym.name) ?? false));
 }
 const getSessionStateMock = vi.mocked(getSessionState);
 const getUsageStatsMock = vi.mocked(getUsageStats);
