@@ -447,43 +447,6 @@ impl Js {
         Ok(out)
     }
 
-    /// `byteLength` of a view whose element width is unknown — trusted only as far as the bytes the
-    /// view can actually reach: it is a JS property, so it is validated and clamped to the buffer.
-    fn byte_length(&self, v: sys::napi_value) -> napi::Result<usize> {
-        let (mut ty, mut len, mut data, mut ab, mut offset) = (
-            0,
-            0usize,
-            ptr::null_mut::<c_void>(),
-            ptr::null_mut(),
-            0usize,
-        );
-        check(unsafe {
-            sys::napi_get_typedarray_info(
-                self.env,
-                v,
-                &mut ty,
-                &mut len,
-                &mut data,
-                &mut ab,
-                &mut offset,
-            )
-        })?;
-        let mut ab_data = ptr::null_mut::<c_void>();
-        let mut ab_len = 0usize;
-        check(unsafe { sys::napi_get_arraybuffer_info(self.env, ab, &mut ab_data, &mut ab_len) })?;
-        let reachable = ab_len.saturating_sub(offset);
-        let mut prop = ptr::null_mut();
-        check(unsafe {
-            sys::napi_get_named_property(self.env, v, c"byteLength".as_ptr(), &mut prop)
-        })?;
-        let mut n = 0f64;
-        check(unsafe { sys::napi_get_value_double(self.env, prop, &mut n) })?;
-        if !(n.is_finite() && n >= 0.0 && n.fract() == 0.0) {
-            return Ok(0);
-        }
-        Ok((n as usize).min(reachable))
-    }
-
     /// The bytes of an ArrayBufferView, or None for anything else.
     fn view_bytes(&self, v: sys::napi_value) -> napi::Result<Option<&[u8]>> {
         let mut is = false;
@@ -512,8 +475,11 @@ impl Js {
                 sys::TypedarrayType::float64_array
                 | sys::TypedarrayType::bigint64_array
                 | sys::TypedarrayType::biguint64_array => 8,
-                // A kind newer than this list (Float16Array): ask the view itself.
-                _ => return Ok(Some(slice(data, self.byte_length(v)?))),
+                // Float16Array (napi 11). Any kind newer than that is refused rather than sized
+                // through its JS `byteLength`: reading a property runs JS, and JS can close the
+                // database mid-bind (the use-after-free this module guards against).
+                11 => 2,
+                _ => return Ok(None),
             };
             return Ok(Some(slice(data, len * width)));
         }

@@ -150,6 +150,24 @@ describe("streamSymbolsSqlite", () => {
   });
 });
 
+describe("streamSymbolsSqlite early stop", () => {
+  // Bug it catches: returning false stopped only the current 900-id chunk, so a caller that had
+  // found what it wanted was handed the next chunk anyway (and the native stream copied the loop).
+  it("stops the whole stream when onBatch returns false, across id chunks", async () => {
+    seed(Array.from({ length: 2000 }, (_, i) => sym({ id: `s${i}`, name: `n${i}` })));
+    let calls = 0;
+    await streamSymbolsSqlite(
+      dbPath,
+      { withSource: false, ids: Array.from({ length: 2000 }, (_, i) => `s${i}`) },
+      () => {
+        calls++;
+        return false;
+      },
+    );
+    expect(calls).toBe(1);
+  });
+});
+
 describe("getIndexMetaSqlite", () => {
   it("returns root, repo and counts without constructing a single symbol", async () => {
     seed([sym({ id: "1", name: "a" }), sym({ id: "2", name: "b", file: "b.ts" })]);

@@ -218,7 +218,7 @@ export async function streamSymbolsSqlite(
     const columns = query.withSource ? "*" : COLUMNS_WITHOUT_SOURCE;
     reader.exec("BEGIN");
     try {
-      for (const idChunk of chunkIds(query.ids)) {
+      streams: for (const idChunk of chunkIds(query.ids)) {
         const { sql, binds } = buildPredicate(query, idChunk);
         const where = sql === "" ? "WHERE rowid > ?" : `${sql} AND rowid > ?`;
         const stmt = reader.prepare(
@@ -250,7 +250,7 @@ export async function streamSymbolsSqlite(
             await onBatch(batch.slice(0, batch.length - (seen - query.limit)));
             break;
           }
-          if ((await onBatch(batch)) === false) break;
+          if ((await onBatch(batch)) === false) break streams; // the whole stream, not this id chunk
           rows = nextPageRows(rows, Date.now() - started);
           await new Promise<void>((resolve) => setImmediate(resolve));
         }
@@ -287,7 +287,7 @@ async function streamSymbolsNative(
   }
   try {
     if (snapshot.repo === null || snapshot.repo === undefined) return;
-    for (const idChunk of chunkIds(query.ids)) {
+    streams: for (const idChunk of chunkIds(query.ids)) {
       let cursor = 0;
       let rows = 50;
       let seen = 0;
@@ -302,7 +302,7 @@ async function streamSymbolsNative(
           await onBatch(batch.slice(0, batch.length - (seen - query.limit)));
           break;
         }
-        if ((await onBatch(batch)) === false) break;
+        if ((await onBatch(batch)) === false) break streams; // the whole stream, not this id chunk
         rows = nextPageRows(rows, Date.now() - started);
         await new Promise<void>((resolve) => setImmediate(resolve));
       }

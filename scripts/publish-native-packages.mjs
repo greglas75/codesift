@@ -43,7 +43,7 @@ function alreadyPublished(name, version) {
     encoding: "utf8",
     shell: process.platform === "win32",
   });
-  return r.status === 0 && r.stdout.trim() === version;
+  return r.status === 0 && (r.stdout ?? "").trim() === version;
 }
 
 function main() {
