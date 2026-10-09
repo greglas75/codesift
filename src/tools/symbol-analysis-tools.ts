@@ -3,12 +3,16 @@ import { join } from "node:path";
 import type { CodeSymbol, SymbolKind } from "../types.js";
 import {
   detectFrameworks,
+  FRAMEWORK_SOURCE_SAMPLE,
   isFrameworkEntryPoint,
 } from "../utils/framework-detect.js";
+import { findRepoSymbols } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
-import { requireCodeIndex, requireIndexSummary } from "./symbol-tool-internals.js";
+import { requireIndexSummary } from "./symbol-tool-internals.js";
 
 const MAX_DEAD_CODE_RESULTS = 100;
+/** Maybe-dead symbols whose source is read per query (see findDeadCode). */
+const DEAD_CODE_SOURCE_CHUNK = 500;
 
 export interface DeadCodeCandidate {
   name: string;
@@ -62,19 +66,17 @@ const EXPORTABLE_KINDS = new Set<SymbolKind>([
 /**
  * Collect top-level symbols of exportable kinds, filtered by test/pattern options.
  */
-function collectExportedSymbols(
-  symbols: CodeSymbol[],
+function isDeadCodeCandidateSymbol(
+  s: CodeSymbol,
   options: { includeTests: boolean; filePattern?: string | undefined },
-): CodeSymbol[] {
-  return symbols.filter((s) => {
-    if (!EXPORTABLE_KINDS.has(s.kind)) return false;
-    if (s.parent) return false;
-    if (!options.includeTests && isTestFile(s.file)) return false;
-    if (options.filePattern && !s.file.includes(options.filePattern)) return false;
-    if (s.name.length < 3) return false;
-    if (s.kind === "variable" && s.name === "default") return false;
-    return true;
-  });
+): boolean {
+  if (!EXPORTABLE_KINDS.has(s.kind)) return false;
+  if (s.parent) return false;
+  if (!options.includeTests && isTestFile(s.file)) return false;
+  if (options.filePattern && !s.file.includes(options.filePattern)) return false;
+  if (s.name.length < 3) return false;
+  if (s.kind === "variable" && s.name === "default") return false;
+  return true;
 }
 
 // Bumped from 2000 → 5000 (F14: prior cap silently dropped references in
@@ -197,12 +199,15 @@ export async function findDeadCode(
     include_tests?: boolean | undefined;
   },
 ): Promise<DeadCodeResult> {
-  const index = await requireCodeIndex(repo);
+  // No full index (ADR-004 stage 2): the summary for the file list, the first symbols for framework
+  // detection, and the exported symbols streamed below. Loading the index was most of this tool's
+  // time — 12.9 s on a 450k-symbol repo against under a second for the scan itself.
+  const index = await requireIndexSummary(repo);
   const includeTests = options?.include_tests ?? false;
   const filePattern = options?.file_pattern;
 
-  const exportedSymbols = collectExportedSymbols(index.symbols, { includeTests, filePattern });
-  const frameworks = detectFrameworks(index);
+  const sample = await findRepoSymbols(repo, { withSource: true, limit: FRAMEWORK_SOURCE_SAMPLE }, { skipFreshness: true });
+  const frameworks = detectFrameworks({ files: index.files, symbols: sample });
 
   // Read EVERY indexed file (incl. tests) for reference scanning. The previous
   // version honored `includeTests` here, which meant a symbol referenced only
@@ -265,9 +270,30 @@ export async function findDeadCode(
   }
 
   const candidates: DeadCodeCandidate[] = [];
+  let scannedSymbols = 0;
+  const toCandidate = (sym: CodeSymbol): DeadCodeCandidate => ({
+    name: sym.name,
+    kind: sym.kind,
+    file: sym.file,
+    start_line: sym.start_line,
+    end_line: sym.end_line,
+    reason: "exported but no references found outside defining file",
+  });
 
-  for (const sym of exportedSymbols) {
-    if (candidates.length >= MAX_DEAD_CODE_RESULTS) break;
+  // isFrameworkEntryPoint reads source only for Kotlin annotations and React/Next directives, and
+  // source can only turn a symbol INTO an entry point. So the read carries no source: a symbol that
+  // passes every check without it is a "maybe", and only maybes get their source read — in order,
+  // until the list is full. Streaming source for every exported symbol made a cold call on a
+  // 1.4M-symbol repo slower than loading the whole index.
+  const sourceMatters = frameworks.has("kotlin-android") || frameworks.has("react") || frameworks.has("nextjs");
+  const maybes: CodeSymbol[] = [];
+  // One read rather than a paged stream: without source the rows are small, and paging 730k of them
+  // took 5.5 s against 2.4 s for a single query on tgm-survey-platform.
+  const exported = await findRepoSymbols(repo, { kinds: [...EXPORTABLE_KINDS], withSource: false }, { skipFreshness: true });
+  for (const sym of exported) {
+    if (!isDeadCodeCandidateSymbol(sym, { includeTests, filePattern })) continue;
+    scannedSymbols++;
+    if (!sourceMatters && candidates.length >= MAX_DEAD_CODE_RESULTS) continue;
     if (isFrameworkEntryPoint(sym, frameworks)) continue;
     // Re-export reachability — barrel forwards skip the textual-mention check.
     if (reExportedFiles.has(sym.file)) continue;
@@ -275,16 +301,28 @@ export async function findDeadCode(
     // Mentioned in any file other than the one defining it => not dead.
     const seen = tokenIndex.get(sym.name);
     const hasExternalRef = !!seen && (seen.multi || seen.first !== sym.file);
+    if (hasExternalRef) continue;
 
-    if (!hasExternalRef) {
-      candidates.push({
-        name: sym.name,
-        kind: sym.kind,
-        file: sym.file,
-        start_line: sym.start_line,
-        end_line: sym.end_line,
-        reason: "exported but no references found outside defining file",
-      });
+    if (sourceMatters) maybes.push(sym);
+    else candidates.push(toCandidate(sym));
+  }
+
+  // Source for the maybes, a chunk at a time, in their order. A row is matched back on more than its
+  // id — ids are not unique (a type and a value can share one) — so each maybe is checked with its
+  // own source.
+  const identity = (s: CodeSymbol) => `${s.id}\0${s.kind}\0${s.file}\0${s.start_line}\0${s.end_line}`;
+  for (let i = 0; i < maybes.length && candidates.length < MAX_DEAD_CODE_RESULTS; i += DEAD_CODE_SOURCE_CHUNK) {
+    const chunk = maybes.slice(i, i + DEAD_CODE_SOURCE_CHUNK);
+    const withSource = await findRepoSymbols(
+      repo,
+      { ids: [...new Set(chunk.map((s) => s.id))], withSource: true },
+      { skipFreshness: true },
+    );
+    const byIdentity = new Map(withSource.map((s) => [identity(s), s]));
+    for (const sym of chunk) {
+      if (candidates.length >= MAX_DEAD_CODE_RESULTS) break;
+      if (isFrameworkEntryPoint(byIdentity.get(identity(sym)) ?? sym, frameworks)) continue;
+      candidates.push(toCandidate(sym));
     }
   }
 
@@ -309,7 +347,7 @@ export async function findDeadCode(
 
   return {
     candidates,
-    scanned_symbols: exportedSymbols.length,
+    scanned_symbols: scannedSymbols,
     scanned_files: fileContents.size,
     // Deliberately ONLY about list length now. Scan completeness lives in `coverage`, because
     // the two have opposite implications: a cut-off list means "there are more", a short scan

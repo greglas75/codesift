@@ -668,6 +668,14 @@ for files it cannot read from disk, and that includes every non-JS/TS file. In a
 still reads most of the index, as it did before. Narrowing it needs a file-list predicate combined
 with the `import`/`export`/`require` literals.
 
-Still loading the index: `review_diff` (ten checks, one of which is whole-repo dead code),
-`trace_route` (the index is passed to twelve framework handlers), `find_dead_code`, and a few
-low-traffic tools (context L2 / knowledge map, wiki, taint, php8, semantic handlers).
+`find_dead_code` (also used by `review_diff`, `audit_scan` and the PHP/Python audits) loaded the whole
+index, but the reference scan itself takes under a second. It now reads the exported symbols without
+source in one query. Source changes the answer only by turning a symbol into a framework entry
+point, so it is read just for the symbols that are still candidates, in order, until 100 are
+confirmed. Old vs new compared on three repos with four option sets each: 12/12 identical. Cold on
+tgm-survey-platform with the native store: 3.6 s and +1.07 GB peak heap, against 4.8 s and +2.68 GB.
+Streaming the same rows in pages took 5.5 s against 2.4 s for one query, so it is one query.
+
+Still loading the index: `review_diff`'s other nine checks, `trace_route` (the index is passed to
+twelve framework handlers), and a few low-traffic tools (context L2 / knowledge map, wiki, taint,
+php8, semantic handlers).

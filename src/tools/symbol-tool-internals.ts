@@ -1,7 +1,6 @@
 import type { BM25Index } from "../search/bm25.js";
-import type { CodeIndex } from "../types.js";
 import type { IndexSummary } from "../storage/sqlite-index-store.js";
-import { getBM25Index, getCodeIndex, getIndexSummary } from "./index-tools.js";
+import { getBM25Index, getIndexSummary } from "./index-tools.js";
 
 export const MAX_REFERENCES = 100;
 export const MAX_CONTEXT_LENGTH = 200;
@@ -34,16 +33,9 @@ export function isNoisePath(filePath: string): boolean {
   return dot >= 0 && NOISE_EXTENSIONS.has(filePath.slice(dot));
 }
 
-export async function requireCodeIndex(repo: string): Promise<CodeIndex> {
-  const index = await getCodeIndex(repo);
-  if (!index) {
-    throw new Error(`Repository "${repo}" not found. Index it first with index_folder.`);
-  }
-  return index;
-}
-
 /**
- * The summary sibling of `requireCodeIndex`, for tools that read the file list and the root.
+ * The repo's summary, for tools that read the file list and the root (the symbols they need come
+ * from narrow reads — no tool here loads the whole index any more).
  *
  * `IndexSummary` has no `symbols` field at all rather than an empty one, so a caller that needs
  * symbols fails to compile instead of reading an empty array as "this repo has none". That is the
