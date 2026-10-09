@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-10-09
+
+The Rust core (ADR-006) ships for the first time, as optional per-platform packages
+(`@codesift/core-darwin-arm64`, `-darwin-x64`, `-linux-x64-gnu`, `-linux-arm64-gnu`,
+`-win32-x64-msvc`). npm installs only the one matching the machine; without it, or with
+`CODESIFT_NATIVE=0`, everything runs on the TypeScript path exactly as before. `/health` → `native`
+says which one is in use.
+
+### Changed
+
+- **BM25 and parsing run in Rust when the core is present.** BM25 postings live outside the V8 heap
+  (353k-symbol repo: 400 MB → 14 MB retained; a conversation index 870 MB → 7 MB), and every tree-sitter
+  extractor (TS/TSX/JS, Python, Go, Rust, PHP, Kotlin, Gradle KTS, Java, Ruby, CSS) runs on native
+  tree-sitter off the main thread. Both are 1:1 ports, checked at 0 differences against the TypeScript
+  implementations (BM25 on 5 real indexes; extraction on ~4.6M symbols).
+- **The native store is still opt-in** (`CODESIFT_NATIVE_STORE=1`). With it on, every SQLite database the
+  process opens goes through the core's own `DatabaseSync` (a port of `node:sqlite`), so one SQLite copy
+  owns every index file.
+
+### Fixed
+
+- `service install` no longer copies credentials (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`) from the
+  shell into the plaintext LaunchAgent / systemd unit; it names the ones it skipped.
+- A stream's early stop (`onBatch` returning `false`) and its `limit` now apply to the whole stream, not
+  to each 900-id chunk.
+
 ## [0.21.0] — 2026-10-08
 
 The shared daemon stops starving its own requests. Measured on the sessions host before this
