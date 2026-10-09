@@ -537,3 +537,18 @@ Found while measuring, and guarded: `build:native` and `npm run build` move the 
 separately, and a daemon restart between them loads an addon the loader's ABI check rejects — with
 `CODESIFT_NATIVE_STORE=1` that daemon has no store. `build-native.mjs` now warns when the addon's ABI
 differs from `dist/`'s.
+
+## Stage 8 — the indexing pipeline in Rust: no-go for now (2026-10-09)
+
+Profiled a full `index_folder` of ResearchShieldNew (35,357 files, 528,405 symbols), native store and
+parser on, embeddings off, host at load 20-40: 29.1 s wall, of which the main thread was **idle 70%**.
+What it still does is spread thin — fs callbacks 2.3 s, parser glue 1.5 s, storage 1.6 s, BM25 1.4 s —
+and the wall time is the parallel parse plus I/O. In the daemon the whole pass already runs in an index
+child process, so none of it blocks a request. Moving walk, hashing and file reads into Rust would buy
+a few seconds of a child's time against re-deriving `walkDirectory`'s semantics exactly (ignores,
+symlinks, size limits, `max_files`). **Revisit when** indexing time becomes the cost of an incident, or
+if in-process indexing (CLI, stdio) turns out to matter.
+
+A profiling trap worth recording: `CODESIFT_EMBEDDING_PROVIDER=none` is not a valid value, so the run
+fell through to the local ONNX model and 6-8 s of "indexing" was `onnxruntime-node`. Disable embeddings
+with `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` and no provider variables when measuring the pipeline.
