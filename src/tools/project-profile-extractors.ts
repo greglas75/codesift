@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 
 import type { CodeIndex, FileEntry } from "../types.js";
 import { fileExists, readJson } from "./project-profile-fs.js";
-import { buildImporterCountFromSources, type ProfileIndex } from "./project-profile-imports.js";
+import { buildImporterCountFromSources, type IndexWithSymbols, type ProfileIndex } from "./project-profile-imports.js";
 import type {
   DependencyGraph,
   DependencyHealth,
@@ -74,9 +74,12 @@ export async function extractIdentity(projectRoot: string): Promise<ProjectIdent
   };
 }
 
+// Without counts, the index must carry its symbols (see classifyFiles).
+export function extractDependencyGraph(index: IndexWithSymbols, importCount?: Map<string, number>): DependencyGraph;
+export function extractDependencyGraph(index: Pick<ProfileIndex, "files">, importCount: Map<string, number>): DependencyGraph;
 export function extractDependencyGraph(
-  index: ProfileIndex,
-  importCount: Map<string, number> = buildImporterCountFromSources(index),
+  index: Pick<ProfileIndex, "files" | "symbols">,
+  importCount: Map<string, number> = buildImporterCountFromSources(index as IndexWithSymbols),
 ): DependencyGraph {
   const entry_points: string[] = [];
   const isTestPath = (path: string) => /\.(test|spec)\.(ts|js|tsx|jsx)$/.test(path);

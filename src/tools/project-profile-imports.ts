@@ -10,6 +10,9 @@ import type { CodeIndex, CodeSymbol } from "../types.js";
  */
 export type ProfileIndex = Pick<CodeIndex, "root" | "files"> & { symbols?: CodeSymbol[] };
 
+/** An index that does carry its symbols — what the source-only importer count needs. */
+export type IndexWithSymbols = Pick<CodeIndex, "files" | "symbols">;
+
 export function extractImportSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
   const sourceWithoutComments = source
@@ -80,11 +83,11 @@ function toImporterCount(importersByFile: Map<string, Set<string>>): Map<string,
   return new Map([...importersByFile.entries()].map(([file, importers]) => [file, importers.size]));
 }
 
-export function buildImporterCountFromSources(index: ProfileIndex): Map<string, number> {
+export function buildImporterCountFromSources(index: IndexWithSymbols): Map<string, number> {
   const indexedFiles = new Set(index.files.map((file) => file.path));
   const importersByFile = new Map<string, Set<string>>();
 
-  for (const symbol of index.symbols ?? []) {
+  for (const symbol of index.symbols) {
     if (!symbol.source) continue;
     collectImports(symbol.file, symbol.source, indexedFiles, importersByFile);
   }

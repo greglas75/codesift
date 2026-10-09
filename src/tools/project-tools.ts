@@ -24,7 +24,12 @@ import {
   extractTestConventions,
 } from "./project-profile-extractors.js";
 import { readJson } from "./project-profile-fs.js";
-import { buildImporterCount, buildImporterCountFromSources, type ProfileIndex } from "./project-profile-imports.js";
+import {
+  buildImporterCount,
+  buildImporterCountFromSources,
+  type IndexWithSymbols,
+  type ProfileIndex,
+} from "./project-profile-imports.js";
 import { writeProfileToDisk } from "./project-profile-persistence.js";
 import { buildSummary } from "./project-profile-summary.js";
 import type { ProfileSummary } from "./project-profile-summary.js";
@@ -158,9 +163,13 @@ function classifyCodeType(path: string, _symbol_count: number): string {
   return "PURE";
 }
 
+// Without counts, the index must carry its symbols: they are what the default counts are built from,
+// and a summary-shaped index would silently count nothing.
+export function classifyFiles(index: IndexWithSymbols, importerCount?: Map<string, number>): FileClassifications;
+export function classifyFiles(index: Pick<ProfileIndex, "files">, importerCount: Map<string, number>): FileClassifications;
 export function classifyFiles(
-  index: ProfileIndex,
-  importerCount: Map<string, number> = buildImporterCountFromSources(index),
+  index: Pick<ProfileIndex, "files" | "symbols">,
+  importerCount: Map<string, number> = buildImporterCountFromSources(index as IndexWithSymbols),
 ): FileClassifications {
   const critical: ClassifiedFile[] = [];
   const important: ClassifiedFile[] = [];

@@ -660,5 +660,14 @@ nodes, ranges of 5 and 556 changed files, up to 25,345 affected test files).
 The TypeScript path also ran out of a 14 GB heap partway through the 556-file range. That path
 remains the fallback when there is no native store.
 
+Moved off the full load in the same pass, each checked against the old code on tgm-survey-platform:
+`test_impact_analysis` and `find_unused_imports` (the summary is all they read), `get_context_bundle`
+(80 bundles, 0 differences), `analyze_project` (React conventions, gotchas and importer counts
+identical). One known limit is in `analyze_project`: the importer count falls back to symbol sources
+for files it cannot read from disk, and that includes every non-JS/TS file. In a Python repo this
+still reads most of the index, as it did before. Narrowing it needs a file-list predicate combined
+with the `import`/`export`/`require` literals.
+
 Still loading the index: `review_diff` (ten checks, one of which is whole-repo dead code),
-`trace_route` and `test_impact_analysis`.
+`trace_route` (the index is passed to twelve framework handlers), `find_dead_code`, and a few
+low-traffic tools (context L2 / knowledge map, wiki, taint, php8, semantic handlers).
