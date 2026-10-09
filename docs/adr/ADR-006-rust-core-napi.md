@@ -676,6 +676,13 @@ confirmed. Old vs new compared on three repos with four option sets each: 12/12 
 tgm-survey-platform with the native store: 3.6 s and +1.07 GB peak heap, against 4.8 s and +2.68 GB.
 Streaming the same rows in pages took 5.5 s against 2.4 s for one query, so it is one query.
 
-Still loading the index: `review_diff`'s other nine checks, `trace_route` (the index is passed to
-twelve framework handlers), and a few low-traffic tools (context L2 / knowledge map, wiki, taint,
-php8, semantic handlers).
+`review_diff` runs its ten checks on a `ReviewIndex` (summary plus two narrow reads: a file's
+symbols, and whether any test source mentions a name). On tgm-survey-platform the old path loaded
+4.3-5.7 GB, two checks timed out at 30 s and complexity overflowed the stack. The new path finishes
+every check in ~30 s at 0.6-1 GB. Small repos are the exception: the checks run at once, and their
+narrow reads queue on the same four libuv threads as the file reads, so codesift went from 1.5 s to
+9.2 s. Up to 150k symbols, `review_diff` therefore loads the index once and every read is served from
+it: 1.36 s against 1.40 s, identical findings.
+
+Still loading the index: `trace_route` (the index is passed to twelve framework handlers) and a few
+low-traffic tools (context L2 / knowledge map, wiki, taint, php8, semantic handlers).

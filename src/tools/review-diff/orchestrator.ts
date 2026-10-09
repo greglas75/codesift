@@ -1,8 +1,8 @@
 import picomatch from "picomatch";
 import { changedSymbols } from "../diff-tools.js";
-import { getCodeIndex } from "../index-tools.js";
+import { getCodeIndex, getIndexSummary } from "../index-tools.js";
 import { validateGitRef } from "../../utils/git-validation.js";
-import type { CodeIndex } from "../../types.js";
+import { reviewIndexFromSummary, type ReviewIndex } from "./review-index.js";
 import {
   ALL_CHECKS,
   DEFAULT_CHECK_TIMEOUT_MS,
@@ -18,6 +18,9 @@ import type { TimeoutSentinel } from "./timeout.js";
 import type { CheckResult, ReviewDiffOptions, ReviewDiffResult, ReviewFinding, ReviewMetadata } from "./types.js";
 import { assertGitTreeMatches } from "../git-tree-guard.js";
 
+/** Up to this many symbols, review_diff loads the index once for all its checks (see prepareReview). */
+const REVIEW_RESIDENT_MAX_SYMBOLS = 150_000;
+
 interface DiffReviewState {
   changedFiles: string[];
   totalFilesChanged: number;
@@ -27,7 +30,7 @@ interface DiffReviewState {
 
 interface ReadyReview {
   status: "ready";
-  index: CodeIndex;
+  index: ReviewIndex;
   reviewState: DiffReviewState;
 }
 
@@ -111,8 +114,8 @@ async function prepareReview(
     };
   }
 
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     return {
       status: "early",
       result: failReviewResult(repo, since, startTime, `Repository not found: ${repo}`),
@@ -123,12 +126,21 @@ async function prepareReview(
   // answers with a result object rather than throwing, and turning a wrong-tree answer into an
   // exception here would change its contract for every caller.
   try {
-    assertGitTreeMatches(repo, index.root);
+    assertGitTreeMatches(repo, summary.root);
   } catch (err) {
     return {
       status: "early",
       result: failReviewResult(repo, since, startTime, err instanceof Error ? err.message : String(err)),
     };
+  }
+
+  // Ten checks run at once and several scan the repo. On a small index one load is cheaper than their
+  // separate store reads, which queue on the same four libuv threads as the file reads: measured on
+  // codesift (35k symbols), 9.2 s with narrow reads against 1.5 s with the index resident — every
+  // narrow read is served from it. On a large one the load is the cost (13 s and +2.4 GB on 1.4M
+  // symbols; two checks timed out and one overflowed the stack), so the checks read narrowly.
+  if (summary.symbol_count <= REVIEW_RESIDENT_MAX_SYMBOLS) {
+    await getCodeIndex(repo, { skipFreshness: true });
   }
 
   const changedFiles = await getFilteredChangedFiles(repo, since, until, opts);
@@ -141,7 +153,7 @@ async function prepareReview(
 
   return {
     status: "ready",
-    index,
+    index: reviewIndexFromSummary(summary),
     reviewState: prepareDiffReviewState(changedFiles, maxFiles, since),
   };
 }
@@ -296,7 +308,7 @@ async function runEnabledChecks(
   enabledChecks: CheckName[],
   repo: string,
   changedFiles: string[],
-  index: CodeIndex,
+  index: ReviewIndex,
   since: string,
   until: string,
   checkTimeoutMs: number,

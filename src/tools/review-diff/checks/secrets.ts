@@ -1,5 +1,4 @@
 import { scanSecrets } from "../../secret-tools.js";
-import type { CodeIndex } from "../../../types.js";
 import { literalChangedFilePattern } from "../file-pattern.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
@@ -7,7 +6,7 @@ import type { CheckResult, ReviewFinding } from "../types.js";
  * Secrets check: run scanSecrets scoped to changedFiles and map findings to T1.
  */
 export async function checkSecrets(
-  index: CodeIndex,
+  index: { repo: string },
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();

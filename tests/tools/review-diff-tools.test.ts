@@ -11,7 +11,12 @@ vi.mock("../../src/tools/symbol-tools.js", () => ({ findDeadCode: vi.fn() }));
 vi.mock("../../src/tools/pattern-tools.js", () => ({ searchPatterns: vi.fn(), listPatterns: vi.fn() }));
 vi.mock("../../src/tools/hotspot-tools.js", () => ({ analyzeHotspots: vi.fn() }));
 vi.mock("../../src/tools/complexity-tools.js", () => ({ analyzeComplexity: vi.fn() }));
-vi.mock("../../src/tools/index-tools.js", () => ({ getCodeIndex: vi.fn() }));
+vi.mock("../../src/tools/index-tools.js", () => ({
+  getCodeIndex: vi.fn(),
+  getIndexSummary: vi.fn(),
+  findRepoSymbols: vi.fn(),
+  findRepoSymbolsInFiles: vi.fn(),
+}));
 vi.mock("../../src/utils/git-validation.js", () => ({ validateGitRef: vi.fn() }));
 // execFile as well as execFileSync: git-exec.ts calls promisify(execFile) at module load, and a
 // mock missing it makes the whole file fail to import rather than fail a test.
@@ -39,7 +44,8 @@ import {
 import type { ReviewFinding, CheckResult, ReviewDiffResult } from "../../src/tools/review-diff-tools.js";
 import { formatReviewDiff } from "../../src/formatters.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
-import { getCodeIndex } from "../../src/tools/index-tools.js";
+import { findRepoSymbols, findRepoSymbolsInFiles, getIndexSummary } from "../../src/tools/index-tools.js";
+import { reviewIndexFromCodeIndex } from "../../src/tools/review-diff/review-index.js";
 import { validateGitRef } from "../../src/utils/git-validation.js";
 import { impactAnalysis } from "../../src/tools/impact-tools.js";
 import { scanSecrets } from "../../src/tools/secret-tools.js";
@@ -267,7 +273,18 @@ describe("determineVerdict", () => {
 // ---------------------------------------------------------------------------
 
 describe("reviewDiff orchestrator", () => {
-  const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+  /** Serve `index` the way prepareReview reads it: the summary, and the two narrow symbol reads. */
+  const mockedGetCodeIndex = {
+    mockResolvedValue(index: CodeIndex | null): void {
+      vi.mocked(getIndexSummary).mockResolvedValue(index);
+      vi.mocked(findRepoSymbolsInFiles).mockImplementation(async (_repo, files) =>
+        (index?.symbols ?? []).filter((s) => files.includes(s.file)));
+      vi.mocked(findRepoSymbols).mockImplementation(async (_repo, query) =>
+        (index?.symbols ?? []).filter((s) =>
+          query.sourceContainsAny === undefined
+          || (s.source != null && query.sourceContainsAny.some((t) => s.source!.includes(t)))));
+    },
+  };
   const mockedChangedSymbols = vi.mocked(changedSymbols);
   const mockedValidateGitRef = vi.mocked(validateGitRef);
   const mockedImpactAnalysisOrch = vi.mocked(impactAnalysis);
@@ -1328,7 +1345,7 @@ describe("checkBreakingChanges", () => {
       ],
     });
 
-    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/a.ts"], "HEAD~1", "HEAD");
+    const result = await checkBreakingChanges(reviewIndexFromCodeIndex(index), "/tmp/test-repo", ["src/a.ts"], "HEAD~1", "HEAD");
 
     expect(result.check).toBe("breaking");
     expect(result.status).toBe("fail");
@@ -1349,7 +1366,7 @@ describe("checkBreakingChanges", () => {
       ],
     });
 
-    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/auth.ts"], "HEAD~1", "HEAD");
+    const result = await checkBreakingChanges(reviewIndexFromCodeIndex(index), "/tmp/test-repo", ["src/auth.ts"], "HEAD~1", "HEAD");
 
     expect(result.check).toBe("breaking");
     expect(result.status).toBe("fail");
@@ -1370,7 +1387,7 @@ describe("checkBreakingChanges", () => {
       ],
     });
 
-    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/a.ts"], "HEAD~1", "HEAD");
+    const result = await checkBreakingChanges(reviewIndexFromCodeIndex(index), "/tmp/test-repo", ["src/a.ts"], "HEAD~1", "HEAD");
 
     expect(result.check).toBe("breaking");
     expect(result.status).toBe("pass");
@@ -1382,7 +1399,7 @@ describe("checkBreakingChanges", () => {
 
     const index = makeFakeIndex();
 
-    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/main.py"], "HEAD~1", "HEAD");
+    const result = await checkBreakingChanges(reviewIndexFromCodeIndex(index), "/tmp/test-repo", ["src/main.py"], "HEAD~1", "HEAD");
 
     expect(result.check).toBe("breaking");
     expect(result.status).toBe("pass");
@@ -1399,7 +1416,7 @@ describe("checkBreakingChanges", () => {
       ],
     });
 
-    const result = await checkBreakingChanges(index, "/tmp/test-repo", ["src/new-file.ts"], "HEAD~1", "HEAD");
+    const result = await checkBreakingChanges(reviewIndexFromCodeIndex(index), "/tmp/test-repo", ["src/new-file.ts"], "HEAD~1", "HEAD");
 
     expect(result.check).toBe("breaking");
     expect(result.status).toBe("pass");
@@ -1424,7 +1441,7 @@ describe("checkBreakingChanges", () => {
 
     // Both old and new paths may appear in changedFiles
     const result = await checkBreakingChanges(
-      index, "/tmp/test-repo", ["src/old.ts", "src/new.ts"], "HEAD~1", "HEAD",
+      reviewIndexFromCodeIndex(index), "/tmp/test-repo", ["src/old.ts", "src/new.ts"], "HEAD~1", "HEAD",
     );
 
     expect(result.check).toBe("breaking");
@@ -1439,7 +1456,7 @@ describe("checkBreakingChanges", () => {
 
     // Pass null as changedFiles to trigger TypeError in .filter()
     const result = await checkBreakingChanges(
-      index, "/tmp/test-repo", null as unknown as string[], "HEAD~1", "HEAD",
+      reviewIndexFromCodeIndex(index), "/tmp/test-repo", null as unknown as string[], "HEAD~1", "HEAD",
     );
 
     expect(result.check).toBe("breaking");
@@ -1463,7 +1480,7 @@ describe("checkTestGaps", () => {
       symbols: [],
     });
 
-    const result = await checkTestGaps(index, ["src/auth.ts"]);
+    const result = await checkTestGaps(reviewIndexFromCodeIndex(index), ["src/auth.ts"]);
 
     expect(result.check).toBe("test-gaps");
     expect(result.status).toBe("warn");
@@ -1483,7 +1500,7 @@ describe("checkTestGaps", () => {
       symbols: [],
     });
 
-    const result = await checkTestGaps(index, ["src/auth.ts"]);
+    const result = await checkTestGaps(reviewIndexFromCodeIndex(index), ["src/auth.ts"]);
 
     expect(result.check).toBe("test-gaps");
     expect(result.status).toBe("pass");
@@ -1511,7 +1528,7 @@ describe("checkTestGaps", () => {
       ],
     });
 
-    const result = await checkTestGaps(index, ["src/auth.ts"]);
+    const result = await checkTestGaps(reviewIndexFromCodeIndex(index), ["src/auth.ts"]);
 
     expect(result.check).toBe("test-gaps");
     expect(result.status).toBe("pass");
@@ -1527,7 +1544,7 @@ describe("checkTestGaps", () => {
       symbols: [],
     });
 
-    const result = await checkTestGaps(index, ["src/auth.test.ts"]);
+    const result = await checkTestGaps(reviewIndexFromCodeIndex(index), ["src/auth.test.ts"]);
 
     expect(result.check).toBe("test-gaps");
     expect(result.status).toBe("pass");
@@ -1543,7 +1560,7 @@ describe("checkTestGaps", () => {
       symbols: [],
     });
 
-    const result = await checkTestGaps(index, ["package.json"]);
+    const result = await checkTestGaps(reviewIndexFromCodeIndex(index), ["package.json"]);
 
     expect(result.check).toBe("test-gaps");
     expect(result.status).toBe("pass");

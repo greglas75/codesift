@@ -1,5 +1,4 @@
 import { analyzeComplexity } from "../../complexity-tools.js";
-import type { CodeIndex } from "../../../types.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 /**
@@ -7,7 +6,7 @@ import type { CheckResult, ReviewFinding } from "../types.js";
  * changedFiles with cyclomatic complexity > 10. Maps to T2 findings.
  */
 export async function checkComplexityDelta(
-  index: CodeIndex,
+  index: { repo: string },
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();

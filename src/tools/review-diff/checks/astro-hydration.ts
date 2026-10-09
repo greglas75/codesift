@@ -1,5 +1,5 @@
 import { hydrationAuditFromIndex } from "../../astro-islands.js";
-import type { CodeIndex } from "../../../types.js";
+import type { ReviewIndex } from "../review-index.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 /**
@@ -7,7 +7,7 @@ import type { CheckResult, ReviewFinding } from "../types.js";
  * Returns skipped when diff has zero .astro files.
  */
 export async function checkAstroHydration(
-  index: CodeIndex,
+  index: Pick<ReviewIndex, "root" | "files">,
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();

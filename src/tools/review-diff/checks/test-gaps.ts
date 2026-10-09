@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isTestFile } from "../../../utils/test-file.js";
-import type { CodeIndex } from "../../../types.js";
+import type { ReviewIndex } from "../review-index.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 const SOURCE_EXTENSIONS = /\.(tsx?|jsx?)$/;
@@ -18,7 +18,7 @@ const SOURCE_EXTENSIONS = /\.(tsx?|jsx?)$/;
  * If BOTH pathways find 0 tests -> T3 advisory finding.
  */
 export async function checkTestGaps(
-  index: CodeIndex,
+  index: Pick<ReviewIndex, "files" | "testSourceMentions">,
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();
@@ -26,7 +26,7 @@ export async function checkTestGaps(
   const findings: ReviewFinding[] = [];
 
   for (const sourceFile of sourceFilesFromDiff(changedFiles)) {
-    if (hasTestCoverage(index, indexFilePaths, sourceFile)) continue;
+    if (await hasTestCoverage(index, indexFilePaths, sourceFile)) continue;
     findings.push({
       check: "test-gaps",
       severity: "warn",
@@ -52,13 +52,14 @@ function sourceFilesFromDiff(changedFiles: string[]): string[] {
   );
 }
 
-function hasTestCoverage(
-  index: CodeIndex,
+async function hasTestCoverage(
+  index: Pick<ReviewIndex, "testSourceMentions">,
   indexFilePaths: Set<string>,
   sourceFile: string,
-): boolean {
+): Promise<boolean> {
   const base = path.basename(sourceFile).replace(SOURCE_EXTENSIONS, "");
-  return hasTestByNaming(indexFilePaths, sourceFile, base) || hasTestByImport(index, base);
+  // A test file whose source mentions the base name counts as importing it.
+  return hasTestByNaming(indexFilePaths, sourceFile, base) || await index.testSourceMentions(base);
 }
 
 function hasTestByNaming(
@@ -88,12 +89,4 @@ function testCandidates(sourceFile: string, base: string): string[] {
     path.join(testsDir, `${base}.test.tsx`),
     path.join(testsDir, `${base}.test.js`),
   ];
-}
-
-function hasTestByImport(index: CodeIndex, base: string): boolean {
-  return index.symbols.some((sym) => {
-    if (!isTestFile(sym.file)) return false;
-    if (!sym.source) return false;
-    return sym.source.includes(base);
-  });
 }

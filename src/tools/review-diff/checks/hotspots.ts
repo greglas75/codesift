@@ -1,5 +1,4 @@
 import { analyzeHotspots } from "../../hotspot-tools.js";
-import type { CodeIndex } from "../../../types.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 /**
@@ -7,7 +6,7 @@ import type { CheckResult, ReviewFinding } from "../types.js";
  * Maps high-churn files to T3 advisory findings.
  */
 export async function checkHotspots(
-  index: CodeIndex,
+  index: { repo: string },
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();

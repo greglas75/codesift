@@ -1,4 +1,4 @@
-import type { CodeIndex } from "../../types.js";
+import type { ReviewIndex } from "./review-index.js";
 import { checkAstroHydration } from "./checks/astro-hydration.js";
 import { checkBlastRadius } from "./checks/blast-radius.js";
 import { checkBreakingChanges } from "./checks/breaking.js";
@@ -14,7 +14,7 @@ import type { CheckResult } from "./types.js";
 
 interface CheckContext {
   changedFiles: string[];
-  index: CodeIndex;
+  index: ReviewIndex;
   since: string;
   until: string;
 }
@@ -23,7 +23,7 @@ export async function runCheck(
   checkName: CheckName,
   _repo: string,
   changedFiles: string[],
-  index: CodeIndex,
+  index: ReviewIndex,
   since: string,
   until: string,
 ): Promise<CheckResult> {

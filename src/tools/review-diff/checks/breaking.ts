@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import type { CodeIndex } from "../../../types.js";
+import type { ReviewIndex } from "../review-index.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 const TS_JS_RE = /\.(tsx?|jsx?)$/;
@@ -17,7 +17,7 @@ const EXPORT_DEFAULT_RE = /export\s+default/g;
  * because renames naturally lose old export names.
  */
 export async function checkBreakingChanges(
-  index: CodeIndex,
+  index: Pick<ReviewIndex, "symbolsInFile">,
   repoRoot: string,
   changedFiles: string[],
   since: string,
@@ -28,9 +28,10 @@ export async function checkBreakingChanges(
   try {
     const renamedFiles = detectRenamedFiles(repoRoot, since, until);
     const filesToCompare = changedFiles.filter((f) => isComparableSourceFile(f, renamedFiles));
-    const findings = filesToCompare.flatMap((file) =>
-      findRemovedExports(index, repoRoot, file, since),
-    );
+    const findings: ReviewFinding[] = [];
+    for (const file of filesToCompare) {
+      findings.push(...await findRemovedExports(index, repoRoot, file, since));
+    }
 
     return {
       check: "breaking",
@@ -86,12 +87,12 @@ function isComparableSourceFile(file: string, renamedFiles: Set<string>): boolea
   return TS_JS_RE.test(file) && !renamedFiles.has(file);
 }
 
-function findRemovedExports(
-  index: CodeIndex,
+async function findRemovedExports(
+  index: Pick<ReviewIndex, "symbolsInFile">,
   repoRoot: string,
   file: string,
   since: string,
-): ReviewFinding[] {
+): Promise<ReviewFinding[]> {
   try {
     const oldSource = execFileSync(
       "git",
@@ -101,7 +102,7 @@ function findRemovedExports(
 
     const oldExports = extractExportNames(oldSource);
     if (oldExports.size === 0) return [];
-    return removedExportFindings(file, oldExports, currentExports(index, file));
+    return removedExportFindings(file, oldExports, await currentExports(index, file));
   } catch {
     // git show failed -> file didn't exist at `since` (new file), skip.
     return [];
@@ -122,10 +123,10 @@ function extractExportNames(source: string): Set<string> {
   return exports;
 }
 
-function currentExports(index: CodeIndex, file: string): Set<string> {
+async function currentExports(index: Pick<ReviewIndex, "symbolsInFile">, file: string): Promise<Set<string>> {
   return new Set(
-    index.symbols
-      .filter((s) => s.file === file && !s.parent)
+    (await index.symbolsInFile(file))
+      .filter((s) => !s.parent)
       .map((s) => s.name),
   );
 }

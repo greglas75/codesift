@@ -1,5 +1,4 @@
 import { findDeadCode } from "../../symbol-tools.js";
-import type { CodeIndex } from "../../../types.js";
 import { literalChangedFilePattern } from "../file-pattern.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
@@ -7,7 +6,7 @@ import type { CheckResult, ReviewFinding } from "../types.js";
  * Dead-code check: run findDeadCode scoped to changedFiles and map candidates to T2 findings.
  */
 export async function checkDeadCode(
-  index: CodeIndex,
+  index: { repo: string },
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();

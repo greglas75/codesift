@@ -1,12 +1,11 @@
 import { impactAnalysis } from "../../impact-tools.js";
-import type { CodeIndex } from "../../../types.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
 /**
  * Blast-radius check: run impactAnalysis and map affected_symbols to T2 findings.
  */
 export async function checkBlastRadius(
-  index: CodeIndex,
+  index: { repo: string },
   since: string,
   until: string,
 ): Promise<CheckResult> {

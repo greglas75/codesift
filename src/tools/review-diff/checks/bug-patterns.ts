@@ -1,5 +1,4 @@
 import { listPatterns, searchPatterns } from "../../pattern-tools.js";
-import type { CodeIndex } from "../../../types.js";
 import { literalChangedFilePattern } from "../file-pattern.js";
 import type { CheckResult, ReviewFinding } from "../types.js";
 
@@ -79,7 +78,7 @@ const ASTRO_ONLY_PATTERNS = new Set([
  * deduplicate findings across patterns.
  */
 export async function checkBugPatterns(
-  index: CodeIndex,
+  index: { repo: string },
   changedFiles: string[],
 ): Promise<CheckResult> {
   const start = Date.now();
