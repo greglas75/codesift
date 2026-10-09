@@ -144,6 +144,9 @@ jobs:
       - name: Build the addon
         run: npm run build:native
 
+      # CODESIFT_NATIVE=1 makes the BM25 and parser components required. It does NOT turn on the native
+      # store, which is opt-in only (CODESIFT_NATIVE_STORE=1): the store/write parity suites opt in
+      # themselves, on their own database copies; tests/storage runs on the TypeScript store.
       - name: Native tests and the storage suite against the built addon
         env:
           CODESIFT_NATIVE: "1"
