@@ -81,7 +81,7 @@ describe.skipIf(!native)("native DatabaseSync matches node:sqlite", () => {
     };
     const ours = options(nativeDatabaseSyncCtor(native!));
     const theirs = options(DatabaseSync);
-    const notSqlVisible = /^(COMPILER=|DEFAULT_MEMSTATUS=|ENABLE_PREUPDATE_HOOK$|ENABLE_SESSION$|ENABLE_UNLOCK_NOTIFY$|ENABLE_RBU$|MAX_VARIABLE_NUMBER=)/;
+    const notSqlVisible = /^(COMPILER=|ATOMIC_INTRINSICS=|DEFAULT_MEMSTATUS=|ENABLE_PREUPDATE_HOOK$|ENABLE_SESSION$|ENABLE_UNLOCK_NOTIFY$|ENABLE_RBU$|MAX_VARIABLE_NUMBER=)/;
     const missing = [...theirs].filter((o) => !ours.has(o) && !notSqlVisible.test(o));
     expect(missing).toEqual([]);
     const limit = (set: Set<string>) => Number([...set].find((o) => o.startsWith("MAX_VARIABLE_NUMBER="))?.split("=")[1] ?? 999);
