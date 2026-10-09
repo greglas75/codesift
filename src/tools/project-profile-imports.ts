@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { CodeIndex } from "../types.js";
+import type { CodeIndex, CodeSymbol } from "../types.js";
+
+/**
+ * What the profile helpers read: the file list and the root, and — only where a file cannot be read
+ * from disk — symbol sources. A whole loaded index satisfies it; `analyze_project` passes the summary
+ * and fetches the few symbols it needs (ADR-004 stage 2).
+ */
+export type ProfileIndex = Pick<CodeIndex, "root" | "files"> & { symbols?: CodeSymbol[] };
 
 export function extractImportSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
@@ -73,11 +80,11 @@ function toImporterCount(importersByFile: Map<string, Set<string>>): Map<string,
   return new Map([...importersByFile.entries()].map(([file, importers]) => [file, importers.size]));
 }
 
-export function buildImporterCountFromSources(index: CodeIndex): Map<string, number> {
+export function buildImporterCountFromSources(index: ProfileIndex): Map<string, number> {
   const indexedFiles = new Set(index.files.map((file) => file.path));
   const importersByFile = new Map<string, Set<string>>();
 
-  for (const symbol of index.symbols) {
+  for (const symbol of index.symbols ?? []) {
     if (!symbol.source) continue;
     collectImports(symbol.file, symbol.source, indexedFiles, importersByFile);
   }
@@ -85,7 +92,14 @@ export function buildImporterCountFromSources(index: CodeIndex): Map<string, num
   return toImporterCount(importersByFile);
 }
 
-export async function buildImporterCount(index: CodeIndex): Promise<Map<string, number>> {
+export async function buildImporterCount(
+  index: ProfileIndex,
+  /** The symbols (with source) of these files, in index order. Defaults to filtering `index.symbols`. */
+  symbolsOf: (files: string[]) => Promise<CodeSymbol[]> = async (files) => {
+    const wanted = new Set(files);
+    return (index.symbols ?? []).filter((symbol) => wanted.has(symbol.file));
+  },
+): Promise<Map<string, number>> {
   const indexedFiles = new Set(index.files.map((file) => file.path));
   const importersByFile = new Map<string, Set<string>>();
   const filesWithSource = new Set<string>();
@@ -102,7 +116,9 @@ export async function buildImporterCount(index: CodeIndex): Promise<Map<string, 
     }
   }
 
-  for (const symbol of index.symbols) {
+  // Symbol sources stand in only for files that could not be read — so only those are fetched.
+  const unread = index.files.map((file) => file.path).filter((path) => !filesWithSource.has(path));
+  for (const symbol of unread.length > 0 ? await symbolsOf(unread) : []) {
     if (!symbol.source || filesWithSource.has(symbol.file)) continue;
     collectImports(symbol.file, symbol.source, indexedFiles, importersByFile);
   }

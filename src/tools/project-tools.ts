@@ -11,7 +11,8 @@ import { join } from "node:path";
 
 import { EXTRACTOR_VERSIONS } from "./index-shared.js";
 import { getCodesiftVersion } from "../storage/telemetry/env-profile.js";
-import type { CodeIndex } from "../types.js";
+import type { CodeSymbol } from "../types.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
 import { extractAstroConventions } from "./astro-config.js";
 import type { AstroConventions } from "./astro-config.js";
 import {
@@ -23,7 +24,7 @@ import {
   extractTestConventions,
 } from "./project-profile-extractors.js";
 import { readJson } from "./project-profile-fs.js";
-import { buildImporterCount, buildImporterCountFromSources } from "./project-profile-imports.js";
+import { buildImporterCount, buildImporterCountFromSources, type ProfileIndex } from "./project-profile-imports.js";
 import { writeProfileToDisk } from "./project-profile-persistence.js";
 import { buildSummary } from "./project-profile-summary.js";
 import type { ProfileSummary } from "./project-profile-summary.js";
@@ -158,7 +159,7 @@ function classifyCodeType(path: string, _symbol_count: number): string {
 }
 
 export function classifyFiles(
-  index: CodeIndex,
+  index: ProfileIndex,
   importerCount: Map<string, number> = buildImporterCountFromSources(index),
 ): FileClassifications {
   const critical: ClassifiedFile[] = [];
@@ -256,9 +257,29 @@ export function resetAnalyzeProjectCacheForTesting(): void {
   analyzeProjectCache.clear();
 }
 
-async function getProjectCodeIndex(repoName: string): Promise<CodeIndex | null> {
-  const { getCodeIndex } = await import("./index-tools.js");
-  return getCodeIndex(repoName);
+/**
+ * The summary — file list, root, counts — which is all the profile reads apart from components and
+ * hooks (fetched separately, for React projects only). It used to load the whole index (ADR-004).
+ */
+async function getProjectSummary(repoName: string): Promise<IndexSummary | null> {
+  const { getIndexSummary } = await import("./index-tools.js");
+  return getIndexSummary(repoName);
+}
+
+async function getReactSymbols(repoName: string): Promise<CodeSymbol[]> {
+  const { findRepoSymbols } = await import("./index-tools.js");
+  return findRepoSymbols(repoName, { kinds: ["component", "hook"], withSource: true }, { skipFreshness: true });
+}
+
+async function getSymbolsOfFiles(repoName: string, files: string[]): Promise<CodeSymbol[]> {
+  const { findRepoSymbolsInFiles } = await import("./index-tools.js");
+  return findRepoSymbolsInFiles(repoName, files, { withSource: true, skipFreshness: true });
+}
+
+async function getProcessEnvSymbols(repoName: string): Promise<CodeSymbol[]> {
+  const { findRepoSymbols } = await import("./index-tools.js");
+  // The literal is a prefilter the store applies; the regex in extractKnownGotchas still decides.
+  return findRepoSymbols(repoName, { sourceContainsAny: ["process.env"], withSource: true }, { skipFreshness: true });
 }
 
 export async function analyzeProject(
@@ -270,7 +291,7 @@ export async function analyzeProject(
   let files_skipped = 0;
   const skip_reasons: Record<string, number> = {};
 
-  const index = await getProjectCodeIndex(repoName);
+  const index = await getProjectSummary(repoName);
   if (!index) {
     const failedProfile: ProjectProfile = {
       version: "1.0",
@@ -318,7 +339,7 @@ export async function analyzeProject(
   const stack = await detectStack(projectRoot);
 
   // Step 2: File classification
-  const importerCount = await buildImporterCount(index);
+  const importerCount = await buildImporterCount(index, (files) => getSymbolsOfFiles(repoName, files));
   const file_classifications = classifyFiles(index, importerCount);
 
   // Step 2b: Dependency graph
@@ -328,7 +349,7 @@ export async function analyzeProject(
   const test_conventions = await extractTestConventions(projectRoot, index);
 
   // Step 2d: Known gotchas
-  const known_gotchas = extractKnownGotchas(index);
+  const known_gotchas = extractKnownGotchas({ files: index.files, symbols: await getProcessEnvSymbols(repoName) });
 
   // Step 3: Framework-specific convention extraction
   let conventions: Conventions | undefined;
@@ -377,7 +398,7 @@ export async function analyzeProject(
     } else if (fw === "react") {
       const pkg = await readJson(join(projectRoot, "package.json"));
       const allDeps = { ...pkg?.dependencies, ...pkg?.devDependencies };
-      reactConventions = extractReactConventions(index.files, allDeps, index.symbols);
+      reactConventions = extractReactConventions(index.files, allDeps, await getReactSymbols(repoName));
     } else if (fw === "fastapi" || fw === "django" || fw === "flask") {
       pythonConventions = extractPythonConventions(index.files);
     } else if (fw === "yii2") {

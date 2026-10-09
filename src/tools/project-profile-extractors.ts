@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 
 import type { CodeIndex, FileEntry } from "../types.js";
 import { fileExists, readJson } from "./project-profile-fs.js";
-import { buildImporterCountFromSources } from "./project-profile-imports.js";
+import { buildImporterCountFromSources, type ProfileIndex } from "./project-profile-imports.js";
 import type {
   DependencyGraph,
   DependencyHealth,
@@ -75,7 +75,7 @@ export async function extractIdentity(projectRoot: string): Promise<ProjectIdent
 }
 
 export function extractDependencyGraph(
-  index: CodeIndex,
+  index: ProfileIndex,
   importCount: Map<string, number> = buildImporterCountFromSources(index),
 ): DependencyGraph {
   const entry_points: string[] = [];
@@ -229,7 +229,7 @@ async function detectAssertionLibrary(projectRoot: string): Promise<string> {
 
 export async function extractTestConventions(
   projectRoot: string,
-  index: CodeIndex,
+  index: Pick<CodeIndex, "files">,
 ): Promise<TestConventions> {
   const testFiles = index.files.filter((file) => /(test|spec)\.(ts|js|tsx|jsx)$/.test(file.path));
   const file_patterns = buildTestFilePatterns(testFiles);
@@ -252,7 +252,8 @@ export async function extractTestConventions(
   };
 }
 
-export function extractKnownGotchas(index: CodeIndex): KnownGotchas {
+/** `index.symbols` needs only the symbols whose source mentions `process.env` (a superset is fine). */
+export function extractKnownGotchas(index: Pick<CodeIndex, "files" | "symbols">): KnownGotchas {
   const gotchas: KnownGotchas["auto_detected"] = [];
   const processEnvEvidence = new Set<string>();
 

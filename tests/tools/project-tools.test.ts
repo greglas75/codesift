@@ -8,10 +8,12 @@ import { tmpdir } from "node:os";
 // ---------------------------------------------------------------------------
 
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: vi.fn(),
+  getIndexSummary: vi.fn(),
+  findRepoSymbols: vi.fn(async () => []),
+  findRepoSymbolsInFiles: vi.fn(async () => []),
 }));
 
-import { getCodeIndex } from "../../src/tools/index-tools.js";
+import { getIndexSummary } from "../../src/tools/index-tools.js";
 
 import {
   detectStack,
@@ -953,7 +955,7 @@ describe("analyzeProject — astro branch", () => {
       "astro.config.mjs": ASTRO_CONFIG_SOURCE,
     });
 
-    const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+    const mockedGetCodeIndex = vi.mocked(getIndexSummary);
     mockedGetCodeIndex.mockResolvedValueOnce({
       repo: "local/test-astro",
       root,
@@ -983,7 +985,7 @@ describe("analyzeProject — astro branch", () => {
       "astro.config.mjs": ASTRO_CONFIG_SOURCE,
     });
 
-    const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+    const mockedGetCodeIndex = vi.mocked(getIndexSummary);
     mockedGetCodeIndex.mockResolvedValueOnce({
       repo: "local/test-astro-conv",
       root,
@@ -1018,7 +1020,7 @@ describe("analyzeProject cache", () => {
     });
     const idx = mockIndex(root, ["src/index.ts"]);
     resetAnalyzeProjectCacheForTesting();
-    (getCodeIndex as any).mockResolvedValue(idx);
+    (getIndexSummary as any).mockResolvedValue(idx);
 
     const a = await analyzeProject("local/test");
     const b = await analyzeProject("local/test");
@@ -1034,11 +1036,11 @@ describe("analyzeProject cache", () => {
     });
     const idx1 = mockIndex(root, ["src/index.ts"]);
     resetAnalyzeProjectCacheForTesting();
-    (getCodeIndex as any).mockResolvedValue(idx1);
+    (getIndexSummary as any).mockResolvedValue(idx1);
     const a = await analyzeProject("local/test");
 
     const idx2 = { ...idx1, updated_at: idx1.updated_at + 1 };
-    (getCodeIndex as any).mockResolvedValue(idx2);
+    (getIndexSummary as any).mockResolvedValue(idx2);
     const b = await analyzeProject("local/test");
 
     expect(b).not.toBe(a);
@@ -1052,7 +1054,7 @@ describe("analyzeProject cache", () => {
     });
     const idx = mockIndex(root, ["src/index.ts"]);
     resetAnalyzeProjectCacheForTesting();
-    (getCodeIndex as any).mockResolvedValue(idx);
+    (getIndexSummary as any).mockResolvedValue(idx);
 
     const a = await analyzeProject("local/test");
     const b = await analyzeProject("local/test", { force: true });

@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockGetCodeIndex = vi.hoisted(() => vi.fn());
+const mockGetIndexSummary = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: mockGetCodeIndex,
+  getIndexSummary: mockGetIndexSummary,
+  findRepoSymbols: vi.fn(async () => []),
+  findRepoSymbolsInFiles: vi.fn(async () => []),
 }));
 
 import {
@@ -30,7 +32,7 @@ const execFileAsync = promisify(execFile);
 
 describe("project profile module boundaries", () => {
   beforeEach(() => {
-    mockGetCodeIndex.mockReset();
+    mockGetIndexSummary.mockReset();
     resetAnalyzeProjectCacheForTesting();
   });
 
@@ -41,7 +43,7 @@ describe("project profile module boundaries", () => {
     expect(source).toContain('await import("./index-tools.js")');
   });
 
-  it("analyzeProject resolves getCodeIndex through the dynamic import boundary", async () => {
+  it("analyzeProject resolves getIndexSummary through the dynamic import boundary", async () => {
     const root = await mkdtemp(join(tmpdir(), "codesift-project-profile-boundary-"));
     try {
       await mkdir(join(root, "src"), { recursive: true });
@@ -63,11 +65,11 @@ describe("project profile module boundaries", () => {
         symbol_count: 1,
         file_count: 3,
       } as CodeIndex;
-      mockGetCodeIndex.mockResolvedValueOnce(index);
+      mockGetIndexSummary.mockResolvedValueOnce(index);
 
       const summary = await analyzeProject("local/dynamic-boundary", { force: true });
 
-      expect(mockGetCodeIndex).toHaveBeenCalledWith("local/dynamic-boundary");
+      expect(mockGetIndexSummary).toHaveBeenCalledWith("local/dynamic-boundary");
       expect(summary.stack).toEqual({
         framework: null,
         language: "typescript",
