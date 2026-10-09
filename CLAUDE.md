@@ -1,7 +1,7 @@
 ## Tech Stack
 TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
 
-## Rust core (ADR-006, stage 0 — 2026-10-08)
+## Rust core (ADR-006 — stages 0, 2, 3 done; 1 and 4 no-go for now — 2026-10-09)
 
 Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
 `crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every

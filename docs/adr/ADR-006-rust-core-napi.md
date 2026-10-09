@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: native store is OPT-IN ONLY — see "Two copies of SQLite"; stage 2: BM25 native; stage 3: every tree-sitter extractor native; stage 4: no-go for now)
+**Status:** Accepted (stage 0 done; stage 1: no-go for now, native store opt-in only; stage 2: BM25 native; stage 3: every tree-sitter extractor native; stage 4: no-go for now)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -378,4 +378,28 @@ exactly the work the opt-in native writer moves off it, once a single SQLite cop
 
 **Stage 4 (import graph): no-go for now.** `collectImportEdges` does not appear on the indexing path at
 all in this profile; there is no measured cost to remove.
+
+## Stage 1 — go/no-go after the SQLite finding: no-go for now (2026-10-09)
+
+Rule 5 of this ADR applied to what a SAFE stage 1 now costs.
+
+**Cost.** Every access to an index database within a process must go through one SQLite copy, so the
+Rust core would have to own all of it: `src/storage/sqlite/*` (~1,800 lines — the connection cache,
+the v1→v2 migration and newer-schema refusal, meta, `saveIncremental`/`removeFile`, the paged whole
+loads with their footprint accounting, legacy-JSON import, `data_version` invalidation, error
+classification) plus the four modules outside it that open index databases. Each needs the same
+exact-parity treatment the read path got, and a partial move is the unsafe design, not a smaller safe
+one.
+
+**Gain, re-measured against what the TypeScript path already does.** Whole loads and whole writes
+already yield to the event loop every page (50+ rows, ~65 ms blocks) and every 500 rows (~22 ms) —
+the daemon stays responsive during them. What the native store would still buy: large `find`s block
+50 ms instead of 320 ms, and ~6 s of main-thread CPU per full index of a 500k-symbol repo moves off it.
+The motivating incident (`initialize` at 40 s on a saturated disk) was addressed by the 50-row page
+floor; the disk-saturation measurement this stage was gated on was never taken.
+
+**Decision.** Not now. The native store, writer and their parity suites stay in the tree, opt-in only,
+so the work is not lost and remains tested. **Revisit when** a measurement on a saturated disk shows
+`/health` or `initialize` blocked by index reads despite the page floor, or when index writes become
+the dominant cost of an incident — then do the whole single-owner migration, not part of it.
 
