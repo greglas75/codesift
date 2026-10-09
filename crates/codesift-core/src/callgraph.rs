@@ -276,7 +276,6 @@ pub fn extract_call_sites(source: &str) -> Vec<CallSite> {
     out
 }
 
-/// One graph, for one (database, skip_tests, filter_react_hooks).
 /// What [`CallGraph::impact_walk`] found; positions are node positions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactWalk {
@@ -292,6 +291,7 @@ pub struct ImpactWalk {
     pub changed_external_callers: Vec<u32>,
 }
 
+/// One graph, for one (database, skip_tests, filter_react_hooks).
 pub struct CallGraph {
     node_count: usize,
     /// Two independent FNV-1a 32 hashes over every id in node order (UTF-16 units, NUL-separated) —
@@ -459,11 +459,16 @@ impl CallGraph {
         let mut file_of: Vec<u32> = Vec::with_capacity(nodes.len());
         let mut ids: Vec<String> = Vec::with_capacity(nodes.len());
         for n in nodes {
-            let next = files.len() as u32;
-            let f = *file_index.entry(n.file.clone()).or_insert_with(|| {
-                files.push(n.file);
-                next
-            });
+            // Look up before inserting: `entry` would need an owned key, a clone per node.
+            let f = match file_index.get(&n.file) {
+                Some(&f) => f,
+                None => {
+                    let f = files.len() as u32;
+                    file_index.insert(n.file.clone(), f);
+                    files.push(n.file);
+                    f
+                }
+            };
             file_of.push(f);
             ids.push(n.id);
         }

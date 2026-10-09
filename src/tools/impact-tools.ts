@@ -237,9 +237,9 @@ function formatAffected(symbols: CodeSymbol[], includeSource: boolean): CodeSymb
 
 /**
  * `impactAnalysis` over the native call graph, with no index in memory: the same walks as the
- * functions below, in the same order, on node positions — files and ids come from the graph, and only
- * the symbols the answer shows are read from the store. `null` means "use the TypeScript path": no
- * graph (native store off), or one released or out of date mid-call.
+ * functions below, in the same order — and only the symbols the answer shows are read from the store.
+ * `null` means "use the TypeScript path": no graph (native store off), or ANY failure in the native
+ * walk (released or out of date mid-call included). The fallback is always a correct answer.
  */
 async function nativeImpact(
   repo: string,
