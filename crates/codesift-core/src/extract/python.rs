@@ -29,11 +29,9 @@ struct Ctx<'s> {
 
 pub fn extract(src: &Utf16Source, file: &str, repo: &str, timeout: Duration) -> Extracted {
     let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-    let Some(tree) = parse_utf16(&lang, src, timeout) else {
-        return Extracted {
-            timed_out: true,
-            ..Extracted::default()
-        };
+    let tree = match parse_utf16(&lang, src, timeout) {
+        Ok(tree) => tree,
+        Err(failure) => return failure.into(),
     };
     let mut ctx = Ctx {
         src,

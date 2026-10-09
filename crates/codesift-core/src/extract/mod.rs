@@ -150,9 +150,15 @@ pub fn strip_quotes(s: &str) -> String {
 
 /// Parse UTF-16 source with a wall-clock budget (`CODESIFT_PARSE_TIMEOUT_MS` on the JS side).
 /// `None` on timeout, like the TypeScript path's rejected race.
-pub fn parse_utf16(language: &Language, src: &Utf16Source, timeout: Duration) -> Option<Tree> {
+pub fn parse_utf16(
+    language: &Language,
+    src: &Utf16Source,
+    timeout: Duration,
+) -> Result<Tree, ParseFailure> {
     let mut parser = Parser::new();
-    parser.set_language(language).ok()?;
+    parser
+        .set_language(language)
+        .map_err(|_| ParseFailure::TimedOut)?;
     let started = Instant::now();
     let mut progress = |_: &ParseState| {
         if started.elapsed() > timeout {
@@ -166,11 +172,17 @@ pub fn parse_utf16(language: &Language, src: &Utf16Source, timeout: Duration) ->
     // The binding hands the callback a CODE-UNIT offset (it divides tree-sitter's byte offset by 2
     // itself) — halving it again here returned text from the wrong place on every read past the
     // first, and the trees diverged from web-tree-sitter's late in a file.
-    parser.parse_utf16_le_with_options(
-        &mut |i, _| if i < units.len() { &units[i..] } else { &[] },
-        None,
-        Some(options),
-    )
+    let tree = parser
+        .parse_utf16_le_with_options(
+            &mut |i, _| if i < units.len() { &units[i..] } else { &[] },
+            None,
+            Some(options),
+        )
+        .ok_or(ParseFailure::TimedOut)?;
+    if tree_depth(&tree) > MAX_TREE_DEPTH {
+        return Err(ParseFailure::TooDeep);
+    }
+    Ok(tree)
 }
 
 /// `node.namedChildren`.
@@ -407,6 +419,59 @@ pub struct Extracted {
     pub timed_out: bool,
     /// Messages the TypeScript extractor would have `console.warn`ed; the JS side prints them.
     pub warnings: Vec<String>,
+    /// The tree was deeper than `MAX_TREE_DEPTH`, so nothing was extracted (see `parse_utf16`).
+    pub too_deep: bool,
+}
+
+/// Why `parse_utf16` produced no tree to walk.
+pub enum ParseFailure {
+    TimedOut,
+    TooDeep,
+}
+
+impl From<ParseFailure> for Extracted {
+    fn from(f: ParseFailure) -> Self {
+        Extracted {
+            timed_out: matches!(f, ParseFailure::TimedOut),
+            too_deep: matches!(f, ParseFailure::TooDeep),
+            ..Extracted::default()
+        }
+    }
+}
+
+/// Deepest syntax tree the (recursive) walkers are handed.
+///
+/// The extractors recurse once per tree level, as their TypeScript originals do. In TypeScript a
+/// pathological tree (a generated file nesting thousands of levels) overflows the JS stack, the
+/// RangeError is caught, and that ONE file fails. In Rust a stack overflow aborts the process — the
+/// daemon or the index child, every client with it (measured: 1,000,000 nested brackets in one `.js`
+/// file → SIGABRT). The rayon pool's 64 MB stacks hold far more than V8's ~10k frames, so this bound
+/// only rejects trees the TypeScript path already failed on.
+pub const MAX_TREE_DEPTH: usize = 20_000;
+
+/// Depth of the deepest node, walked with a cursor (no recursion, so it cannot overflow itself).
+fn tree_depth(tree: &Tree) -> usize {
+    let mut cursor = tree.walk();
+    let (mut depth, mut max) = (1usize, 1usize);
+    loop {
+        if cursor.goto_first_child() {
+            depth += 1;
+            max = max.max(depth);
+            if max > MAX_TREE_DEPTH {
+                return max;
+            }
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return max;
+            }
+            depth -= 1;
+        }
+    }
 }
 
 /// One file's extraction, serialised: the symbols as a JSON array in `makeSymbol` key order.
@@ -467,13 +532,19 @@ pub fn extract_to_json(
             "java" | "ruby" | "css" => generic::extract(&src, file, repo, language, timeout)?,
             _ => return None,
         };
+        let mut warnings = extracted.warnings;
+        if extracted.too_deep {
+            warnings.push(format!(
+                "[parser] {file}: syntax tree deeper than {MAX_TREE_DEPTH} levels — no symbols extracted"
+            ));
+        }
         let mut json = String::new();
         write_json(&extracted.symbols, repo, file, &mut json);
         Some(ExtractOutput {
             json,
             has_error: extracted.has_error,
             timed_out: extracted.timed_out,
-            warnings: extracted.warnings,
+            warnings,
         })
     })
 }
@@ -481,6 +552,30 @@ pub fn extract_to_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Bug it catches: a walker recursing into a 1,000,000-level tree overflowed the stack and aborted the
+    // whole process (daemon or index child) — TypeScript fails that one file with a caught RangeError.
+    #[test]
+    fn a_tree_deeper_than_the_bound_is_skipped_with_a_warning_not_a_crash() {
+        let source = format!("x = {}1{};", "[".repeat(1_000_000), "]".repeat(1_000_000));
+        let out = extract_to_json(
+            &source,
+            "deep.js",
+            "r",
+            "javascript",
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(out.json, "[]");
+        assert!(!out.timed_out);
+        assert!(
+            out.warnings
+                .iter()
+                .any(|w| w.contains("deep.js") && w.contains("deeper than")),
+            "{:?}",
+            out.warnings
+        );
+    }
 
     #[test]
     fn strip_quotes_matches_the_regex() {

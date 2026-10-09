@@ -33,11 +33,9 @@ pub fn extract(
         "css" => tree_sitter_css::LANGUAGE.into(),
         _ => return None,
     };
-    let Some(tree) = parse_utf16(&lang, src, timeout) else {
-        return Some(Extracted {
-            timed_out: true,
-            ..Extracted::default()
-        });
+    let tree = match parse_utf16(&lang, src, timeout) {
+        Ok(tree) => tree,
+        Err(failure) => return Some(failure.into()),
     };
     let mut symbols = Vec::new();
     walk(src, file, repo, tree.root_node(), None, &mut symbols);

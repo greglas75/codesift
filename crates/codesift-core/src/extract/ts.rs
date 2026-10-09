@@ -41,11 +41,9 @@ pub fn extract(
         "javascript" => tree_sitter_javascript::LANGUAGE.into(),
         _ => return None,
     };
-    let Some(tree) = parse_utf16(&lang, src, timeout) else {
-        return Some(Extracted {
-            timed_out: true,
-            ..Extracted::default()
-        });
+    let tree = match parse_utf16(&lang, src, timeout) {
+        Ok(tree) => tree,
+        Err(failure) => return Some(failure.into()),
     };
     let root = tree.root_node();
     let mut ctx = Ctx {

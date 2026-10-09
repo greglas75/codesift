@@ -12,8 +12,8 @@ use std::time::Duration;
 use tree_sitter::Node;
 
 use super::{
-    children, js_trim, make_symbol, named_children, parse_utf16, Extracted, Meta, Opts, Sym,
-    Utf16Source,
+    children, js_trim, make_symbol, named_children, parse_utf16, Extracted, Meta, Opts,
+    ParseFailure, Sym, Utf16Source,
 };
 
 struct Ctx<'s> {
@@ -23,17 +23,15 @@ struct Ctx<'s> {
     symbols: Vec<Sym>,
 }
 
-fn parse(src: &Utf16Source, timeout: Duration) -> Option<tree_sitter::Tree> {
+fn parse(src: &Utf16Source, timeout: Duration) -> Result<tree_sitter::Tree, ParseFailure> {
     let lang: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
     parse_utf16(&lang, src, timeout)
 }
 
 pub fn extract(src: &Utf16Source, file: &str, repo: &str, timeout: Duration) -> Extracted {
-    let Some(tree) = parse(src, timeout) else {
-        return Extracted {
-            timed_out: true,
-            ..Extracted::default()
-        };
+    let tree = match parse(src, timeout) {
+        Ok(tree) => tree,
+        Err(failure) => return failure.into(),
     };
     let mut ctx = Ctx {
         src,
@@ -559,11 +557,9 @@ pub fn extract_gradle_kts(
     repo: &str,
     timeout: Duration,
 ) -> Extracted {
-    let Some(tree) = parse(src, timeout) else {
-        return Extracted {
-            timed_out: true,
-            ..Extracted::default()
-        };
+    let tree = match parse(src, timeout) {
+        Ok(tree) => tree,
+        Err(failure) => return failure.into(),
     };
     let mut ctx = Ctx {
         src,
