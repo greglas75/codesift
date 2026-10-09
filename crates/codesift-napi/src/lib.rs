@@ -280,12 +280,37 @@ pub struct Bm25HitJs {
     pub matches: Vec<String>,
 }
 
-/// A BM25 index held in Rust memory, outside the V8 heap. All methods are synchronous: ingestion
-/// is driven in batches by the JS builder (which yields between them), and a search over the
-/// postings is milliseconds.
+/// A BM25 index held in Rust memory, outside the V8 heap. Ingestion is driven in batches by the JS
+/// builder: `ingestAsync` tokenises a batch in parallel off the main thread (only converting the
+/// symbols' strings in happens on it); a search over the postings is milliseconds and stays sync.
 #[napi]
 pub struct NativeBm25 {
-    inner: bm25::Bm25,
+    inner: Arc<Mutex<bm25::Bm25>>,
+}
+
+fn lock(m: &Mutex<bm25::Bm25>) -> napi::Result<std::sync::MutexGuard<'_, bm25::Bm25>> {
+    m.lock()
+        .map_err(|_| napi::Error::new(Status::GenericFailure, "bm25 lock poisoned"))
+}
+
+pub struct IngestTask {
+    inner: Arc<Mutex<bm25::Bm25>>,
+    batch: Vec<bm25::SymbolInput>,
+}
+
+impl Task for IngestTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> napi::Result<()> {
+        let prepared = codesift_core::bm25::prepare_batch(&self.batch);
+        lock(&self.inner)?.ingest_build_prepared(prepared);
+        Ok(())
+    }
+
+    fn resolve(&mut self, _env: Env, _out: ()) -> napi::Result<()> {
+        Ok(())
+    }
 }
 
 #[napi]
@@ -293,21 +318,32 @@ impl NativeBm25 {
     #[napi(constructor)]
     pub fn new() -> Self {
         NativeBm25 {
-            inner: bm25::Bm25::new(),
+            inner: Arc::new(Mutex::new(bm25::Bm25::new())),
         }
     }
 
-    /// One batch of a build, in order.
+    /// One batch of a build, in order, on the main thread.
     #[napi]
-    pub fn ingest(&mut self, symbols: Vec<Bm25SymbolJs>) {
+    pub fn ingest(&self, symbols: Vec<Bm25SymbolJs>) -> napi::Result<()> {
         let batch: Vec<bm25::SymbolInput> = symbols.into_iter().map(Into::into).collect();
-        self.inner.ingest_build(&batch);
+        lock(&self.inner)?.ingest_build(&batch);
+        Ok(())
+    }
+
+    /// One batch of a build, tokenised off the main thread. Batches must be awaited in order.
+    #[napi]
+    pub fn ingest_async(&self, symbols: Vec<Bm25SymbolJs>) -> AsyncTask<IngestTask> {
+        AsyncTask::new(IngestTask {
+            inner: Arc::clone(&self.inner),
+            batch: symbols.into_iter().map(Into::into).collect(),
+        })
     }
 
     /// End of a build: resolves import centrality over every file seen.
     #[napi]
-    pub fn finish(&mut self) {
-        self.inner.finish();
+    pub fn finish(&self) -> napi::Result<()> {
+        lock(&self.inner)?.finish();
+        Ok(())
     }
 
     /// `weights` in field order: name, signature, docstring, body, comments.
@@ -321,8 +357,7 @@ impl NativeBm25 {
         let w: [f64; bm25::FIELD_COUNT] = weights.try_into().map_err(|_| {
             napi::Error::new(Status::InvalidArg, "weights must have exactly 5 entries")
         })?;
-        Ok(self
-            .inner
+        Ok(lock(&self.inner)?
             .search(&query, top_k as usize, &w)
             .into_iter()
             .map(|h| Bm25HitJs {
@@ -334,25 +369,26 @@ impl NativeBm25 {
     }
 
     #[napi]
-    pub fn update_file(&mut self, file: String, symbols: Vec<Bm25SymbolJs>) {
+    pub fn update_file(&self, file: String, symbols: Vec<Bm25SymbolJs>) -> napi::Result<()> {
         let batch: Vec<bm25::SymbolInput> = symbols.into_iter().map(Into::into).collect();
-        self.inner.update_file(&file, &batch);
+        lock(&self.inner)?.update_file(&file, &batch);
+        Ok(())
     }
 
     /// `[file, score]` for every file with a non-zero import centrality.
     #[napi]
-    pub fn centrality(&self) -> Vec<(String, f64)> {
-        self.inner.centrality_entries()
+    pub fn centrality(&self) -> napi::Result<Vec<(String, f64)>> {
+        Ok(lock(&self.inner)?.centrality_entries())
     }
 
     #[napi(getter)]
-    pub fn doc_count(&self) -> i64 {
-        self.inner.doc_count()
+    pub fn doc_count(&self) -> napi::Result<i64> {
+        Ok(lock(&self.inner)?.doc_count())
     }
 
     #[napi]
-    pub fn footprint_bytes(&self) -> f64 {
-        self.inner.footprint_bytes() as f64
+    pub fn footprint_bytes(&self) -> napi::Result<f64> {
+        Ok(lock(&self.inner)?.footprint_bytes() as f64)
     }
 }
 
@@ -378,59 +414,283 @@ pub struct ExtractedJs {
     pub warnings: Vec<String>,
 }
 
-pub struct ExtractTask {
-    source: String,
-    file: String,
-    repo: String,
-    language: String,
-    timeout_ms: u32,
-}
-
-impl Task for ExtractTask {
-    type Output = codesift_core::extract::ExtractOutput;
-    type JsValue = ExtractedJs;
-
-    fn compute(&mut self) -> napi::Result<Self::Output> {
-        codesift_core::extract::extract_to_json(
-            &self.source,
-            &self.file,
-            &self.repo,
-            &self.language,
-            std::time::Duration::from_millis(self.timeout_ms as u64),
-        )
-        .ok_or_else(|| {
-            napi::Error::new(
-                Status::InvalidArg,
-                format!("no native extractor for language {:?}", self.language),
-            )
-        })
-    }
-
-    fn resolve(&mut self, _env: Env, out: Self::Output) -> napi::Result<ExtractedJs> {
-        Ok(ExtractedJs {
-            json: out.json,
-            has_error: out.has_error,
-            timed_out: out.timed_out,
-            warnings: out.warnings,
-        })
-    }
-}
-
-/// Parse `source` and extract its symbols off the main thread. `file` is the repo-relative path the
-/// symbol ids carry.
+/// Parse `source` and extract its symbols off the main thread — on tokio's blocking pool, so that
+/// many files can be in flight at once without occupying libuv's four threads, which the indexer's
+/// file reads need. `file` is the repo-relative path the symbol ids carry.
 #[napi]
-pub fn extract_symbols(
+pub async fn extract_symbols(
     source: String,
     file: String,
     repo: String,
     language: String,
     timeout_ms: u32,
-) -> AsyncTask<ExtractTask> {
-    AsyncTask::new(ExtractTask {
-        source,
-        file,
-        repo,
-        language,
-        timeout_ms,
+) -> napi::Result<ExtractedJs> {
+    let lang = language.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        codesift_core::extract::extract_to_json(
+            &source,
+            &file,
+            &repo,
+            &lang,
+            std::time::Duration::from_millis(timeout_ms as u64),
+        )
     })
+    .await
+    .map_err(|e| napi::Error::new(Status::GenericFailure, e.to_string()))?
+    .ok_or_else(|| {
+        napi::Error::new(
+            Status::InvalidArg,
+            format!("no native extractor for language {language:?}"),
+        )
+    })?;
+    Ok(ExtractedJs {
+        json: out.json,
+        has_error: out.has_error,
+        timed_out: out.timed_out,
+        warnings: out.warnings,
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Whole-index write (ADR-006, the write half of stage 1)
+// ---------------------------------------------------------------------------------------------
+
+/// A `CodeSymbol` as the row writer reads it; JS passes its symbol objects plus the extras JSON.
+/// `js_name` keeps the snake_case keys `CodeSymbol` actually has — `#[napi(object)]` would otherwise
+/// look for camelCase ones and reject every symbol.
+#[napi(object)]
+pub struct SymbolRowJs {
+    pub id: String,
+    pub file: String,
+    pub name: String,
+    pub kind: String,
+    #[napi(js_name = "start_line")]
+    pub start_line: f64,
+    #[napi(js_name = "end_line")]
+    pub end_line: f64,
+    #[napi(js_name = "start_col")]
+    pub start_col: Option<f64>,
+    #[napi(js_name = "end_col")]
+    pub end_col: Option<f64>,
+    #[napi(js_name = "start_byte")]
+    pub start_byte: Option<f64>,
+    #[napi(js_name = "end_byte")]
+    pub end_byte: Option<f64>,
+    pub signature: Option<String>,
+    pub docstring: Option<String>,
+    pub source: Option<String>,
+    pub parent: Option<String>,
+    #[napi(js_name = "is_async")]
+    pub is_async: Option<bool>,
+    #[napi(js_name = "is_exported")]
+    pub is_exported: Option<bool>,
+}
+
+#[napi(object)]
+pub struct FileRowJs {
+    pub path: String,
+    pub language: String,
+    #[napi(js_name = "symbol_count")]
+    pub symbol_count: f64,
+    #[napi(js_name = "last_modified")]
+    pub last_modified: f64,
+    #[napi(js_name = "mtime_ms")]
+    pub mtime_ms: Option<f64>,
+    pub stale: Option<bool>,
+}
+
+#[napi(object)]
+pub struct MetaEntryJs {
+    pub key: String,
+    pub value: String,
+}
+
+type SharedWriter = Arc<Mutex<Option<store::Writer>>>;
+
+fn with_writer<T>(
+    w: &SharedWriter,
+    f: impl FnOnce(&store::Writer) -> Result<T, StoreError>,
+) -> napi::Result<T> {
+    let guard = w
+        .lock()
+        .map_err(|_| napi::Error::new(Status::GenericFailure, "writer lock poisoned"))?;
+    let writer = guard
+        .as_ref()
+        .ok_or_else(|| napi::Error::new(Status::GenericFailure, "index writer already finished"))?;
+    f(writer).map_err(to_napi)
+}
+
+/// A whole-index replacement in progress. Rows are inserted off the main thread; `commit` finishes
+/// it, `rollback` (or garbage collection) abandons it and leaves the previous index untouched.
+#[napi]
+pub struct IndexWriter {
+    inner: SharedWriter,
+}
+
+pub struct BeginWriteTask {
+    db_path: PathBuf,
+}
+
+impl Task for BeginWriteTask {
+    type Output = store::Writer;
+    type JsValue = IndexWriter;
+
+    fn compute(&mut self) -> napi::Result<store::Writer> {
+        store::Writer::begin(&self.db_path).map_err(to_napi)
+    }
+
+    fn resolve(&mut self, _env: Env, w: store::Writer) -> napi::Result<IndexWriter> {
+        Ok(IndexWriter {
+            inner: Arc::new(Mutex::new(Some(w))),
+        })
+    }
+}
+
+/// Open a write transaction that replaces the whole index (DELETE then insert).
+#[napi]
+pub fn begin_index_write(db_path: String) -> AsyncTask<BeginWriteTask> {
+    AsyncTask::new(BeginWriteTask {
+        db_path: PathBuf::from(db_path),
+    })
+}
+
+pub struct InsertSymbolsTask {
+    inner: SharedWriter,
+    rows: Vec<store::SymbolRowIn>,
+}
+
+impl Task for InsertSymbolsTask {
+    type Output = ();
+    type JsValue = ();
+    fn compute(&mut self) -> napi::Result<()> {
+        with_writer(&self.inner, |w| w.insert_symbols(&self.rows))
+    }
+    fn resolve(&mut self, _env: Env, _o: ()) -> napi::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct InsertFilesTask {
+    inner: SharedWriter,
+    rows: Vec<store::FileRowIn>,
+}
+
+impl Task for InsertFilesTask {
+    type Output = ();
+    type JsValue = ();
+    fn compute(&mut self) -> napi::Result<()> {
+        with_writer(&self.inner, |w| w.insert_files(&self.rows))
+    }
+    fn resolve(&mut self, _env: Env, _o: ()) -> napi::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct CommitTask {
+    inner: SharedWriter,
+    meta: Vec<(String, String)>,
+    source_complete: bool,
+}
+
+impl Task for CommitTask {
+    type Output = ();
+    type JsValue = ();
+    fn compute(&mut self) -> napi::Result<()> {
+        let writer = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "writer lock poisoned"))?
+            .take()
+            .ok_or_else(|| {
+                napi::Error::new(Status::GenericFailure, "index writer already finished")
+            })?;
+        writer
+            .commit(&self.meta, self.source_complete)
+            .map_err(to_napi)
+    }
+    fn resolve(&mut self, _env: Env, _o: ()) -> napi::Result<()> {
+        Ok(())
+    }
+}
+
+#[napi]
+impl IndexWriter {
+    /// Insert symbol rows; `extras` holds each symbol's `JSON.stringify`ed extras (or null).
+    #[napi]
+    pub fn insert_symbols(
+        &self,
+        symbols: Vec<SymbolRowJs>,
+        extras: Vec<Option<String>>,
+    ) -> napi::Result<AsyncTask<InsertSymbolsTask>> {
+        if symbols.len() != extras.len() {
+            return Err(napi::Error::new(
+                Status::InvalidArg,
+                "symbols and extras differ in length",
+            ));
+        }
+        let rows = symbols
+            .into_iter()
+            .zip(extras)
+            .map(|(s, e)| store::SymbolRowIn {
+                id: s.id,
+                file: s.file,
+                name: s.name,
+                kind: s.kind,
+                start_line: s.start_line,
+                end_line: s.end_line,
+                start_col: s.start_col,
+                end_col: s.end_col,
+                start_byte: s.start_byte,
+                end_byte: s.end_byte,
+                signature: s.signature,
+                docstring: s.docstring,
+                source: s.source,
+                parent: s.parent,
+                is_async: s.is_async,
+                is_exported: s.is_exported,
+                extras: e,
+            })
+            .collect();
+        Ok(AsyncTask::new(InsertSymbolsTask {
+            inner: Arc::clone(&self.inner),
+            rows,
+        }))
+    }
+
+    #[napi]
+    pub fn insert_files(&self, files: Vec<FileRowJs>) -> AsyncTask<InsertFilesTask> {
+        let rows = files
+            .into_iter()
+            .map(|f| store::FileRowIn {
+                path: f.path,
+                language: f.language,
+                symbol_count: f.symbol_count,
+                last_modified: f.last_modified,
+                mtime_ms: f.mtime_ms,
+                stale: f.stale,
+            })
+            .collect();
+        AsyncTask::new(InsertFilesTask {
+            inner: Arc::clone(&self.inner),
+            rows,
+        })
+    }
+
+    /// Write meta (in order), clear the lossy marker when `sourceComplete`, COMMIT.
+    #[napi]
+    pub fn commit(&self, meta: Vec<MetaEntryJs>, source_complete: bool) -> AsyncTask<CommitTask> {
+        AsyncTask::new(CommitTask {
+            inner: Arc::clone(&self.inner),
+            meta: meta.into_iter().map(|m| (m.key, m.value)).collect(),
+            source_complete,
+        })
+    }
+
+    /// Abandon the write; the previous index stays as it was.
+    #[napi]
+    pub fn rollback(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.take();
+        }
+    }
 }

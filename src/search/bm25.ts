@@ -439,9 +439,10 @@ async function buildNativeBM25(Ctor: new () => NativeBm25Handle, symbols: CodeSy
   const symbolMap = new Map<string, CodeSymbol>();
   for (let i = 0; i < symbols.length; i += SYMBOLS_PER_TURN) {
     const batch = symbols.slice(i, i + SYMBOLS_PER_TURN);
-    native.ingest(batch);
+    // Tokenised in parallel off the main thread; only reading the strings in happens here. Awaited
+    // one batch at a time, because ingestion order is what ties are broken by.
+    await native.ingestAsync(batch);
     for (const symbol of batch) symbolMap.set(symbol.id, symbol);
-    if (i + SYMBOLS_PER_TURN < symbols.length) await yieldToEventLoop();
   }
   native.finish();
   let centrality: Map<string, number> | undefined;

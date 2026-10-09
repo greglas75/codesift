@@ -33,8 +33,23 @@ import { chunkFile, chunkBySymbols } from "../../search/chunker.js";
 import { loadConfig } from "../../config.js";
 import type { CodeSymbol, FileEntry, CodeChunk } from "../../types.js";
 import { embeddingCaches, invalidateEmbeddingCache } from "./state.js";
+import { getNativeCore } from "../../native/index.js";
 
 const PARSE_CONCURRENCY = 8;
+/**
+ * Files in flight when the Rust extractor parses (ADR-006 stage 3). Its parses run on tokio's blocking
+ * pool across every core, so eight at a time left most of them idle — measured as 6.3 s of the main
+ * thread waiting during a 23 s index of a 35k-file repo. The WASM path keeps 8: it has two workers.
+ */
+const NATIVE_PARSE_CONCURRENCY = 32;
+
+function parseConcurrency(): number {
+  try {
+    return getNativeCore("parser") ? NATIVE_PARSE_CONCURRENCY : PARSE_CONCURRENCY;
+  } catch {
+    return PARSE_CONCURRENCY;
+  }
+}
 const CHUNK_EMBEDDING_BATCH_SIZE = 96;
 
 export async function parseOneFile(
@@ -143,8 +158,9 @@ export async function parseFiles(
   // of parseOneFile so the snapshot never re-reads (and never races) the file.
   const shas: Record<string, string> = {};
 
-  for (let i = 0; i < files.length; i += PARSE_CONCURRENCY) {
-    const batch = files.slice(i, i + PARSE_CONCURRENCY);
+  const concurrency = parseConcurrency();
+  for (let i = 0; i < files.length; i += concurrency) {
+    const batch = files.slice(i, i + concurrency);
     const results = await Promise.all(
       batch.map((filePath) => parseOneFile(filePath, repoRoot, repoName)),
     );

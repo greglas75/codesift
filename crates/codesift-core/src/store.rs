@@ -611,6 +611,187 @@ impl Drop for Snapshot {
     }
 }
 
+/// One symbol row as `symbolToRow` lays it out. Numbers are f64 because that is how `node:sqlite`
+/// binds a JS number; the INTEGER columns' affinity then stores an integral value as INTEGER on both
+/// paths, and a fractional one (an `mtime_ms`) as REAL on both.
+#[derive(Debug, Clone, Default)]
+pub struct SymbolRowIn {
+    pub id: String,
+    pub file: String,
+    pub name: String,
+    pub kind: String,
+    pub start_line: f64,
+    pub end_line: f64,
+    pub start_col: Option<f64>,
+    pub end_col: Option<f64>,
+    pub start_byte: Option<f64>,
+    pub end_byte: Option<f64>,
+    pub signature: Option<String>,
+    pub docstring: Option<String>,
+    pub source: Option<String>,
+    pub parent: Option<String>,
+    pub is_async: Option<bool>,
+    pub is_exported: Option<bool>,
+    /// `JSON.stringify` of the extras, computed on the JS side so the stored bytes are the same.
+    pub extras: Option<String>,
+}
+
+/// `fileEntryToRow`.
+#[derive(Debug, Clone, Default)]
+pub struct FileRowIn {
+    pub path: String,
+    pub language: String,
+    pub symbol_count: f64,
+    pub last_modified: f64,
+    pub mtime_ms: Option<f64>,
+    pub stale: Option<bool>,
+}
+
+/// `INSERT_SYMBOL_SQL` / `INSERT_FILE_SQL` of rows.ts — the same statements.
+const INSERT_SYMBOL_SQL: &str = "INSERT INTO symbols (
+  id, file, name, kind, start_line, end_line, start_col, end_col,
+  start_byte, end_byte, signature, docstring, source, parent,
+  is_async, is_exported, extras
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+const INSERT_FILE_SQL: &str =
+    "INSERT INTO files (path, language, symbol_count, last_modified, mtime_ms, stale)
+VALUES (?,?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET
+  language=excluded.language, symbol_count=excluded.symbol_count,
+  last_modified=excluded.last_modified, mtime_ms=excluded.mtime_ms,
+  stale=excluded.stale";
+
+const UPSERT_META_SQL: &str =
+    "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+
+/// `WAL_CHECKPOINT_THRESHOLD_BYTES` of connection.ts.
+const WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
+
+fn bool_int(b: Option<bool>) -> Option<i64> {
+    b.map(|v| if v { 1 } else { 0 })
+}
+
+/// A whole-index replacement — `saveIndexSqlite` + `writeIndexRows` — on its own connection and its
+/// own transaction. Dropped without `commit`, it rolls back, so a write abandoned midway leaves the
+/// previous index exactly as it was (and `repo`, written last, never half-present).
+pub struct Writer {
+    conn: Option<Connection>,
+    db_path: std::path::PathBuf,
+}
+
+impl Writer {
+    pub fn begin(db_path: &Path) -> Result<Writer> {
+        let conn = open(db_path)?;
+        // IMMEDIATE takes the write lock up front: a deferred BEGIN that upgrades on its first write
+        // can fail with BUSY without waiting, where this waits out busy_timeout like any writer.
+        conn.execute_batch("BEGIN IMMEDIATE; DELETE FROM symbols; DELETE FROM files;")?;
+        Ok(Writer {
+            conn: Some(conn),
+            db_path: db_path.to_path_buf(),
+        })
+    }
+
+    fn conn(&self) -> Result<&Connection> {
+        self.conn.as_ref().ok_or_else(|| StoreError {
+            sqlite_code: None,
+            message: "index writer already finished".to_string(),
+        })
+    }
+
+    pub fn insert_symbols(&self, rows: &[SymbolRowIn]) -> Result<()> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare_cached(INSERT_SYMBOL_SQL)?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.id,
+                r.file,
+                r.name,
+                r.kind,
+                r.start_line,
+                r.end_line,
+                r.start_col,
+                r.end_col,
+                r.start_byte,
+                r.end_byte,
+                r.signature,
+                r.docstring,
+                r.source,
+                r.parent,
+                bool_int(r.is_async),
+                bool_int(r.is_exported),
+                r.extras,
+            ])?;
+        }
+        Ok(())
+    }
+
+    pub fn insert_files(&self, rows: &[FileRowIn]) -> Result<()> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare_cached(INSERT_FILE_SQL)?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.path,
+                r.language,
+                r.symbol_count,
+                r.last_modified,
+                r.mtime_ms,
+                bool_int(r.stale),
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Meta in the order `writeIndexRows` writes it, the lossy-migration marker cleared when the rows
+    /// came from source, then COMMIT and — after it, never inside — the WAL bound of
+    /// `maybeCheckpointWal`.
+    pub fn commit(mut self, meta: &[(String, String)], source_complete: bool) -> Result<()> {
+        let conn = self.conn.take().ok_or_else(|| StoreError {
+            sqlite_code: None,
+            message: "index writer already finished".to_string(),
+        })?;
+        let result = (|| -> Result<()> {
+            let mut up = conn.prepare_cached(UPSERT_META_SQL)?;
+            for (k, v) in meta {
+                up.execute([k, v])?;
+            }
+            drop(up);
+            if source_complete {
+                conn.execute("DELETE FROM meta WHERE key = ?", ["lossy_v1_migration"])?;
+            }
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
+        let wal = self.db_path.with_file_name(format!(
+            "{}-wal",
+            self.db_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        if std::fs::metadata(&wal)
+            .map(|m| m.len() >= WAL_CHECKPOINT_THRESHOLD_BYTES)
+            .unwrap_or(false)
+        {
+            // Best effort: BUSY under a live reader is retried by the next write.
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 /// `getIndexMetaSqlite`: `None` when the database holds no index (no `repo` or no `root`).
 pub fn index_meta(db_path: &Path) -> Result<Option<IndexMeta>> {
     let conn = open(db_path)?;
@@ -891,6 +1072,62 @@ mod tests {
             let back: String = serde_json::from_slice(&out).unwrap();
             assert_eq!(back, case, "{}", String::from_utf8_lossy(&out));
         }
+    }
+
+    #[test]
+    fn writer_replaces_the_index_and_an_abandoned_write_leaves_it_untouched() {
+        let (_d, p) = db();
+        let row = |id: &str, mtime: Option<f64>| SymbolRowIn {
+            id: id.into(),
+            file: "w.ts".into(),
+            name: id.into(),
+            kind: "function".into(),
+            start_line: 1.0,
+            end_line: 2.0,
+            is_exported: Some(true),
+            extras: Some(r#"{"tokens":["w"]}"#.into()),
+            start_byte: mtime,
+            ..SymbolRowIn::default()
+        };
+        // Abandoned: dropped without commit.
+        {
+            let w = Writer::begin(&p).unwrap();
+            w.insert_symbols(&[row("gone", None)]).unwrap();
+        }
+        assert!(one(&q(), &p).contains("axb"));
+        let w = Writer::begin(&p).unwrap();
+        w.insert_symbols(&[row("a", None), row("b", Some(3.5))])
+            .unwrap();
+        w.insert_files(&[FileRowIn {
+            path: "w.ts".into(),
+            language: "typescript".into(),
+            symbol_count: 2.0,
+            last_modified: 1.0,
+            mtime_ms: Some(1.25),
+            stale: None,
+        }])
+        .unwrap();
+        w.commit(&[("repo".into(), "t".into())], true).unwrap();
+        let got = one(&q(), &p);
+        assert!(got.starts_with(r#"[{"id":"a","repo":"t","name":"a","kind":"function","file":"w.ts","start_line":1,"end_line":2,"is_exported":true,"tokens":["w"]}"#), "{got}");
+        let conn = Connection::open(&p).unwrap();
+        let ty: String = conn
+            .query_row(
+                "SELECT typeof(start_byte) FROM symbols WHERE id='b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ty, "real");
+        let ty: String = conn
+            .query_row(
+                "SELECT typeof(start_line) FROM symbols WHERE id='b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ty, "integer");
+        assert_eq!(index_meta(&p).unwrap().unwrap().file_count, 1);
     }
 
     #[test]

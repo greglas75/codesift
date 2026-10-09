@@ -24,11 +24,18 @@ import { isIndexStorageError } from "../../src/storage/sqlite/errors.js";
 import { getNativeCore, resetNativeForTesting } from "../../src/native/index.js";
 import type { CodeSymbol } from "../../src/types.js";
 
+// The store is opt-in only (see OPT_IN_ONLY in src/native/index.ts), so these suites opt in.
 const native = (() => {
+  const prev = process.env["CODESIFT_NATIVE_STORE"];
+  process.env["CODESIFT_NATIVE_STORE"] = "1";
+  resetNativeForTesting();
   try {
     return getNativeCore("store");
   } catch {
     return null;
+  } finally {
+    if (prev === undefined) delete process.env["CODESIFT_NATIVE_STORE"];
+    else process.env["CODESIFT_NATIVE_STORE"] = prev;
   }
 })();
 

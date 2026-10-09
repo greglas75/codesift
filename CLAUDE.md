@@ -20,7 +20,12 @@ component keeps its TS implementation; the binary is OPTIONAL.
   Dev hosts use rustup for `greglas`, pinned straight to 1.99.0: the Mac and ryzen-dev (ryzen-old-1).
 - Rustup treats `1.99.0` and `stable` as DIFFERENT toolchains even when they are the same build — a
   fresh `rustup` install plus this repo's pin downloads the compiler twice. `rustup default 1.99.0`.
-- **Stage 1 (store):** `findSymbolsSqlite`/`getIndexMetaSqlite` go native when loaded — query off the
+- ⛔ **The native store is OPT-IN ONLY (`CODESIFT_NATIVE_STORE=1`), never `auto`.** Two copies of
+  SQLite (node:sqlite + rusqlite) on one file in one process corrupt it: POSIX locks never conflict
+  within a process, so a closing Rust connection deleted `-wal`/`-shm` node still had open
+  (SQLITE_IOERR; in the field, lost writes). Safe only once ONE copy owns every index-db access in a
+  process — see ADR-006. Do not "fix" by opting it into `auto`.
+- **Stage 1 (store, opt-in):** `findSymbolsSqlite`/`getIndexMetaSqlite` go native when enabled — query off the
   main thread, results as ≤4 MB JSON chunks parsed with yields. Parity: `node --max-old-space-size=12288
   --import tsx scripts/native-parity.ts <copy of an index.db>` (0 diffs on 5 real indexes);
   benchmark: `scripts/bench-store.ts`. Measurements in ADR-006. Never one JSON string per result — a

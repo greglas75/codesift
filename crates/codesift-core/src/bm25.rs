@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use memchr::memmem;
+use rayon::prelude::*;
 use regex::Regex;
 
 const K1: f64 = 1.2;
@@ -239,6 +240,36 @@ fn import_re() -> &'static Regex {
     })
 }
 
+/// The part of ingesting a symbol that depends on nothing but the symbol: its field tokens and the
+/// import paths centrality counts. Pure, so a batch is tokenised in parallel.
+pub struct Prepared {
+    id: String,
+    file: String,
+    fields: [Vec<String>; FIELD_COUNT],
+    imports: Vec<String>,
+}
+
+/// `prepare` over a build batch, in parallel, keeping input order.
+pub fn prepare_batch(batch: &[SymbolInput]) -> Vec<Prepared> {
+    batch.par_iter().map(|s| prepare(s, true)).collect()
+}
+
+pub fn prepare(sym: &SymbolInput, with_imports: bool) -> Prepared {
+    let imports = match sym.source.as_deref() {
+        Some(src) if with_imports && !src.is_empty() => import_re()
+            .captures_iter(src)
+            .map(|c| c[1].to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
+    Prepared {
+        id: sym.id.clone(),
+        file: sym.file.clone(),
+        fields: field_tokens(sym),
+        imports,
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The index
 // ---------------------------------------------------------------------------------------------
@@ -312,7 +343,8 @@ impl Bm25 {
     }
 
     /// `ingestSymbol` (without the docCount bookkeeping, which differs between build and update).
-    fn ingest(&mut self, sym: &SymbolInput) {
+    /// Only the map updates happen here, in input order; tokenising was done by `prepare`.
+    fn ingest_prepared(&mut self, sym: &Prepared) {
         let file = self.file_id(&sym.file);
         let existing = self.key_ids.get(&sym.id).copied();
         // A key that is alive is being overwritten in place (`Map.set` on an existing id); a dead or
@@ -340,7 +372,7 @@ impl Bm25 {
             k.tokens.iter().chain(k.stale.iter()).copied().collect()
         };
 
-        let fields = field_tokens(sym);
+        let fields = &sym.fields;
         let mut lengths = [0u32; FIELD_COUNT];
         let mut key_tokens: Vec<u32> = Vec::new();
         for (f, tokens) in fields.iter().enumerate() {
@@ -388,19 +420,18 @@ impl Bm25 {
         k.tokens = key_tokens;
     }
 
-    /// Build-mode ingestion of a batch (the loop of `buildBM25IndexYielding`). Import paths are
-    /// collected now and resolved in `finish`, against every file the build will have seen.
+    /// Build-mode ingestion of a batch (the loop of `buildBM25IndexYielding`): tokenised in parallel,
+    /// then folded into the maps one symbol at a time in input order — which is all the ranking
+    /// depends on. Import paths are resolved in `finish`, against every file the build will have seen.
     pub fn ingest_build(&mut self, batch: &[SymbolInput]) {
-        for sym in batch {
-            self.ingest(sym);
+        self.ingest_build_prepared(prepare_batch(batch));
+    }
+
+    pub fn ingest_build_prepared(&mut self, prepared: Vec<Prepared>) {
+        for p in prepared {
+            self.ingest_prepared(&p);
             self.doc_count += 1;
-            if let Some(src) = sym.source.as_deref() {
-                if !src.is_empty() {
-                    for c in import_re().captures_iter(src) {
-                        self.pending_imports.push(c[1].to_string());
-                    }
-                }
-            }
+            self.pending_imports.extend(p.imports);
         }
     }
 
@@ -464,7 +495,7 @@ impl Bm25 {
             self.remove_key(key);
         }
         for sym in symbols {
-            self.ingest(sym);
+            self.ingest_prepared(&prepare(sym, false));
             self.doc_count += 1;
         }
     }

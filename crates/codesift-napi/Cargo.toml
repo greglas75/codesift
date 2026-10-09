@@ -11,7 +11,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 codesift-core = { path = "../codesift-core" }
-napi = "3"
+# `tokio_rt`: extraction runs as an async fn on tokio's blocking pool, NOT on libuv's four threads —
+# those also serve every fs.readFile/stat the indexer does, and a parse holding one starved them.
+napi = { version = "3", features = ["tokio_rt"] }
+tokio = { version = "1", features = ["rt"] }
 napi-derive = "3"
 
 [build-dependencies]

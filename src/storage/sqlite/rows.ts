@@ -42,15 +42,19 @@ export type SymbolRow = {
   extras: string | null;
 };
 
-export function symbolToRow(sym: CodeSymbol): unknown[] {
+/** The `extras` column's text for a symbol, or null — the one place it is built, so the TypeScript
+ *  writer and the native one (which takes it pre-serialised) store identical bytes. */
+export function symbolExtrasJson(sym: CodeSymbol): string | null {
   const extras: SymbolExtras = {};
   if (sym.tokens !== undefined) extras.tokens = sym.tokens;
   if (sym.decorators !== undefined) extras.decorators = sym.decorators;
   if (sym.extends !== undefined) extras.extends = sym.extends;
   if (sym.implements !== undefined) extras.implements = sym.implements;
   if (sym.meta !== undefined) extras.meta = sym.meta;
-  const hasExtras = Object.keys(extras).length > 0;
+  return Object.keys(extras).length > 0 ? JSON.stringify(extras) : null;
+}
 
+export function symbolToRow(sym: CodeSymbol): unknown[] {
   return [
     sym.id,
     sym.file,
@@ -68,7 +72,7 @@ export function symbolToRow(sym: CodeSymbol): unknown[] {
     sym.parent ?? null,
     sym.is_async === undefined ? null : sym.is_async ? 1 : 0,
     sym.is_exported === undefined ? null : sym.is_exported ? 1 : 0,
-    hasExtras ? JSON.stringify(extras) : null,
+    symbolExtrasJson(sym),
   ];
 }
 

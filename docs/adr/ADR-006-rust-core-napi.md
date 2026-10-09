@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: every tree-sitter extractor native)
+**Status:** Accepted (stage 0 done; stage 1: native store is OPT-IN ONLY — see "Two copies of SQLite"; stage 2: BM25 native; stage 3: every tree-sitter extractor native; stage 4: no-go for now)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -325,4 +325,55 @@ Rust, PHP, Kotlin, Gradle KTS — about 4.6M symbols compared in total, 0 differ
 TypeScript has no grammar to share: the regex extractors (Markdown, Prisma, SQL, Astro, Hono,
 conversations), the generic fallback for Java/Ruby/CSS, and the ~28 tools that walk ASTs in
 TypeScript through web-tree-sitter.
+
+## Two copies of SQLite in one process — why the native store is opt-in only (2026-10-09)
+
+Adding the native whole-index WRITE turned up a fault in stage 1 as built: after a Rust connection
+wrote and closed, the next `node:sqlite` read of the same database failed with `SQLITE_IOERR`.
+
+The cause is documented by SQLite as a way to corrupt a database — "multiple copies of SQLite linked
+into the same application". `node:sqlite` and rusqlite's bundled SQLite are two copies. SQLite's unix
+locking uses POSIX `fcntl` locks, which never conflict within one process, and each copy keeps its own
+table of open files, so neither can see the other's connections. When the Rust connection closed, its
+SQLite believed it was the last one: it took the "exclusive" lock (granted — same process), checkpointed,
+and deleted `-wal`/`-shm` that node's connection still had open. In a daemon that is not an IOERR but
+writes landing in an unlinked WAL — lost data. Reads are exposed too: stage 1 opened and closed a Rust
+connection per query next to node's cached one.
+
+The parity suites did not catch it because they never interleaved a live node connection with a
+closing Rust one in a way that triggers the checkpoint. The full-suite storage tests did, once a
+native write sat between two TypeScript operations on the same file.
+
+**Decision, in force now:** `store` is the one component that `auto` and `CODESIFT_NATIVE` never turn
+on (`OPT_IN_ONLY` in `src/native/index.ts`); only `CODESIFT_NATIVE_STORE=1` does, and only the parity
+suites set it. BM25 and parsing never open a database and stay on in `auto`. The live daemon was not
+exposed — its `dist/` predates the native loader — but the next build would have been.
+
+**What a safe stage 1 requires:** every access to an index database within a process going through
+ONE copy of SQLite — `src/storage/sqlite/*` (connection cache, migrations, meta, incremental writes,
+paged loads, narrow reads) plus the four modules outside it that open index databases
+(`cli/commands-daemon.ts`, `cli/commands-maintenance.ts` — prune checkpoints WALs —
+`storage/registry.ts`, `tools/index-tools/worktree-seed.ts`). Partial ownership is not a smaller
+version of the safe design; it is the unsafe one. Until that migration happens, the measured stage 1
+gains (3–8x less event-loop block on reads, 6 s of main-thread writes per large index) are not taken.
+
+## Indexing after stage 3 — where the time went next (2026-10-09)
+
+Full `index_folder` of ResearchShieldNew (35,355 files, 528,394 symbols), native core on, one process:
+
+| | wall | main-thread BM25 | main-thread waiting on parses |
+|---|---:|---:|---:|
+| after stage 3 | 23.2 s | 5.1 s | 6.3 s |
+| + BM25 tokenised in parallel off the main thread (`ingestAsync`) | | **1.1 s** | |
+| + parses on tokio's blocking pool, 32 files in flight | **18.4–19.1 s** | | |
+
+Extraction used to hold one of libuv's four threads per parse — the same threads every `readFile` and
+`stat` of the indexer needs. It now runs as an `async fn` on tokio's blocking pool, and the indexer
+keeps 32 files in flight when the native parser is on (8 for WASM, which has two workers).
+
+The largest remaining main-thread cost is the SQLite write of the index (`writeIndexRows`, ~6 s) —
+exactly the work the opt-in native writer moves off it, once a single SQLite copy owns the files.
+
+**Stage 4 (import graph): no-go for now.** `collectImportEdges` does not appear on the indexing path at
+all in this profile; there is no measured cost to remove.
 

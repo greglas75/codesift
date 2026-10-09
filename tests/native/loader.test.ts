@@ -39,6 +39,14 @@ describe("nativeMode", () => {
     expect(nativeMode("store", { CODESIFT_NATIVE: "1", CODESIFT_NATIVE_STORE: "0" })).toBe("off");
   });
 
+  it("never turns the store on unless its own switch says so", () => {
+    // Two SQLite copies on one file in one process corrupt it — see OPT_IN_ONLY.
+    expect(nativeMode("store", {})).toBe("off");
+    expect(nativeMode("store", { CODESIFT_NATIVE: "1" })).toBe("off");
+    expect(nativeMode("store", { CODESIFT_NATIVE_STORE: "1" })).toBe("required");
+    expect(nativeMode("bm25", {})).toBe("auto");
+  });
+
   it("treats a typo as auto, never as required", () => {
     expect(nativeMode(undefined, { CODESIFT_NATIVE: "yes please" })).toBe("auto");
   });

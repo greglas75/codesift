@@ -9,7 +9,8 @@ import {
   writeMetaValue,
   maybeCheckpointWal,
 } from "./connection.js";
-import { rethrowOperational } from "./errors.js";
+import { rethrowNative, rethrowOperational } from "./errors.js";
+import { getNativeCore, type NativeCore } from "../../native/index.js";
 import { readMetaExtras } from "./meta.js";
 import {
   INSERT_FILE_SQL,
@@ -18,6 +19,7 @@ import {
   fileRowBytes,
   rowToFileEntry,
   rowToSymbol,
+  symbolExtrasJson,
   symbolRowBytes,
   symbolToRow,
   type FileRow,
@@ -53,6 +55,8 @@ export async function saveIndexSqlite(
   opts?: { sourceComplete?: boolean },
 ): Promise<void> {
   const db = await openIndexDb(dbPath);
+  const native = dbPath === ":memory:" ? null : getNativeCore("store");
+  if (native) return saveIndexNative(native, dbPath, index, opts);
 
   db.exec("BEGIN");
   try {
@@ -70,6 +74,60 @@ export async function saveIndexSqlite(
     // their own, so a SQLITE_BUSY or a full disk during a write used to reach the tool layer as an
     // anonymous Error — carrying the same information as a bug in our own code.
     rethrowOperational(err, dbPath);
+  }
+}
+
+/** Rows per native insert call: one main-thread conversion of this many symbols, then the inserts
+ *  run off it. Large enough that per-call overhead vanishes, small enough that no single
+ *  conversion is a noticeable stall. */
+const NATIVE_WRITE_BATCH = 5000;
+
+/**
+ * `saveIndexSqlite` through the Rust core (ADR-006, the write half of stage 1): the same DELETE, the
+ * same INSERT statements in the same order, the same meta and the same lossy-marker rule — on the
+ * core's own connection and transaction, with the row inserts off the main thread. They were the
+ * largest remaining main-thread cost of a full index (6.2 s of 19 s on a 528k-symbol repo).
+ *
+ * The extras column is serialised HERE (`symbolExtrasJson`, shared with `symbolToRow`), so the stored
+ * bytes are the TypeScript path's by construction. `openIndexDb` has already run, so the schema and
+ * migrations are in place; a write from another connection moves `data_version` for the cached TS
+ * connection, which is what its readers' invalidation watches.
+ */
+async function saveIndexNative(
+  native: NativeCore,
+  dbPath: string,
+  index: CodeIndex,
+  opts?: { sourceComplete?: boolean },
+): Promise<void> {
+  let writer: Awaited<ReturnType<NativeCore["beginIndexWrite"]>>;
+  try {
+    writer = await native.beginIndexWrite(dbPath);
+  } catch (err) {
+    rethrowNative(err, dbPath);
+  }
+  try {
+    for (let i = 0; i < index.symbols.length; i += NATIVE_WRITE_BATCH) {
+      const batch = index.symbols.slice(i, i + NATIVE_WRITE_BATCH);
+      await writer.insertSymbols(batch, batch.map(symbolExtrasJson));
+    }
+    for (let i = 0; i < index.files.length; i += NATIVE_WRITE_BATCH) {
+      await writer.insertFiles(index.files.slice(i, i + NATIVE_WRITE_BATCH));
+    }
+    await writer.commit(
+      [
+        { key: "repo", value: index.repo },
+        { key: "root", value: index.root },
+        { key: "created_at", value: String(index.created_at) },
+        { key: "updated_at", value: String(index.updated_at) },
+        { key: "extractor_version", value: JSON.stringify(index.extractor_version ?? null) },
+        { key: "workspaces", value: JSON.stringify(index.workspaces ?? null) },
+        { key: "schema_version", value: String(SCHEMA_VERSION) },
+      ],
+      opts?.sourceComplete === true,
+    );
+  } catch (err) {
+    writer.rollback();
+    rethrowNative(err, dbPath);
   }
 }
 

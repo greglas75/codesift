@@ -1,6 +1,9 @@
 import type { CodeSymbol } from "../../types.js";
 import { openIndexDb, openReadConnection, readMetaValue } from "./connection.js";
-import { classifyStorageError, rethrowOperational } from "./errors.js";
+import { rethrowNative, rethrowOperational } from "./errors.js";
+
+// Kept importable from here: tests and callers predate its move to errors.ts.
+export { rethrowNative } from "./errors.js";
 import { rowToSymbol, type SymbolRow } from "./rows.js";
 import { nextPageRows } from "./index-io.js";
 import { getNativeCore, type NativeCore } from "../../native/index.js";
@@ -130,27 +133,6 @@ async function nativeStoreFor(dbPath: string): Promise<NativeCore | null> {
   return core;
 }
 
-/**
- * Route a native failure through the SAME classifier as the TypeScript path.
- *
- * The binding reports SQLite faults as `[sqlite:<extended code>] <message>`; the code goes back on
- * as `errcode`, which is the field `classifyStorageError` reads for node:sqlite errors. A locked or
- * corrupt database must become an `IndexStorageError` whichever implementation met it — otherwise
- * the fault falls into the "not indexed" branch, the failure this store's error handling exists for.
- */
-export function rethrowNative(err: unknown, dbPath: string): never {
-  const message = err instanceof Error ? err.message : String(err);
-  const tagged = /^\[sqlite:(-?\d+)\] /.exec(message);
-  if (tagged) {
-    const like = Object.assign(new Error(message.slice(tagged[0].length)), { errcode: Number(tagged[1]) });
-    // Unclassified (e.g. a plain SQLITE_ERROR) keeps the original error and its stack.
-    if (classifyStorageError(like) !== null) rethrowOperational(like, dbPath);
-    throw err;
-  }
-  // Not from SQLite — but classified like anything else the TypeScript path catches, so a fault
-  // raised by a stream's own callback is treated identically on both paths.
-  rethrowOperational(err, dbPath);
-}
 
 export async function findSymbolsSqlite(
   dbPath: string,
