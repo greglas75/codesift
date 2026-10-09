@@ -110,15 +110,26 @@ function describes(graph: NativeCallGraphHandle, symbols: CodeSymbol[]): boolean
   return true;
 }
 
-function lookup(symbols: CodeSymbol[], fetch: (id: string) => Uint32Array | null): AdjacencyLookup {
+function lookup(
+  symbols: CodeSymbol[],
+  fetch: (id: string) => Uint32Array | null,
+  fallback: (id: string) => CodeSymbol[] | undefined,
+): AdjacencyLookup {
   // Memoised per id, like the TypeScript Map: repeated `get`s of one id return the same array.
   const memo = new Map<string, CodeSymbol[] | undefined>();
   return {
     get(id: string): CodeSymbol[] | undefined {
       if (memo.has(id)) return memo.get(id);
-      // A graph released under a long call answers by throwing; surface it as a storage-shaped error
-      // rather than a wrong empty adjacency.
-      const positions = fetch(id);
+      let positions: Uint32Array | null;
+      try {
+        positions = fetch(id);
+      } catch {
+        // Released under a long call (eviction). The TypeScript adjacency answers the same question,
+        // so the consumer gets the right list, late, rather than an error or a wrong empty one.
+        const out = fallback(id);
+        memo.set(id, out);
+        return out;
+      }
       const out = positions === null ? undefined : Array.from(positions, (i) => symbols[i]!);
       memo.set(id, out);
       return out;
@@ -177,12 +188,25 @@ export async function nativeAdjacency(
   symbols: CodeSymbol[],
   skipTests: boolean,
   filterReactHooks: boolean,
+  /** Builds the TypeScript adjacency — used only if the graph is released mid-call. */
+  buildFallback: () => { callees: AdjacencyLookup; callers: AdjacencyLookup },
 ): Promise<NativeAdjacency | null> {
   const graph = await nativeGraphFor(repo, skipTests, filterReactHooks);
   if (!graph || !describes(graph, symbols)) return null;
+  return adjacencyFromGraph(graph, symbols, buildFallback);
+}
+
+/** The `.get(id)` view of a graph already proven to describe `symbols` (exported for tests). */
+export function adjacencyFromGraph(
+  graph: NativeCallGraphHandle,
+  symbols: CodeSymbol[],
+  buildFallback: () => { callees: AdjacencyLookup; callers: AdjacencyLookup },
+): NativeAdjacency {
+  let built: { callees: AdjacencyLookup; callers: AdjacencyLookup } | null = null;
+  const fallback = () => (built ??= buildFallback());
   return {
-    callees: lookup(symbols, (id) => graph.callees(id)),
-    callers: lookup(symbols, (id) => graph.callers(id)),
+    callees: lookup(symbols, (id) => graph.callees(id), (id) => fallback().callees.get(id)),
+    callers: lookup(symbols, (id) => graph.callers(id), (id) => fallback().callers.get(id)),
   };
 }
 

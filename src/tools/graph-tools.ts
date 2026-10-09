@@ -45,8 +45,8 @@ export async function adjacencyFor(
   skipTests = true,
   filterReactHooks = false,
 ): Promise<AdjacencyIndex> {
-  return (await nativeAdjacency(repo, symbols, skipTests, filterReactHooks))
-    ?? buildAdjacencyIndex(symbols, skipTests, filterReactHooks);
+  const build = () => buildAdjacencyIndex(symbols, skipTests, filterReactHooks);
+  return (await nativeAdjacency(repo, symbols, skipTests, filterReactHooks, build)) ?? build();
 }
 
 export interface CallSite {

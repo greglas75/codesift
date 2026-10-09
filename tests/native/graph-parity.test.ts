@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { SCHEMA_SQL } from "../../src/storage/sqlite/schema.js";
 import { INSERT_SYMBOL_SQL, symbolToRow } from "../../src/storage/sqlite/rows.js";
 import { buildAdjacencyIndex } from "../../src/tools/graph-tools.js";
-import { hashSymbolIds } from "../../src/tools/graph-native.js";
+import { adjacencyFromGraph, hashSymbolIds } from "../../src/tools/graph-native.js";
 import { getNativeCore, resetNativeForTesting } from "../../src/native/index.js";
 import type { CodeSymbol } from "../../src/types.js";
 
@@ -100,6 +100,19 @@ describe.skipIf(!native)("native call graph matches buildAdjacencyIndex", () => 
     let tsEdges = 0;
     for (const list of ts.callees.values()) tsEdges += list.length;
     expect(graph.edgeCount).toBeGreaterThanOrEqual(tsEdges); // callee lists of colliding ids are overwritten in TS, edges still counted
+  });
+
+  // Bug it catches: a graph evicted and released while impact_analysis still walked it threw out of
+  // `.get(id)` — the consumer must get the TypeScript adjacency's answer instead.
+  it("answers from the TypeScript adjacency once the graph is released mid-use", async () => {
+    const graph = await native!.buildCallGraph(dbPath, true, false);
+    const adjacency = adjacencyFromGraph(graph, SYMBOLS, () => buildAdjacencyIndex(SYMBOLS, true, false));
+    const id = "t:src/a.ts:fetchUser:1";
+    const before = ids(adjacency.callers.get(id));
+    graph.release();
+    const ts = buildAdjacencyIndex(SYMBOLS, true, false);
+    expect(ids(adjacency.callees.get(id))).toEqual(ids(ts.callees.get(id)));
+    expect(before).toEqual(ids(ts.callers.get(id)));
   });
 
   it("hashes node ids the way graph-native.ts verifies them", async () => {
