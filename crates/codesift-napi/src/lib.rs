@@ -820,6 +820,33 @@ impl NativeCallGraph {
         self.graph()?.ids_at(&positions).map_err(to_napi)
     }
 
+    /// The file of each node position.
+    #[napi]
+    pub fn files_at(
+        &self,
+        positions: napi::bindgen_prelude::Uint32Array,
+    ) -> napi::Result<Vec<String>> {
+        self.graph()?.files_at(&positions).map_err(to_napi)
+    }
+
+    /// `impact_analysis`'s walks, off the main thread (see `CallGraph::impact_walk`).
+    #[napi]
+    pub fn impact_walk(
+        &self,
+        changed_files: Vec<String>,
+        max_depth: u32,
+        max_affected: u32,
+        max_dependency_files: u32,
+    ) -> napi::Result<AsyncTask<ImpactWalkTask>> {
+        Ok(AsyncTask::new(ImpactWalkTask {
+            graph: self.graph()?,
+            changed_files,
+            max_depth,
+            max_affected,
+            max_dependency_files,
+        }))
+    }
+
     /// `[callers0, callees0, callers1, callees1, …]` list lengths for `ids`.
     #[napi]
     pub fn degrees(&self, ids: Vec<String>) -> napi::Result<napi::bindgen_prelude::Uint32Array> {
@@ -841,6 +868,59 @@ impl NativeCallGraph {
             positions: positions.to_vec(),
             with_source,
         }))
+    }
+}
+
+#[napi(object)]
+pub struct ImpactWalkJs {
+    pub changed: Vec<u32>,
+    pub affected: Vec<u32>,
+    /// `[file, dependents]` pairs, in order.
+    pub dependency_graph: Vec<DependencyEntryJs>,
+    /// Flattened `(test symbol, callee)` position pairs.
+    pub test_hits: Vec<u32>,
+    pub changed_external_callers: Vec<u32>,
+}
+
+#[napi(object)]
+pub struct DependencyEntryJs {
+    pub file: String,
+    pub dependents: Vec<String>,
+}
+
+pub struct ImpactWalkTask {
+    graph: Arc<codesift_core::callgraph::CallGraph>,
+    changed_files: Vec<String>,
+    max_depth: u32,
+    max_affected: u32,
+    max_dependency_files: u32,
+}
+
+impl Task for ImpactWalkTask {
+    type Output = codesift_core::callgraph::ImpactWalk;
+    type JsValue = ImpactWalkJs;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        Ok(self.graph.impact_walk(
+            &self.changed_files,
+            self.max_depth as usize,
+            self.max_affected as usize,
+            self.max_dependency_files as usize,
+        ))
+    }
+
+    fn resolve(&mut self, _env: Env, w: Self::Output) -> napi::Result<ImpactWalkJs> {
+        Ok(ImpactWalkJs {
+            changed: w.changed,
+            affected: w.affected,
+            dependency_graph: w
+                .dependency_graph
+                .into_iter()
+                .map(|(file, dependents)| DependencyEntryJs { file, dependents })
+                .collect(),
+            test_hits: w.test_hits.into_iter().flat_map(|(a, b)| [a, b]).collect(),
+            changed_external_callers: w.changed_external_callers,
+        })
     }
 }
 

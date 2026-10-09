@@ -277,6 +277,21 @@ pub fn extract_call_sites(source: &str) -> Vec<CallSite> {
 }
 
 /// One graph, for one (database, skip_tests, filter_react_hooks).
+/// What [`CallGraph::impact_walk`] found; positions are node positions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImpactWalk {
+    /// Every symbol in a changed file, in node order.
+    pub changed: Vec<u32>,
+    /// The affected symbols shown (changed first, then callers breadth-first), capped.
+    pub affected: Vec<u32>,
+    /// file -> files with callers of its symbols, at most `max_dependency_files` entries.
+    pub dependency_graph: Vec<(String, Vec<String>)>,
+    /// (test symbol, the callee that put its file in the result).
+    pub test_hits: Vec<(u32, u32)>,
+    /// Per `changed` entry: how many of its callers are in another file.
+    pub changed_external_callers: Vec<u32>,
+}
+
 pub struct CallGraph {
     node_count: usize,
     /// Two independent FNV-1a 32 hashes over every id in node order (UTF-16 units, NUL-separated) —
@@ -289,6 +304,9 @@ pub struct CallGraph {
     /// Per node: its id and rowid, so a caller holding no index can name nodes and fetch them.
     ids: Vec<String>,
     rowids: Vec<i64>,
+    /// Per node, an index into `files` — what `impact_analysis` asks of a node besides its id.
+    file_of: Vec<u32>,
+    files: Vec<String>,
     db_path: PathBuf,
 }
 
@@ -436,14 +454,29 @@ impl CallGraph {
                 break;
             }
         }
+        let mut files: Vec<String> = Vec::new();
+        let mut file_index: HashMap<String, u32> = HashMap::new();
+        let mut file_of: Vec<u32> = Vec::with_capacity(nodes.len());
+        let mut ids: Vec<String> = Vec::with_capacity(nodes.len());
+        for n in nodes {
+            let next = files.len() as u32;
+            let f = *file_index.entry(n.file.clone()).or_insert_with(|| {
+                files.push(n.file);
+                next
+            });
+            file_of.push(f);
+            ids.push(n.id);
+        }
         Ok(CallGraph {
-            node_count: nodes.len(),
+            node_count: ids.len(),
             id_hash,
             callees,
             callers,
             edges,
-            ids: nodes.into_iter().map(|n| n.id).collect(),
+            ids,
             rowids,
+            file_of,
+            files,
             db_path: PathBuf::new(),
         })
     }
@@ -481,6 +514,187 @@ impl CallGraph {
             .collect()
     }
 
+    /// The file of each node position (out-of-range positions are an error).
+    pub fn files_at(&self, positions: &[u32]) -> Result<Vec<String>> {
+        positions
+            .iter()
+            .map(|&p| {
+                self.file_of
+                    .get(p as usize)
+                    .map(|&f| self.files[f as usize].clone())
+                    .ok_or_else(|| StoreError {
+                        sqlite_code: None,
+                        message: format!("node {p} out of range"),
+                    })
+            })
+            .collect()
+    }
+
+    /// `impact_analysis`'s walks (impact-tools.ts `impactFromIndex`), done here so a 1.4M-node graph
+    /// costs one call instead of several per node. Same visit order, same first-wins and
+    /// insertion-order rules as the TypeScript Maps and Sets; see the fields of [`ImpactWalk`].
+    pub fn impact_walk(
+        &self,
+        changed_files: &[String],
+        max_depth: usize,
+        max_affected: usize,
+        max_dependency_files: usize,
+    ) -> ImpactWalk {
+        let file_idx: HashMap<&str, u32> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.as_str(), i as u32))
+            .collect();
+        let changed_set: std::collections::HashSet<u32> = changed_files
+            .iter()
+            .filter_map(|f| file_idx.get(f.as_str()).copied())
+            .collect();
+        let changed: Vec<u32> = (0..self.file_of.len() as u32)
+            .filter(|&p| changed_set.contains(&self.file_of[p as usize]))
+            .collect();
+
+        // findAffectedSymbols: a Map keyed by id — a repeated id keeps its slot and takes the later
+        // node (`set` on a changed symbol), a caller is added only the first time its id is seen.
+        let mut slot: HashMap<&str, usize> = HashMap::new();
+        let mut affected: Vec<u32> = Vec::new();
+        for &p in &changed {
+            let id = self.ids[p as usize].as_str();
+            match slot.get(id) {
+                Some(&k) => affected[k] = p,
+                None => {
+                    slot.insert(id, affected.len());
+                    affected.push(p);
+                }
+            }
+        }
+        // Only the first `max_affected` entries are ever read, and the walk only appends — so it stops
+        // once they exist. The TypeScript walks on to the end and slices; on 556 changed files of a
+        // 1.4M-node graph that was most of the 5 s the call took.
+        let mut frontier = changed.clone();
+        'walk: for _ in 0..max_depth {
+            if affected.len() >= max_affected {
+                break;
+            }
+            let mut next: Vec<u32> = Vec::new();
+            for &p in &frontier {
+                let Some(callers) = self.callers.get(self.ids[p as usize].as_str()) else {
+                    continue;
+                };
+                for &c in callers {
+                    let cid = self.ids[c as usize].as_str();
+                    if !slot.contains_key(cid) {
+                        slot.insert(cid, affected.len());
+                        affected.push(c);
+                        next.push(c);
+                        if affected.len() >= max_affected {
+                            break 'walk;
+                        }
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        affected.truncate(max_affected);
+
+        // changed files + the files of the affected symbols shown
+        let mut affected_files: std::collections::HashSet<u32> = changed_set;
+        for &p in &affected {
+            affected_files.insert(self.file_of[p as usize]);
+        }
+
+        // buildFileDependencyGraph: files in order of their first symbol, dependents in first-seen order
+        let mut groups: Vec<(u32, Vec<u32>)> = Vec::new();
+        let mut group_of: HashMap<u32, usize> = HashMap::new();
+        for p in 0..self.file_of.len() as u32 {
+            let f = self.file_of[p as usize];
+            if !affected_files.contains(&f) {
+                continue;
+            }
+            match group_of.get(&f) {
+                Some(&g) => groups[g].1.push(p),
+                None => {
+                    group_of.insert(f, groups.len());
+                    groups.push((f, vec![p]));
+                }
+            }
+        }
+        let mut dependency_graph: Vec<(String, Vec<String>)> = Vec::new();
+        for (f, nodes) in &groups {
+            if dependency_graph.len() >= max_dependency_files {
+                break;
+            }
+            let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            let mut dependents: Vec<String> = Vec::new();
+            for &p in nodes {
+                let Some(callers) = self.callers.get(self.ids[p as usize].as_str()) else {
+                    continue;
+                };
+                for &c in callers {
+                    let cf = self.file_of[c as usize];
+                    if cf != *f && seen.insert(cf) {
+                        dependents.push(self.files[cf as usize].clone());
+                    }
+                }
+            }
+            if !dependents.is_empty() {
+                dependency_graph.push((self.files[*f as usize].clone(), dependents));
+            }
+        }
+
+        // findAffectedTests, indirect half: test files already counted (changed directly) are skipped,
+        // and a file counts once — at its first symbol whose callees reach an affected file.
+        let is_test: Vec<bool> = self.files.iter().map(|f| is_test_file_strict(f)).collect();
+        let mut seen_tests: std::collections::HashSet<u32> = changed_files
+            .iter()
+            .filter(|f| is_test_file_strict(f))
+            .filter_map(|f| file_idx.get(f.as_str()).copied())
+            .collect();
+        let mut test_hits: Vec<(u32, u32)> = Vec::new();
+        for p in 0..self.file_of.len() as u32 {
+            let f = self.file_of[p as usize];
+            if !is_test[f as usize] || seen_tests.contains(&f) {
+                continue;
+            }
+            let Some(callees) = self.callees.get(self.ids[p as usize].as_str()) else {
+                continue;
+            };
+            if let Some(&c) = callees
+                .iter()
+                .find(|&&c| affected_files.contains(&self.file_of[c as usize]))
+            {
+                seen_tests.insert(f);
+                test_hits.push((p, c));
+            }
+        }
+
+        // calculateRiskScores: per changed symbol, its callers in other files
+        let changed_external_callers = changed
+            .iter()
+            .map(|&p| {
+                let f = self.file_of[p as usize];
+                self.callers
+                    .get(self.ids[p as usize].as_str())
+                    .map_or(0, |cs| {
+                        cs.iter()
+                            .filter(|&&c| self.file_of[c as usize] != f)
+                            .count()
+                    }) as u32
+            })
+            .collect();
+
+        ImpactWalk {
+            changed,
+            affected,
+            dependency_graph,
+            test_hits,
+            changed_external_callers,
+        }
+    }
+
     /// `(callers, callees)` list lengths for each id, 0 where the map has no entry — what
     /// `classifySymbolRoles` reads off the TypeScript maps.
     pub fn degrees(&self, ids: &[String]) -> Vec<u32> {
@@ -512,6 +726,8 @@ impl CallGraph {
             + map(&self.callers)
             + self.ids.iter().map(|s| s.capacity() + 24).sum::<usize>()
             + self.rowids.capacity() * 8
+            + self.file_of.capacity() * 4
+            + self.files.iter().map(|s| s.capacity() + 24).sum::<usize>()
     }
 }
 

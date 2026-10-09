@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 19;
+export const NATIVE_ABI = 20;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -135,6 +135,16 @@ export interface NativeSqliteDatabase {
   prepare(sql: string): NativeSqliteStatement;
 }
 
+/** `CallGraph::impact_walk`: node positions, and the dependency graph already as file names. */
+export interface NativeImpactWalk {
+  changed: number[];
+  affected: number[];
+  dependencyGraph: Array<{ file: string; dependents: string[] }>;
+  /** Flattened (test symbol, callee) pairs. */
+  testHits: number[];
+  changedExternalCallers: number[];
+}
+
 /** A call graph built off the main thread (stage 7); values are node positions in rowid order. */
 export interface NativeCallGraphHandle {
   readonly nodeCount: number;
@@ -146,6 +156,9 @@ export interface NativeCallGraphHandle {
   /** Free the graph now; later calls throw. */
   release(): void;
   idsAt(positions: Uint32Array): string[];
+  filesAt(positions: Uint32Array): string[];
+  /** `impact_analysis`'s walks, off the main thread (impact-tools.ts `nativeImpactFrom`). */
+  impactWalk(changedFiles: string[], maxDepth: number, maxAffected: number, maxDependencyFiles: number): Promise<NativeImpactWalk>;
   degrees(ids: string[]): Uint32Array;
   symbolsJson(positions: Uint32Array, withSource: boolean): Promise<string[]>;
 }

@@ -634,6 +634,31 @@ On tgm-survey-platform (rdesigner), each read in a fresh process:
 | symbols of 300 files, no source (ranking) | 421 ms | +85 MB |
 | `names` for 5 identifiers (`plan_turn`) | 32 ms | +12 MB |
 
-Still loading the index: `impact_analysis`, `review_diff`, `trace_route`, `test_impact_analysis`. Each
-walks the call graph and maps it onto the whole symbol array, and `impact_analysis` also visits every
-test symbol. Moving them means indexless walks like the ones `trace_call_chain` has.
+### `impact_analysis` without the index (ABI 20)
+
+`impact_analysis` now runs its walks in Rust (`CallGraph::impact_walk`), off the main thread, in one
+call: the changed symbols, the breadth-first walk over callers, the file dependency graph, the test
+files reached and per-symbol counts for risk. They keep the TypeScript order rules exactly: a Map
+keyed by id where a repeated changed id keeps its slot, first-seen callers, files in order of their
+first symbol. The store is read only for the 20 symbols shown and for the callee names the test
+reasons quote. The first version made several napi calls per node and took **66 s** on a 1.4M-node
+graph, against 3-5 s for the TypeScript walk. Moving the walk into Rust is what fixed it.
+
+The walk also stops once the 20 entries it shows exist. It only ever appends, so the answer is the
+same. The TypeScript path keeps walking to the end and then slices.
+
+Parity (`scripts/native-impact-parity.ts`, 2 git ranges × depths 1-3 × with/without source, old and
+new compared as JSON): codesift 12/12 identical, tgm-survey-platform 12/12 identical (1,426,824
+nodes, ranges of 5 and 556 changed files, up to 25,345 affected test files).
+
+| tgm-survey-platform | TypeScript path | native |
+|---|---:|---:|
+| setup per cold call | 45 s (index load + adjacency) | 25 s graph build, cached per `data_version` |
+| walk, 5 changed files | 3.0-3.8 s | 0.84-0.98 s |
+| walk, 556 changed files, depth 3 | 5.0-5.4 s | 0.84-0.87 s |
+
+The TypeScript path also ran out of a 14 GB heap partway through the 556-file range. That path
+remains the fallback when there is no native store.
+
+Still loading the index: `review_diff` (ten checks, one of which is whole-repo dead code),
+`trace_route` and `test_impact_analysis`.

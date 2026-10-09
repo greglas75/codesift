@@ -9,9 +9,10 @@ import { DatabaseSync } from "node:sqlite";
 import { SCHEMA_SQL } from "../../src/storage/sqlite/schema.js";
 import { INSERT_SYMBOL_SQL, symbolToRow } from "../../src/storage/sqlite/rows.js";
 import { buildAdjacencyIndex } from "../../src/tools/graph-tools.js";
-import { adjacencyFromGraph, hashSymbolIds } from "../../src/tools/graph-native.js";
+import { adjacencyFromGraph, graphSymbolsAt, hashSymbolIds } from "../../src/tools/graph-native.js";
+import { impactFromIndex, nativeImpactFrom } from "../../src/tools/impact-tools.js";
 import { getNativeCore, resetNativeForTesting } from "../../src/native/index.js";
-import type { CodeSymbol } from "../../src/types.js";
+import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 
 const native = (() => {
   const prev = process.env["CODESIFT_NATIVE_STORE"];
@@ -113,6 +114,26 @@ describe.skipIf(!native)("native call graph matches buildAdjacencyIndex", () => 
     const ts = buildAdjacencyIndex(SYMBOLS, true, false);
     expect(ids(adjacency.callees.get(id))).toEqual(ids(ts.callees.get(id)));
     expect(before).toEqual(ids(ts.callers.get(id)));
+  });
+
+  // Bug it catches: impact_analysis answering from the graph must give the TypeScript path's answer —
+  // same affected symbols in the same order, tests and their reasons, dependency graph and risk.
+  it.each([
+    [["src/a.ts"], 2, false],
+    [["src/a.ts"], 1, true],
+    [["src/b.ts", "src/d.ts"], 3, false],
+    [["src/gen.ts"], 2, false],
+    [["app/Svc.php", "missing.ts"], 2, true],
+    [["src/a.test.ts", "src/c.tsx"], 2, false],
+    [[], 2, false],
+  ])("impact over %j at depth %i (source %s) matches the TypeScript path", async (changed, depth, withSource) => {
+    const graph = await native!.buildCallGraph(dbPath, false, false);
+    // The symbols as the store returns them — what getCodeIndex hands the TypeScript path.
+    const symbols = await graphSymbolsAt(graph, SYMBOLS.map((_, i) => i), true);
+    const index = { repo: "t", root: "/tmp/t", symbols, files: [], created_at: 0, updated_at: 0, symbol_count: symbols.length, file_count: 0 } as CodeIndex;
+    const ts = impactFromIndex(index, buildAdjacencyIndex(symbols, false, false), changed, depth, withSource);
+    const got = await nativeImpactFrom(graph, changed, depth, withSource);
+    expect(got).toEqual(ts);
   });
 
   it("hashes node ids the way graph-native.ts verifies them", async () => {
