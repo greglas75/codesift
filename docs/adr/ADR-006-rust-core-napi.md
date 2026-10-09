@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS extractor native)
+**Status:** Accepted (stage 0 done; stage 1: find/meta/stream native, gate measurement open; stage 2: BM25 native; stage 3: TS/TSX/JS + Python extractors native)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -271,4 +271,18 @@ Measured: a full `index_folder` of ResearchShieldNew (33,227 files, 494,840 symb
 both ways) **34.7 s → 19.5 s**. The TypeScript baseline parsed in-thread (a dev run has no built
 worker); production's two workers make the real gap smaller. Parallelism here is bounded by the libuv
 pool (4 threads) — spawning on the extractor's own pool is the next step if parsing still dominates.
+
+### Stage 3, second language — Python
+
+Port of `python.ts` (`extract/python.rs`) on `tree-sitter-python =0.23.6` (the pinned npm version;
+`.wasm` identical by hash). Carried over because they show in the output: the depth counter restarts in
+a plain class body but not a decorated one; a decorated function's body is walked with the OUTER parent
+id; computed `__all__` members come out in stack order; decorator meta keys keep first-assignment
+order. `MAX_WALK_DEPTH` warnings come back to JS and are printed as before.
+
+Parity on the first run: **0 differences** on sentry, data-lab, tgm-statbox and Helper — 15,939 files,
+220,464 symbols. Native extraction 1.7x faster single-threaded (7.2 s → 4.1 s on sentry).
+
+Shared now in `extract/mod.rs`: `Sym`, `Opts`, `make_symbol` (= `_shared.ts`), `meta_set` (JS object
+assignment semantics), the serialiser, and `Extracted` with a `warnings` list.
 

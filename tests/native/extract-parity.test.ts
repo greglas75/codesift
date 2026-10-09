@@ -119,6 +119,41 @@ class { method( }
 function after() {}
 `],
   ["empty file", "k.ts", ""],
+  ["python: classes, decorators, __all__, fields", "m.py", `
+"""Module doc."""
+__all__ = ['a', "b", r'''c''', BASE]
+__all__ = BASE + ["x", 'y']
+MAX_SIZE = 10
+lower = 1
+
+@dataclass(frozen=True)
+class Point(Base, metaclass=ABCMeta):
+    """A point."""
+    x: int = 0
+    y = 1
+
+    @property
+    def norm(self) -> float:
+        return 0.0
+
+    @norm.setter
+    @abstractmethod
+    async def norm(self, v): ...
+
+    def __init__(self):
+        def inner():
+            class Deep: pass
+
+class TestThing(unittest.TestCase):
+    def test_it(self): pass
+
+@pytest.fixture
+def client(): ...
+
+@app.route('/x')
+def view():
+    def nested(): pass
+`],
 ];
 
 describe.skipIf(!native)("native extractor parity with the TypeScript extractor", () => {
@@ -127,7 +162,7 @@ describe.skipIf(!native)("native extractor parity with the TypeScript extractor"
   });
 
   it.each(CASES)("%s", async (_label, file, source) => {
-    const language = file.endsWith(".tsx") ? "tsx" : file.endsWith(".js") ? "javascript" : "typescript";
+    const language = file.endsWith(".tsx") ? "tsx" : file.endsWith(".js") ? "javascript" : file.endsWith(".py") ? "python" : "typescript";
     const tree = await parseFile(`/repo/${file}`, source);
     const ts = tree ? extractSymbols(tree, file, source, "local/t", language) : [];
     const out = await native!.extractSymbols(source, file, "local/t", language, 30_000);
@@ -143,6 +178,6 @@ describe.skipIf(!native)("native extractor parity with the TypeScript extractor"
   });
 
   it("refuses a language it does not extract", async () => {
-    await expect(native!.extractSymbols("x = 1", "x.py", "r", "python", 30_000)).rejects.toThrow(/no native extractor/);
+    await expect(native!.extractSymbols("x := 1", "x.zig", "r", "zig", 30_000)).rejects.toThrow(/no native extractor/);
   });
 });

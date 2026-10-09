@@ -374,6 +374,8 @@ pub struct ExtractedJs {
     pub has_error: bool,
     /// The parse ran past its budget; no symbols, as the TypeScript path's rejected race.
     pub timed_out: bool,
+    /// Warnings the TypeScript extractor would have printed; the JS side prints them.
+    pub warnings: Vec<String>,
 }
 
 pub struct ExtractTask {
@@ -409,6 +411,7 @@ impl Task for ExtractTask {
             json: out.json,
             has_error: out.has_error,
             timed_out: out.timed_out,
+            warnings: out.warnings,
         })
     }
 }

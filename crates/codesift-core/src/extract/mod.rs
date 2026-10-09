@@ -9,6 +9,7 @@
 //! `start_byte`/`end_byte`, `source.slice(...)` and the 5,000-character truncation all count UTF-16
 //! code units. Sources are parsed with `parse_utf16_le` and every offset here is a code-unit index.
 
+pub mod python;
 pub mod ts;
 
 use std::sync::OnceLock;
@@ -178,18 +179,206 @@ pub fn descendants_of_type<'t>(node: Node<'t>, kind: &str) -> Vec<Node<'t>> {
     out
 }
 
+/// One metadata value; `meta` holds only booleans, integers and string lists.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Meta {
+    Bool(bool),
+    Int(i64),
+    Strs(Vec<String>),
+    Str(String),
+}
+
+/// A `CodeSymbol` as `makeSymbol` builds it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sym {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub source: String,
+    pub tokens: Vec<String>,
+    pub docstring: Option<String>,
+    pub parent: Option<String>,
+    pub signature: Option<String>,
+    pub decorators: Vec<String>,
+    pub extends: Vec<String>,
+    pub implements: Vec<String>,
+    pub is_async: bool,
+    /// Set at creation (`is_exported: true` in the options).
+    pub is_exported: bool,
+    /// Set by the export post-pass on a symbol that had no `is_exported` key: serialised LAST.
+    pub exported_late: bool,
+    pub meta: Vec<(&'static str, Meta)>,
+}
+
+#[derive(Default)]
+pub struct Opts {
+    pub parent: Option<String>,
+    pub docstring: Option<String>,
+    pub signature: Option<String>,
+    pub decorators: Vec<String>,
+    pub extends: Vec<String>,
+    pub implements: Vec<String>,
+    pub is_async: bool,
+    pub is_exported: bool,
+    pub meta: Vec<(&'static str, Meta)>,
+}
+
+/// `makeSymbol` of `_shared.ts`. Truthiness is the caller's contract there and is applied here:
+/// an empty docstring, parent or signature is left out, as `if (opts?.docstring)` leaves it out.
+#[allow(clippy::too_many_arguments)]
+pub fn make_symbol(
+    src: &Utf16Source,
+    file: &str,
+    repo: &str,
+    node: Node<'_>,
+    name: String,
+    kind: &'static str,
+    opts: Opts,
+) -> Sym {
+    let start_line = node.start_position().row + 1;
+    let id = format!("{repo}:{file}:{name}:{start_line}");
+    let source = truncate_source(src.text(node));
+    let tokens = crate::bm25::tokenize_identifier(&name);
+    Sym {
+        id,
+        kind,
+        start_line,
+        end_line: node.end_position().row + 1,
+        start_byte: start_index(node),
+        end_byte: end_index(node),
+        source,
+        tokens,
+        name,
+        docstring: opts.docstring.filter(|s| !s.is_empty()),
+        parent: opts.parent.filter(|s| !s.is_empty()),
+        signature: opts.signature.filter(|s| !s.is_empty()),
+        decorators: opts.decorators,
+        extends: opts.extends,
+        implements: opts.implements,
+        is_async: opts.is_async,
+        is_exported: opts.is_exported,
+        exported_late: false,
+        meta: opts.meta,
+    }
+}
+
+/// Set a meta key the way a JS object assignment does: an existing key keeps its position and takes
+/// the new value; a new key goes last.
+pub fn meta_set(meta: &mut Vec<(&'static str, Meta)>, key: &'static str, value: Meta) {
+    match meta.iter_mut().find(|(k, _)| *k == key) {
+        Some(entry) => entry.1 = value,
+        None => meta.push((key, value)),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Serialisation — `makeSymbol`'s key order, then a late `is_exported`
+// ---------------------------------------------------------------------------------------------
+
+/// Append the symbols as a JSON array, in `makeSymbol`'s key order.
+pub fn write_json(symbols: &[Sym], repo: &str, file: &str, out: &mut String) {
+    use std::fmt::Write;
+    let q = |s: &str| serde_json::to_string(s).expect("string serialises");
+    let qs = |v: &[String]| serde_json::to_string(v).expect("strings serialise");
+    out.push('[');
+    for (i, s) in symbols.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(
+            out,
+            "{{\"id\":{},\"repo\":{},\"name\":{},\"kind\":\"{}\",\"file\":{},\"start_line\":{},\"end_line\":{},\"start_byte\":{},\"end_byte\":{},\"source\":{},\"tokens\":{}",
+            q(&s.id),
+            q(repo),
+            q(&s.name),
+            s.kind,
+            q(file),
+            s.start_line,
+            s.end_line,
+            s.start_byte,
+            s.end_byte,
+            q(&s.source),
+            qs(&s.tokens)
+        );
+        if let Some(d) = &s.docstring {
+            let _ = write!(out, ",\"docstring\":{}", q(d));
+        }
+        if let Some(p) = &s.parent {
+            let _ = write!(out, ",\"parent\":{}", q(p));
+        }
+        if let Some(sig) = &s.signature {
+            let _ = write!(out, ",\"signature\":{}", q(sig));
+        }
+        if !s.decorators.is_empty() {
+            let _ = write!(out, ",\"decorators\":{}", qs(&s.decorators));
+        }
+        if !s.extends.is_empty() {
+            let _ = write!(out, ",\"extends\":{}", qs(&s.extends));
+        }
+        if !s.implements.is_empty() {
+            let _ = write!(out, ",\"implements\":{}", qs(&s.implements));
+        }
+        if s.is_async {
+            out.push_str(",\"is_async\":true");
+        }
+        if s.is_exported {
+            out.push_str(",\"is_exported\":true");
+        }
+        if !s.meta.is_empty() {
+            out.push_str(",\"meta\":{");
+            for (j, (k, v)) in s.meta.iter().enumerate() {
+                if j > 0 {
+                    out.push(',');
+                }
+                let _ = write!(out, "\"{k}\":");
+                match v {
+                    Meta::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+                    Meta::Int(n) => {
+                        let _ = write!(out, "{n}");
+                    }
+                    Meta::Str(t) => out.push_str(&q(t)),
+                    Meta::Strs(list) => out.push_str(&qs(list)),
+                }
+            }
+            out.push('}');
+        }
+        if s.exported_late {
+            out.push_str(",\"is_exported\":true");
+        }
+        out.push('}');
+    }
+    out.push(']');
+}
+
+/// One file's symbols, before serialisation.
+#[derive(Default)]
+pub struct Extracted {
+    pub symbols: Vec<Sym>,
+    /// The tree had syntax errors (the TypeScript extractor warns about it).
+    pub has_error: bool,
+    /// The parse was abandoned at the timeout; the TypeScript path logs and indexes nothing.
+    pub timed_out: bool,
+    /// Messages the TypeScript extractor would have `console.warn`ed; the JS side prints them.
+    pub warnings: Vec<String>,
+}
+
 /// One file's extraction, serialised: the symbols as a JSON array in `makeSymbol` key order.
 pub struct ExtractOutput {
     pub json: String,
     pub has_error: bool,
     pub timed_out: bool,
+    pub warnings: Vec<String>,
 }
 
-/// Threads with stacks large enough for any real syntax tree. The walk is recursive, like the
-/// TypeScript one; a pool thread's default stack (512 KB for a secondary thread on macOS) would
+/// Threads with stacks large enough for any real syntax tree. The walks are recursive, like the
+/// TypeScript ones; a pool thread's default stack (512 KB for a secondary thread on macOS) would
 /// overflow on deeply nested code and ABORT the process, where V8 throws a RangeError the TypeScript
-/// extractor catches. 64 MB holds trees far deeper than V8's stack does, so on a pathological file this
-/// extractor returns every symbol where the TypeScript one returns a partial list.
+/// extractor catches. 64 MB holds trees far deeper than V8's stack does, so on a pathological file
+/// these extractors return every symbol where the TypeScript ones return a partial list.
 fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
@@ -201,7 +390,10 @@ fn pool() -> &'static rayon::ThreadPool {
     })
 }
 
-/// Parse and extract one file. `None` for a language this module does not handle.
+/// Languages with a native extractor — the JS side routes only these here.
+pub const LANGUAGES: [&str; 4] = ["typescript", "tsx", "javascript", "python"];
+
+/// Parse and extract one file. `None` for a language without a native extractor.
 pub fn extract_to_json(
     source: &str,
     file: &str,
@@ -211,13 +403,20 @@ pub fn extract_to_json(
 ) -> Option<ExtractOutput> {
     pool().install(|| {
         let src = Utf16Source::from_text(source);
-        let extracted = ts::extract(&src, file, repo, language, timeout)?;
+        let extracted = match language {
+            "typescript" | "tsx" | "javascript" => {
+                ts::extract(&src, file, repo, language, timeout)?
+            }
+            "python" => python::extract(&src, file, repo, timeout),
+            _ => return None,
+        };
         let mut json = String::new();
-        ts::write_json(&extracted.symbols, repo, file, &mut json);
+        write_json(&extracted.symbols, repo, file, &mut json);
         Some(ExtractOutput {
             json,
             has_error: extracted.has_error,
             timed_out: extracted.timed_out,
+            warnings: extracted.warnings,
         })
     })
 }

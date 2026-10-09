@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 5;
+export const NATIVE_ABI = 6;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -90,6 +90,8 @@ export interface NativeExtracted {
   json: string;
   hasError: boolean;
   timedOut: boolean;
+  /** Warnings the TypeScript extractor would have printed (e.g. Python's MAX_WALK_DEPTH). */
+  warnings: string[];
 }
 
 export interface NativeCore {
@@ -101,7 +103,7 @@ export interface NativeCore {
   indexMeta(dbPath: string): Promise<NativeIndexMeta | null>;
   openSnapshot(dbPath: string): Promise<NativeSymbolSnapshot>;
   NativeBm25: new () => NativeBm25Handle;
-  /** Parse and extract one TypeScript / TSX / JavaScript file off the main thread. */
+  /** Parse and extract one file off the main thread (TypeScript, TSX, JavaScript, Python). */
   extractSymbols(source: string, file: string, repo: string, language: string, timeoutMs: number): Promise<NativeExtracted>;
 }
 

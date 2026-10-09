@@ -1,5 +1,5 @@
 /**
- * Extractor parity on REAL code (ADR-006 stage 3): every TypeScript / TSX / JavaScript file under a
+ * Extractor parity on REAL code (ADR-006 stage 3): every TypeScript / TSX / JavaScript / Python file under a
  * directory, extracted by web-tree-sitter + the TypeScript extractor and by the Rust extractor,
  * compared byte for byte after JSON.stringify (same symbols, same order, same keys in the same order).
  *
@@ -18,8 +18,8 @@ import { initParser, parseFile, getLanguageForPath } from "../src/parser/parser-
 import { extractSymbols } from "../src/parser/symbol-extractor.js";
 import { getNativeCore } from "../src/native/index.js";
 
-const NATIVE_LANGUAGES = new Set(["typescript", "tsx", "javascript"]);
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", "target"]);
+const NATIVE_LANGUAGES = new Set(["typescript", "tsx", "javascript", "python"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage", ".turbo", "target", ".venv", "venv", "__pycache__"]);
 
 function walk(dir: string, out: string[]): void {
   for (const name of readdirSync(dir)) {
@@ -47,6 +47,8 @@ async function main(): Promise<void> {
     console.error("usage: native-extract-parity.ts <dir> [--limit N]");
     process.exit(2);
   }
+  const gi = process.argv.indexOf("--lang");
+  const only = gi > 0 ? new Set(process.argv[gi + 1]!.split(",")) : null;
   const li = process.argv.indexOf("--limit");
   const limit = li > 0 ? Number(process.argv[li + 1]) : Infinity;
   const core = getNativeCore();
@@ -60,7 +62,7 @@ async function main(): Promise<void> {
   walk(root, files);
   const targets = files
     .map((abs) => ({ abs, rel: relative(root, abs), language: getLanguageForPath(relative(root, abs)) }))
-    .filter((f): f is { abs: string; rel: string; language: string } => f.language !== null && NATIVE_LANGUAGES.has(f.language))
+    .filter((f): f is { abs: string; rel: string; language: string } => f.language !== null && NATIVE_LANGUAGES.has(f.language) && (only === null || only.has(f.language)))
     .slice(0, limit);
 
   let diffs = 0;

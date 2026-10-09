@@ -204,13 +204,13 @@ async function runInThreadParse(req: ParseRequest): Promise<CodeSymbol[]> {
  *
  * In dev/test (no built parse-worker.js) falls back to in-thread parsing.
  */
-/** Languages the Rust extractor covers (ADR-006 stage 3) — the TypeScript extractor's own set. */
-const NATIVE_EXTRACT_LANGUAGES = new Set(["typescript", "tsx", "javascript"]);
+/** Languages with a Rust extractor (ADR-006 stage 3) — `codesift_core::extract::LANGUAGES`. */
+const NATIVE_EXTRACT_LANGUAGES = new Set(["typescript", "tsx", "javascript", "python"]);
 
 /**
  * The native path: parse and extract in Rust, on the libuv pool rather than one of the two workers,
  * with the same timeout and the same two warnings the TypeScript path prints. Symbols arrive as JSON
- * in `makeSymbol`'s key order — verified byte-identical to the TypeScript extractor on 3.39M symbols
+ * in `makeSymbol`'s key order — verified byte-identical to the TypeScript extractors on real code
  * (scripts/native-extract-parity.ts).
  *
  * No worker isolation, deliberately: the worker exists because a WASM parse could hang its thread
@@ -229,6 +229,7 @@ async function runNativeExtract(core: NativeCore, req: ParseRequest): Promise<Co
   if (out.hasError) {
     console.warn(`[ts-extractor] grammar errors detected in ${req.relPath}; some symbols may be incomplete`);
   }
+  for (const warning of out.warnings) console.warn(warning);
   return JSON.parse(out.json) as CodeSymbol[];
 }
 
