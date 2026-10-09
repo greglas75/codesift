@@ -93,20 +93,22 @@ async function findRemovedExports(
   file: string,
   since: string,
 ): Promise<ReviewFinding[]> {
+  let oldSource: string;
   try {
-    const oldSource = execFileSync(
+    oldSource = execFileSync(
       "git",
       ["show", `${since}:${file}`],
       { cwd: repoRoot, encoding: "utf-8", timeout: 10_000 },
     );
-
-    const oldExports = extractExportNames(oldSource);
-    if (oldExports.size === 0) return [];
-    return removedExportFindings(file, oldExports, await currentExports(index, file));
   } catch {
     // git show failed -> file didn't exist at `since` (new file), skip.
     return [];
   }
+
+  const oldExports = extractExportNames(oldSource);
+  if (oldExports.size === 0) return [];
+  // Outside the try: a store fault must fail the check, not read as "the file is new".
+  return removedExportFindings(file, oldExports, await currentExports(index, file));
 }
 
 function extractExportNames(source: string): Set<string> {
