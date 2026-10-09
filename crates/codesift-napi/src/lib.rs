@@ -713,47 +713,71 @@ impl IndexWriter {
 /// order — `index.symbols` positions once the JS side has checked `idHash` against its array.
 #[napi]
 pub struct NativeCallGraph {
-    inner: Arc<codesift_core::callgraph::CallGraph>,
+    /// `None` after `release()`. An evicted graph must free its memory when the JS cache drops it, not
+    /// when V8 next collects the wrapper — V8 cannot see these bytes, so it has no reason to hurry, and
+    /// a few evicted graphs are gigabytes. A task in flight keeps its own `Arc` until it finishes.
+    inner: Mutex<Option<Arc<codesift_core::callgraph::CallGraph>>>,
+}
+
+impl NativeCallGraph {
+    fn graph(&self) -> napi::Result<Arc<codesift_core::callgraph::CallGraph>> {
+        self.inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "call graph lock poisoned"))?
+            .clone()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "call graph released"))
+    }
 }
 
 #[napi]
 impl NativeCallGraph {
     #[napi(getter)]
-    pub fn node_count(&self) -> u32 {
-        self.inner.node_count() as u32
+    pub fn node_count(&self) -> napi::Result<u32> {
+        Ok(self.graph()?.node_count() as u32)
     }
 
     #[napi(getter)]
-    pub fn edge_count(&self) -> f64 {
-        self.inner.edge_count() as f64
+    pub fn edge_count(&self) -> napi::Result<f64> {
+        Ok(self.graph()?.edge_count() as f64)
     }
 
     /// The two FNV-1a hashes of every id in node order (UTF-16 units, NUL-separated).
     #[napi]
-    pub fn id_hash(&self) -> Vec<u32> {
-        let (a, b) = self.inner.id_hash();
-        vec![a, b]
+    pub fn id_hash(&self) -> napi::Result<Vec<u32>> {
+        let (a, b) = self.graph()?.id_hash();
+        Ok(vec![a, b])
     }
 
     /// Node positions of the symbols `id` calls, or `null` (the TypeScript map has no entry).
     #[napi]
-    pub fn callees(&self, id: String) -> Option<napi::bindgen_prelude::Uint32Array> {
-        self.inner
+    pub fn callees(&self, id: String) -> napi::Result<Option<napi::bindgen_prelude::Uint32Array>> {
+        Ok(self
+            .graph()?
             .callees(&id)
-            .map(|v| napi::bindgen_prelude::Uint32Array::new(v.to_vec()))
+            .map(|v| napi::bindgen_prelude::Uint32Array::new(v.to_vec())))
     }
 
     /// Node positions of the symbols that call `id`, or `null`.
     #[napi]
-    pub fn callers(&self, id: String) -> Option<napi::bindgen_prelude::Uint32Array> {
-        self.inner
+    pub fn callers(&self, id: String) -> napi::Result<Option<napi::bindgen_prelude::Uint32Array>> {
+        Ok(self
+            .graph()?
             .callers(&id)
-            .map(|v| napi::bindgen_prelude::Uint32Array::new(v.to_vec()))
+            .map(|v| napi::bindgen_prelude::Uint32Array::new(v.to_vec())))
     }
 
+    /// Resident bytes; 0 once released.
     #[napi]
     pub fn footprint_bytes(&self) -> f64 {
-        self.inner.footprint_bytes() as f64
+        self.graph().map_or(0.0, |g| g.footprint_bytes() as f64)
+    }
+
+    /// Drop the graph now (the JS cache calls this on eviction).
+    #[napi]
+    pub fn release(&self) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.take();
+        }
     }
 
     /// The ids of these node positions.
@@ -762,13 +786,15 @@ impl NativeCallGraph {
         &self,
         positions: napi::bindgen_prelude::Uint32Array,
     ) -> napi::Result<Vec<String>> {
-        self.inner.ids_at(&positions).map_err(to_napi)
+        self.graph()?.ids_at(&positions).map_err(to_napi)
     }
 
     /// `[callers0, callees0, callers1, callees1, …]` list lengths for `ids`.
     #[napi]
-    pub fn degrees(&self, ids: Vec<String>) -> napi::bindgen_prelude::Uint32Array {
-        napi::bindgen_prelude::Uint32Array::new(self.inner.degrees(&ids))
+    pub fn degrees(&self, ids: Vec<String>) -> napi::Result<napi::bindgen_prelude::Uint32Array> {
+        Ok(napi::bindgen_prelude::Uint32Array::new(
+            self.graph()?.degrees(&ids),
+        ))
     }
 
     /// The symbols at these node positions, as JSON arrays to concatenate in order, read off the main
@@ -778,12 +804,12 @@ impl NativeCallGraph {
         &self,
         positions: napi::bindgen_prelude::Uint32Array,
         with_source: bool,
-    ) -> AsyncTask<GraphSymbolsTask> {
-        AsyncTask::new(GraphSymbolsTask {
-            graph: Arc::clone(&self.inner),
+    ) -> napi::Result<AsyncTask<GraphSymbolsTask>> {
+        Ok(AsyncTask::new(GraphSymbolsTask {
+            graph: self.graph()?,
             positions: positions.to_vec(),
             with_source,
-        })
+        }))
     }
 }
 
@@ -829,7 +855,7 @@ impl Task for BuildCallGraphTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<NativeCallGraph> {
         Ok(NativeCallGraph {
-            inner: Arc::new(output),
+            inner: Mutex::new(Some(Arc::new(output))),
         })
     }
 }

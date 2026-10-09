@@ -301,6 +301,20 @@ async function nativeCallTree(
   target ??= candidates[0];
   if (!target) throw new Error(`Symbol "${symbolName}" not found in repository "${repo}"`);
 
+  try {
+    return await nativeCallTreeFrom(graph, target, direction, maxDepth, includeSource);
+  } catch {
+    return null; // released under us, or a row changed — the TypeScript path re-reads everything
+  }
+}
+
+async function nativeCallTreeFrom(
+  graph: NativeCallGraphHandle,
+  target: CodeSymbol,
+  direction: Direction,
+  maxDepth: number,
+  includeSource: boolean,
+): Promise<CallNode | null> {
   interface Pending { pos: number; children: Pending[] }
   const visited = new Set<string>([target.id]);
   let totalNodes = 1;
@@ -330,12 +344,7 @@ async function nativeCallTree(
     for (const p of list) { order.push(p.pos); collect(p.children); }
   };
   collect(rootChildren);
-  let fetched: CodeSymbol[];
-  try {
-    fetched = await graphSymbolsAt(graph, order, includeSource);
-  } catch {
-    return null; // a row changed since the graph was built — the TypeScript path re-reads everything
-  }
+  const fetched = await graphSymbolsAt(graph, order, includeSource);
   const byPos = new Map<number, CodeSymbol>();
   order.forEach((pos, i) => byPos.set(pos, fetched[i]!));
   const toNode = (p: Pending): CallNode => ({ symbol: byPos.get(p.pos)!, children: p.children.map(toNode) });
@@ -770,6 +779,18 @@ async function nativeNeighbours(
   await getIndexSummary(repo); // the freshness check getCodeIndex would have run
   const graph = await nativeGraphFor(repo, true, false);
   if (!graph) return null;
+  try {
+    return await nativeNeighboursFrom(graph, symbolIds, limit);
+  } catch {
+    return null;
+  }
+}
+
+async function nativeNeighboursFrom(
+  graph: NativeCallGraphHandle,
+  symbolIds: readonly string[],
+  limit: number,
+): Promise<Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>> {
   const pick = (positions: Uint32Array | null): { kept: number[]; total: number } => {
     if (!positions || positions.length === 0) return { kept: [], total: 0 };
     const ids = graph.idsAt(positions);
@@ -784,12 +805,7 @@ async function nativeNeighbours(
   };
   const plan = symbolIds.map((id) => ({ id, callers: pick(graph.callers(id)), callees: pick(graph.callees(id)) }));
   const wanted = plan.flatMap((p) => [...p.callers.kept, ...p.callees.kept]);
-  let fetched: CodeSymbol[];
-  try {
-    fetched = await graphSymbolsAt(graph, wanted, false);
-  } catch {
-    return null;
-  }
+  const fetched = await graphSymbolsAt(graph, wanted, false);
   let cursor = 0;
   const take = (n: number): CodeSymbol[] => fetched.slice(cursor, (cursor += n)).map(stripSource);
   const out = new Map<string, { callers: CodeSymbol[]; callees: CodeSymbol[]; callersTotal: number; calleesTotal: number }>();
@@ -817,6 +833,7 @@ async function nativeSymbolRoles(
   const graph = await nativeGraphFor(repo, skipTests, false);
   if (!graph) return null;
   const results: SymbolRoleInfo[] = [];
+  try {
   await streamRepoSymbols(repo, { withSource: false, kinds: [...CALLABLE_KINDS] }, (batch) => {
     const kept = batch.filter((sym) =>
       !(skipTests && isTestFile(sym.file)) && !(options?.file_pattern && !sym.file.includes(options.file_pattern)));
@@ -836,6 +853,9 @@ async function nativeSymbolRoles(
       });
     });
   }, { skipFreshness: true });
+  } catch {
+    return null; // released under us — the TypeScript path answers
+  }
   results.sort((a, b) => (b.callers + b.callees) - (a.callers + a.callees));
   return results.slice(0, options?.top_n ?? 100);
 }

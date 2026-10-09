@@ -44,6 +44,18 @@ interface CachedGraph {
 const graphs = new Map<string, CachedGraph>();
 const MAX_GRAPHS = 4;
 
+/**
+ * Free an evicted graph's Rust memory. V8 cannot see those bytes, so leaving it to the wrapper's GC
+ * could keep gigabytes alive; the delay lets a call already holding this graph finish with it.
+ */
+const RELEASE_DELAY_MS = 60_000;
+function retire(entry: CachedGraph): void {
+  entry.graph.then((g) => {
+    const timer = setTimeout(() => g.release(), RELEASE_DELAY_MS);
+    timer.unref();
+  }, () => undefined);
+}
+
 /** Which symbol arrays a graph has been proven to describe (node order = array order). */
 const verified = new WeakMap<NativeCallGraphHandle, WeakSet<CodeSymbol[]>>();
 
@@ -67,9 +79,11 @@ export function hashSymbolIds(symbols: readonly CodeSymbol[]): [number, number] 
 }
 
 function describes(graph: NativeCallGraphHandle, symbols: CodeSymbol[]): boolean {
+  // The length first, every time: a proven array that has since grown or shrunk must not pass on the
+  // strength of an earlier proof.
+  if (graph.nodeCount !== symbols.length) return false;
   let proven = verified.get(graph);
   if (proven?.has(symbols)) return true;
-  if (graph.nodeCount !== symbols.length) return false;
   const [a, b] = hashSymbolIds(symbols);
   const [ga, gb] = graph.idHash();
   if (a !== ga || b !== gb) return false;
@@ -87,6 +101,8 @@ function lookup(symbols: CodeSymbol[], fetch: (id: string) => Uint32Array | null
   return {
     get(id: string): CodeSymbol[] | undefined {
       if (memo.has(id)) return memo.get(id);
+      // A graph released under a long call answers by throwing; surface it as a storage-shaped error
+      // rather than a wrong empty adjacency.
       const positions = fetch(id);
       const out = positions === null ? undefined : Array.from(positions, (i) => symbols[i]!);
       memo.set(id, out);
@@ -117,13 +133,18 @@ export async function nativeGraphFor(
     const version = await getDataVersion(dbPath);
     let entry = graphs.get(key);
     if (!entry || entry.version !== version) {
+      if (entry) retire(entry);
       const fresh: CachedGraph = { version, graph: core.buildCallGraph(dbPath, skipTests, filterReactHooks) };
       fresh.graph.then((g) => { fresh.built = g; }, () => undefined);
       entry = fresh;
     }
     graphs.delete(key);
     graphs.set(key, entry); // most recently used last
-    while (graphs.size > MAX_GRAPHS) graphs.delete(graphs.keys().next().value!);
+    while (graphs.size > MAX_GRAPHS) {
+      const oldest = graphs.keys().next().value!;
+      retire(graphs.get(oldest)!);
+      graphs.delete(oldest);
+    }
     return await entry.graph;
   } catch {
     // A failed build must not stay cached as this key's answer.

@@ -142,6 +142,8 @@ export interface NativeCallGraphHandle {
   callees(id: string): Uint32Array | null;
   callers(id: string): Uint32Array | null;
   footprintBytes(): number;
+  /** Free the graph now; later calls throw. */
+  release(): void;
   idsAt(positions: Uint32Array): string[];
   degrees(ids: string[]): Uint32Array;
   symbolsJson(positions: Uint32Array, withSource: boolean): Promise<string[]>;
