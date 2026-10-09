@@ -7,6 +7,7 @@ import { createEdgeAccumulator, type EdgeAccumulator } from "./edge-accumulator.
 import { buildKotlinFilesByBasename } from "./language-imports.js";
 import { buildNormalizedPathMap } from "./path-map.js";
 import { collectSourceEdges, type SourceEdgeContext } from "./source-edge-collector.js";
+import { extractTypeScriptImportsBatch, isTypeScriptImportFile } from "./typescript-edge-collector.js";
 import type { ImportEdge, PythonImportContext, ImportGraphIndex } from "./types.js";
 import { buildWorkspaceAliasResolver } from "./workspace-alias.js";
 
@@ -44,6 +45,9 @@ function buildSourceContext(index: ImportGraphIndex): CollectionContext {
  * files.
  */
 const READ_BATCH = 32;
+
+/** Files per native parse batch: enough to keep every core busy, few enough sources held at once. */
+const PARSE_CHUNK = 1024;
 
 /** Collect all import edges between files in the index. */
 export async function collectImportEdges(
@@ -91,18 +95,40 @@ export async function collectImportEdges(
   // `collectSourceEdges` appends to a shared accumulator, so out-of-order processing would reorder
   // the edge list — equivalent as a graph, different as a response, and every caller diffing
   // results across versions would see a change that is not one.
-  for (let i = 0; i < files.length; i += READ_BATCH) {
-    const batch = files.slice(i, i + READ_BATCH);
-    const sources = await Promise.all(
-      batch.map((file) => readFile(join(index.root, file.path), "utf-8").catch(() => null)),
-    );
-    for (let j = 0; j < batch.length; j++) {
-      const file = batch[j]!;
+  //
+  // Files are taken a chunk at a time so the `.ts`/`.tsx` ones that need parsing can go to the Rust
+  // core together, which parses them in parallel (ADR-006 stage 4); without a core the map is empty
+  // and each file is parsed below exactly as before.
+  const cachedCalls = (file: (typeof files)[number]) => {
+    const hit = cache?.get(file.path);
+    return hit !== undefined && file.mtime_ms !== undefined && hit.mtime === file.mtime_ms ? hit : undefined;
+  };
+  for (let c = 0; c < files.length; c += PARSE_CHUNK) {
+    const chunk = files.slice(c, c + PARSE_CHUNK);
+    const sources: Array<string | null> = [];
+    for (let i = 0; i < chunk.length; i += READ_BATCH) {
+      const batch = chunk.slice(i, i + READ_BATCH);
+      sources.push(...await Promise.all(
+        batch.map((file) => readFile(join(index.root, file.path), "utf-8").catch(() => null)),
+      ));
+    }
+    const toParse: Array<{ path: string; source: string }> = [];
+    for (let j = 0; j < chunk.length; j++) {
+      const file = chunk[j]!;
+      const source = sources[j];
+      if (source != null && isTypeScriptImportFile(file.path) && cachedCalls(file) === undefined) {
+        toParse.push({ path: file.path, source });
+      }
+    }
+    const tsImports = await extractTypeScriptImportsBatch(toParse);
+
+    for (let j = 0; j < chunk.length; j++) {
+      const file = chunk[j]!;
       const source = sources[j];
       if (source === null || source === undefined) continue;
 
-      const hit = cache?.get(file.path);
-      if (hit !== undefined && file.mtime_ms !== undefined && hit.mtime === file.mtime_ms) {
+      const hit = cachedCalls(file);
+      if (hit !== undefined) {
         for (const call of hit.calls) baseAdd(file.path, call.to, call.extras);
         nextCache.set(file.path, hit);
         reused++;
@@ -110,7 +136,7 @@ export async function collectImportEdges(
       }
 
       recording = [];
-      await collectSourceEdges(file.path, source, context);
+      await collectSourceEdges(file.path, source, context, tsImports.get(file.path));
       if (file.mtime_ms !== undefined) {
         nextCache.set(file.path, { mtime: file.mtime_ms, calls: recording });
       }

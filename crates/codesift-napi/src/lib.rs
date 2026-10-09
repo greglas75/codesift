@@ -461,6 +461,25 @@ pub async fn extract_symbols(
     })
 }
 
+/// `extractTypeScriptImports` over a batch of `.ts`/`.tsx` sources (stage 4), parsed in parallel on
+/// the extract pool: a JSON array with one entry per source, `null` where the parse failed.
+#[napi]
+pub async fn extract_ts_imports(
+    sources: Vec<String>,
+    tsx: Vec<bool>,
+    timeout_ms: u32,
+) -> napi::Result<String> {
+    tokio::task::spawn_blocking(move || {
+        codesift_core::extract::imports::imports_batch_json(
+            &sources,
+            &tsx,
+            std::time::Duration::from_millis(timeout_ms as u64),
+        )
+    })
+    .await
+    .map_err(|e| napi::Error::new(Status::GenericFailure, e.to_string()))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Whole-index write (ADR-006, the write half of stage 1)
 // ---------------------------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import { collectPhpEdges, collectPythonEdges, collectPythonRegexEdges } from "./
 import { extractBareImports, extractImports } from "./source-imports.js";
 import type { AddImportEdge, PythonImportContext, ImportGraphIndex } from "./types.js";
 import { collectTypeScriptEdges } from "./typescript-edge-collector.js";
+import type { TsImportEdge } from "../ts-imports.js";
 import { NULL_RESOLVER, type WorkspaceAliasResolver } from "./workspace-alias.js";
 
 export interface SourceEdgeContext {
@@ -58,6 +59,8 @@ export async function collectSourceEdges(
   filePath: string,
   source: string,
   context: SourceEdgeContext,
+  /** Imports the native batch already extracted for this file (`.ts`/`.tsx` only). */
+  tsImports?: TsImportEdge[],
 ): Promise<void> {
   const typescript = await collectTypeScriptEdges(
     context.index,
@@ -65,6 +68,7 @@ export async function collectSourceEdges(
     source,
     context.normalizedPaths,
     context.addEdge,
+    tsImports,
   );
   if (!typescript.astHandled) {
     collectRegexEdges(filePath, source, context.normalizedPaths, context.addEdge);

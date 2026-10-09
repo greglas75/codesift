@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 17;
+export const NATIVE_ABI = 18;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -165,6 +165,10 @@ export interface NativeCore {
   /** `node:sqlite`'s `DatabaseSync`, ported onto the core's SQLite copy (stage 1: one copy per process). */
   SqliteDatabase: new (location: string, options?: NativeSqliteOpenOptions) => NativeSqliteDatabase;
   buildCallGraph(dbPath: string, skipTests: boolean, filterReactHooks: boolean): Promise<NativeCallGraphHandle>;
+  /** `extractTypeScriptImports` for a batch of `.ts`/`.tsx` sources, parsed in parallel off the main
+   *  thread (stage 4): a JSON array with one entry per source — its `TsImportEdge[]`, or `null` where
+   *  the parse failed. */
+  extractTsImports(sources: string[], tsx: boolean[], timeoutMs: number): Promise<string>;
 }
 
 export type NativeMode = "auto" | "off" | "required";

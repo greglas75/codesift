@@ -65,6 +65,9 @@ describe("buildImportAdjacency", () => {
 
 describe("collectImportEdges", () => {
   it("falls back to regex imports when the TypeScript parser returns null", async () => {
+    // The web-tree-sitter path is the one under test; the native batch would parse instead.
+    const previousNative = process.env["CODESIFT_NATIVE_PARSER"];
+    process.env["CODESIFT_NATIVE_PARSER"] = "0";
     const root = await mkdtemp(join(tmpdir(), "codesift-import-graph-"));
     const parser = await getParser("typescript");
     expect(parser).not.toBeNull();
@@ -88,6 +91,8 @@ describe("collectImportEdges", () => {
       );
       expect(edges).toContainEqual({ from: "src/main.ts", to: "src/dep.ts" });
     } finally {
+      if (previousNative === undefined) delete process.env["CODESIFT_NATIVE_PARSER"];
+      else process.env["CODESIFT_NATIVE_PARSER"] = previousNative;
       parseSpy.mockRestore();
       warningSpy.mockRestore();
       await rm(root, { recursive: true, force: true });

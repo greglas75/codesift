@@ -57,7 +57,7 @@ handlers, the framework analyzers, the CLI and the hooks stay in TypeScript.
    conversations, persisted in the existing v2 format.
 3. **Parser + extractors**, per language (TS/TSX/JS first), and the `index_folder` pipeline.
    `web-tree-sitter` stays for the ~28 tools that walk ASTs in TypeScript.
-4. *(Optional, decided after 3)* import graph.
+4. *(Optional, decided after 3)* import graph — done 2026-10-09, see the stage 4 section.
 
 Rules that hold across all of them:
 
@@ -576,3 +576,42 @@ instance here of a second map of one structure without a bound of its own.
 Still materialising the index, and on the ADR-004 list: `impact_analysis`, `trace_route`, `review_diff`,
 `plan_turn`, ranked `search_text`, `context L2`, wiki, taint, test-impact and a few helpers. They now get
 the Rust graph through `adjacencyFor`, so the expensive part is gone; what remains is the load itself.
+
+## Stage 10 — the remaining candidates, measured (2026-10-09)
+
+Each measured before any code, as the plan required:
+
+- **Cosine search over embeddings: no-go.** Scoring 55k vectors takes 40 ms in TypeScript; the cost
+  is loading them (2.3 s for an 856 MB ndjson file), and that is the text format, not the language.
+  A binary vector format would pay off in either language and is a format change, which this ADR
+  keeps out of a language stage.
+- **The conversation extractor: no-go.** 2.5 s for an 861 MB conversation directory, in a
+  background pass nothing waits on.
+- **The import graph (stage 4): go.** A cold build parses every `.ts`/`.tsx` file one at a time on
+  the main thread, and the edge cache is dropped whenever the file set changes (adding one file can
+  change where an untouched import resolves) — so in a repo with active worktrees, the cold build is
+  the common case, not the rare one.
+
+## Stage 4 — import extraction in Rust (2026-10-09)
+
+`extract/imports.rs` is a 1:1 port of `extractTypeScriptImports`: the same pre-order walk (iterative,
+so a deep tree cannot overflow), the same `type`-keyword rules, `typeof import()` as type-only, mocks,
+non-literal specifiers skipped. Only extraction moved. Resolution against tsconfig paths, workspace
+aliases and the indexed file set stays in TypeScript, unchanged.
+
+`collectImportEdges` reads files in chunks of 1,024 and sends each chunk's uncached `.ts`/`.tsx` files
+to the core in one call. The core parses them in parallel on the extract pool, and processing then
+continues in file order, as before. A file whose parse the core gives up on (budget, depth) is left
+out of the result, and its edges come from the web-tree-sitter path that decided them before.
+
+Parity (`scripts/native-imports-parity.ts`, each file's edges compared, then the whole edge list with
+the native parser off and on):
+
+| index | `.ts`/`.tsx` files compared | per-file diffs | graph | TypeScript | native |
+|---|---:|---:|---|---:|---:|
+| ResearchShieldNew (29,433 files) | 3,763 | 0 | 12,118 edges, identical | 3,944 ms | **641 ms** |
+| tgm-survey-platform (89,142 files) | 69,499 | 0 | 219,404 edges, identical | 83,682 ms | **12,333 ms** |
+
+Both measured on the Mac under its usual load. Python's import extraction stays in TypeScript; its
+cost has not been measured as a separate item.
+

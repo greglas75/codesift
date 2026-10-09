@@ -1,7 +1,7 @@
 ## Tech Stack
 TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
 
-## Rust core (ADR-006 — stages 0–3 done, store still opt-in pending a monitored daemon run; 4 no-go — 2026-10-09)
+## Rust core (ADR-006 — stages 0–4, 6, 7 done; store still opt-in pending a monitored daemon run; 8, 9 no-go — 2026-10-09)
 
 Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
 `crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every
@@ -44,6 +44,11 @@ component keeps its TS implementation; the binary is OPTIONAL.
   grammars `=0.23.2`/`=0.23.1` (= the shipped .wasm, verified by hash). Everything positional is UTF-16
   code units. Parity: `scripts/native-extract-parity.ts <dir>` (0 diffs on 3.39M symbols). The
   `parse_utf16_le_with_options` callback gets a CODE-UNIT offset — do not halve it again.
+- **Stage 4 (import graph, `.ts`/`.tsx`):** `collectImportEdges` sends each 1,024-file chunk's uncached
+  files to `extractTsImports` (`extract/imports.rs`, a 1:1 port of `extractTypeScriptImports`), parsed
+  in parallel off the main thread; path resolution stays in TS. A file the core gives up on is absent
+  from the result and takes the web-tree-sitter path — never "no imports". Parity:
+  `scripts/native-imports-parity.ts <copy.db>` (per file + whole graph; 0 diffs on 73k files).
 - **Distribution:** `@codesift/core-<tag>` per platform, templates in `npm/`, built by the `native`
   matrix in `release.yml`, published by `scripts/publish-native-packages.mjs` BEFORE the main package,
   which then gets `optionalDependencies` for the platforms that made it (never committed). One-time
