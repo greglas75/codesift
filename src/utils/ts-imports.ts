@@ -78,7 +78,9 @@ function getSourcePath(node: TSNode): string | undefined {
     return sourceField.text.replace(/^['"`]|['"`]$/g, "");
   }
   // Fallback: scan named children for a `string` node (some grammar variants
-  // expose it without a named field)
+  // expose it without a named field) — only in a statement that has `from`. Without that check
+  // `export default "./x"` and `export = "y"` read their exported VALUE as a module to import.
+  if (!node.children.some((c) => c.type === "from")) return undefined;
   for (const child of node.namedChildren) {
     if (child.type === "string") {
       return child.text.replace(/^['"`]|['"`]$/g, "");

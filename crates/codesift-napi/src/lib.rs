@@ -469,6 +469,16 @@ pub async fn extract_ts_imports(
     tsx: Vec<bool>,
     timeout_ms: u32,
 ) -> napi::Result<String> {
+    if sources.len() != tsx.len() {
+        return Err(napi::Error::new(
+            Status::InvalidArg,
+            format!(
+                "extractTsImports: {} sources but {} tsx flags",
+                sources.len(),
+                tsx.len()
+            ),
+        ));
+    }
     tokio::task::spawn_blocking(move || {
         codesift_core::extract::imports::imports_batch_json(
             &sources,

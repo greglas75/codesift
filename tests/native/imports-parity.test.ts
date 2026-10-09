@@ -36,6 +36,7 @@ const CASES: Array<[string, string, string]> = [
   ["declare module nests imports", "a.ts", `declare module "m" { import { X } from "./nested"; }`],
   ["tsx with jsx and require", "a.tsx", `import React from "react";\nexport const C = () => <div>{require("./b")}</div>;`],
   ["syntax errors still yield the edges they reach", "a.ts", `import { a } from "./ok";\nclass { method( }\nimport b from "./after";`],
+  ["an exported string value is not a module", "a.ts", `export default "./x";\nexport = 'y';`],
   ["non-ascii specifiers", "a.ts", `import { zażółć as 中文 } from "./ünï🚀";`],
 ];
 

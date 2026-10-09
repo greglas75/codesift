@@ -43,6 +43,7 @@ async function main(): Promise<void> {
   const tsFiles = index.files.filter((f) => /\.tsx?$/.test(f.path));
   let compared = 0;
   let nativeNull = 0;
+  let diffCount = 0;
   const diffs: string[] = [];
   for (let i = 0; i < tsFiles.length; i += 1024) {
     const batch: Array<{ path: string; source: string }> = [];
@@ -61,12 +62,14 @@ async function main(): Promise<void> {
       if (!tree) continue;
       compared++;
       const want = JSON.stringify(extractTypeScriptImports(tree));
-      if (JSON.stringify(got) !== want && diffs.length < 5) {
+      if (JSON.stringify(got) === want) continue;
+      diffCount++;
+      if (diffs.length < 5) {
         diffs.push(`${path}\n  ts:     ${want.slice(0, 400)}\n  native: ${JSON.stringify(got).slice(0, 400)}`);
       }
     }
   }
-  console.log(`per file: ${compared} compared, ${nativeNull} left to TypeScript, ${diffs.length > 0 ? "DIFFERENCES" : "0 differences"}`);
+  console.log(`per file: ${compared} compared, ${nativeNull} left to TypeScript, ${diffCount} differences`);
 
   // 2. whole graph
   const run = async (mode: string) => {
@@ -75,8 +78,11 @@ async function main(): Promise<void> {
     const edges = await collectImportEdges(index);
     return { edges, ms: performance.now() - t };
   };
+  const previous = process.env["CODESIFT_NATIVE_PARSER"];
   const ts = await run("0");
   const nat = await run("1");
+  if (previous === undefined) delete process.env["CODESIFT_NATIVE_PARSER"];
+  else process.env["CODESIFT_NATIVE_PARSER"] = previous;
   const same = JSON.stringify(ts.edges) === JSON.stringify(nat.edges);
   console.log(
     `graph: ${index.files.length} files, ${ts.edges.length} vs ${nat.edges.length} edges, ` +
@@ -84,7 +90,10 @@ async function main(): Promise<void> {
   );
 
   for (const d of diffs) console.log(d);
-  process.exit(diffs.length === 0 && same ? 0 : 1);
+  // A run that compared nothing proves nothing — e.g. a core declining every file would otherwise
+  // pass both checks, the graph one because every file then takes the TypeScript path.
+  if (compared === 0) console.log("FAIL: no file was compared");
+  process.exit(diffCount === 0 && same && compared > 0 ? 0 : 1);
 }
 
 main().catch((err) => {

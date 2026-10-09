@@ -15,7 +15,9 @@ use std::time::Duration;
 use rayon::prelude::*;
 use tree_sitter::{Language, Node};
 
-use super::{children, named_children, parse_utf16, pool, strip_quotes, Utf16Source};
+use super::{
+    children, end_index, named_children, parse_utf16, pool, start_index, strip_quotes, Utf16Source,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportEdge {
@@ -39,6 +41,10 @@ const MOCK_CALLEES: [&str; 11] = [
     "jest.requireMock",
 ];
 
+/// The longest entry above, in UTF-16 units: a callee longer than this cannot be one, and reading the
+/// text of every link of a long `a().b().c()…` chain would copy the chain once per call.
+const MOCK_CALLEE_MAX_UNITS: usize = 18;
+
 fn is_type_keyword(src: &Utf16Source, node: Node<'_>) -> bool {
     node.kind() == "type" && src.text(node) == "type"
 }
@@ -60,13 +66,16 @@ fn statement_is_type_only(src: &Utf16Source, node: Node<'_>) -> bool {
 fn source_path(src: &Utf16Source, node: Node<'_>) -> Option<String> {
     let raw = match node.child_by_field_name("source") {
         Some(field) => strip_quotes(&src.text(field)),
-        None => strip_quotes(
+        // Only in a statement with `from`: otherwise `export default "./x"` reads its exported
+        // VALUE as a module to import.
+        None if children(node).into_iter().any(|c| c.kind() == "from") => strip_quotes(
             &src.text(
                 named_children(node)
                     .into_iter()
                     .find(|c| c.kind() == "string")?,
             ),
         ),
+        None => return None,
     };
     (!raw.is_empty()).then_some(raw)
 }
@@ -180,7 +189,10 @@ fn collect_call_edge(src: &Utf16Source, node: Node<'_>, edges: &mut Vec<ImportEd
                 edges.push(edge(path, "require", false));
             }
         }
-        "member_expression" if MOCK_CALLEES.contains(&src.text(func).as_str()) => {
+        "member_expression"
+            if end_index(func) - start_index(func) <= MOCK_CALLEE_MAX_UNITS
+                && MOCK_CALLEES.contains(&src.text(func).as_str()) =>
+        {
             if let Some(path) = string_argument(src, node) {
                 edges.push(edge(path, "mock", false));
             }
@@ -331,7 +343,15 @@ pub fn imports_batch_json(sources: &[String], tsx: &[bool], timeout: Duration) -
             .par_iter()
             .enumerate()
             .map(|(i, source)| {
-                let edges = imports_of(source, tsx.get(i).copied().unwrap_or(false), timeout)?;
+                // A missing flag is not guessed: the wrong grammar parses JSX as errors and still
+                // returns edges, which the fallback would never get to correct.
+                let tsx = *tsx.get(i)?;
+                // A panic in one file must cost that file, not the whole batch.
+                let edges = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    imports_of(source, tsx, timeout)
+                }))
+                .ok()
+                .flatten()?;
                 let mut out = String::new();
                 write_edges(&edges, &mut out);
                 Some(out)
@@ -434,6 +454,12 @@ other.mock("./not-a-runner");
         );
     }
 
+    // Bug it catches: the no-`source` fallback read an exported string value as a module.
+    #[test]
+    fn an_exported_string_value_is_not_a_module() {
+        assert_eq!(edges("export default \"./x\";\nexport = 'y';"), vec![]);
+    }
+
     #[test]
     fn batch_marks_failed_parses_null_and_keeps_order() {
         let sources = vec![
@@ -446,5 +472,7 @@ other.mock("./not-a-runner");
         assert_eq!(parsed[0][0]["path"], "./a");
         assert!(parsed[1].is_null());
         assert_eq!(parsed[2][0]["kind"], "require");
+        let short = imports_batch_json(&sources[..2], &[false], Duration::from_secs(30));
+        assert!(serde_json::from_str::<serde_json::Value>(&short).unwrap()[1].is_null());
     }
 }

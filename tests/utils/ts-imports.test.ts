@@ -17,6 +17,15 @@ describe("extractTypeScriptImports", () => {
     return extractTypeScriptImports(tree);
   }
 
+  // Bug it catches: the "first string child" fallback read an exported string VALUE as a re-export
+  // source, inventing a dependency on "./x" / "react" from `export default "./x"`.
+  it.each([`export default "./x";`, `export default 'react';`, `export = "./y";`])(
+    "does not read the exported string in %s as a module",
+    (src) => {
+      expect(extract(src)).toEqual([]);
+    },
+  );
+
   it("flags `import type { X } from \"y\"` as type_only", () => {
     const edges = extract(`import type { Foo } from "./y";`);
     expect(edges).toHaveLength(1);
