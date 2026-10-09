@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 14;
+export const NATIVE_ABI = 15;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -134,6 +134,16 @@ export interface NativeSqliteDatabase {
   prepare(sql: string): NativeSqliteStatement;
 }
 
+/** A call graph built off the main thread (stage 7); values are node positions in rowid order. */
+export interface NativeCallGraphHandle {
+  readonly nodeCount: number;
+  readonly edgeCount: number;
+  idHash(): number[];
+  callees(id: string): Uint32Array | null;
+  callers(id: string): Uint32Array | null;
+  footprintBytes(): number;
+}
+
 export interface NativeCore {
   version(): string;
   abiVersion(): number;
@@ -149,6 +159,7 @@ export interface NativeCore {
   extractSymbols(source: string, file: string, repo: string, language: string, timeoutMs: number): Promise<NativeExtracted>;
   /** `node:sqlite`'s `DatabaseSync`, ported onto the core's SQLite copy (stage 1: one copy per process). */
   SqliteDatabase: new (location: string, options?: NativeSqliteOpenOptions) => NativeSqliteDatabase;
+  buildCallGraph(dbPath: string, skipTests: boolean, filterReactHooks: boolean): Promise<NativeCallGraphHandle>;
 }
 
 export type NativeMode = "auto" | "off" | "required";

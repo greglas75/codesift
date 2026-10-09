@@ -50,6 +50,11 @@ export async function readCacheReport(): Promise<CacheReport> {
     report["conversation_embeddings"] = { entries: stats.embeddings };
   } catch { /* ditto */ }
   try {
+    // Edges live in Rust memory (stage 7), so heap_used_mb does not show them — this does.
+    const graph = await import("../tools/graph-native.js");
+    report["native_call_graph"] = graph.nativeGraphCacheStats();
+  } catch { /* ditto */ }
+  try {
     const gate = await import("../tools/index-tools/load-gate.js");
     const { active, waiting } = gate.indexLoadGateState();
     report["index_load_gate"] = { entries: active + waiting };

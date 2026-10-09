@@ -704,3 +704,93 @@ impl IndexWriter {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Call graph (stage 7)
+// ---------------------------------------------------------------------------------------------
+
+/// The call graph of one index (see `codesift_core::callgraph`). Node values are positions in rowid
+/// order — `index.symbols` positions once the JS side has checked `idHash` against its array.
+#[napi]
+pub struct NativeCallGraph {
+    inner: codesift_core::callgraph::CallGraph,
+}
+
+#[napi]
+impl NativeCallGraph {
+    #[napi(getter)]
+    pub fn node_count(&self) -> u32 {
+        self.inner.node_count() as u32
+    }
+
+    #[napi(getter)]
+    pub fn edge_count(&self) -> f64 {
+        self.inner.edge_count() as f64
+    }
+
+    /// The two FNV-1a hashes of every id in node order (UTF-16 units, NUL-separated).
+    #[napi]
+    pub fn id_hash(&self) -> Vec<u32> {
+        let (a, b) = self.inner.id_hash();
+        vec![a, b]
+    }
+
+    /// Node positions of the symbols `id` calls, or `null` (the TypeScript map has no entry).
+    #[napi]
+    pub fn callees(&self, id: String) -> Option<napi::bindgen_prelude::Uint32Array> {
+        self.inner
+            .callees(&id)
+            .map(|v| napi::bindgen_prelude::Uint32Array::new(v.to_vec()))
+    }
+
+    /// Node positions of the symbols that call `id`, or `null`.
+    #[napi]
+    pub fn callers(&self, id: String) -> Option<napi::bindgen_prelude::Uint32Array> {
+        self.inner
+            .callers(&id)
+            .map(|v| napi::bindgen_prelude::Uint32Array::new(v.to_vec()))
+    }
+
+    #[napi]
+    pub fn footprint_bytes(&self) -> f64 {
+        self.inner.footprint_bytes() as f64
+    }
+}
+
+pub struct BuildCallGraphTask {
+    db_path: PathBuf,
+    skip_tests: bool,
+    filter_react_hooks: bool,
+}
+
+impl Task for BuildCallGraphTask {
+    type Output = codesift_core::callgraph::CallGraph;
+    type JsValue = NativeCallGraph;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        codesift_core::callgraph::CallGraph::build(
+            &self.db_path,
+            self.skip_tests,
+            self.filter_react_hooks,
+        )
+        .map_err(to_napi)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<NativeCallGraph> {
+        Ok(NativeCallGraph { inner: output })
+    }
+}
+
+/// Build the call graph of an index off the main thread.
+#[napi]
+pub fn build_call_graph(
+    db_path: String,
+    skip_tests: bool,
+    filter_react_hooks: bool,
+) -> AsyncTask<BuildCallGraphTask> {
+    AsyncTask::new(BuildCallGraphTask {
+        db_path: PathBuf::from(db_path),
+        skip_tests,
+        filter_react_hooks,
+    })
+}

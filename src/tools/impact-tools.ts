@@ -1,6 +1,6 @@
 import { getCodeIndex } from "./index-tools.js";
 import { runGit } from "./git-exec.js";
-import { buildAdjacencyIndex, stripSource } from "./graph-tools.js";
+import { adjacencyFor, stripSource } from "./graph-tools.js";
 import { buildGitDiffArgs } from "../utils/git-validation.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import type { CodeSymbol, CodeIndex, AffectedTest, RiskScore, ImpactResult } from "../types.js";
@@ -172,7 +172,7 @@ export async function impactAnalysis(
   // automatically when both packages live in the same CodeIndex. Workspace
   // metadata on `index.workspaces` (Task 7) is therefore NOT consulted here —
   // it is already implicit in the symbol set.
-  const adjacency = buildAdjacencyIndex(index.symbols, false);
+  const adjacency = await adjacencyFor(repo, index.symbols, false);
 
   const allAffected = findAffectedSymbols(
     changedSymbols,

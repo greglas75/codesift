@@ -2,6 +2,7 @@ import { getCodeIndex, getIndexSummary } from "./index-tools.js";
 import { isTestFileStrict as isTestFile } from "../utils/test-file.js";
 import { REACT_STDLIB_HOOKS } from "./react-tools.js";
 import type { CodeSymbol, Direction, CallNode } from "../types.js";
+import { nativeAdjacency, type AdjacencyLookup } from "./graph-native.js";
 
 const DEFAULT_CALL_DEPTH = 1;
 
@@ -25,10 +26,26 @@ const CALLABLE_KINDS = new Set([
  * Built once per traceCallChain / impactAnalysis call.
  */
 export interface AdjacencyIndex {
-  /** symbol id → symbols that this symbol references (callees) */
-  callees: Map<string, CodeSymbol[]>;
+  /** symbol id → symbols that this symbol references (callees). Only `get` is part of the contract:
+   *  the native graph (graph-native.ts) answers it without materialising the whole map. */
+  callees: AdjacencyLookup;
   /** symbol id → symbols that reference this symbol (callers) */
-  callers: Map<string, CodeSymbol[]>;
+  callers: AdjacencyLookup;
+}
+
+/**
+ * The adjacency of `symbols` (which must be `repo`'s loaded index): the Rust core's graph when it can
+ * serve it, else `buildAdjacencyIndex`. Same answer either way — `nativeAdjacency` proves its node
+ * order against `symbols` before using it — at a fraction of the main-thread cost.
+ */
+export async function adjacencyFor(
+  repo: string,
+  symbols: CodeSymbol[],
+  skipTests = true,
+  filterReactHooks = false,
+): Promise<AdjacencyIndex> {
+  return (await nativeAdjacency(repo, symbols, skipTests, filterReactHooks))
+    ?? buildAdjacencyIndex(symbols, skipTests, filterReactHooks);
 }
 
 export interface CallSite {
@@ -144,7 +161,7 @@ function buildAdjacencyIndex(
   allSymbols: CodeSymbol[],
   skipTests = true,
   filterReactHooks = false,
-): AdjacencyIndex {
+): { callees: Map<string, CodeSymbol[]>; callers: Map<string, CodeSymbol[]> } {
   const callees = new Map<string, CodeSymbol[]>();
   const callers = new Map<string, CodeSymbol[]>();
 
@@ -325,7 +342,7 @@ export async function traceCallChain(
     );
   }
 
-  const adjacency = buildAdjacencyIndex(index.symbols, !includeTests, filterReactHooks);
+  const adjacency = await adjacencyFor(repo, index.symbols, !includeTests, filterReactHooks);
   const tree = buildCallTree(target, adjacency, direction, maxDepth);
 
   if (outputFormat === "mermaid") {
@@ -412,7 +429,7 @@ export async function classifySymbolRoles(
   if (!index) throw new Error(`Repository not found: ${repo}`);
 
   const skipTests = !(options?.include_tests ?? false);
-  const adjacency = buildAdjacencyIndex(index.symbols, skipTests);
+  const adjacency = await adjacencyFor(repo, index.symbols, skipTests);
 
   const results: SymbolRoleInfo[] = [];
 
@@ -668,7 +685,7 @@ export async function callNeighbours(
   if (!index) throw new Error(`Repository not found: ${repo}`);
   let adjacency = neighbourAdjacency.get(index.symbols);
   if (!adjacency) {
-    adjacency = buildAdjacencyIndex(index.symbols, true, false);
+    adjacency = await adjacencyFor(repo, index.symbols, true, false);
     neighbourAdjacency.set(index.symbols, adjacency);
   }
   const dedupe = (list: CodeSymbol[]): CodeSymbol[] => {

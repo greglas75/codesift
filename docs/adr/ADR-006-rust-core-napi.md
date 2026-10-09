@@ -490,3 +490,28 @@ Measured on a 454,892-symbol rdesigner index, whole stream with source vs. with 
 The win is the rows that never reach V8, on either store. Not migrated yet, because their filters are
 per-pattern or stateful: `search_patterns` (`patterns/execution.ts`), `perf-tools`, `async-correctness`,
 the React and PHP-view scanners — each needs its own literal hints.
+
+## Stage 7, first half — the call graph in Rust (2026-10-09)
+
+`buildAdjacencyIndex` (graph-tools.ts) scanned every symbol's source with three regexes on the main
+thread, on every `trace_call_chain`, `classify_roles`, `explore` neighbours, `impact_analysis` and
+`trace_route`. `codesift_core::callgraph` is a 1:1 port — JS `\s` spelled out, ASCII `\w`/`\b`, the
+same call-site order and dedupe, keyed by id so colliding ids share caller lists exactly as the
+TypeScript `Map`s do — built off the main thread from the index database and cached until
+`data_version` moves. `adjacencyFor(repo, symbols, …)` serves it through the `.get(id)` shape the
+consumers use; node positions map onto `index.symbols` only after an id hash over that array matches
+the graph's, so a resident index patched in place falls back to the TypeScript build. Only with the
+native store on — the graph reads through the core's SQLite.
+
+Parity (`scripts/native-graph-parity.ts`, 454,892-symbol rdesigner index, every id's callers and
+callees compared in order): **0 differences** in all three option sets the tools use.
+
+| option set | edges | TypeScript, main thread | Rust, off it | Rust memory |
+|---|---:|---:|---:|---:|
+| tests skipped | 4,375,487 | 1,407 ms | 1,594 ms | 77 MB |
+| tests included (impact, trace_route) | 28,318,500 | 4,883 ms (+1.17 GB heap) | 3,234 ms | 382 MB |
+| React hooks filtered | 4,375,487 | 1,498 ms | 1,034 ms | 77 MB |
+
+The main-thread cost goes to zero, the heap stops carrying the edges, and a repeat call reuses the
+graph instead of rebuilding it. Still loading the whole index: these tools need `index.symbols` for
+the nodes they print — the second half of stage 7 serves those from the store as well.

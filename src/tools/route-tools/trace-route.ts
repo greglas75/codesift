@@ -1,5 +1,5 @@
 import type { CallNode, CodeIndex, CodeSymbol } from "../../types.js";
-import { buildAdjacencyIndex, buildCallTree } from "../graph-tools.js";
+import { adjacencyFor, buildCallTree } from "../graph-tools.js";
 import { getCodeIndex } from "../index-tools.js";
 import { collectRouteHandlers } from "./handler-discovery.js";
 import { enrichNextjsTrace } from "./next-trace.js";
@@ -25,9 +25,9 @@ function appendCallTree(node: CallNode, depth: number, accumulator: TraceAccumul
   }
 }
 
-function traceHandlerCalls(index: CodeIndex, handlers: RouteHandler[]): TraceAccumulator {
+async function traceHandlerCalls(repo: string, index: CodeIndex, handlers: RouteHandler[]): Promise<TraceAccumulator> {
   const accumulator: TraceAccumulator = { callChain: [], calleeSymbols: [] };
-  const adjacency = buildAdjacencyIndex(index.symbols, false);
+  const adjacency = await adjacencyFor(repo, index.symbols, false);
 
   for (const handler of handlers) {
     const fullSymbol = index.symbols.find(
@@ -60,7 +60,7 @@ export async function traceRoute(
     return { path, handlers: [], call_chain: [], db_calls: [] };
   }
 
-  const { callChain, calleeSymbols } = traceHandlerCalls(index, handlers);
+  const { callChain, calleeSymbols } = await traceHandlerCalls(repo, index, handlers);
   // Handlers in one file (GET + POST) walk overlapping callee trees, so the same symbol arrived
   // once per handler that reached it and findDbCalls — which does not dedupe either — emitted the
   // same database call several times. Deduped by identity, not by name: two distinct symbols may

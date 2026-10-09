@@ -108,12 +108,12 @@ impl From<std::io::Error> for StoreError {
     }
 }
 
-type Result<T> = std::result::Result<T, StoreError>;
+pub(crate) type Result<T> = std::result::Result<T, StoreError>;
 
 /// Open for reading. READ_WRITE without CREATE, not READ_ONLY: a read-only handle cannot create
 /// the `-shm` file of a WAL database whose last writer closed cleanly, and fails with CANTOPEN on
 /// a perfectly healthy index. Nothing here writes.
-fn open(db_path: &Path) -> Result<Connection> {
+pub(crate) fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
