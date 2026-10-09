@@ -120,13 +120,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Node 24, not 22: the native store's DatabaseSync is a port of Node 24's node:sqlite, and
+      # node:sqlite itself differs between releases (22 truncates text at a NUL and orders run()'s
+      # keys differently) — the parity transcript compares against the node it runs on. 24 is what
+      # the farm (.tf.json) and the daemon run.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      # The TypeScript side of the extractor parity needs the .wasm grammars (not committed).
+      - name: Download WASM grammars
+        run: npm run download-wasm
 
       # rustup is preinstalled on every hosted runner and honours rust-toolchain.toml,
       # so the first cargo call installs the pinned 1.99.0 — the farm's version.
@@ -150,4 +158,6 @@ jobs:
       - name: Native tests and the storage suite against the built addon
         env:
           CODESIFT_NATIVE: "1"
-        run: npx vitest run tests/native tests/storage
+        # tests/storage is not Windows-clean (POSIX separators and permission semantics in its
+        # fixtures, independent of the core) — Windows runs the native suites only.
+        run: npx vitest run tests/native ${{ runner.os != 'Windows' && 'tests/storage' || '' }}

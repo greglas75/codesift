@@ -116,7 +116,10 @@ describe.skipIf(!native)("native DatabaseSync matches node:sqlite", () => {
     const w = new Native(path);
     w.exec("PRAGMA journal_mode = WAL; CREATE TABLE t(a, b TEXT, c REAL)");
     const ins = w.prepare("INSERT INTO t VALUES (?, ?, ?)");
+    // One transaction: 1000 autocommits are 1000 fsyncs, past the timeout on a Windows runner.
+    w.exec("BEGIN");
     for (let i = 0; i < 1000; i++) ins.run(i, `s${i}`, i / 3);
+    w.exec("COMMIT");
     w.close();
     const r = new DatabaseSync(path, { readOnly: true });
     try {
