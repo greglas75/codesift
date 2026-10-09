@@ -26,7 +26,9 @@ function show(v: unknown): string {
   if (v instanceof Uint8Array) return `${v.constructor.name}[${[...v].join(",")}]`;
   if (Array.isArray(v)) return `[${v.map(show).join(", ")}]`;
   if (typeof v === "object") {
-    const proto = Object.getPrototypeOf(v) === null ? "null-proto" : "object";
+    const p = Object.getPrototypeOf(v) as object | null;
+    // Named, not just "has one": a row built on any other prototype must print differently.
+    const proto = p === null ? "null-proto" : p === Object.prototype ? "object" : `proto:${p.constructor?.name ?? "?"}`;
     return `${proto}{${Object.entries(v as object).map(([k, x]) => `${JSON.stringify(k)}: ${show(x)}`).join(", ")}}`;
   }
   return `${typeof v}:${String(v)}`;
