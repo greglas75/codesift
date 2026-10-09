@@ -28,7 +28,7 @@ function show(v: unknown): string {
   if (typeof v === "object") {
     const p = Object.getPrototypeOf(v) as object | null;
     // Named, not just "has one": a row built on any other prototype must print differently.
-    const proto = p === null ? "null-proto" : p === Object.prototype ? "object" : `proto:${p.constructor?.name ?? "?"}`;
+    const proto = p === null ? "null-proto" : p === Object.prototype ? "object" : `proto:${p.constructor?.name || "anonymous"}`;
     return `${proto}{${Object.entries(v as object).map(([k, x]) => `${JSON.stringify(k)}: ${show(x)}`).join(", ")}}`;
   }
   return `${typeof v}:${String(v)}`;

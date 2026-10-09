@@ -94,14 +94,19 @@ describe.skipIf(!native)("native DatabaseSync matches node:sqlite", () => {
     const Native = nativeDatabaseSyncCtor(native!);
     const db = new Native(":memory:");
     const stmt = db.prepare("SELECT $a AS a, $b AS b");
+    let getterRan = false;
     const named = {
       get a() {
+        getterRan = true;
         db.close();
         return 1;
       },
       b: 2,
     };
+    // Before the fix this did not throw — the process died (exit 139), which no assertion can see;
+    // reaching the lines below at all is half of the check.
     expect(() => stmt.get(named)).toThrow("statement has been finalized");
+    expect(getterRan).toBe(true);
   });
 
   it("writes a file node:sqlite reads back identically", () => {

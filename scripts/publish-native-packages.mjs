@@ -88,7 +88,10 @@ function main() {
       copyFileSync(built, join(work, file));
       const args = ["publish", "--access", "public", "--ignore-scripts", ...(dryRun ? ["--dry-run"] : [])];
       const r = spawnSync("npm", args, { cwd: work, stdio: "inherit", shell: process.platform === "win32" });
-      if (r.status === 0) {
+      // A failed publish is re-checked against the registry: the first `alreadyPublished` can have
+      // missed it on a transient `npm view` error, and then the publish fails with "cannot publish over
+      // an existing version" for a package that IS there.
+      if (r.status === 0 || alreadyPublished(pkg.name, version)) {
         published.push(pkg.name);
       } else {
         skipped.push(`${tag}: npm publish exited ${r.status ?? r.error?.message}`);

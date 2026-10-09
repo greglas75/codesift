@@ -149,7 +149,9 @@ pub fn strip_quotes(s: &str) -> String {
 }
 
 /// Parse UTF-16 source with a wall-clock budget (`CODESIFT_PARSE_TIMEOUT_MS` on the JS side).
-/// `None` on timeout, like the TypeScript path's rejected race.
+/// `TimedOut` when the budget ran out — like the TypeScript path's rejected race — and also when the
+/// grammar cannot be loaded at all, which the JS side handles the same way (no symbols, one warning);
+/// `TooDeep` when the tree is past `MAX_TREE_DEPTH`.
 pub fn parse_utf16(
     language: &Language,
     src: &Utf16Source,

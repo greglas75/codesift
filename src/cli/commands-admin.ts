@@ -190,7 +190,9 @@ async function handleService(args: string[], flags: Flags): Promise<void> {
       // A routable bind needs a token; the server enforces the same rule.
       const token = getFlag(flags, "token") ?? process.env["CODESIFT_HTTP_TOKEN"];
       // The caller's CODESIFT_* settings go into the unit; credentials do not (serviceEnvFromShell).
-      const { env: inheritedEnv, skipped } = serviceEnvFromShell(process.env);
+      const { env: inheritedEnv, skipped: credentials } = serviceEnvFromShell(process.env);
+      // The HTTP token does reach the unit, through `token` above — do not report it as dropped.
+      const skipped = credentials.filter((k) => !(k === "CODESIFT_HTTP_TOKEN" && token));
       if (skipped.length > 0) {
         process.stderr.write(
           `[codesift] not written into the service unit (credentials, stored there in plain text): `
