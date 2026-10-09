@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 11;
+export const NATIVE_ABI = 12;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -115,7 +115,7 @@ export interface NativeCore {
   NativeBm25: new () => NativeBm25Handle;
   /** Open a transaction that replaces the whole index (stage 1, write half). */
   beginIndexWrite(dbPath: string): Promise<NativeIndexWriter>;
-  /** Parse and extract one file off the main thread (TypeScript, TSX, JavaScript, Python, Go, Rust, PHP, Kotlin, Gradle KTS). */
+  /** Parse and extract one file off the main thread (every language with a tree-sitter grammar: TS/TSX/JS, Python, Go, Rust, PHP, Kotlin, Gradle KTS, Java, Ruby, CSS). */
   extractSymbols(source: string, file: string, repo: string, language: string, timeoutMs: number): Promise<NativeExtracted>;
 }
 

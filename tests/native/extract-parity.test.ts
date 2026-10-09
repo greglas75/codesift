@@ -258,6 +258,14 @@ class MySpec : FunSpec({
 })
 class Strs : StringSpec({ "a string test" { } })
 `],
+  ["java (generic extractor): nested classes, methods, no byte offsets", "r.java", `
+package x;
+public class Outer {
+  public void run() {}
+  static class Inner { int go() { return 1; } }
+  interface Api { void call(); }
+}
+`],
   ["gradle kts: plugins, dependencies, config", "build.gradle.kts", `
 plugins {
     kotlin("jvm") version "1.9.0"
@@ -282,7 +290,7 @@ describe.skipIf(!native)("native extractor parity with the TypeScript extractor"
   });
 
   it.each(CASES)("%s", async (_label, file, source) => {
-    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust", php: "php", kt: "kotlin" };
+    const byExt: Record<string, string> = { tsx: "tsx", js: "javascript", py: "python", go: "go", rs: "rust", php: "php", kt: "kotlin", java: "java" };
     const language = file.endsWith(".gradle.kts") ? "gradle-kts" : byExt[file.split(".").pop()!] ?? "typescript";
     const tree = await parseFile(`/repo/${file}`, source);
     const ts = tree ? extractSymbols(tree, file, source, "local/t", language) : [];

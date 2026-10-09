@@ -320,11 +320,13 @@ grammar whose `.wasm` ships (by hash). Parity on the first run: **0 differences*
 public projects chosen for coverage (nowinandroid for Compose + Gradle KTS, ktor, kotest for the DSL) —
 6,100 files, 83,519 symbols.
 
-That completes the TypeScript extractors that run on a tree-sitter grammar: TS/TSX/JS, Python, Go,
-Rust, PHP, Kotlin, Gradle KTS — about 4.6M symbols compared in total, 0 differences. What stays in
-TypeScript has no grammar to share: the regex extractors (Markdown, Prisma, SQL, Astro, Hono,
-conversations), the generic fallback for Java/Ruby/CSS, and the ~28 tools that walk ASTs in
-TypeScript through web-tree-sitter.
+With the generic fallback ported next (Java, Ruby, CSS on `tree-sitter-java =0.23.5`,
+`tree-sitter-ruby =0.23.1`, `tree-sitter-css =0.25.0`, each the shipped `.wasm` by hash; 0 differences on
+commons-lang's 11,669 symbols — Ruby and CSS yield no symbols through it on either side, its node map
+names none of their node types), every extractor that runs on a tree-sitter grammar has a native
+counterpart: ~4.6M symbols compared in total, 0 differences. What stays in TypeScript has no grammar to
+share — the regex extractors (Markdown, Prisma, SQL, Astro, Hono, conversations) — plus the ~28 tools
+that walk ASTs in TypeScript through web-tree-sitter.
 
 ## Two copies of SQLite in one process — why the native store is opt-in only (2026-10-09)
 

@@ -1262,7 +1262,7 @@ mod tests {
         let syms = run("const s = '🚀';\nfunction f() {}\n", "typescript");
         let f = syms.iter().find(|s| s.name == "f").unwrap();
         // "const s = '🚀';\n" is 16 code units (the emoji is two).
-        assert_eq!(f.start_byte, 16);
+        assert_eq!(f.start_byte, Some(16));
         assert_eq!(f.start_line, 2);
     }
 

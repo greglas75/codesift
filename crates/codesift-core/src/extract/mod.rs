@@ -9,6 +9,7 @@
 //! `start_byte`/`end_byte`, `source.slice(...)` and the 5,000-character truncation all count UTF-16
 //! code units. Sources are parsed with `parse_utf16_le` and every offset here is a code-unit index.
 
+pub mod generic;
 pub mod go;
 pub mod kotlin;
 pub mod php;
@@ -218,8 +219,9 @@ pub struct Sym {
     pub kind: &'static str,
     pub start_line: usize,
     pub end_line: usize,
-    pub start_byte: usize,
-    pub end_byte: usize,
+    /// `None` only for the generic extractor, whose symbols never carried byte offsets.
+    pub start_byte: Option<usize>,
+    pub end_byte: Option<usize>,
     pub source: String,
     pub tokens: Vec<String>,
     pub docstring: Option<String>,
@@ -270,8 +272,8 @@ pub fn make_symbol(
         kind,
         start_line,
         end_line: node.end_position().row + 1,
-        start_byte: start_index(node),
-        end_byte: end_index(node),
+        start_byte: Some(start_index(node)),
+        end_byte: Some(end_index(node)),
         source,
         tokens,
         name,
@@ -313,7 +315,7 @@ pub fn write_json(symbols: &[Sym], repo: &str, file: &str, out: &mut String) {
         }
         let _ = write!(
             out,
-            "{{\"id\":{},\"repo\":{},\"name\":{},\"kind\":\"{}\",\"file\":{},\"start_line\":{},\"end_line\":{},\"start_byte\":{},\"end_byte\":{},\"source\":{},\"tokens\":{}",
+            "{{\"id\":{},\"repo\":{},\"name\":{},\"kind\":\"{}\",\"file\":{},\"start_line\":{},\"end_line\":{}",
             q(&s.id),
             q(repo),
             q(&s.name),
@@ -321,8 +323,13 @@ pub fn write_json(symbols: &[Sym], repo: &str, file: &str, out: &mut String) {
             q(file),
             s.start_line,
             s.end_line,
-            s.start_byte,
-            s.end_byte,
+        );
+        if let (Some(sb), Some(eb)) = (s.start_byte, s.end_byte) {
+            let _ = write!(out, ",\"start_byte\":{sb},\"end_byte\":{eb}");
+        }
+        let _ = write!(
+            out,
+            ",\"source\":{},\"tokens\":{}",
             q(&s.source),
             qs(&s.tokens)
         );
@@ -457,6 +464,7 @@ pub fn extract_to_json(
             "php" => php::extract(&src, file, repo, timeout),
             "kotlin" => kotlin::extract(&src, file, repo, timeout),
             "gradle-kts" => kotlin::extract_gradle_kts(&src, file, repo, timeout),
+            "java" | "ruby" | "css" => generic::extract(&src, file, repo, language, timeout)?,
             _ => return None,
         };
         let mut json = String::new();
