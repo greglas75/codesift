@@ -128,6 +128,7 @@ jobs:
       # bootstrap is in docs/release-native.md.
       - uses: actions/download-artifact@v4
         with:
+          pattern: native-*
           path: native-artifacts
       - name: Publish native platform packages
         run: node scripts/publish-native-packages.mjs --artifacts native-artifacts

@@ -37,6 +37,15 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+/** True when `name@version` is already on the registry — a re-run of a release that got that far. */
+function alreadyPublished(name, version) {
+  const r = spawnSync("npm", ["view", `${name}@${version}`, "version"], {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
+  return r.status === 0 && r.stdout.trim() === version;
+}
+
 function main() {
   const artifacts = arg("--artifacts");
   const dryRun = process.argv.includes("--dry-run");
@@ -54,6 +63,14 @@ function main() {
     const dir = join(root, "npm", tag);
     const pkgPath = join(dir, "package.json");
     if (!existsSync(pkgPath)) continue;
+    const name = readJson(pkgPath).name;
+    // npm refuses to publish over an existing version, so on a re-run (the main publish failed after
+    // the platforms went out) every platform would land in `skipped` and the main package would ship
+    // with NO native dependencies. What is on the registry counts as published.
+    if (!dryRun && alreadyPublished(name, version)) {
+      published.push(name);
+      continue;
+    }
     const file = `codesift-core.${tag}.node`;
     const built = [join(artifacts, `native-${tag}`, file), join(artifacts, file)].find(existsSync);
     if (!built) {
@@ -81,11 +98,15 @@ function main() {
     }
   }
 
-  if (published.length > 0) {
-    mainPkg.optionalDependencies = { ...(mainPkg.optionalDependencies ?? {}) };
-    for (const name of published) mainPkg.optionalDependencies[name] = version;
-    if (!dryRun) writeJson(mainPkgPath, mainPkg);
-  }
+  // Recomputed, not merged: a platform that did not make it this time must not keep a pin from an
+  // earlier write. Other optional dependencies are left as they are.
+  const optional = Object.fromEntries(
+    Object.entries(mainPkg.optionalDependencies ?? {}).filter(([n]) => !n.startsWith("@codesift/core-")),
+  );
+  for (const name of published) optional[name] = version;
+  if (Object.keys(optional).length > 0) mainPkg.optionalDependencies = optional;
+  else delete mainPkg.optionalDependencies;
+  if (!dryRun) writeJson(mainPkgPath, mainPkg);
 
   console.log(`native packages published: ${published.length ? published.join(", ") : "none"}`);
   for (const s of skipped) console.log(`native package skipped — ${s}`);

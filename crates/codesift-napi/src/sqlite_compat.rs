@@ -132,7 +132,11 @@ impl DbState {
             }
         }
         let r = unsafe { sqlite3_close_v2(self.db) };
-        self.db = ptr::null_mut();
+        // Only a successful close releases the handle; on failure it stays, so the error can be read
+        // from it and a later close can retry — as node clears `connection_` only after the check.
+        if r == ffi::SQLITE_OK {
+            self.db = ptr::null_mut();
+        }
         r
     }
 }
@@ -222,26 +226,35 @@ impl SqliteDatabase {
         let dqs = c_int::from(self.dqs);
         let fk = c_int::from(self.foreign_keys);
         let mut fk_out: c_int = 0;
-        unsafe {
-            ffi::sqlite3_db_config(
-                db,
-                ffi::SQLITE_DBCONFIG_DQS_DML,
-                dqs,
-                ptr::null_mut::<c_int>(),
-            );
-            ffi::sqlite3_db_config(
-                db,
-                ffi::SQLITE_DBCONFIG_DQS_DDL,
-                dqs,
-                ptr::null_mut::<c_int>(),
-            );
-            ffi::sqlite3_db_config(
-                db,
-                ffi::SQLITE_DBCONFIG_ENABLE_FKEY,
-                fk,
-                &mut fk_out as *mut c_int,
-            );
-            ffi::sqlite3_busy_timeout(db, self.timeout);
+        // Checked, as node checks them: an option that silently failed to apply (foreign keys off,
+        // double-quoted strings accepted) would be a connection that answers differently from node's.
+        let applied = unsafe {
+            [
+                ffi::sqlite3_db_config(
+                    db,
+                    ffi::SQLITE_DBCONFIG_DQS_DML,
+                    dqs,
+                    ptr::null_mut::<c_int>(),
+                ),
+                ffi::sqlite3_db_config(
+                    db,
+                    ffi::SQLITE_DBCONFIG_DQS_DDL,
+                    dqs,
+                    ptr::null_mut::<c_int>(),
+                ),
+                ffi::sqlite3_db_config(
+                    db,
+                    ffi::SQLITE_DBCONFIG_ENABLE_FKEY,
+                    fk,
+                    &mut fk_out as *mut c_int,
+                ),
+                ffi::sqlite3_busy_timeout(db, self.timeout),
+            ]
+        };
+        if applied.iter().any(|&r| r != ffi::SQLITE_OK) {
+            let err = sqlite_error(db);
+            unsafe { sqlite3_close_v2(db) };
+            return Err(err);
         }
         st.db = db;
         Ok(())
@@ -352,11 +365,14 @@ impl Drop for SqliteStatement {
 }
 
 /// Resets the statement on every exit path, as node's `OnScopeLeave` does.
-struct ResetGuard(*mut ffi::sqlite3_stmt);
+/// Resets only a statement that is still live: one finalized by re-entrant JS mid-call is freed memory.
+struct ResetGuard<'a>(&'a SqliteStatement, *mut ffi::sqlite3_stmt);
 
-impl Drop for ResetGuard {
+impl Drop for ResetGuard<'_> {
     fn drop(&mut self) {
-        unsafe { ffi::sqlite3_reset(self.0) };
+        if self.0.still_live(self.1).is_ok() {
+            unsafe { ffi::sqlite3_reset(self.1) };
+        }
     }
 }
 
@@ -431,6 +447,16 @@ impl Js {
         Ok(out)
     }
 
+    fn byte_length(&self, v: sys::napi_value) -> napi::Result<usize> {
+        let mut prop = ptr::null_mut();
+        check(unsafe {
+            sys::napi_get_named_property(self.env, v, c"byteLength".as_ptr(), &mut prop)
+        })?;
+        let mut n = 0f64;
+        check(unsafe { sys::napi_get_value_double(self.env, prop, &mut n) })?;
+        Ok(n as usize)
+    }
+
     /// The bytes of an ArrayBufferView, or None for anything else.
     fn view_bytes(&self, v: sys::napi_value) -> napi::Result<Option<&[u8]>> {
         let mut is = false;
@@ -456,7 +482,11 @@ impl Js {
                 sys::TypedarrayType::int32_array
                 | sys::TypedarrayType::uint32_array
                 | sys::TypedarrayType::float32_array => 4,
-                _ => 8,
+                sys::TypedarrayType::float64_array
+                | sys::TypedarrayType::bigint64_array
+                | sys::TypedarrayType::biguint64_array => 8,
+                // A kind newer than this list (Float16Array): ask the view itself.
+                _ => return Ok(Some(slice(data, self.byte_length(v)?))),
             };
             return Ok(Some(slice(data, len * width)));
         }
@@ -496,6 +526,17 @@ impl SqliteStatement {
             _ => return Err(invalid_state("statement has been finalized")),
         };
         Ok((st.handle()?, handle))
+    }
+
+    /// After any call that can run JS: is `stmt` still this statement's live handle? A getter or a
+    /// Proxy trap in the named-parameter object can call `db.close()`, which finalizes every
+    /// statement; continuing with the old pointer would be a use-after-free, not an exception.
+    fn still_live(&self, stmt: *mut ffi::sqlite3_stmt) -> napi::Result<()> {
+        match self.handles() {
+            Ok((_, current)) if current == stmt => Ok(()),
+            Ok(_) => Err(invalid_state("statement has been finalized")),
+            Err(e) => Err(e),
+        }
     }
 
     /// `StatementSync::BindParams`.
@@ -545,6 +586,8 @@ impl SqliteStatement {
                 &mut keys,
             )
         })?;
+        // A Proxy's ownKeys trap is JS, and JS can close the database under us.
+        self.still_live(stmt)?;
         let mut n = 0u32;
         check(unsafe { sys::napi_get_array_length(js.env, keys, &mut n) })?;
         for i in 0..n {
@@ -574,6 +617,8 @@ impl SqliteStatement {
             }
             let mut value = ptr::null_mut();
             check(unsafe { sys::napi_get_property(js.env, obj, key, &mut value) })?;
+            // So is a getter — the statement may have been finalized by the time it returns.
+            self.still_live(stmt)?;
             bind_value(js, db, stmt, index, value)?;
         }
         Ok(())
@@ -827,7 +872,7 @@ impl SqliteStatement {
     ) -> napi::Result<Raw> {
         let (db, stmt) = self.handles()?;
         let js = Js { env: env.raw() };
-        let _reset = ResetGuard(stmt);
+        let _reset = ResetGuard(self, stmt);
         self.bind(&js, db, stmt, named, &positional)?;
         match unsafe { ffi::sqlite3_step(stmt) } {
             ffi::SQLITE_ROW => {
@@ -849,7 +894,7 @@ impl SqliteStatement {
     ) -> napi::Result<Raw> {
         let (db, stmt) = self.handles()?;
         let js = Js { env: env.raw() };
-        let _reset = ResetGuard(stmt);
+        let _reset = ResetGuard(self, stmt);
         self.bind(&js, db, stmt, named, &positional)?;
         // Column names are read after the first step, as node does: a step can re-prepare the
         // statement after a schema change, and `SELECT *` then has different columns.
@@ -888,7 +933,7 @@ impl SqliteStatement {
         let (db, stmt) = self.handles()?;
         let js = Js { env: env.raw() };
         {
-            let _reset = ResetGuard(stmt);
+            let _reset = ResetGuard(self, stmt);
             self.bind(&js, db, stmt, named, &positional)?;
         }
         unsafe { ffi::sqlite3_step(stmt) };

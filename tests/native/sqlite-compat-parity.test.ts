@@ -88,6 +88,22 @@ describe.skipIf(!native)("native DatabaseSync matches node:sqlite", () => {
     expect(limit(ours)).toBeGreaterThanOrEqual(limit(theirs));
   });
 
+  it("throws when a named-parameter getter closes the database mid-bind (use-after-free)", () => {
+    // Native only: the getter finalizes the statement being bound; reading on would touch freed
+    // memory. node itself is not run here — this is about the port not crashing the process.
+    const Native = nativeDatabaseSyncCtor(native!);
+    const db = new Native(":memory:");
+    const stmt = db.prepare("SELECT $a AS a, $b AS b");
+    const named = {
+      get a() {
+        db.close();
+        return 1;
+      },
+      b: 2,
+    };
+    expect(() => stmt.get(named)).toThrow("statement has been finalized");
+  });
+
   it("writes a file node:sqlite reads back identically", () => {
     const dir = freshDir();
     const path = join(dir, "x.db");

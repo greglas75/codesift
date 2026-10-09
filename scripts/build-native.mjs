@@ -7,7 +7,7 @@
 //
 // Usage: node scripts/build-native.mjs [--debug] [--target x86_64-apple-darwin]
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -89,7 +89,14 @@ function main() {
   }
   const out = join(root, "native", `codesift-core.${tag}.node`);
   mkdirSync(dirname(out), { recursive: true });
-  copyFileSync(built, out);
+  // Copy beside it, then rename: a NEW inode. Copying over the file in place rewrites the inode a
+  // running process (the daemon) has mapped, and macOS then kills any process that pages code in from
+  // it — "CODESIGNING Invalid Page", SIGKILL with no message (2026-10-09: every test process after a
+  // rebuild died in 0.4 s, and the daemon would have crash-looped on its next restart). A rename
+  // leaves the old inode intact for whoever still has it open.
+  const tmp = `${out}.${process.pid}.tmp`;
+  copyFileSync(built, tmp);
+  renameSync(tmp, out);
   console.log(`build-native: ${out}`);
 }
 
