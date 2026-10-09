@@ -200,7 +200,7 @@ export async function findDeadCode(
   },
 ): Promise<DeadCodeResult> {
   // No full index (ADR-004 stage 2): the summary for the file list, the first symbols for framework
-  // detection, and the exported symbols streamed below. Loading the index was most of this tool's
+  // detection, and the exported symbols read below. Loading the index was most of this tool's
   // time — 12.9 s on a 450k-symbol repo against under a second for the scan itself.
   const index = await requireIndexSummary(repo);
   const includeTests = options?.include_tests ?? false;
@@ -309,7 +309,8 @@ export async function findDeadCode(
 
   // Source for the maybes, a chunk at a time, in their order. A row is matched back on more than its
   // id — ids are not unique (a type and a value can share one) — so each maybe is checked with its
-  // own source.
+  // own source. A maybe whose row is gone or changed since the read above (a reindex in between) is
+  // checked without source, as it was found.
   const identity = (s: CodeSymbol) => `${s.id}\0${s.kind}\0${s.file}\0${s.start_line}\0${s.end_line}`;
   for (let i = 0; i < maybes.length && candidates.length < MAX_DEAD_CODE_RESULTS; i += DEAD_CODE_SOURCE_CHUNK) {
     const chunk = maybes.slice(i, i + DEAD_CODE_SOURCE_CHUNK);
