@@ -765,7 +765,7 @@ function canonicalCycleSignature(nodes: string[]): string {
 }
 
 // Export shared utilities for impact-tools and testing
-export { buildAdjacencyIndex, extractCallSites, buildCallTree, stripSource, isTestFile, classifyRole };
+export { buildAdjacencyIndex, extractCallSites, buildCallTree, nativeCallTreeFrom, stripSource, isTestFile, classifyRole };
 
 /**
  * `callNeighbours` over the Rust graph with no index in memory: dedupe by id in list order, the first

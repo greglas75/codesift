@@ -1,4 +1,5 @@
-import type { CodeSymbol, CodeIndex } from "../../types.js";
+import type { CodeSymbol } from "../../types.js";
+import { asRouteIndex, type RouteIndex, type RouteIndexInput } from "./route-index.js";
 import { deriveUrlPath } from "../../utils/nextjs.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
@@ -15,12 +16,12 @@ function syntheticHandler(file: string, name: string): CodeSymbol {
   } as CodeSymbol;
 }
 
-function appHandlersForFile(index: CodeIndex, file: string): RouteHandler[] {
-  const symbols = index.symbols.filter(
+async function appHandlersForFile(index: RouteIndex, file: string): Promise<RouteHandler[]> {
+  const symbols = (await index.inFiles([file], false)).filter(
     // HEAD and OPTIONS are route exports like any other. Omitting them did not just lose the
     // method — a file exporting only HEAD fell into the `symbols.length === 0` branch below and
     // was reported as an un-methoded synthetic "route".
-    (symbol) => symbol.file === file && /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/.test(symbol.name),
+    (symbol) => /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/.test(symbol.name),
   );
   if (symbols.length === 0) {
     return [{
@@ -40,7 +41,8 @@ function appHandlersForFile(index: CodeIndex, file: string): RouteHandler[] {
 }
 
 /** Find Next.js App Router handlers whose file path defines the route. */
-export function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+export async function findNextJSHandlers(input: RouteIndexInput, searchPath: string): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   const handlers: RouteHandler[] = [];
   const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
 
@@ -52,20 +54,20 @@ export function findNextJSHandlers(index: CodeIndex, searchPath: string): RouteH
     if (!routeMatch) continue;
     const routePath = (routeMatch[1] ?? "").replace(/\([^)]+\)\/?/g, "");
     if (matchPath(routePath, normalizedSearch)) {
-      handlers.push(...appHandlersForFile(index, file.path));
+      handlers.push(...await appHandlersForFile(index, file.path));
     }
   }
   return handlers;
 }
-function hasNextProjectSignal(index: CodeIndex): boolean {
+function hasNextProjectSignal(index: Pick<RouteIndex, "files">): boolean {
   return index.files.some((file) =>
     /^(src\/)?next\.config\.[mc]?[jt]sx?$/.test(file.path) ||
     /(^|\/)app\/.*\/(page|layout|route)\.[jt]sx?$/.test(file.path)
   );
 }
 
-function pagesHandlerForFile(index: CodeIndex, file: string): RouteHandler {
-  const symbols = index.symbols.filter((symbol) => symbol.file === file);
+async function pagesHandlerForFile(index: RouteIndex, file: string): Promise<RouteHandler> {
+  const symbols = await index.inFiles([file], false);
   const symbol = symbols.find((candidate) =>
     candidate.name === "default" || candidate.name === "handler"
   ) ?? symbols.find((candidate) =>
@@ -81,7 +83,8 @@ function pagesHandlerForFile(index: CodeIndex, file: string): RouteHandler {
 }
 
 /** Find Next.js Pages Router API handlers while excluding Astro's src/pages convention. */
-export function findPagesRouterHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
+export async function findPagesRouterHandlers(input: RouteIndexInput, searchPath: string): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   if (!hasNextProjectSignal(index)) return [];
 
   const normalizedSearch = searchPath.replace(/^\/|\/$/g, "");
@@ -90,7 +93,7 @@ export function findPagesRouterHandlers(index: CodeIndex, searchPath: string): R
     if (!/^(\.\/)?pages\/api\//.test(file.path)) continue;
     const normalizedRoute = deriveUrlPath(file.path, "pages").replace(/^\/|\/$/g, "");
     if (normalizedRoute === normalizedSearch) {
-      handlers.push(pagesHandlerForFile(index, file.path));
+      handlers.push(await pagesHandlerForFile(index, file.path));
     }
   }
   return handlers;

@@ -1,4 +1,4 @@
-import type { CodeIndex } from "../../types.js";
+import { asRouteIndex, type RouteIndex, type RouteIndexInput } from "./route-index.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import { readIndexedFiles } from "./file-sources.js";
@@ -22,21 +22,17 @@ function routeTarget(segments: string[]): { controllerId: string; actionId: stri
   };
 }
 
-function conventionHandler(
-  index: CodeIndex,
+async function conventionHandler(
+  index: RouteIndex,
   controllerId: string,
   actionId: string,
-): RouteHandler | null {
+): Promise<RouteHandler | null> {
   const controllerName = toPascal(controllerId) + "Controller";
   const actionName = "action" + toPascal(actionId);
-  const controller = index.symbols.find(
-    (symbol) => symbol.name === controllerName && symbol.kind === "class",
-  );
+  const [controller] = await index.find({ name: controllerName, kind: "class", withSource: false, limit: 1 });
   if (!controller) return null;
 
-  const action = index.symbols.find(
-    (symbol) => symbol.name === actionName && symbol.parent === controller.id,
-  );
+  const [action] = await index.find({ name: actionName, parent: controller.id, withSource: false, limit: 1 });
   const symbol = action ?? controller;
   return {
     symbol: stripSource(symbol),
@@ -46,15 +42,15 @@ function conventionHandler(
   };
 }
 
-function configRuleHandler(index: CodeIndex, route: string, method: string): RouteHandler | null {
+async function configRuleHandler(index: RouteIndex, route: string, method: string): Promise<RouteHandler | null> {
   const target = routeTarget(route.split("/"));
   if (!target) return null;
-  const handler = conventionHandler(index, target.controllerId, target.actionId);
+  const handler = await conventionHandler(index, target.controllerId, target.actionId);
   return handler ? { ...handler, method } : null;
 }
 
 async function findYii2HandlersFromConfig(
-  index: CodeIndex,
+  index: RouteIndex,
   searchPath: string,
 ): Promise<RouteHandler[]> {
   // `const [config] = ...` took the FIRST config/web.php and ignored the rest. A Yii2 application
@@ -71,7 +67,7 @@ async function findYii2HandlersFromConfig(
       const rulePath = match[2]!.replace(/<\w+(?::[^>]+)?>/g, "[param]").toLowerCase();
       if (!matchPath(rulePath, normalizedSearch)) continue;
 
-      const handler = configRuleHandler(index, match[3]!, match[1]?.toUpperCase() ?? "GET");
+      const handler = await configRuleHandler(index, match[3]!, match[1]?.toUpperCase() ?? "GET");
       if (handler) handlers.push(handler);
     }
   }
@@ -80,9 +76,10 @@ async function findYii2HandlersFromConfig(
 
 /** Find Yii2 handlers through controller/action conventions and URL rules. */
 export async function findYii2Handlers(
-  index: CodeIndex,
+  input: RouteIndexInput,
   searchPath: string,
 ): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   const segments = searchPath
     .replace(/^\/|\/$/g, "")
     .toLowerCase()
@@ -91,6 +88,6 @@ export async function findYii2Handlers(
   const target = routeTarget(segments);
   if (!target) return [];
 
-  const handler = conventionHandler(index, target.controllerId, target.actionId);
+  const handler = await conventionHandler(index, target.controllerId, target.actionId);
   return handler ? [handler] : findYii2HandlersFromConfig(index, searchPath);
 }

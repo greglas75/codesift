@@ -4,12 +4,25 @@ import type { CodeIndex, CodeSymbol, FileEntry } from "../../src/types.js";
 // Mock the index-tools module
 vi.mock("../../src/tools/index-tools.js", () => ({
   getCodeIndex: vi.fn(),
+  getIndexSummary: vi.fn(),
+  findRepoSymbols: vi.fn(),
+  findRepoSymbolsInFiles: vi.fn(),
 }));
 
-import { getCodeIndex } from "../../src/tools/index-tools.js";
+import { findRepoSymbols, findRepoSymbolsInFiles, getCodeIndex, getIndexSummary } from "../../src/tools/index-tools.js";
+import { filterCachedSymbols } from "../../src/tools/index-tools/registry.js";
 import { traceRoute } from "../../src/tools/route-tools.js";
 
-const mockedGetCodeIndex = vi.mocked(getCodeIndex);
+/** Serve a fixture index the way traceRoute reads it: summary, narrow reads, and the TS-path load. */
+const mockedGetCodeIndex = {
+  mockResolvedValue(index: CodeIndex): void {
+    vi.mocked(getCodeIndex).mockResolvedValue(index);
+    vi.mocked(getIndexSummary).mockResolvedValue(index);
+    vi.mocked(findRepoSymbols).mockImplementation(async (_repo, query) => filterCachedSymbols(index.symbols, query));
+    vi.mocked(findRepoSymbolsInFiles).mockImplementation(async (_repo, files, opts) =>
+      filterCachedSymbols(index.symbols.filter((s) => files.includes(s.file)), { withSource: opts.withSource }));
+  },
+};
 
 function makeSym(overrides: Partial<CodeSymbol> & { name: string; file: string }): CodeSymbol {
   return {

@@ -684,5 +684,15 @@ narrow reads queue on the same four libuv threads as the file reads, so codesift
 9.2 s. Up to 150k symbols, `review_diff` therefore loads the index once and every read is served from
 it: 1.36 s against 1.40 s, identical findings.
 
-Still loading the index: `trace_route` (the index is passed to twelve framework handlers) and a few
-low-traffic tools (context L2 / knowledge map, wiki, taint, php8, semantic handlers).
+`trace_route` hands its thirteen framework finders a `RouteIndex`: the summary plus `find(SymbolQuery)`
+and `inFiles`, both in index order. Each lookup the finders made over `index.symbols` became one
+query: by file and name, by name and kind, parent, `fileSuffixAny`, and for Express and Hono a
+`sourceContainsAny` literal that their regexes require. The callee trees come from the native graph
+(`nativeCallTreeFrom` with source, for the DB-call scan), falling back to the old path when there is
+no graph. Old vs new on tgm-survey-platform, 7 routes (up to 21 handlers and 3,565 call-chain nodes),
+and on ResearchShieldNew, 6 routes (NestJS, Express and Yii2; up to 113 handlers and 29,146 nodes):
+13/13 identical. The total for each batch was 145.6 s / 2.4 GB → 68.9 s / 0.9 GB and 14.5 s / 637 MB →
+8.7 s / 326 MB.
+
+Still loading the index: a few low-traffic tools (context L2 / knowledge map, wiki, taint, php8,
+semantic handlers).

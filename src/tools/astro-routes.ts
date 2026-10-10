@@ -2,7 +2,7 @@
  * Astro file-based routing: src/pages/ → routes.
  * Exports findAstroHandlers (for traceRoute) and astroRouteMap (tool handler).
  */
-import type { CodeIndex, CodeSymbol, FileEntry, RouteFramework } from "../types.js";
+import type { CodeSymbol, FileEntry, RouteFramework } from "../types.js";
 import { matchPath } from "./route-shared.js";
 import { findRepoSymbolsInFiles, getIndexSummary } from "./index-tools.js";
 
@@ -68,6 +68,11 @@ function placeholder(file: string, name: string): Omit<CodeSymbol, "source" | "t
 export interface AstroRouteIndex {
   files: ReadonlyArray<Pick<FileEntry, "path">>;
   symbols: ReadonlyArray<Pick<CodeSymbol, "file" | "name">>;
+}
+
+/** A page file under src/pages/ — the only files route building reads symbols for. */
+export function isAstroPageFile(path: string): boolean {
+  return isPageFile(path);
 }
 
 function isPageFile(path: string): boolean {
@@ -141,7 +146,10 @@ export function buildRouteEntries(index: AstroRouteIndex): { routes: AstroRouteE
 }
 
 /** Find Astro route handlers matching a search path (for traceRoute dispatch). */
-export function findAstroHandlers(index: CodeIndex, searchPath: string): AstroRouteHandler[] {
+export function findAstroHandlers(
+  index: { files: AstroRouteIndex["files"]; symbols: ReadonlyArray<CodeSymbol> },
+  searchPath: string,
+): AstroRouteHandler[] {
   const handlers: AstroRouteHandler[] = [];
   const { routes } = buildRouteEntries(index);
 

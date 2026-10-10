@@ -1,4 +1,5 @@
-import type { CodeIndex, CodeSymbol } from "../../types.js";
+import type { CodeSymbol } from "../../types.js";
+import { asRouteIndex, type RouteIndexInput } from "./route-index.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import type { RouteHandler } from "./types.js";
@@ -30,8 +31,15 @@ function handlersForSymbol(symbol: CodeSymbol, searchPath: string): RouteHandler
 }
 
 /** Find Express-style route handlers in production JS/TS symbols. */
-export function findExpressHandlers(index: CodeIndex, searchPath: string): RouteHandler[] {
-  return index.symbols
+export async function findExpressHandlers(input: RouteIndexInput, searchPath: string): Promise<RouteHandler[]> {
+  // The store keeps only JS/TS symbols whose source has `.get`, `.post`, … — a literal every pattern
+  // below requires — so the scan no longer pulls every source in the repo; the regexes still decide.
+  const candidates = await asRouteIndex(input).find({
+    fileSuffixAny: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+    sourceContainsAny: EXPRESS_METHODS.map((method) => `.${method}`),
+    withSource: true,
+  });
+  return candidates
     .filter(isProductionJavaScript)
     .flatMap((symbol) => handlersForSymbol(symbol, searchPath));
 }

@@ -22,35 +22,35 @@ function indexWith(files: string[], symbols: Array<{ name: string; file: string 
 }
 
 describe("Next.js route discovery", () => {
-  it("finds a root App Router route at app/route.ts", () => {
+  it("finds a root App Router route at app/route.ts", async () => {
     // `/app\/(.*?)\/route\./` demanded a segment between `app/` and the file, so the route for `/`
     // — an ordinary Next.js route — was unreachable by construction.
     const index = indexWith(["app/route.ts"], [{ name: "GET", file: "app/route.ts" }]);
-    const handlers = findNextJSHandlers(index, "/");
+    const handlers = await findNextJSHandlers(index, "/");
     expect(handlers).toHaveLength(1);
     expect(handlers[0]?.method).toBe("GET");
   });
 
-  it("still resolves a nested route", () => {
+  it("still resolves a nested route", async () => {
     const index = indexWith(["app/users/route.ts"], [{ name: "GET", file: "app/users/route.ts" }]);
-    expect(findNextJSHandlers(index, "/users")).toHaveLength(1);
+    expect(await findNextJSHandlers(index, "/users")).toHaveLength(1);
   });
 
-  it.each(["HEAD", "OPTIONS"])("discovers a %s export as a method", (method) => {
+  it.each(["HEAD", "OPTIONS"])("discovers a %s export as a method", async (method) => {
     // Omitting these did not merely lose the method name: a file exporting only HEAD fell into the
     // "no handlers found" branch and was reported as an un-methoded synthetic route.
     const index = indexWith(["app/ping/route.ts"], [{ name: method, file: "app/ping/route.ts" }]);
-    const handlers = findNextJSHandlers(index, "/ping");
+    const handlers = await findNextJSHandlers(index, "/ping");
     expect(handlers).toHaveLength(1);
     expect(handlers[0]?.method).toBe(method);
     expect(handlers[0]?.symbol.name).toBe(method);
   });
 
-  it("does not treat an unrelated export as a route method", () => {
+  it("does not treat an unrelated export as a route method", async () => {
     // The regex is an allowlist for a reason — widening it to "any uppercase export" would make
     // constants into handlers.
     const index = indexWith(["app/x/route.ts"], [{ name: "REVALIDATE", file: "app/x/route.ts" }]);
-    const handlers = findNextJSHandlers(index, "/x");
+    const handlers = await findNextJSHandlers(index, "/x");
     expect(handlers).toHaveLength(1);
     expect(handlers[0]?.method).toBeUndefined();   // synthetic, no method claimed
   });

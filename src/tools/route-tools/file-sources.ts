@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CodeIndex } from "../../types.js";
+import type { RouteIndex } from "./route-index.js";
 
 export interface IndexedFileSource {
   path: string;
@@ -8,7 +8,7 @@ export interface IndexedFileSource {
 }
 
 export async function readIndexedFiles(
-  index: CodeIndex,
+  index: Pick<RouteIndex, "root" | "files">,
   matches: (path: string) => boolean,
 ): Promise<IndexedFileSource[]> {
   const candidates = index.files.filter((file) => matches(file.path));

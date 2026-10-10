@@ -1,4 +1,4 @@
-import type { CodeIndex } from "../../types.js";
+import { asRouteIndex, type RouteIndex, type RouteIndexInput } from "./route-index.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import { readIndexedFiles } from "./file-sources.js";
@@ -13,17 +13,17 @@ const MAPPINGS = [
 ];
 
 interface SpringScanContext {
-  index: CodeIndex;
+  index: RouteIndex;
   file: string;
   source: string;
   classPrefix: string;
   searchPath: string;
 }
 
-function scanMapping(
+async function scanMapping(
   context: SpringScanContext,
   mapping: typeof MAPPINGS[number],
-): RouteHandler[] {
+): Promise<RouteHandler[]> {
   const { index, file, source, classPrefix, searchPath } = context;
   const pattern = new RegExp(
     `@${mapping.annotation}\\s*\\(\\s*(?:value\\s*=\\s*)?["']([^"']*)["'](?:[^)]*)?\\)\\s*(?:fun|\\n\\s*fun)\\s+(\\w+)`,
@@ -35,9 +35,7 @@ function scanMapping(
     if (!matchPath(fullPath, searchPath)) continue;
 
     const functionName = match[2] ?? "";
-    const symbol = index.symbols.find(
-      (candidate) => candidate.file === file && candidate.name === functionName,
-    );
+    const [symbol] = await index.find({ file, name: functionName, withSource: false, limit: 1 });
     handlers.push({
       symbol: symbol
         ? stripSource(symbol)
@@ -57,12 +55,12 @@ function scanMapping(
   return handlers;
 }
 
-function scanSpringFile(
-  index: CodeIndex,
+async function scanSpringFile(
+  index: RouteIndex,
   file: string,
   source: string,
   searchPath: string,
-): RouteHandler[] {
+): Promise<RouteHandler[]> {
   if (!/@(?:RestController|Controller)\b/.test(source)) return [];
 
   // `.exec(source)` took the FIRST @RequestMapping anywhere in the file. A method-level mapping
@@ -71,14 +69,19 @@ function scanSpringFile(
   const classPrefix = /@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']*)["'][\s\S]{0,400}?\bclass\b/
     .exec(source)?.[1] ?? "";
   const context = { index, file, source, classPrefix, searchPath };
-  return MAPPINGS.flatMap((mapping) => scanMapping(context, mapping));
+  const handlers: RouteHandler[] = [];
+  for (const mapping of MAPPINGS) handlers.push(...await scanMapping(context, mapping));
+  return handlers;
 }
 
 /** Find Spring Boot Kotlin handlers from controller mapping annotations. */
 export async function findSpringBootKotlinHandlers(
-  index: CodeIndex,
+  input: RouteIndexInput,
   searchPath: string,
 ): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   const files = await readIndexedFiles(index, (path) => /\.kts?$/.test(path));
-  return files.flatMap(({ path, source }) => scanSpringFile(index, path, source, searchPath));
+  const handlers: RouteHandler[] = [];
+  for (const { path, source } of files) handlers.push(...await scanSpringFile(index, path, source, searchPath));
+  return handlers;
 }

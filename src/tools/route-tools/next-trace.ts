@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { CodeIndex, CodeSymbol } from "../../types.js";
+import type { CodeSymbol } from "../../types.js";
 import { computeLayoutChain, scanDirective, traceMiddleware } from "../../utils/nextjs.js";
 import type { RouteHandler, RouteTraceResult } from "./types.js";
 
@@ -45,7 +45,7 @@ async function findServerActions(
 
 export async function enrichNextjsTrace(
   result: RouteTraceResult,
-  index: CodeIndex,
+  index: { root: string },
   handlers: RouteHandler[],
   calleeSymbols: CodeSymbol[],
 ): Promise<void> {

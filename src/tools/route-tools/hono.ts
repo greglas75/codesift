@@ -1,15 +1,17 @@
 import { join, relative } from "node:path";
 import type { HonoAppModel, HonoRoute } from "../../parser/extractors/hono-model.js";
-import type { CodeIndex, CodeSymbol } from "../../types.js";
+import type { CodeSymbol } from "../../types.js";
+import { asRouteIndex, type RouteIndex, type RouteIndexInput } from "./route-index.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import type { RouteHandler } from "./types.js";
 
-function resolveHonoEntryFile(index: CodeIndex): string | null {
+async function resolveHonoEntryFile(index: RouteIndex): Promise<string | null> {
   // `.find()` took whichever app the index happened to list first, so a fixture or a sub-app in a
   // test file could shadow the real one. Still a heuristic — but a test file is never the routed
   // application, and that is the case this actually hit.
-  const candidates = index.symbols.filter(
+  // "Hono" is a literal the regex requires (OpenAPIHono contains it too); the store applies it.
+  const candidates = (await index.find({ sourceContainsAny: ["Hono"], withSource: true })).filter(
     (symbol) => symbol.source &&
       /new\s+(?:Hono|OpenAPIHono)\s*(?:<[^>]*>)?\s*\(/.test(symbol.source),
   );
@@ -36,17 +38,13 @@ async function loadHonoModel(repo: string, entryFile: string): Promise<HonoAppMo
   }
 }
 
-function routeHandlerSymbol(repo: string, index: CodeIndex, route: HonoRoute): CodeSymbol {
+async function routeHandlerSymbol(repo: string, index: RouteIndex, route: HonoRoute): Promise<CodeSymbol> {
   // `.replace(index.root + "/", "")` hardcoded the POSIX separator, so on win32 the prefix never
   // matched, `relativeFile` stayed absolute, and the symbol lookup below missed every time —
   // silently, as "no handler". Three of the installs reporting telemetry are win32.
   const relativeFile = relative(index.root, route.handler.file);
-  return index.symbols.find(
-    (symbol) =>
-      symbol.file === relativeFile &&
-      symbol.name === route.handler.name &&
-      Math.abs(symbol.start_line - route.handler.line) <= 2,
-  ) ?? {
+  const named = await index.find({ file: relativeFile, name: route.handler.name, withSource: false });
+  return named.find((symbol) => Math.abs(symbol.start_line - route.handler.line) <= 2) ?? {
     id: `hono:${route.file}:${route.line}`,
     repo,
     name: route.handler.name,
@@ -61,8 +59,8 @@ function routeHandlerSymbol(repo: string, index: CodeIndex, route: HonoRoute): C
   };
 }
 
-function toRouteHandler(repo: string, index: CodeIndex, route: HonoRoute): RouteHandler {
-  const symbol = routeHandlerSymbol(repo, index, route);
+async function toRouteHandler(repo: string, index: RouteIndex, route: HonoRoute): Promise<RouteHandler> {
+  const symbol = await routeHandlerSymbol(repo, index, route);
   return {
     symbol: stripSource(symbol),
     file: symbol.file,
@@ -74,19 +72,23 @@ function toRouteHandler(repo: string, index: CodeIndex, route: HonoRoute): Route
 /** Find Hono handlers from the extractor's resolved application model. */
 export async function findHonoHandlers(
   repo: string,
-  index: CodeIndex,
+  input: RouteIndexInput,
   searchPath: string,
 ): Promise<RouteHandler[]> {
-  const { detectFrameworks } = await import("../../utils/framework-detect.js");
-  if (!detectFrameworks(index).has("hono")) return [];
+  const index = asRouteIndex(input);
+  const { detectFrameworks, FRAMEWORK_SOURCE_SAMPLE } = await import("../../utils/framework-detect.js");
+  const sample = await index.find({ withSource: true, limit: FRAMEWORK_SOURCE_SAMPLE });
+  if (!detectFrameworks({ files: index.files, symbols: sample }).has("hono")) return [];
 
-  const entryFile = resolveHonoEntryFile(index);
+  const entryFile = await resolveHonoEntryFile(index);
   if (!entryFile) return [];
 
   const model = await loadHonoModel(repo, entryFile);
   if (!model) return [];
 
-  return model.routes
-    .filter((route) => matchPath(route.path, searchPath))
-    .map((route) => toRouteHandler(repo, index, route));
+  const handlers: RouteHandler[] = [];
+  for (const route of model.routes) {
+    if (matchPath(route.path, searchPath)) handlers.push(await toRouteHandler(repo, index, route));
+  }
+  return handlers;
 }

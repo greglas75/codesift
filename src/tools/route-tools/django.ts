@@ -1,6 +1,6 @@
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
-import type { CodeIndex } from "../../types.js";
+import { asRouteIndex, type RouteIndexInput } from "./route-index.js";
 import { readIndexedFiles } from "./file-sources.js";
 import type { RouteHandler } from "./types.js";
 
@@ -8,7 +8,8 @@ import type { RouteHandler } from "./types.js";
  * Find Django route handlers by parsing urlpatterns in urls.py files.
  * Handles path(), re_path(), and include() chains.
  */
-export async function findDjangoHandlers(index: CodeIndex, searchPath: string): Promise<RouteHandler[]> {
+export async function findDjangoHandlers(input: RouteIndexInput, searchPath: string): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   const handlers: RouteHandler[] = [];
   const urlFiles = await readIndexedFiles(index, (path) => path.endsWith("urls.py"));
 
@@ -37,7 +38,7 @@ export async function findDjangoHandlers(index: CodeIndex, searchPath: string): 
       const viewParts = viewRef.split(".");
       const lastPart = viewParts.at(-1) ?? viewRef;
       const viewName = lastPart === "as_view" ? (viewParts.at(-2) ?? lastPart) : lastPart;
-      const sym = index.symbols.find((s) => s.name === viewName && s.file.endsWith(".py"));
+      const [sym] = await index.find({ name: viewName, fileSuffixAny: [".py"], withSource: false, limit: 1 });
 
       handlers.push({
         symbol: sym

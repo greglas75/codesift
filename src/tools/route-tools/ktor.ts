@@ -1,4 +1,5 @@
-import type { CodeIndex } from "../../types.js";
+import type { CodeSymbol } from "../../types.js";
+import { asRouteIndex, type RouteIndexInput } from "./route-index.js";
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
 import { readIndexedFiles } from "./file-sources.js";
@@ -47,17 +48,14 @@ function methodMatches(line: string): Array<{ method: string; path: string }> {
 }
 
 function ktorHandler(
-  index: CodeIndex,
+  fileSymbols: CodeSymbol[],
   file: string,
   line: number,
   method: string,
   methodPath: string,
 ): RouteHandler {
-  const symbol = index.symbols.find(
-    (candidate) =>
-      candidate.file === file &&
-      candidate.start_line <= line &&
-      candidate.end_line >= line,
+  const symbol = fileSymbols.find(
+    (candidate) => candidate.start_line <= line && candidate.end_line >= line,
   );
   return {
     symbol: symbol
@@ -76,15 +74,16 @@ function ktorHandler(
   };
 }
 
-function scanKtorFile(
-  index: CodeIndex,
-  file: string,
-  source: string,
-  searchPath: string,
-): RouteHandler[] {
+interface KtorMatch {
+  line: number;
+  method: string;
+  path: string;
+}
+
+function scanKtorFile(source: string, searchPath: string): KtorMatch[] {
   if (!/\b(routing|route)\s*[({]/.test(source)) return [];
 
-  const handlers: RouteHandler[] = [];
+  const matches: KtorMatch[] = [];
   const state: ScopeState = { prefixes: [], braceDepth: 0 };
   for (const [lineIndex, line] of source.split("\n").entries()) {
     updateScopes(line, state);
@@ -92,18 +91,29 @@ function scanKtorFile(
     for (const match of methodMatches(line)) {
       const fullPath = `${prefix}/${match.path}`.replace(/\/+/g, "/");
       if (matchPath(fullPath, searchPath)) {
-        handlers.push(ktorHandler(index, file, lineIndex + 1, match.method, match.path));
+        matches.push({ line: lineIndex + 1, method: match.method, path: match.path });
       }
     }
   }
-  return handlers;
+  return matches;
 }
 
 /** Find Ktor handlers in routing DSL blocks, including nested route prefixes. */
 export async function findKtorHandlers(
-  index: CodeIndex,
+  input: RouteIndexInput,
   searchPath: string,
 ): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   const files = await readIndexedFiles(index, (path) => /\.kts?$/.test(path));
-  return files.flatMap(({ path, source }) => scanKtorFile(index, path, source, searchPath));
+  const handlers: RouteHandler[] = [];
+  for (const { path, source } of files) {
+    const matches = scanKtorFile(source, searchPath);
+    if (matches.length === 0) continue;
+    // A file's symbols are read only when one of its routes matches.
+    const fileSymbols = await index.inFiles([path], false);
+    for (const match of matches) {
+      handlers.push(ktorHandler(fileSymbols, path, match.line, match.method, match.path));
+    }
+  }
+  return handlers;
 }

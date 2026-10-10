@@ -11,6 +11,7 @@ import {
 import { indexFolder } from "../../src/tools/index-tools.js";
 import { resetConfigCache } from "../../src/config.js";
 import * as indexTools from "../../src/tools/index-tools.js";
+import { filterCachedSymbols } from "../../src/tools/index-tools/registry.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../../src/types.js";
 
 let tmpRoot: string;
@@ -202,8 +203,16 @@ function makeIndex(
 // (indexTools and vi already imported at top of file)
 
 function withIndex(index: CodeIndex, fn: () => Promise<void>): Promise<void> {
-  const spy = vi.spyOn(indexTools, "getCodeIndex").mockResolvedValue(index);
-  return fn().finally(() => spy.mockRestore());
+  // traceRoute reads the summary and narrow symbol reads; the full load is only its fallback.
+  const spies = [
+    vi.spyOn(indexTools, "getCodeIndex").mockResolvedValue(index),
+    vi.spyOn(indexTools, "getIndexSummary").mockResolvedValue(index),
+    vi.spyOn(indexTools, "findRepoSymbols").mockImplementation(async (_repo, query) =>
+      filterCachedSymbols(index.symbols, query)),
+    vi.spyOn(indexTools, "findRepoSymbolsInFiles").mockImplementation(async (_repo, files, opts) =>
+      filterCachedSymbols(index.symbols.filter((s) => files.includes(s.file)), { withSource: opts.withSource })),
+  ];
+  return fn().finally(() => { for (const spy of spies) spy.mockRestore(); });
 }
 
 let tmpDir: string;

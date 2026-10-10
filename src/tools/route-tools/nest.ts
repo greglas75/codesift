@@ -1,12 +1,12 @@
 import { stripSource } from "../graph-tools.js";
 import { matchPath } from "../route-shared.js";
-import type { CodeIndex } from "../../types.js";
+import { asRouteIndex, type RouteIndex, type RouteIndexInput } from "./route-index.js";
 import { readIndexedFiles } from "./file-sources.js";
 import type { RouteHandler } from "./types.js";
 
 interface NestHandlerInput {
   handlers: RouteHandler[],
-  index: CodeIndex,
+  index: RouteIndex,
   filePath: string,
   functionName: string,
   method: string,
@@ -15,14 +15,14 @@ interface NestHandlerInput {
 
 interface NestScanContext {
   handlers: RouteHandler[];
-  index: CodeIndex;
+  index: RouteIndex;
   filePath: string;
   source: string;
   controllerPrefix: string;
   searchPath: string;
 }
 
-function addNestHandler(input: NestHandlerInput): void {
+async function addNestHandler(input: NestHandlerInput): Promise<void> {
   const { handlers, index, filePath, functionName, method, deduplicate } = input;
   if (deduplicate && handlers.some((handler) =>
     handler.file === filePath &&
@@ -30,9 +30,7 @@ function addNestHandler(input: NestHandlerInput): void {
     handler.method === method
   )) return;
 
-  const symbol = index.symbols.find(
-    (candidate) => candidate.file === filePath && candidate.name === functionName,
-  );
+  const [symbol] = await index.find({ file: filePath, name: functionName, withSource: false, limit: 1 });
   handlers.push({
     symbol: symbol
       ? stripSource(symbol)
@@ -50,10 +48,10 @@ function addNestHandler(input: NestHandlerInput): void {
   });
 }
 
-function appendPathDecorators(
+async function appendPathDecorators(
   context: NestScanContext,
   decorator: string,
-): void {
+): Promise<void> {
   const { handlers, index, filePath, source, controllerPrefix, searchPath } = context;
   const pattern = new RegExp(
     `@${decorator}\\s*\\(\\s*['"\`]([^'"\`]*)['"\`]\\s*\\)\\s*(?:\\n\\s*@[^\\n]+)*\\n\\s*(?:(?:public|private|protected|static|readonly|override|async)\\s+)*(\\w+)`,
@@ -62,7 +60,7 @@ function appendPathDecorators(
   for (const match of source.matchAll(pattern)) {
     const fullPath = `/${controllerPrefix}/${match[1] ?? ""}`.replace(/\/+/g, "/");
     if (matchPath(fullPath, searchPath)) {
-      addNestHandler({
+      await addNestHandler({
         handlers,
         index,
         filePath,
@@ -74,10 +72,10 @@ function appendPathDecorators(
   }
 }
 
-function appendEmptyDecorators(
+async function appendEmptyDecorators(
   context: NestScanContext,
   decorator: string,
-): void {
+): Promise<void> {
   const { handlers, index, filePath, source, controllerPrefix, searchPath } = context;
   const pattern = new RegExp(
     `@${decorator}\\s*\\(\\s*\\)\\s*(?:\\n\\s*@[^\\n]+)*\\n\\s*(?:(?:public|private|protected|static|readonly|override|async)\\s+)*(\\w+)`,
@@ -86,7 +84,7 @@ function appendEmptyDecorators(
   const fullPath = `/${controllerPrefix}`.replace(/\/+/g, "/") || "/";
   if (!matchPath(fullPath, searchPath)) return;
   for (const match of source.matchAll(pattern)) {
-    addNestHandler({
+    await addNestHandler({
       handlers,
       index,
       filePath,
@@ -99,9 +97,10 @@ function appendEmptyDecorators(
 
 /** Find NestJS handlers from controller and method decorators. */
 export async function findNestJSHandlers(
-  index: CodeIndex,
+  input: RouteIndexInput,
   searchPath: string,
 ): Promise<RouteHandler[]> {
+  const index = asRouteIndex(input);
   const handlers: RouteHandler[] = [];
   const controllerFiles = await readIndexedFiles(
     index,
@@ -112,8 +111,8 @@ export async function findNestJSHandlers(
     const controllerPrefix = /@Controller\s*\(\s*['"`]([^'"`]*)['"`]/.exec(source)?.[1] ?? "";
     const context = { handlers, index, filePath: path, source, controllerPrefix, searchPath };
     for (const decorator of ["Get", "Post", "Put", "Delete", "Patch"]) {
-      appendPathDecorators(context, decorator);
-      appendEmptyDecorators(context, decorator);
+      await appendPathDecorators(context, decorator);
+      await appendEmptyDecorators(context, decorator);
     }
   }
   return handlers;

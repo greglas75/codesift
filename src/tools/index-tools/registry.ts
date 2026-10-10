@@ -322,7 +322,7 @@ export async function streamRepoSymbols(
  * into tools purely to be reused, which is how a "narrow read" acquires a dependency on the wide
  * one. Both are asserted against the SQL by the backend-parity tests.
  */
-function filterCachedSymbols(symbols: CodeSymbol[], query: SymbolQuery): CodeSymbol[] {
+export function filterCachedSymbols(symbols: CodeSymbol[], query: SymbolQuery): CodeSymbol[] {
   const ids = query.ids === undefined ? null : new Set(query.ids);
   const out: CodeSymbol[] = [];
   for (const symbol of symbols) {
