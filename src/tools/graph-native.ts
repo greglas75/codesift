@@ -1,6 +1,6 @@
 import type { CodeSymbol } from "../types.js";
 import { getNativeCore, type NativeCallGraphHandle } from "../native/index.js";
-import { loadConfig } from "../config.js";
+import { callGraphCacheBudgetBytes, loadConfig } from "../config.js";
 import { resolveRegisteredRepoMeta } from "../storage/registry.js";
 import { resolveIndexBackend, sqlitePathFor } from "../storage/index-migration.js";
 import { getDataVersion } from "../storage/sqlite/accessors.js";
@@ -40,7 +40,7 @@ interface CachedGraph {
   built?: NativeCallGraphHandle;
 }
 
-/** Graphs by `dbPath|skipTests|filterReactHooks`, newest last; a handful at most. */
+/** Graphs by `dbPath|skipTests|filterReactHooks`, newest last; at most four, and within a byte budget. */
 const graphs = new Map<string, CachedGraph>();
 const MAX_GRAPHS = 4;
 
@@ -171,7 +171,16 @@ export async function nativeGraphFor(
       retire(graphs.get(oldest)!);
       graphs.delete(oldest);
     }
-    return await entry.graph;
+    const graph = await entry.graph;
+    // Its bytes are known only now; the count cap above cannot see that one graph can be 3 GB.
+    const sizes = [...graphs].map(([k, e]) => ({ key: k, bytes: e.built?.footprintBytes() }));
+    for (const evict of graphsOverBudget(sizes, callGraphCacheBudgetBytes())) {
+      const evicted = graphs.get(evict);
+      if (!evicted) continue;
+      retire(evicted);
+      graphs.delete(evict);
+    }
+    return graph;
   } catch {
     // A failed build must not stay cached as this key's answer.
     graphs.delete(key);
@@ -220,6 +229,28 @@ export async function graphSymbolsAt(
   const chunks = await graph.symbolsJson(Uint32Array.from(positions), withSource);
   const out: CodeSymbol[] = [];
   for (const chunk of chunks) for (const sym of JSON.parse(chunk) as CodeSymbol[]) out.push(sym);
+  return out;
+}
+
+/**
+ * Which cached graphs to drop, oldest first, until the finished ones fit `budget`. `entries` is in
+ * use order (oldest first); a build still in flight has no size yet and is neither counted nor
+ * dropped, and the newest entry is never dropped — evicting the graph a caller just asked for would
+ * rebuild it on the next call. Exported for tests.
+ */
+export function graphsOverBudget(
+  entries: ReadonlyArray<{ key: string; bytes: number | undefined }>,
+  budget: number,
+): string[] {
+  let total = 0;
+  for (const e of entries) total += e.bytes ?? 0;
+  const out: string[] = [];
+  for (const e of entries.slice(0, -1)) {
+    if (total <= budget) break;
+    if (e.bytes === undefined) continue;
+    out.push(e.key);
+    total -= e.bytes;
+  }
   return out;
 }
 

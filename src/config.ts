@@ -75,6 +75,18 @@ function scaledCacheBudgetMb(divisor: number, cap: number): number {
  * else. This is pure eviction pressure — semantic search still works, it just
  * keeps fewer repos resident.
  */
+/**
+ * Budget for the Rust call graphs `graph-native.ts` keeps resident. They live outside the V8 heap, so
+ * nothing else bounds them: a count cap of four let two graphs of one 1.4M-symbol repo (tests in and
+ * out) hold 6.6 GB on 2026-10-10, half the daemon's RSS. The most recently used graph is always kept.
+ */
+export function callGraphCacheBudgetBytes(): number {
+  const raw = process.env["CODESIFT_MAX_CALL_GRAPH_CACHE_MB"];
+  const n = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isNaN(n) && n > 0) return n * 1024 * 1024;
+  return scaledCacheBudgetMb(32, 8192) * 1024 * 1024;
+}
+
 export function embeddingMemBudgetBytes(): number {
   const raw = process.env["CODESIFT_MAX_EMBEDDING_MEM_MB"];
   const n = raw ? parseInt(raw, 10) : NaN;
