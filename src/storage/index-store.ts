@@ -46,6 +46,7 @@ import {
   saveIncrementalJson,
 } from "./index-json-mutations.js";
 import {
+  findSymbolNamesSqlite,
   findSymbolsByRequestedIdsSqlite,
   findSymbolsInFilesSqlite,
 } from "./sqlite/narrow-queries.js";
@@ -213,6 +214,20 @@ export async function findSymbolsInFiles(
   const index = await loadJsonIndex(indexPath);
   if (index === null) return [];
   return filterByFiles(index.symbols, files, opts.withSource);
+}
+
+/** Every distinct symbol name, in order of first appearance. JSON: parity, not speed. */
+export async function findSymbolNames(indexPath: string): Promise<string[]> {
+  assertCanonicalIndexPath(indexPath);
+  if ((await resolveIndexBackend()) === "sqlite") {
+    const dbPath = sqlitePathFor(indexPath);
+    await ensureSqliteMigrated(indexPath, dbPath);
+    return findSymbolNamesSqlite(dbPath);
+  }
+  warnIfRollbackIsStale(indexPath);
+  const index = await loadJsonIndex(indexPath);
+  if (index === null) return [];
+  return [...new Set(index.symbols.map((symbol) => symbol.name))];
 }
 
 /**

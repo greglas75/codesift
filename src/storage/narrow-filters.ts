@@ -16,6 +16,7 @@ export function symbolMatchesScanPredicates(symbol: CodeSymbol, query: SymbolQue
   }
   if (query.minLines !== undefined && symbol.end_line - symbol.start_line + 1 < query.minLines) return false;
   if (query.fileSuffixAny !== undefined && !query.fileSuffixAny.some((sfx) => symbol.file.endsWith(sfx))) return false;
+  if (query.hasHeritage === true && symbol.extends === undefined && symbol.implements === undefined) return false;
   return true;
 }
 

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findSymbols, streamSymbols, getIndexMeta, saveIndex } from "../../src/storage/index-store.js";
+import { findSymbolNames, findSymbols, streamSymbols, getIndexMeta, saveIndex } from "../../src/storage/index-store.js";
 import { closeAllIndexDbs } from "../../src/storage/sqlite/connection.js";
 import { resetIndexBackendForTesting } from "../../src/storage/index-migration.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../../src/types.js";
@@ -25,7 +25,9 @@ function sym(over: Partial<CodeSymbol> & { id: string; name: string }): CodeSymb
 const SYMBOLS: CodeSymbol[] = [
   sym({ id: "1", name: "createUser", file: "a.ts", source: "function createUser() {}" }),
   sym({ id: "2", name: "createInvoice", file: "b.ts", kind: "function" }),
-  sym({ id: "3", name: "UserModel", file: "b.ts", kind: "class", parent: "mod" }),
+  sym({ id: "3", name: "UserModel", file: "b.ts", kind: "class", parent: "mod", extends: ["Base"] }),
+  sym({ id: "6", name: "Repo", file: "c.ts", kind: "interface", implements: ["Store"] }),
+  sym({ id: "7", name: "createUser", file: "c.ts", start_line: 9 }),
   sym({ id: "4", name: "a_b", file: "c.ts" }),
   sym({ id: "5", name: "axb", file: "c.ts" }),
 ];
@@ -67,6 +69,8 @@ const QUERIES: SymbolQuery[] = [
   { withSource: false, names: ["createUser", "nope"] },
   { withSource: false, names: ["CreateUser"] },
   { withSource: false, names: [] },
+  { withSource: false, hasHeritage: true },
+  { withSource: false, hasHeritage: false },
 ];
 
 beforeEach(() => {
@@ -123,6 +127,17 @@ describe("findSymbols backend parity", () => {
     for (let i = 0; i < QUERIES.length; i++) {
       expect(fromSqlite[i], `query ${JSON.stringify(QUERIES[i])}`).toBe(fromJson[i]);
     }
+  });
+
+  // Bug it catches: the zero-hit vocabulary depending on the backend — a different order changes which
+  // suggestions win ties, and a repeated name must appear once.
+  it("lists distinct names in order of first appearance on both backends", async () => {
+    writeFileSync(indexPath, JSON.stringify(INDEX));
+    const j = await underBackend("json", () => findSymbolNames(indexPath));
+    await underBackend("sqlite", async () => { await saveIndex(indexPath, INDEX); });
+    const s2 = await underBackend("sqlite", () => findSymbolNames(indexPath));
+    expect(j).toEqual(["createUser", "createInvoice", "UserModel", "Repo", "a_b", "axb"]);
+    expect(s2).toEqual(j);
   });
 
   it("omits the source key on both backends when it was not requested", async () => {

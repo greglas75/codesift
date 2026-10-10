@@ -1,11 +1,11 @@
-import { getBM25Index, getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getBM25Index, getIndexSummary } from "./index-tools.js";
 import { searchBM25 } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { collectImportEdges } from "../utils/import-graph.js";
-import { collectHeritageFileEdges } from "../utils/heritage-edges.js";
+import { collectHeritageFileEdgesFrom, HERITAGE_DECL_KINDS, type HeritageFileEdge } from "../utils/heritage-edges.js";
 import { getGraphPath, loadGraph, saveGraph, computeIndexHash } from "../storage/graph-store.js";
 import { getRepo } from "../storage/registry.js";
-import type { CodeIndex } from "../types.js";
+import type { IndexSummary } from "../storage/sqlite-index-store.js";
 import type { PersistentGraph } from "../storage/graph-store.js";
 import { assembleL0 } from "./context-levels/l0.js";
 import { assembleL1 } from "./context-levels/l1.js";
@@ -74,7 +74,8 @@ export async function assembleContext(
 
   if (lvl === "L0") return assembleL0(results, budget);
   if (lvl === "L1") return assembleL1(results, budget);
-  if (lvl === "L2") return assembleL2(results, budget, await getCodeIndex(repo));
+  // L2 reads only the file list (each file's language), so the summary serves it.
+  if (lvl === "L2") return assembleL2(results, budget, await getIndexSummary(repo));
   return assembleL3(results, budget);
 }
 
@@ -138,10 +139,16 @@ export async function getKnowledgeMap(
   depth?: number,
   outputFormat?: "json" | "mermaid",
 ): Promise<KnowledgeMap | { mermaid: string }> {
-  const index = await getCodeIndex(repo);
+  // The file list for modules and import edges, and two narrow reads for heritage edges — not the
+  // whole index (ADR-004 stage 2).
+  const index = await getIndexSummary(repo);
   if (!index) {
     throw new Error(`Repository not found: ${repo}`);
   }
+  const heritage = async (): Promise<HeritageFileEdge[]> => collectHeritageFileEdgesFrom(
+    await findRepoSymbols(repo, { kinds: HERITAGE_DECL_KINDS, withSource: false }, { skipFreshness: true }),
+    await findRepoSymbols(repo, { hasHeritage: true, withSource: false }, { skipFreshness: true }),
+  ).edges;
 
   const maxDepth = depth ?? 3;
 
@@ -155,7 +162,7 @@ export async function getKnowledgeMap(
   }
 
   // Collect all import edges by reading file source from disk (may use cached graph)
-  const collected = await collectEdges(index, moduleMap);
+  const collected = await collectEdges(index, moduleMap, heritage);
   const edges = collected.edges;
 
   const circularDeps = collected.cachedCircularDeps ?? findCircularDeps(edges);
@@ -256,8 +263,9 @@ function dedupeKnowledgeEdges(...groups: KnowledgeMapEdge[][]): KnowledgeMapEdge
 }
 
 async function collectEdges(
-  index: CodeIndex,
+  index: IndexSummary,
   moduleMap: Map<string, KnowledgeMapModule>,
+  heritage: () => Promise<HeritageFileEdge[]>,
 ): Promise<CollectedEdges> {
   // Try loading cached graph
   const config = loadConfig();
@@ -275,7 +283,7 @@ async function collectEdges(
             moduleMap.has(e.to),
         )
         .map((e) => ({ from: e.from, to: e.to }));
-      const heritageKm = collectHeritageFileEdges(index)
+      const heritageKm = (await heritage())
         .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
         .map((e) => ({ from: e.from, to: e.to }));
       const edges = dedupeKnowledgeEdges(importKm, heritageKm);
@@ -290,7 +298,7 @@ async function collectEdges(
     const importKm = importEdges
       .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
       .map((e) => ({ from: e.from, to: e.to }));
-    const heritageEdges = collectHeritageFileEdges(index).filter(
+    const heritageEdges = (await heritage()).filter(
       (e) => moduleMap.has(e.from) && moduleMap.has(e.to),
     );
     const heritageKm = heritageEdges.map((e) => ({ from: e.from, to: e.to }));
@@ -308,7 +316,7 @@ async function collectEdges(
   const importKm = importEdges
     .filter((e) => moduleMap.has(e.from) && moduleMap.has(e.to))
     .map((e) => ({ from: e.from, to: e.to }));
-  const heritageEdges = collectHeritageFileEdges(index).filter(
+  const heritageEdges = (await heritage()).filter(
     (e) => moduleMap.has(e.from) && moduleMap.has(e.to),
   );
   const heritageKm = heritageEdges.map((e) => ({ from: e.from, to: e.to }));

@@ -1,6 +1,6 @@
 import { loadConfig } from "../../config.js";
 import { resolveRegisteredRepoMeta } from "../../storage/registry.js";
-import { findSymbolsByRequestedIds, findSymbolsInFiles } from "../../storage/index-store.js";
+import { findSymbolNames, findSymbolsByRequestedIds, findSymbolsInFiles } from "../../storage/index-store.js";
 import { filterByFiles, filterByRequestedIds } from "../../storage/narrow-filters.js";
 import type { CodeSymbol } from "../../types.js";
 import { ensureIndexFresh } from "./file-indexer.js";
@@ -54,4 +54,16 @@ export async function findRepoSymbolsInFiles(
   const cached = codeIndexes.get(target.resolvedName);
   if (cached) return filterByFiles(cached.symbols, files, opts.withSource);
   return findSymbolsInFiles(target.indexPath, files, { withSource: opts.withSource });
+}
+
+/** Every distinct symbol name, in order of first appearance. */
+export async function findRepoSymbolNames(
+  repoName: string,
+  opts?: { skipFreshness?: boolean },
+): Promise<string[]> {
+  const target = await resolveIndexPath(repoName, opts?.skipFreshness);
+  if (!target) return [];
+  const cached = codeIndexes.get(target.resolvedName);
+  if (cached) return [...new Set(cached.symbols.map((symbol) => symbol.name))];
+  return findSymbolNames(target.indexPath);
 }

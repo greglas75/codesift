@@ -62,6 +62,9 @@ export interface SymbolQuery {
   minLines?: number;
   /** `file` ends with one of these (case-sensitive, like `endsWith`). Empty matches nothing. */
   fileSuffixAny?: readonly string[];
+  /** `true`: only symbols carrying `extends` or `implements` (both live in `extras`, set only when
+   *  non-empty). `false`/absent: no filter. */
+  hasHeritage?: boolean;
 }
 
 export interface IndexMeta {
@@ -132,6 +135,9 @@ function buildPredicate(query: SymbolQuery, idChunk?: readonly string[]): Predic
       clauses.push(`(${query.fileSuffixAny.map(() => "file GLOB ?").join(" OR ")})`);
       binds.push(...query.fileSuffixAny.map((s) => `*${s.replace(/[*?[]/g, "[$&]")}`));
     }
+  }
+  if (query.hasHeritage === true) {
+    clauses.push("(json_extract(extras, '$.extends') IS NOT NULL OR json_extract(extras, '$.implements') IS NOT NULL)");
   }
   if (idChunk !== undefined) {
     clauses.push(`id IN (${idChunk.map(() => "?").join(",")})`);

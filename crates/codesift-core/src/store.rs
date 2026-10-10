@@ -54,6 +54,8 @@ pub struct SymbolQuery {
     pub source_contains_any: Option<Vec<String>>,
     pub min_lines: Option<i64>,
     pub file_suffix_any: Option<Vec<String>>,
+    /// `Some(true)`: only symbols with `extends` or `implements` in `extras`.
+    pub has_heritage: Option<bool>,
 }
 
 /// The fields `getIndexMetaSqlite` reads. `updated_at` stays a string: the JS side applies
@@ -203,6 +205,12 @@ fn build_predicate(q: &SymbolQuery, id_chunk: Option<&[String]>) -> (String, Vec
                     .map(|s| SqlValue::Text(format!("*{}", escape_glob(s)))),
             );
         }
+    }
+    if q.has_heritage == Some(true) {
+        clauses.push(
+            "(json_extract(extras, '$.extends') IS NOT NULL OR json_extract(extras, '$.implements') IS NOT NULL)"
+                .into(),
+        );
     }
     if let Some(chunk) = id_chunk {
         let marks = vec!["?"; chunk.len()].join(",");

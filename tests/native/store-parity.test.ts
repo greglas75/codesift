@@ -131,6 +131,8 @@ const QUERIES: Array<[string, SymbolQuery]> = [
   ["names", { withSource: false, names: ["createUser", "absent", "odd"] }],
   ["empty names", { withSource: false, names: [] }],
   ["names + limit", { withSource: false, names: ["createUser", "odd"], limit: 1 }],
+  ["hasHeritage", { withSource: false, hasHeritage: true }],
+  ["hasHeritage false is no filter", { withSource: false, hasHeritage: false, kind: "class" }],
 ];
 
 describe.skipIf(!native)("native store parity with the TypeScript read path", () => {

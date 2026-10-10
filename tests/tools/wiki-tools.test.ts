@@ -11,8 +11,13 @@ import type { ProfileSummary } from "../../src/tools/project-tools.js";
 // ---------------------------------------------------------------------------
 
 const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
+// generateWiki reads the summary (served here from the same fixture) and the communities' symbols.
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getCodeIndex: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
+  getIndexSummary: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
+  findRepoSymbolsInFiles: async (repo: string, files: readonly string[]) => {
+    const index = await mockGetCodeIndex(repo);
+    return (index?.symbols ?? []).filter((s) => files.includes(s.file));
+  },
 }));
 
 const mockDetectCommunities = vi.fn<(repo: string, focus?: string) => Promise<CommunityResult>>();

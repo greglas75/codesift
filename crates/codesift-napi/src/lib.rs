@@ -46,6 +46,7 @@ pub struct SymbolQueryJs {
     pub source_contains_any: Option<Vec<String>>,
     pub min_lines: Option<i64>,
     pub file_suffix_any: Option<Vec<String>>,
+    pub has_heritage: Option<bool>,
 }
 
 impl From<SymbolQueryJs> for SymbolQuery {
@@ -64,6 +65,7 @@ impl From<SymbolQueryJs> for SymbolQuery {
             source_contains_any: q.source_contains_any,
             min_lines: q.min_lines,
             file_suffix_any: q.file_suffix_any,
+            has_heritage: q.has_heritage,
         }
     }
 }

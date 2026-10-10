@@ -1,7 +1,7 @@
 import type { Parser } from "web-tree-sitter";
 import type { CodeIndex, CodeSymbol } from "../types.js";
 import { getParser } from "../parser/parser-manager.js";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbols, getIndexSummary } from "./index-tools.js";
 import {
   DEFAULT_MAX_DEPTH,
   DEFAULT_MAX_TRACES,
@@ -87,10 +87,15 @@ export async function taintTrace(
     throw new Error(`taint_trace is not implemented for framework "${framework}" yet.`);
   }
 
-  const index = await getCodeIndex(repo);
-  if (!index) {
+  const summary = await getIndexSummary(repo);
+  if (!summary) {
     throw new Error(`Repository "${repo}" not found.`);
   }
+  // Only Python symbols are ever analysed or resolved: candidates are .py, and every callee lookup
+  // lands in a .py file (resolvePythonImport tries `<module>.py` and `/__init__.py` only). So the
+  // Python symbols are read instead of the whole index (ADR-004 stage 2).
+  const symbols = await findRepoSymbols(repo, { fileSuffixAny: [".py"], withSource: true }, { skipFreshness: true });
+  const index: CodeIndex = { ...summary, symbols };
 
   const pythonParser = await getParser("python");
   if (!pythonParser) {

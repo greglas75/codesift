@@ -1,7 +1,8 @@
 import type { CodeIndex, CodeSymbol } from "../types.js";
 
 /** Declarations indexed for resolving heritage names → defining file. */
-const DECL_KINDS = new Set<CodeSymbol["kind"]>(["class", "interface", "type"]);
+export const HERITAGE_DECL_KINDS: ReadonlyArray<CodeSymbol["kind"]> = ["class", "interface", "type"];
+const DECL_KINDS = new Set<CodeSymbol["kind"]>(HERITAGE_DECL_KINDS);
 
 export interface HeritageFileEdge {
   from: string;
@@ -28,9 +29,9 @@ function normalizeHeritageRef(raw: string): string {
   return lt >= 0 ? compact.slice(0, lt) : compact;
 }
 
-function buildDeclaredTypeFiles(index: CodeIndex): Map<string, Set<string>> {
+function buildDeclaredTypeFiles(declared: readonly CodeSymbol[]): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>();
-  for (const s of index.symbols) {
+  for (const s of declared) {
     if (!DECL_KINDS.has(s.kind)) continue;
     const baseName = stripTrailingGeneric(s.name).trim();
     if (!baseName) continue;
@@ -82,7 +83,23 @@ export function collectHeritageFileEdgesWithStats(index: CodeIndex): {
   edges: HeritageFileEdge[];
   stats: HeritageResolutionStats;
 } {
-  const nameToFiles = buildDeclaredTypeFiles(index);
+  return collectHeritageFileEdgesFrom(index.symbols, index.symbols);
+}
+
+/**
+ * The same, from two narrow reads instead of a whole index: the declarations (any order — they only
+ * fill a name → files map) and the symbols carrying `extends`/`implements`, IN INDEX ORDER, since
+ * edges are emitted in the order those symbols are walked. Symbols without heritage add nothing, so a
+ * full index passed as both is the same walk.
+ */
+export function collectHeritageFileEdgesFrom(
+  declared: readonly CodeSymbol[],
+  heritage: readonly CodeSymbol[],
+): {
+  edges: HeritageFileEdge[];
+  stats: HeritageResolutionStats;
+} {
+  const nameToFiles = buildDeclaredTypeFiles(declared);
   const out: HeritageFileEdge[] = [];
   const seen = new Set<string>();
   const stats: HeritageResolutionStats = { ambiguous: 0, unresolved: 0 };
@@ -111,7 +128,7 @@ export function collectHeritageFileEdgesWithStats(index: CodeIndex): {
     }
   };
 
-  for (const sym of index.symbols) {
+  for (const sym of heritage) {
     push(sym, sym.extends, "extends");
     push(sym, sym.implements, "implements");
   }

@@ -137,11 +137,14 @@ export async function handleSemanticQuery(
   }
 
   // Fall back to symbol-level semantic search
-  const { getCodeIndex, getEmbeddingCache } = await import("../tools/index-tools.js");
+  const { findRepoSymbols, getEmbeddingCache, getIndexSummary } = await import("../tools/index-tools.js");
   const { searchSemantic } = await import("../search/semantic.js");
 
-  const index = await getCodeIndex(repo);
-  if (!index) throw new Error(`Repository "${repo}" not found`);
+  // Every symbol's id and file (no source) for the filter and the ranking; source is read only for
+  // the few results shown (ADR-004 stage 2 — this loaded the whole index).
+  const summary = await getIndexSummary(repo);
+  if (!summary) throw new Error(`Repository "${repo}" not found`);
+  const index = { symbols: await findRepoSymbols(repo, { withSource: false }, { skipFreshness: true }) };
 
   const embeddings = await getEmbeddingCache(repo);
   if (!embeddings) {
@@ -166,7 +169,16 @@ export async function handleSemanticQuery(
     return { type: "semantic", data: text, tokens: estimateTokens(text) };
   }
 
-  const results = searchSemantic(new Float32Array(primaryVec), filteredEmbeddings, symbolMap, ctx.topK);
+  const ranked = searchSemantic(new Float32Array(primaryVec), filteredEmbeddings, symbolMap, ctx.topK);
+  const withSource = new Map(
+    (ranked.length > 0
+      ? await findRepoSymbols(repo, { ids: ranked.map((r) => r.symbol.id), withSource: true }, { skipFreshness: true })
+      : []
+    ).map((s) => [s.id, s]),
+  );
+  // Both maps are keyed by id and filled in index order, so an id shared by two symbols resolves to
+  // the same (last) one in each.
+  const results = ranked.map((r) => ({ ...r, symbol: withSource.get(r.symbol.id) ?? r.symbol }));
   // Truncate source then format as text (avoid double JSON serialization)
   const truncated = results.map((r) => ({ ...r, symbol: truncateSymbolSource(r.symbol, sourceLimit) }));
   const text = formatSemanticResults(truncated);

@@ -156,3 +156,22 @@ export async function findSymbolsInFilesSqlite(
     rethrowOperational(err, dbPath);
   }
 }
+
+/**
+ * Every distinct symbol name, in order of first appearance (rowid) — the vocabulary the zero-hit
+ * suggestions rank. One grouped scan on idx_symbols_name: 0.2 s for 258k names out of 1.4M symbols,
+ * where materialising the symbols to read their names took 8-13 s. Case-sensitive (BINARY), like
+ * `new Set(names)`.
+ */
+export async function findSymbolNamesSqlite(dbPath: string): Promise<string[]> {
+  const db = await openIndexDb(dbPath);
+  try {
+    if (readMetaValue(db, "repo") === undefined) return [];
+    const rows = db
+      .prepare("SELECT name FROM symbols GROUP BY name ORDER BY MIN(rowid)")
+      .all() as unknown as Array<{ name: string }>;
+    return rows.map((row) => row.name);
+  } catch (err) {
+    rethrowOperational(err, dbPath);
+  }
+}

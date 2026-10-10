@@ -2,7 +2,7 @@ import { writeFile, mkdir, readFile, readdir, rename, unlink, appendFile } from 
 import { join, resolve } from "node:path";
 import { getCurrentGitCommit } from "../utils/git-head.js";
 import { isPathWithin } from "../utils/path-within.js";
-import { getCodeIndex } from "./index-tools.js";
+import { findRepoSymbolsInFiles, getIndexSummary } from "./index-tools.js";
 import { detectCommunities } from "./community-tools.js";
 import { classifySymbolRoles } from "./graph-tools.js";
 import { coChangeAnalysis, fanInFanOut } from "./coupling-tools.js";
@@ -161,7 +161,9 @@ export async function generateWiki(
     journal_bulk_fill?: boolean;
   },
 ): Promise<WikiResult> {
-  const index = await getCodeIndex(repo);
+  // The root and the file list are all generation reads from the index itself; the analyses it fans
+  // out to read what they need (ADR-004 stage 2).
+  const index = await getIndexSummary(repo);
   if (!index) throw new Error(`Repository "${repo}" not found.`);
 
   const outputDir = options?.output_dir ?? join(index.root, ".codesift", "wiki");
@@ -369,8 +371,13 @@ export async function generateWiki(
       degradedReasons.push(`project_overview_error: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
+      // Key exports read only the communities' files, and only names, kinds and signatures.
+      const communityFiles = [...new Set(communities.flatMap((c) => c.files))];
+      const symbols = communityFiles.length > 0
+        ? await findRepoSymbolsInFiles(repo, communityFiles, { withSource: false, skipFreshness: true })
+        : [];
       modules = buildModuleMetadata(
-        communities, fullProfile, index, importEdges, fileHotspots, rankedHubs,
+        communities, fullProfile, { symbols }, importEdges, fileHotspots, rankedHubs,
       );
     } catch (err) {
       degradedReasons.push(`module_metadata_error: ${err instanceof Error ? err.message : String(err)}`);

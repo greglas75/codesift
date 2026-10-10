@@ -2,7 +2,7 @@ import type { CodeIndex, SearchResult } from "../../types.js";
 import type { AssembleContextResult, FileSummary } from "./types.js";
 import { estimateTokens } from "./shared.js";
 
-export function assembleL2(results: SearchResult[], budget: number, index: CodeIndex | null): AssembleContextResult {
+export function assembleL2(results: SearchResult[], budget: number, index: Pick<CodeIndex, "files"> | null): AssembleContextResult {
   const fileMap = new Map<string, { lang: string; exports: string[]; count: number }>();
   for (const result of results) {
     const sym = result.symbol;

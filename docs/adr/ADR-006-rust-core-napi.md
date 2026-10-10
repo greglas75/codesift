@@ -694,5 +694,23 @@ and on ResearchShieldNew, 6 routes (NestJS, Express and Yii2; up to 113 handlers
 13/13 identical. The total for each batch was 145.6 s / 2.4 GB → 68.9 s / 0.9 GB and 14.5 s / 637 MB →
 8.7 s / 326 MB.
 
-Still loading the index: a few low-traffic tools (context L2 / knowledge map, wiki, taint, php8,
-semantic handlers).
+The last ones, each compared against the previous code on real repos:
+
+- `search_text`'s zero-hit vocabulary: the distinct symbol names in order of first appearance, from
+  one grouped query (`findSymbolNames`, `GROUP BY name ORDER BY MIN(rowid)`): 0.2 s for 258k names out
+  of 1.4M symbols. A repeated name never changes the suggestions, so the result is the same: 15/15
+  cases identical, first call on tgm-survey-platform 7.5 s → 1.3 s. Its freshness check reads the
+  summary.
+- `get_knowledge_map`: heritage edges come from two reads, the declarations and the symbols with
+  `extends`/`implements` (a new exact predicate, `hasHeritage` → `json_extract` on `extras`, ABI 21).
+  Identical on codesift and tgm-survey-platform with and without focus, 25.8 s → 2.7 s.
+- `taint_trace`: Python symbols only (`fileSuffixAny: [".py"]`). Every callee lookup resolves to a
+  `.py` file, so nothing outside is ever read. Identical on three repos, 5.1 s → 0.5 s.
+- `assemble_context` L2, wiki generation, and the semantic symbol fallback read the summary,
+  community files' symbols, and ids without source plus source for the top results, respectively.
+
+`tests/tools/no-full-index-load.test.ts` now fails on any new `getCodeIndex` call in `src/`. What
+remains is on its allowlist: the TypeScript fallbacks for when there is no native call graph
+(`graph-tools`, `impact-tools`, `trace-route`), `review_diff`'s single load for small repos, and
+`php8_migration_candidates`. That last one has no recorded calls, and its rules depend on whole-index
+order across predicates that no single query expresses.

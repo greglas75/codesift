@@ -34,7 +34,7 @@ export type IndexFreshness =
     };
 
 export function assessIndexFreshness(
-  index: CodeIndex,
+  index: Pick<CodeIndex, "root" | "updated_at" | "created_at">,
   lastGitCommit: string | undefined,
 ): IndexFreshness {
   const headSha = safeReadGitHead(index.root);
@@ -75,7 +75,7 @@ export function assessIndexFreshness(
  * Preserves the original semantics exactly: unknown-and-old counts as stale.
  */
 export function isStaleIndex(
-  index: CodeIndex,
+  index: Pick<CodeIndex, "root" | "updated_at" | "created_at">,
   lastGitCommit: string | undefined,
 ): boolean {
   const freshness = assessIndexFreshness(index, lastGitCommit);

@@ -45,7 +45,7 @@ interface GitHealthLike {
  */
 export function buildProjectOverview(
   projectResult: ProjectProfile,
-  codeIndex: CodeIndex,
+  codeIndex: Pick<CodeIndex, "root" | "file_count">,
 ): ProjectOverview & { _degraded?: string } {
   const ident = projectResult.identity;
   const stack = projectResult.stack;
@@ -162,7 +162,8 @@ const TEST_FILE_RE = /\.test\.(ts|js|py|go)$|\.spec\.(ts|js)$|__tests__\//;
 export function buildModuleMetadata(
   communities: CommunityInfo[],
   projectResult: ProjectProfile,
-  codeIndex: CodeIndex,
+  /** At least the symbols of the communities' files, in index order (no source needed). */
+  codeIndex: Pick<CodeIndex, "symbols">,
   importEdges: ImportEdge[],
   fileHotspots: FileHotspot[],
   rankedHubs: RankedHubSymbol[], // reserved — future: per-community hub listing
