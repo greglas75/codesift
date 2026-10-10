@@ -17,4 +17,10 @@ describe("graphsOverBudget", () => {
   ])("%s", (_case, entries, budgetGb, expected) => {
     expect(graphsOverBudget(entries, budgetGb * GB)).toEqual(expected);
   });
+
+  // Bug it catches: a concurrent call moved its own key last, and this call evicted the graph it was
+  // about to return.
+  it("keeps the caller's graph wherever it sits in the order", () => {
+    expect(graphsOverBudget([e("mine", 3), e("other", 3)], 4 * GB, "mine")).toEqual([]);
+  });
 });

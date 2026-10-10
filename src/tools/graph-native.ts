@@ -173,8 +173,9 @@ export async function nativeGraphFor(
     }
     const graph = await entry.graph;
     // Its bytes are known only now; the count cap above cannot see that one graph can be 3 GB.
-    const sizes = [...graphs].map(([k, e]) => ({ key: k, bytes: e.built?.footprintBytes() }));
-    for (const evict of graphsOverBudget(sizes, callGraphCacheBudgetBytes())) {
+    const sizes = [...graphs].map(([k, e]) => ({ key: k, bytes: footprintOf(k === key ? graph : e.built) }));
+    // This call's key, not just the newest: another call may have moved its own key last meanwhile.
+    for (const evict of graphsOverBudget(sizes, callGraphCacheBudgetBytes(), key)) {
       const evicted = graphs.get(evict);
       if (!evicted) continue;
       retire(evicted);
@@ -232,22 +233,34 @@ export async function graphSymbolsAt(
   return out;
 }
 
+/** A graph's resident bytes, or undefined when unknown (in flight, or a handle that no longer answers). */
+function footprintOf(graph: NativeCallGraphHandle | undefined): number | undefined {
+  try {
+    return graph?.footprintBytes();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Which cached graphs to drop, oldest first, until the finished ones fit `budget`. `entries` is in
  * use order (oldest first); a build still in flight has no size yet and is neither counted nor
- * dropped, and the newest entry is never dropped — evicting the graph a caller just asked for would
- * rebuild it on the next call. Exported for tests.
+ * dropped, and neither the newest entry nor `keep` is dropped — evicting the graph a caller just asked
+ * for would rebuild it on the next call. So the result can stay over budget when those alone exceed it.
+ * Exported for tests.
  */
 export function graphsOverBudget(
   entries: ReadonlyArray<{ key: string; bytes: number | undefined }>,
   budget: number,
+  /** The key the caller is about to return — kept wherever it sits in the order. */
+  keep?: string,
 ): string[] {
   let total = 0;
   for (const e of entries) total += e.bytes ?? 0;
   const out: string[] = [];
   for (const e of entries.slice(0, -1)) {
     if (total <= budget) break;
-    if (e.bytes === undefined) continue;
+    if (e.bytes === undefined || e.key === keep) continue;
     out.push(e.key);
     total -= e.bytes;
   }
