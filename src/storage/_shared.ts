@@ -91,7 +91,9 @@ export const PID_TRUST_WINDOW_MS = 24 * 60 * 60 * 1000;
  * writers would turn a slow save into a deleted one.
  */
 export function writerPidIsAlive(entry: string): boolean {
-  const match = /\.(?:generation|tmp)\.(\d+)(?:\.|$)/.exec(entry);
+  // `.seeding.<pid>` is the worktree seed's half-made database or vector clone: same contract, a
+  // live seed must not be reclaimed under it.
+  const match = /\.(?:generation|tmp|seeding)\.(\d+)(?:\.|$)/.exec(entry);
   if (!match) return false;
   const pid = Number(match[1]);
   if (!Number.isInteger(pid) || pid <= 0 || pid > MAX_PLAUSIBLE_PID) return false;
@@ -179,6 +181,7 @@ export const ARTIFACT_SUFFIXES = [
   "embeddings.ndjson",
   "embeddings.meta.json",
   "embeddings.partial.ndjson",
+  "embeddings.partial.ndjson.lock",
   "chunks.ndjson",
   "chunk-embeddings.ndjson",
   "bm25.json",

@@ -264,7 +264,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   // A temp file is never live data by construction: readers open the target name, never the tail.
   // The rules that decide are therefore the same two the in-process sweeper uses — an hour of age,
   // and a writer that is no longer running — not registry membership.
-  const tempTail = /\.(?:tmp|generation)\./;
+  const tempTail = /\.(?:tmp|generation|seeding)\./;
   const orphanTempAgeMs = 60 * 60 * 1000;
   const { writerPidIsAlive, PID_TRUST_WINDOW_MS: pidTrustWindowMs } = await import("../storage/_shared.js");
   let files = 0, bytes = 0, kept = 0;

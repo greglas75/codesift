@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { basename } from "node:path";
-import { ARTIFACT_SUFFIXES, artifactPattern } from "../../src/storage/_shared.js";
+import { ARTIFACT_SUFFIXES, artifactPattern, writerPidIsAlive } from "../../src/storage/_shared.js";
 import { getChunkPath, getChunkEmbeddingPath } from "../../src/storage/chunk-store.js";
 import { sqlitePathFor, getIndexPath } from "../../src/storage/index-store.js";
 import { getPartialEmbeddingPath } from "../../src/storage/embedding-store.js";
@@ -51,6 +51,13 @@ describe("prune recognises every artifact the storage layer creates", () => {
     // The worktree seed's half-made copies, left by a process killed mid-seed.
     expect(re.test("a1b2c3d4e5f6.index.db.seeding.4242")).toBe(true);
     expect(re.test("a1b2c3d4e5f6.embeddings.ndjson.seeding.4242")).toBe(true);
+    expect(re.test(basename(`${getPartialEmbeddingPath(INDEX_PATH)}.lock`))).toBe(true);
+  });
+
+  it("treats a seed in progress like any other live writer", () => {
+    // Matched by shape alone, a live seed's half-made copy would be reclaimed under it.
+    expect(writerPidIsAlive(`a1b2c3d4e5f6.index.db.seeding.${process.pid}`)).toBe(true);
+    expect(writerPidIsAlive("a1b2c3d4e5f6.index.db.seeding.999999")).toBe(false);
   });
 
   it("leaves shared and non-repo files alone", () => {

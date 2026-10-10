@@ -33,39 +33,11 @@ export function getPartialEmbeddingPath(indexPath: string): string {
   return indexPath.replace(/\.index\.json$/, ".embeddings.partial.ndjson");
 }
 
-/** The model a partial file was started with, from its header line; null when unreadable. */
-export async function partialEmbeddingModel(partialPath: string): Promise<string | null> {
-  try {
-    const { open } = await import("node:fs/promises");
-    const handle = await open(partialPath, "r");
-    try {
-      const buf = Buffer.alloc(1024);
-      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-      const first = buf.subarray(0, bytesRead).toString("utf-8").split("\n")[0] ?? "";
-      const header = JSON.parse(first) as { model?: unknown };
-      return typeof header.model === "string" ? header.model : null;
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return null;
-  }
-}
-
-/** Append finished vectors to a partial file, writing its header first when it is new. */
-export async function appendPartialEmbeddings(
-  partialPath: string,
-  model: string,
-  entries: ReadonlyArray<{ id: string; vec: Float32Array; h: number | undefined }>,
-): Promise<void> {
-  if (entries.length === 0) return;
-  const { appendFile } = await import("node:fs/promises");
-  const { existsSync } = await import("node:fs");
-  let text = existsSync(partialPath) ? "" : JSON.stringify({ model }) + "\n";
-  for (const { id, vec, h } of entries) {
-    text += JSON.stringify(h === undefined ? { id, vec: Array.from(vec) } : { id, vec: Array.from(vec), h }) + "\n";
-  }
-  await appendFile(partialPath, text);
+/** Bytes `loadEmbeddings` charges for a map — the same per-entry price, so budgets add up. */
+export function residentEmbeddingBytes(embeddings: ReadonlyMap<string, Float32Array>): number {
+  let bytes = 0;
+  for (const [id, vec] of embeddings) bytes += vec.byteLength + id.length * 2 + 48;
+  return bytes;
 }
 
 interface EmbeddingLine {

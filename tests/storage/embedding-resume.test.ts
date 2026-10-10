@@ -4,7 +4,7 @@
 // run. Measured 2026-10-09: 1,021 failed runs in the daemon log (839 timeouts), none of which saved a
 // vector — and on a ~450k-symbol repo one run is hours of model calls.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { CodeSymbol } from "../../src/types.js";
@@ -51,6 +51,9 @@ beforeEach(async () => {
   dataDir = mkdtempSync(join(tmpdir(), "cs-embed-resume-"));
   prevDataDir = process.env["CODESIFT_DATA_DIR"];
   process.env["CODESIFT_DATA_DIR"] = dataDir;
+  // The cross-repo cache is keyed by model, so its hits are legitimately reusable — and would hide
+  // which vectors came from THIS repo's files, which is what these tests are about.
+  process.env["CODESIFT_MAX_SHARED_CACHE_MB"] = "0";
   const { resetConfigCache } = await import("../../src/config.js");
   resetConfigCache();
   calls.length = 0;
@@ -61,6 +64,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  delete process.env["CODESIFT_MAX_SHARED_CACHE_MB"];
   if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
   else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
   rmSync(dataDir, { recursive: true, force: true });
@@ -120,8 +124,86 @@ describe("embedSymbols checkpoints and resumes", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("ignores a checkpoint whose header cannot be read", async () => {
-    writeFileSync(partial(), "not json\n");
+  it("moves an unrecognised checkpoint aside instead of deleting it", async () => {
+    // A complete first line that is not a header is not ours to judge — but resuming from it would be
+    // a guess. Kept as a `.tmp.<ts>` tail, which prune reclaims by age.
+    writeFileSync(partial(), JSON.stringify({ id: "x", vec: [1, 2] }) + "\n");
+    expect(await run()).toBe(true);
+    expect(calls.flat()).toHaveLength(6);
+    expect(readdirSync(dataDir).some((f) => /\.embeddings\.partial\.ndjson\.tmp\.\d+$/.test(f))).toBe(true);
+  });
+
+  it("drops a first write that never completed a line — at most one batch", async () => {
+    writeFileSync(partial(), '{"model":"mod');
+    expect(await run()).toBe(true);
+    expect(existsSync(partial())).toBe(false);
+  });
+
+  it("leaves an unreadable checkpoint untouched and does not append to it", async () => {
+    // A failed read is not a wrong model. The first version deleted the file on ANY read failure —
+    // one transient error discarding hours of vectors.
+    if (process.getuid?.() === 0) return; // root reads through mode 000
+    writeFileSync(partial(), JSON.stringify({ model: "model-a" }) + "\n");
+    chmodSync(partial(), 0o000);
+    try {
+      expect(await run()).toBe(true);
+      chmodSync(partial(), 0o600);
+      expect(readFileSync(partial(), "utf-8")).toBe(JSON.stringify({ model: "model-a" }) + "\n");
+    } finally {
+      chmodSync(partial(), 0o600);
+    }
+  });
+
+  it("cuts a torn last line before appending, so the next batch is not fused to it", async () => {
+    failAfterCalls = 1;
+    await run();
+    const intact = readFileSync(partial(), "utf-8");
+    writeFileSync(partial(), intact + '{"id":"local/r:src/zz.ts:zz:1","vec":[1,');
+
+    vi.resetModules();
+    calls.length = 0;
+    failAfterCalls = 1; // resumes 2, appends one more batch of 2, then fails
+    await run();
+
+    // Every line parses: the fragment was cut, not glued to the next batch.
+    const lines = readFileSync(partial(), "utf-8").trim().split("\n");
+    for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
+    expect(lines).toHaveLength(1 + 2 + 2);
+  });
+
+  it("writes the header into an empty checkpoint left by a crash between create and write", async () => {
+    writeFileSync(partial(), "");
+    failAfterCalls = 1;
+    await run();
+    expect(JSON.parse(readFileSync(partial(), "utf-8").split("\n")[0] ?? "")).toEqual({ model: "model-a" });
+  });
+
+  it("does not touch a checkpoint another live process owns", async () => {
+    writeFileSync(partial(), JSON.stringify({ model: "model-a" }) + "\n");
+    writeFileSync(`${partial()}.lock`, String(process.ppid));
+    failAfterCalls = 1;
+
+    await run();
+
+    // Neither resumed from, appended to, nor deleted — and the owner's lock is left alone.
+    expect(readFileSync(partial(), "utf-8")).toBe(JSON.stringify({ model: "model-a" }) + "\n");
+    expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe(String(process.ppid));
+  });
+
+  it("takes over the lock of a process that is gone, and releases it after the run", async () => {
+    writeFileSync(`${partial()}.lock`, "999999");
+    expect(await run()).toBe(true);
+    expect(existsSync(`${partial()}.lock`)).toBe(false);
+  });
+
+  it("does not reuse a vector file whose meta is missing", async () => {
+    // A crash between the vector and meta writes leaves vectors of an unknown model — the same
+    // incomparability the model check exists for.
+    expect(await run()).toBe(true);
+    rmSync(main().replace(".ndjson", ".meta.json"));
+    vi.resetModules();
+    calls.length = 0;
+
     expect(await run()).toBe(true);
     expect(calls.flat()).toHaveLength(6);
   });

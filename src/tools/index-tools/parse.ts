@@ -1,4 +1,6 @@
-import { readFile, unlink } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { EmbeddingCheckpoint } from "../../storage/embedding-checkpoint.js";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { recordEmbeddingRun } from "../../storage/embedding-health.js";
@@ -20,8 +22,7 @@ import {
   getEmbeddingPath,
   getEmbeddingMetaPath,
   getPartialEmbeddingPath,
-  partialEmbeddingModel,
-  appendPartialEmbeddings,
+  residentEmbeddingBytes,
   loadEmbeddingMeta,
   batchEmbed,
   primeContentHashes,
@@ -281,34 +282,46 @@ export async function embedSymbols(
   const embeddingPath = getEmbeddingPath(indexPath);
   const metaPath = getEmbeddingMetaPath(indexPath);
   const partialPath = getPartialEmbeddingPath(indexPath);
-  let checkpointed = 0;
+  let checkpoint: EmbeddingCheckpoint | null = null;
   try {
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
+    const budget = embeddingMemBudgetBytes();
 
     // Vectors from another model are incomparable, and the content hash cannot tell: it covers the
     // TEXT, so an unchanged symbol embedded by the old model passed as current and was kept forever,
     // under a meta rewritten to name the new one. A seeded worktree makes that common — it clones
-    // whatever its donor was embedded with.
+    // whatever its donor was embedded with. A vector file with NO meta is the same unknown (a crash
+    // between the two writes, or a file from before meta existed), so it is not reused either.
     const storedModel = (await loadEmbeddingMeta(metaPath))?.model;
-    const existing = storedModel === undefined || storedModel === provider.model
-      ? await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes())
-      : new Map<string, Float32Array>();
-
-    // Resume: what a failed or killed run finished is in the partial file, NEWER than the main
-    // file, so its hashes are primed first (priming never overwrites).
-    if ((await partialEmbeddingModel(partialPath)) === provider.model) {
-      const resumed = await loadEmbeddings(partialPath, embeddingMemBudgetBytes());
-      for (const [id, vec] of resumed) existing.set(id, vec);
-      primeContentHashes(repoName, contentHashesForPath(partialPath));
-      if (resumed.size > 0) console.error(`[codesift] ${repoName}: resuming embedding with ${resumed.size} vectors already done`);
-    } else {
-      await unlink(partialPath).catch(() => undefined);
-    }
+    const reuseMain = storedModel === undefined ? !existsSync(embeddingPath) : storedModel === provider.model;
+    const existing = reuseMain ? await loadEmbeddings(embeddingPath, budget) : new Map<string, Float32Array>();
     // Seed the in-memory hash map from what was stored beside the vectors.
     // Without this the map starts empty on every process, every symbol looks
     // changed, and the whole corpus is re-embedded on each MCP server start.
-    if (existing.size > 0) primeContentHashes(repoName, contentHashesForPath(embeddingPath));
+    // Only from a file actually loaded in THIS call — the per-path map may hold an older load.
+    const mainHashes = existing.size > 0 ? contentHashesForPath(embeddingPath) : null;
+
+    // Resume from what a failed or killed run finished — if no other live process owns that file.
+    const opened = await EmbeddingCheckpoint.open(partialPath, provider.model);
+    if ("busy" in opened) {
+      console.error(`[codesift] ${repoName}: another process (pid ${opened.busy}) holds the embedding checkpoint — running without one`);
+    } else {
+      checkpoint = opened;
+      const decision = await checkpoint.decide();
+      if (decision.note) console.error(`[codesift] ${repoName}: ${decision.note}`);
+      if (decision.resume) {
+        // The partial gets what the main file left of the budget: two full budgets would be twice
+        // the cap the budget exists to enforce.
+        const resumed = await loadEmbeddings(partialPath, Math.max(0, budget - residentEmbeddingBytes(existing)));
+        for (const [id, vec] of resumed) existing.set(id, vec);
+        // NEWER than the main file, so primed first (priming never overwrites).
+        primeContentHashes(repoName, contentHashesForPath(partialPath));
+        if (resumed.size > 0) console.error(`[codesift] ${repoName}: resuming embedding with ${resumed.size} vectors already done`);
+      }
+      await checkpoint.prepareForAppend();
+    }
+    if (mainHashes) primeContentHashes(repoName, mainHashes);
 
     const embeddings = await batchEmbed(
       symbolTexts, existing,
@@ -317,13 +330,7 @@ export async function embedSymbols(
       // Model identity keys the cross-repo cache; a worktree of an already
       // embedded checkout then costs lookups instead of model calls.
       { model: provider.model, dimensions: provider.dimensions },
-      async (done) => {
-        // Best effort: a checkpoint that cannot be written costs a resume, never the run.
-        try {
-          await appendPartialEmbeddings(partialPath, provider.model, done);
-          checkpointed += done.length;
-        } catch { /* disk full or gone — the run itself carries on */ }
-      },
+      checkpoint ? (done) => checkpoint!.append(done) : undefined,
     );
     await saveEmbeddings(embeddingPath, embeddings, contentHashesFor(repoName));
     await saveEmbeddingMeta(metaPath, {
@@ -334,16 +341,22 @@ export async function embedSymbols(
       updated_at: Date.now(),
     });
     // Folded into the main file — only now is it safe to drop.
-    await unlink(partialPath).catch(() => undefined);
+    await checkpoint?.discard();
     embeddingCaches.set(repoName, embeddings);
     recordEmbeddingRun(repoName, true);
     return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    const kept = checkpointed > 0 ? ` — ${checkpointed} vectors kept, the next run resumes from them` : "";
-    console.error(`[codesift] Embedding failed for ${repoName}: ${message}${kept}`);
+    const progress = checkpoint?.progress;
+    const kept = progress && progress.written > 0
+      ? ` — ${progress.written} vectors kept, the next run resumes from them`
+      : "";
+    const lost = progress?.error ? ` (checkpointing failed: ${progress.error})` : "";
+    console.error(`[codesift] Embedding failed for ${repoName}: ${message}${kept}${lost}`);
     recordEmbeddingRun(repoName, false, message);
     return false;
+  } finally {
+    await checkpoint?.release();
   }
 }
 
