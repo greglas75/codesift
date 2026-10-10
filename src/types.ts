@@ -35,8 +35,8 @@ export interface FileLocation {
   end_line: number;     // 1-based
   start_col?: number;
   end_col?: number;
-  start_byte?: number;  // byte offset in file — enables precise disk reads
-  end_byte?: number;    // byte offset in file
+  start_byte?: number;  // UTF-16 code-unit offset in the file's text (tree-sitter over a JS string) — not bytes
+  end_byte?: number;    // UTF-16 code-unit offset, exclusive
 }
 
 export interface CodeSymbol extends FileLocation {

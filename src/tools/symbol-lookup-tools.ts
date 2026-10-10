@@ -1,4 +1,4 @@
-import { open, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CodeSymbol, SymbolKind } from "../types.js";
 import {
@@ -107,50 +107,46 @@ function stripSymbol(sym: CodeSymbol): Omit<CodeSymbol, "repo" | "tokens" | "sta
 
 
 /**
- * Read a source file and extract lines for a symbol (1-based, inclusive).
- * Uses byte offsets when available for precise reads without loading full file.
+ * Read a source file and extract a symbol's text.
+ *
+ * `start_byte`/`end_byte` are UTF-16 code units, not bytes — both extractors take them from
+ * tree-sitter over a JS string. Reading them as file byte offsets shifted the window back by every
+ * multi-byte character above the symbol and cut its end short: an em-dash in a comment and
+ * get_symbol / find_and_show returned this function starting inside the comment above it.
+ * So the offsets slice the decoded text, and only when they still land on the indexed line —
+ * after an edit they describe a file that no longer exists, and whole lines are the better guess.
  * Returns undefined if the file cannot be read.
  */
-async function extractSource(
-  repoRoot: string,
-  file: string,
-  startLine: number,
-  endLine: number,
-  startByte?: number,
-  endByte?: number,
-): Promise<string | undefined> {
-  const filePath = join(repoRoot, file);
-
-  // Fast path: use byte offsets to read exact range
-  if (startByte != null && endByte != null && endByte > startByte) {
-    try {
-      const fh = await open(filePath, "r");
-      try {
-        const length = endByte - startByte;
-        const buf = Buffer.alloc(length);
-        let total = 0;
-        while (total < length) {
-          const { bytesRead } = await fh.read(buf, total, length - total, startByte + total);
-          if (bytesRead === 0) break;
-          total += bytesRead;
-        }
-        if (total === length) return buf.toString("utf-8");
-      } finally {
-        await fh.close();
-      }
-    } catch {
-      // Fall through to line-based extraction
-    }
-  }
-
-  // Fallback: line-based extraction
+async function extractSource(repoRoot: string, sym: CodeSymbol): Promise<string | undefined> {
+  let content: string;
   try {
-    const content = await readFile(filePath, "utf-8");
-    const lines = content.split("\n");
-    return lines.slice(startLine - 1, endLine).join("\n");
+    content = await readFile(join(repoRoot, sym.file), "utf-8");
   } catch {
     return undefined;
   }
+  if (offsetsStillMatch(content, sym)) return content.slice(sym.start_byte, sym.end_byte);
+  return content.split("\n").slice(sym.start_line - 1, sym.end_line).join("\n");
+}
+
+/**
+ * Whether the offsets still describe this symbol: the start on its indexed line, the end on its end
+ * line, and the text there opening the way the indexed source does. A line check alone is not
+ * enough — one inserted line moved the old offset onto the comment above, which had become the
+ * symbol's line number.
+ */
+function offsetsStillMatch(content: string, sym: CodeSymbol): sym is CodeSymbol & { start_byte: number; end_byte: number } {
+  const { start_byte: start, end_byte: end } = sym;
+  if (start == null || end == null || end <= start || end > content.length) return false;
+  if (lineAt(content, start) !== sym.start_line || lineAt(content, end) !== sym.end_line) return false;
+  const opening = sym.source?.split("\n", 1)[0];
+  return !opening || content.startsWith(opening, start);
+}
+
+/** The 1-based line holding code unit `offset`. */
+function lineAt(content: string, offset: number): number {
+  let line = 1;
+  for (let i = content.indexOf("\n"); i !== -1 && i < offset; i = content.indexOf("\n", i + 1)) line++;
+  return line;
 }
 
 /**
@@ -268,14 +264,7 @@ export async function getSymbol(
   }
   const symbol = matches[0]!;
 
-  const source = await extractSource(
-    summary.root,
-    symbol.file,
-    symbol.start_line,
-    symbol.end_line,
-    symbol.start_byte,
-    symbol.end_byte,
-  );
+  const source = await extractSource(summary.root, symbol);
 
   const result = { ...symbol };
   if (source !== undefined) {

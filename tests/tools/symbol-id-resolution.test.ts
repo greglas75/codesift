@@ -6,6 +6,11 @@ import { getSymbol, resolveSymbolIdExact } from "../../src/tools/symbol-tools.js
 import { resetConfigCache } from "../../src/config.js";
 
 const REPO = "local/symid-project";
+const UNICODE_SOURCE = `// Zażółć gęślą jaźń — a comment with multi-byte characters
+export function afterUnicode(): string {
+  return "ok";
+}
+`;
 
 let tmpDir: string;
 let fixtureDir: string;
@@ -40,6 +45,9 @@ beforeEach(async () => {
 }
 `,
   );
+
+  // Multi-byte text above a symbol: the stored offsets are UTF-16 code units, the file is UTF-8.
+  await writeFile(join(fixtureDir, "src", "unicode.ts"), UNICODE_SOURCE);
 
   await indexFolder(fixtureDir);
 });
@@ -82,5 +90,25 @@ describe("resolveSymbolIdExact — bare-name recovery for get_symbol/get_symbols
     const id = await resolveSymbolIdExact(REPO, "veryUniqueName");
     const result = await getSymbol(REPO, id as string);
     expect(result?.symbol.name).toBe("veryUniqueName");
+  });
+});
+
+describe("getSymbol source after multi-byte text", () => {
+  // Bug: start_byte/end_byte were read as FILE BYTE offsets, but they count UTF-16 code units, so
+  // every multi-byte character above a symbol moved the window back and cut its end short.
+  it("returns exactly the declaration", async () => {
+    const id = await resolveSymbolIdExact(REPO, "afterUnicode");
+    const result = await getSymbol(REPO, id!, { include_related: false });
+    expect(result?.symbol.source).toMatch(/^(export )?function afterUnicode\(\): string \{\n {2}return "ok";\n\}$/);
+  });
+
+  // Bug it catches: offsets from before an edit sliced the new text mid-token.
+  it("falls back to whole indexed lines once the file has changed", async () => {
+    const id = await resolveSymbolIdExact(REPO, "afterUnicode");
+    const edited = `// one more line\n${UNICODE_SOURCE}`;
+    await writeFile(join(fixtureDir, "src", "unicode.ts"), edited);
+    const result = await getSymbol(REPO, id!, { include_related: false });
+    const { start_line, end_line } = result!.symbol;
+    expect(result?.symbol.source).toBe(edited.split("\n").slice(start_line - 1, end_line).join("\n"));
   });
 });
