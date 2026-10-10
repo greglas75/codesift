@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import type { Flags } from "./args.js";
 import { getBoolFlag, output, die } from "./args.js";
 
@@ -116,7 +117,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
   for (const name of readdirSync(dataDir)) {
     const m = /^([0-9a-f]{8,})\.index\.db$/.exec(name);
     if (!m?.[1] || live.has(m[1])) continue;
-    let db: import("node:sqlite").DatabaseSync | undefined;
+    let db: DatabaseSyncType | undefined;
     try {
       // Through `loadSqliteCtor`, never `node:sqlite` directly: with the native store on, the Rust
       // copy of SQLite owns every index database in the process, and a second copy opening the same

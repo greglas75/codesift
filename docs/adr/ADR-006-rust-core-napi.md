@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Completed 2026-10-10 (stages 0–7 done, the native store on by default; 8, 9 and 10 measured and declined; the TypeScript paths stay permanently as the fallback)
+**Status:** Completed 2026-10-10 (stages 0–7 done, the native store on by default; 8 and 10 declined on measurement; 9 declined on conversation indexes, reopened for the owner by a code-index measurement — see Closing; the TypeScript paths stay permanently as the fallback)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)

@@ -229,8 +229,9 @@ function parseMode(raw: string | undefined): NativeMode | undefined {
  * and while `node:sqlite` — a second copy — had the same files open in the same process, a Rust
  * connection's last-connection checkpoint deleted `-wal`/`-shm` node still held (SQLite's fcntl locks
  * never conflict within one process). Since `loadSqliteCtor()` hands every caller the core's own
- * `DatabaseSync` when the store is on, one copy owns every database a process opens, and the choice is
- * made once per process. A monitored daemon run (ADR-006 stage 5: 24 h, 0 crashes, 0 SQLite errors)
+ * `DatabaseSync` when the store is on, one copy owns every index database a process opens (the lone
+ * exception, `daemon-lock.db`, is a file nothing else opens), and the choice is made once per process;
+ * tests/storage/single-sqlite-owner.test.ts fails on a new direct `node:sqlite` load. A monitored daemon run (ADR-006 stage 5: 24 h, 0 crashes, 0 SQLite errors)
  * cleared it for `auto` like every other component; `CODESIFT_NATIVE_STORE=0` still turns it off.
  */
 

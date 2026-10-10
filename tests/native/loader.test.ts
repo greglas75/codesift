@@ -43,6 +43,7 @@ describe("nativeMode", () => {
   // turning it off — the one switch back to node:sqlite for a whole process.
   it("treats the store like every other component, with its own switch winning", () => {
     expect(nativeMode("store", {})).toBe("auto");
+    expect(nativeMode("store", { CODESIFT_NATIVE_STORE: "1" })).toBe("required");
     expect(nativeMode("store", { CODESIFT_NATIVE: "1" })).toBe("required");
     expect(nativeMode("store", { CODESIFT_NATIVE: "1", CODESIFT_NATIVE_STORE: "0" })).toBe("off");
     expect(nativeMode("store", { CODESIFT_NATIVE: "0" })).toBe("off");
