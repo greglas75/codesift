@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { seedWorktreeIndexFromParent } from "../../src/tools/index-tools/worktree-seed.js";
+import { parsePorcelainZ, seedWorktreeIndexFromParent } from "../../src/tools/index-tools/worktree-seed.js";
 import { resetConfigCache } from "../../src/config.js";
 import { getRepoName } from "../../src/storage/registry.js";
 import { canonicalPath } from "../../src/utils/worktree.js";
@@ -285,6 +285,31 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(files).toEqual(["src/a.ts"]);
   });
 
+  // Bug: without -z git QUOTES a path holding a space or a non-ASCII byte, so the donor's untracked
+  // file matched nothing in this tree and its symbols stayed in the seeded index.
+  it("drops a donor file whose name git would quote", async () => {
+    const ghost = "src/ghost file é.ts";
+    writeFileSync(join(parentRoot, ghost), "export function ghost() {}\n");
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"], [ghost, "ghost"]]);
+    registry({
+      [PARENT_NAME]: {
+        name: PARENT_NAME, root: parentRoot,
+        index_path: join(dataDir, `${PARENT_HASH}.index.json`),
+        last_git_commit: git(["rev-parse", "HEAD"], parentRoot).trim(),
+      },
+    });
+
+    const seed = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+    const { catchUpSeededWorktree } = await import("../../src/tools/index-tools/worktree-seed.js");
+    await catchUpSeededWorktree(worktreeRoot, WT_NAME, seed.seeded_at_commit ?? null, seed.files, seed.donor_root);
+
+    const db = new DatabaseSync(`file:${join(dataDir, "bbbbbbbbbbbb.index.db")}?mode=ro`, { open: true });
+    const files = (db.prepare("SELECT DISTINCT file FROM symbols ORDER BY file").all() as Array<{ file: string }>)
+      .map((r) => r.file);
+    db.close();
+    expect(files).toEqual(["src/a.ts"]);
+  });
+
   it("leaves no half-copied database when the parent index is empty", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), []);
     registry({
@@ -373,4 +398,17 @@ describe("indexing a subdirectory of a linked worktree", () => {
       rmSync(base, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+describe("parsePorcelainZ", () => {
+  // Bug it catches: a rename read as one path "old -> new", so the old path never left the index.
+  it.each([
+    ["an untracked file with a space", "?? src/a b.ts\0", [{ code: "??", path: "src/a b.ts" }]],
+    ["a rename, source after target", "R  src/new.ts\0src/old.ts\0", [{ code: "R ", path: "src/new.ts", from: "src/old.ts" }]],
+    ["a deletion", " D src/gone.ts\0", [{ code: " D", path: "src/gone.ts" }]],
+    ["a nested checkout directory", "?? .worktrees/x/\0", []],
+    ["no output", "", []],
+  ])("parses %s", (_case, output, expected) => {
+    expect(parsePorcelainZ(output)).toEqual(expected);
+  });
 });

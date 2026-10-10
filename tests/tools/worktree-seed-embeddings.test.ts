@@ -5,7 +5,7 @@
 // repo (full index). A vector line is ~16 KB, so copying would cost ~7 GB per worktree; the clone costs
 // nothing, and where the filesystem cannot clone the seed must decline rather than copy.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadEmbeddings, contentHashesForPath } from "../../src/storage/embedding-store.js";
@@ -94,6 +94,23 @@ describe("seedEmbeddingsFromDonor", () => {
     const meta = JSON.parse(readFileSync(metaOf(targetIndex()), "utf-8"));
     expect(meta.id_rebase).toEqual({ from: `${DONOR}:`, to: `${TARGET}:` });
     expect([...(await loadEmbeddings(vectorsOf(targetIndex()))).keys()]).toEqual([`${TARGET}:src/a.ts:a:1`]);
+  });
+
+  // Bug: the donor's meta was written before the vector rename and left behind when the rename
+  // failed, pairing the donor's count and id rebase with the target's old vectors. Only a
+  // copy-on-write filesystem reaches the rename; elsewhere the clone declines first.
+  it("keeps the target's meta when the vectors cannot be put in place", async () => {
+    writeDonor([{ id: `${DONOR}:src/a.ts:a:1`, vec: [1, 0] }]);
+    const previous = { model: "embeddinggemma", provider: "ollama", dimensions: 2, symbol_count: 5, updated_at: 1 };
+    writeFileSync(metaOf(targetIndex()), JSON.stringify(previous));
+    // A non-empty directory where the vector file goes: the rename over it fails.
+    mkdirSync(vectorsOf(targetIndex()));
+    writeFileSync(join(vectorsOf(targetIndex()), "occupied"), "");
+
+    const result = await seedEmbeddingsFromDonor(donorIndex(), DONOR, targetIndex(), TARGET);
+
+    expect(result.seeded).toBe(false);
+    expect(JSON.parse(readFileSync(metaOf(targetIndex()), "utf-8"))).toEqual(previous);
   });
 
   it("declines a donor with no vectors", async () => {

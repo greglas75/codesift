@@ -438,6 +438,38 @@ async function git(args: string[], cwd: string): Promise<string | null> {
   return runGit(args, { cwd, timeout: 15_000 }).catch(() => null);
 }
 
+const STATUS_Z = ["status", "--porcelain", "-z", "--untracked-files=all"];
+
+interface PorcelainEntry {
+  code: string;
+  path: string;
+  /** The source of a rename or copy. */
+  from?: string;
+}
+
+/**
+ * `git status --porcelain -z`. Without `-z` git quotes any path holding a space, a quote or a
+ * non-ASCII byte (`"src/caf\303\251.ts"`) and joins a rename as `old -> new`, so those paths matched
+ * no file and the seed kept symbols for files that were not there. Directory entries (a nested
+ * checkout git will not descend into) name no indexed file and are dropped.
+ */
+export function parsePorcelainZ(output: string | null): PorcelainEntry[] {
+  if (!output) return [];
+  const fields = output.split("\0");
+  const entries: PorcelainEntry[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i]!;
+    if (field.length < 4) continue;
+    const code = field.slice(0, 2);
+    const path = field.slice(3);
+    // In -z output a rename or copy is followed by its source, as a field of its own.
+    const from = code.includes("R") || code.includes("C") ? fields[++i] : undefined;
+    if (path.endsWith("/")) continue;
+    entries.push(from ? { code, path, from } : { code, path });
+  }
+  return entries;
+}
+
 /**
  * Bring a freshly seeded worktree index from the parent's commit to this tree's actual state.
  *
@@ -489,28 +521,20 @@ export async function catchUpSeededWorktree(
   }
 
   // Working tree on top of HEAD: modified, staged, and untracked alike.
-  const status = await git(["status", "--porcelain", "--untracked-files=all"], worktreeRoot);
-  if (status !== null) {
-    for (const line of status.split("\n")) {
-      if (line.length < 4) continue;
-      const code = line.slice(0, 2);
-      const path = line.slice(3).trim();
-      if (!path) continue;
-      if (code.includes("D")) removed.add(path);
-      else changed.add(path);
-    }
+  for (const entry of parsePorcelainZ(await git(STATUS_Z, worktreeRoot))) {
+    if (entry.code.includes("D")) removed.add(entry.path);
+    else changed.add(entry.path);
+    if (entry.from) removed.add(entry.from);
   }
 
   // The donor's own dirty files. A sibling chosen as donor is usually mid-change, and its index holds
   // that work; left alone, a file it added would stay searchable here without existing on disk.
   // Re-read from THIS tree when the path exists here, dropped when it does not.
   if (donorRoot && existsSync(donorRoot) && canonicalPath(donorRoot) !== canonicalPath(worktreeRoot)) {
-    const donorStatus = await git(["status", "--porcelain", "--untracked-files=all"], donorRoot);
-    for (const line of (donorStatus ?? "").split("\n")) {
-      if (line.length < 4) continue;
+    for (const entry of parsePorcelainZ(await git(STATUS_Z, donorRoot))) {
       // A rename lists both sides; the donor's index may hold either.
-      for (const path of line.slice(3).trim().split(" -> ")) {
-        if (!path || changed.has(path) || removed.has(path)) continue;
+      for (const path of entry.from ? [entry.path, entry.from] : [entry.path]) {
+        if (changed.has(path) || removed.has(path)) continue;
         if (existsSync(join(worktreeRoot, path))) changed.add(path);
         else removed.add(path);
       }

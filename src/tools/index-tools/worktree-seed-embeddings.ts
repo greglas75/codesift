@@ -85,6 +85,11 @@ export async function seedEmbeddingsFromDonor(
     return { seeded: false, reason: `filesystem cannot clone the vector file (${code}) — not copying it` };
   }
 
+  const targetMetaPath = getEmbeddingMetaPath(targetIndexPath);
+  // What the target's meta was, so a failed rename can put it back — otherwise the donor's count and
+  // id rebase stay attached to whatever vector file the target already had.
+  const previousMeta = await loadEmbeddingMeta(targetMetaPath);
+  let metaWritten = false;
   try {
     // A donor that is itself a seeded clone still carries ITS donor's ids; rebasing from those keeps
     // a chain of seeds pointing at the ids actually in the bytes.
@@ -92,15 +97,19 @@ export async function seedEmbeddingsFromDonor(
     // Meta first, then the vectors. A reader that sees the new meta with the old (or no) vector file
     // finds no id carrying `from` and rewrites nothing; the reverse order would expose the donor's
     // ids under this repo's name for a moment, matching nothing in its index.
-    await saveEmbeddingMeta(getEmbeddingMetaPath(targetIndexPath), {
+    await saveEmbeddingMeta(targetMetaPath, {
       ...donorMeta,
       updated_at: Date.now(),
       id_rebase: { from, to: `${targetName}:` },
     });
+    metaWritten = true;
     await rename(tempVectors, targetVectors);
     return { seeded: true, vectors: donorMeta.symbol_count };
   } catch (err) {
     await unlink(tempVectors).catch(() => undefined);
+    if (metaWritten) {
+      await (previousMeta ? saveEmbeddingMeta(targetMetaPath, previousMeta) : unlink(targetMetaPath)).catch(() => undefined);
+    }
     return { seeded: false, reason: `vector seed failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
