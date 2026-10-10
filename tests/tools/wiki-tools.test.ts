@@ -11,9 +11,15 @@ import type { ProfileSummary } from "../../src/tools/project-tools.js";
 // ---------------------------------------------------------------------------
 
 const mockGetCodeIndex = vi.fn<(repo: string) => Promise<CodeIndex | null>>();
-// generateWiki reads the summary (served here from the same fixture) and the communities' symbols.
+// generateWiki reads the summary and the communities' symbols. The summary is the fixture WITHOUT its
+// symbols, as the real one is — a code path still reading `summary.symbols` then fails here.
 vi.mock("../../src/tools/index-tools.js", () => ({
-  getIndexSummary: (...args: unknown[]) => mockGetCodeIndex(args[0] as string),
+  getIndexSummary: async (repo: string) => {
+    const index = await mockGetCodeIndex(repo);
+    if (!index) return null;
+    const { symbols: _symbols, ...summary } = index;
+    return summary;
+  },
   findRepoSymbolsInFiles: async (repo: string, files: readonly string[]) => {
     const index = await mockGetCodeIndex(repo);
     return (index?.symbols ?? []).filter((s) => files.includes(s.file));

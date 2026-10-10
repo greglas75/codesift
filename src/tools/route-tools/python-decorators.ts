@@ -45,6 +45,8 @@ async function findDecoratedPythonHandlers(
   if (!read) {
     read = index.inFiles(pythonFiles.map((file) => file.path), false);
     pythonSymbolsByIndex.set(index, read);
+    // A failed read must not answer the next caller sharing this RouteIndex.
+    read.catch(() => pythonSymbolsByIndex.delete(index));
   }
   for (const symbol of await read) {
     const list = byFile.get(symbol.file);

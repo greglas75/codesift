@@ -111,7 +111,6 @@ export const indexFile = lazyExport<typeof import("./tools/index-tools.js").inde
 export const indexRepo = lazyExport<typeof import("./tools/index-tools.js").indexRepo>(loadIndexTools, "indexRepo");
 export const listAllRepos = lazyExport<typeof import("./tools/index-tools.js").listAllRepos>(loadIndexTools, "listAllRepos");
 export const invalidateCache = lazyExport<typeof import("./tools/index-tools.js").invalidateCache>(loadIndexTools, "invalidateCache");
-export const getCodeIndex = lazyExport<typeof import("./tools/index-tools.js").getCodeIndex>(loadIndexTools, "getCodeIndex");
 
 export const searchSymbols = lazyExport<typeof import("./tools/search-tools.js").searchSymbols>(loadSearchTools, "searchSymbols");
 export const searchText = lazyExport<typeof import("./tools/search-tools.js").searchText>(loadSearchTools, "searchText");

@@ -30,6 +30,8 @@ const SYMBOLS: CodeSymbol[] = [
   sym({ id: "7", name: "createUser", file: "c.ts", start_line: 9 }),
   sym({ id: "4", name: "a_b", file: "c.ts" }),
   sym({ id: "5", name: "axb", file: "c.ts" }),
+  // An empty heritage list is still a heritage list on both sides: JSON keeps `[]`, SQL stores it.
+  sym({ id: "8", name: "Empty", file: "c.ts", kind: "class", extends: [] }),
 ];
 
 const file = (path: string): FileEntry => ({
@@ -71,6 +73,7 @@ const QUERIES: SymbolQuery[] = [
   { withSource: false, names: [] },
   { withSource: false, hasHeritage: true },
   { withSource: false, hasHeritage: false },
+  { withSource: false, hasHeritage: true, kind: "class" },
 ];
 
 beforeEach(() => {
@@ -136,7 +139,7 @@ describe("findSymbols backend parity", () => {
     const j = await underBackend("json", () => findSymbolNames(indexPath));
     await underBackend("sqlite", async () => { await saveIndex(indexPath, INDEX); });
     const s2 = await underBackend("sqlite", () => findSymbolNames(indexPath));
-    expect(j).toEqual(["createUser", "createInvoice", "UserModel", "Repo", "a_b", "axb"]);
+    expect(j).toEqual(["createUser", "createInvoice", "UserModel", "Repo", "a_b", "axb", "Empty"]);
     expect(s2).toEqual(j);
   });
 

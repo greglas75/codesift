@@ -4,7 +4,6 @@ export {
   indexRepo,
   listAllRepos,
   invalidateCache,
-  getCodeIndex,
   searchSymbols,
   searchText,
   semanticSearch,
