@@ -9,20 +9,33 @@
 export interface EmbeddingHealth {
   runs: number;
   failures: number;
-  /** Consecutive failures since the last success — the number that says "it is broken now". */
+  /** Consecutive failures across all repos since the last success anywhere — a provider outage. */
   failures_since_success: number;
   last_success_at?: string;
   last_success_repo?: string;
   last_failure_at?: string;
   last_failure_repo?: string;
   last_error?: string;
+  /** Repos failing in a row while others succeed — a per-repo fault the global streak resets. */
+  failing_repos: Record<string, { consecutive: number; last_error?: string }>;
 }
 
 const MAX_ERROR_CHARS = 300;
 /** One failure is a blip (a provider restart, one oversized batch); three in a row is an outage. */
-const FAILURES_BEFORE_REASON = 3;
+const FAILURES_BEFORE_ALERT = 3;
+/** The daemon outlives every session; the per-repo map must not grow with every repo it ever saw. */
+const MAX_FAILING_REPOS = 50;
 
-let state: EmbeddingHealth = { runs: 0, failures: 0, failures_since_success: 0 };
+function fresh(): EmbeddingHealth {
+  return { runs: 0, failures: 0, failures_since_success: 0, failing_repos: {} };
+}
+
+let state: EmbeddingHealth = fresh();
+
+/** One line, bounded: provider errors carry HTTP bodies and stack traces. */
+function cleanError(error: string): string {
+  return error.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim().slice(0, MAX_ERROR_CHARS);
+}
 
 export function recordEmbeddingRun(repo: string, ok: boolean, error?: string): void {
   const at = new Date().toISOString();
@@ -31,25 +44,46 @@ export function recordEmbeddingRun(repo: string, ok: boolean, error?: string): v
     state.failures_since_success = 0;
     state.last_success_at = at;
     state.last_success_repo = repo;
+    delete state.failing_repos[repo];
     return;
   }
+  const message = error === undefined ? undefined : cleanError(error);
   state.failures++;
   state.failures_since_success++;
   state.last_failure_at = at;
   state.last_failure_repo = repo;
-  if (error !== undefined) state.last_error = error.slice(0, MAX_ERROR_CHARS);
+  if (message !== undefined) state.last_error = message;
+
+  const previous = state.failing_repos[repo];
+  delete state.failing_repos[repo]; // re-insert last, so the oldest entry is the first key
+  state.failing_repos[repo] = {
+    consecutive: (previous?.consecutive ?? 0) + 1,
+    ...(message !== undefined ? { last_error: message } : {}),
+  };
+  const repos = Object.keys(state.failing_repos);
+  if (repos.length > MAX_FAILING_REPOS) delete state.failing_repos[repos[0]!];
 }
 
 export function embeddingHealthSnapshot(): EmbeddingHealth {
-  return { ...state };
+  const failing: EmbeddingHealth["failing_repos"] = {};
+  for (const [repo, entry] of Object.entries(state.failing_repos)) failing[repo] = { ...entry };
+  return { ...state, failing_repos: failing };
 }
 
-/** A `/health` reason once embedding has failed often enough in a row to call it broken, else null. */
-export function embeddingHealthReason(health: EmbeddingHealth): string | null {
-  if (health.failures_since_success < FAILURES_BEFORE_REASON) return null;
-  return `embeddings: ${health.failures_since_success} consecutive failed runs (last: ${health.last_error ?? "unknown"})`;
+/**
+ * What to alert on, or null: a provider outage (three failures in a row anywhere) or repos that keep
+ * failing while others succeed. Reported inside the `embeddings` block, not in `/health`'s top-level
+ * `reasons` — those mean "not ok", and BM25 and every tool still work.
+ */
+export function embeddingHealthAlert(health: EmbeddingHealth): string | null {
+  if (health.failures_since_success >= FAILURES_BEFORE_ALERT) {
+    return `${health.failures_since_success} consecutive failed runs (last: ${health.last_error ?? "unknown"})`;
+  }
+  const repos = Object.entries(health.failing_repos).filter(([, e]) => e.consecutive >= FAILURES_BEFORE_ALERT);
+  if (repos.length === 0) return null;
+  return `failing repeatedly: ${repos.map(([repo, e]) => `${repo} ×${e.consecutive}`).join(", ")}`;
 }
 
 export function resetEmbeddingHealthForTesting(): void {
-  state = { runs: 0, failures: 0, failures_since_success: 0 };
+  state = fresh();
 }

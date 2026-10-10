@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { statSync } from "node:fs";
 import { readVitals, classifyVitals, startVitals } from "./server-helpers/health-vitals.js";
 import { nativeStatus } from "./native/index.js";
-import { embeddingHealthReason, embeddingHealthSnapshot } from "./storage/embedding-health.js";
+import { embeddingHealthAlert, embeddingHealthSnapshot } from "./storage/embedding-health.js";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHost } from "./utils/loopback.js";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
@@ -467,11 +467,16 @@ export async function startHttpServer(
                     // told "down" stops using tools it could still have used.
                     const vitals = readVitals();
                     const { status, reasons } = classifyVitals(vitals);
-                    // Embedding fails into stderr by design; this is where a broken provider shows.
-                    // It names a reason but leaves the status alone — BM25 and every tool still work.
-                    const embeddings = { provider: loadConfig().embeddingProvider ?? null, ...embeddingHealthSnapshot() };
-                    const embeddingReason = embeddingHealthReason(embeddings);
-                    if (embeddingReason) reasons.push(embeddingReason);
+                    // Embedding fails into stderr by design; this is where a broken provider shows. The
+                    // alert stays inside this block: top-level `reasons` mean "not ok", and BM25 and every
+                    // tool still work without vectors.
+                    const embeddingState = embeddingHealthSnapshot();
+                    const embeddingAlert = embeddingHealthAlert(embeddingState);
+                    const embeddings = {
+                      provider: loadConfig().embeddingProvider ?? null,
+                      ...embeddingState,
+                      ...(embeddingAlert ? { alert: embeddingAlert } : {}),
+                    };
                     return {
                       status,
                       sessions: inFlight,

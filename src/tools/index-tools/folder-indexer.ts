@@ -245,10 +245,17 @@ async function adoptChildIndex(
   // the vectors it wrote replace whatever this process had cached.
   if (config.embeddingProvider && process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
     void scheduleEmbedding(repoName, async () => {
-      const ok = await runEmbeddingChildProcess(repoName, rootPath, indexPath);
-      // The child's own record dies with it; /health reads this process's.
-      recordEmbeddingRun(repoName, ok, ok ? undefined : "embed child failed (reason in the daemon's stderr log)");
-      invalidateEmbeddingCaches(repoName);
+      // The child's own record dies with it; /health reads this process's. Its reason is in the
+      // daemon's stderr log, which the child inherits.
+      try {
+        const ok = await runEmbeddingChildProcess(repoName, rootPath, indexPath);
+        recordEmbeddingRun(repoName, ok, ok ? undefined : "embed child failed (reason in the daemon's stderr log)");
+      } catch (err) {
+        recordEmbeddingRun(repoName, false, err instanceof Error ? err.message : String(err));
+        throw err;
+      } finally {
+        invalidateEmbeddingCaches(repoName);
+      }
     });
   }
 

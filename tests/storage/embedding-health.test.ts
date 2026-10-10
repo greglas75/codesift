@@ -2,7 +2,7 @@
 // and /health said "ok" through nine days of failed runs on the Mac.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  embeddingHealthReason,
+  embeddingHealthAlert,
   embeddingHealthSnapshot,
   recordEmbeddingRun,
   resetEmbeddingHealthForTesting,
@@ -15,26 +15,33 @@ describe("embedding health", () => {
     recordEmbeddingRun("local/a", false, "fetch failed");
     recordEmbeddingRun("local/a", false, "fetch failed");
     recordEmbeddingRun("local/b", true);
-    recordEmbeddingRun("local/a", false, "ECONNREFUSED");
+    recordEmbeddingRun("local/a", false, "ECONNREFUSED\n    at Socket.connect");
 
-    const h = embeddingHealthSnapshot();
-    expect(h).toMatchObject({
+    expect(embeddingHealthSnapshot()).toMatchObject({
       runs: 4,
       failures: 3,
       failures_since_success: 1,
       last_success_repo: "local/b",
       last_failure_repo: "local/a",
-      last_error: "ECONNREFUSED",
+      last_error: "ECONNREFUSED at Socket.connect",
+      failing_repos: { "local/a": { consecutive: 3 } },
     });
   });
 
-  it.each([
-    ["no runs", [] as boolean[], null],
-    ["two failures", [false, false], null],
-    ["three failures in a row", [false, false, false], "embeddings: 3 consecutive failed runs (last: down)"],
-    ["three failures broken by a success", [false, false, true, false], null],
-  ])("names a reason only for an outage: %s", (_case, outcomes, expected) => {
-    for (const ok of outcomes) recordEmbeddingRun("local/a", ok, ok ? undefined : "down");
-    expect(embeddingHealthReason(embeddingHealthSnapshot())).toBe(expected);
+  type Run = [repo: string, ok: boolean];
+  it.each<[string, Run[], string | null]>([
+    ["no runs", [], null],
+    ["two failures", [["local/a", false], ["local/a", false]], null],
+    ["three failures in a row", [["local/a", false], ["local/b", false], ["local/a", false]], "3 consecutive failed runs (last: down)"],
+    // A success elsewhere resets the global streak; the repo that keeps failing must still show.
+    [
+      "one repo failing while another succeeds",
+      [["local/a", false], ["local/b", true], ["local/a", false], ["local/b", true], ["local/a", false]],
+      "failing repeatedly: local/a ×3",
+    ],
+    ["a repo that recovered", [["local/a", false], ["local/a", false], ["local/a", true], ["local/a", false]], null],
+  ])("alerts only on an outage: %s", (_case, runs, expected) => {
+    for (const [repo, ok] of runs) recordEmbeddingRun(repo, ok, ok ? undefined : "down");
+    expect(embeddingHealthAlert(embeddingHealthSnapshot())).toBe(expected);
   });
 });
