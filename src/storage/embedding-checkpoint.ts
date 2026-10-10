@@ -19,7 +19,7 @@
  * Every failure here degrades to "no checkpoint this run", which is the behaviour before partial
  * files existed — never to losing vectors or blocking the run.
  */
-import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 
 export type PartialState =
   | { kind: "absent" }
@@ -85,22 +85,45 @@ function pidIsAlive(pid: number): boolean {
 /** Locks this process holds. Its own pid in a lock file is otherwise indistinguishable from a leftover. */
 const heldHere = new Set<string>();
 
-/** Take `<partial>.lock`, or report the live pid that holds it. A dead holder is taken over. */
+/**
+ * Take `<partial>.lock`, or report the live pid that holds it (0: could not tell). A dead holder is
+ * taken over.
+ *
+ * Takeover is a RENAME, not an unlink. Two processes that both read the same dead pid would each
+ * unlink and recreate, and the second unlink can remove the first one's fresh lock — two owners.
+ * A rename moves exactly one file to a name only this process uses, so after it the mover reads what
+ * it actually took: the dead owner's lock (proceed) or a live one's fresh lock (put it back, busy).
+ */
 async function acquireLock(lockPath: string): Promise<{ held: true } | { held: false; owner: number }> {
   if (heldHere.has(lockPath)) return { held: false, owner: process.pid };
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const ownerIn = async (path: string) => Number((await readFile(path, "utf-8").catch(() => "")).trim());
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await writeFile(lockPath, String(process.pid), { flag: "wx" });
       heldHere.add(lockPath);
       return { held: true };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const owner = Number((await readFile(lockPath, "utf-8").catch(() => "")).trim());
-      if (owner !== process.pid && pidIsAlive(owner)) return { held: false, owner };
-      // A dead process's lock, or one an earlier process with our recycled pid left behind (this
-      // process holds nothing, per `heldHere`).
-      await unlink(lockPath).catch(() => undefined);
+      // Anything but "someone holds it" (EACCES, ENOSPC, …) means no checkpoint this run, not a failed run.
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return { held: false, owner: 0 };
     }
+    const owner = await ownerIn(lockPath);
+    if (owner !== process.pid && pidIsAlive(owner)) return { held: false, owner };
+    // A dead process's lock, or one an earlier process with our recycled pid left behind (this
+    // process holds nothing, per `heldHere`).
+    const taken = `${lockPath}.takeover.${process.pid}`;
+    try {
+      await rename(lockPath, taken);
+    } catch {
+      continue; // somebody else moved it first — race them for the create
+    }
+    const moved = await ownerIn(taken);
+    if (moved !== process.pid && pidIsAlive(moved)) {
+      // Took a live owner's fresh lock: hand it back unless a third process has created one since.
+      await link(taken, lockPath).catch(() => undefined);
+      await unlink(taken).catch(() => undefined);
+      return { held: false, owner: moved };
+    }
+    await unlink(taken).catch(() => undefined);
   }
   return { held: false, owner: 0 };
 }
@@ -112,14 +135,18 @@ export interface ResumeDecision {
 }
 
 /**
- * The checkpoint one embedding run writes. `open` returns null when another live process owns the
- * file; the caller then runs exactly as before checkpoints existed.
+ * The checkpoint one embedding run writes. `open` returns `{busy}` when another live process owns
+ * the file (or the lock cannot be taken at all, `busy: 0`); the caller then runs exactly as before
+ * checkpoints existed.
  */
 export class EmbeddingCheckpoint {
   private written = 0;
   private headerPending = true;
   private firstError: string | null = null;
+  /** No more appends this run. */
   private disabled = false;
+  /** The file on disk is not one this run may delete: unreadable, or could not be set aside. */
+  private foreign = false;
 
   private constructor(readonly path: string, private readonly model: string, private readonly lockPath: string) {}
 
@@ -141,33 +168,57 @@ export class EmbeddingCheckpoint {
         return { resume: false };
       case "model":
         if (state.model === this.model) return { resume: true };
-        await unlink(this.path).catch(() => undefined);
-        return { resume: false, note: `discarded checkpoint from model "${state.model}"` };
+        return this.clear(`discarded checkpoint from model "${state.model}"`);
       case "torn":
-        await unlink(this.path).catch(() => undefined);
-        return { resume: false };
+        return this.clear();
       case "foreign": {
         // A `.tmp.<ts>` tail is what prune reclaims by age, so this is kept for a while, not forever.
         const aside = `${this.path}.tmp.${Date.now()}`;
-        await rename(this.path, aside).catch(() => undefined);
-        return { resume: false, note: `moved an unrecognised checkpoint aside to ${aside}` };
+        try {
+          await rename(this.path, aside);
+          return { resume: false, note: `moved an unrecognised checkpoint aside to ${aside}` };
+        } catch (err) {
+          return this.cannotClear(err);
+        }
       }
       case "unreadable":
         // Cannot tell what it is, so it must not be appended to or deleted. No checkpoint this run.
         this.disabled = true;
+        this.foreign = true;
         return { resume: false, note: `checkpoint unreadable (${state.error}) — left untouched, not checkpointing` };
     }
   }
 
-  /** Cut a torn last line, so the next append starts on a line of its own. */
+  /** Delete the file; if that fails it is still there, so nothing may be appended to it. */
+  private async clear(note?: string): Promise<ResumeDecision> {
+    try {
+      await unlink(this.path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return this.cannotClear(err);
+    }
+    return note === undefined ? { resume: false } : { resume: false, note };
+  }
+
+  private cannotClear(err: unknown): ResumeDecision {
+    this.disabled = true;
+    this.foreign = true;
+    const code = (err as NodeJS.ErrnoException).code ?? String(err);
+    return { resume: false, note: `could not set the old checkpoint aside (${code}) — not checkpointing` };
+  }
+
+  /**
+   * Cut a torn last line, so the next append starts on a line of its own. Never throws: anything
+   * unexpected turns checkpointing off for this run instead of failing it.
+   */
   async prepareForAppend(): Promise<void> {
     if (this.disabled) return;
+    // Every early exit below leaves a file this run could not vouch for: no appends, no delete.
+    const giveUp = () => { this.disabled = true; this.foreign = true; };
     let handle;
     try {
       handle = await open(this.path, "r+");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // created on first append
-      this.disabled = true;
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") giveUp(); // ENOENT: created on first append
       return;
     }
     try {
@@ -177,11 +228,21 @@ export class EmbeddingCheckpoint {
       // A torn line is at most one vector line (~16 KB); scan back far enough to find its start.
       const window = Math.min(size, 1024 * 1024);
       const buf = Buffer.alloc(window);
-      await handle.read(buf, 0, window, size - window);
+      // Fill the window completely: a short read would leave zeros where the tail is, and the last
+      // newline found would be an earlier one — truncating good lines.
+      let filled = 0;
+      while (filled < window) {
+        const { bytesRead } = await handle.read(buf, filled, window - filled, size - window + filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      if (filled < window) { giveUp(); return; }
       const lastNewline = buf.lastIndexOf(0x0a);
       if (lastNewline === window - 1) return;
-      if (lastNewline < 0) { this.disabled = true; return; } // no line end in 1 MB: not ours to edit
+      if (lastNewline < 0) { giveUp(); return; } // no line end in 1 MB: not ours to edit
       await handle.truncate(size - window + lastNewline + 1);
+    } catch {
+      giveUp();
     } finally {
       await handle.close().catch(() => undefined);
     }
@@ -206,6 +267,9 @@ export class EmbeddingCheckpoint {
       await handle.write(text);
       this.written += entries.length;
     } catch (err) {
+      // Stop here: a failed write may have left a torn line, and appending after it would fuse the
+      // fragment with the next batch. The next run cuts the tail before it appends.
+      this.disabled = true;
       if (this.firstError === null) this.firstError = err instanceof Error ? err.message : String(err);
     } finally {
       await handle?.close().catch(() => undefined);
@@ -219,7 +283,7 @@ export class EmbeddingCheckpoint {
 
   /** The run's vectors reached the main file: the checkpoint has nothing left to protect. */
   async discard(): Promise<void> {
-    if (!this.disabled) await unlink(this.path).catch(() => undefined);
+    if (!this.foreign) await unlink(this.path).catch(() => undefined);
   }
 
   async release(): Promise<void> {

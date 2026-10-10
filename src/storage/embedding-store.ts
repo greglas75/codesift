@@ -90,7 +90,9 @@ function idRebaseFor(embeddingPath: string, readText: (path: string) => string):
       id_rebase?: { from?: unknown; to?: unknown };
     };
     const { from, to } = meta.id_rebase ?? {};
-    return typeof from === "string" && typeof to === "string" && from !== to ? { from, to } : null;
+    // A prefix is `<repo>:`. An empty `from` would match every id and prefix it twice.
+    const isPrefix = (p: unknown): p is string => typeof p === "string" && p.length > 1 && p.endsWith(":");
+    return isPrefix(from) && isPrefix(to) && from !== to ? { from, to } : null;
   } catch {
     return null;
   }
