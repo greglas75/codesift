@@ -34,7 +34,8 @@ let state: EmbeddingHealth = fresh();
 
 /** One line, bounded: provider errors carry HTTP bodies and stack traces. */
 function cleanError(error: string): string {
-  return error.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim().slice(0, MAX_ERROR_CHARS);
+  const printable = Array.from(error, (c) => (c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f ? " " : c)).join("");
+  return printable.replace(/\s+/g, " ").trim().slice(0, MAX_ERROR_CHARS);
 }
 
 export function recordEmbeddingRun(repo: string, ok: boolean, error?: string): void {
