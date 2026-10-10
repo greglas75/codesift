@@ -102,8 +102,14 @@ async function lockHolder(path: string): Promise<{ pid: number } | "live" | "sta
     return (err as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "live";
   }
   if (/^[1-9]\d{0,9}$/.test(text)) return { pid: Number(text) };
-  const age = await stat(path).then((s) => Date.now() - s.mtimeMs, () => 0);
-  return age < UNREADABLE_LOCK_GRACE_MS ? "live" : "stale";
+  let age: number;
+  try {
+    age = Date.now() - (await stat(path)).mtimeMs;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "live";
+  }
+  // A future mtime (clock change, another host) would otherwise read as fresh forever.
+  return age >= 0 && age < UNREADABLE_LOCK_GRACE_MS ? "live" : "stale";
 }
 
 const holdsLock = (h: Awaited<ReturnType<typeof lockHolder>>): boolean =>
@@ -337,7 +343,10 @@ export class EmbeddingCheckpoint {
 
   async release(): Promise<void> {
     if (!heldHere.delete(this.lockPath)) return;
-    const owner = Number((await readFile(this.lockPath, "utf-8").catch(() => "")).trim());
-    if (owner === process.pid) await unlink(this.lockPath).catch(() => undefined);
+    // Held here, so only a lock that now names ANOTHER pid is not ours to remove. While this process
+    // lived nobody could take it over, so that should not happen — but if it did, it stands.
+    const holder = await lockHolder(this.lockPath);
+    if (typeof holder === "object" && holder.pid !== process.pid) return;
+    await unlink(this.lockPath).catch(() => undefined);
   }
 }

@@ -418,13 +418,14 @@ export async function batchEmbed(
   onBatch?: (entries: Array<{ id: string; vec: Float32Array; h: number | undefined }>) => Promise<void>,
 ): Promise<Map<string, Float32Array>> {
   const result = new Map(existing);
-  const hashes = cacheKey ? (embeddingContentHashes.get(cacheKey) ?? new Map<string, number>()) : new Map<string, number>();
+  // A COPY, published only when the run returns: the shared map outlives a failed run in this process,
+  // and a hash it holds for a vector that never reached disk makes the next run keep the stale one.
+  const hashes = new Map<string, number>(cacheKey ? (embeddingContentHashes.get(cacheKey) ?? []) : []);
 
   // Find symbols that need embedding (new or content changed)
   const toEmbed: Array<{ id: string; text: string }> = [];
-  // The hash a symbol WILL have once its vector exists. Committed to `hashes` only then: the map
-  // outlives a failed run in this process, and a new hash recorded beside the old vector made the
-  // next run read that stale vector as current and keep it.
+  // The hash a symbol WILL have once its vector exists, committed to `hashes` only then — the
+  // checkpoint line for that vector carries it, and an un-embedded symbol never claims it.
   const pendingHash = new Map<string, number>();
   for (const [id, text] of symbolTexts) {
     const hash = contentHash(text);
