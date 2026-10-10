@@ -384,8 +384,8 @@ export function bm25FootprintBytes(index: BM25Index): number {
 /**
  * Resident budget for one BM25 cache, in bytes.
  *
- * Same RAM tiers as the index and embedding budgets, so all of them agree about what a machine this
- * size is willing to hold. `CODESIFT_MAX_BM25_CACHE_MB` overrides.
+ * The index budget's tiers (`indexCacheMemBudgetBytes`): 256 MB up to 16 GB of RAM, 512 MB up to 32 GB,
+ * then RAM/32 between 1 GB and 8 GB. `CODESIFT_MAX_BM25_CACHE_MB` overrides.
  */
 export function bm25CacheBudgetBytes(env: NodeJS.ProcessEnv = process.env, totalBytes?: number): number {
   const raw = env["CODESIFT_MAX_BM25_CACHE_MB"];
@@ -395,6 +395,7 @@ export function bm25CacheBudgetBytes(env: NodeJS.ProcessEnv = process.env, total
   }
   let total = 8 * 1024 ** 3;
   try { total = totalBytes ?? totalmem(); } catch { /* keep the floor */ }
+  if (!Number.isFinite(total) || total <= 0) total = 8 * 1024 ** 3;
   const totalGb = total / 1024 ** 3;
   // Above 32 GB it scales like the index budget (RAM/32, capped at 8 GB). It used to stop at 1 GB, below
   // ONE index of a 1.43M-symbol repo (1.49 GB): the cache held a single worktree, and sessions on

@@ -13,6 +13,7 @@ describe("bm25CacheBudgetBytes", () => {
     ["48 GB keeps the 1 GB floor", 48 * GB, 1536 * MB],
     ["128 GB scales to RAM/32", 128 * GB, 4096 * MB],
     ["512 GB caps at 8 GB", 512 * GB, 8192 * MB],
+    ["an unreadable total falls back to the smallest tier", Number.NaN, 256 * MB],
   ])("%s", (_case, total, expected) => {
     expect(bm25CacheBudgetBytes({}, total)).toBe(expected);
   });
