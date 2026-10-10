@@ -138,8 +138,9 @@ function offsetsStillMatch(content: string, sym: CodeSymbol): sym is CodeSymbol 
   const { start_byte: start, end_byte: end } = sym;
   if (start == null || end == null || end <= start || end > content.length) return false;
   if (lineAt(content, start) !== sym.start_line || lineAt(content, end) !== sym.end_line) return false;
+  // No stored opening to compare against: the line checks alone are what let a stale offset through.
   const opening = sym.source?.split("\n", 1)[0];
-  return !opening || content.startsWith(opening, start);
+  return !!opening && content.startsWith(opening, start);
 }
 
 /** The 1-based line holding code unit `offset`. */
