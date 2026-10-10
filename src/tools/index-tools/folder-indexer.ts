@@ -389,9 +389,15 @@ export async function indexFolder(
       const { seedWorktreeIndexFromParent } = await import("./worktree-seed.js");
       const seed = await seedWorktreeIndexFromParent(rootPath, repoName, indexPath);
       if (seed.seeded) {
+        const distance = seed.donor_distance !== undefined ? `, ${seed.donor_distance} commit(s) back` : "";
+        const vectors = seed.embeddings === undefined
+          ? ""
+          : "vectors" in seed.embeddings
+            ? `, ${seed.embeddings.vectors} vectors cloned`
+            : `, no vectors (${seed.embeddings.skipped})`;
         console.error(
-          `[codesift] Seeded ${repoName} from ${seed.parent_repo} in ${seed.elapsed_ms} ms ` +
-          `(${seed.files} files, ${seed.symbols} symbols) — bringing it to this tree's HEAD…`,
+          `[codesift] Seeded ${repoName} from ${seed.parent_repo}${distance} in ${seed.elapsed_ms} ms ` +
+          `(${seed.files} files, ${seed.symbols} symbols${vectors}) — bringing it to this tree's HEAD…`,
         );
         const { catchUpSeededWorktree } = await import("./worktree-seed.js");
         const caught = await catchUpSeededWorktree(
@@ -399,6 +405,7 @@ export async function indexFolder(
           repoName,
           seed.seeded_at_commit ?? null,
           seed.files,
+          seed.donor_root,
         );
         if (caught.caught_up) {
           const summary = await loadIndexSummary(indexPath);
@@ -414,6 +421,9 @@ export async function indexFolder(
             duration_ms: Date.now() - startTime,
             reason: `seeded from ${seed.parent_repo}`,
             ...(seed.parent_repo !== undefined ? { seeded_from: seed.parent_repo } : {}),
+            ...(seed.embeddings && "vectors" in seed.embeddings
+              ? { seeded_vectors: seed.embeddings.vectors }
+              : {}),
             ...(redirected ? { redirected_from: requestedPath } : {}),
             files_reparsed: caught.updated ?? 0,
             // Same reasoning as the walk path: a file that failed to index is absent, and absence

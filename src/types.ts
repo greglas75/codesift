@@ -265,6 +265,13 @@ export interface EmbeddingMeta {
   dimensions: number;
   symbol_count: number;
   updated_at: number;
+  /**
+   * The vector file was CLONED from another repo's (a seeded worktree), so its ids still carry that
+   * repo's prefix. The loader rewrites `from` to `to` per line instead of the seed rewriting the
+   * file, because rewriting means writing ~16 KB per symbol — 7 GB for one worktree of a 450k-symbol
+   * repo — where a copy-on-write clone costs nothing. Absent on every file an embedding run wrote.
+   */
+  id_rebase?: { from: string; to: string };
 }
 
 export interface CodeChunk {

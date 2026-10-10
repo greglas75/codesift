@@ -56,6 +56,25 @@ export function contentHashesForPath(embeddingPath: string): Map<string, number>
   return loadedContentHashes.get(embeddingPath) ?? new Map<string, number>();
 }
 
+/**
+ * The id rewrite recorded beside a CLONED vector file (see `EmbeddingMeta.id_rebase`), or null.
+ *
+ * Read from the meta file because that is where the seed records it — the vector file itself is a
+ * byte-identical clone of the donor's and cannot say whose ids it carries.
+ */
+function idRebaseFor(embeddingPath: string, readText: (path: string) => string): { from: string; to: string } | null {
+  if (!embeddingPath.endsWith(".embeddings.ndjson")) return null;
+  try {
+    const meta = JSON.parse(readText(embeddingPath.replace(/\.embeddings\.ndjson$/, ".embeddings.meta.json"))) as {
+      id_rebase?: { from?: unknown; to?: unknown };
+    };
+    const { from, to } = meta.id_rebase ?? {};
+    return typeof from === "string" && typeof to === "string" && from !== to ? { from, to } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function loadEmbeddings(
   embeddingPath: string,
   maxBytes: number = Number.POSITIVE_INFINITY,
@@ -68,12 +87,14 @@ export async function loadEmbeddings(
   // embedding files are GB-scale (e.g. 4.5GB), so a single slurp spikes the heap
   // by the full file size at load. readline keeps peak memory to one line plus
   // the resident Float32Array map.
-  const { createReadStream, existsSync, statSync } = await import("node:fs");
+  const { createReadStream, existsSync, statSync, readFileSync } = await import("node:fs");
   const { createInterface } = await import("node:readline");
 
   // Missing file → empty map (mirrors prior readFile catch). Guarding here avoids
   // an async ENOENT surfacing as an unhandled stream/readline error.
   if (!existsSync(embeddingPath)) return embeddings;
+
+  const rebase = idRebaseFor(embeddingPath, (p) => readFileSync(p, "utf-8"));
 
   // HARD memory bound. The streaming above only stops the *file text* from being
   // slurped in one shot — it still built the full resident Float32Array map, so a
@@ -125,6 +146,7 @@ export async function loadEmbeddings(
       try {
         const entry = JSON.parse(trimmed) as EmbeddingLine;
         if (entry.id && Array.isArray(entry.vec)) {
+          if (rebase && entry.id.startsWith(rebase.from)) entry.id = rebase.to + entry.id.slice(rebase.from.length);
           const vec = new Float32Array(entry.vec);
           residentBytes += vec.byteLength + entry.id.length * 2 + 48; // vector + key + Map overhead
           if (residentBytes > maxBytes) {

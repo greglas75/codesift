@@ -47,8 +47,17 @@ export interface SeedResult {
   symbols?: number;
   /** The commit the seeded content actually describes — the parent's, not the worktree's. */
   seeded_at_commit?: string | null;
+  /** The donor's working tree. Its uncommitted files were copied too, so the catch-up revisits them. */
+  donor_root?: string;
+  /** Commits between the donor's and this tree's HEAD, when the donor was found in its history. */
+  donor_distance?: number;
+  /** Symbol vectors cloned from the donor, or why none were. */
+  embeddings?: { vectors: number } | { skipped: string };
   elapsed_ms?: number;
 }
+
+/** How far back `HEAD`'s history is searched for a donor's commit. */
+const DONOR_HISTORY_DEPTH = 5_000;
 
 /** SQLite string literal. Double-quoting would make the path an IDENTIFIER and fail. */
 function sqlLiteral(value: string): string {
@@ -81,17 +90,32 @@ function sqlLiteral(value: string): string {
  * free to detect since the registry already records `last_git_commit`. Falling back to the parent
  * keeps the previous behaviour when no sibling exists.
  *
- * Deliberately no git call in the selection path. Ranking candidates by real diff size would mean
- * one `git diff` per candidate, and this repository has 97 registered siblings — the search would
- * cost more than the copy it is choosing. An exact commit match is the case that matters and it is
- * free; anything else falls through to the parent and is decided by the ceiling as before.
+ * ---------------------------------------------------------------------------
+ * Same commit was not enough (2026-10-10)
+ * ---------------------------------------------------------------------------
+ *
+ * A worktree cut from a develop commit nobody has indexed yet has no exact match, so it still fell
+ * back to the parent — which by then sat on `codex/designer-prototype-specs`, 943 commits behind
+ * develop and 16,916 files away. Measured in the daemon log: 216 seeds declined with "13173 files
+ * differ (> 2172)" and the like, each followed by a full index and a full re-embed, while dozens of
+ * siblings sat a handful of commits from that HEAD.
+ *
+ * So the donor is now the indexed commit NEAREST in this tree's history. One `git rev-list` (the
+ * caller's `history`: sha → commits back from HEAD) ranks every registered index at once — still no
+ * git call per candidate. A sha found there is by construction in this repository's history, so its
+ * committed content is this repository's content at that commit; the catch-up then covers the gap and
+ * the ceiling still guards a donor that is near in commits but far in files. Ties go to a donor that
+ * already has vectors, since those are cloned along with the index.
  */
 export async function pickSeedDonor(
   registryPath: string,
   parentName: string,
   parent: { root: string; index_path: string; last_git_commit?: string | undefined },
   worktreeHead: string | null,
-): Promise<{ name: string; root: string; index_path: string; commit: string | null; sameCommit: boolean }> {
+  history?: ReadonlyMap<string, number>,
+): Promise<{
+  name: string; root: string; index_path: string; commit: string | null; sameCommit: boolean; distance?: number;
+}> {
   const fallback = {
     name: parentName,
     root: parent.root,
@@ -100,26 +124,54 @@ export async function pickSeedDonor(
     sameCommit: false,
   };
   if (!worktreeHead) return fallback;
-  if (parent.last_git_commit === worktreeHead) return { ...fallback, sameCommit: true };
 
+  const distanceOf = (commit: string | undefined): number | undefined =>
+    commit === undefined ? undefined : commit === worktreeHead ? 0 : history?.get(commit);
+
+  type Candidate = { name: string; root: string; index_path: string; last_git_commit?: string | undefined };
   const { listRepos } = await import("../../storage/registry.js");
-  const all = await listRepos(registryPath).catch(() => []);
-  for (const candidate of all) {
-    if (candidate.name === parentName) continue;
-    if (candidate.last_git_commit !== worktreeHead) continue;
-    // Same repository, not merely the same commit id: a sibling worktree shares the parent's root
-    // as a path ancestor, or is the parent itself. Without this a coincidentally equal sha in an
-    // unrelated repo would seed the wrong tree — the exact failure this feature exists to avoid.
+  const registered = (await listRepos(registryPath).catch(() => [])) as Candidate[];
+  // The parent first, so it wins a tie it is part of — the behaviour before siblings were considered.
+  const pool: Candidate[] = [{ name: parentName, ...parent }, ...registered.filter((c) => c.name !== parentName)];
+
+  let best: { candidate: Candidate; distance: number } | undefined;
+  for (const candidate of pool) {
+    const distance = distanceOf(candidate.last_git_commit);
+    if (distance === undefined) continue;
+    if (best && distance > best.distance) continue;
+    // A registry row is not an index: copying from a database that is not there fails after the
+    // decision, when another donor was available all along.
     if (!existsSync(sqlitePathFor(candidate.index_path))) continue;
-    return {
-      name: candidate.name,
-      root: candidate.root,
-      index_path: candidate.index_path,
-      commit: candidate.last_git_commit ?? null,
-      sameCommit: true,
-    };
+    if (best && distance === best.distance) {
+      const { hasSymbolEmbeddings } = await import("./worktree-seed-embeddings.js");
+      if (await hasSymbolEmbeddings(best.candidate.index_path)) continue;
+      if (!(await hasSymbolEmbeddings(candidate.index_path))) continue;
+    }
+    best = { candidate, distance };
   }
-  return fallback;
+  if (!best) return fallback;
+  return {
+    name: best.candidate.name,
+    root: best.candidate.root,
+    index_path: best.candidate.index_path,
+    commit: best.candidate.last_git_commit ?? null,
+    sameCommit: best.distance === 0,
+    distance: best.distance,
+  };
+}
+
+/** sha → commits back from HEAD, for `pickSeedDonor`. Empty when git cannot answer. */
+async function headHistory(worktreeRoot: string): Promise<Map<string, number>> {
+  const out = await runGit(["rev-list", `--max-count=${DONOR_HISTORY_DEPTH}`, "HEAD"], {
+    cwd: worktreeRoot,
+    timeout: 10_000,
+  }).catch(() => "");
+  const history = new Map<string, number>();
+  out.split("\n").forEach((sha, i) => {
+    const trimmed = sha.trim();
+    if (trimmed && !history.has(trimmed)) history.set(trimmed, i);
+  });
+  return history;
 }
 
 export async function seedWorktreeIndexFromParent(
@@ -177,7 +229,9 @@ export async function seedWorktreeIndexFromParent(
     return { seeded: false, reason: "not a git checkout — nothing to catch the seed up to" };
   }
 
-  const donor = await pickSeedDonor(config.registryPath, parentName, parent, worktreeHead);
+  const donor = await pickSeedDonor(
+    config.registryPath, parentName, parent, worktreeHead, await headHistory(worktreeRoot),
+  );
 
   const parentDb = sqlitePathFor(donor.index_path);
   const targetDb = sqlitePathFor(worktreeIndexPath);
@@ -263,12 +317,24 @@ export async function seedWorktreeIndexFromParent(
       indexed_at: Date.now(),
     } as never);
 
+    // Vectors are not part of the database, and leaving them out is what made every worktree either
+    // vector-less or a full re-embed. A clone costs nothing; see worktree-seed-embeddings.ts.
+    let embeddings: SeedResult["embeddings"];
+    if (config.embeddingProvider) {
+      const { seedEmbeddingsFromDonor } = await import("./worktree-seed-embeddings.js");
+      const vectors = await seedEmbeddingsFromDonor(donor.index_path, donor.name, worktreeIndexPath, worktreeName);
+      embeddings = vectors.seeded ? { vectors: vectors.vectors ?? 0 } : { skipped: vectors.reason ?? "unknown" };
+    }
+
     return {
       seeded: true,
       parent_repo: donor.name,
       files,
       symbols,
       seeded_at_commit: donor.commit,
+      donor_root: donor.root,
+      ...(donor.distance !== undefined ? { donor_distance: donor.distance } : {}),
+      ...(embeddings ? { embeddings } : {}),
       elapsed_ms: Date.now() - started,
     };
   } catch (err: unknown) {
@@ -391,6 +457,9 @@ export async function catchUpSeededWorktree(
   /** Files the seed copied in. The ceiling is a fraction of this; omitting it falls back to the
    *  flat floor, which is what a caller that cannot know the size should get. */
   seededFileCount?: number,
+  /** The donor's working tree, when it was not this one. Its index holds its uncommitted edits and
+   *  untracked files too — content no commit diff mentions — so those paths are revisited here. */
+  donorRoot?: string,
 ): Promise<CatchUpResult> {
   const head = (await git(["rev-parse", "HEAD"], worktreeRoot))?.trim();
   if (!head) return { caught_up: false, reason: "not a git checkout" };
@@ -429,6 +498,22 @@ export async function catchUpSeededWorktree(
       if (!path) continue;
       if (code.includes("D")) removed.add(path);
       else changed.add(path);
+    }
+  }
+
+  // The donor's own dirty files. A sibling chosen as donor is usually mid-change, and its index holds
+  // that work; left alone, a file it added would stay searchable here without existing on disk.
+  // Re-read from THIS tree when the path exists here, dropped when it does not.
+  if (donorRoot && existsSync(donorRoot) && canonicalPath(donorRoot) !== canonicalPath(worktreeRoot)) {
+    const donorStatus = await git(["status", "--porcelain", "--untracked-files=all"], donorRoot);
+    for (const line of (donorStatus ?? "").split("\n")) {
+      if (line.length < 4) continue;
+      // A rename lists both sides; the donor's index may hold either.
+      for (const path of line.slice(3).trim().split(" -> ")) {
+        if (!path || changed.has(path) || removed.has(path)) continue;
+        if (existsSync(join(worktreeRoot, path))) changed.add(path);
+        else removed.add(path);
+      }
     }
   }
 

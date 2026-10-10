@@ -108,3 +108,53 @@ describe("pickSeedDonor", () => {
     expect(donor.sameCommit).toBe(false);
   });
 });
+
+// Same commit was not enough. Measured 2026-10-09: the parent sat 943 commits behind develop, 16,916
+// files away, and 216 seeds were declined ("13173 files differ (> 2172)") while siblings sat a few
+// commits from HEAD — each decline a full index and a full re-embed of ~450k symbols.
+describe("pickSeedDonor — nearest commit in HEAD's history", () => {
+  const near = "d".repeat(40);
+  const far = "e".repeat(40);
+  const history = new Map([[HEAD, 0], [near, 3], [far, 40], [PARENT_COMMIT, 943]]);
+
+  it("takes the sibling nearest in history over a parent far behind", async () => {
+    await register("parent", PARENT_COMMIT);
+    await register("far", far);
+    await register("near", near);
+
+    const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
+
+    expect(donor.name).toBe("near");
+    expect(donor.distance).toBe(3);
+    expect(donor.sameCommit).toBe(false);
+    // The catch-up diffs from here, so it is the donor's commit.
+    expect(donor.commit).toBe(near);
+  });
+
+  it("ignores an index whose commit is not in this tree's history", async () => {
+    // Not in history means not provably this repository's content — e.g. a sibling on a branch that
+    // diverged, or an unrelated repo. The parent is the better-understood fallback.
+    await register("parent", PARENT_COMMIT);
+    await register("diverged", "f".repeat(40));
+
+    const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
+
+    expect(donor.name).toBe("parent");
+    expect(donor.distance).toBe(943);
+  });
+
+  it("breaks a tie toward the donor that already has vectors", async () => {
+    await register("parent", PARENT_COMMIT);
+    await register("bare", near);
+    const withVectors = await register("vectors", near);
+    writeFileSync(withVectors.replace(/\.index\.json$/, ".embeddings.ndjson"), "{}\n");
+    writeFileSync(
+      withVectors.replace(/\.index\.json$/, ".embeddings.meta.json"),
+      JSON.stringify({ model: "m", provider: "ollama", dimensions: 2, symbol_count: 1, updated_at: 1 }),
+    );
+
+    const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
+
+    expect(donor.name).toBe("vectors");
+  });
+});

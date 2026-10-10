@@ -32,4 +32,6 @@ export interface IndexFolderResult {
   seeded_from?: string;
   /** Files re-parsed after a seed to bring it from the parent's commit to this tree's HEAD. */
   files_reparsed?: number;
+  /** Symbol vectors cloned from the seed's donor instead of being embedded again. */
+  seeded_vectors?: number;
 }

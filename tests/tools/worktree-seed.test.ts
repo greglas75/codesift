@@ -253,6 +253,38 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
   });
 
+  it("drops the donor's untracked files from the seed during catch-up", async () => {
+    // The donor's index holds its working tree, not its commit: a file it has not committed was
+    // copied in, and no commit diff mentions it. Left alone it stays searchable here — a symbol for a
+    // file that does not exist in this tree.
+    writeFileSync(join(parentRoot, "src", "ghost.ts"), "export function ghost() {}\n");
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"], ["src/ghost.ts", "ghost"]]);
+    registry({
+      [PARENT_NAME]: {
+        name: PARENT_NAME, root: parentRoot,
+        index_path: join(dataDir, `${PARENT_HASH}.index.json`),
+        last_git_commit: git(["rev-parse", "HEAD"], parentRoot).trim(),
+      },
+    });
+
+    const seed = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+    expect(seed.seeded).toBe(true);
+    expect(seed.donor_root).toBe(parentRoot);
+
+    const { catchUpSeededWorktree } = await import("../../src/tools/index-tools/worktree-seed.js");
+    const caught = await catchUpSeededWorktree(
+      worktreeRoot, WT_NAME, seed.seeded_at_commit ?? null, seed.files, seed.donor_root,
+    );
+
+    expect(caught.caught_up).toBe(true);
+    expect(caught.removed).toBe(1);
+    const db = new DatabaseSync(`file:${join(dataDir, "bbbbbbbbbbbb.index.db")}?mode=ro`, { open: true });
+    const files = (db.prepare("SELECT DISTINCT file FROM symbols ORDER BY file").all() as Array<{ file: string }>)
+      .map((r) => r.file);
+    db.close();
+    expect(files).toEqual(["src/a.ts"]);
+  });
+
   it("leaves no half-copied database when the parent index is empty", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), []);
     registry({
