@@ -53,6 +53,24 @@ describe("EmbeddingCheckpoint lock", () => {
     expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe("");
   });
 
+  it("reads an mtime slightly ahead of the clock as fresh, not stale", async () => {
+    // mtimeMs has sub-millisecond precision and Date.now() does not, so a lock read right after it
+    // was created is routinely a fraction of a millisecond in the "future". Deterministic version of
+    // a flake the full farm suite hit: that lock was taken over in 5 ms.
+    writeFileSync(`${partial()}.lock`, "");
+    const ahead = new Date(Date.now() + 500);
+    utimesSync(`${partial()}.lock`, ahead, ahead);
+    expect(await EmbeddingCheckpoint.open(partial(), "m")).toEqual({ busy: 0 });
+  });
+
+  it("takes over a lock with no readable pid whose mtime is far in the future", async () => {
+    writeFileSync(`${partial()}.lock`, "");
+    const future = new Date(Date.now() + 10 * 60_000);
+    utimesSync(`${partial()}.lock`, future, future);
+    const ckpt = await openOwned();
+    await ckpt.release();
+  });
+
   it("takes over a lock with no readable pid once it is past its grace period", async () => {
     writeFileSync(`${partial()}.lock`, "12abc");
     const old = new Date(Date.now() - 5 * 60_000);

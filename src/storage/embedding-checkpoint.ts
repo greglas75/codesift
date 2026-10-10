@@ -108,8 +108,11 @@ async function lockHolder(path: string): Promise<{ pid: number } | "live" | "sta
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "ENOENT" ? "gone" : "live";
   }
-  // A future mtime (clock change, another host) would otherwise read as fresh forever.
-  return age >= 0 && age < UNREADABLE_LOCK_GRACE_MS ? "live" : "stale";
+  // A FAR-future mtime (clock change, another host) would otherwise read as fresh forever. A slightly
+  // negative age is normal, not that: `mtimeMs` carries sub-millisecond precision and `Date.now()`
+  // does not, so a lock read right after creation is often a fraction of a millisecond "ahead" —
+  // treating that as stale took over a lock being created (seen as a flake in the full farm suite).
+  return Math.abs(age) < UNREADABLE_LOCK_GRACE_MS ? "live" : "stale";
 }
 
 const holdsLock = (h: Awaited<ReturnType<typeof lockHolder>>): boolean =>
