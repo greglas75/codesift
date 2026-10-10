@@ -28,6 +28,13 @@ describe("embedding health", () => {
     });
   });
 
+  // Bug it catches: a failure reported without a message erased the repo's last known reason.
+  it("keeps a repo's last error across a failure that carries none", () => {
+    recordEmbeddingRun("local/a", false, "ECONNREFUSED");
+    recordEmbeddingRun("local/a", false);
+    expect(embeddingHealthSnapshot().failing_repos["local/a"]).toEqual({ consecutive: 2, last_error: "ECONNREFUSED" });
+  });
+
   type Run = [repo: string, ok: boolean];
   it.each<[string, Run[], string | null]>([
     ["no runs", [], null],

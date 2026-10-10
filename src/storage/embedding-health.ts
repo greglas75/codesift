@@ -59,7 +59,8 @@ export function recordEmbeddingRun(repo: string, ok: boolean, error?: string): v
   delete state.failing_repos[repo]; // re-insert last, so the oldest entry is the first key
   state.failing_repos[repo] = {
     consecutive: (previous?.consecutive ?? 0) + 1,
-    ...(message !== undefined ? { last_error: message } : {}),
+    // A failure without a message keeps the repo's last known reason rather than erasing it.
+    ...(message !== undefined ? { last_error: message } : previous?.last_error !== undefined ? { last_error: previous.last_error } : {}),
   };
   const repos = Object.keys(state.failing_repos);
   if (repos.length > MAX_FAILING_REPOS) delete state.failing_repos[repos[0]!];
