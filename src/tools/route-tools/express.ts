@@ -32,8 +32,8 @@ function handlersForSymbol(symbol: CodeSymbol, searchPath: string): RouteHandler
 
 /** Find Express-style route handlers in production JS/TS symbols. */
 export async function findExpressHandlers(input: RouteIndexInput, searchPath: string): Promise<RouteHandler[]> {
-  // The store keeps only JS/TS symbols whose source has `.get`, `.post`, … — a literal every pattern
-  // below requires — so the scan no longer pulls every source in the repo; the regexes still decide.
+  // The store keeps only JS/TS symbols whose source contains `.get`, `.post`, … — a literal every
+  // pattern below requires (common ones like `map.get(` still pass); the regexes decide.
   const candidates = await asRouteIndex(input).find({
     fileSuffixAny: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
     sourceContainsAny: EXPRESS_METHODS.map((method) => `.${method}`),

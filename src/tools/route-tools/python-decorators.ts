@@ -20,6 +20,12 @@ interface DecoratorRoute {
 
 type DecoratorParser = (decorator: string) => DecoratorRoute | null;
 
+/**
+ * Flask and FastAPI run side by side over the same index and both need every Python file's symbols;
+ * one read per RouteIndex serves both.
+ */
+const pythonSymbolsByIndex = new WeakMap<object, Promise<CodeSymbol[]>>();
+
 async function findDecoratedPythonHandlers(
   input: RouteIndexInput,
   searchPath: string,
@@ -35,7 +41,12 @@ async function findDecoratedPythonHandlers(
   // One read for every Python file's symbols (no source — decorators are not source), grouped back
   // by file so the walk keeps its order: files in index order, symbols in index order within each.
   const byFile = new Map<string, CodeSymbol[]>();
-  for (const symbol of await index.inFiles(pythonFiles.map((file) => file.path), false)) {
+  let read = pythonSymbolsByIndex.get(index);
+  if (!read) {
+    read = index.inFiles(pythonFiles.map((file) => file.path), false);
+    pythonSymbolsByIndex.set(index, read);
+  }
+  for (const symbol of await read) {
     const list = byFile.get(symbol.file);
     if (list) list.push(symbol);
     else byFile.set(symbol.file, [symbol]);
