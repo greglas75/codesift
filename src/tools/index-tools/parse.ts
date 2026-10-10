@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { recordEmbeddingRun } from "../../storage/embedding-health.js";
@@ -19,6 +19,10 @@ import {
   saveEmbeddingMeta,
   getEmbeddingPath,
   getEmbeddingMetaPath,
+  getPartialEmbeddingPath,
+  partialEmbeddingModel,
+  appendPartialEmbeddings,
+  loadEmbeddingMeta,
   batchEmbed,
   primeContentHashes,
   contentHashesFor,
@@ -276,14 +280,36 @@ export async function embedSymbols(
 
   const embeddingPath = getEmbeddingPath(indexPath);
   const metaPath = getEmbeddingMetaPath(indexPath);
+  const partialPath = getPartialEmbeddingPath(indexPath);
+  let checkpointed = 0;
   try {
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
-    const existing = await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes());
+
+    // Vectors from another model are incomparable, and the content hash cannot tell: it covers the
+    // TEXT, so an unchanged symbol embedded by the old model passed as current and was kept forever,
+    // under a meta rewritten to name the new one. A seeded worktree makes that common — it clones
+    // whatever its donor was embedded with.
+    const storedModel = (await loadEmbeddingMeta(metaPath))?.model;
+    const existing = storedModel === undefined || storedModel === provider.model
+      ? await loadEmbeddings(embeddingPath, embeddingMemBudgetBytes())
+      : new Map<string, Float32Array>();
+
+    // Resume: what a failed or killed run finished is in the partial file, NEWER than the main
+    // file, so its hashes are primed first (priming never overwrites).
+    if ((await partialEmbeddingModel(partialPath)) === provider.model) {
+      const resumed = await loadEmbeddings(partialPath, embeddingMemBudgetBytes());
+      for (const [id, vec] of resumed) existing.set(id, vec);
+      primeContentHashes(repoName, contentHashesForPath(partialPath));
+      if (resumed.size > 0) console.error(`[codesift] ${repoName}: resuming embedding with ${resumed.size} vectors already done`);
+    } else {
+      await unlink(partialPath).catch(() => undefined);
+    }
     // Seed the in-memory hash map from what was stored beside the vectors.
     // Without this the map starts empty on every process, every symbol looks
     // changed, and the whole corpus is re-embedded on each MCP server start.
-    primeContentHashes(repoName, contentHashesForPath(embeddingPath));
+    if (existing.size > 0) primeContentHashes(repoName, contentHashesForPath(embeddingPath));
+
     const embeddings = await batchEmbed(
       symbolTexts, existing,
       (texts) => provider.embed(texts, "document"),
@@ -291,6 +317,13 @@ export async function embedSymbols(
       // Model identity keys the cross-repo cache; a worktree of an already
       // embedded checkout then costs lookups instead of model calls.
       { model: provider.model, dimensions: provider.dimensions },
+      async (done) => {
+        // Best effort: a checkpoint that cannot be written costs a resume, never the run.
+        try {
+          await appendPartialEmbeddings(partialPath, provider.model, done);
+          checkpointed += done.length;
+        } catch { /* disk full or gone — the run itself carries on */ }
+      },
     );
     await saveEmbeddings(embeddingPath, embeddings, contentHashesFor(repoName));
     await saveEmbeddingMeta(metaPath, {
@@ -300,12 +333,15 @@ export async function embedSymbols(
       symbol_count: embeddings.size,
       updated_at: Date.now(),
     });
+    // Folded into the main file — only now is it safe to drop.
+    await unlink(partialPath).catch(() => undefined);
     embeddingCaches.set(repoName, embeddings);
     recordEmbeddingRun(repoName, true);
     return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
+    const kept = checkpointed > 0 ? ` — ${checkpointed} vectors kept, the next run resumes from them` : "";
+    console.error(`[codesift] Embedding failed for ${repoName}: ${message}${kept}`);
     recordEmbeddingRun(repoName, false, message);
     return false;
   }

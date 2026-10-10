@@ -19,6 +19,55 @@ export function getEmbeddingMetaPath(indexPath: string): string {
   return indexPath.replace(/\.index\.json$/, ".embeddings.meta.json");
 }
 
+/**
+ * Vectors an embedding run has computed but not yet folded into the main file.
+ * {hash}.index.json → {hash}.embeddings.partial.ndjson
+ *
+ * The main file is written once, at the end of a run, so any failure before that discarded the
+ * whole run. On a ~450k-symbol repo that is hours of model calls, and the daemon log held 1,021
+ * failed runs (839 timeouts) — none of which saved a vector. Each finished batch is appended here
+ * instead, and the next run starts from it. Same line format as the main file, after one header
+ * line naming the model: vectors from another model are not comparable and must not be resumed.
+ */
+export function getPartialEmbeddingPath(indexPath: string): string {
+  return indexPath.replace(/\.index\.json$/, ".embeddings.partial.ndjson");
+}
+
+/** The model a partial file was started with, from its header line; null when unreadable. */
+export async function partialEmbeddingModel(partialPath: string): Promise<string | null> {
+  try {
+    const { open } = await import("node:fs/promises");
+    const handle = await open(partialPath, "r");
+    try {
+      const buf = Buffer.alloc(1024);
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      const first = buf.subarray(0, bytesRead).toString("utf-8").split("\n")[0] ?? "";
+      const header = JSON.parse(first) as { model?: unknown };
+      return typeof header.model === "string" ? header.model : null;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Append finished vectors to a partial file, writing its header first when it is new. */
+export async function appendPartialEmbeddings(
+  partialPath: string,
+  model: string,
+  entries: ReadonlyArray<{ id: string; vec: Float32Array; h: number | undefined }>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const { appendFile } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  let text = existsSync(partialPath) ? "" : JSON.stringify({ model }) + "\n";
+  for (const { id, vec, h } of entries) {
+    text += JSON.stringify(h === undefined ? { id, vec: Array.from(vec) } : { id, vec: Array.from(vec), h }) + "\n";
+  }
+  await appendFile(partialPath, text);
+}
+
 interface EmbeddingLine {
   id: string;
   vec: number[];
@@ -387,6 +436,12 @@ export async function batchEmbed(
    * tests) disables the shared lookup and behaves exactly as before.
    */
   sharedModel?: { model: string; dimensions: number },
+  /**
+   * Called with each batch the MODEL produced, as soon as it is produced — so a caller can persist
+   * progress that a later failure would otherwise discard. Lookups from the shared cache are not
+   * reported: they cost nothing to repeat.
+   */
+  onBatch?: (entries: Array<{ id: string; vec: Float32Array; h: number | undefined }>) => Promise<void>,
 ): Promise<Map<string, Float32Array>> {
   const result = new Map(existing);
   const hashes = cacheKey ? (embeddingContentHashes.get(cacheKey) ?? new Map<string, number>()) : new Map<string, number>();
@@ -433,6 +488,7 @@ export async function batchEmbed(
 
     const vectors = await embedBatchWithStallRetry(embedFn, texts);
 
+    const done: Array<{ id: string; vec: Float32Array; h: number | undefined }> = [];
     for (let j = 0; j < batch.length; j++) {
       const entry = batch[j];
       const vec = vectors[j];
@@ -440,8 +496,10 @@ export async function batchEmbed(
         const f32 = new Float32Array(vec);
         result.set(entry.id, f32);
         if (entry.key) freshlyEmbedded.push({ key: entry.key, vec: f32 });
+        done.push({ id: entry.id, vec: f32, h: hashes.get(entry.id) });
       }
     }
+    if (onBatch) await onBatch(done);
   }
 
   // Remove embeddings for symbols that no longer exist in the corpus

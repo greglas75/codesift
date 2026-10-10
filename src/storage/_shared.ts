@@ -178,6 +178,7 @@ export const ARTIFACT_SUFFIXES = [
   "index.db-shm",
   "embeddings.ndjson",
   "embeddings.meta.json",
+  "embeddings.partial.ndjson",
   "chunks.ndjson",
   "chunk-embeddings.ndjson",
   "bm25.json",
@@ -197,7 +198,8 @@ export function artifactPattern(): RegExp {
   // The abandoned-write tails are BOTH shapes. `.tmp.<ts>` comes from `atomicWriteFile`;
   // `.generation.<pid>.<uuid>` comes from `chunk-store`, and prune could not see it — measured
   // 2026-09-05, 164 such files holding 19.6 GB that neither cleanup path could reach.
+  // `.seeding.<pid>` is the worktree seed's half-made database or vector clone.
   return new RegExp(
-    `^([0-9a-f]{8,})\\.(?:${suffixes.join("|")})(?:\\.tmp\\..*|\\.generation\\..*)?$`,
+    `^([0-9a-f]{8,})\\.(?:${suffixes.join("|")})(?:\\.tmp\\..*|\\.generation\\..*|\\.seeding\\..*)?$`,
   );
 }

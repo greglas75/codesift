@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { ARTIFACT_SUFFIXES, artifactPattern } from "../../src/storage/_shared.js";
 import { getChunkPath, getChunkEmbeddingPath } from "../../src/storage/chunk-store.js";
 import { sqlitePathFor, getIndexPath } from "../../src/storage/index-store.js";
+import { getPartialEmbeddingPath } from "../../src/storage/embedding-store.js";
 
 /**
  * `prune` reclaims a file only when it matches `<hash>.<known suffix>`, so a suffix the
@@ -29,6 +30,7 @@ describe("prune recognises every artifact the storage layer creates", () => {
       getChunkEmbeddingPath(INDEX_PATH),
       INDEX_PATH.replace(/\.index\.json$/, ".embeddings.ndjson"),
       INDEX_PATH.replace(/\.index\.json$/, ".embeddings.meta.json"),
+      getPartialEmbeddingPath(INDEX_PATH),
       INDEX_PATH.replace(/\.index\.json$/, ".snapshot.json"),
     ];
     for (const p of produced) {
@@ -46,6 +48,9 @@ describe("prune recognises every artifact the storage layer creates", () => {
   it("reclaims the abandoned half of an interrupted atomic write", () => {
     const re = artifactPattern();
     expect(re.test("a1b2c3d4e5f6.embeddings.ndjson.tmp.1785000000000")).toBe(true);
+    // The worktree seed's half-made copies, left by a process killed mid-seed.
+    expect(re.test("a1b2c3d4e5f6.index.db.seeding.4242")).toBe(true);
+    expect(re.test("a1b2c3d4e5f6.embeddings.ndjson.seeding.4242")).toBe(true);
   });
 
   it("leaves shared and non-repo files alone", () => {
