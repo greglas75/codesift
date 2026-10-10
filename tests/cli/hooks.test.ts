@@ -1195,6 +1195,7 @@ describe("handlePrecheckBash", () => {
 describe("handlePostindexFile", () => {
   let exitCode: number | undefined;
   let postindexDataDir: string;
+  let previousDataDir: string | undefined;
 
   beforeEach(() => {
     exitCode = undefined;
@@ -1202,6 +1203,7 @@ describe("handlePostindexFile", () => {
     // The 2 s debounce is persisted in the data dir. Without its own, this describe wrote into the
     // real ~/.codesift, and the next run within 2 s skipped indexFile (5/10 under `rt --repeat 10`).
     postindexDataDir = mkdtempSync(join(tmpdir(), "codesift-postindex-"));
+    previousDataDir = process.env["CODESIFT_DATA_DIR"];
     process.env["CODESIFT_DATA_DIR"] = postindexDataDir;
     vi.spyOn(process, "exit").mockImplementation((code?: number) => {
       exitCode = code ?? 0;
@@ -1212,7 +1214,8 @@ describe("handlePostindexFile", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete process.env["HOOK_TOOL_INPUT"];
-    delete process.env["CODESIFT_DATA_DIR"];
+    if (previousDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+    else process.env["CODESIFT_DATA_DIR"] = previousDataDir;
     rmSync(postindexDataDir, { recursive: true, force: true });
   });
 

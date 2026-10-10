@@ -107,9 +107,14 @@ export async function seedEmbeddingsFromDonor(
     return { seeded: true, vectors: donorMeta.symbol_count };
   } catch (err) {
     await unlink(tempVectors).catch(() => undefined);
+    let restore = "";
     if (metaWritten) {
-      await (previousMeta ? saveEmbeddingMeta(targetMetaPath, previousMeta) : unlink(targetMetaPath)).catch(() => undefined);
+      await (previousMeta ? saveEmbeddingMeta(targetMetaPath, previousMeta) : unlink(targetMetaPath)).catch(
+        (restoreErr: unknown) => {
+          restore = `; the target meta could not be restored (${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)})`;
+        },
+      );
     }
-    return { seeded: false, reason: `vector seed failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { seeded: false, reason: `vector seed failed: ${err instanceof Error ? err.message : String(err)}${restore}` };
   }
 }

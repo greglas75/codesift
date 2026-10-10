@@ -524,7 +524,8 @@ export async function catchUpSeededWorktree(
   for (const entry of parsePorcelainZ(await git(STATUS_Z, worktreeRoot))) {
     if (entry.code.includes("D")) removed.add(entry.path);
     else changed.add(entry.path);
-    if (entry.from) removed.add(entry.from);
+    // A rename takes the old path away; a copy leaves it where it was.
+    if (entry.from && entry.code.includes("R")) removed.add(entry.from);
   }
 
   // The donor's own dirty files. A sibling chosen as donor is usually mid-change, and its index holds

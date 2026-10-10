@@ -406,6 +406,7 @@ describe("parsePorcelainZ", () => {
     ["an untracked file with a space", "?? src/a b.ts\0", [{ code: "??", path: "src/a b.ts" }]],
     ["a rename, source after target", "R  src/new.ts\0src/old.ts\0", [{ code: "R ", path: "src/new.ts", from: "src/old.ts" }]],
     ["a deletion", " D src/gone.ts\0", [{ code: " D", path: "src/gone.ts" }]],
+    ["a copy, source after target", "C  src/copy.ts\0src/orig.ts\0", [{ code: "C ", path: "src/copy.ts", from: "src/orig.ts" }]],
     ["a nested checkout directory", "?? .worktrees/x/\0", []],
     ["no output", "", []],
   ])("parses %s", (_case, output, expected) => {
