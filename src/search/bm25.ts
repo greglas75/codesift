@@ -387,15 +387,20 @@ export function bm25FootprintBytes(index: BM25Index): number {
  * Same RAM tiers as the index and embedding budgets, so all of them agree about what a machine this
  * size is willing to hold. `CODESIFT_MAX_BM25_CACHE_MB` overrides.
  */
-export function bm25CacheBudgetBytes(env: NodeJS.ProcessEnv = process.env): number {
+export function bm25CacheBudgetBytes(env: NodeJS.ProcessEnv = process.env, totalBytes?: number): number {
   const raw = env["CODESIFT_MAX_BM25_CACHE_MB"];
   if (raw !== undefined) {
     const parsed = Number.parseInt(raw, 10);
     if (Number.isFinite(parsed) && parsed > 0) return parsed * 1024 * 1024;
   }
-  let totalGb = 8;
-  try { totalGb = totalmem() / 1024 ** 3; } catch { /* keep the floor */ }
-  const mb = totalGb <= 16 ? 256 : totalGb <= 32 ? 512 : 1024;
+  let total = 8 * 1024 ** 3;
+  try { total = totalBytes ?? totalmem(); } catch { /* keep the floor */ }
+  const totalGb = total / 1024 ** 3;
+  // Above 32 GB it scales like the index budget (RAM/32, capped at 8 GB). It used to stop at 1 GB, below
+  // ONE index of a 1.43M-symbol repo (1.49 GB): the cache held a single worktree, and sessions on
+  // different worktrees evicted each other into a ~20 s rebuild per switch (usage.jsonl, 2026-10-10:
+  // 28 of 78 rdesigner search_symbols calls over 5 s, p90 23.8 s).
+  const mb = totalGb <= 16 ? 256 : totalGb <= 32 ? 512 : Math.min(8192, Math.max(1024, Math.floor(total / (1024 * 1024) / 32)));
   return mb * 1024 * 1024;
 }
 
