@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stage 0 done; stage 1: single-owner migration done, native store still opt-in pending a live run; stage 2: BM25 native; stage 3: every tree-sitter extractor native; stage 4: no-go for now)
+**Status:** Accepted (stages 0–4, 6 and 7 done; 8 and 9 no-go; 10 measured, no-go; stage 1's native store still opt-in until its 24 h monitored daemon run — stage 5)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -714,3 +714,26 @@ remains is on its allowlist: the TypeScript fallbacks for when there is no nativ
 (`graph-tools`, `impact-tools`, `trace-route`), `review_diff`'s single load for small repos, and
 `php8_migration_candidates`. That last one has no recorded calls, and its rules depend on whole-index
 order across predicates that no single query expresses.
+
+## Live findings after stage 7 (2026-10-10)
+
+Running the ABI 21 build in the daemon surfaced two defects that predate this programme, and an
+install path that never got the core:
+
+- **Every response shortener crashed.** The seven tools with a compact/counts shortener return
+  `dispatchFormatter`'s string, and the shortener received that string and read `.handlers.length` off
+  it. Any answer above 52.5K characters failed the whole call (`trace_route /health` on
+  ResearchShieldNew, 78 handlers). The unit tests fed `wrapTool` raw objects, so they never saw it.
+  `dispatchFormatter` now records the raw result in a per-call AsyncLocalStorage slot (20f22cfd).
+- **`get_symbol` sliced source by the wrong unit.** `start_byte`/`end_byte` are UTF-16 code units
+  (stage 3 kept web-tree-sitter's semantics 1:1); `extractSource` read them as file byte offsets, so
+  every multi-byte character above a declaration shifted the body back into the preceding comment.
+  Fixed by slicing the decoded text, guarded against offsets from before an edit (9733bc9f, 96539280).
+- **ryzen-dev ran 0.21.1 with no Rust core.** Its updater builds from the git tag, and the
+  `@codesift/core-<platform>` packages are added to `optionalDependencies` only at publish time, so a
+  source build never has them (`/health`: "no binary for this platform"). The updater now installs the
+  prebuilt package of the same version (cc-remote 6e9a183).
+
+`/health` also reports embedding runs now (`embeddings`: provider, consecutive failures, last error):
+a provider that disappeared had failed silently for nine days.
+

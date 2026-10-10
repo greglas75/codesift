@@ -53,6 +53,9 @@ component keeps its TS implementation; the binary is OPTIONAL.
   matrix in `release.yml`, published by `scripts/publish-native-packages.mjs` BEFORE the main package,
   which then gets `optionalDependencies` for the platforms that made it (never committed). One-time
   owner bootstrap (npm org + 0.0.0 placeholders + trusted publishers): `docs/release-native.md`.
+  A build from a git checkout never has the core (the dependency exists only in the published
+  package): install `@codesift/core-<tag>@<version>` beside it, as ryzen-dev's `cc-update` does, or
+  `/health` says `no binary for this platform` and everything runs on the TypeScript fallback.
 - Rust checks run on the farm, not the Mac: `rt rust` (profile in `.tf.json`), or `rt --light bash -c 'export PATH=/home/tf/runtimes/rust-1.99.0/bin:$PATH && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'`.
   The darwin addon can only be built on a Mac (`TF_ALLOW_LOCAL=1 npm run build:native`).
 
