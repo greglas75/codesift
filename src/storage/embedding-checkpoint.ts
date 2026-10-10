@@ -134,6 +134,17 @@ const holdsLock = (h: Awaited<ReturnType<typeof lockHolder>>): boolean =>
  */
 async function acquireLock(lockPath: string): Promise<{ held: true } | { held: false; owner: number }> {
   if (heldHere.has(lockPath)) return { held: false, owner: process.pid };
+  // Reserved BEFORE the first await. Marked only after link(), two concurrent opens in this process
+  // both passed the check above; the second then read a lock naming our own pid, took it for a
+  // leftover, took it over — and both believed they owned it. Reserved, a lock naming our pid that
+  // this attempt meets can only be a leftover, and the scratch names below are this attempt's alone.
+  heldHere.add(lockPath);
+  const result = await acquireReserved(lockPath);
+  if (!result.held) heldHere.delete(lockPath);
+  return result;
+}
+
+async function acquireReserved(lockPath: string): Promise<{ held: true } | { held: false; owner: number }> {
   const fresh = `${lockPath}.tmp.${process.pid}.new`;
   const taken = `${lockPath}.tmp.${process.pid}.takeover`;
   const ownerOf = (h: Awaited<ReturnType<typeof lockHolder>>) => (typeof h === "object" ? h.pid : 0);
@@ -146,7 +157,6 @@ async function acquireLock(lockPath: string): Promise<{ held: true } | { held: f
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await link(fresh, lockPath);
-        heldHere.add(lockPath);
         return { held: true };
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") return { held: false, owner: 0 };

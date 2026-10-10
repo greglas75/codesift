@@ -87,6 +87,19 @@ describe("EmbeddingCheckpoint lock", () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it("is not taken by two concurrent opens in one process", async () => {
+    // Both used to pass the in-process check before either had linked; the second then read a lock
+    // naming our own pid as a leftover and took it over — two owners of one file.
+    const [a, b] = await Promise.all([
+      EmbeddingCheckpoint.open(partial(), "m"),
+      EmbeddingCheckpoint.open(partial(), "m"),
+    ]);
+    const owners = [a, b].filter((x) => !("busy" in x));
+    expect(owners).toHaveLength(1);
+    await (owners[0] as EmbeddingCheckpoint).release();
+    expect(existsSync(`${partial()}.lock`)).toBe(false);
+  });
+
   it("is not taken twice by one process", async () => {
     const first = await openOwned();
     expect(await EmbeddingCheckpoint.open(partial(), "m")).toEqual({ busy: process.pid });
