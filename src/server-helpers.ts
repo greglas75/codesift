@@ -7,6 +7,7 @@ import { markToolActivity } from "./tools/index-tools/state.js";
 import { resolveToolRepoArgs } from "./server-helpers/repo-resolution.js";
 import { buildResponseHint, resetHintState, trackSequentialCalls } from "./server-helpers/response-hints.js";
 import { SHOWN_SOURCE_POINTER_MARK } from "./server-helpers/shown-source.js";
+import { runWithFormattedDataSlot, type FormattedDataSlot } from "./server-helpers/formatted-data.js";
 import { CHARS_PER_TOKEN, resolveMaxResponseTokens, responseBodyCharBudget } from "./server-helpers/response-budget.js";
 export { loadRegistrySync, isAncestorOrEqual, resolveRepoFromCwd, canonicalizeRepoName, _resetRegistryCacheForTests } from "./server-helpers/repo-resolution.js";
 export { buildResponseHint, trackSequentialCalls } from "./server-helpers/response-hints.js";
@@ -215,7 +216,23 @@ function persistLargeOutput(text: string, toolName: string): string {
   return filePath;
 }
 
-function formatResponse(text: string, toolName: string, args: Record<string, unknown>, data: unknown): ToolResponse {
+/** A shortener that fails costs the call nothing: the hard cap below still bounds the text. */
+function tryShorten(toolName: string, level: "compact" | "counts", shorten: (data: unknown) => string, data: unknown): string | null {
+  try {
+    return shorten(data);
+  } catch (err) {
+    console.error(`[codesift] ${toolName} ${level} shortener failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+function formatResponse(
+  text: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  data: unknown,
+  shortenerInput: unknown = data,
+): ToolResponse {
   // Large output management: persist to disk when output is very large
   let persistedPath: string | undefined;
   if (text.length > PERSIST_THRESHOLD_CHARS) {
@@ -232,10 +249,12 @@ function formatResponse(text: string, toolName: string, args: Record<string, unk
     const entry = SHORTENING_REGISTRY.get(toolName);
     if (entry) {
       if (text.length > COMPACT_THRESHOLD && entry.compact) {
-        text = "[compact] " + entry.compact(data);
+        const compact = tryShorten(toolName, "compact", entry.compact, shortenerInput);
+        if (compact !== null) text = "[compact] " + compact;
       }
       if (text.length > COUNTS_THRESHOLD && entry.counts) {
-        text = "[counts] " + entry.counts(data);
+        const counts = tryShorten(toolName, "counts", entry.counts, shortenerInput);
+        if (counts !== null) text = "[counts] " + counts;
       }
     }
   }
@@ -333,7 +352,8 @@ export function wrapTool<T>(
     const promise = (async (): Promise<ToolResponse> => {
       const start = performance.now();
       try {
-        const data = await fn();
+        const formatted: FormattedDataSlot = {};
+        const data = await runWithFormattedDataSlot(formatted, fn);
         const text = typeof data === "string" ? data : JSON.stringify(data);
         const elapsed = performance.now() - start;
         trackSequentialCalls(toolName);
@@ -351,7 +371,8 @@ export function wrapTool<T>(
         } else if (!bypassCache) {
           setCache(cacheKey, text);
         }
-        const response = formatResponse(text, toolName, args, data);
+        const shortenerInput = typeof data === "string" && formatted.tool === toolName ? formatted.data : data;
+        const response = formatResponse(text, toolName, args, data, shortenerInput);
         // Track AFTER formatting so telemetry can record both the raw size
         // and what was actually sent post-cascade (result_tokens_sent).
         const sentText = response.content[0]?.text ?? "";

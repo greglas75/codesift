@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
 import { wrapTool, resetSessionState, registerShortener, resetShorteningRegistry, resolveRepoFromCwd, cutAtRecordBoundary } from "../../src/server-helpers.js";
 import { SHOWN_SOURCE_POINTER_MARK } from "../../src/server-helpers/shown-source.js";
+import { dispatchFormatter } from "../../src/formatter-dispatch.js";
+import { formatTraceRouteCompact, formatTraceRouteCounts } from "../../src/formatters-shortening.js";
 
 let tmpDir: string;
 
@@ -146,6 +148,34 @@ describe("progressive cascade", () => {
     const bigData = { items: "x".repeat(55_000) };
     const result = await wrapTool("test_tool", { repo: "local/test", detail_level: false }, async () => bigData)();
     expect(result.content[0].text).toContain("[compact]");
+  });
+
+  // Bug: real handlers return dispatchFormatter's STRING, and the shortener read `.handlers.length`
+  // off it — a large trace_route answer failed with "Cannot read properties of undefined".
+  it("hands the shortener the raw result behind a formatted handler response", async () => {
+    registerShortener("trace_route", { compact: formatTraceRouteCompact, counts: formatTraceRouteCounts });
+    const handlers = Array.from({ length: 900 }, (_, i) => ({
+      file: `src/controllers/very/long/path/to/controller-number-${i}.controller.ts`,
+      framework: "nestjs",
+      symbol: { name: `handlerMethod${i}`, kind: "method", file: "x", start_line: i },
+    }));
+    const raw = { path: "/health", handlers, call_chain: [], db_calls: [] };
+    const result = await wrapTool("trace_route", { repo: "local/test", path: "/health" }, async () =>
+      dispatchFormatter("trace_route", raw))();
+    expect(result.content[0].text).toContain("[compact] route: /health\nhandlers (900):");
+  });
+
+  it("keeps the full text when a shortener throws", async () => {
+    registerShortener("test_tool", {
+      compact: () => {
+        throw new Error("boom");
+      },
+    });
+    const bigStr = "y".repeat(55_000);
+    const result = await wrapTool("test_tool", { repo: "local/test" }, async () => bigStr)();
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("y".repeat(1000));
+    expect(result.content[0].text).not.toContain("[compact]");
   });
 
   it("falls through gracefully for unregistered tool", async () => {

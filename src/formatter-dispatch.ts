@@ -48,6 +48,7 @@ import {
   formatFrameworkAudit,
   formatNextjsLinkIntegrity,
 } from "./formatters-nextjs.js";
+import { recordFormattedData } from "./server-helpers/formatted-data.js";
 
 export const FORMATTER_DISPATCH = {
   search_symbols: formatSearchSymbols,
@@ -93,5 +94,6 @@ export const FORMATTER_DISPATCH = {
 export type FormatterToolName = keyof typeof FORMATTER_DISPATCH;
 
 export function dispatchFormatter(toolName: FormatterToolName, data: unknown): string {
+  recordFormattedData(toolName, data);
   return FORMATTER_DISPATCH[toolName](data as never);
 }
