@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { recordEmbeddingRun } from "../../storage/embedding-health.js";
 import { EXTRACTOR_VERSIONS } from "../index-shared.js";
 import { getLanguageForExtension } from "../../parser/parser-manager.js";
 import { saveIndex, loadIndex, loadIndexSummary, getIndexPath } from "../../storage/index-store.js";
@@ -244,7 +245,9 @@ async function adoptChildIndex(
   // the vectors it wrote replace whatever this process had cached.
   if (config.embeddingProvider && process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
     void scheduleEmbedding(repoName, async () => {
-      await runEmbeddingChildProcess(repoName, rootPath, indexPath);
+      const ok = await runEmbeddingChildProcess(repoName, rootPath, indexPath);
+      // The child's own record dies with it; /health reads this process's.
+      recordEmbeddingRun(repoName, ok, ok ? undefined : "embed child failed (reason in the daemon's stderr log)");
       invalidateEmbeddingCaches(repoName);
     });
   }

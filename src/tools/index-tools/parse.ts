@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
+import { recordEmbeddingRun } from "../../storage/embedding-health.js";
 import {
   extractMarkdownSymbols,
   extractPrismaSymbols,
@@ -300,10 +301,12 @@ export async function embedSymbols(
       updated_at: Date.now(),
     });
     embeddingCaches.set(repoName, embeddings);
+    recordEmbeddingRun(repoName, true);
     return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[codesift] Embedding failed for ${repoName}: ${message}`);
+    recordEmbeddingRun(repoName, false, message);
     return false;
   }
 }

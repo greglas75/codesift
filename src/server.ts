@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { statSync } from "node:fs";
 import { readVitals, classifyVitals, startVitals } from "./server-helpers/health-vitals.js";
 import { nativeStatus } from "./native/index.js";
+import { embeddingHealthReason, embeddingHealthSnapshot } from "./storage/embedding-health.js";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHost } from "./utils/loopback.js";
 import { runWithRequestContext } from "./server-helpers/request-context.js";
@@ -466,6 +467,11 @@ export async function startHttpServer(
                     // told "down" stops using tools it could still have used.
                     const vitals = readVitals();
                     const { status, reasons } = classifyVitals(vitals);
+                    // Embedding fails into stderr by design; this is where a broken provider shows.
+                    // It names a reason but leaves the status alone — BM25 and every tool still work.
+                    const embeddings = { provider: loadConfig().embeddingProvider ?? null, ...embeddingHealthSnapshot() };
+                    const embeddingReason = embeddingHealthReason(embeddings);
+                    if (embeddingReason) reasons.push(embeddingReason);
                     return {
                       status,
                       sessions: inFlight,
@@ -473,6 +479,7 @@ export async function startHttpServer(
                       vitals,
                       // Which core is serving (ADR-006): the Rust one or the TypeScript fallback.
                       native: nativeStatus(),
+                      embeddings,
                       ...(caches ? { caches } : {}),
                       ...(reasons.length > 0 ? { reasons } : {}),
                     };
