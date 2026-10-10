@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-10-10
+
+The Rust core is complete (ADR-006) and its store is now on by default. With a platform package
+installed, storage, BM25, parsing, import extraction and the call graph all run in Rust; without one,
+or with `CODESIFT_NATIVE=0`, the TypeScript path runs exactly as before.
+
+### Changed
+
+- **The native store is on by default.** After a 24 h monitored daemon run (0 crashes, 0 SQLite
+  errors) it follows `auto` like every other component. Each process picks one SQLite copy once, so
+  the single-owner guarantee holds either way. `CODESIFT_NATIVE_STORE=0` turns it off.
+- **The call graph is built in Rust,** off the main thread, and cached until the index changes.
+  `trace_call_chain`, `impact_analysis`, `trace_route`, `classify_roles` and `explore` use it. On a
+  1.4M-symbol repo, `trace_route` went from 145.6 s / 2.4 GB to 68.9 s / 0.9 GB.
+- **No tool loads the whole index any more** except the TypeScript fallbacks, which run when there is
+  no native graph. Examples:
+  - `review_diff` on a large repo: 4.3–5.7 GB → 0.6–1 GB, no timeouts.
+  - `get_knowledge_map`: 25.8 s → 2.7 s.
+  - `find_dead_code`: 12.9 s → under a second.
+  - `taint_trace`: 5.1 s → 0.5 s.
+
+  A test fails on any new full-index load.
+- **Import extraction for `.ts`/`.tsx` runs in Rust,** in parallel. Whole-repo scanners push their filters
+  into the store, so far fewer symbols cross into JavaScript.
+- **Cache budgets scale with RAM above 32 GB.** BM25 and the Rust call graphs now get RAM/32 (capped at
+  8 GB); BM25 used to stop at 1 GB and the graphs were bounded only by count. Each budget can be
+  overridden (`CODESIFT_MAX_BM25_CACHE_MB`, `CODESIFT_MAX_CALL_GRAPH_CACHE_MB`).
+- **`/health` reports embedding runs** (`embeddings`): provider, failures in a row overall and per repo,
+  the last error, and an `alert` once it looks like an outage.
+- **An interrupted embedding run resumes from its finished batches.** It refuses vectors made by a
+  different model.
+
+### Fixed
+
+- Every tool with a response shortener (`trace_route`, `analyze_complexity`, `find_clones`,
+  `analyze_hotspots`, `nextjs_route_map`, `nextjs_metadata_audit`, `framework_audit`) failed on any
+  answer above ~52K characters with "Cannot read properties of undefined (reading 'length')".
+- `get_symbol`, `find_and_show` and `get_context_bundle` returned a body shifted into the preceding
+  comment whenever non-ASCII text appeared above a declaration: the offsets are UTF-16 code units and
+  were read as bytes.
+- Worktree seeding parses `git status` with `-z`. Before, paths with spaces or non-ASCII characters,
+  and renames, never matched a file.
+- Worktree seeding no longer leaves a donor's embedding metadata behind when placing its vectors fails.
+
 ## [0.21.1] — 2026-10-09
 
 The Rust core (ADR-006) ships for the first time, as optional per-platform packages

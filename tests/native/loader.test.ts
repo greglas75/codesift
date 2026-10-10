@@ -39,12 +39,13 @@ describe("nativeMode", () => {
     expect(nativeMode("store", { CODESIFT_NATIVE: "1", CODESIFT_NATIVE_STORE: "0" })).toBe("off");
   });
 
-  it("never turns the store on unless its own switch says so", () => {
-    // Two SQLite copies on one file in one process corrupt it — see OPT_IN_ONLY.
-    expect(nativeMode("store", {})).toBe("off");
-    expect(nativeMode("store", { CODESIFT_NATIVE: "1" })).toBe("off");
-    expect(nativeMode("store", { CODESIFT_NATIVE_STORE: "1" })).toBe("required");
-    expect(nativeMode("bm25", {})).toBe("auto");
+  // Bug it catches: the store left opt-in after stage 5, or `CODESIFT_NATIVE_STORE=0` no longer
+  // turning it off — the one switch back to node:sqlite for a whole process.
+  it("treats the store like every other component, with its own switch winning", () => {
+    expect(nativeMode("store", {})).toBe("auto");
+    expect(nativeMode("store", { CODESIFT_NATIVE: "1" })).toBe("required");
+    expect(nativeMode("store", { CODESIFT_NATIVE: "1", CODESIFT_NATIVE_STORE: "0" })).toBe("off");
+    expect(nativeMode("store", { CODESIFT_NATIVE: "0" })).toBe("off");
   });
 
   it("treats a typo as auto, never as required", () => {

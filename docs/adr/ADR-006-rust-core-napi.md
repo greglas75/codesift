@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Accepted (stages 0–4, 6 and 7 done; 8 and 9 no-go; 10 measured, no-go; stage 1's native store still opt-in until its 24 h monitored daemon run — stage 5)
+**Status:** Completed 2026-10-10 (stages 0–7 done, the native store on by default; 8, 9 and 10 measured and declined; the TypeScript paths stay permanently as the fallback)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -736,4 +736,38 @@ install path that never got the core:
 
 `/health` also reports embedding runs now (`embeddings`: provider, consecutive failures, last error):
 a provider that disappeared had failed silently for nine days.
+
+## Stage 5 — the native store on by default (2026-10-10)
+
+The gate was 24 hours of the Mac daemon on `CODESIFT_NATIVE_STORE=1` under a watchdog sampling PID,
+RSS, `/health`, crash reports and SQLite errors every 15 minutes (2026-10-09 23:29 → 2026-10-10 23:34):
+
+| | result |
+|---|---|
+| crash reports for the daemon | **0** (today's node `.ips` files belong to other processes, other PIDs) |
+| SQLite errors in the daemon log | **0** |
+| `/health` | 25–150 ms, the core loaded throughout |
+| restarts | 8 deliberate deploys, plus 2 by another session's `npm run build`; every boot in the log follows a `SIGTERM`, none follows a crash |
+
+The window also found two unbounded memory paths, both fixed before the switch: Rust call graphs held
+by count only (two graphs of one 1.4M-symbol repo, 6.6 GB; now a byte budget, RAM/32) and a BM25
+budget fixed at 1 GB, below one such index (1.49 GB; now RAM/32). RSS then plateaued at ~9.25 GB on a
+128 GB machine with a 32 GB heap limit.
+
+`OPT_IN_ONLY` is gone: the store follows `auto` like every component, and `CODESIFT_NATIVE_STORE=0`
+turns it off for a process. The single-owner guarantee does not depend on the default — each process
+chooses one SQLite copy once, in `loadSqliteCtor()`.
+
+## Closing
+
+Every component keeps its TypeScript implementation, and the binary stays optional: installs without
+a platform package, the CI job without Rust, and source builds that do not add `@codesift/core-<tag>`
+all run the same tools. That is the recommendation going forward, not a transition state.
+
+One measurement reopens a declined stage. Stage 9 was measured on 1,259 small conversation indexes,
+where the native build beat loading a persisted file. On a 1.43M-symbol code index the first
+`search_symbols` per index costs 6.4 s of loading plus 13.9 s of native build (25 s end to end; the
+TypeScript engine took 69 s), and every worktree of that repo is its own index: usage.jsonl for
+2026-10-09..10 has 28 of 78 such calls above 5 s. Persisting the native index would remove the build
+half. That is an owner decision, recorded here with its numbers.
 

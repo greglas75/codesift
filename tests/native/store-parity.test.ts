@@ -24,7 +24,8 @@ import { isIndexStorageError } from "../../src/storage/sqlite/errors.js";
 import { getNativeCore, resetNativeForTesting } from "../../src/native/index.js";
 import type { CodeSymbol } from "../../src/types.js";
 
-// The store is opt-in only (see OPT_IN_ONLY in src/native/index.ts), so these suites opt in.
+// These suites REQUIRE the store (CODESIFT_NATIVE_STORE=1 throws when the binary is missing), so a
+// parity run can never silently compare the TypeScript path with itself.
 const native = (() => {
   const prev = process.env["CODESIFT_NATIVE_STORE"];
   process.env["CODESIFT_NATIVE_STORE"] = "1";

@@ -1,7 +1,7 @@
 ## Tech Stack
 TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
 
-## Rust core (ADR-006 — stages 0–4, 6, 7 done; store still opt-in pending a monitored daemon run; 8, 9 no-go — 2026-10-09)
+## Rust core (ADR-006 — stages 0–7 done, store on by default since 2026-10-10; 8, 9, 10 no-go)
 
 Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
 `crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every
@@ -28,9 +28,10 @@ component keeps its TS implementation; the binary is OPTIONAL.
   `loadSqliteCtor()` returns the core's own `DatabaseSync` (`storage/sqlite/native-sqlite.ts` over
   `sqlite_compat.rs`), so ONE copy owns everything opened through it. **Never `import("node:sqlite")`
   for a database in `src/`** — go through `loadSqliteCtor()` (the one exception: `daemon-lock.db`,
-  which nothing else opens). The store is still OPT-IN (`CODESIFT_NATIVE_STORE=1`) until a monitored
-  daemon run; parity of the port is `tests/native/sqlite-compat-parity.test.ts` (ADR-006).
-- **Stage 1 (store, opt-in):** `findSymbolsSqlite`/`getIndexMetaSqlite` go native when enabled — query off the
+  which nothing else opens). The store follows `auto` like every component since stage 5 (a 24 h
+  monitored daemon run: 0 crashes, 0 SQLite errors); `CODESIFT_NATIVE_STORE=0` turns it off for a process.
+  Parity of the port is `tests/native/sqlite-compat-parity.test.ts` (ADR-006).
+- **Stage 1 (store, default since stage 5):** `findSymbolsSqlite`/`getIndexMetaSqlite` go native when enabled — query off the
   main thread, results as ≤4 MB JSON chunks parsed with yields. Parity: `node --max-old-space-size=12288
   --import tsx scripts/native-parity.ts <copy of an index.db>` (0 diffs on 5 real indexes);
   benchmark: `scripts/bench-store.ts`. Measurements in ADR-006. Never one JSON string per result — a

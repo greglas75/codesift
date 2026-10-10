@@ -224,21 +224,15 @@ function parseMode(raw: string | undefined): NativeMode | undefined {
   }
 }
 
-/**
- * Components that `auto` and the global switch never turn on — only their own variable does.
- *
- * `store` is here because it opens the index databases with the core's OWN copy of SQLite while
- * `node:sqlite`, a second copy, has the same files open in the same process. SQLite's locking relies on
- * POSIX `fcntl` locks, which never conflict within one process, so each copy believes it is alone: a
- * Rust connection closing ran the last-connection checkpoint and deleted `-wal`/`-shm` that node still
- * had open (caught as SQLITE_IOERR in tests/storage; in the field that is lost writes). SQLite documents
- * this as a way to corrupt a database ("multiple copies of SQLite linked into the same application").
- *
- * That condition is now met: with the store on, `loadSqliteCtor()` hands every caller the core's own
- * `DatabaseSync` (storage/sqlite/native-sqlite.ts), so one copy owns every index database in the
- * process. It stays opt-in only until a daemon has run on it under monitoring (ADR-006, stage 1).
+/*
+ * The store used to be opt-in only. It opens the index databases with the core's OWN copy of SQLite,
+ * and while `node:sqlite` — a second copy — had the same files open in the same process, a Rust
+ * connection's last-connection checkpoint deleted `-wal`/`-shm` node still held (SQLite's fcntl locks
+ * never conflict within one process). Since `loadSqliteCtor()` hands every caller the core's own
+ * `DatabaseSync` when the store is on, one copy owns every database a process opens, and the choice is
+ * made once per process. A monitored daemon run (ADR-006 stage 5: 24 h, 0 crashes, 0 SQLite errors)
+ * cleared it for `auto` like every other component; `CODESIFT_NATIVE_STORE=0` still turns it off.
  */
-const OPT_IN_ONLY = new Set(["store"]);
 
 /**
  * The mode for one component. An unrecognised value falls back to `auto` rather than `required`:
@@ -248,7 +242,6 @@ export function nativeMode(component?: string, env: NodeJS.ProcessEnv = process.
   if (component) {
     const own = parseMode(env[`CODESIFT_NATIVE_${component.toUpperCase()}`]);
     if (own) return own;
-    if (OPT_IN_ONLY.has(component.toLowerCase())) return "off";
   }
   return parseMode(env["CODESIFT_NATIVE"]) ?? "auto";
 }
