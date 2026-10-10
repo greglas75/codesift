@@ -130,7 +130,7 @@ describe("embedSymbols checkpoints and resumes", () => {
     writeFileSync(partial(), JSON.stringify({ id: "x", vec: [1, 2] }) + "\n");
     expect(await run()).toBe(true);
     expect(calls.flat()).toHaveLength(6);
-    expect(readdirSync(dataDir).some((f) => /\.embeddings\.partial\.ndjson\.tmp\.\d+$/.test(f))).toBe(true);
+    expect(readdirSync(dataDir).some((f) => /\.embeddings\.partial\.ndjson\.tmp\.\d+-[0-9a-f-]+$/.test(f))).toBe(true);
   });
 
   it("drops a first write that never completed a line — at most one batch", async () => {

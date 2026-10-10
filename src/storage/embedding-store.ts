@@ -422,13 +422,19 @@ export async function batchEmbed(
 
   // Find symbols that need embedding (new or content changed)
   const toEmbed: Array<{ id: string; text: string }> = [];
+  // The hash a symbol WILL have once its vector exists. Committed to `hashes` only then: the map
+  // outlives a failed run in this process, and a new hash recorded beside the old vector made the
+  // next run read that stale vector as current and keep it.
+  const pendingHash = new Map<string, number>();
   for (const [id, text] of symbolTexts) {
     const hash = contentHash(text);
     const needsEmbed = !existing.has(id) || (cacheKey !== undefined && hashes.get(id) !== hash);
     if (needsEmbed) {
       toEmbed.push({ id, text });
+      pendingHash.set(id, hash);
+    } else {
+      hashes.set(id, hash);
     }
-    hashes.set(id, hash);
   }
 
   // Cross-repo lookup before calling the model. Half of the symbols still
@@ -447,6 +453,8 @@ export async function batchEmbed(
     const hit = shared.get(key);
     if (hit) {
       result.set(item.id, hit);
+      const h = pendingHash.get(item.id);
+      if (h !== undefined) hashes.set(item.id, h);
     } else {
       stillToEmbed.push({ ...item, key });
     }
@@ -470,7 +478,9 @@ export async function batchEmbed(
         const f32 = new Float32Array(vec);
         result.set(entry.id, f32);
         if (entry.key) freshlyEmbedded.push({ key: entry.key, vec: f32 });
-        done.push({ id: entry.id, vec: f32, h: hashes.get(entry.id) });
+        const h = pendingHash.get(entry.id);
+        if (h !== undefined) hashes.set(entry.id, h);
+        done.push({ id: entry.id, vec: f32, h });
       }
     }
     if (onBatch) await onBatch(done);

@@ -305,7 +305,9 @@ export async function embedSymbols(
     // Resume from what a failed or killed run finished — if no other live process owns that file.
     const opened = await EmbeddingCheckpoint.open(partialPath, provider.model);
     if ("busy" in opened) {
-      const who = opened.busy > 0 ? `another process (pid ${opened.busy}) holds` : "could not lock";
+      const who = opened.busy === process.pid
+        ? "this process is already embedding it and holds"
+        : opened.busy > 0 ? `another process (pid ${opened.busy}) holds` : "could not lock";
       console.error(`[codesift] ${repoName}: ${who} the embedding checkpoint — running without one`);
     } else {
       checkpoint = opened;

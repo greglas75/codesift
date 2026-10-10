@@ -4,11 +4,13 @@
 // once, a failed append followed by more appends (fusing a torn line with the next batch), and errors
 // that failed the whole embedding run where they should only turn checkpointing off.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EmbeddingCheckpoint } from "../../src/storage/embedding-checkpoint.js";
-import { loadEmbeddings } from "../../src/storage/embedding-store.js";
+import { batchEmbed, contentHashesFor, loadEmbeddings } from "../../src/storage/embedding-store.js";
 
 let dir: string;
 const partial = () => join(dir, "abcdef012345.embeddings.partial.ndjson");
@@ -41,6 +43,30 @@ describe("EmbeddingCheckpoint lock", () => {
     const opened = await EmbeddingCheckpoint.open(partial(), "m");
     expect(opened).toEqual({ busy: process.ppid });
     expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe(String(process.ppid));
+  });
+
+  it("treats a lock with no readable pid as live while it is fresh — it may be mid-creation", async () => {
+    // The first version created the name before writing the pid; a reader in between saw an empty
+    // lock, called its owner dead, and took it over from a live process.
+    writeFileSync(`${partial()}.lock`, "");
+    expect(await EmbeddingCheckpoint.open(partial(), "m")).toEqual({ busy: 0 });
+    expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe("");
+  });
+
+  it("takes over a lock with no readable pid once it is past its grace period", async () => {
+    writeFileSync(`${partial()}.lock`, "12abc");
+    const old = new Date(Date.now() - 5 * 60_000);
+    utimesSync(`${partial()}.lock`, old, old);
+    const ckpt = await openOwned();
+    expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe(String(process.pid));
+    await ckpt.release();
+  });
+
+  it("leaves no scratch files behind after taking a lock", async () => {
+    writeFileSync(`${partial()}.lock`, "999999");
+    const ckpt = await openOwned();
+    await ckpt.release();
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it("is not taken twice by one process", async () => {
@@ -85,6 +111,41 @@ describe("EmbeddingCheckpoint append", () => {
     expect(JSON.parse(lines[0] ?? "")).toEqual({ model: "m" });
     expect(lines).toHaveLength(3);
     expect([...(await loadEmbeddings(partial())).keys()]).toEqual(["a", "b"]);
+  });
+
+  it("writes the header again when the file is emptied mid-run", async () => {
+    const ckpt = await openOwned();
+    await ckpt.decide();
+    await ckpt.prepareForAppend();
+    await ckpt.append([vec("a")]);
+    truncateSync(partial(), 0);
+    await ckpt.append([vec("b")]);
+    await ckpt.release();
+
+    const lines = readFileSync(partial(), "utf-8").trim().split("\n");
+    expect(JSON.parse(lines[0] ?? "")).toEqual({ model: "m" });
+    expect(lines).toHaveLength(2);
+  });
+});
+
+describe("batchEmbed content hashes", () => {
+  it("does not record a new hash for a symbol whose new vector was never computed", async () => {
+    // The hash map outlives a failed run in this process. Recording the new hash beside the OLD
+    // vector made the next run read that stale vector as current and keep it.
+    const key = `ckpt-hash-${Date.now()}`;
+    const ok = async (texts: string[]) => texts.map(() => [1, 2]);
+    const first = await batchEmbed(new Map([["a", "v1"]]), new Map(), ok, 8, key);
+    const before = contentHashesFor(key).get("a");
+
+    await expect(batchEmbed(new Map([["a", "v2"]]), first, async () => {
+      throw new Error("provider down");
+    }, 8, key)).rejects.toThrow("provider down");
+    expect(contentHashesFor(key).get("a")).toBe(before);
+
+    let calls = 0;
+    await batchEmbed(new Map([["a", "v2"]]), first, async (texts) => { calls++; return ok(texts); }, 8, key);
+    expect(calls).toBe(1);
+    expect(contentHashesFor(key).get("a")).not.toBe(before);
   });
 });
 
