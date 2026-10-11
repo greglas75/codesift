@@ -812,3 +812,22 @@ small in-memory maps.
 | loaded, symbols in JS | 6.4 s | 4.5 GB |
 | **loaded, store-backed** | **1.9 s** | **2.2 GB** |
 
+### What the index held, and what it holds now (2026-10-11)
+
+The 1.43M symbols above were mostly not the repository: **1,147,223 (80%)** came from `zuvo/`, gitignored
+recovery and context copies of the source tree, because the walker never read `.gitignore`. It does now
+(`src/utils/walk/gitignore.ts`). The main checkout of that repo, reindexed through the daemon (in the
+index child, which now also writes the native BM25 file):
+
+| | before | after |
+|---|---:|---:|
+| symbols | 1,426,824 | **456,093** |
+| files | 89,142 | **24,780** |
+| persisted BM25 file | — | 94 MB |
+| first `search_symbols` through the daemon | 17–27 s cold | **0.97 s** |
+| daemon heap after it | — | 98 MB (BM25 cache: 0.48 GB, all Rust) |
+
+The call graph shrinks with it (230M edges with tests on the old index). Worktree indexes shed their
+copies at their next reindex. Not done here: the database file keeps its size (2.5 GB) until something
+runs `VACUUM`, since a full rewrite only frees pages.
+
