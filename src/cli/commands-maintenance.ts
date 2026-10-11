@@ -12,19 +12,85 @@ import { getBoolFlag, output, die } from "./args.js";
  */
 /** Databases below this are not worth a VACUUM; `CODESIFT_PRUNE_VACUUM_MIN_MB` overrides (tests use 0). */
 function vacuumMinBytes(): number {
-  const raw = process.env["CODESIFT_PRUNE_VACUUM_MIN_MB"];
-  const mb = raw === undefined ? Number.NaN : Number(raw);
+  const raw = process.env["CODESIFT_PRUNE_VACUUM_MIN_MB"]?.trim();
+  const mb = raw ? Number(raw) : Number.NaN;
   return (Number.isFinite(mb) && mb >= 0 ? mb : 64) * 1024 * 1024;
 }
 
 async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   const { loadConfig } = await import("../config.js");
   const { withRegistryLock } = await import("../storage/registry.js");
-  const registryPath = loadConfig().registryPath;
-  await withRegistryLock(registryPath, () => handlePruneLocked(flags, registryPath));
+  const config = loadConfig();
+  const report = await withRegistryLock(config.registryPath, () => handlePruneLocked(flags, config.registryPath));
+  // Outside the registry lock: a VACUUM of a multi-GB index takes seconds, and every index_folder
+  // registers through that lock.
+  const vacuum = await vacuumBloatedIndexes(config.dataDir, getBoolFlag(flags, "dry-run") === true);
+  output({ ...report, ...vacuum }, flags);
 }
 
-async function handlePruneLocked(flags: Flags, registryPath: string): Promise<void> {
+/**
+ * A full reindex rewrites an index by DELETE + INSERT, which frees pages but never returns them to the
+ * disk. Measured 2026-10-11: rdesigner shed 68% of its symbols (.gitignore) and its database stayed at
+ * 2.5 GB; the first run of this reclaimed 13.6 GB from 9 databases. VACUUM rebuilds the file — only for
+ * an index.db of at least 64 MB (`CODESIFT_PRUNE_VACUUM_MIN_MB`) with at least half its pages free, and
+ * with busy_timeout 0, so one being written is skipped, never waited on. Readers are safe: every paged
+ * reader holds one snapshot across its pages, and in WAL mode a VACUUM leaves an open snapshot's view
+ * unchanged. VACUUM may renumber rowids but copies rows in rowid order — the only order anything
+ * relies on — and it moves data_version, which is what the native call-graph cache keys on.
+ */
+async function vacuumBloatedIndexes(dataDir: string, dryRun: boolean): Promise<Record<string, unknown>> {
+  const { readdirSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { loadSqliteCtor } = await import("../storage/sqlite/runtime.js");
+  const DatabaseSync = await loadSqliteCtor();
+  const minBytes = vacuumMinBytes();
+  const sizeOf = (path: string): number => {
+    try {
+      return statSync(path).size;
+    } catch {
+      return 0;
+    }
+  };
+  let vacuumed = 0, before = 0, after = 0;
+  const candidates: string[] = [];
+  for (const name of DatabaseSync ? readdirSync(dataDir) : []) {
+    if (!name.endsWith(".index.db")) continue;
+    const full = join(dataDir, name);
+    const size = sizeOf(full);
+    if (size === 0 || size < minBytes) continue;
+    let db: InstanceType<NonNullable<typeof DatabaseSync>> | undefined;
+    try {
+      db = new DatabaseSync!(full);
+      db.exec("PRAGMA busy_timeout = 0");
+      const free = (db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+      const pages = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count;
+      if (pages === 0 || free / pages < 0.5) continue;
+      candidates.push(name);
+      if (dryRun) continue;
+      const total = size + sizeOf(`${full}-wal`);
+      db.exec("VACUUM");
+      vacuumed++;
+      try {
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      } catch { /* a reader holds the log; it truncates on a later checkpoint */ }
+      before += total;
+      after += sizeOf(full) + sizeOf(`${full}-wal`);
+    } catch (err) {
+      // Busy (being written) is the expected skip; anything else is reported, and the file is left.
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/busy|locked/i.test(message)) console.error(`[codesift] prune: VACUUM of ${name} failed: ${message}`);
+    } finally {
+      try { db?.close(); } catch { /* already closed */ }
+    }
+  }
+  return {
+    vacuum_candidates: candidates.length,
+    vacuumed,
+    vacuum_reclaimed_gb: +((before - after) / 1e9).toFixed(2),
+  };
+}
+
+async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Record<string, unknown>> {
   const { readFileSync, readdirSync, statSync, unlinkSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { loadConfig } = await import("../config.js");
@@ -63,7 +129,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     reg = JSON.parse(readFileSync(registryPath, "utf-8")) as typeof reg;
   } catch {
     die("prune: cannot read registry.json — aborting so live data is never deleted.");
-    return;
+    return {};
   }
   for (const [name, v] of Object.entries(reg.repos ?? {})) {
     const ip = v.index_path;
@@ -441,53 +507,8 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     }
   }
 
-  // A full reindex rewrites an index by DELETE + INSERT, which frees pages but never returns them to
-  // the disk. Measured 2026-10-11: rdesigner shed 68% of its symbols (gitignored copies) and its
-  // database stayed at 2.5 GB. VACUUM rebuilds the file — only for a database at least 64 MB with at
-  // least half its pages free, and with busy_timeout 0, so one being written is skipped, never waited
-  // on. Readers are safe: every paged reader holds one snapshot across its pages, and in WAL mode a
-  // VACUUM does not disturb an open snapshot. VACUUM may renumber rowids but copies rows in rowid order
-  // — the only order anything relies on — and it moves data_version, so cached call graphs rebuild.
-  let vacuumed = 0, vacuumBefore = 0, vacuumAfter = 0;
-  const vacuumCandidates: string[] = [];
-  {
-    const DatabaseSync = await loadSqliteCtor();
-    for (const name of DatabaseSync ? readdirSync(dataDir) : []) {
-      if (!name.endsWith(".index.db")) continue;
-      const full = join(dataDir, name);
-      let size: number;
-      try {
-        size = statSync(full).size;
-      } catch {
-        continue;
-      }
-      if (size < vacuumMinBytes()) continue;
-      try {
-        const db = new DatabaseSync!(full);
-        try {
-          db.exec("PRAGMA busy_timeout = 0");
-          const free = (db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
-          const pages = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count;
-          if (pages === 0 || free / pages < 0.5) continue;
-          vacuumCandidates.push(name);
-          if (dryRun) continue;
-          db.exec("VACUUM");
-          db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-          vacuumed++;
-          vacuumBefore += size;
-          vacuumAfter += statSync(full).size;
-        } finally {
-          db.close();
-        }
-      } catch { /* busy (in use) or unreadable — left exactly as it was */ }
-    }
-  }
-
-  output({
+  return {
     bm25_superseded_format: bm25Superseded,
-    vacuum_candidates: vacuumCandidates.length,
-    vacuumed,
-    vacuum_reclaimed_gb: +((vacuumBefore - vacuumAfter) / 1e9).toFixed(2),
     wal_checkpointed: walCheckpointed,
     wal_reclaimed_gb: +((walBefore - walAfter) / 1e9).toFixed(2),
     indeterminate_databases: indeterminate.length,
@@ -502,7 +523,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     freed_gb: +(bytes / 1e9).toFixed(2),
     kept_live_artifacts: kept,
     data_dir: dataDir,
-  }, flags);
+  };
 }
 
 type ProcessRow = { pid: number; ppid: number; rssKb: number; command: string };
