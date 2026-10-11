@@ -129,14 +129,20 @@ export async function loadPersistedNativeBM25(
     return null;
   }
   if (changed.length > 0) {
-    // Grouped once; updateBM25ForFile would walk every symbol per file.
-    const byFile = new Map<string, CodeSymbol[]>();
-    for (const symbol of await symbolsInFiles(changed)) {
-      const list = byFile.get(symbol.file);
-      if (list) list.push(symbol);
-      else byFile.set(symbol.file, [symbol]);
+    try {
+      // Grouped once; updateBM25ForFile would walk every symbol per file.
+      const byFile = new Map<string, CodeSymbol[]>();
+      for (const symbol of await symbolsInFiles(changed)) {
+        const list = byFile.get(symbol.file);
+        if (list) list.push(symbol);
+        else byFile.set(symbol.file, [symbol]);
+      }
+      for (const file of changed) native.updateFile(file, byFile.get(file) ?? []);
+    } catch {
+      // A read that failed must not leave a half-updated index, nor its memory: rebuild instead.
+      native.release();
+      return null;
     }
-    for (const file of changed) native.updateFile(file, byFile.get(file) ?? []);
   }
   return native;
 }

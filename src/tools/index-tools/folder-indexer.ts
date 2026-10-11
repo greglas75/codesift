@@ -676,8 +676,9 @@ export async function indexFolder(
   const bm25 = await buildBM25IndexYielding(mergedSymbols);
   const bm25BuildMs = Date.now() - bm25Started;
   // A native index is cached store-backed — the same Rust index without the JS map of every symbol
-  // (2.4 GB of heap on a 1.43M-symbol repo); hits are read from the index saved just below.
-  rememberBM25Index(repoName, isNativeBM25(bm25) ? storeBackedBM25(bm25.native, repoName) : bm25);
+  // (2.4 GB of heap on a 1.43M-symbol repo) — so it is cached only once saveIndex below has put those
+  // symbols where its hits are read from. The in-memory index is cached here, as before.
+  if (!isNativeBM25(bm25)) rememberBM25Index(repoName, bm25);
 
   // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges
   // and other downstream consumers see the populated `workspaces` field.
@@ -711,6 +712,7 @@ export async function indexFolder(
   // path above keeps symbols from the previous index for unchanged files, and those carry
   // whatever an older schema left behind — so a partial re-parse must not clear the lossy marker.
   await saveIndex(indexPath, codeIndex, { sourceComplete: filesToParse.length === files.length });
+  if (isNativeBM25(bm25)) rememberBM25Index(repoName, storeBackedBM25(bm25.native, repoName));
 
   // In an index child the BM25 index just built dies with the process, and the daemon's first
   // search would rebuild it — measured 10.04 s against 0.70 s to reload the sidecar on the largest

@@ -135,9 +135,15 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
 
   const nativeCore = getNativeCore("bm25");
   if (nativeCore) {
-    const native = await openStoreBackedBM25(nativeCore, resolvedName, meta.index_path);
-    if (native) rememberBM25Index(resolvedName, native);
-    return native;
+    try {
+      const native = await openStoreBackedBM25(nativeCore, resolvedName, meta.index_path);
+      if (native) rememberBM25Index(resolvedName, native);
+      return native;
+    } catch (err) {
+      // The TypeScript engine below answers the same searches; a native fault costs speed, not results.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] native BM25 for ${resolvedName} failed (${message}); using the TypeScript index`);
+    }
   }
 
   const index = await loadIndex(meta.index_path);
