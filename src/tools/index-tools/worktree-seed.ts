@@ -161,7 +161,7 @@ export async function pickSeedDonor(
 }
 
 /** sha → commits back from HEAD, for `pickSeedDonor`. Empty when git cannot answer. */
-async function headHistory(worktreeRoot: string): Promise<Map<string, number>> {
+export async function headHistory(worktreeRoot: string): Promise<Map<string, number>> {
   const out = await runGit(["rev-list", `--max-count=${DONOR_HISTORY_DEPTH}`, "HEAD"], {
     cwd: worktreeRoot,
     timeout: 10_000,

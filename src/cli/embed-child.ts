@@ -51,6 +51,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  // A repo with nothing of its own starts from the nearest sibling's vectors, so only what differs
+  // is embedded. Best effort: any failure here leaves the run exactly as it was before.
+  try {
+    const { cloneVectorsFromNearestDonor } = await import("../tools/index-tools/worktree-seed-embeddings.js");
+    const cloned = await cloneVectorsFromNearestDonor(rootPath, repoName, indexPath);
+    if (cloned.seeded) {
+      process.stderr.write(
+        `[codesift] ${repoName}: cloned ${cloned.vectors} vectors from ${cloned.donor} ` +
+        `(${cloned.distance} commit(s) back) — embedding only what differs\n`,
+      );
+    }
+  } catch { /* no donor; embed from scratch */ }
+
   // Both report failure instead of throwing: embedding is non-fatal to INDEXING,
   // but it is the entire job of this process, so a failure here must not be
   // reported to the parent as a completed run. The marker is the parent's only

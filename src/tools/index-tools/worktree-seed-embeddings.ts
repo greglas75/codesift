@@ -29,6 +29,7 @@ import { promisify } from "node:util";
 import {
   getEmbeddingMetaPath,
   getEmbeddingPath,
+  getPartialEmbeddingPath,
   loadEmbeddingMeta,
   saveEmbeddingMeta,
 } from "../../storage/embedding-store.js";
@@ -117,4 +118,49 @@ export async function seedEmbeddingsFromDonor(
     }
     return { seeded: false, reason: `vector seed failed: ${err instanceof Error ? err.message : String(err)}${restore}` };
   }
+}
+
+/**
+ * Before an embedding run starts from nothing, clone the vectors of the indexed checkout NEAREST in
+ * this tree's history that has them — so a full index of a worktree costs the files that differ,
+ * not the repo.
+ *
+ * The seed (worktree-seed.ts) clones vectors only on its own path. A worktree that fell back to a
+ * full index — or was indexed before any donor had vectors — embedded everything, and so did each of
+ * its siblings, at the same time. Measured 2026-10-11: two rdesigner worktrees at the SAME develop
+ * commit embedding the same 463k symbols side by side, halving each other's share of a model that
+ * serves one request at a time.
+ *
+ * Only when this repo has neither a vector file nor a checkpoint: anything of its own is newer than
+ * a donor's and is resumed instead. The donor must have a COMPLETE vector file (its meta counts the
+ * vectors); a donor still being embedded has only a checkpoint, which is not cloned. What the clone
+ * gets wrong — files that differ from the donor — the run's content hashes find and re-embed, and
+ * vectors from another model are refused by the run's model check.
+ */
+export async function cloneVectorsFromNearestDonor(
+  rootPath: string,
+  repoName: string,
+  indexPath: string,
+): Promise<EmbeddingSeedResult & { donor?: string; distance?: number }> {
+  if (existsSync(getEmbeddingPath(indexPath)) || existsSync(getPartialEmbeddingPath(indexPath))) {
+    return { seeded: false, reason: "has vectors or a checkpoint of its own" };
+  }
+  const { headHistory } = await import("./worktree-seed.js");
+  const { listRepos } = await import("../../storage/registry.js");
+  const { loadConfig } = await import("../../config.js");
+  const history = await headHistory(rootPath);
+  if (history.size === 0) return { seeded: false, reason: "no git history to place a donor in" };
+
+  let best: { name: string; index_path: string; distance: number } | undefined;
+  for (const candidate of await listRepos(loadConfig().registryPath).catch(() => [])) {
+    if (candidate.name === repoName || !candidate.last_git_commit) continue;
+    const distance = history.get(candidate.last_git_commit);
+    if (distance === undefined || (best && distance >= best.distance)) continue;
+    if (!(await hasSymbolEmbeddings(candidate.index_path))) continue;
+    best = { name: candidate.name, index_path: candidate.index_path, distance };
+  }
+  if (!best) return { seeded: false, reason: "no indexed checkout in this history has vectors" };
+
+  const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);
+  return { ...result, donor: best.name, distance: best.distance };
 }

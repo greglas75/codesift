@@ -6,10 +6,11 @@
 // nothing, and where the filesystem cannot clone the seed must decline rather than copy.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadEmbeddings, contentHashesForPath } from "../../src/storage/embedding-store.js";
-import { seedEmbeddingsFromDonor } from "../../src/tools/index-tools/worktree-seed-embeddings.js";
+import { cloneVectorsFromNearestDonor, seedEmbeddingsFromDonor } from "../../src/tools/index-tools/worktree-seed-embeddings.js";
 
 let dir: string;
 const DONOR = "local/repo";
@@ -117,5 +118,77 @@ describe("seedEmbeddingsFromDonor", () => {
     const result = await seedEmbeddingsFromDonor(donorIndex(), DONOR, targetIndex(), TARGET);
     expect(result).toEqual({ seeded: false, reason: "donor has no vectors" });
     expect(existsSync(metaOf(targetIndex()))).toBe(false);
+  });
+});
+
+// A full index of a worktree used to embed the whole repo even with a sibling at the same commit
+// holding complete vectors. Measured 2026-10-11: two rdesigner worktrees at one develop commit
+// embedding the same 463k symbols side by side.
+describe("cloneVectorsFromNearestDonor", () => {
+  let repo: string;
+  let prevDataDir: string | undefined;
+  const git = (args: string[]) => execFileSync("git", args, {
+    cwd: repo, encoding: "utf-8",
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  }).trim();
+
+  beforeEach(async () => {
+    repo = join(dir, "repo");
+    mkdirSync(repo);
+    git(["init", "-q", "-b", "main"]);
+    writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "one"]);
+    prevDataDir = process.env["CODESIFT_DATA_DIR"];
+    process.env["CODESIFT_DATA_DIR"] = dir;
+    const { resetConfigCache } = await import("../../src/config.js");
+    resetConfigCache();
+  });
+  afterEach(async () => {
+    if (prevDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+    else process.env["CODESIFT_DATA_DIR"] = prevDataDir;
+    const { resetConfigCache } = await import("../../src/config.js");
+    resetConfigCache();
+  });
+
+  function register(commit: string): void {
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      updated_at: 1,
+      repos: { [DONOR]: { name: DONOR, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: commit } },
+    }));
+  }
+
+  it("clones the vectors of a checkout found in this tree's history", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
+    register(git(["rev-parse", "HEAD"]));
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+
+    if (!result.seeded) {
+      expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
+      return;
+    }
+    expect(result).toMatchObject({ donor: DONOR, distance: 0, vectors: 1 });
+    expect([...(await loadEmbeddings(vectorsOf(targetIndex()))).keys()]).toEqual([`${TARGET}:a.ts:a:1`]);
+  });
+
+  it("leaves a repo that has a checkpoint of its own alone — that is newer than any donor", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0] }]);
+    register(git(["rev-parse", "HEAD"]));
+    writeFileSync(join(dir, "target.embeddings.partial.ndjson"), JSON.stringify({ model: "m" }) + "\n");
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+
+    expect(result.seeded).toBe(false);
+    expect(existsSync(vectorsOf(targetIndex()))).toBe(false);
+  });
+
+  it("ignores a checkout whose commit is not in this tree's history", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0] }]);
+    register("f".repeat(40));
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout in this history has vectors" });
   });
 });
