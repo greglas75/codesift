@@ -141,11 +141,13 @@ async function loadRipgrepFixture(behavior: RipgrepBehavior = {}): Promise<Fallb
         return stdout;
       }),
       execFile: vi.fn((
-        _command: string,
+        command: string,
         args: string[],
-        _options: object,
+        options: object,
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => {
+        // Only ripgrep is faked; anything else (the walker's `git ls-files`) runs for real.
+        if (command !== "rg") return Reflect.apply(actual.execFile, actual, [command, args, options, callback]);
         if (args[0] === "--version") {
           callback(null, "ripgrep 14", "");
           return {};

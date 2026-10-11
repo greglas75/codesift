@@ -16,8 +16,8 @@ export async function walkDirectory(
   const normalizedOptions = options ?? {};
   const files: string[] = [];
   const limits = new WalkLimits(normalizedOptions.maxFileSize, normalizedOptions.maxFiles);
-  // A walk is a fresh look at the tree, so it takes a fresh listing rather than a cached one.
-  const ignored = normalizedOptions.respectGitignore === false ? null : await loadGitIgnored(rootPath, { fresh: true });
+  // Cached for 30 s: search_text's fallback walks per call, and .gitignore rarely changes in between.
+  const ignored = normalizedOptions.respectGitignore === false ? null : await loadGitIgnored(rootPath);
   const filters = createFileFilter(rootPath, normalizedOptions, ignored);
 
   await traverseDirectory(rootPath, {
