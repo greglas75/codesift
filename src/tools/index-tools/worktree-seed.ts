@@ -319,10 +319,19 @@ export async function seedWorktreeIndexFromParent(
 
     // Vectors are not part of the database, and leaving them out is what made every worktree either
     // vector-less or a full re-embed. A clone costs nothing; see worktree-seed-embeddings.ts.
+    //
+    // The index donor and the vector donor need not be the same checkout. The nearest index is the
+    // best one to copy, and the nearest index is usually a sibling nobody has embedded — measured
+    // 2026-10-12: a fresh develop worktree seeded from a sibling 0 commits back with no vectors,
+    // while one 60 commits back held all 462,980. So: the index donor's vectors when it has them,
+    // otherwise those of the nearest checkout in this history that does.
     let embeddings: SeedResult["embeddings"];
     if (config.embeddingProvider) {
-      const { seedEmbeddingsFromDonor } = await import("./worktree-seed-embeddings.js");
-      const vectors = await seedEmbeddingsFromDonor(donor.index_path, donor.name, worktreeIndexPath, worktreeName);
+      const { seedEmbeddingsFromDonor, hasSymbolEmbeddings, cloneVectorsFromNearestDonor } =
+        await import("./worktree-seed-embeddings.js");
+      const vectors = (await hasSymbolEmbeddings(donor.index_path))
+        ? await seedEmbeddingsFromDonor(donor.index_path, donor.name, worktreeIndexPath, worktreeName)
+        : await cloneVectorsFromNearestDonor(worktreeRoot, worktreeName, worktreeIndexPath);
       embeddings = vectors.seeded ? { vectors: vectors.vectors ?? 0 } : { skipped: vectors.reason ?? "unknown" };
     }
 

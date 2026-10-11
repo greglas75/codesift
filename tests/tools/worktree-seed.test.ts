@@ -310,6 +310,39 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(files).toEqual(["src/a.ts"]);
   });
 
+  it("takes vectors from the nearest checkout that HAS them when the index donor has none", async () => {
+    // Measured 2026-10-12: a fresh develop worktree seeded its index from a sibling 0 commits back
+    // with no vectors, while one 60 commits back held all 462,980 — and got no vectors at all.
+    const prevProvider = process.env["CODESIFT_EMBEDDING_PROVIDER"];
+    process.env["CODESIFT_EMBEDDING_PROVIDER"] = "ollama";
+    resetConfigCache();
+    try {
+      const head = git(["rev-parse", "HEAD"], parentRoot).trim();
+      makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
+      const other = join(dataDir, "cccccccccccc.index.json");
+      writeFileSync(other.replace(".index.json", ".embeddings.ndjson"), JSON.stringify({ id: "local/other:src/a.ts:a:1", vec: [1, 0] }) + "\n");
+      writeFileSync(other.replace(".index.json", ".embeddings.meta.json"), JSON.stringify({
+        model: "embeddinggemma", provider: "ollama", dimensions: 2, symbol_count: 1, updated_at: 1,
+      }));
+      registry({
+        [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`), last_git_commit: head },
+        "local/other": { name: "local/other", root: join(dataDir, "other"), index_path: other, last_git_commit: head },
+      });
+
+      const result = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+
+      expect(result.seeded).toBe(true);
+      // Either cloned, or — on a filesystem without copy-on-write — declined for THAT reason, not
+      // because the index donor had none.
+      if (result.embeddings && "vectors" in result.embeddings) expect(result.embeddings.vectors).toBe(1);
+      else expect(result.embeddings).toEqual({ skipped: expect.stringMatching(/cannot clone/) });
+    } finally {
+      if (prevProvider === undefined) delete process.env["CODESIFT_EMBEDDING_PROVIDER"];
+      else process.env["CODESIFT_EMBEDDING_PROVIDER"] = prevProvider;
+      resetConfigCache();
+    }
+  });
+
   it("leaves no half-copied database when the parent index is empty", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), []);
     registry({
